@@ -344,5 +344,13 @@
   "frs": [],
   "short": "a shared expert averaged with the routed output needs a scale on the shared expert (SharedExpertSpec has none); the adapter refuses by its own check; the `sum` variant is Level B",
   "evidence": "adapter run"
+ },
+ "minicpm3": {
+  "class": "data",
+  "frs": [
+   "FR-25"
+  ],
+  "short": "Level B by a third-party adapter when the built-in refusal (by name, a description of the remote-code model) is overridden; on the merged tree its random tiny fixture reached logits of 305 natural-log units and lane G's LOGITS_Q24_V1 refused it past 120 (a property of the fixture's scale_emb = 12, not of the family): the census config now uses scale_emb = 2",
+  "evidence": "adapter run"
  }
 }

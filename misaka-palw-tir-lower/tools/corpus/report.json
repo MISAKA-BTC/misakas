@@ -8,8 +8,9 @@
       "hf_arch": "LlamaForCausalLM",
       "id": "llama",
       "level": "A",
+      "level_label": "A",
       "model_type": "llama",
-      "ms": 3514,
+      "ms": 3190,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -35,6 +36,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "4be1f4c6294c049a1829aae69b285fbfbcbacd17ce6564d90244c7cca79167447e4b5237ff3177bb8a918cef03c53bc4ac70de6f8c4747835c205612782fe998",
@@ -174,21 +176,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.908360389394556e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00015386746242921105,
-          "kl_mean": 0.00004251498614867137,
+          "kl_max": 0.0001538674165590464,
+          "kl_mean": 0.000042514989783168085,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 136,
+          "ms": 144,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.00018176737801711695,
+          "ppl_delta": -0.00018177131191632334,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -202,7 +204,7 @@
           },
           "digest": "80eb404d6305888945a3a633f83463eac60c8321422d8e07fee621e89f1320aba086196ae1177e0d92a56675f5c54721a19e6150f04dddc57520cab752b0676d",
           "layers": 2,
-          "ms": 1,
+          "ms": 5,
           "nodes": 317,
           "ok": true,
           "params": 71,
@@ -229,13 +231,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 83,
+          "ms": 135,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 3126,
+          "ms": 2559,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -254,8 +256,9 @@
       "hf_arch": "Qwen2ForCausalLM",
       "id": "qwen2",
       "level": "A",
+      "level_label": "A",
       "model_type": "qwen2",
-      "ms": 3062,
+      "ms": 2733,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -281,6 +284,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "76777c6779beb7920af9a4e6a16351819be790429f37f2bd952d7e12b6c4c8a21e9038b271aa9be42a544a1a9b95b7ca4387993b18b6e8156cce7b2b2a0e8ef0",
@@ -376,7 +380,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 2,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -427,21 +431,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.0356770986698276e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.002574459209909847,
-          "kl_mean": 0.00012601484927702203,
+          "kl_max": 0.0025744587771261594,
+          "kl_mean": 0.00012601485447461772,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 164,
+          "ms": 156,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0006506527978129562,
+          "ppl_delta": -0.00065064964421091,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -482,13 +486,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 180,
+          "ms": 100,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2697,
+          "ms": 2451,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -507,8 +511,9 @@
       "hf_arch": "MistralForCausalLM",
       "id": "mistral",
       "level": "A",
+      "level_label": "A",
       "model_type": "mistral",
-      "ms": 3310,
+      "ms": 2593,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -534,6 +539,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "9874ce796ad73bf44638098714e2e8470a42cd7fa8ab857eaa8d163a33a374095ad75f4808b52a7ee31d34f580e839aebe587cf5927b859c6ef8709df6f2aec0",
@@ -622,7 +628,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -673,21 +679,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.0624323202457226e-7,
-          "ms": 10,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0001333116972669421,
-          "kl_mean": 0.00003801898523423857,
+          "kl_max": 0.00013331173739471446,
+          "kl_mean": 0.00003801898783611048,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 128,
+          "ms": 134,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0005549961101756207,
+          "ppl_delta": 0.000554994008802101,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -701,7 +707,7 @@
           },
           "digest": "6c1936793af342d5c788933d1431eedbe08f3579da9c35c5289ef2c39c91c6414cde8b76a467ce7b87afe61adb860b20e44c17b58a03a3965f9e595171ef1a31",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 317,
           "ok": true,
           "params": 71,
@@ -728,13 +734,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 80,
+          "ms": 147,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 3068,
+          "ms": 2293,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -753,8 +759,9 @@
       "hf_arch": "GPT2LMHeadModel",
       "id": "gpt2",
       "level": "B",
+      "level_label": "B",
       "model_type": "gpt2",
-      "ms": 3185,
+      "ms": 2539,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -790,6 +797,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "030c5309b06f1d298bfbcd8d8d37f5eeaa437f0e84b5262eb93fd91eb50ccee6ad64f62472e6449455fa125ed3a11f1fe0f49534e3e162b588e381e5438ef0d1",
@@ -899,7 +907,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 3,
           "ok": true,
           "position": {
             "commit_lanes": 1152,
@@ -931,7 +939,7 @@
           }
         },
         "bind": {
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -954,21 +962,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.3808023182608057e-7,
-          "ms": 8,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.001819973265401252,
-          "kl_mean": 0.00019951501379237465,
+          "kl_max": 0.0018199730481558637,
+          "kl_mean": 0.00019951503718522708,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 143,
+          "ms": 154,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0029746201394822425,
+          "ppl_delta": 0.002974615251399415,
           "top1": 1.0
         },
         "lower": {
@@ -982,7 +990,7 @@
           },
           "digest": "89b91d583620149190e824b9b8ee96f6b782fd3fcc132488128e3d1ed9108224eb8564e90cc8bb3ab66fa4dcd585534c849d94b3a787f2029c7f1243eab22ba0",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 485,
           "ok": true,
           "params": 116,
@@ -1007,13 +1015,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 73,
+          "ms": 137,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 2937,
+          "ms": 2222,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1032,8 +1040,9 @@
       "hf_arch": "Qwen3ForCausalLM",
       "id": "qwen3",
       "level": "A",
+      "level_label": "A",
       "model_type": "qwen3",
-      "ms": 4576,
+      "ms": 2639,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -1059,6 +1068,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "68eac1494210acab3703bb1d61b67b963a31c0f60a5c36636c80e4ec9527629edb300b4909abdd808fbe04f6ac86654385abe9f9d830dcef3a35199fb9b9d5bb",
@@ -1161,7 +1171,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 4,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1280,
@@ -1212,21 +1222,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.8562250430542962e-7,
-          "ms": 5,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0012363481641775589,
-          "kl_mean": 0.00011307167441763688,
+          "kl_max": 0.001236347804423785,
+          "kl_mean": 0.00011307166754755756,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 205,
+          "ms": 181,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.014047610965376434,
+          "ppl_delta": 0.01404760813955619,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -1267,13 +1277,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 138,
+          "ms": 108,
           "ok": true,
           "tensors": 134
         },
         "three_way": {
           "equal": true,
-          "ms": 4206,
+          "ms": 2330,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1292,8 +1302,9 @@
       "hf_arch": "Gemma2ForCausalLM",
       "id": "gemma2",
       "level": "B",
+      "level_label": "B",
       "model_type": "gemma2",
-      "ms": 6219,
+      "ms": 3090,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1321,6 +1332,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "209f2e470737f8a072633147a870bcc38ad476d90cb0e8a6b9fb0460cecb0d7272a5f3ec10b620bf736111cecb08d3e19053006175533f46986e5b51e7e33191",
@@ -1508,21 +1520,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.2672115386634568e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0001322901211641839,
-          "kl_mean": 2.96836171205254e-6,
+          "kl_max": 0.00013229015525183566,
+          "kl_mean": 2.9683622958344727e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 206,
+          "ms": 142,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00037487540164082844,
+          "ppl_delta": 0.00037488164757371045,
           "top1": 1.0
         },
         "lower": {
@@ -1565,13 +1577,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 236,
+          "ms": 70,
           "ok": true,
           "tensors": 141
         },
         "three_way": {
           "equal": true,
-          "ms": 5755,
+          "ms": 2857,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1590,8 +1602,9 @@
       "hf_arch": "Gemma3ForCausalLM",
       "id": "gemma3_text",
       "level": "B",
+      "level_label": "B",
       "model_type": "gemma3_text",
-      "ms": 7059,
+      "ms": 4910,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1616,6 +1629,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "39895055b896d19a6490812e7d357d50697c70730c23eb5e5d8fb64f3274e2b86cb8de8c61c0a10deb0df18a3d196d1e51c2ea2e2616b08618f18c6e7ee01b8d",
@@ -1756,7 +1770,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 8,
           "ok": true,
           "position": {
             "commit_lanes": 2048,
@@ -1788,7 +1802,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 4,
           "ok": true,
           "unused_tensors": 0
         },
@@ -1818,14 +1832,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 1.2868679865378338e-6,
-          "kl_mean": 5.042474390908532e-8,
+          "kl_max": 1.2868698400046909e-6,
+          "kl_mean": 5.042479552771153e-8,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 288,
+          "ms": 274,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0019226043906519497,
+          "ppl_delta": -0.001922607172485935,
           "top1": 1.0
         },
         "lower": {
@@ -1839,7 +1853,7 @@
           },
           "digest": "d3a415d5abb2f80a6e132bfdbd102702c1278a34d32609d7fc25abacf796883a3c69653c1de878e81860d5533418fe4edca866dec34761f62fc58a2c7d3d7eef",
           "layers": 3,
-          "ms": 2,
+          "ms": 4,
           "nodes": 790,
           "ok": true,
           "params": 150,
@@ -1866,13 +1880,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 227,
+          "ms": 119,
           "ok": true,
           "tensors": 217
         },
         "three_way": {
           "equal": true,
-          "ms": 6518,
+          "ms": 4482,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1891,8 +1905,9 @@
       "hf_arch": "Gemma4ForCausalLM",
       "id": "gemma4_text",
       "level": "B",
+      "level_label": "B",
       "model_type": "gemma4_text",
-      "ms": 18830,
+      "ms": 11017,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1917,6 +1932,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "3a962d15211f9ca047c892eae7483bd89439f9f6d19e337204f4c63ffc70ae09fed6fea31a712f28f09f2f008a2638cd8dc54f7463957ae82876e06c64d0b8dc",
@@ -2182,14 +2198,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.013487947137136675,
-          "kl_mean": 0.00022285751308267902,
+          "kl_max": 0.013487947344932395,
+          "kl_mean": 0.00022285751315338288,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 634,
+          "ms": 599,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0011153128400167578,
+          "ppl_delta": 0.0011153162137962358,
           "top1": 1.0
         },
         "lower": {
@@ -2232,13 +2248,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 376,
+          "ms": 434,
           "ok": true,
           "tensors": 415
         },
         "three_way": {
           "equal": true,
-          "ms": 17776,
+          "ms": 9938,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2257,8 +2273,9 @@
       "hf_arch": "Phi3ForCausalLM",
       "id": "phi3",
       "level": "B",
+      "level_label": "B",
       "model_type": "phi3",
-      "ms": 99260,
+      "ms": 50705,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2285,6 +2302,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "4d90755abcdec7139481c169b05d73389a646e6578502d83835f6b305f5d278b7fa71a2bb1fc0642a42d20949fa8d1e77adbb28aca42d234630c2e05b8715a8f",
@@ -2433,14 +2451,14 @@
           "reference": "decode"
         },
         "int_vs_float": {
-          "kl_max": 0.00016996647764805248,
-          "kl_mean": 0.00005004424494097081,
+          "kl_max": 0.00016996649957086514,
+          "kl_mean": 0.00005004424189335193,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 502,
+          "ms": 291,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0006532045082214832,
+          "ppl_delta": 0.0006532047708089905,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -2481,13 +2499,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 379,
+          "ms": 416,
           "ok": true,
           "tensors": 124
         },
         "three_way": {
           "equal": true,
-          "ms": 98361,
+          "ms": 49981,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2506,8 +2524,9 @@
       "hf_arch": "GPTNeoXForCausalLM",
       "id": "gpt_neox",
       "level": "B",
+      "level_label": "B",
       "model_type": "gpt_neox",
-      "ms": 4265,
+      "ms": 2087,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2535,6 +2554,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "75a05ac8c56150c2b3116a77fdb1b30d2b332a562f793c3913d47b7035436c114e2450858dbc17ba97d78197d76008f0eccea39503aa2cfc87e0f43810544f9f",
@@ -2637,7 +2657,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1024,
@@ -2695,14 +2715,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00007142097920573138,
-          "kl_mean": 0.000033343823790514295,
+          "kl_max": 0.0000714209533413793,
+          "kl_mean": 0.00003334382157861009,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 170,
+          "ms": 104,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.000891241637000606,
+          "ppl_delta": 0.0008912378751320116,
           "top1": 1.0
         },
         "lower": {
@@ -2743,13 +2763,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 185,
+          "ms": 63,
           "ok": true,
           "tensors": 121
         },
         "three_way": {
           "equal": true,
-          "ms": 3891,
+          "ms": 1903,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2768,8 +2788,9 @@
       "hf_arch": "OPTForCausalLM",
       "id": "opt",
       "level": "B",
+      "level_label": "B",
       "model_type": "opt",
-      "ms": 4022,
+      "ms": 1990,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2802,6 +2823,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "5ac3604de923d66e3ef031cdae2adf34071e7773a59cf3b6e1297224439f87be9003a4e9ee5e486b52240ea0d7b13aab73c25c74b329f131fc507413cc8bdeac",
@@ -2971,14 +2993,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0015198250138367085,
-          "kl_mean": 0.0002177493175603754,
+          "kl_max": 0.0015198252991909626,
+          "kl_mean": 0.00021774930941209723,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 128,
+          "ms": 99,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.005410853656998782,
+          "ppl_delta": 0.00541085854233847,
           "top1": 1.0
         },
         "lower": {
@@ -3017,13 +3039,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 204,
+          "ms": 37,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 3673,
+          "ms": 1839,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3042,8 +3064,9 @@
       "hf_arch": "FalconForCausalLM",
       "id": "falcon",
       "level": "B",
+      "level_label": "B",
       "model_type": "falcon",
-      "ms": 4616,
+      "ms": 2295,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3079,6 +3102,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "9778b427b26e1e06cc1213f4dd53ed2cf718ae6918b83e032deac7afc3542e90e4b15dabcfecd2070e930524a3a7638ccda7579ecfbc5cda9a243800a787948c",
@@ -3225,14 +3249,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0017050115047047391,
-          "kl_mean": 0.0001511600068777164,
+          "kl_max": 0.0017050118803135588,
+          "kl_mean": 0.0001511600082820866,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 191,
+          "ms": 147,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.006851649499432955,
+          "ppl_delta": -0.006851645800986517,
           "top1": 1.0
         },
         "lower": {
@@ -3273,13 +3297,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 218,
+          "ms": 93,
           "ok": true,
           "tensors": 105
         },
         "three_way": {
           "equal": true,
-          "ms": 4190,
+          "ms": 2040,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3298,8 +3322,9 @@
       "hf_arch": "Starcoder2ForCausalLM",
       "id": "starcoder2",
       "level": "B",
+      "level_label": "B",
       "model_type": "starcoder2",
-      "ms": 5316,
+      "ms": 2209,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3327,6 +3352,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "79d1015cf01b0a9c439ee0cff174ef73f84b746c59eebcd387f163c532ffc11db2cfaf3e34c44da7625af88db81ab9f4af04577c66affeccb4c1cad4ca745166",
@@ -3436,7 +3462,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 928,
@@ -3494,14 +3520,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0023169014219716947,
-          "kl_mean": 0.0002406826822526961,
+          "kl_max": 0.0023169015254860346,
+          "kl_mean": 0.00024068266079908324,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 188,
+          "ms": 113,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00902049937480176,
+          "ppl_delta": 0.009020498646432173,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -3515,7 +3541,7 @@
           },
           "digest": "bdb0b1d1dfe4e0187908e4f67b3b0c916b071668fce95fdd8e5157f023d11480c6b1e3e0c03ddbfe2810352ca0e8936a3eb9e55d94eb4603662848e6d063b8e7",
           "layers": 2,
-          "ms": 3,
+          "ms": 1,
           "nodes": 309,
           "ok": true,
           "params": 65,
@@ -3542,13 +3568,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 115,
+          "ms": 77,
           "ok": true,
           "tensors": 117
         },
         "three_way": {
           "equal": true,
-          "ms": 4989,
+          "ms": 2003,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3567,8 +3593,9 @@
       "hf_arch": "Cohere2ForCausalLM",
       "id": "cohere2",
       "level": "B",
+      "level_label": "B",
       "model_type": "cohere2",
-      "ms": 8944,
+      "ms": 4900,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3596,6 +3623,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "43296f5c1cc136bac779b8b019c9b1a9873bb220bdcff2199b8691a6d9346039bd541a7c27c45a5cdd05782484f3c737411e94f7af93c210c64bed80b05b54ed",
@@ -3769,21 +3797,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.4554033278244997e-7,
-          "ms": 7,
+          "ms": 8,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.000029277729878298612,
-          "kl_mean": 6.9788599707025965e-6,
+          "kl_max": 0.00002927773938045172,
+          "kl_mean": 6.978858374324798e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 399,
+          "ms": 238,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.00001930826195417623,
+          "ppl_delta": -0.000019306725332124408,
           "top1": 0.9722222222222222
         },
         "lower": {
@@ -3797,7 +3825,7 @@
           },
           "digest": "6b0d7704ab1fbb88c4c78744ff3d6df0cca1ebe78921902e322d56e2680a0a95d69175b6e1008739a3c7ef598680f7efa14c256344850a6b52d17d3f98e0d053",
           "layers": 4,
-          "ms": 1,
+          "ms": 2,
           "nodes": 501,
           "ok": true,
           "params": 116,
@@ -3824,13 +3852,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 304,
+          "ms": 137,
           "ok": true,
           "tensors": 220
         },
         "three_way": {
           "equal": true,
-          "ms": 8208,
+          "ms": 4496,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3849,8 +3877,9 @@
       "hf_arch": "GraniteForCausalLM",
       "id": "granite",
       "level": "A",
+      "level_label": "A",
       "model_type": "granite",
-      "ms": 5060,
+      "ms": 2560,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -3876,6 +3905,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "e359dfc5dc173a0a9726467e8631f75eb5cbab33046def517eb02c590f8c6cc8171478617b295709efd001d14dd35f7e04862df3fe5f130c10f0da77d924bb2e",
@@ -4036,14 +4066,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 2.531312290932114e-6,
-          "kl_mean": 1.4033084212677754e-6,
+          "kl_max": 2.531304638297661e-6,
+          "kl_mean": 1.4033089281533229e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 231,
+          "ms": 150,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00013124216221349627,
+          "ppl_delta": 0.00013124041635759198,
           "top1": 0.9722222222222222
         },
         "lower": {
@@ -4084,13 +4114,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 256,
+          "ms": 94,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 4542,
+          "ms": 2296,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4109,8 +4139,9 @@
       "hf_arch": "Glm4ForCausalLM",
       "id": "glm4",
       "level": "B",
+      "level_label": "B",
       "model_type": "glm4",
-      "ms": 5822,
+      "ms": 2365,
       "read": {
         "a_diff": ".hf.mlp: \"FusedGateFirst\" ≠ \"Separate\"",
         "a_same_as_adapter": false,
@@ -4136,6 +4167,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "d0642ebed949969a58f47d02c4ea440e9004881e3f60d0a87d15f55deac56d4a906e25aafbc317cd880f47cbccd9382e5312608aabd3d0edb6af806687f99230",
@@ -4273,7 +4305,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -4303,14 +4335,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00029423231551459526,
-          "kl_mean": 0.00009018389447748445,
+          "kl_max": 0.00029423212699174883,
+          "kl_mean": 0.00009018390062215724,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 157,
+          "ms": 137,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.000030022205289470527,
+          "ppl_delta": -0.00003002041638666686,
           "top1": 1.0
         },
         "lower": {
@@ -4351,13 +4383,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 149,
+          "ms": 58,
           "ok": true,
           "tensors": 144
         },
         "three_way": {
           "equal": true,
-          "ms": 5496,
+          "ms": 2151,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4376,8 +4408,9 @@
       "hf_arch": "SmolLM3ForCausalLM",
       "id": "smollm3",
       "level": "B",
+      "level_label": "B",
       "model_type": "smollm3",
-      "ms": 11143,
+      "ms": 4560,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4404,6 +4437,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "43500fdd0fe4c8ac37abf0b0df452c587e9f8194dafcff6368955a70236212ae11640110b0323b17247e3b9e98304ffaade65c753361916fef3d27fed8c664d3",
@@ -4561,14 +4595,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.06300236993311001,
-          "kl_mean": 0.001794025247843527,
+          "kl_max": 0.06300237215702884,
+          "kl_mean": 0.0017940252799624784,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 412,
+          "ms": 217,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.007821576154137366,
+          "ppl_delta": -0.00782157020574381,
           "top1": 0.9722222222222222
         },
         "lower": {
@@ -4609,13 +4643,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 323,
+          "ms": 148,
           "ok": true,
           "tensors": 232
         },
         "three_way": {
           "equal": true,
-          "ms": 10383,
+          "ms": 4169,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4634,8 +4668,9 @@
       "hf_arch": "ArceeForCausalLM",
       "id": "arcee",
       "level": "B",
+      "level_label": "B",
       "model_type": "arcee",
-      "ms": 4757,
+      "ms": 2328,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -4659,6 +4694,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -4814,14 +4850,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00013498435430071585,
-          "kl_mean": 0.00004352600454434603,
+          "kl_max": 0.00013498432484674805,
+          "kl_mean": 0.00004352600916917292,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 212,
+          "ms": 125,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0006134364635609346,
+          "ppl_delta": -0.0006134348756217101,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -4862,13 +4898,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 197,
+          "ms": 61,
           "ok": true,
           "tensors": 104
         },
         "three_way": {
           "equal": true,
-          "ms": 4318,
+          "ms": 2118,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4887,8 +4923,9 @@
       "hf_arch": "ApertusForCausalLM",
       "id": "apertus",
       "level": "C",
+      "level_label": "C",
       "model_type": "apertus",
-      "ms": 12,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4910,6 +4947,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -4946,8 +4984,9 @@
       "hf_arch": "HeliumForCausalLM",
       "id": "helium",
       "level": "B",
+      "level_label": "B",
       "model_type": "helium",
-      "ms": 6239,
+      "ms": 2457,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -4971,6 +5010,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -5096,7 +5136,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 0,
           "ok": true,
           "unused_tensors": 0
         },
@@ -5126,14 +5166,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00009593934217601459,
-          "kl_mean": 0.00003488191436034321,
+          "kl_max": 0.00009593937644534231,
+          "kl_mean": 0.00003488190919488295,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 202,
+          "ms": 140,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.000042423986578832285,
+          "ppl_delta": -0.00004242179498670229,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -5174,13 +5214,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 152,
+          "ms": 93,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 5849,
+          "ms": 2192,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5199,8 +5239,9 @@
       "hf_arch": "HunYuanDenseV1ForCausalLM",
       "id": "hunyuan_v1_dense",
       "level": "C",
+      "level_label": "C",
       "model_type": "hunyuan_v1_dense",
-      "ms": 62,
+      "ms": 40,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5226,6 +5267,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "11164a1eac5ffd52fd5e1c9eaea38d49cc631f64ca9831415edce8bad98e078e827d099a40947f1a47bb0f717c67aa12e67b569237953297dc069cbd9864d6fb",
@@ -5369,7 +5411,7 @@
           }
         },
         "bind": {
-          "ms": 4,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -5446,8 +5488,9 @@
       "hf_arch": "SeedOssForCausalLM",
       "id": "seed_oss",
       "level": "B",
+      "level_label": "B",
       "model_type": "seed_oss",
-      "ms": 6354,
+      "ms": 2609,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5473,6 +5516,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "cc835f5f5d71d999f063f7b923dbc4ff4b2850be4a1a697b2dc60e47b180f9571f2917fdb0240cefb9fdc538791e4002c5d2bfc3698feb84d690bbedd9fe0d85",
@@ -5630,14 +5674,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0001849471229579087,
-          "kl_mean": 0.00004503505019628338,
+          "kl_max": 0.0001849471344768288,
+          "kl_mean": 0.00004503505120486829,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 170,
+          "ms": 133,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.001435609044832642,
+          "ppl_delta": 0.0014356082757542854,
           "top1": 1.0
         },
         "lower": {
@@ -5678,13 +5722,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 175,
+          "ms": 60,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 5987,
+          "ms": 2396,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5703,8 +5747,9 @@
       "hf_arch": "Ernie4_5ForCausalLM",
       "id": "ernie4_5",
       "level": "B",
+      "level_label": "B",
       "model_type": "ernie4_5",
-      "ms": 5603,
+      "ms": 2626,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5730,6 +5775,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "e674f80ca770027578a5ed2ee3e721c3e365b5bc8636de7e06154948878b4e004d6f012c0d2dd99a8da8804f434a9a0677f942c03bd4b09b0e384b4e216eef4b",
@@ -5889,21 +5935,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.5142692608117274e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.002711505028663813,
-          "kl_mean": 0.00017004800041927598,
+          "kl_max": 0.002711504136921976,
+          "kl_mean": 0.00017004798849763975,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 287,
+          "ms": 139,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00011989400489476054,
+          "ppl_delta": 0.00011989390595412708,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -5944,13 +5990,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 119,
+          "ms": 149,
           "ok": true,
           "tensors": 122
         },
         "three_way": {
           "equal": true,
-          "ms": 5175,
+          "ms": 2317,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5969,8 +6015,9 @@
       "hf_arch": "BitNetForCausalLM",
       "id": "bitnet",
       "level": "C",
+      "level_label": "C",
       "model_type": "bitnet",
-      "ms": 34,
+      "ms": 37,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -5994,6 +6041,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -6082,7 +6130,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 2,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -6182,8 +6230,9 @@
       "hf_arch": "PersimmonForCausalLM",
       "id": "persimmon",
       "level": "B",
+      "level_label": "B",
       "model_type": "persimmon",
-      "ms": 5606,
+      "ms": 2462,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6211,6 +6260,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "d8963d8546568c01d2fe3ad25693d7c4a98fe7ae649329d3d5851fa4e877152867dc72065e1a26b8e8157dc85c37bb36f245b49778f93f68ea93cd8fe61c23e7",
@@ -6368,7 +6418,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -6391,21 +6441,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.8830189524723616e-7,
-          "ms": 6,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00018067100842811094,
-          "kl_mean": 0.000045507825399891315,
+          "kl_max": 0.0001806710476675356,
+          "kl_mean": 0.000045507821503130966,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 189,
+          "ms": 132,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0005351703437043165,
+          "ppl_delta": -0.0005351718041705089,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -6446,13 +6496,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 101,
+          "ms": 83,
           "ok": true,
           "tensors": 137
         },
         "three_way": {
           "equal": true,
-          "ms": 5289,
+          "ms": 2224,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6471,8 +6521,9 @@
       "hf_arch": "DiffLlamaForCausalLM",
       "id": "diffllama",
       "level": "C",
+      "level_label": "C",
       "model_type": "diffllama",
-      "ms": 9,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6498,6 +6549,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -6538,8 +6590,9 @@
       "hf_arch": "CwmForCausalLM",
       "id": "cwm",
       "level": "A",
+      "level_label": "A",
       "model_type": "cwm",
-      "ms": 5659,
+      "ms": 2351,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -6563,6 +6616,7 @@
           "supported": true
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -6658,7 +6712,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -6713,21 +6767,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.682383766499566e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00020524834168452488,
-          "kl_mean": 0.00005099576988918296,
+          "kl_max": 0.00020524839002704023,
+          "kl_mean": 0.000050995771652227144,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 145,
+          "ms": 128,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0007453405462857221,
+          "ppl_delta": -0.0007453407783926114,
           "top1": 1.0
         },
         "lower": {
@@ -6768,13 +6822,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 76,
+          "ms": 64,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 5413,
+          "ms": 2139,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6793,6 +6847,7 @@
       "hf_arch": "Gemma3nForCausalLM",
       "id": "gemma3n_text",
       "level": "C",
+      "level_label": "C",
       "model_type": "gemma3n_text",
       "ms": 2,
       "read": {
@@ -6848,6 +6903,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -6898,8 +6954,9 @@
       "hf_arch": "MixtralForCausalLM",
       "id": "mixtral",
       "level": "B",
+      "level_label": "B",
       "model_type": "mixtral",
-      "ms": 7811,
+      "ms": 4117,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6928,6 +6985,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "850b0a7666ce838638a0f4d8faf4a593a1c1021f3f2e6839dda3ccab1d2500f6b5f9896501f9c2f728b60cb448d269a9d997a38df793f2e451a7f9fb844a7809",
@@ -7082,14 +7140,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0002074951296805757,
-          "kl_mean": 0.00005295272291166284,
+          "kl_max": 0.00020749516479149737,
+          "kl_mean": 0.00005295271858742145,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 181,
+          "ms": 133,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0006909984119503054,
+          "ppl_delta": 0.0006910002330460241,
           "top1": 1.0
         },
         "lower": {
@@ -7132,13 +7190,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 211,
+          "ms": 101,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 7396,
+          "ms": 3863,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7157,8 +7215,9 @@
       "hf_arch": "Qwen2MoeForCausalLM",
       "id": "qwen2_moe",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen2_moe",
-      "ms": 5707,
+      "ms": 3407,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7192,6 +7251,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "fbc1bca518f1c8d2948c21f8c3b29c50131fe717553504b4022a68b45cc9601d646c02129a5e26b01cae923dbe13fb4ac33ce09491aa1dfc833025da145b0cf9",
@@ -7310,7 +7370,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 7,
+          "ms": 5,
           "ok": true,
           "position": {
             "commit_lanes": 1318,
@@ -7373,14 +7433,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0001792661144343848,
-          "kl_mean": 0.00004004277971431891,
+          "kl_max": 0.00017926609589086814,
+          "kl_mean": 0.0000400427795356874,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 167,
+          "ms": 136,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0005302475393096362,
+          "ppl_delta": 0.0005302478477562378,
           "top1": 1.0
         },
         "lower": {
@@ -7395,7 +7455,7 @@
           },
           "digest": "0d446787d616e3b826dbe220c4fb0ab053c13a0468146a44f75a045b2f89a73e9a5b6df89dde5ef6b14ad2597fcdf50ff541d4db16b4e480ce4a62988593ed0e",
           "layers": 2,
-          "ms": 7,
+          "ms": 2,
           "nodes": 674,
           "ok": true,
           "params": 149,
@@ -7423,13 +7483,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 215,
+          "ms": 80,
           "ok": true,
           "tensors": 149
         },
         "three_way": {
           "equal": true,
-          "ms": 5295,
+          "ms": 3168,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7448,8 +7508,9 @@
       "hf_arch": "Qwen3MoeForCausalLM",
       "id": "qwen3_moe",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen3_moe",
-      "ms": 5595,
+      "ms": 2607,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7481,6 +7542,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "44e118b3fd2755eefa6d642609c0c804809921f34a977ac03516694253ce6d7588dc36b1d43baac5a2bf8562c4acc05f6801fa82984bdcd215169472e3a21d77",
@@ -7651,14 +7713,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00007961869427307334,
-          "kl_mean": 0.000027297599756984795,
+          "kl_max": 0.00007961878594985894,
+          "kl_mean": 0.000027297603054603785,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 172,
+          "ms": 136,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0007474726042062674,
+          "ppl_delta": 0.0007474707628387645,
           "top1": 0.9722222222222222
         },
         "lower": {
@@ -7701,13 +7763,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 291,
+          "ms": 79,
           "ok": true,
           "tensors": 130
         },
         "three_way": {
           "equal": true,
-          "ms": 5112,
+          "ms": 2373,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7726,8 +7788,9 @@
       "hf_arch": "GraniteMoeForCausalLM",
       "id": "granitemoe",
       "level": "B",
+      "level_label": "B",
       "model_type": "granitemoe",
-      "ms": 4517,
+      "ms": 2506,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7755,6 +7818,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "a3367036d278b7ff4e00168bb70f2392a8c8b75729639d7873e75cb17c4d9226cd2137367065b56ba53a1f7549ebbc4c467dc92a4e81eec80aab888aaeedaea6",
@@ -7925,14 +7989,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00015213937100050026,
-          "kl_mean": 3.264853211714383e-6,
+          "kl_max": 0.00015213937707842117,
+          "kl_mean": 3.2648533263794608e-6,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 154,
+          "ms": 109,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0007891682955822876,
+          "ppl_delta": -0.0007891695178304792,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -7975,13 +8039,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 252,
+          "ms": 73,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 4093,
+          "ms": 2308,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8000,8 +8064,9 @@
       "hf_arch": "DeepseekV3ForCausalLM",
       "id": "deepseek_v3",
       "level": "B",
+      "level_label": "B",
       "model_type": "deepseek_v3",
-      "ms": 6018,
+      "ms": 3060,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8044,6 +8109,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "78bce29e758443506e3a31aad358758dbb55453eb6ab9f8a003a6ce665004d1c7d6cb7da27c40cdd93448edbd73f47d86ec46c145df72c0341f901fdf19ec5f0",
@@ -8244,14 +8310,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00010052277295384657,
-          "kl_mean": 0.00004293121149693192,
+          "kl_max": 0.00010052281155271099,
+          "kl_mean": 0.0000429312164935884,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 264,
+          "ms": 160,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.00009161387768741314,
+          "ppl_delta": -0.00009161253323275442,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -8266,7 +8332,7 @@
           },
           "digest": "ed398716605a8a3175a6db7d4299bd92411b5a9235fd41b6d97de41a97560347e9190579be0336e22902156e09f5b7c6a1267131c604296aa3c55e1f48e260db",
           "layers": 2,
-          "ms": 5,
+          "ms": 3,
           "nodes": 869,
           "ok": true,
           "params": 172,
@@ -8298,13 +8364,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 472,
+          "ms": 78,
           "ok": true,
           "tensors": 172
         },
         "three_way": {
           "equal": true,
-          "ms": 5252,
+          "ms": 2796,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8323,8 +8389,9 @@
       "hf_arch": "GptOssForCausalLM",
       "id": "gpt_oss",
       "level": "B",
+      "level_label": "B",
       "model_type": "gpt_oss",
-      "ms": 6684,
+      "ms": 3799,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8352,6 +8419,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "4b650cf3a348994065c54a0798ebfc584dcbada91605bb601746d9a900a0eccac05a2b66add85e06b9a4aaba034b81a4a5eefc3a05c48a80ae6ceb31b328fab5",
@@ -8545,14 +8613,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.014771090426471803,
-          "kl_mean": 0.00023534218782712276,
+          "kl_max": 0.014771089982557748,
+          "kl_mean": 0.00023534218287726564,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 188,
+          "ms": 134,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.006832290019456511,
+          "ppl_delta": -0.006832286411277755,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -8598,13 +8666,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 189,
+          "ms": 75,
           "ok": true,
           "tensors": 138
         },
         "three_way": {
           "equal": true,
-          "ms": 6283,
+          "ms": 3570,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8623,8 +8691,9 @@
       "hf_arch": "Llama4ForCausalLM",
       "id": "llama4_text",
       "level": "B",
+      "level_label": "B",
       "model_type": "llama4_text",
-      "ms": 14681,
+      "ms": 7933,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8649,6 +8718,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "898a0c414fdc32390faa2fb9d18a0e444f65491a7604a96ce489a4bd0ca711717e0ccb8587277adf1db410711c67e044892ac68dd601219629f10d597500df48",
@@ -8887,14 +8957,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.007926594437201673,
-          "kl_mean": 0.00023119359728640697,
+          "kl_max": 0.007926592650757461,
+          "kl_mean": 0.00023119350567398105,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 372,
+          "ms": 383,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.004750049348249408,
+          "ppl_delta": -0.0047500574175038945,
           "top1": 1.0
         },
         "lower": {
@@ -8909,7 +8979,7 @@
           },
           "digest": "52289e0c9cf3a660045f4e632ecaaee1740838f233a81bd3d2f63f880124cc2652868cc4d5aabf7a9bc4bb5eefb6d73b4e3bac10b8cafbe6a5a6ddb2aa587193",
           "layers": 4,
-          "ms": 2,
+          "ms": 19,
           "nodes": 687,
           "ok": true,
           "params": 146,
@@ -8940,13 +9010,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 356,
+          "ms": 303,
           "ok": true,
           "tensors": 275
         },
         "three_way": {
           "equal": true,
-          "ms": 13924,
+          "ms": 7202,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8965,8 +9035,9 @@
       "hf_arch": "Glm4MoeForCausalLM",
       "id": "glm4_moe",
       "level": "B",
+      "level_label": "B",
       "model_type": "glm4_moe",
-      "ms": 6859,
+      "ms": 3509,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9003,6 +9074,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "87f88f0a4060c61c95c48c66cb23e06eecfca1b86d649455ff1238984102573f9158f50adbc423635192756d67b4a848a869284723dc9d7607f0f4626690a7bc",
@@ -9154,7 +9226,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 8,
           "ok": true,
           "position": {
             "commit_lanes": 1326,
@@ -9217,14 +9289,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.2603333729155962,
-          "kl_mean": 0.0036862643172288112,
+          "kl_max": 0.26033337366522874,
+          "kl_mean": 0.003686264322969756,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 290,
+          "ms": 144,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.001890404678237645,
+          "ppl_delta": -0.0018904036317695105,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -9239,7 +9311,7 @@
           },
           "digest": "45cddebe6fab36a4d721a171950dd4511759064b862e61134199daaa7bda05acb0b1c36310d3e7eaf2544059fed69609162c2d8607bc962fea684908d56637a0",
           "layers": 2,
-          "ms": 3,
+          "ms": 2,
           "nodes": 805,
           "ok": true,
           "params": 156,
@@ -9271,13 +9343,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 260,
+          "ms": 95,
           "ok": true,
           "tensors": 156
         },
         "three_way": {
           "equal": true,
-          "ms": 6281,
+          "ms": 3245,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -9296,8 +9368,9 @@
       "hf_arch": "DbrxForCausalLM",
       "id": "dbrx",
       "level": "C",
+      "level_label": "C",
       "model_type": "dbrx",
-      "ms": 36,
+      "ms": 34,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9333,6 +9406,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "9456f71a780b1d35124e616ac0b1f7111ad8c97eb7413a5feb44efd7d2921c747a5df635146a659f2606941ae0edab24334830ec40bf1f6858ee83c049165bed",
@@ -9456,7 +9530,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1960,
@@ -9556,8 +9630,9 @@
       "hf_arch": "JetMoeForCausalLM",
       "id": "jetmoe",
       "level": "C",
+      "level_label": "C",
       "model_type": "jetmoe",
-      "ms": 9,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9591,6 +9666,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -9639,8 +9715,9 @@
       "hf_arch": "Ernie4_5_MoeForCausalLM",
       "id": "ernie4_5_moe",
       "level": "C",
+      "level_label": "C",
       "model_type": "ernie4_5_moe",
-      "ms": 25,
+      "ms": 23,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9682,6 +9759,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "4bca794c325dd25c130db244199a0010f63b7e7ea9af290a8827d0891cc0263c0d439a87cebd8be8b6fd516307cf0bb3656d171e6090ff015a51cf2c5e810cb1",
@@ -9938,8 +10016,9 @@
       "hf_arch": "HunYuanMoEV1ForCausalLM",
       "id": "hunyuan_v1_moe",
       "level": "C",
+      "level_label": "C",
       "model_type": "hunyuan_v1_moe",
-      "ms": 34,
+      "ms": 31,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9969,6 +10048,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "6b8d64bf5fbd7251a07f7063c1d7dfbdb9b8d4442d53a150e9f241e6bba3bf90eaa476495e7c64f2a4e847093b785aeb4934477412944a9c57985ab0ccda45f0",
@@ -10206,8 +10286,9 @@
       "hf_arch": "MiniMaxM2ForCausalLM",
       "id": "minimax_m2",
       "level": "B",
+      "level_label": "B",
       "model_type": "minimax_m2",
-      "ms": 4848,
+      "ms": 2887,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10237,6 +10318,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "d17d58767317c3f061ba6079b29e11e301ed38d156820cd7a82bf2904c42d5f3f34ec757fd3923c13cde54ec381c7484d2af2e42fe2492ae4a3516013365246b",
@@ -10395,7 +10477,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -10426,14 +10508,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.020632081705542718,
-          "kl_mean": 0.00031763928096837057,
+          "kl_max": 0.020632080127076527,
+          "kl_mean": 0.00031763925938845764,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 171,
+          "ms": 153,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.003172538346480458,
+          "ppl_delta": -0.003172535966361023,
           "top1": 1.0
         },
         "lower": {
@@ -10478,13 +10560,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 121,
+          "ms": 117,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 4531,
+          "ms": 2595,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -10503,8 +10585,9 @@
       "hf_arch": "LongcatFlashForCausalLM",
       "id": "longcat_flash",
       "level": "C",
+      "level_label": "C",
       "model_type": "longcat_flash",
-      "ms": 13,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10554,6 +10637,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -10618,8 +10702,9 @@
       "hf_arch": "DeepseekV32ForCausalLM",
       "id": "deepseek_v32",
       "level": "C",
+      "level_label": "C",
       "model_type": "deepseek_v32",
-      "ms": 19,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10641,6 +10726,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -10677,8 +10763,9 @@
       "hf_arch": "DeepseekV4ForCausalLM",
       "id": "deepseek_v4",
       "level": "C",
+      "level_label": "C",
       "model_type": "deepseek_v4",
-      "ms": 16,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10700,6 +10787,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -10736,8 +10824,9 @@
       "hf_arch": "Qwen3NextForCausalLM",
       "id": "qwen3_next",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen3_next",
-      "ms": 22659,
+      "ms": 11418,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10762,6 +10851,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "29519a1e3f8e332d7c79ef235081f010943d0421ea88dac26d532204e2611d2ea74381aba0f4d0f1011badcc731e2f3cc5c08f7688e633777f29a1f460ee1c35",
@@ -10929,7 +11019,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 11,
+          "ms": 12,
           "ok": true,
           "position": {
             "commit_lanes": 3338,
@@ -10991,14 +11081,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.09705691224796376,
-          "kl_mean": 0.0017286956316694703,
+          "kl_max": 0.09705691191429047,
+          "kl_mean": 0.001728695629414552,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 509,
+          "ms": 409,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.004604876475440278,
+          "ppl_delta": -0.004604877637768956,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -11046,13 +11136,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 574,
+          "ms": 347,
           "ok": true,
           "tensors": 359
         },
         "three_way": {
           "equal": true,
-          "ms": 21531,
+          "ms": 10617,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11071,8 +11161,9 @@
       "hf_arch": "Qwen3_5MoeForCausalLM",
       "id": "qwen3_5_moe",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen3_5_moe_text",
-      "ms": 22787,
+      "ms": 11436,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11097,6 +11188,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "1d788f25006c6aa7600655c441857c1a9269da9bbca167b4a8a0b574a4a8d7a84a66a38124ba57074d04e4073b4e5abe27f25bd84af1d86af31d8413cae7583f",
@@ -11257,7 +11349,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 8,
+          "ms": 7,
           "ok": true,
           "position": {
             "commit_lanes": 3440,
@@ -11312,21 +11404,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 6.362996622912962e-7,
-          "ms": 8,
+          "ms": 9,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.2741120751517613,
-          "kl_mean": 0.006632809575092647,
+          "kl_max": 0.2741120795213935,
+          "kl_mean": 0.006632809715832346,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 663,
+          "ms": 330,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.022489224099347616,
+          "ppl_delta": -0.022489220278575472,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -11374,13 +11466,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 706,
+          "ms": 235,
           "ok": true,
           "tensors": 358
         },
         "three_way": {
           "equal": true,
-          "ms": 21381,
+          "ms": 10835,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11399,8 +11491,9 @@
       "hf_arch": "JambaForCausalLM",
       "id": "jamba",
       "level": "B",
+      "level_label": "B",
       "model_type": "jamba",
-      "ms": 17954,
+      "ms": 8539,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11441,6 +11534,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "800ab413933d53291858a6a1cfbfd8ff0a8de01e987a29200a503353721dcba35ebe57da71c153f1ddb68e64fe3337a19725e42ad2dd606c58d1bdb842f4c66f",
@@ -11612,14 +11706,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0015950081889437827,
-          "kl_mean": 0.0002187418237082,
+          "kl_max": 0.0015950079845457417,
+          "kl_mean": 0.00021874182261470972,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 628,
+          "ms": 294,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.002333802040669797,
+          "ppl_delta": 0.00233380442084119,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -11666,13 +11760,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 379,
+          "ms": 178,
           "ok": true,
           "tensors": 272
         },
         "three_way": {
           "equal": true,
-          "ms": 16912,
+          "ms": 8032,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11691,8 +11785,9 @@
       "hf_arch": "MambaForCausalLM",
       "id": "mamba",
       "level": "B",
+      "level_label": "B",
       "model_type": "mamba",
-      "ms": 6184,
+      "ms": 3370,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11717,6 +11812,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "ae5c248c9e9b4240727638e9b007fd69705b9ec7582c3ea81735f4263d0c5f2931a6554e338e319f0cc24e7cc56985d9928f7103093c93206f325e0e720a7fd0",
@@ -11850,14 +11946,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.000037730619138544395,
-          "kl_mean": 1.5113760635834796e-6,
+          "kl_max": 0.00003773061477732901,
+          "kl_mean": 1.5113778050138095e-6,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 210,
+          "ms": 126,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.000465028133958878,
+          "ppl_delta": 0.00046502242023049867,
           "top1": 1.0
         },
         "lower": {
@@ -11899,13 +11995,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 219,
+          "ms": 105,
           "ok": true,
           "tensors": 106
         },
         "three_way": {
           "equal": true,
-          "ms": 5733,
+          "ms": 3125,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11924,8 +12020,9 @@
       "hf_arch": "Mamba2ForCausalLM",
       "id": "mamba2",
       "level": "B",
+      "level_label": "B",
       "model_type": "mamba2",
-      "ms": 9618,
+      "ms": 3123,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11967,6 +12064,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "c37430e8b7fa7525ce142632f771f09ddf1db2c733f1a23d50a41236c59c0fc7bfd4bab869c40edcf78c4cd1e96a4abbadc5e9bb940899c4831c82718e944eeb",
@@ -12064,7 +12162,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -12086,21 +12184,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.300086882269052e-7,
-          "ms": 7,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.0006562171252843642,
-          "kl_mean": 0.00008043549195457469,
+          "kl_max": 0.0006562170543958385,
+          "kl_mean": 0.0000804354845285936,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 128,
+          "ms": 114,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00035327481082458867,
+          "ppl_delta": 0.00035327402866358604,
           "top1": 0.9583333333333334
         },
         "lower": {
@@ -12143,13 +12241,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 104,
+          "ms": 76,
           "ok": true,
           "tensors": 108
         },
         "three_way": {
           "equal": true,
-          "ms": 9366,
+          "ms": 2915,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12168,8 +12266,9 @@
       "hf_arch": "FalconMambaForCausalLM",
       "id": "falcon_mamba",
       "level": "B",
+      "level_label": "B",
       "model_type": "falcon_mamba",
-      "ms": 12277,
+      "ms": 3561,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12194,6 +12293,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "8339d97589da2568ed3ffb61f8b28b10ea32518a815149fd79b50f531b46f61eebbd3732b51e3497e4a41f0719d008fe21ed4c4c77be139de8c7e20d191d0600",
@@ -12327,14 +12427,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00006188978166856123,
-          "kl_mean": 1.568285502356388e-6,
+          "kl_max": 0.00006188976092363442,
+          "kl_mean": 1.5682842685691875e-6,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 244,
+          "ms": 171,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0038254676880848937,
+          "ppl_delta": -0.0038254674845428216,
           "top1": 1.0
         },
         "lower": {
@@ -12376,13 +12476,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 228,
+          "ms": 89,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 11790,
+          "ms": 3285,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12401,8 +12501,9 @@
       "hf_arch": "RwkvForCausalLM",
       "id": "rwkv",
       "level": "B",
+      "level_label": "B",
       "model_type": "rwkv",
-      "ms": 20187,
+      "ms": 7687,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12427,6 +12528,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "19974db4ebb67de27a18fd57059ac9b2a0081d385acfa89fc7223788ab4a4f4407087822af1bc91783565e8d45cae802c683be627db2cdc5461502a0bfdeafec",
@@ -12515,7 +12617,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 7,
           "ok": true,
           "position": {
             "commit_lanes": 3232,
@@ -12567,14 +12669,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00010118633002243763,
-          "kl_mean": 0.00003879770048601163,
+          "kl_max": 0.00010118630823766425,
+          "kl_mean": 0.000038797700562099544,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 937,
+          "ms": 268,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.00010754907704979555,
+          "ppl_delta": -0.00010754835483850478,
           "top1": 1.0
         },
         "lower": {
@@ -12588,7 +12690,7 @@
           },
           "digest": "a06ffd97ad4859ea4b70230c9d23bf6450c8126225a564d7c69fd9f6b23897e52f2683f76427ceb4ba6e6f575a82f11f01cf704305f90236b2b507ea72d8b0a2",
           "layers": 4,
-          "ms": 2,
+          "ms": 3,
           "nodes": 691,
           "ok": true,
           "params": 169,
@@ -12613,13 +12715,13 @@
           "states": 5
         },
         "materialise": {
-          "ms": 517,
+          "ms": 146,
           "ok": true,
           "tensors": 321
         },
         "three_way": {
           "equal": true,
-          "ms": 18706,
+          "ms": 7245,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12638,8 +12740,9 @@
       "hf_arch": "FalconH1ForCausalLM",
       "id": "falcon_h1",
       "level": "C",
+      "level_label": "C",
       "model_type": "falcon_h1",
-      "ms": 1,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12683,6 +12786,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -12728,8 +12832,9 @@
       "hf_arch": "GraniteMoeHybridForCausalLM",
       "id": "granitemoehybrid",
       "level": "C",
+      "level_label": "C",
       "model_type": "granitemoehybrid",
-      "ms": 34,
+      "ms": 22,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12763,6 +12868,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": true,
+        "refusal_overridden": "user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)",
         "report": {
           "adapter": {
             "hash": "c6524c95b5da443ed86ac39236482f070c46e94112f378aed670d3498838240a5ab3b19a70fc286cb19974f353b4162ad9a0dd168625fc730b05b4b1060067f5",
@@ -12875,7 +12981,7 @@
           "error": "weights: param `moe.shared.up.w`: checkpoint gives [32, 32], graph needs [16, 32]",
           "failed_stage": "bind",
           "level": "B",
-          "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters)"
+          "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters); user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)"
         }
       ],
       "route": "decoder",
@@ -12921,7 +13027,7 @@
         },
         "bind": {
           "error": "weights: param `moe.shared.up.w`: checkpoint gives [32, 32], graph needs [16, 32]",
-          "ms": 7,
+          "ms": 4,
           "ok": false
         },
         "fixture": {
@@ -12980,7 +13086,7 @@
       },
       "tensors": 29,
       "usage": "m",
-      "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters) (refuted: bind)"
+      "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters); user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet) (refuted: bind)"
     },
     {
       "category": "text/hybrid",
@@ -12990,6 +13096,7 @@
       "hf_arch": "Zamba2ForCausalLM",
       "id": "zamba2",
       "level": "C",
+      "level_label": "C",
       "model_type": "zamba2",
       "ms": 1,
       "read": {
@@ -13025,6 +13132,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -13065,8 +13173,9 @@
       "hf_arch": "NemotronHForCausalLM",
       "id": "nemotron_h",
       "level": "C",
+      "level_label": "C",
       "model_type": "nemotron_h",
-      "ms": 5,
+      "ms": 1,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13100,6 +13209,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -13140,8 +13250,9 @@
       "hf_arch": "Lfm2ForCausalLM",
       "id": "lfm2",
       "level": "C",
+      "level_label": "C",
       "model_type": "lfm2",
-      "ms": 33,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13163,6 +13274,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -13199,8 +13311,9 @@
       "hf_arch": "KimiLinearForCausalLM",
       "id": "kimi_linear",
       "level": "C",
+      "level_label": "C",
       "model_type": "kimi_linear",
-      "ms": 13,
+      "ms": 12,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13222,6 +13335,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
@@ -13258,8 +13372,9 @@
       "hf_arch": "BertModel",
       "id": "bert",
       "level": "B",
+      "level_label": "B",
       "model_type": "bert",
-      "ms": 1969,
+      "ms": 899,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13287,6 +13402,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "64b16a5faaa5f3f5b106c20e196703ab86956d41dc254f021ead356e578ca10ced9762a77f082d15969feab4b96cf616dc5960bc656e0a6ccf25174ace66941e",
@@ -13396,7 +13512,7 @@
           "cone_work": 621,
           "cones": 17,
           "job_macs": 215040,
-          "ms": 6,
+          "ms": 5,
           "ok": true,
           "step_leaves": 189
         },
@@ -13425,13 +13541,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.0108130338727388e-7,
-          "ms": 19,
+          "ms": 7,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999479084559845,
-          "ms": 310,
+          "ms": 112,
           "ok": true
         },
         "lower": {
@@ -13470,12 +13586,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 77,
+          "ms": 64,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1530,
+          "ms": 699,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -13494,8 +13610,9 @@
       "hf_arch": "RobertaModel",
       "id": "roberta",
       "level": "B",
+      "level_label": "B",
       "model_type": "roberta",
-      "ms": 1372,
+      "ms": 891,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13523,6 +13640,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "085fa9698dbcf34a065ca8362a82a742a96384b71b90bd32e816907feac8ffddabda76b73f6835fdde4ea1ac805d4ece75af9d0358b3ec8eeaff302602c0207c",
@@ -13632,7 +13750,7 @@
           "cone_work": 621,
           "cones": 17,
           "job_macs": 215040,
-          "ms": 7,
+          "ms": 5,
           "ok": true,
           "step_leaves": 189
         },
@@ -13661,13 +13779,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.4775875375535775e-7,
-          "ms": 9,
+          "ms": 7,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999174291031367,
-          "ms": 189,
+          "ms": 110,
           "ok": true
         },
         "lower": {
@@ -13679,7 +13797,7 @@
             "lowerer_cone_split": 14
           },
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 242,
           "ok": true,
           "params": 53,
@@ -13706,12 +13824,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 76,
+          "ms": 61,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1077,
+          "ms": 696,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -13730,8 +13848,9 @@
       "hf_arch": "XLMRobertaModel",
       "id": "xlm_roberta",
       "level": "B",
+      "level_label": "B",
       "model_type": "xlm-roberta",
-      "ms": 2004,
+      "ms": 1321,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13759,6 +13878,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "085fa9698dbcf34a065ca8362a82a742a96384b71b90bd32e816907feac8ffddabda76b73f6835fdde4ea1ac805d4ece75af9d0358b3ec8eeaff302602c0207c",
@@ -13868,7 +13988,7 @@
           "cone_work": 621,
           "cones": 17,
           "job_macs": 322560,
-          "ms": 10,
+          "ms": 5,
           "ok": true,
           "step_leaves": 279
         },
@@ -13897,13 +14017,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.681267054919299e-7,
-          "ms": 13,
+          "ms": 11,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999491996157195,
-          "ms": 194,
+          "ms": 163,
           "ok": true
         },
         "lower": {
@@ -13942,12 +14062,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 191,
+          "ms": 92,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1583,
+          "ms": 1038,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -13966,8 +14086,9 @@
       "hf_arch": "DistilBertModel",
       "id": "distilbert",
       "level": "B",
+      "level_label": "B",
       "model_type": "distilbert",
-      "ms": 1179,
+      "ms": 904,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14001,6 +14122,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "b1ce961f5f777cd4b29976c755ecf02039702086288b9bf8feca26253965e8c0451690b9bfae1346a5bc41cdb1149355c89ae3560e3f978b8410f807a8974e2d",
@@ -14110,7 +14232,7 @@
           "step_leaves": 189
         },
         "bind": {
-          "ms": 3,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -14134,13 +14256,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.930787324496933e-7,
-          "ms": 10,
+          "ms": 7,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999107030729124,
-          "ms": 133,
+          "ms": 111,
           "ok": true
         },
         "lower": {
@@ -14179,12 +14301,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 91,
+          "ms": 61,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 920,
+          "ms": 704,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -14203,8 +14325,9 @@
       "hf_arch": "MPNetModel",
       "id": "mpnet",
       "level": "B",
+      "level_label": "B",
       "model_type": "mpnet",
-      "ms": 1284,
+      "ms": 923,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14232,6 +14355,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "1986bfea5c09872961b47b213bc94dc6ccfaab984460a43fe1c3c709b1b153accae25de3d9527ccb2e5be49851e717ea7381edfc1061d617249ef1b832d247a0",
@@ -14343,12 +14467,12 @@
           "cone_work": 633,
           "cones": 17,
           "job_macs": 215040,
-          "ms": 7,
+          "ms": 5,
           "ok": true,
           "step_leaves": 189
         },
         "bind": {
-          "ms": 4,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -14372,13 +14496,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.9314177274836601e-7,
-          "ms": 11,
+          "ms": 7,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999580368408341,
-          "ms": 138,
+          "ms": 115,
           "ok": true
         },
         "lower": {
@@ -14390,7 +14514,7 @@
             "lowerer_cone_split": 14
           },
           "layers": 2,
-          "ms": 3,
+          "ms": 1,
           "nodes": 247,
           "ok": true,
           "params": 55,
@@ -14417,12 +14541,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 97,
+          "ms": 63,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1010,
+          "ms": 721,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -14441,8 +14565,9 @@
       "hf_arch": "DebertaV2Model",
       "id": "deberta_v2",
       "level": "C",
+      "level_label": "C",
       "model_type": "deberta-v2",
-      "ms": 5,
+      "ms": 3,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14484,6 +14609,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -14521,8 +14647,9 @@
       "hf_arch": "AlbertModel",
       "id": "albert",
       "level": "C",
+      "level_label": "C",
       "model_type": "albert",
-      "ms": 16,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14557,6 +14684,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "4ecd72bcc1ef202a3f9127ce67495527ac9c67199f0edbaa9a0d157408faff69495a4d79f211105c6b4c1b4c82021579cbcdd21f0019805cc0b32960a74314de",
@@ -14708,8 +14836,9 @@
       "hf_arch": "ModernBertModel",
       "id": "modernbert",
       "level": "C",
+      "level_label": "C",
       "model_type": "modernbert",
-      "ms": 3,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14737,6 +14866,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -14774,8 +14904,9 @@
       "hf_arch": "NomicBertModel",
       "id": "nomic_bert",
       "level": "C",
+      "level_label": "C",
       "model_type": "nomic_bert",
-      "ms": 7,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14806,6 +14937,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -14843,8 +14975,9 @@
       "hf_arch": "CLIPTextModelWithProjection",
       "id": "clip_text",
       "level": "B",
+      "level_label": "B",
       "model_type": "clip_text_model",
-      "ms": 2016,
+      "ms": 1315,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14872,6 +15005,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "5255de8aa7524271c771e08a368ca2fdaafbee5ac42f5b12d2e4bb8040fbedd806d4ea358b86887cb47c7ce5c6c94532d952a762962d41770c09b628d62bf44b",
@@ -15031,7 +15165,7 @@
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999723665357422,
-          "ms": 164,
+          "ms": 136,
           "ok": true
         },
         "lower": {
@@ -15069,12 +15203,12 @@
           "states": 2
         },
         "materialise": {
-          "ms": 45,
+          "ms": 47,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1783,
+          "ms": 1114,
           "ok": true,
           "positions": 15,
           "sequences": 2
@@ -15170,8 +15304,9 @@
       "hf_arch": "T5ForConditionalGeneration",
       "id": "t5",
       "level": "C",
+      "level_label": "C",
       "model_type": "t5",
-      "ms": 19,
+      "ms": 7,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15199,6 +15334,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15313,8 +15449,9 @@
       "hf_arch": "T5ForConditionalGeneration",
       "id": "t5_gated",
       "level": "C",
+      "level_label": "C",
       "model_type": "t5",
-      "ms": 18,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15342,6 +15479,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15457,8 +15595,9 @@
       "hf_arch": "BartForConditionalGeneration",
       "id": "bart",
       "level": "C",
+      "level_label": "C",
       "model_type": "bart",
-      "ms": 9,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15486,6 +15625,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15601,8 +15741,9 @@
       "hf_arch": "MBartForConditionalGeneration",
       "id": "mbart",
       "level": "C",
+      "level_label": "C",
       "model_type": "mbart",
-      "ms": 11,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15630,6 +15771,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15745,8 +15887,9 @@
       "hf_arch": "MarianMTModel",
       "id": "marian",
       "level": "C",
+      "level_label": "C",
       "model_type": "marian",
-      "ms": 12,
+      "ms": 7,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15774,6 +15917,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15815,8 +15959,9 @@
       "hf_arch": "LongT5ForConditionalGeneration",
       "id": "longt5",
       "level": "C",
+      "level_label": "C",
       "model_type": "longt5",
-      "ms": 5,
+      "ms": 1,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15844,6 +15989,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15885,8 +16031,9 @@
       "hf_arch": "T5EncoderModel",
       "id": "t5_encoder",
       "level": "C",
+      "level_label": "C",
       "model_type": "t5",
-      "ms": 8,
+      "ms": 7,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15929,6 +16076,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -15966,8 +16114,9 @@
       "hf_arch": "LlavaForConditionalGeneration",
       "id": "llava",
       "level": "B",
+      "level_label": "B",
       "model_type": "llava",
-      "ms": 3177,
+      "ms": 3289,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16001,6 +16150,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "b9a6b7a031adb6b4135de22dc89cc6b8645dec9475668a3cd0c47cb02ca44508b61ee7d523985ca445e0b25743e47c9a39cc2a9097596d6a75fc276ff8d0ff33",
@@ -16133,21 +16283,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.7283349353856235e-7,
-          "ms": 6,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00023394732831438092,
-          "kl_mean": 0.000042997856269668724,
+          "kl_max": 0.00023394729422837168,
+          "kl_mean": 0.00004299785464582157,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 153,
+          "ms": 126,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.0004452466111235509,
+          "ppl_delta": -0.00044524224948483404,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -16188,13 +16338,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 92,
+          "ms": 58,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2895,
+          "ms": 3084,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16213,8 +16363,9 @@
       "hf_arch": "Qwen2VLForConditionalGeneration",
       "id": "qwen2_vl",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen2_vl",
-      "ms": 2843,
+      "ms": 2497,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16246,6 +16397,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "5e16795591d3fb10fb036469aee7bfaf048304d4148805b65737d1d31e9d5d7e8255916a21f6f4fe7956749aab4213ed88eec7e5c0594a97ebf993952a6fd850",
@@ -16392,21 +16544,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.513669532666341e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00013501493647838673,
-          "kl_mean": 0.000038770329598680187,
+          "kl_max": 0.00013501498706400375,
+          "kl_mean": 0.000038770329270355674,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 189,
+          "ms": 147,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0012917326151975494,
+          "ppl_delta": 0.001291733058095268,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -16447,13 +16599,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 79,
+          "ms": 64,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2553,
+          "ms": 2264,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16472,8 +16624,9 @@
       "hf_arch": "Qwen2_5_VLForConditionalGeneration",
       "id": "qwen2_5_vl",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen2_5_vl",
-      "ms": 3522,
+      "ms": 2418,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16505,6 +16658,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "5e16795591d3fb10fb036469aee7bfaf048304d4148805b65737d1d31e9d5d7e8255916a21f6f4fe7956749aab4213ed88eec7e5c0594a97ebf993952a6fd850",
@@ -16651,21 +16805,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.904769668104649e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00014804079648860757,
-          "kl_mean": 0.00004317521301785657,
+          "kl_max": 0.00014804089290755594,
+          "kl_mean": 0.000043175217997752,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 170,
+          "ms": 132,
           "ok": true,
           "positions": 72,
-          "ppl_delta": -0.00021537175257702046,
+          "ppl_delta": -0.00021536858845783158,
           "top1": 0.9861111111111112
         },
         "lower": {
@@ -16679,7 +16833,7 @@
           },
           "digest": "3c2ec669cd3979151e41127070f784535c5defd96b9322ee7b24bf2cde0d90451ea28de43094ab7b1b6f1a91baca175c1c4b13279b44aeba15b46645795e497e",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 323,
           "ok": true,
           "params": 74,
@@ -16706,13 +16860,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 180,
+          "ms": 78,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 3140,
+          "ms": 2186,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16731,8 +16885,9 @@
       "hf_arch": "Qwen3VLForConditionalGeneration",
       "id": "qwen3_vl",
       "level": "B",
+      "level_label": "B",
       "model_type": "qwen3_vl",
-      "ms": 2888,
+      "ms": 2594,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16767,6 +16922,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "78bcab8eedd39f5291ca0e84bdf43a5972e9be94ec9f5f784ce60d4a7dd7ac4f6aa135f11d2f6f833dffe1d59e7d092a7ad853835e259451cdc9127a732a44e1",
@@ -16933,21 +17089,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.497221061187847e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00010690887297748442,
-          "kl_mean": 0.00004418049273562703,
+          "kl_max": 0.0001069088661345552,
+          "kl_mean": 0.000044180493213625405,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 218,
+          "ms": 133,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.00030294452174994824,
+          "ppl_delta": 0.0003029459893957309,
           "top1": 0.9722222222222222
         },
         "lower": {
@@ -16988,13 +17144,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 136,
+          "ms": 66,
           "ok": true,
           "tensors": 138
         },
         "three_way": {
           "equal": true,
-          "ms": 2506,
+          "ms": 2366,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17013,8 +17169,9 @@
       "hf_arch": "Gemma3ForConditionalGeneration",
       "id": "gemma3_vlm",
       "level": "B",
+      "level_label": "B",
       "model_type": "gemma3",
-      "ms": 3196,
+      "ms": 2508,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17046,6 +17203,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "a9c22504b1d7e6bac57d385deec740fd34458ece0d521942dbe4e3cb10fa979ab1237c9b72c73182e30e3999f57520814271cb843fcb4394b5506607a08a6efd",
@@ -17241,14 +17399,14 @@
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 1.3564230502702145e-8,
-          "kl_mean": 6.847584932517392e-10,
+          "kl_max": 1.3564227811230411e-8,
+          "kl_mean": 6.847584243221806e-10,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 163,
+          "ms": 144,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.001808361410717163,
+          "ppl_delta": 0.0018083667384980462,
           "top1": 1.0
         },
         "lower": {
@@ -17289,13 +17447,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 118,
+          "ms": 66,
           "ok": true,
           "tensors": 150
         },
         "three_way": {
           "equal": true,
-          "ms": 2887,
+          "ms": 2268,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17314,6 +17472,7 @@
       "hf_arch": "PaliGemmaForConditionalGeneration",
       "id": "paligemma",
       "level": "C",
+      "level_label": "C",
       "model_type": "paligemma",
       "ms": 1,
       "read": {
@@ -17349,6 +17508,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -17386,8 +17546,9 @@
       "hf_arch": "Idefics3ForConditionalGeneration",
       "id": "idefics3",
       "level": "B",
+      "level_label": "B",
       "model_type": "idefics3",
-      "ms": 2885,
+      "ms": 2679,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17420,6 +17581,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "b3d6652ee2b1d5bc46c2e659c535d122b9697f6b21a0454e2e0ede8e9d38ef888ed09fc89f6b69c1eb70a4a4615d6f4527fee02e6f96c1b0d6986748962d7d96",
@@ -17512,7 +17674,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 24,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -17563,21 +17725,21 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.855507874919617e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
         },
         "int_vs_float": {
-          "kl_max": 0.00010122433450623108,
-          "kl_mean": 0.00004293954988017086,
+          "kl_max": 0.0001012243508640111,
+          "kl_mean": 0.00004293954374440663,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 192,
+          "ms": 117,
           "ok": true,
           "positions": 72,
-          "ppl_delta": 0.0006096543898646001,
+          "ppl_delta": 0.0006096541640765452,
           "top1": 1.0
         },
         "lower": {
@@ -17618,13 +17780,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 167,
+          "ms": 71,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2480,
+          "ms": 2464,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17643,8 +17805,9 @@
       "hf_arch": "MllamaForConditionalGeneration",
       "id": "mllama",
       "level": "C",
+      "level_label": "C",
       "model_type": "mllama",
-      "ms": 1,
+      "ms": 5,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17678,6 +17841,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -17754,8 +17918,9 @@
       "hf_arch": "CLIPVisionModelWithProjection",
       "id": "clip_vision",
       "level": "C",
+      "level_label": "C",
       "model_type": "clip_vision_model",
-      "ms": 6,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17789,6 +17954,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -17863,8 +18029,9 @@
       "hf_arch": "SiglipVisionModel",
       "id": "siglip_vision",
       "level": "C",
+      "level_label": "C",
       "model_type": "siglip_vision_model",
-      "ms": 6,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17898,6 +18065,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -17939,8 +18107,9 @@
       "hf_arch": "ViTForImageClassification",
       "id": "vit",
       "level": "C",
+      "level_label": "C",
       "model_type": "vit",
-      "ms": 3,
+      "ms": 5,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17977,6 +18146,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18018,8 +18188,9 @@
       "hf_arch": "ResNetForImageClassification",
       "id": "resnet",
       "level": "C",
+      "level_label": "C",
       "model_type": "resnet",
-      "ms": 11,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18058,6 +18229,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18095,8 +18267,9 @@
       "hf_arch": "UNet2DConditionModel",
       "id": "unet2d_condition",
       "level": "C",
+      "level_label": "C",
       "model_type": "unet",
-      "ms": 2,
+      "ms": 3,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18118,6 +18291,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18149,6 +18323,7 @@
       "hf_arch": "UNet2DConditionModel",
       "id": "unet_sdxl",
       "level": "C",
+      "level_label": "C",
       "model_type": "unet",
       "ms": 3,
       "read": {
@@ -18172,6 +18347,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18203,8 +18379,9 @@
       "hf_arch": "DiTTransformer2DModel",
       "id": "dit",
       "level": "C",
+      "level_label": "C",
       "model_type": "dit",
-      "ms": 0,
+      "ms": 1,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18226,6 +18403,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18257,6 +18435,7 @@
       "hf_arch": "FluxTransformer2DModel",
       "id": "flux",
       "level": "C",
+      "level_label": "C",
       "model_type": "flux",
       "ms": 1,
       "read": {
@@ -18280,6 +18459,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18311,6 +18491,7 @@
       "hf_arch": "SD3Transformer2DModel",
       "id": "sd3",
       "level": "C",
+      "level_label": "C",
       "model_type": "sd3",
       "ms": 1,
       "read": {
@@ -18334,6 +18515,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18365,8 +18547,9 @@
       "hf_arch": "AutoencoderKL",
       "id": "vae_kl",
       "level": "C",
+      "level_label": "C",
       "model_type": "vae",
-      "ms": 1,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18388,6 +18571,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18419,6 +18603,7 @@
       "hf_arch": "WhisperForConditionalGeneration",
       "id": "whisper",
       "level": "C",
+      "level_label": "C",
       "model_type": "whisper",
       "ms": 2,
       "read": {
@@ -18448,6 +18633,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18485,6 +18671,7 @@
       "hf_arch": "Wav2Vec2ForCTC",
       "id": "wav2vec2",
       "level": "C",
+      "level_label": "C",
       "model_type": "wav2vec2",
       "ms": 3,
       "read": {
@@ -18557,6 +18744,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18594,8 +18782,9 @@
       "hf_arch": "SpeechT5ForTextToSpeech",
       "id": "speecht5",
       "level": "C",
+      "level_label": "C",
       "model_type": "speecht5",
-      "ms": 2,
+      "ms": 4,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18623,6 +18812,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18660,8 +18850,9 @@
       "hf_arch": "MusicgenForConditionalGeneration",
       "id": "musicgen",
       "level": "C",
+      "level_label": "C",
       "model_type": "musicgen",
-      "ms": 2,
+      "ms": 3,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18689,6 +18880,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18726,8 +18918,9 @@
       "hf_arch": "EncodecModel",
       "id": "encodec",
       "level": "C",
+      "level_label": "C",
       "model_type": "encodec",
-      "ms": 2,
+      "ms": 3,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18755,6 +18948,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18792,6 +18986,7 @@
       "hf_arch": "ChatGLMModel",
       "id": "chatglm3",
       "level": "C",
+      "level_label": "C",
       "model_type": "chatglm",
       "ms": 1,
       "read": {
@@ -18827,6 +19022,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "kind": "none"
@@ -18864,6 +19060,7 @@
       "hf_arch": "InternLM2ForCausalLM",
       "id": "internlm2",
       "level": "B",
+      "level_label": "B",
       "model_type": "internlm2",
       "ms": 14,
       "read": {
@@ -18890,6 +19087,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "38369621c38824bbeb5058ab60db1239ed15b5e841c5655b5e184d55e3c059ded638c361626c2e48cbf3dceb422494405b3f7884697b1e658603c98ff12eb84c",
@@ -18987,6 +19185,7 @@
       "hf_arch": "MiniCPMForCausalLM",
       "id": "minicpm",
       "level": "B",
+      "level_label": "B",
       "model_type": "minicpm",
       "ms": 16,
       "read": {
@@ -19013,6 +19212,7 @@
           "ok": false
         },
         "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
             "hash": "750865df732a15b240650bc69138fdd6f4a1ca6ca07e9f55bec02d2fd47bbca9fb6bcf461cfdb67734def5e65a0958e7b3af3d6fc7c37820289197d0355f342b",
@@ -19127,7 +19327,7 @@
     }
   ],
   "full": true,
-  "pack_hash": "1146c5a13455100e645f04482f8080378b2291ed8001d17ac3f0db2b02c086b8ec3f788ebb3a2843dbbfca656e72f8eb62887ffbb1617b5c1637ee540dab0e0a",
+  "pack_hash": "b322735f7d207a4c9081ccf442b5155a2b9fa03d754ad0c8cc1072074829781982b37607498158d891c2c821dc0e17d212f463593b7b5628f1806b643a5ba175",
   "schema": "misaka.palw.corpus-report.v2",
   "transformers": "5.17.0",
   "usage_weight": {
