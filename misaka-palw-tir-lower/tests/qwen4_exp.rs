@@ -48,7 +48,7 @@ fn the_adapter_reads_every_fixture_into_generic_features() {
     for n in names() {
         let s = spec_of(&n);
         let h = s.hyper.as_ref().unwrap_or_else(|| panic!("{n}: no hyper-connection streams"));
-        assert!(h.streams >= 2, "{n}");
+        assert!(h.streams >= 1, "{n}");
         // every layer is a gated residual over those streams; the mixer is a delta net or sparse attention
         for (i, l) in s.layers.iter().enumerate() {
             assert!(matches!(l.residual, Residual::HyperConnection { .. }), "{n} layer {i}");

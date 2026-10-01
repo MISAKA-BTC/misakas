@@ -112,7 +112,9 @@ def no_ple(**kw):
 CONFIGS = {
     # the whole combination: 4 streams, PLE on two layers, QSA with 2-token blocks keeping 2, GDN 1:2, 8 experts top-2
     "qwen4_exp": (cfg(), {"T": 14, "decode": True}),
-    # GR-02 / hc_count: 2 streams (HF requires > 1; the single-stream case is a spec-level test)
+    # GR-01 / GR-02: one stream (transformers' config validation refuses it, its modules compute it: the
+    # config check is bypassed and the logits come from the in-memory model) and two streams
+    "qwen4_hc1": (cfg(hc_count=2, ple_layer_ids=[1]), {"T": 10, "hc1": True}),
     "qwen4_hc2": (cfg(hc_count=2), {"T": 10}),
     # GR-03: gate edge values — the mixers' sigmoids and silus driven into saturation
     "qwen4_hc_edge": (cfg(), {"T": 10, "edge": True}),
@@ -192,6 +194,21 @@ def make(name, cfg_dict, opts):
     arch = cfg_dict["architectures"]
     seed = sum(ord(ch) for ch in name)
     T = opts.get("T", 10)
+    if opts.get("hc1"):
+        # `validate_architecture` demands hc_count > 1; the modules themselves compute one stream. The
+        # config check is switched off for this fixture (the class is restored afterwards).
+        from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpTextConfig
+        saved_validators = Qwen4ExpTextConfig.__class_validators__
+        Qwen4ExpTextConfig.__class_validators__ = [v for v in saved_validators if v.__name__ != "validate_architecture"]
+        cfg_dict["hc_count"] = 1
+    try:
+        return _make(name, model_type, cfg_dict, arch, opts, seed, T)
+    finally:
+        if opts.get("hc1"):
+            Qwen4ExpTextConfig.__class_validators__ = saved_validators
+
+
+def _make(name, model_type, cfg_dict, arch, opts, seed, T):
     config = CONFIG_MAPPING[model_type](**cfg_dict)
     config.architectures = arch
     torch.manual_seed(seed)
