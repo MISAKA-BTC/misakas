@@ -6,7 +6,7 @@
 //! * the worker (`palw_gen_execute_tensor_v1`) commits the output node's elements as the kind's
 //!   canonical bytes under an `output_root`, and the claim's execution root commits both the step tree
 //!   and that root (`PalwGenTensorBindingV1`);
-//! * the output close (`GenOutputTile`, tag 13) holds one output tile, proven under the claim's root,
+//! * the output close (`GenOutputTile`, tag 16) holds one output tile, proven under the claim's root,
 //!   to the output node's committed step tile of the same lanes: an honest claim is acquitted at every
 //!   tile; a lane whose canonical bytes are not the committed value (`TirOutputDigestMismatch`), a
 //!   committed lane outside the node's proven interval (`TirValueOutsideProvenInterval`) is convicted;
@@ -598,11 +598,11 @@ fn an_honest_claim_is_acquitted_at_every_output_tile() {
         }
         // One tile past the output is no tile.
         assert!(ev.output_close(tiles).is_err());
-        // It rides the court's close enum at tag 13, below every other generative close in the byte order.
+        // It rides the court's close enum at tag 16 (spec 17 §17.0: 13–15 are RFC-0004's evaluation proofs).
         let close = ev.output_close(0).unwrap();
         let proof = PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) };
         assert!(proof.is_gen_v1() && !proof.is_tir_v1());
-        assert_eq!(borsh::to_vec(&proof).unwrap()[0], 13);
+        assert_eq!(borsh::to_vec(&proof).unwrap()[0], 16);
         let back: PalwCourtVerdictProofV2 = borsh::from_slice(&borsh::to_vec(&proof).unwrap()).unwrap();
         assert_eq!(back, proof);
         let object = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CourtClosed {
@@ -611,6 +611,39 @@ fn an_honest_claim_is_acquitted_at_every_output_tile() {
             proof,
         };
         assert!(kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object), "dropped by name below palw_gen_v1");
+    }
+}
+
+/// **The court proofs keep the tags the allocation gives them** (spec 17 §17.0, the allocation authority for
+/// every branch): 10–12 are the generative closes, 13–15 are RFC-0004's evaluation proofs (reserved, so none
+/// decodes on this build) and 16 is the output close, whose discriminant is explicit — a variant declared before
+/// it never renumbers it.
+#[test]
+fn the_generative_court_proofs_keep_the_tags_the_allocation_gives_them() {
+    let f = image();
+    let p = prompt();
+    let ids = PalwGenIdsV1 { prompt: &p, negative: &[] };
+    let job = image_job(&f, 0, 0, [0x33; 32]);
+    let (e, binding) = run(&f, &job, ids);
+    let ev = evidence(&f, &e, &binding, ids);
+    let cone = ev.cone_close(0, &LIMITS).expect("a cone close at the first leaf");
+    let output = ev.output_close(0).expect("an output close at the first tile");
+    let proofs = [
+        (10u8, PalwCourtVerdictProofV2::GenCone { close: Box::new(cone.clone()) }),
+        (12, PalwCourtVerdictProofV2::GenDissection { bottom: Box::new(cone) }),
+        (16, PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(output) }),
+    ];
+    for (tag, proof) in &proofs {
+        let bytes = borsh::to_vec(proof).unwrap();
+        assert_eq!(bytes[0], *tag, "the tag of {:?}", std::mem::discriminant(proof));
+        assert_eq!(&borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).unwrap(), proof, "tag {tag} round-trips");
+    }
+    // 13–15 are reserved for RFC-0004's evaluation proofs and 17 and up are free: this build allocates none of
+    // them, so the bytes of an output close under any of those tags decode as nothing.
+    let mut bytes = borsh::to_vec(&proofs[2].1).unwrap();
+    for tag in [13u8, 14, 15, 17, 255] {
+        bytes[0] = tag;
+        assert!(borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).is_err(), "tag {tag} is no proof on this build");
     }
 }
 

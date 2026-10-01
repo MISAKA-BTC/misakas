@@ -2411,7 +2411,7 @@ block's box-demand rules: refused below `palw_tir_fence2`, H7's row past it.
 The one step tree of a pipeline (stage-major leaf numbering: `palw_gen_step_v1.rs`) and the admission
 that counts its leaves exactly are built, and so is the generative job for the tensor profiles
 (`PalwGenJobV1`, `palw_gen_job_v1.rs`), its acceptance against a class by name, the tensor claim's
-binding and execution root, the output close (`GenOutputTile`, tag 13) and the worker, seat and court
+binding and execution root, the output close (`GenOutputTile`, tag 16) and the worker, seat and court
 halves of a node (§15.13). The claim lane's carriage of a tensor job (the commitment, its fee, its
 signature, the bond and anchor checks of the envelope) is **not built**: it is the free-prompt lane's,
 opened for pipeline classes by its own later fence (RFC-0003 §Activation).
@@ -2537,7 +2537,7 @@ cut at the output node's step tiles (PALW-OUT-3). The worker (`palw_gen_execute_
 pipeline with `R` keyed by the job's seed at the job's item index, commits the one step tree and then
 the output.
 
-**The output close** (`GenOutputTile`, `PalwCourtVerdictProofV2` tag 13, appended last) holds one output
+**The output close** (`GenOutputTile`, `PalwCourtVerdictProofV2` tag 16) holds one output
 tile to the claim's own step tree. It carries the binding, the output tile's index, bytes and path under
 `output_root`, and the output node's committed step tile of the same lanes with its path under its
 stage's root (`PalwGenOutputCloseV1`). The court checks, in this order, and the first failure decides:
@@ -2554,6 +2554,16 @@ stage's root (`PalwGenOutputCloseV1`). The court checks, in this order, and the 
    `TirValueOutsideProvenInterval { value_index }` (PALW-TIR-33), a lane whose canonical bytes are not
    the committed value's is `TirOutputDigestMismatch { value_index }` (discriminant 21, the lane within the
    tile), both hashed into the evidence id.
+
+**The tag is an allocation, and explicit** (decision of 2026-10-01, the coordinator's). `GenOutputTile` is
+discriminant **16** of `PalwCourtVerdictProofV2`. Spec 17 §17.0 is the allocation authority for every branch:
+10–12 are the generative closes (`GenCone`, `GenDecodeToken`, `GenDissection`), **13–15 are reserved for
+RFC-0004's evaluation proofs**, and 16 is the next free number. The output close first took 13, the next
+positional number on a branch that had not seen the reservation, and moved when the two allocations met. The
+enum now carries its discriminants explicitly (`#[borsh(use_discriminant = true)]` and the `repr(u8)` Rust asks
+of a data-carrying variant), so a variant declared before it never renumbers it, and 13–15 do not decode on this
+build (an older build's reading of a tag it has not allocated). No network has carried the tag: the fence is
+dormant everywhere and testnet-12's identity is untouched.
 
 **What each check names** (finding G22). Check 1's inside: the close's version or the binding's is
 `Version`; a `committed_execution_root` that is not the claim's, or parts that do not produce it, is
