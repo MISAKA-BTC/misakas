@@ -41,6 +41,15 @@ pub enum PalwMaterialPlacementV1 {
     HoldOut { epoch: u64 },
 }
 
+/// A pool entry's kind in its key [D13]: a hold-out case, or a setter set.
+const POOL_KIND_HOLDOUT: u8 = 1;
+const POOL_KIND_SETTER: u8 = 2;
+
+/// Every pool entry of one epoch, in key order.
+fn pool_range(line_id: &Hash64, epoch: u64) -> std::ops::RangeInclusive<(Hash64, u64, u8, Hash64)> {
+    (*line_id, epoch, 0, Hash64::default())..=(*line_id, epoch, u8::MAX, Hash64::from_bytes([0xFF; 64]))
+}
+
 fn refused(why: &'static str) -> PalwStateV2Error {
     PalwStateV2Error::ImprovementRefused(why)
 }
@@ -104,7 +113,7 @@ impl PalwChainStateV2 {
     }
 
     pub fn improvement_pool_entries(&self, line_id: &Hash64, epoch: u64) -> Vec<&PalwPoolEntryV2> {
-        self.improvement_pool_entries.range((*line_id, epoch, 0)..=(*line_id, epoch, u32::MAX)).map(|(_, row)| row).collect()
+        self.improvement_pool_entries.range(pool_range(line_id, epoch)).map(|(_, row)| row).collect()
     }
 
     pub fn improvement_items(&self, line_id: &Hash64, epoch: u64) -> Vec<&PalwEvalItemV1> {
@@ -451,9 +460,17 @@ impl TransitionBuilder<'_> {
         let escrow = palw_improvement_jobs_per_subject_v1(&policy.eval, true)
             .checked_mul(policy.fees.eval_fee_per_job)
             .ok_or(PalwStateV2Error::Overflow("candidate escrow"))?;
-        let total =
-            fee.checked_add(bond).and_then(|t| t.checked_add(escrow)).ok_or(PalwStateV2Error::Overflow("candidate payment"))?;
-        self.debit_improvement_hold_v1(line_id, submitter, total, daa)?;
+        let held = bond.checked_add(escrow).ok_or(PalwStateV2Error::Overflow("candidate payment"))?;
+        let total = held.checked_add(fee).ok_or(PalwStateV2Error::Overflow("candidate payment"))?;
+        // [D2/E21] One debit; the registration fee enters the balance now (the draw's escrow may use
+        // it), the bond and the candidate's own escrow are held until the epoch ends.
+        self.debit_improvement_bond_v1(submitter, total, daa)?;
+        let mut pool = self.improvement_pool_of_v1(line_id);
+        pool.balance = pool.balance.checked_add(fee).ok_or(PalwStateV2Error::Overflow("improvement balance"))?;
+        pool.fees_in += fee as u128;
+        pool.held = pool.held.checked_add(held).ok_or(PalwStateV2Error::Overflow("improvement held"))?;
+        pool.held_in += held as u128;
+        self.write_improvement_pool_row_v1(line_id, pool);
         let mut header = self.improvement_epoch_of_v1(line_id, epoch)?;
         let index = header.candidates;
         self.write_improvement_candidate(
@@ -504,6 +521,13 @@ impl TransitionBuilder<'_> {
         {
             return Err(refused("the epoch's hold-out pool is full (4·n)"));
         }
+        // [D13] An id enters an epoch's pool once.
+        if into_holdout
+            && let Some(header) = &open
+            && self.state.improvement_pool_entries.contains_key(&(*line_id, header.epoch, POOL_KIND_HOLDOUT, *id))
+        {
+            return Err(refused("the case is already in the epoch's hold-out pool"));
+        }
         if kind == PalwMaterialKindV1::HardCase {
             self.debit_improvement_fee_v1(line_id, supplier, policy.fees.hard_case_fee, daa)?;
         }
@@ -511,9 +535,8 @@ impl TransitionBuilder<'_> {
             && into_holdout
         {
             let mut header = header.clone();
-            let index = header.pool_entries;
             self.write_improvement_pool_entry(
-                (*line_id, header.epoch, index),
+                (*line_id, header.epoch, POOL_KIND_HOLDOUT, *id),
                 Some(PalwPoolEntryV2::HoldOut { id: *id, supplier: *supplier }),
             );
             header.pool_entries += 1;
@@ -554,10 +577,13 @@ impl TransitionBuilder<'_> {
         if items == 0 || items > policy.eval.n {
             return Err(refused("a setter set holds 1 to n items"));
         }
+        // [D13] A set enters an epoch's pool once.
+        if self.state.improvement_pool_entries.contains_key(&(*line_id, header.epoch, POOL_KIND_SETTER, *set_id)) {
+            return Err(refused("the set is already in the epoch's pool"));
+        }
         self.debit_improvement_hold_v1(line_id, setter, policy.fees.setter_bond, daa)?;
-        let index = header.pool_entries;
         self.write_improvement_pool_entry(
-            (*line_id, header.epoch, index),
+            (*line_id, header.epoch, POOL_KIND_SETTER, *set_id),
             Some(PalwPoolEntryV2::SetterSet { set_id: *set_id, setter: *setter, items }),
         );
         header.pool_entries += 1;
@@ -597,6 +623,20 @@ impl TransitionBuilder<'_> {
         if !self.state.improvement_subjects(line_id, epoch).contains(&subject) {
             return Err(refused("a score for a subject the epoch does not evaluate"));
         }
+        // [D6] A score outside its kind's range is refused: ExactMatch 0 or 1, Pairwise −1, 0 or 1, Judge
+        // inside the policy's `[lo, hi]`; the one outcome function then reads only legal values.
+        let policy = self.improvement_policy_of_v1(line_id)?;
+        let in_range = match score.kind {
+            PalwScoringKindV1::ExactMatch => matches!(score.value, 0 | 1),
+            PalwScoringKindV1::Pairwise => matches!(score.value, -1..=1),
+            PalwScoringKindV1::Judge => policy.eval.stages.iter().any(|stage| {
+                matches!(stage.params, PalwScoringParamsV1::Judge { lo, hi } if (lo as i64..=hi as i64).contains(&score.value))
+            }),
+            PalwScoringKindV1::RefLogLik => true,
+        };
+        if !in_range {
+            return Err(refused("a score outside its kind's range"));
+        }
         let key = (*line_id, epoch, item, subject);
         let mut row =
             self.state.improvement_results.get(&key).cloned().unwrap_or(PalwEvalResultV1 { item, subject, scores: Vec::new() });
@@ -620,6 +660,11 @@ impl TransitionBuilder<'_> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let fee = policy.fees.eval_fee_per_job;
         let mut header = self.improvement_epoch_of_v1(line_id, epoch)?;
+        // [E23] Paid only while the epoch evaluates or closes: a claim final after the epoch's end is
+        // not paid (the unspent escrow has gone back), and is not scored either.
+        if !matches!(header.state, PalwEpochStateV1::Evaluating | PalwEpochStateV1::Closing) {
+            return Ok(0);
+        }
         let paid = match subject {
             PalwEvalSubjectV1::Parent => {
                 let paid = fee.min(header.escrow.parent - header.escrow.parent_spent);
@@ -807,21 +852,33 @@ pub(super) fn apply_improvement_policy_set_v1(
         }
         (None, None) => return Err(policy_refused("an opt-out of a line that is not governed")),
         (Some(mut line), Some(policy)) => {
+            // [D14] A policy before `effective_daa` cancels an opt-out; past it the line is no longer
+            // governed and opts in again only once it has dissolved.
+            if !line.governed_at(daa) {
+                return Err(policy_refused("the line has opted out; it opts in again once it dissolves"));
+            }
             line.policy_sequence = payload.sequence;
             line.status = PalwImprovementLineStatusV1::Governed;
             let mut record =
                 builder.state.improvement_policies.get(&line_id).cloned().ok_or_else(|| policy_refused("the line has no policy"))?;
-            if line.open_epoch.is_some() {
-                record.pending = Some(Box::new(policy.clone()));
-            } else {
+            let idle = line.open_epoch.is_none();
+            if idle {
                 record.policy = policy.clone();
                 record.pending = None;
                 line.policy_digest = digest.expect("Some policy");
-                // The next check lands on the new grid.
-                line.next_due_daa = palw_improve_next_boundary_v1(daa, policy.windows.grid);
+            } else {
+                record.pending = Some(Box::new(policy.clone()));
             }
             builder.write_improvement_policy(line_id, Some(record));
+            if idle {
+                // [E28] The next check lands on the new grid (or an earlier vesting step, §17.5.2).
+                line.next_due_daa = next_due_v1(builder, &line, daa)?;
+            }
             builder.write_improvement_line(line_id, Some(line));
+        }
+        (Some(line), None) if line.status != PalwImprovementLineStatusV1::Governed => {
+            // [D14] One opt-out: a second would restart the delay (or re-govern a line past it).
+            return Err(policy_refused("the line is already opting out"));
         }
         (Some(mut line), None) => {
             line.policy_sequence = payload.sequence;
@@ -897,7 +954,6 @@ pub(super) fn apply_lineage_rollback_v1(
     let daa = ctx.daa_score;
     let line_id = payload.line_id;
     let mut line = builder.improvement_line_row_v1(&line_id)?;
-    let policy = builder.improvement_policy_of_v1(&line_id)?;
     let last = builder.state.improvement_last_head(&line_id).ok_or_else(|| refused("the line has no head history"))?;
     if last.cause != PalwHeadCauseV1::Promoted
         || last.epoch != payload.epoch
@@ -906,14 +962,16 @@ pub(super) fn apply_lineage_rollback_v1(
     {
         return Err(refused("only the latest promotion, restoring its parent, can be rolled back"));
     }
-    let unit = palw_improvement_epoch_length_v1(&policy.windows);
+    // [E22] The window and the bar are the ones pinned at the promotion.
+    let terms =
+        line.last_promotion.filter(|p| p.epoch == payload.epoch).ok_or_else(|| refused("the promotion is not the line's latest"))?;
     let cause = match payload.cause {
         PalwRollbackCauseV1::Owner => {
             let owner = builder.state.model_line_or_founding(&line_id).and_then(|l| l.owner);
             if owner != Some(*filer) {
                 return Err(refused("an owner's rollback filed by another bond"));
             }
-            if daa > last.daa.saturating_add(unit.saturating_mul(policy.rollback_epochs as u64)) {
+            if daa > terms.owner_until_daa {
                 return Err(refused("the owner's rollback window has passed"));
             }
             PalwHeadCauseV1::RolledBackByOwner
@@ -936,16 +994,19 @@ pub(super) fn apply_lineage_rollback_v1(
             return Err(refused("a licence rollback needs a challenge procedure (not in v1)"));
         }
     };
+    // [D12] Vesting is final: every grant first vests to this DAA, and only the remainder is forfeited.
+    vest_improvement_grants_v1(builder, &line_id, daa)?;
     // E11: an open epoch is aborted first, against the head it opened on.
     if let Some(open) = line.open_epoch {
         decide_epoch_v1(builder, ctx, &mut line, open, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::Aborted })?;
     }
-    // The winner's unvested trainer grant and bond are forfeited; its submitter is barred.
+    // [D7] Every grant of the promoted epoch — the trainer's and the datasets' S2 and the winner's bond —
+    // forfeits its unvested remainder (PALW-MIP-16); the submitter is barred.
     let promoted_epoch = payload.epoch;
     for (index, grant) in
         builder.state.improvement_grants(&line_id, promoted_epoch).into_iter().map(|(i, g)| (i, *g)).collect::<Vec<_>>()
     {
-        if grant.forfeited || !matches!(grant.stage, PalwRewardStageV1::S2Trainer | PalwRewardStageV1::WinnerBond) {
+        if grant.forfeited || grant.vested >= grant.amount {
             continue;
         }
         let left = grant.amount - grant.vested;
@@ -957,7 +1018,7 @@ pub(super) fn apply_lineage_rollback_v1(
         builder.write_improvement_grant((line_id, promoted_epoch, index), Some(PalwRewardGrantV1 { forfeited: true, ..grant }));
     }
     if let Some((_, winner)) = builder.state.improvement_candidate(&line_id, promoted_epoch, &last.class_id) {
-        let until = daa.saturating_add(unit.saturating_mul(policy.ban_epochs as u64));
+        let until = daa.saturating_add(terms.ban_daa);
         let submitter = winner.submitter;
         line.barred.retain(|(bond, _)| *bond != submitter);
         line.barred.push((submitter, until));
@@ -971,7 +1032,8 @@ pub(super) fn apply_lineage_rollback_v1(
     line.regression_check = None;
     line.last_promotion = None;
     line.regression_epoch = None;
-    line.next_due_daa = line.next_due_daa.min(palw_improve_next_boundary_v1(daa, policy.windows.grid));
+    // [D12] The next check, vesting step or opt-out, whichever is first.
+    line.next_due_daa = next_due_v1(builder, &line, daa)?;
     builder.write_improvement_line(line_id, Some(line));
     Ok(())
 }
@@ -1000,13 +1062,8 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) {
     let mut budget = PALW_IMPROVE_RETIRE_ROWS_PER_BLOCK_V1;
     while budget > 0 {
         let Some(&(_, line_id, epoch)) = builder.state.improvement_retiring.iter().next() else { break };
-        let pool: Vec<_> = builder
-            .state
-            .improvement_pool_entries
-            .range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX))
-            .map(|(k, _)| *k)
-            .take(budget)
-            .collect();
+        let pool: Vec<_> =
+            builder.state.improvement_pool_entries.range(pool_range(&line_id, epoch)).map(|(k, _)| *k).take(budget).collect();
         budget -= pool.len();
         for key in pool {
             builder.write_improvement_pool_entry(key, None);
@@ -1029,8 +1086,7 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) {
         for key in results {
             builder.write_improvement_result(key, None);
         }
-        let remaining =
-            builder.state.improvement_pool_entries.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
+        let remaining = builder.state.improvement_pool_entries.range(pool_range(&line_id, epoch)).next().is_some()
                 || builder.state.improvement_items.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
                 || builder.state.improvement_results.range(lo..=hi).next().is_some();
         if remaining {
@@ -1080,6 +1136,8 @@ fn advance_improvement_line_v1(
         return Ok(());
     }
     line.barred.retain(|(_, until)| *until > daa);
+    // [D12] Vesting is final and runs first: every grant pays up to this DAA before any transition.
+    vest_improvement_grants_v1(builder, &line_id, daa)?;
     for _ in 0..PALW_IMPROVE_STEPS_PER_ADVANCE_V1 {
         let progressed = match line.open_epoch {
             Some(epoch) => step_epoch_v1(builder, ctx, &mut line, epoch)?,
@@ -1124,6 +1182,10 @@ fn next_due_v1(builder: &TransitionBuilder<'_>, line: &PalwImprovementLineV1, da
     if let PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(at) } = line.status {
         due = due.min(at.max(daa + 1));
     }
+    // [D12] The next vesting step of any grant still vesting (§17.5.2).
+    if let Some(step) = palw_improve_next_vesting_step_v1(&builder.state, &line.line_id, daa) {
+        due = due.min(step);
+    }
     Ok(due.max(daa + 1))
 }
 
@@ -1149,7 +1211,9 @@ fn step_idle_v1(
         return Ok(false);
     }
     let epoch = line.next_epoch;
-    let previous = line.regression_check.take().filter(|class| builder.state.tir_classes.contains_key(class));
+    // [E20] The regression check is taken at the draw, not here: an epoch that ends before its draw
+    // leaves it for the next.
+    let previous = None;
     let header = PalwImprovementEpochV1 {
         line_id: line.line_id,
         epoch,
@@ -1173,9 +1237,6 @@ fn step_idle_v1(
         decided_daa: None,
         retire: PalwEpochRetireV1::Pending,
     };
-    if previous.is_some() {
-        line.regression_epoch = Some(epoch);
-    }
     builder.write_improvement_epoch((line.line_id, epoch), Some(header));
     builder.write_improvement_usage(line.line_id, Some(PalwImprovementUsageV1 { usage: 0, since_daa: daa }));
     let mut pool = builder.improvement_pool_of_v1(&line.line_id);
@@ -1271,10 +1332,13 @@ fn draw_epoch_v1(
         decide_epoch_v1(builder, ctx, line, epoch, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::TooFewItems })?;
         return Ok(true);
     }
+    // [E24] `TooFewItems` is decided before `PoolInsufficient`.
+    // [E20] The regression check, if one is owed and its class is still admitted, joins here.
+    let previous = line.regression_check.filter(|class| builder.state.tir_classes.contains_key(class));
     let fee = policy.fees.eval_fee_per_job;
     let parent_escrow = palw_improvement_jobs_per_subject_v1(&policy.eval, false).saturating_mul(fee);
     let previous_escrow =
-        if header.previous.is_some() { palw_improvement_jobs_per_subject_v1(&policy.eval, true).saturating_mul(fee) } else { 0 };
+        if previous.is_some() { palw_improvement_jobs_per_subject_v1(&policy.eval, true).saturating_mul(fee) } else { 0 };
     let need = parent_escrow.saturating_add(previous_escrow);
     let mut pool = builder.improvement_pool_of_v1(&line_id);
     if pool.balance < need {
@@ -1293,6 +1357,11 @@ fn draw_epoch_v1(
     pool.held += need;
     builder.write_improvement_pool(line_id, Some(pool));
     header.escrow = PalwEpochEscrowV1 { parent: parent_escrow, parent_spent: 0, previous: previous_escrow, previous_spent: 0 };
+    if previous.is_some() {
+        header.previous = previous;
+        line.regression_check = None;
+        line.regression_epoch = Some(epoch);
+    }
     let judged = palw_improvement_has_stage_v1(&policy.eval, PalwScoringKindV1::Judge)
         || palw_improvement_has_stage_v1(&policy.eval, PalwScoringKindV1::Pairwise);
     let mut item = 0u32;
@@ -1431,18 +1500,42 @@ fn decide_epoch_v1(
     };
     let unit = palw_improvement_epoch_length_v1(&policy.windows);
     let mut grants = Vec::new();
-    for (index, row) in
-        builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(i, r)| (i, r.clone())).collect::<Vec<_>>()
-    {
+    // [D3] The parent's and the regression check's unspent escrow return to the balance first (the
+    // spent part is sunk); S2's `R` below is taken from the balance they leave.
+    let spent = header.escrow.parent_spent + header.escrow.previous_spent;
+    let unspent = (header.escrow.parent - header.escrow.parent_spent) + (header.escrow.previous - header.escrow.previous_spent);
+    if unspent > 0 {
+        let mut pool = builder.improvement_pool_of_v1(&line_id);
+        pool.held -= unspent;
+        pool.balance += unspent;
+        builder.write_improvement_pool(line_id, Some(pool));
+    }
+    let candidates: Vec<PalwEpochCandidateV1> =
+        builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(_, row)| row.clone()).collect();
+    // [D2/E21] The fees funded the draw's escrow with the rest of the balance: on an abort each fee is
+    // refunded less its share of what the parent's and `Previous`'s escrow spent,
+    // `fee_i − ⌈fee_i · min(F, S) / F⌉`, the rounding staying in the balance — which never goes below
+    // zero.
+    let fees: u128 = candidates.iter().map(|row| row.fee_paid as u128).sum();
+    let consumed = fees.min(spent as u128);
+    for row in &candidates {
         let unspent = row.escrow - row.escrow_spent;
         let refund = if aborted {
-            // E11: the fee, the bond and what is left of the escrow, in full.
-            row.fee_paid + row.bond + unspent
-        } else if Some(row.class_id) == winner {
-            // The winner's bond vests (below); its fee is the pool's; its unspent escrow comes back.
+            // E11: the bond and what is left of the escrow in full, and the fee's unspent part.
+            let fee_share = if fees == 0 { 0 } else { (row.fee_paid as u128 * consumed).div_ceil(fees) as u64 };
             let mut pool = builder.improvement_pool_of_v1(&line_id);
-            pool.held -= row.fee_paid + row.bond;
-            pool.balance += row.fee_paid;
+            // [D2/E21] And never more than the balance holds: an S1 payout may have spent part of what the
+            // fees funded, and the abort — the owner's safety valve — is not refused for want of balance;
+            // a candidate later in acceptance order then gets back what is left.
+            let fee_refund = (row.fee_paid - fee_share.min(row.fee_paid)).min(pool.balance);
+            pool.balance -= fee_refund;
+            pool.held = pool.held.checked_add(fee_refund).ok_or(PalwStateV2Error::Overflow("improvement held"))?;
+            builder.write_improvement_pool(line_id, Some(pool));
+            row.bond + unspent + fee_refund
+        } else if Some(row.class_id) == winner {
+            // The winner's bond vests (below); its unspent escrow comes back; its fee stays.
+            let mut pool = builder.improvement_pool_of_v1(&line_id);
+            pool.held -= row.bond;
             pool.unvested += row.bond;
             builder.write_improvement_pool(line_id, Some(pool));
             grants.push(PalwRewardGrantV1 {
@@ -1458,23 +1551,10 @@ fn decide_epoch_v1(
             });
             unspent
         } else {
-            // A loser's fee is the pool's; its bond and unspent escrow come back.
-            let mut pool = builder.improvement_pool_of_v1(&line_id);
-            pool.held -= row.fee_paid;
-            pool.balance += row.fee_paid;
-            builder.write_improvement_pool(line_id, Some(pool));
+            // A loser's bond and unspent escrow come back; its fee stays.
             row.bond + unspent
         };
         builder.release_improvement_hold_v1(&line_id, &row.submitter, refund)?;
-        let _ = index;
-    }
-    // The parent's and the regression check's unspent escrow return to the balance (spent is sunk).
-    let unspent = (header.escrow.parent - header.escrow.parent_spent) + (header.escrow.previous - header.escrow.previous_spent);
-    if unspent > 0 {
-        let mut pool = builder.improvement_pool_of_v1(&line_id);
-        pool.held -= unspent;
-        pool.balance += unspent;
-        builder.write_improvement_pool(line_id, Some(pool));
     }
     if let Some(class_id) = winner {
         // S2 (§17.11.3).
@@ -1521,7 +1601,12 @@ fn decide_epoch_v1(
         pool.unvested += granted;
         builder.write_improvement_pool(line_id, Some(pool));
         move_head_v1(builder, line, epoch, class_id, daa, PalwHeadCauseV1::Promoted);
-        line.last_promotion = Some(epoch);
+        // [E22] The rollback terms are the promoted epoch's policy's, pinned now.
+        line.last_promotion = Some(PalwLastPromotionV1 {
+            epoch,
+            owner_until_daa: daa.saturating_add(unit.saturating_mul(policy.rollback_epochs as u64)),
+            ban_daa: unit.saturating_mul(policy.ban_epochs as u64),
+        });
         line.regression_check = Some(header.parent);
         line.regression_epoch = None;
     }
@@ -1551,6 +1636,20 @@ fn decide_epoch_v1(
     }
     line.next_due_daa = palw_improve_next_boundary_v1(daa, builder.improvement_policy_of_v1(&line_id)?.windows.grid);
     Ok(())
+}
+
+/// **The next DAA at which one of the line's grants vests a step** (`from + k·L_e`, strictly after
+/// `daa`), if any grant is still vesting.
+fn palw_improve_next_vesting_step_v1(state: &PalwChainStateV2, line_id: &Hash64, daa: u64) -> Option<u64> {
+    state
+        .improvement_grants
+        .range((*line_id, 0, 0)..=(*line_id, u64::MAX, u32::MAX))
+        .filter(|(_, g)| !g.forfeited && g.vested < g.amount && g.vest_unit_daa > 0)
+        .map(|(_, g)| {
+            let done = daa.saturating_sub(g.vest_from_daa) / g.vest_unit_daa;
+            g.vest_from_daa.saturating_add((done + 1).saturating_mul(g.vest_unit_daa))
+        })
+        .min()
 }
 
 /// **Vesting** (spec 17 §17.11.4): every grant of the line's kept epochs is paid up to its target.
@@ -1596,7 +1695,7 @@ fn retire_settled_epochs_v1(builder: &mut TransitionBuilder<'_>, line: &PalwImpr
         .map(|((_, e), _)| *e)
         .collect();
     for epoch in decided {
-        if Some(epoch) == line.last_promotion || Some(epoch) == line.regression_epoch {
+        if line.last_promotion.is_some_and(|p| p.epoch == epoch) || Some(epoch) == line.regression_epoch {
             continue;
         }
         let settled = builder.state.improvement_grants(&line_id, epoch).iter().all(|(_, g)| g.forfeited || g.vested >= g.amount);
@@ -1923,9 +2022,11 @@ mod tests {
         assert_eq!(e.state, PalwEpochStateV1::Decided);
         assert_eq!(e.outcome, Some(PalwPromotionOutcomeV1::Promoted { class_id: h(CAND_A), wins: 8, losses: 0 }));
         let line = s.improvement_line(&h(LINE)).unwrap();
+        assert_eq!((line.head, line.open_epoch, line.regression_check), (h(CAND_A), None, Some(h(LINE))));
         assert_eq!(
-            (line.head, line.open_epoch, line.last_promotion, line.regression_check),
-            (h(CAND_A), None, Some(1), Some(h(LINE)))
+            line.last_promotion,
+            Some(PalwLastPromotionV1 { epoch: 1, owner_until_daa: 1_950 + 2 * 950, ban_daa: 8 * 950 }),
+            "[E22] the rollback terms are pinned at the promotion"
         );
         assert_eq!(s.improvement_last_head(&h(LINE)).unwrap().cause, PalwHeadCauseV1::Promoted);
         let (_, b_row) = s.improvement_candidate(&h(LINE), 1, &h(CAND_B)).unwrap();
@@ -1939,10 +2040,25 @@ mod tests {
         s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 1_950 });
         let s = at(&s, &p, 2_000, |_| {});
         let e2 = s.improvement_epoch(&h(LINE), 2).unwrap();
-        assert_eq!((e2.parent, e2.previous), (h(CAND_A), Some(h(LINE))));
+        assert_eq!((e2.parent, e2.previous), (h(CAND_A), None), "[E20] the check joins at the draw");
         // The detail rows of epoch 1 retire over the following blocks.
         assert!(s.improvement_items(&h(LINE), 1).is_empty(), "eight items and 24 results fit one block's budget");
         assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().retire, PalwEpochRetireV1::Done);
+        // [E20] Epoch 2 has no candidate and ends before its draw: the check stays owed to the next.
+        let s = at(&s, &p, 2_450, |_| {});
+        assert_eq!(
+            s.improvement_epoch(&h(LINE), 2).unwrap().outcome,
+            Some(PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::NoCandidate })
+        );
+        let line = s.improvement_line(&h(LINE)).unwrap();
+        assert_eq!((line.regression_check, line.regression_epoch), (Some(h(LINE)), None));
+        // [D12] Idle, the line is next due at its grants' first vesting step (1,950 + 950), which comes
+        // before the next boundary (3,000); the step vests a quarter of every grant.
+        assert_eq!(line.next_due_daa, 2_900);
+        let s = at(&s, &p, 2_900, |_| {});
+        assert!(s.improvement_grants(&h(LINE), 1).iter().all(|(_, g)| g.vested == g.amount / 4));
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().next_due_daa, 3_000);
+        conserved(&s, &h(LINE));
     }
 
     #[test]
@@ -2074,6 +2190,200 @@ mod tests {
                 .all(|(_, g)| g.forfeited)
         );
         conserved(&s, &h(LINE));
+    }
+
+    /// [D2/E21, D12, E22] A promotion, then the owner shortens `rollback_epochs` and `ban_epochs`.
+    /// (a) Epoch 2 draws with B's fee in the balance and pays three of the parent's jobs; the owner's
+    /// rollback aborts it: B gets its bond and escrow back in full and its fee less the spend.
+    /// (b) With no epoch 2, the grants vest their first quarter on their own step (2,900), and the
+    /// owner rolls back at 2,920 — past the new policy's window (2,900), inside the pinned one (3,850):
+    /// the quarter stays vested and the bar is the pinned one. The pool conserves throughout.
+    #[test]
+    fn an_abort_refunds_each_fee_less_its_spend_and_a_rollback_keeps_what_vested() {
+        fn cases(b: &mut TransitionBuilder<'_>, base: u8, daa: u64) {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::HardCase, &h(base + i), &bond(CAROL), daa).unwrap();
+            }
+        }
+        fn enter(b: &mut TransitionBuilder<'_>, epoch: u64, class: u8, who: u8, daa: u64) {
+            b.admit_improvement_candidate_v1(
+                &h(LINE),
+                epoch,
+                &h(class),
+                &bond(who),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(class) },
+                h(0x50),
+                Vec::new(),
+                daa,
+            )
+            .unwrap();
+        }
+        let p = params();
+        let mut s = opted_in(500);
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |_| {});
+        let s = at(&s, &p, 1_200, |b| enter(b, 1, CAND_A, ALICE, 1_200));
+        let s = at(&s, &p, 1_400, |b| cases(b, 0x60, 1_400));
+        let s = at(&s, &p, 1_510, |b| {
+            for item in 0..8u32 {
+                for (subject, value) in [(PalwEvalSubjectV1::Parent, 0), (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1)] {
+                    let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
+                    b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
+                }
+            }
+        });
+        let s = at(&s, &p, 1_950, |_| {});
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().head, h(CAND_A));
+        // [E22] A later policy shortens the owner's window (to 1,950 + 950) and the bar (to 950).
+        let mut shorter = policy();
+        shorter.rollback_epochs = 1;
+        shorter.ban_epochs = 1;
+        let promoted = at(&s, &p, 1_960, |b| apply_improvement_policy_set_v1(b, &ctx(1_960), &set(LINE, 2, Some(shorter))).unwrap());
+        let rollback = PalwLineageRollbackV1 { line_id: h(LINE), epoch: 1, to_class: h(LINE), cause: PalwRollbackCauseV1::Owner };
+        let extras = PalwTransitionExtrasV1::default();
+        let fees = policy().fees;
+        let fee_per_job = fees.eval_fee_per_job;
+
+        // (a) [D2/E21] Epoch 2 draws; three of the parent's jobs are paid; the owner aborts it.
+        let mut s = promoted.clone();
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 1_960 });
+        let s = at(&s, &p, 2_000, |_| {});
+        let s = at(&s, &p, 2_200, |b| enter(b, 2, CAND_B, BOB, 2_200));
+        let s = at(&s, &p, 2_400, |b| cases(b, 0x70, 2_400));
+        let s = at(&s, &p, 2_510, |b| {
+            for _ in 0..3 {
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL)).unwrap(), fee_per_job);
+            }
+        });
+        let e2 = s.improvement_epoch(&h(LINE), 2).unwrap();
+        assert_eq!((e2.state, e2.previous), (PalwEpochStateV1::Evaluating, Some(h(LINE))), "[E20] the check joined at the draw");
+        conserved(&s, &h(LINE));
+        let bob_before = s.improvement_earnings(&bond(BOB));
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        apply_lineage_rollback_v1(&mut b, &ctx(2_600), &rollback, &bond(OWNER)).unwrap();
+        let aborted = b.checkpoint().0;
+        let escrow_b = palw_improvement_jobs_per_subject_v1(&policy().eval, true) * fee_per_job;
+        assert_eq!(
+            aborted.improvement_earnings(&bond(BOB)) - bob_before,
+            fees.candidate_bond + escrow_b + (fees.registration_fee - 3 * fee_per_job),
+            "B: the bond and its escrow in full, the fee less the spend it funded"
+        );
+        conserved(&aborted, &h(LINE));
+
+        // (b) [D12, E22] No epoch 2: the first quarter vests on its step; the rollback keeps it.
+        let s = at(&promoted, &p, 2_000, |_| {});
+        assert!(s.improvement_line(&h(LINE)).unwrap().open_epoch.is_none(), "usage restarted at the promotion");
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().next_due_daa, 2_900, "due at the first vesting step");
+        let s = at(&s, &p, 2_900, |_| {});
+        assert!(s.improvement_grants(&h(LINE), 1).iter().all(|(_, g)| g.vested == g.amount / 4), "the first quarter vested");
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        apply_lineage_rollback_v1(&mut b, &ctx(2_920), &rollback, &bond(OWNER)).expect("inside the pinned window (3,850)");
+        let s = b.checkpoint().0;
+        let line = s.improvement_line(&h(LINE)).unwrap();
+        assert!(line.is_barred(&bond(ALICE), 2_920 + 8 * 950 - 1) && !line.is_barred(&bond(ALICE), 2_920 + 8 * 950), "the pinned bar");
+        for (_, grant) in s.improvement_grants(&h(LINE), 1) {
+            assert!(grant.forfeited && grant.vested == grant.amount / 4, "[D12] the vested quarter is kept: {grant:?}");
+        }
+        conserved(&s, &h(LINE));
+    }
+
+    /// **[D2/E21] An abort never refunds more than the balance holds.** An S1 payout may have spent part
+    /// of what the fees funded; the owner's rollback is then not refused for want of balance — each fee's
+    /// refund is clamped by what the balance holds, and the pool still conserves. Here the whole balance
+    /// is spent when the epoch is aborted, one candidate whose fee (10,000) is far above the escrows
+    /// (8 jobs a subject at 1 sompi): the unspent parent escrow (5) is all there is to refund.
+    #[test]
+    fn an_abort_refunds_no_more_than_the_balance_holds() {
+        let p = params();
+        let mut pol = policy();
+        pol.fees.registration_fee = 10_000;
+        pol.fees.eval_fee_per_job = 1;
+        let s = at(&genesis(), &p, 500, |b| apply_improvement_policy_set_v1(b, &ctx(500), &set(LINE, 1, Some(pol.clone()))).expect("opt in"));
+        let mut s = s;
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |_| {});
+        let s = at(&s, &p, 1_200, |b| {
+            b.admit_improvement_candidate_v1(
+                &h(LINE),
+                1,
+                &h(CAND_A),
+                &bond(ALICE),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(CAND_A) },
+                h(0x50),
+                Vec::new(),
+                1_200,
+            )
+            .unwrap();
+        });
+        let s = at(&s, &p, 1_400, |b| {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::HardCase, &h(0x60 + i), &bond(CAROL), 1_400).unwrap();
+            }
+        });
+        let s = at(&s, &p, 1_510, |b| {
+            for _ in 0..3 {
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL)).unwrap(), 1);
+            }
+        });
+        assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Evaluating);
+        // S1 has spent everything the balance held (the 10,000 less the parent's reserved escrow).
+        let mut drained = s.clone();
+        let mut pool = drained.improvement_pool(&h(LINE)).unwrap();
+        let spent = pool.balance;
+        assert!(spent > 5, "the fee is in the balance: {spent}");
+        pool.balance = 0;
+        pool.paid += spent as u128;
+        drained.improvement_pools.insert(h(LINE), pool);
+        conserved(&drained, &h(LINE));
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&drained, &p, false, false, false, false, &extras);
+        let mut line = drained.improvement_line(&h(LINE)).unwrap().clone();
+        decide_epoch_v1(&mut b, &ctx(1_520), &mut line, 1, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::Aborted })
+            .expect("an abort is never refused for want of balance");
+        let after = b.checkpoint().0;
+        let escrow_a = palw_improvement_jobs_per_subject_v1(&pol.eval, true) * pol.fees.eval_fee_per_job;
+        let unspent_parent = palw_improvement_jobs_per_subject_v1(&pol.eval, false) * pol.fees.eval_fee_per_job - 3;
+        assert_eq!(
+            after.improvement_earnings(&bond(ALICE)),
+            pol.fees.candidate_bond + escrow_a + unspent_parent,
+            "the bond and the escrow in full, and of the fee only what the balance held (the parent's returned escrow)"
+        );
+        assert_eq!(after.improvement_pool(&h(LINE)).unwrap().balance, 0, "nothing below zero");
+        conserved(&after, &h(LINE));
+    }
+
+    /// [D14] An opt-out is filed once; a policy before its `effective_daa` cancels it; past it (the
+    /// line not yet dissolved) a policy is refused.
+    #[test]
+    fn an_opt_out_is_cancelled_before_it_takes_effect_and_filed_once() {
+        let p = params();
+        let s = opted_in(500);
+        let s = at(&s, &p, 700, |b| apply_improvement_policy_set_v1(b, &ctx(700), &set(LINE, 2, None)).unwrap());
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        assert!(
+            matches!(apply_improvement_policy_set_v1(&mut b, &ctx(800), &set(LINE, 3, None)), Err(PalwStateV2Error::ImprovementPolicyRefused(_))),
+            "a second opt-out"
+        );
+        apply_improvement_policy_set_v1(&mut b, &ctx(800), &set(LINE, 3, Some(policy()))).unwrap();
+        let cancelled = b.checkpoint().0;
+        assert_eq!(cancelled.improvement_line(&h(LINE)).unwrap().status, PalwImprovementLineStatusV1::Governed);
+        // Something still held keeps the line from dissolving past its effective DAA (1,700).
+        let mut s = s;
+        let mut pool = s.improvement_pool(&h(LINE)).unwrap();
+        pool.held += 1;
+        pool.held_in += 1;
+        s.improvement_pools.insert(h(LINE), pool);
+        let s = at(&s, &p, 1_700, |_| {});
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().status, PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(1_700) });
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        assert!(
+            matches!(
+                apply_improvement_policy_set_v1(&mut b, &ctx(1_800), &set(LINE, 3, Some(policy()))),
+                Err(PalwStateV2Error::ImprovementPolicyRefused(_))
+            ),
+            "past effective_daa the line opts in again only once dissolved"
+        );
     }
 
     /// **Spec 17 §17.13: `transitions.json` and `pool.json`** — the end-to-end epoch above, traced

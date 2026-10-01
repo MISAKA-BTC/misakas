@@ -10266,8 +10266,9 @@ pub struct PalwChainStateV2 {
     improvement_material: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>,
     /// RFC-0004: each epoch's candidates, by `(line, epoch, index)` in acceptance order.
     improvement_candidates: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>,
-    /// RFC-0004: each epoch's hold-out cases and setter sets, by `(line, epoch, index)`.
-    improvement_pool_entries: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwPoolEntryV2>,
+    /// RFC-0004: each epoch's hold-out cases and setter sets, by `(line, epoch, kind, id)` — kind 1 a
+    /// hold-out case, 2 a setter set — so an id enters an epoch's pool once [D13].
+    improvement_pool_entries: BTreeMap<(Hash64, u64, u8, Hash64), crate::palw_improve_state_v1::PalwPoolEntryV2>,
     /// RFC-0004: each epoch's drawn items, by `(line, epoch, item)`.
     improvement_items: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>,
     /// RFC-0004: each recorded score set, by `(line, epoch, item, subject)`.
@@ -11016,7 +11017,11 @@ impl PalwChainStateV2 {
         self.improvement_material.insert((id, n), material);
         self.improvement_epochs.insert((id, n), epoch);
         self.improvement_candidates.insert((id, n, 0), candidate);
-        self.improvement_pool_entries.insert((id, n, 0), pool_entry);
+        let entry_key = match pool_entry {
+            crate::palw_improve_state_v1::PalwPoolEntryV2::HoldOut { id: case, .. } => (id, n, 1u8, case),
+            crate::palw_improve_state_v1::PalwPoolEntryV2::SetterSet { set_id, .. } => (id, n, 2u8, set_id),
+        };
+        self.improvement_pool_entries.insert(entry_key, pool_entry);
         self.improvement_items.insert((id, n, item.item), item);
         self.improvement_results.insert((id, n, result.item, result.subject), result);
         self.improvement_grants.insert((id, n, 0), grant);
@@ -18518,7 +18523,11 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     /// **RFC-0004: the one writer of `improvement_pool_entries`**, journaled `ImprovementRow` (8).
-    pub(crate) fn write_improvement_pool_entry(&mut self, key: (Hash64, u64, u32), new: Option<crate::palw_improve_state_v1::PalwPoolEntryV2>) {
+    pub(crate) fn write_improvement_pool_entry(
+        &mut self,
+        key: (Hash64, u64, u8, Hash64),
+        new: Option<crate::palw_improve_state_v1::PalwPoolEntryV2>,
+    ) {
         self.write_improvement_row(PALW_IMPROVE_TABLE_POOL_ENTRIES_V1, key, new, |s| &mut s.improvement_pool_entries);
     }
 
@@ -37275,7 +37284,7 @@ pub struct PalwStateCarriageV2 {
     pub improvement_pools: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementPoolV1>,
     pub improvement_material: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>,
     pub improvement_candidates: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>,
-    pub improvement_pool_entries: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwPoolEntryV2>,
+    pub improvement_pool_entries: BTreeMap<(Hash64, u64, u8, Hash64), crate::palw_improve_state_v1::PalwPoolEntryV2>,
     pub improvement_items: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>,
     pub improvement_results: BTreeMap<(Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>,
     pub improvement_grants: BTreeMap<(Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>,
@@ -37470,9 +37479,19 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
     for ((id, _), _) in &c.improvement_material {
         line(id, "a material frontier")?;
     }
-    let detail = c.improvement_candidates.keys().chain(c.improvement_pool_entries.keys()).chain(c.improvement_items.keys());
+    let detail = c.improvement_candidates.keys().chain(c.improvement_items.keys());
     for (id, n, _) in detail.chain(c.improvement_grants.keys()) {
-        epoch(id, *n, "a candidate, pool entry, item or grant")?;
+        epoch(id, *n, "a candidate, item or grant")?;
+    }
+    for ((id, n, kind, entry), row) in &c.improvement_pool_entries {
+        epoch(id, *n, "a pool entry")?;
+        let named = match row {
+            crate::palw_improve_state_v1::PalwPoolEntryV2::HoldOut { id: case, .. } => (1u8, case),
+            crate::palw_improve_state_v1::PalwPoolEntryV2::SetterSet { set_id, .. } => (2u8, set_id),
+        };
+        if named != (*kind, entry) {
+            return Err(format!("a pool entry of {id}/{n} under another kind or id"));
+        }
     }
     for (id, n, _, _) in c.improvement_results.keys() {
         epoch(id, *n, "a result")?;
@@ -56162,7 +56181,7 @@ pub(crate) mod tests {
             })),
             ("improvement_pool_entries", Box::new(|s| {
                 let r = crate::palw_improve_state_v1::test_rows::pool_entry_v1(0xD6);
-                s.improvement_pool_entries.insert((Hash64::from_bytes([0xD6; 64]), 1, 0), r);
+                s.improvement_pool_entries.insert((Hash64::from_bytes([0xD6; 64]), 1, 1, Hash64::from_bytes([0xD6; 64])), r);
             })),
             ("improvement_items", Box::new(|s| {
                 let r = crate::palw_improve_state_v1::test_rows::item_v1(0xD7);
