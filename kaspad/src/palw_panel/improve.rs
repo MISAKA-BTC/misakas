@@ -43,8 +43,8 @@ use misaka_palw_sdk::improve_eval::{
 };
 
 use crate::palw_improve_watch::{
-    PALW_IMPROVE_READ_EVERY_V1, PalwImproveWatchV1, palw_improve_held_classes_v1, palw_improve_log_tick_v1,
-    palw_improve_status_json_v1, palw_improve_watch_armed_v1,
+    PALW_IMPROVE_READ_EVERY_V1, PalwImproveWatchV1, palw_improve_admitting_classes_v1, palw_improve_held_classes_v1,
+    palw_improve_log_tick_v1, palw_improve_status_json_v1, palw_improve_watch_armed_v1,
 };
 
 /// A job this node ran whose claim has not taken it is offered again after this many DAA (a carrier
@@ -82,6 +82,9 @@ pub(super) struct PalwImproveLoopV1 {
     seat_done: HashMap<Hash64, PalwEvalSeatJudgmentV1>,
     /// The section files this node already tried against a candidate (by path and modification time).
     sections_tried: HashSet<(PathBuf, u64)>,
+    /// Jobs this node ran whose claim came out past the job's share of the epoch's position budget
+    /// (MIP-20): the chain would refuse it whole, so it is neither carried nor run again.
+    over_budget: HashSet<Hash64>,
 }
 
 /// What a seat's step on an evaluation duty came to.
@@ -154,14 +157,27 @@ impl PalwPanelService {
             return;
         }
         st.read_at = Some(std::time::Instant::now());
-        let (views, evals, status) = self
+        let (views, evals, status, admitting) = self
             .consensus_manager
             .consensus()
             .unguarded_session()
-            .spawn_blocking(|c| (c.palw_improvement_open_epochs_v1(), c.palw_improvement_eval_views_v1(), c.palw_improvement_status_v1()))
+            .spawn_blocking(|c| {
+                (
+                    c.palw_improvement_open_epochs_v1(),
+                    c.palw_improvement_eval_views_v1(),
+                    c.palw_improvement_status_v1(),
+                    palw_improve_admitting_classes_v1(c.palw_model_registry_v1().as_ref()),
+                )
+            })
             .await;
         self.improve_refresh_held_v1(st);
-        let node = PalwImproveNodeV1 { holds: st.held_ids.clone(), evaluates: self.improve_evaluates_v1(), prefetch_full: false };
+        let node = PalwImproveNodeV1 {
+            holds: st.held_ids.clone(),
+            evaluates: self.improve_evaluates_v1(),
+            prefetch_full: false,
+            admitting,
+            ceilings: self.consensus_config.params.palw_improvement_v1.map(|fence| fence.ceilings),
+        };
         let tick = {
             let chain = PalwImproveNodeChainV1 { views: &views, eval: &evals };
             st.watch.tick(&chain, &node, current_daa)
@@ -179,7 +195,10 @@ impl PalwPanelService {
                     self.improve_prefetch_v1(st, line_id, epoch, class_id, plan);
                 }
                 PalwImproveDutyV1::Evaluate { task, until_daa } => {
-                    if st.running.len() + st.ready.len() >= PALW_IMPROVE_MAX_RUNNING_V1 || st.attempted.contains_key(&task.job_id) {
+                    if st.running.len() + st.ready.len() >= PALW_IMPROVE_MAX_RUNNING_V1
+                        || st.attempted.contains_key(&task.job_id)
+                        || st.over_budget.contains(&task.job_id)
+                    {
                         continue;
                     }
                     let Some(held) = st.held.get(&task.subject_class).cloned() else { continue };
@@ -371,6 +390,15 @@ impl PalwPanelService {
         Ok((build(fee)?, claim_id))
     }
 
+    /// **A task's job share of its epoch's evaluation budget** (MIP-20), from the epoch views as last read
+    /// and the network's ceilings; `None` where either is unknown.
+    fn improve_job_cap_of_v1(&self, st: &PalwImproveLoopV1, task: &PalwImproveEvalTaskV1) -> Option<u64> {
+        let ceilings = self.consensus_config.params.palw_improvement_v1.map(|fence| fence.ceilings)?;
+        let view = st.views.iter().find(|v| v.line.line_id == task.line_id && v.epoch.epoch == task.epoch)?;
+        let epoch = misaka_palw_sdk::improve::PalwImproveEpochViewV1::of_view_v1(view);
+        Some(misaka_palw_sdk::improve::palw_improve_job_cap_v1(&view.policy, &epoch, &ceilings))
+    }
+
     /// **Carry one finished evaluation claim at the panel's carrier site**, funded and chained exactly as
     /// the canonical claim is: `true` when a carrier went out (the caller's slot count and funding
     /// follow), `false` when nothing was carried (nothing finished, no funding, or the build refused).
@@ -394,6 +422,23 @@ impl PalwPanelService {
         if taken {
             info!("[{PALW_PANEL}] [palw-improve] job {} is taken already: not carrying this node's claim", work.task.job_id);
             return false;
+        }
+        // MIP-20: the chain refuses a claim past its job's share of the epoch's evaluation budget whole, so
+        // a run that came out over it (a generation that ran long) is not carried.
+        if let Some(cap) = self.improve_job_cap_of_v1(st, &work.task) {
+            let positions = work.task.positions_of(work.tail.generated.len());
+            if positions > cap {
+                warn!(
+                    "[{PALW_PANEL}] [palw-improve] item {} of epoch {} for {:?} took {positions} positions, past its job's share of the \
+                     epoch's evaluation budget ({cap}): the chain would refuse the claim, so it is not carried",
+                    work.task.item, work.task.epoch, work.task.subject
+                );
+                if st.over_budget.len() >= 4096 {
+                    st.over_budget.clear();
+                }
+                st.over_budget.insert(work.task.job_id);
+                return false;
+            }
         }
         let (tx, claim_id) = match self.improve_build_claim_tx_v1(st, session, network_domain, bond, current_daa, &work, funding_outpoint, &funding_entry) {
             Ok(built) => built,
