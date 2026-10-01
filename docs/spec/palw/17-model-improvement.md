@@ -39,8 +39,9 @@ Contents:
 - §17.9 promotion;
 - §17.10 rollback;
 - §17.11 the pool and rewards;
-- §17.12 rules PALW-MIP-1…24;
-- §17.13 vectors.
+- §17.12 rules PALW-MIP-1…24 (and PALW-MIP-25…27, §17.14.5);
+- §17.13 vectors;
+- §17.14 pipeline-claim data availability (Phase F's half).
 
 ---
 
@@ -49,6 +50,8 @@ Contents:
 Every number below was chosen free on every branch that touches the same space:
 - `tir/fence-2`: object tag 67, delta 88–89, tails `0xC0`–`0xC1`;
 - `rfc3/fp-v5`: object tags 68–69, delta 90, tail `0xC2`, court proofs 10–12 and 16, step fault 21;
+- Phase F's pipeline-claim data availability (`rfc4/int`, §17.14): object tags 83–85 (83 assigned, 84 and 85
+  reserved), DA units 5–6, DA answers 7–9; and `HardCaseKeyRevealed`, object tag 86;
 - the capacity line: tails `0xB*`;
 - `rcore/int-10` (the release line): the model court window's delta entry `ClassCourtWindow`, which that line
   declared at 90 and which sits at the **end** of the delta enum here (100; `GenClass` keeps 90 — the
@@ -76,12 +79,17 @@ Each variant's borsh discriminant is its tag. Tags 70–82 are appended after `C
 | 80 | `CandidateSubmitted` | `PalwCandidateSubmissionV1` | `submitter` (a bond) | `palw_improve_candidate_v1` | cand (A5) |
 | 81 | `LineageHeadRolledBack` | `PalwLineageRollbackV1` | `filer`: the owner, or any bond with a proof | `palw_improve_state_v1` | core (A2) |
 | 82 | `ImprovementPoolFunded` | `PalwImprovementPoolFundingV1` | unsigned (its carrier's sink output pays it, as `ModelBuy`) | `palw_improve_state_v1` | core (A9) |
+| 83 | `DefaultAccusedPipelineStep` | `PalwPipelineStepAccusationV1` | the `accuser` (a bond) | `palw_pipeline_da_v1` | Phase F (§17.14) |
+| 84, 85 | reserved (uninhabited payload) | — | — | `palw_pipeline_da_v1` | — |
+| 86 | `HardCaseKeyRevealed` | `PalwCaseKeyRevealV1` | unsigned (opens the commitment) | `palw_improve_material_v1` | cand (A4) |
 
-Tags 83–85 are reserved for Phase F's pipeline-claim data-availability objects (the coordinator's
-decision of 2026-09-29): evaluation claims otherwise have no on-chain DA transport, so a withholding
-evaluator could not be convicted. Those objects are dropped by name below `palw_improvement_v1`. Tag 86
-is `HardCaseKeyRevealed` (the material lane's: a hold-out case's committed key or reference, opened in
-`Closing`, unsigned, as `SetterKeysRevealed` opens a set's).
+Tags 83–85 are Phase F's pipeline-claim data-availability tags (the coordinator's decision of
+2026-09-29; §17.14): evaluation claims otherwise have no on-chain DA transport, so a withholding evaluator
+could not be convicted. **Tag 83 is `DefaultAccusedPipelineStep`**, the demand; **tags 84 and 85 stay
+reserved**, their variants' payload uninhabited, so a block that carries one is undecodable, as an unknown
+tag is, while every later tag keeps its number. Phase F's objects are dropped by name below
+`palw_improvement_v1`. **Tag 86 is `HardCaseKeyRevealed`** (the material lane's: a hold-out case's
+committed key or reference, opened in `Closing`, unsigned, as `SetterKeysRevealed` opens a set's; §17.8.2).
 
 The integration's allocations beyond them (2026-10-01; each lane asked the core lane, §17.0's rule):
 
@@ -1276,3 +1284,122 @@ the fold, and `misaka-palw-improve-ref2` — MUST agree on every one.
 | `pool.json` | a line's pool through deposits, φ, fees, escrow, S1, S2 caps, vesting, forfeit and dissolution, with the conservation sums | core (A9) |
 | `scoring/*.json`, `pipelines/eval-*.json` | the scoring library (`consensus-vectors/tir-v2/`) | eval (A7, landed) |
 | `composite.json` | composite roots and class ids | cand (A5) |
+
+## 17.14 Pipeline-claim data availability
+
+> Normative past `palw_improvement_v1`. Phase F's half of RFC-0004: spec 17 §17.0 reserved object tags
+> 83–85 and the DA units 5–6 for it (the coordinator's decision of 2026-09-29), and this section
+> assigns them. It is the second IR fence's mechanism (`palw_tir_fence2`: `TirStepLeaf`,
+> `TirStepNode`, `DefaultAccusedTirStep`; `docs/design/palw/tir/evidence-transport-scope.md`) for the
+> other claims whose execution is a step tree: pipeline claims.
+
+### 17.14.1 Why
+
+A **pipeline claim** is a free-prompt claim whose execution is a pipeline of programs (spec 04b §15.6):
+RFC-0003's generative claims (a V5 job on a `gen_classes` class) and RFC-0004's evaluation claims (a
+version-9 job, §17.8.2). Its executor commits one step tree — a keyed Merkle tree per stage over that
+stage's leaves, and a step root over the stage roots (`palw_gen_step_v1`) — and the execution root binds
+the step root, the job and the answer. The executor's capture (40–625 MB for a real-size class) is
+never on chain and no seat can pull it, so a lie is never convicted: no seat holds the leaf the court
+needs, and the court's moves (`GenCone`, `GenDecodeToken`, the dissection) all open a leaf of that tree.
+An evaluation claim in particular would let a withholding evaluator decide a promotion's counts for
+free. The remedy is the IR claim's: a DA demand that names one unit of the tree and a producer that
+must disclose it inside `W_disclose` or be defaulted (a DA court conviction, DA-7).
+
+### 17.14.2 Units, answers, demand
+
+| Item | Value |
+| --- | --- |
+| Units (`PalwDaUnitV1`, appended after tag 4) | **5 `PipelineStepLeaf { stage: u8, index: u64 }`** — leaf `index` of stage `stage`'s tree; **6 `PipelineStepNode { stage: u8, level: u8, index: u64 }`** — interior node `index` of the stage's tree at `level ≥ 1` above the leaf hashes (level 0 is a leaf). Tag 7 stays spare. A pipeline has no rows unit: a stream stage's logits are leaves of its tree |
+| Answers (`PalwDaAnswerV1`, appended after tag 6) | **7 `PipelineStepLeaf`** (the leaf's preimage and its opening to the stage root), **8 `PipelineStepNode`** (the node's frontier ten levels down and its opening), **9 `PipelineStepOutOfRange`** (the claim's binding, proving the unit is not in the execution). Each rides `MaterialDisclosedV2` (tag 55), signed by the discloser as every DA answer is |
+| Demand (object tag **83**, `DefaultAccusedPipelineStep`) | `PalwPipelineStepAccusationV1 { claim, unit, accuser, signature }`: keyed by the claim alone (no binding, no draws), signed by the accuser's bond under the ML-DSA-87 context `misaka-palw/pipeline/da-step-accusation/mldsa87/v1` over `H("misaka-palw/pipeline/da-step-accusation/message/v1", network ‖ claim ‖ borsh(unit) ‖ accuser)`. It opens an R-core+ session naming exactly that unit |
+| Tags 84, 85 | reserved. Their variants exist so that every later tag keeps its number, with a payload that is never constructible (a block that carries one is undecodable, exactly as an unknown tag is) |
+| Fence | `palw_improvement_v1` and nothing else: below it the acceptance walk drops every such object by name, first and charged nothing (an older build cannot decode them, A-2), the gate refuses them, and the fold refuses them as the second lock. Its prerequisites already include `palw_tir_fence2`, `palw_gen_v1` and `palw_kary_court` (§17.0) |
+
+**The binding.** An answer carries a *compact* binding — the parts of the claim's execution root and
+nothing else, so a node answer stays near the frontier's 64 KiB:
+- `Gen { job_id, class_id, step_leaf_count, stage_roots, generated }`: the inputs of
+  `palw_gen_execution_root_v1`;
+- `Eval { job_id, subject_class, step_leaf_count, stage_roots, prompt_root, prompt_tokens, params,
+  generated_root, finalized_root, score }`: the inputs of `palw_improve_eval_execution_root_v1`.
+- `Tensor { job_id, class_id, step_leaf_count, stage_roots, output_root }`: the inputs of
+  `palw_gen_tensor_execution_root_v1` (RFC-0003 §I.3: an image or an embedding, a generative class's claim
+  whose output is a digest) — in its own domain, so no text binding of the same trees is a tensor claim's.
+
+The fold takes the kind from its own state — an evaluation claim is one in `improvement_eval_claims`; a
+generative claim (text or tensor: the binding's variant is whichever recomputes the claim's execution root) is a free-prompt claim whose class is in `gen_classes` — and accepts only the binding
+of that kind whose recomputed execution root is the claim's `execution_root` and whose class is the
+claim's. (`step_root` is `palw_gen_step_root_v1` over `stage_roots`; the job and every other input are
+inside the root, so the root's equality pins them.)
+
+### 17.14.3 What an answer proves (hash arithmetic only)
+
+A stage's root is `H(stage-root key, [stage] ‖ LE u64 count ‖ M)`, `M` the Merkle root of its leaf
+hashes (`palw_gen_stage_root_v1`): **the stage's leaf count is committed inside the stage root**. An
+answer therefore carries `stage_leaf_count` (and, for an out-of-range proof, `M`), and the fold checks
+it by recomputing the stage root. The fold derives no class, no program and no step space; it does not
+judge that a count is the job's canonical one — that is the court's (`StepLeafCountNotCanonical`), and a
+non-canonical claim is convicted there.
+
+For stage tree `T` of `count` leaves (leaf hashes at level 0, each level above `⌈w / 2⌉` nodes by
+`palw_gen_step_node` over pairs, an odd last node promoted — the same arithmetic as the IR step tree, with
+the pipeline's own node rule):
+- **`PipelineStepLeaf { stage, index }`** is answered by `{ binding, stage_leaf_count, coord, lanes_le,
+  siblings }`: `index < count`; `coord.stage = stage`; the leaf hash
+  `H(leaf key, borsh(coord) ‖ LE u32 n ‖ lanes_le)`, `n = |lanes_le| / 4`, walked up by `siblings`
+  from position `index` reaches `M`, and `H(stage-root key, [stage] ‖ LE u64 count ‖ M)` is
+  `binding.stage_roots[stage]`. The leaf's *structure* is not judged (a leaf whose coordinate is not
+  its index's is what was committed; the court convicts it from the answer, as for an IR leaf);
+- **`PipelineStepNode { stage, level, index }`** is answered by `{ binding, stage_leaf_count, frontier,
+  siblings }`: `(level, index)` is an interior node of `T`; `frontier` is exactly the nodes it covers
+  `min(level, 10)` levels down (the leaf hashes when nearer) — at most 1,024 hashes — folding to it by
+  the tree's rule; `siblings` walk it to `M`; the stage root is `binding.stage_roots[stage]` as above;
+- **`PipelineStepOutOfRange`** is answered by `{ binding, stage_tree }`: for a `stage` at or past
+  `|stage_roots|` the binding alone (`stage_tree` empty); otherwise `stage_tree = { leaf_count, M }` with
+  the stage root recomputed, and the unit past the tree — a leaf at or past `leaf_count`, a node whose
+  level is above the root or whose index is at or past its level's width.
+
+An answer of a unit inside the tree by out-of-range, or of a unit past it by a disclosure, is refused.
+
+### 17.14.4 Demands and the descent
+
+- **At the door** (the gate, then the fold): `stage < 16` (NF-P1's most stages), a leaf `index <
+  PALW_HELD_STEP_LADDER_V1` (2^40, the widest ladder any network runs), a node `1 ≤ level ≤ 40` with
+  `index` below the width of the widest tree at that level. A unit past the claim's own stage is the
+  accused's to prove by `PipelineStepOutOfRange`. The claim MUST be a pipeline claim of the kinds above;
+  every other gate, budget, clock and record of the R-core+ session is `DA-1…DA-9`'s unchanged.
+- **A seat's descent.** The seat compares its own replay with the claim: it demands the root of a stage
+  (`level = ⌈log₂ count⌉`, `index = 0`); the answer's binding names every stage root, so it learns the
+  first stage whose root differs from its own and descends that stage — each node answer is ten levels —
+  and ends at the leaf. A stage of up to 2^20 leaves is reached inside one seat's four sessions (the
+  discovery, two node sessions, the leaf); one of up to 2^30 when the stage roots are already known
+  (any earlier answer's binding is on chain), and any seat, or any bond with a session budget, continues
+  from what the chain already holds.
+- **The close from the disclosure alone.** The descent takes the first differing node at every level, so
+  everything wholly before the disputed leaf is the seat's own; the disclosed leaf and its opening give
+  the nodes on its path, and the cone close (`GenCone`) is built from the seat's own leaves and that
+  one.
+
+### 17.14.5 Rules
+
+- **PALW-MIP-25 (pipeline DA objects).** Below `palw_improvement_v1` the objects and answers of this
+  section MUST be dropped by name in the acceptance walk and refused by the gate and the fold. Past it,
+  a demand MUST be signed by its accuser's registered key over the network, the claim, the unit and the
+  accuser, and name a unit within §17.14.4's door bounds.
+- **PALW-MIP-26 (answers).** An answer MUST verify by hash arithmetic against the claim's committed roots
+  alone (§17.14.3). The fold MUST NOT accept an answer for a claim that is not a pipeline claim of the
+  binding's kind, and MUST NOT judge a leaf's structure or a count's canonicality.
+- **PALW-MIP-27 (default).** A demanded unit unanswered by the producer or a bond with a live lock on
+  the claim inside `W_disclose` MUST default the claim as a DA court default does (DA-7); an answer
+  answers every session that demands the unit (DA-4).
+
+### 17.14.6 Vectors and tests
+
+`consensus-vectors/pipeline-da-v1/` pins the stage tree's arithmetic (leaf hash, Merkle root, stage root, the
+frontier and the openings, over stages of 0, 1, 2, 3, 4, 5, 7, 8, 9, 17 and 33 leaves), the answers a prover
+builds and the checks that accept or refuse them, the out-of-range proofs, the compact bindings' execution
+roots, the tags of the units and answers, and the demand's message; `PIPELINE_DA_BLESS=1` rewrites them. The
+fold's own tests (`palw_pipeline_da_fold_v1`) run a claim through demand, answer and default; the processor's
+gate test (`t12_pipeline_da_gate`) holds the demand's signature, its fence and its unit bounds; the evidence
+transport doc (`docs/design/palw/tir/evidence-transport-scope.md`) carries the design note.
+

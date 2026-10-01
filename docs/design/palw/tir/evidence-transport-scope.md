@@ -105,3 +105,35 @@ one-move accusation and every close stay exactly as the chain adjudicates them t
 Until this lands, Stage 2's live court battery runs on a small IR class whose captures fit under 16 MiB
 (coordinator, 2026-09-28). D-F1 keeps Active → claims → Final and the offline `palw-class certify` of
 every kind.
+
+## Pipeline claims (Phase F, 2026-10-01; `palw_improvement_v1`)
+
+RFC-0003's generative claims and RFC-0004's evaluation claims commit a step tree of their own — a keyed
+Merkle tree per stage over that stage's leaves and a step root over the stage roots
+(`palw_gen_step_v1`) — and have the IR claim's problem exactly: the capture is never on chain, no seat
+holds a leaf, a lie is never convicted, and an evaluation claim's withholding executor would decide a
+promotion's counts for free. Spec 17 §17.14 gives them C's mechanism. What differs from the IR claim's:
+
+- **The units are per stage**: `PipelineStepLeaf { stage, index }` (`PalwDaUnitV1` tag 5) and
+  `PipelineStepNode { stage, level, index }` (tag 6); answers 7–9; the demand is object tag 83,
+  `DefaultAccusedPipelineStep`, keyed by the claim alone. A pipeline has no rows unit: a stream stage's
+  logits are leaves of its tree.
+- **Nothing is derived.** A stage root commits the stage's leaf count (`H(key, [stage] ‖ count ‖ M)`), so
+  an answer carries the count and the fold recomputes the root: no class decode, no program, no step
+  space, no enumeration. A count's canonicality stays the court's (`StepLeafCountNotCanonical`), a leaf's
+  structure the court's too.
+- **A compact binding**: the parts of the claim's execution root and nothing else (a generative text claim's
+  job id, class, count, stage roots and generated ids, a tensor claim's the output digest instead; an evaluation claim's job id, subject class, count,
+  stage roots, prompt root and length, parameters, generated and finalized roots and score), so a node
+  answer stays near its 64 KiB frontier. The IR binding carries the class's layout; a generative job is
+  larger still.
+- **The claim's kind is the fold's**: an evaluation claim is one of an epoch's jobs, a generative claim
+  one whose class is a registered generative class; a demand on any other claim is refused at the door,
+  because a demand nobody could answer would default an honest producer.
+- **Reach.** The descent is ten levels a session. A stage of up to 2^20 leaves is reached inside one
+  seat's four sessions by itself (the discovery of which stage differs, two node sessions, the leaf), and
+  one of 2^30 when the stage roots are already known — any earlier answer's binding is on chain, and any
+  bond with a session budget continues from what the chain holds.
+- **The fence is `palw_improvement_v1`** (spec 17 §17.0's decision of 2026-09-29), not `palw_tir_fence2`:
+  a generative claim has its court's moves and no DA transport between `palw_gen_v1` and
+  `palw_improvement_v1`. `PalwStateParamsV2::pipeline_da_active_at` is the one place the choice is made.

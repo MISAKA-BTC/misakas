@@ -2735,3 +2735,8 @@ interval carries no operand, param or image, because the court convicts on PALW-
 
 There are no `Hist` tile leaves (RFC-0003 §II.2.1, finding G14). The stages are concatenated stage-major, so
 every leaf is adjudicated from leaves that precede it.
+
+**Data availability.** The capture of this tree is never on chain. Past `palw_improvement_v1` a DA demand
+names one leaf or one interior node of one stage's tree (`PipelineStepLeaf`, `PipelineStepNode`; spec 17
+§17.14), and an answer is checked by hash arithmetic over the stage roots above — the stage root commits the
+stage's leaf count, so no class, program or step space is derived to check it.
