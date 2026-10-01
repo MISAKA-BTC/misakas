@@ -100,20 +100,25 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
         if let Ok(bytes) = std::fs::read(&refp) {
             let r: serde_json::Value = serde_json::from_slice(&bytes).expect("reference json");
             let detail = r["steps_detail"].as_array().expect("steps_detail");
+            let flat = |key: &str| -> Vec<f64> { r[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+            // The float denoiser is held to diffusers on diffusers' OWN text tensors (the integer text stages' rows differ
+            // from the float CLIP's by their own quantisation, which is the pipeline's fidelity, not the denoiser's).
+            let (pe_ref, pooled_ref) = (flat("prompt_embeds"), flat("pooled"));
+            let (_, vels_own) = float_loop(&fx.dit, &fx.tables, si, &noise_f, &pe_ref, &pooled_ref, &mut Calib::new());
             for (i, d) in detail.iter().enumerate() {
                 let f = |key: &str| -> Vec<f64> { d[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
                 let (v_ref, l_ref) = (f("velocity"), f("latent"));
                 let amax_v = v_ref.iter().fold(0f64, |m, v| m.max(v.abs()));
-                let dv = vels_f[i].iter().zip(&v_ref).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
+                let dv = vels_own[i].iter().zip(&v_ref).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
                 let got: Vec<f64> = denoise.steps[i].output.data.iter().map(|v| *v as f64 * fx.stage.scales.latent).collect();
                 let amax_l = l_ref.iter().fold(0f64, |m, v| m.max(v.abs()));
                 let dl = got.iter().zip(&l_ref).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
                 eprintln!(
-                    "  diffusers step {i}: Rust float velocity worst {dv:.2e} ({:.2e} of amax); integer latent worst {dl:.4} ({:.2}% of amax)",
+                    "  diffusers step {i}: Rust float velocity (same text) worst {dv:.2e} ({:.2e} of amax); integer pipeline latent worst {dl:.4} ({:.2}% of amax)",
                     dv / amax_v,
                     100.0 * dl / amax_l
                 );
-                assert!(dv / amax_v < 1e-3, "the Rust float denoiser is diffusers' (case {k} step {i}): relative {}", dv / amax_v);
+                assert!(dv / amax_v < 1e-4, "the Rust float denoiser is diffusers' (case {k} step {i}): relative {}", dv / amax_v);
             }
             let img_ref: Vec<f64> = r["image_hwc_u8"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
             let worst = run.output.data.iter().zip(&img_ref).fold(0f64, |m, (g, w)| m.max((*g as f64 - w).abs()));
