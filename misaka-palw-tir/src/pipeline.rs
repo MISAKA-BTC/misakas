@@ -12,6 +12,10 @@
 //! form ([`validate_pipeline`], with every edge's interval proved statically) and a run
 //! ([`run_pipeline`]). The class object — identity, per-stage layouts, the artifact, registration,
 //! the step tree and the court — is consensus's, and comes with `palw_gen_v1`.
+//!
+//! A node that holds a program's weights in its own executor may compute an input-free stage's
+//! positions there ([`PipelineParams::stepper`], [`StageStepperV1`]) — byte for byte what the
+//! reference computes; consensus never offers a stepper, so its runs are the reference's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -253,6 +257,52 @@ pub trait RandomSource {
 /// Each program's params (the pipeline's artifact, by program).
 pub trait PipelineParams {
     fn params(&self, program: u16) -> &dyn ParamSource;
+
+    /// **The holder's own stepper for `program`'s positions**, when it computes them itself — a
+    /// node's typed executor over the weights it holds (RFC-0004 §7.2: an evaluation's subject stage,
+    /// whose program is the class's own, lifted with no input). Asked once per run of a stage whose
+    /// program reads no input, before the stage's first position; `decl` is that program. `None` — the
+    /// default, and every consensus caller's — runs the reference interpreter over [`Self::params`].
+    /// A stepper answers for the reference ([`StageStepperV1`]): the claim's step tree is built from what
+    /// it returns.
+    fn stepper(&self, program: u16, decl: &TirProgramV2) -> Option<Box<dyn StageStepperV1 + '_>> {
+        let _ = (program, decl);
+        None
+    }
+}
+
+/// **A stage's positions computed elsewhere than the reference interpreter** ([`PipelineParams::stepper`]).
+/// One call per position from the stage's start — position 0, the initial state — with the
+/// position's token in; out comes exactly what the reference computes there: the output and the
+/// commit points as [`InterpreterV2::step`] reports them, and the `Fixed` states after the position
+/// as the reference's run state holds them (an instance never written is absent). A position the
+/// reference refuses, the stepper refuses, with the same error class. Nothing else may differ: the
+/// stage's leaves, roots and every stage after it are built from these values.
+pub trait StageStepperV1 {
+    fn step(&mut self, token: u32) -> TirResult<StageStepV1>;
+}
+
+/// One position of a stage as [`StageStepperV1::step`] answers it: the step's output and commits, and
+/// the `Fixed` states after it.
+pub type StageStepV1 = (StepOutputV2, BTreeMap<crate::interp::StateKey, Tensor>);
+
+/// The holder's stepper for a stage, when the stage's program reads no input and the holder offers one.
+fn stage_stepper<'p>(params: &'p dyn PipelineParams, program: u16, decl: &TirProgramV2) -> Option<Box<dyn StageStepperV1 + 'p>> {
+    if decl.inputs.is_empty() { params.stepper(program, decl) } else { None }
+}
+
+/// [`run_stage`] on a holder's stepper.
+fn run_stage_on(
+    mut stepper: Box<dyn StageStepperV1 + '_>,
+    tokens: &[u32],
+) -> TirResult<(Vec<StepOutputV2>, Vec<BTreeMap<crate::interp::StateKey, Tensor>>)> {
+    let (mut steps, mut fixed_after) = (Vec::with_capacity(tokens.len()), Vec::with_capacity(tokens.len()));
+    for t in tokens {
+        let (step, fixed) = stepper.step(*t)?;
+        steps.push(step);
+        fixed_after.push(fixed);
+    }
+    Ok((steps, fixed_after))
 }
 
 fn nf<T>(msg: impl Into<String>) -> TirResult<T> {
@@ -701,7 +751,10 @@ pub fn run_pipeline(
         let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
         let interp = InterpreterV2::new(prog)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let (steps, fixed_after) = run_stage(&interp, params.params(st.program), &inputs, &run_tokens)?;
+        let (steps, fixed_after) = match stage_stepper(params, st.program, prog) {
+            Some(stepper) => run_stage_on(stepper, &run_tokens)?,
+            None => run_stage(&interp, params.params(st.program), &inputs, &run_tokens)?,
+        };
         runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let output = pipeline_output(p, programs, &runs)?;
@@ -772,13 +825,17 @@ pub fn run_text_pipeline(
         let (tokens, trip) = stage_tokens(st, job)?;
         let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let (steps, fixed_after) = run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?;
+        let (steps, fixed_after) = match stage_stepper(params, st.program, prog) {
+            Some(stepper) => run_stage_on(stepper, &run_tokens)?,
+            None => run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?,
+        };
         runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let st = &p.stages[text];
     let prog = &programs[st.program as usize];
     let inputs = stage_inputs(p, st, prog, &runs, job, random)?;
     let interp = InterpreterV2::new(prog)?;
+    let mut stepper = stage_stepper(params, st.program, prog);
     let mut state = crate::interp::RunState::default();
     let (mut stream, mut generated, mut steps) = (job.prompt.clone(), Vec::new(), Vec::new());
     let mut fixed_after = Vec::new();
@@ -787,8 +844,18 @@ pub fn run_text_pipeline(
         if pos as u32 >= st.max_trip {
             return err(TirErrorKind::Position, format!("stage {}: the stream passes max_trip {}", st.name, st.max_trip));
         }
-        let out = interp.step(params.params(st.program), &inputs, &mut state, stream[pos])?;
-        fixed_after.push(state.fixed.clone());
+        let out = match stepper.as_mut() {
+            Some(stepper) => {
+                let (out, fixed) = stepper.step(stream[pos])?;
+                fixed_after.push(fixed);
+                out
+            }
+            None => {
+                let out = interp.step(params.params(st.program), &inputs, &mut state, stream[pos])?;
+                fixed_after.push(state.fixed.clone());
+                out
+            }
+        };
         let consumed = pos + 1 >= job.prompt.len();
         let answer = if consumed { Some(select(pos as u32, &out.output)) } else { None };
         steps.push(out);
@@ -806,6 +873,8 @@ pub fn run_text_pipeline(
         }
         pos += 1;
     }
+    // The stream stage is over: a holder's stepper is released before the stages after it run.
+    drop(stepper);
     let tokens = stream[..steps.len()].to_vec();
     runs.push(StageRun { trip: steps.len() as u32, tokens, steps, fixed_after });
     // A decode stage's later stages read what it decoded (`TokenSource::Generated`).
@@ -815,7 +884,10 @@ pub fn run_text_pipeline(
         let (tokens, trip) = stage_tokens(st, &after)?;
         let inputs = stage_inputs(p, st, prog, &runs, &after, random)?;
         let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let (steps, fixed_after) = run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?;
+        let (steps, fixed_after) = match stage_stepper(params, st.program, prog) {
+            Some(stepper) => run_stage_on(stepper, &run_tokens)?,
+            None => run_stage(&InterpreterV2::new(prog)?, params.params(st.program), &inputs, &run_tokens)?,
+        };
         runs.push(StageRun { trip, tokens, steps, fixed_after });
     }
     let output = pipeline_output(p, programs, &runs)?;

@@ -133,7 +133,7 @@ pub fn eval_cone(
                     fixed[inst as usize] = Buf::from_i128s(s.dtype, &t.data);
                 }
                 Ref::Param(j) => {
-                    if params.get(j, layer).is_none() {
+                    if !params.has(j, layer) {
                         return Err(TirError::new(
                             TirErrorKind::Missing,
                             format!("param {} (layer {layer:?})", p.params[j as usize].name),
@@ -214,7 +214,7 @@ pub fn eval_cone(
                     out = Buf::from_i128s(s.dtype, &all);
                     Ok(None)
                 }
-                _ => eval_compute(plan, bp, node, &rd, &vals, out_shape, &mut out, &mut scratch),
+                _ => eval_compute(plan, bp, node, (block, ni as u16), &rd, &vals, out_shape, &mut out, &mut scratch),
             }
         };
         slots[ni] = out;

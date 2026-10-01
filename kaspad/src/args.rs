@@ -247,7 +247,8 @@ pub struct Args {
     /// load in the order given, and loading stops here. What is skipped is named in the log, and a
     /// class this node does not hold is one it never declares and is never drawn to judge.
     pub palw_class_cache_bytes: u64,
-    /// **How much of a MAPPED class artifact's weights this node keeps in memory** (ADR-0112).
+    /// **How much of a class artifact's weights this node keeps in memory** (ADR-0112) — a mapped
+    /// Qwen3.6 class's, and an IR class's (`docs/design/palw/tir/runtime-residency.md`).
     ///
     /// `None` (the default) is a fifth of the artifact's weight bytes — the ratio the ADR
     /// certifies. `Some(0)` is no loader: weights are read through the mapping and the page cache
@@ -1944,14 +1945,17 @@ pub fn cli() -> Command {
                 .require_equals(false)
                 .value_parser(clap::value_parser!(u64))
                 .help(
-                    "MISAKA PALW: keep at most this many bytes of a MAPPED class artifact's weights in memory (ADR-0112). \
-                     The always-set is pinned, routed experts are read as the router chooses them and held under the \
-                     remainder, and nothing is read through a page fault. Default: a fifth of the artifact's weights, \
+                    "MISAKA PALW: keep at most this many bytes of a class artifact's weights in memory (ADR-0112) -- a \
+                     mapped Qwen3.6 class's, and an IR class's, whose tiers are read off its program (docs/design/palw/tir/\
+                     runtime-residency.md). The always-set is pinned, routed experts (rows) are read as the router chooses \
+                     them and held under the remainder, an IR class's gathered tables (embeddings, n-gram) are read a row at \
+                     a time, and nothing is read through a page fault. Default: a fifth of the artifact's weights, \
                      within what this host has available at startup (MemAvailable, or the memory cgroup's headroom where \
                      smaller) less 16 GiB the node keeps for itself -- less than a fifth if only less can be spared, and \
                      the page cache, with a warning, if not even the class's floor can. 0 = no loader, the page cache \
                      decides (the behaviour before ADR-0112). A STATED budget below the class's floor -- its always-set \
-                     plus one token's experts -- is refused at startup by name.",
+                     plus one token's experts (for an IR class, plus one admission in flight) -- is refused at startup by \
+                     name.",
                 ),
         )
         .arg(

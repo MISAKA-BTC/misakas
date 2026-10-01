@@ -1177,10 +1177,14 @@ pub fn load_class_holdings_v1(
     let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
         held_or_load_locked(&mut held, role, path, |p| {
             let loaded = sdk.load_artifact_with(p, policy);
+            // What this holding took of the spare bytes: a Qwen3.6 mapping's budget, an IR class's
+            // store's (or a composite candidate's own pins beside its parent's shared store).
             if let (Ok(holding), misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare)) = (&loaded, policy)
-                && let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding)
+                && let Some(spent) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding)
+                    .map(|stats| stats.budget_bytes)
+                    .or_else(|| misaka_palw_sdk::lineages::tir::tir_residency_spent_of(holding))
             {
-                policy = misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare.saturating_sub(stats.budget_bytes));
+                policy = misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare.saturating_sub(spent));
             }
             loaded
         })
@@ -1272,6 +1276,73 @@ pub fn load_class_holdings_v1(
                  reclaim what the budget pins and every draw will page — lower --palw-class-resident-bytes, or free the host",
                 gib(stats.budget_bytes),
                 gib(available)
+            );
+        }
+    }
+    // The same arithmetic for an IR class (ADR-0112 for every IR class, runtime-residency.md): the
+    // tiers are read off its program, so the numbers name pinned bytes, routed rows and gathered
+    // tables rather than experts — and a composite candidate says it shares its parent's store.
+    for holding in &holdings {
+        use misaka_palw_sdk::lineages::tir;
+        let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
+        if let Some(declined) = tir::tir_residency_declined_of(holding) {
+            if declined.routed_bytes == 0 {
+                // A class that routes nothing reads (nearly) all of itself every forward: its floor is
+                // near its size, a fifth never holds it, and the page cache is where it belongs by
+                // default. Said, not warned.
+                info!(
+                    "[{role}] residency for IR class {name}: the page cache — it routes nothing, so its floor ({:.2} GiB of \
+                     {:.2} GiB) is out of a default fifth's reach; state --palw-class-resident-bytes {} (the floor) or more to \
+                     read it through the file descriptor instead",
+                    gib(declined.floor_bytes),
+                    gib(declined.weight_bytes),
+                    declined.floor_bytes
+                );
+                continue;
+            }
+            warn!(
+                "[{role}] residency for IR class {name}: the page cache — the default came to {:.2} GiB, under the class's floor \
+                 of {:.2} GiB (its pinned set, one token's routed rows and one admission in flight; a fifth would be {:.2} GiB); \
+                 its {:.2} GiB of routed rows will be read through page faults. Free the host, or state \
+                 --palw-class-resident-bytes {} (the floor) or more to hold it anyway",
+                gib(declined.budget_bytes),
+                gib(declined.floor_bytes),
+                gib(declined.fifth_bytes),
+                gib(declined.routed_bytes),
+                declined.floor_bytes
+            );
+            continue;
+        }
+        if let Some(stats) = tir::tir_residency_owner_stats_of(holding) {
+            let available = host_available_bytes_v1();
+            info!(
+                "[{role}] residency for IR class {name}: budget {:.2} GiB = {:.2} GiB pinned + {:.2} GiB for one admission in \
+                 flight + {:.2} GiB for routed rows (about {:.1} tokens of them; the floor is {:.2} GiB); gathered tables are \
+                 read a row at a time and never held; nothing is mapped. The host reports {} available (ADR-0112)",
+                gib(stats.budget_bytes),
+                gib(stats.pinned_bytes),
+                gib(stats.in_flight_bytes),
+                gib(stats.routed_capacity_bytes),
+                stats.tokens_held(),
+                gib(stats.floor_bytes),
+                available.map_or("no available memory on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
+            );
+            if let Some(available) = available
+                && stats.budget_bytes > available
+            {
+                warn!(
+                    "[{role}] the residency budget of IR class {name} ({:.2} GiB) is more than this host has available ({:.2} \
+                     GiB): the kernel will reclaim what the budget holds and every forward will page — lower \
+                     --palw-class-resident-bytes, or free the host",
+                    gib(stats.budget_bytes),
+                    gib(available)
+                );
+            }
+        } else if tir::tir_residency_stats_of(holding).is_some() {
+            info!(
+                "[{role}] residency for IR candidate {name}: its parent's store, shared (one per parent root); {:.3} GiB pinned \
+                 for the candidate itself — its adapter, and any parent param it reads whole that the store serves by rows",
+                gib(tir::tir_own_pinned_bytes_of(holding).unwrap_or(0))
             );
         }
     }
@@ -1727,22 +1798,29 @@ pub const PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1: u64 = 512 << 20;
 
 /// **What a replay of this holding will hold on this host.**
 ///
-/// A Qwen3.6 mapping with ADR-0112 residency reports the budget it already pinned. Every other
-/// holding — dense decode, or a mapping the page cache decides — reports the file, which is what
-/// the kernel will page in.
+/// A Qwen3.6 mapping with ADR-0112 residency reports the budget it already pinned; an IR class
+/// under a residency its store's budget (a composite candidate: its parent's shared store and its
+/// own pins). Every other holding — dense decode, or a mapping the page cache decides — reports the
+/// file, which is what the kernel will page in.
 pub fn holding_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
     if let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding) {
         return Some(stats.budget_bytes);
+    }
+    if let Some(stats) = misaka_palw_sdk::lineages::tir::tir_residency_stats_of(holding) {
+        let own = misaka_palw_sdk::lineages::tir::tir_own_pinned_bytes_of(holding).unwrap_or(0);
+        return Some(stats.budget_bytes.saturating_add(own));
     }
     holding.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).map(|meta| meta.len())
 }
 
 /// **What a replay of this holding still has to take from MemAvailable.** A resident Qwen3.6
-/// mapping has already pinned its budget; charging it again against leftover MemAvailable is the
-/// 6.50-vs-3 GiB deferral on a host that just mapped the class. Page-cache and dense holdings
-/// still report the file.
+/// mapping has already pinned its budget, and so has an IR class's store (ADR-0112 for IR classes);
+/// charging it again against leftover MemAvailable is the 6.50-vs-3 GiB deferral on a host that
+/// just mapped the class. Page-cache and dense holdings still report the file.
 pub fn incremental_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
-    if misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding).is_some() {
+    if misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding).is_some()
+        || misaka_palw_sdk::lineages::tir::tir_residency_stats_of(holding).is_some()
+    {
         return Some(0);
     }
     holding_replay_bytes_v1(holding)
@@ -1905,11 +1983,66 @@ pub fn process_storage_read_bytes_v1() -> Option<u64> {
     }
 }
 
-/// What one draw starts from: the process's storage counter, and each mapped holding's residency
-/// numbers (ADR-0112 Decision 8).
+/// **One holding's residency, for the storage line** (ADR-0112 Decision 8): a Qwen3.6 mapping's
+/// loader (`ir = false`: routed experts) or an IR class's store (`ir = true`: routed and gathered
+/// rows, read off its program's tiers). Counters since open; a line prints their deltas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwHeldResidencyV1 {
+    pub ir: bool,
+    pub budget_bytes: u64,
+    pub pinned_bytes: u64,
+    /// What the budget leaves the routed rows (experts).
+    pub routed_budget_bytes: u64,
+    pub resident_routed_bytes: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    /// Bytes the loader or store read from the file.
+    pub bytes_read: u64,
+    /// An IR class's gathered rows and their bytes (zero for a Qwen3.6 mapping).
+    pub gathered_rows: u64,
+    pub gathered_bytes: u64,
+}
+
+/// A holding's residency numbers, whichever lineage holds it; an IR composite candidate reports
+/// none (its parent's store is reported under the parent's name, once).
+pub fn held_residency_v1(holding: &PalwLoadedArtifactV1) -> Option<PalwHeldResidencyV1> {
+    if let Some(s) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding) {
+        return Some(PalwHeldResidencyV1 {
+            ir: false,
+            budget_bytes: s.budget_bytes,
+            pinned_bytes: s.pinned_bytes,
+            routed_budget_bytes: s.expert_budget_bytes(),
+            resident_routed_bytes: s.resident_expert_bytes,
+            hits: s.hits,
+            misses: s.misses,
+            evictions: s.evictions,
+            bytes_read: s.bytes_read,
+            gathered_rows: 0,
+            gathered_bytes: 0,
+        });
+    }
+    let s = misaka_palw_sdk::lineages::tir::tir_residency_owner_stats_of(holding)?;
+    Some(PalwHeldResidencyV1 {
+        ir: true,
+        budget_bytes: s.budget_bytes,
+        pinned_bytes: s.pinned_bytes,
+        routed_budget_bytes: s.routed_capacity_bytes,
+        resident_routed_bytes: s.resident_routed_bytes,
+        hits: s.hits,
+        misses: s.misses,
+        evictions: s.evictions,
+        bytes_read: s.bytes_read,
+        gathered_rows: s.gathered_rows,
+        gathered_bytes: s.gathered_bytes,
+    })
+}
+
+/// What one draw (or replay) starts from: the process's storage counter, and each holding's
+/// residency numbers (ADR-0112 Decision 8).
 pub struct PalwStorageSnapshotV1 {
     process_read_bytes: Option<u64>,
-    holdings: Vec<(String, misaka_palw_base0::qwen36::Qwen36ResidencyStatsV1)>,
+    holdings: Vec<(String, PalwHeldResidencyV1)>,
 }
 
 pub fn storage_snapshot_v1(holdings: &[PalwLoadedArtifactV1]) -> PalwStorageSnapshotV1 {
@@ -1918,9 +2051,9 @@ pub fn storage_snapshot_v1(holdings: &[PalwLoadedArtifactV1]) -> PalwStorageSnap
         holdings: holdings
             .iter()
             .filter_map(|h| {
-                let stats = misaka_palw_sdk::lineages::qwen36::residency_stats_of(h)?;
+                let held = held_residency_v1(h)?;
                 let name = h.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| h.lineage_id.to_string());
-                Some((name, stats))
+                Some((name, held))
             })
             .collect(),
     }
@@ -1978,6 +2111,13 @@ fn draw_log_gate_admits_v1(role: &str, read_mib: Option<u64>) -> Option<String> 
 /// The number the fleet lacked: 12.8 GiB through 3 million page faults a draw was found with a
 /// sampler, not a log.
 pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings: &[PalwLoadedArtifactV1]) -> Option<u64> {
+    log_storage_v1(role, "draw", before, holdings)
+}
+
+/// **The storage line of one run** — a producer's draw, a seat's replay ([`log_draw_storage_v1`]'s
+/// line, naming what ran): the process's storage reads, and per held residency what it read, in
+/// how many misses of how many lookups, the rows an IR class gathered, what it evicted and holds.
+pub fn log_storage_v1(role: &str, what: &str, before: &PalwStorageSnapshotV1, holdings: &[PalwLoadedArtifactV1]) -> Option<u64> {
     let after = storage_snapshot_v1(holdings);
     let mib = |bytes: u64| bytes as f64 / (1u64 << 20) as f64;
     // ADR-0132: the number the telemetry keeps, in whole MiB, where the platform counts it.
@@ -1991,25 +2131,41 @@ pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings:
     };
     // Rate-gated (T12-lifecycle log finding): at most one line a period per role, every heavy draw
     // always, the folded ones counted into the next.
-    let Some(folded) = draw_log_gate_admits_v1(role, process_mib) else {
+    let Some(folded) = draw_log_gate_admits_v1(&format!("{role}/{what}"), process_mib) else {
         return process_mib;
     };
     if after.holdings.is_empty() {
-        info!("[{role}] this draw read {process} from storage (no mapped class holds a residency: the page cache decides){folded}");
+        info!("[{role}] this {what} read {process} from storage (no class holds a residency: the page cache decides){folded}");
         return process_mib;
     }
     for (name, now) in &after.holdings {
         let then = before.holdings.iter().find(|(n, _)| n == name).map(|(_, s)| *s).unwrap_or_default();
         let lookups = now.hits.saturating_sub(then.hits) + now.misses.saturating_sub(then.misses);
+        let hits = 100.0 * now.hits.saturating_sub(then.hits) as f64 / lookups.max(1) as f64;
+        if now.ir {
+            info!(
+                "[{role}] this {what} read {process} from storage; the store for IR class {name} read {:.1} MiB — {} misses of \
+                 {lookups} routed-row lookups ({hits:.1} % hits) and {} gathered rows ({:.1} MiB) — evicted {}, and holds {:.2} of \
+                 {:.2} GiB of routed rows beside {:.2} GiB pinned{folded}",
+                mib(now.bytes_read.saturating_sub(then.bytes_read)),
+                now.misses.saturating_sub(then.misses),
+                now.gathered_rows.saturating_sub(then.gathered_rows),
+                mib(now.gathered_bytes.saturating_sub(then.gathered_bytes)),
+                now.evictions.saturating_sub(then.evictions),
+                gib(now.resident_routed_bytes),
+                gib(now.routed_budget_bytes),
+                gib(now.pinned_bytes)
+            );
+            continue;
+        }
         info!(
-            "[{role}] this draw read {process} from storage; the loader for {name} read {:.1} MiB in {} misses of {lookups} expert \
-             lookups ({:.1} % hits), evicted {}, and holds {:.2} of {:.2} GiB of routed experts beside {:.2} GiB pinned{folded}",
+            "[{role}] this {what} read {process} from storage; the loader for {name} read {:.1} MiB in {} misses of {lookups} expert \
+             lookups ({hits:.1} % hits), evicted {}, and holds {:.2} of {:.2} GiB of routed experts beside {:.2} GiB pinned{folded}",
             mib(now.bytes_read.saturating_sub(then.bytes_read)),
             now.misses.saturating_sub(then.misses),
-            100.0 * now.hits.saturating_sub(then.hits) as f64 / lookups.max(1) as f64,
             now.evictions.saturating_sub(then.evictions),
-            gib(now.resident_expert_bytes),
-            gib(now.expert_budget_bytes()),
+            gib(now.resident_routed_bytes),
+            gib(now.routed_budget_bytes),
             gib(now.pinned_bytes)
         );
     }
@@ -2412,6 +2568,81 @@ mod tests {
         let paged = load_class_holdings_v1("test-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
         assert!(misaka_palw_sdk::lineages::qwen36::residency_stats_of(&paged[0]).is_none(), "the page cache decides: no stats");
         assert!(paged[0].summary.contains("page cache"), "{}", paged[0].summary);
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A tiny IR artifact on disk — the golden `moe-top2-shared` program under a small layout — the
+    /// way the IR court's end-to-end tests write one.
+    fn write_ir_fixture(tag: &str) -> PathBuf {
+        use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+        let unhex = |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() };
+        let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs/moe-top2-shared.json");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&vector).expect("the golden program")).expect("json");
+        let mut program =
+            misaka_palw_tir::TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
+        program.logits_scheme_id.copy_from_slice(kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1().as_byte_slice());
+        let program = misaka_palw_tir::TirProgramV1::decode_canonical(&program.encode()).expect("still canonical");
+        let tensors: std::collections::BTreeMap<(u16, Option<u16>), Vec<u8>> = v["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                ((t["param"].as_u64().unwrap() as u16, t["layer"].as_u64().map(|l| l as u16)), unhex(t["le_hex"].as_str().unwrap()))
+            })
+            .collect();
+        let commit_tiles = program.blocks.iter().flat_map(|b| b.nodes.iter()).filter(|n| n.commit).map(|_| 8).collect();
+        let layout = PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 64,
+            checkpoint_interval: 2,
+            h_tile: 4,
+            commit_tiles,
+            state_tiles: program.states.iter().map(|_| 4).collect(),
+        };
+        let path = std::env::temp_dir().join(format!("misaka-holdings-{tag}-{}.palwtir", std::process::id()));
+        let meta = serde_json::json!({ "model_id": format!("test/{tag}") }).to_string();
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&layout).unwrap(), [9; 64], meta, &mut |j, l| {
+            tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}"))
+        })
+        .expect("the container");
+        path
+    }
+
+    /// **ADR-0112 for IR classes, on the node's door** (`docs/design/palw/tir/runtime-residency.md`):
+    /// an IR artifact loaded under a stated budget is held within it — read through the file
+    /// descriptor, nothing mapped — names its residency in its summary, prices a replay at its budget
+    /// and takes nothing more from `MemAvailable`, and its storage line runs; a default the class's
+    /// floor does not fit leaves it on the page cache, says why, and prices the file.
+    #[test]
+    fn an_ir_holding_is_held_within_its_budget_priced_on_it_and_logged() {
+        use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+        use misaka_palw_sdk::lineages::tir::{tir_residency_declined_of, tir_residency_stats_of};
+        let _guard = exclusive();
+        let path = write_ir_fixture("ir-budget");
+        let file = std::fs::metadata(&path).expect("on disk").len();
+        let held = load_class_holdings_v1("test-ir-budget", &sdk(), std::slice::from_ref(&path), 0, Residency::Bytes(1 << 30));
+        assert_eq!(held.len(), 1, "held");
+        let stats = tir_residency_stats_of(&held[0]).expect("held within the stated budget");
+        assert_eq!(stats.budget_bytes, 1 << 30);
+        assert!(held[0].summary.contains("resident within"), "{}", held[0].summary);
+        let entry = misaka_palw_sdk::lineages::tir::tir_entry_of(&held[0]).expect("an IR holding");
+        assert!(!entry.artifact.is_mapped(), "nothing of a budgeted IR artifact is mapped");
+        assert_eq!(holding_replay_bytes_v1(&held[0]), Some(1 << 30), "a replay is priced at the budget");
+        assert_eq!(incremental_replay_bytes_v1(&held[0]), Some(0), "already this process's");
+        let line = held_residency_v1(&held[0]).expect("the storage line's numbers");
+        assert!(line.ir && line.budget_bytes == 1 << 30 && line.bytes_read > 0, "{line:?}");
+        let before = storage_snapshot_v1(&held);
+        log_storage_v1("test-ir", "replay", &before, &held);
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+
+        let declined = load_class_holdings_v1("test-ir-declined", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthWithin(0));
+        assert_eq!(declined.len(), 1, "a default the host cannot spare still holds the class");
+        assert!(tir_residency_stats_of(&declined[0]).is_none(), "the page cache decides");
+        let why = tir_residency_declined_of(&declined[0]).expect("and says why");
+        assert!(why.budget_bytes < why.floor_bytes, "{why:?}");
+        assert!(declined[0].summary.contains("page cache"), "{}", declined[0].summary);
+        assert_eq!(holding_replay_bytes_v1(&declined[0]), Some(file), "page cache: the file is what will fault in");
         evict_held_artifacts_v1(std::slice::from_ref(&path));
         std::fs::remove_file(&path).ok();
     }

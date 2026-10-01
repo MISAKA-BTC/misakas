@@ -180,7 +180,11 @@ fn serve(adapter: &str) {
         let over = TirLineageV1::load_composite_over(&parent_entry, &sp).expect("the section over a held parent entry");
         let entries = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&over));
         assert_eq!(entries.len(), 1);
-        assert_eq!((entries[0].class_id(), entries[0].artifact_root), (entry.class_id(), entry.artifact_root), "{adapter}: the same candidate");
+        assert_eq!(
+            (entries[0].class_id(), entries[0].artifact_root),
+            (entry.class_id(), entry.artifact_root),
+            "{adapter}: the same candidate"
+        );
         let stranger = TirLineageV1::open_entry(&cp).expect("the full candidate is no parent");
         assert!(TirLineageV1::load_composite_over(&stranger, &sp).is_err(), "{adapter}: a section opens over its own parent only");
     }
@@ -359,8 +363,11 @@ fn serve(adapter: &str) {
                 params,
             }
         };
-        let (held_comp, held_full, held_parent) =
-            (PalwEvalHeldV1::from_entry(&entry).unwrap(), PalwEvalHeldV1::from_entry(&full).unwrap(), PalwEvalHeldV1::from_entry(&parent).unwrap());
+        let (held_comp, held_full, held_parent) = (
+            PalwEvalHeldV1::from_entry(&entry).unwrap(),
+            PalwEvalHeldV1::from_entry(&full).unwrap(),
+            PalwEvalHeldV1::from_entry(&parent).unwrap(),
+        );
         let seed = kaspa_consensus_core::palw_improve_state_v1::palw_improve_eval_seed_v1(&Hash64::from_bytes([0x33; 64]), 7);
         let generate = |h: &PalwEvalHeldV1| {
             task_of(
@@ -375,7 +382,10 @@ fn serve(adapter: &str) {
             palw_eval_run_v1(&held_comp, &generate(&held_comp)).expect("the composite generates"),
             palw_eval_run_v1(&held_full, &generate(&held_full)).expect("the full candidate generates"),
         );
-        assert_eq!(wc.execution.claim, wf.execution.claim, "{adapter}: the composite computes the candidate: one step tree, one answer");
+        assert_eq!(
+            wc.execution.claim, wf.execution.claim,
+            "{adapter}: the composite computes the candidate: one step tree, one answer"
+        );
         assert_eq!(wc.generated().len(), 3);
         assert_ne!(wc.binding.committed_execution_root, wf.binding.committed_execution_root, "the class is in the execution root");
         let forced = |h: &PalwEvalHeldV1| {
@@ -406,13 +416,44 @@ fn serve(adapter: &str) {
             trace_retention_daa: 5_000,
         };
         for (work, held) in [(&wc, &held_comp), (&fc, &held_comp), (&fp, &held_parent)] {
-            let claim = misaka_palw_sdk::improve_eval::palw_eval_claim_v1(work, held, &facts).expect("a claim the chain's check admits");
+            let claim =
+                misaka_palw_sdk::improve_eval::palw_eval_claim_v1(work, held, &facts).expect("a claim the chain's check admits");
             assert_eq!(
                 palw_eval_seat_judge_v1(held, &claim.commitment, &claim.prompt, &claim.tail),
                 PalwEvalSeatJudgmentV1::Valid,
                 "{adapter}: a seat holding the class replays the claim"
             );
         }
+    }
+
+    // Under a residency (ADR-0112 for IR classes): the parent held within a budget and the section
+    // opened over it — served by the parent's store, one per parent root, the adapter pinned beside
+    // it, nothing mapped — computes the composite's job exactly as the two mapped files do.
+    {
+        let resident = TirLineageV1::new();
+        let budget = PalwWeightResidencyV1::Bytes(1 << 40);
+        resident.load(&pp, budget).expect("the parent within a budget");
+        resident.load(&sp, budget).expect("the section over the held parent");
+        let held = resident.tir_classes();
+        let held_parent = held.iter().find(|e| e.artifact.composite_ref().is_none()).expect("the parent");
+        let held_candidate = held.iter().find(|e| e.artifact.composite_ref().is_some()).expect("the candidate");
+        let store = held_parent.artifact.weight_store().expect("the parent's residency");
+        assert!(Arc::ptr_eq(held_candidate.artifact.weight_store().expect("shared"), store), "{adapter}: one store per parent root");
+        assert!(
+            !held_candidate.artifact.is_mapped() && held_candidate.artifact.own_pinned_bytes() > 0,
+            "{adapter}: the adapter pinned"
+        );
+        assert_eq!(held_candidate.class_id(), entry.class_id(), "{adapter}: the same candidate class");
+        let rb = TirLineageV1::backend(held_candidate, &court(), form).expect("the resident candidate's backend");
+        let (rctx, rprompt) = rb.job_for_anchor(anchor).expect("its job");
+        assert_eq!(rprompt, prompt_usize);
+        let rr = rb.execute(&rctx, &rprompt).expect("the resident candidate runs");
+        assert_eq!(
+            (rr.execution_root, rr.trace_root, &rr.material),
+            (run.execution_root, run.trace_root, &run.material),
+            "{adapter}: the residency computes the mapped composite's capture"
+        );
+        assert_eq!(store.stats().whole_reads, 0, "{adapter}");
     }
 
     // Refusals.

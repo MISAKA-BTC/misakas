@@ -137,7 +137,7 @@ fn random_programs_agree_from_random_mid_run_states() {
         let start = random_state(&mut rng, &g.prog);
         let steps = rng.gen_range(1..=6);
         let toks = tokens(&mut rng, &g.prog, steps);
-        let o = differential(&g.prog, &g.params, &toks, &Opts { every_node: seed % 4 == 0, start: Some(start) })
+        let o = differential(&g.prog, &g.params, &toks, &Opts { every_node: seed % 4 == 0, start: Some(start), ..Default::default() })
             .unwrap_or_else(|e| panic!("mid-run seed {seed}: {e}"));
         refused += o.refused as u64;
         total += o;

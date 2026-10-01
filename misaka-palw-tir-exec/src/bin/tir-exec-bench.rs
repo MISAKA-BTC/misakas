@@ -23,7 +23,10 @@
 //! all in memory), then mapped as a node maps an IR artifact (`TirArtifactV1`) and run from the mapping —
 //! reporting the write, the load, the streamed inventory root pass, the inventory tree's build and size,
 //! the time of each position (cold, then warm page cache) and the resident set. `--reuse` maps an
-//! existing file of the same geometry instead of writing it.
+//! existing file of the same geometry instead of writing it. **`--resident-bytes <n>`** holds it under a
+//! runtime residency of `n` bytes instead (ADR-0112 for IR classes, `runtime-residency.md`): nothing
+//! mapped, the pinned set read once, the embedding gathered a row at a time — and prints the store's
+//! numbers, the measurement to set against the mapping's.
 
 use std::borrow::Cow;
 use std::time::Instant;
@@ -336,7 +339,7 @@ fn main() {
     }
     if let Some(path) = args.iter().position(|a| a == "--container").and_then(|i| args.get(i + 1)) {
         #[cfg(feature = "node")]
-        container(&g, std::path::Path::new(path), args.iter().any(|a| a == "--reuse"), prefill);
+        container(&g, std::path::Path::new(path), args.iter().any(|a| a == "--reuse"), prefill, arg(&args, "--resident-bytes", 0u64));
         #[cfg(not(feature = "node"))]
         panic!("--container {path}: build with --features node");
         #[allow(unreachable_code)]
@@ -422,8 +425,8 @@ fn main() {
 /// container one instance at a time (each instance's fill seeded by its `(param, layer)`, so a rewrite
 /// is byte-identical), mapped as a node maps an IR artifact, and run from the mapping.
 #[cfg(feature = "node")]
-fn container(g: &Geo, path: &std::path::Path, reuse: bool, prefill: usize) {
-    use misaka_palw_tir_exec::node::TirArtifactV1;
+fn container(g: &Geo, path: &std::path::Path, reuse: bool, prefill: usize, resident: u64) {
+    use misaka_palw_tir_exec::node::{TirArtifactV1, TirResidencyPolicyV1};
     let (program, fills) = qwen2_program(g);
     let seeded =
         |j: u16, layer: Option<u16>| Rng(0x9e37_79b9_7f4a_7c15 ^ (u64::from(j) << 32) ^ u64::from(layer.map_or(0xFFFF, |l| l)));
@@ -454,8 +457,24 @@ fn container(g: &Geo, path: &std::path::Path, reuse: bool, prefill: usize) {
         );
     }
     let t = Instant::now();
-    let artifact = TirArtifactV1::open(path).expect("the container maps");
-    println!("load (open, check, map, bind in place): {:.2} s; RSS {} MiB", t.elapsed().as_secs_f64(), rss_mib().unwrap_or(0));
+    let artifact = if resident > 0 {
+        let a = TirArtifactV1::open_with_residency(path, TirResidencyPolicyV1::Bytes(resident)).expect("the container opens");
+        if let Some(s) = a.residency_stats() {
+            println!(
+                "load under a residency of {:.2} GiB (open, check, one pass: pinned {:.2} GiB, root, ranges): {:.2} s; read {:.2} GiB; RSS {} MiB",
+                resident as f64 / (1u64 << 30) as f64,
+                s.pinned_bytes as f64 / (1u64 << 30) as f64,
+                t.elapsed().as_secs_f64(),
+                s.bytes_read as f64 / (1u64 << 30) as f64,
+                rss_mib().unwrap_or(0)
+            );
+        }
+        a
+    } else {
+        let a = TirArtifactV1::open(path).expect("the container maps");
+        println!("load (open, check, map, bind in place): {:.2} s; RSS {} MiB", t.elapsed().as_secs_f64(), rss_mib().unwrap_or(0));
+        a
+    };
     let t = Instant::now();
     let (root, leaves) = artifact.inventory_root().expect("the inventory root");
     println!(
@@ -484,10 +503,24 @@ fn container(g: &Geo, path: &std::path::Path, reuse: bool, prefill: usize) {
             println!("  position {i}: {:.3} s; RSS {} MiB", times[i], rss_mib().unwrap_or(0));
         }
     }
+    if let Some(s) = artifact.residency_stats() {
+        println!(
+            "the store after {prefill} positions: read {:.2} GiB in all; {} routed misses of {} lookups, {} evictions; {} gathered rows \
+             ({:.1} KiB); {} whole reads",
+            s.bytes_read as f64 / (1u64 << 30) as f64,
+            s.misses,
+            s.hits + s.misses,
+            s.evictions,
+            s.gathered_rows,
+            s.gathered_bytes as f64 / 1024.0,
+            s.whole_reads
+        );
+    }
     let warm = &times[times.len().min(1)..];
     if !warm.is_empty() {
         println!(
-            "positions from the mapping: first {:.3} s (cold), then {:.3} s mean over {} (weights {:.2} GiB per position)",
+            "positions {}: first {:.3} s (cold), then {:.3} s mean over {} (weights {:.2} GiB per position)",
+            if resident > 0 { "from the residency" } else { "from the mapping" },
             times[0],
             warm.iter().sum::<f64>() / warm.len() as f64,
             warm.len(),

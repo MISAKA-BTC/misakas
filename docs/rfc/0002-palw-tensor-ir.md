@@ -468,6 +468,14 @@ constraints (primitives, attributes, shapes, ranges) and native code for it.
 an IR segment. Where the segment is byte-identical on the differential gate, the kernel becomes that
 pattern's fused implementation; today's GDN, router and attention engines keep their speed.
 
+**Runtime residency (node software, like the fused kernels).** Where a class's weights are held is the
+node's decision, under ADR-0112's budget, with the tiers read off the program's dataflow — pinned
+params read whole every forward, routed rows a route selects (a mixture's experts), gathered rows an
+input selects (embeddings, n-gram tables) — and nothing read through a page fault:
+[`docs/design/palw/tir/runtime-residency.md`](../design/palw/tir/runtime-residency.md). It changes
+no byte any commitment sees (the identity is tested at the floor, at a fifth and against the page
+cache), appears in no object, id or fingerprint, and ships as a node release.
+
 ## 8. The tool: `palw-class check-architecture`
 
 ```

@@ -52,6 +52,9 @@ pub struct Opts {
     pub every_node: bool,
     /// Start both from this state instead of the initial one.
     pub start: Option<RunState>,
+    /// Run the executor as a runtime residency runs it: every routed or gathered param served by
+    /// rows ([`TirParams::from_map_served`], tiers at `pin_below_bytes = 0`), the rest bound.
+    pub rows: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -66,6 +69,11 @@ pub struct Outcome {
     /// rules, spec 04b §9.3), with an example.
     pub class_diffs: usize,
     pub class_examples: Vec<String>,
+    /// Under `Opts::rows`: instances served by rows, rows the executor gathered through the source,
+    /// and whole instances read for a dense read (the fallback the tiers never plan).
+    pub served: usize,
+    pub rows_gathered: u64,
+    pub whole_reads: u64,
 }
 
 impl std::ops::AddAssign for Outcome {
@@ -79,6 +87,9 @@ impl std::ops::AddAssign for Outcome {
         if self.class_examples.len() < 8 {
             self.class_examples.extend(o.class_examples);
         }
+        self.served += o.served;
+        self.rows_gathered += o.rows_gathered;
+        self.whole_reads += o.whole_reads;
     }
 }
 
@@ -187,7 +198,17 @@ pub fn differential(program: &TirProgramV1, params: &MapParams, tokens: &[u32], 
         (a, b) => return Err(format!("validation differs: reference {:?}, executor {:?}", a.err(), b.err())),
     };
     let mut ref_state = opts.start.clone().unwrap_or_default();
-    let exec_params = TirParams::from_map(&plan, params);
+    let mut source: Option<std::sync::Arc<misaka_palw_tir_exec::TirRowsInMemoryV1>> = None;
+    let exec_params = if opts.rows {
+        let tiers = misaka_palw_tir_exec::TirTiersV1::of(program, misaka_palw_tir_exec::TirTierRulesV1 { pin_below_bytes: 0 });
+        TirParams::from_map_served(&plan, params, &tiers).map(|(p, s)| {
+            out.served = s.instances().count();
+            source = Some(s);
+            p
+        })
+    } else {
+        TirParams::from_map(&plan, params)
+    };
     let exec_params = match exec_params {
         Ok(p) => p,
         Err(e) => {
@@ -268,6 +289,12 @@ pub fn differential(program: &TirProgramV1, params: &MapParams, tokens: &[u32], 
             (Err(e), Ok(())) => return Err(format!("step {i} (pos {}): reference failed ({e}), executor ok", before.pos)),
         }
         same_state(&ref_state, &exec.export_state()).map_err(|e| format!("after step {i}: {e}"))?;
+    }
+    if let Some(s) = source {
+        use misaka_palw_tir_exec::TirRowSourceV1;
+        let c = s.counts();
+        out.rows_gathered = c.rows_gathered;
+        out.whole_reads = c.whole_reads;
     }
     Ok(out)
 }

@@ -31,6 +31,33 @@ pub struct TirInventoryTreeV1 {
 }
 
 impl TirInventoryTreeV1 {
+    /// **The tree over leaf hashes already computed** (a residency's streamed pass), in inventory
+    /// order: refused unless they are exactly the program's leaf count.
+    pub fn from_leaves(program: &TirProgramV1, leaves: Vec<Hash64>) -> Result<Self, String> {
+        let index = PalwTirInventoryIndexV1::new(program).ok_or("the TIR inventory refuses this program")?;
+        if leaves.is_empty() || leaves.len() as u64 != index.leaf_count() as u64 {
+            return Err(format!("{} leaf hashes for an inventory of {}", leaves.len(), index.leaf_count()));
+        }
+        Ok(Self { index, levels: Self::levels(leaves) })
+    }
+
+    fn levels(leaves: Vec<Hash64>) -> Vec<Vec<Hash64>> {
+        let mut levels = vec![leaves];
+        while levels.last().expect("non-empty").len() > 1 {
+            let level = levels.last().expect("non-empty");
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut pairs = level.chunks_exact(2);
+            for pair in &mut pairs {
+                next.push(artifact_node_v1(&pair[0], &pair[1]));
+            }
+            if let [odd] = pairs.remainder() {
+                next.push(*odd);
+            }
+            levels.push(next);
+        }
+        levels
+    }
+
     /// Hash every leaf of `program`'s inventory from `src` (one instance's bytes resident at a
     /// time) and fold the levels.
     pub fn build(program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1) -> Result<Self, String> {
@@ -55,20 +82,7 @@ impl TirInventoryTreeV1 {
             let piece = &bytes[start as usize..start as usize + len as usize];
             leaves.push(artifact_leaf_parts_v1(&program.params[j as usize].name, layer, start, piece));
         }
-        let mut levels = vec![leaves];
-        while levels.last().expect("non-empty").len() > 1 {
-            let level = levels.last().expect("non-empty");
-            let mut next = Vec::with_capacity(level.len().div_ceil(2));
-            let mut pairs = level.chunks_exact(2);
-            for pair in &mut pairs {
-                next.push(artifact_node_v1(&pair[0], &pair[1]));
-            }
-            if let [odd] = pairs.remainder() {
-                next.push(*odd);
-            }
-            levels.push(next);
-        }
-        Ok(Self { index, levels })
+        Ok(Self { index, levels: Self::levels(leaves) })
     }
 
     /// The inventory root — the class's `artifact_root`.
@@ -96,6 +110,27 @@ impl TirInventoryTreeV1 {
         let (j, layer, start, len) = self.index.piece_of(leaf)?;
         let bytes = src.tensor_bytes(j, layer)?;
         let piece = bytes.get(start as usize..start as usize + len as usize)?.to_vec();
+        self.opening_of(program, leaf, j, layer, start, piece)
+    }
+
+    /// [`Self::open`], reading only the leaf's piece from `src` — what a residency serves, through
+    /// the file descriptor, without the instance around it.
+    pub fn open_with(&self, program: &TirProgramV1, src: &dyn TirByteSourceV1, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        let (j, layer, start, len) = self.index.piece_of(leaf)?;
+        let mut piece = vec![0u8; len as usize];
+        src.read_bytes(j, layer, start as u64, &mut piece).ok()?;
+        self.opening_of(program, leaf, j, layer, start, piece)
+    }
+
+    fn opening_of(
+        &self,
+        program: &TirProgramV1,
+        leaf: u32,
+        j: u16,
+        layer: Option<u16>,
+        start: u32,
+        piece: Vec<u8>,
+    ) -> Option<PalwArtifactOpeningV1> {
         let operand =
             PalwArtifactOperandV1 { tensor_name: program.params[j as usize].name.clone(), layer, row_start: start, bytes: piece };
         let mut path = Vec::new();
@@ -140,14 +175,58 @@ impl TirInventoryTreeV1 {
         Some(opened)
     }
 
+    /// [`Self::operands`], reading only each leaf's piece from `src` (a residency's reads).
+    pub fn operands_with(
+        &self,
+        program: &TirProgramV1,
+        src: &dyn TirByteSourceV1,
+        leaves: &[u32],
+    ) -> Option<Vec<(u32, PalwArtifactOperandV1)>> {
+        let mut sorted = leaves.to_vec();
+        sorted.sort_unstable();
+        if sorted.is_empty() || sorted.windows(2).any(|w| w[0] == w[1]) || *sorted.last()? >= self.leaf_count() {
+            return None;
+        }
+        let mut opened = Vec::with_capacity(sorted.len());
+        for &leaf in &sorted {
+            let (j, layer, start, len) = self.index.piece_of(leaf)?;
+            let mut piece = vec![0u8; len as usize];
+            src.read_bytes(j, layer, start as u64, &mut piece).ok()?;
+            let operand =
+                PalwArtifactOperandV1 { tensor_name: program.params[j as usize].name.clone(), layer, row_start: start, bytes: piece };
+            opened.push((leaf, operand));
+        }
+        Some(opened)
+    }
+
+    /// [`Self::multiproof`], reading only each leaf's piece from `src` (a residency's reads).
+    pub fn multiproof_with(
+        &self,
+        program: &TirProgramV1,
+        src: &dyn TirByteSourceV1,
+        leaves: &[u32],
+    ) -> Option<PalwArtifactMultiproofV1> {
+        let opened = self.operands_with(program, src, leaves)?;
+        Some(self.multiproof_of(opened))
+    }
+
     /// **One multiproof over `leaves`** (RFC-0002 Phase F §2.12.1: an IR close carries its parameter
     /// openings as one `PalwArtifactMultiproofV1`): the operands read from `src` in ascending leaf
     /// order, and exactly the siblings `palw_artifact_multiproof_v1` supplies — read off this tree's
     /// levels instead of folding the inventory again, so a run of leaves costs its two boundary paths.
     /// `None` for an empty set, a repeated leaf, a leaf outside the inventory, or a source that does not
     /// hold a piece.
-    pub fn multiproof(&self, program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+    pub fn multiproof(
+        &self,
+        program: &TirProgramV1,
+        src: &dyn PalwTirTensorSourceV1,
+        leaves: &[u32],
+    ) -> Option<PalwArtifactMultiproofV1> {
         let opened = self.operands(program, src, leaves)?;
+        Some(self.multiproof_of(opened))
+    }
+
+    fn multiproof_of(&self, opened: Vec<(u32, PalwArtifactOperandV1)>) -> PalwArtifactMultiproofV1 {
         let sorted: Vec<u32> = opened.iter().map(|(leaf, _)| *leaf).collect();
         // The builder's walk: level by level, a known node whose partner is not known supplies it.
         let mut known: Vec<u64> = sorted.iter().map(|&i| i as u64).collect();
@@ -175,7 +254,30 @@ impl TirInventoryTreeV1 {
             next.dedup();
             known = next;
         }
-        Some(PalwArtifactMultiproofV1 { leaf_count: self.leaf_count(), opened, siblings })
+        PalwArtifactMultiproofV1 { leaf_count: self.leaf_count(), opened, siblings }
+    }
+}
+
+/// **Reads bytes of param instances** — a piece for an opening, a chunk for a pass — without asking
+/// for a whole instance: a residency reads exactly the bytes asked for, through the file descriptor
+/// (`super::residency`).
+pub trait TirByteSourceV1 {
+    /// `buf.len()` bytes of instance `(param, layer)` from byte `at` of it.
+    fn read_bytes(&self, param: u16, layer: Option<u16>, at: u64, buf: &mut [u8]) -> Result<(), String>;
+}
+
+/// **Any tensor source, a piece at a time** — each read cut out of the whole instance it serves.
+pub struct TirWholeInstancesV1<'s>(pub &'s dyn PalwTirTensorSourceV1);
+
+impl TirByteSourceV1 for TirWholeInstancesV1<'_> {
+    fn read_bytes(&self, param: u16, layer: Option<u16>, at: u64, buf: &mut [u8]) -> Result<(), String> {
+        let bytes = self.0.tensor_bytes(param, layer).ok_or_else(|| format!("no tensor for param {param} at {layer:?}"))?;
+        let piece = usize::try_from(at)
+            .ok()
+            .and_then(|at| bytes.get(at..at.checked_add(buf.len())?))
+            .ok_or_else(|| format!("param {param} at {layer:?}: bytes {at}..+{} leave the instance", buf.len()))?;
+        buf.copy_from_slice(piece);
+        Ok(())
     }
 }
 

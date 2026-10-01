@@ -1,7 +1,8 @@
 //! **The executor as a node runs a class** (feature `node`; RFC-0002 Phase F step F9): a
-//! PALWTIR1 artifact mapped in place ([`artifact`]), and a job executed into the step leg and the
-//! roots Phase F defines ([`run`]). The consensus types these are stated in live in
-//! `kaspa-consensus-core`; the executor itself does not need them, so this layer is a feature.
+//! PALWTIR1 artifact mapped in place or held within a budget ([`artifact`], [`residency`]), and a
+//! job executed into the step leg and the roots Phase F defines ([`run`]). The consensus types
+//! these are stated in live in `kaspa-consensus-core`; the executor itself does not need them, so
+//! this layer is a feature.
 
 pub mod annex;
 pub mod artifact;
@@ -10,6 +11,7 @@ pub mod drill;
 pub mod evidence;
 pub mod inventory;
 pub mod mapped;
+pub mod residency;
 pub mod run;
 pub mod tree;
 
@@ -30,6 +32,12 @@ pub use evidence::{
     TirEvidenceV1, TirRetainedJobV1, TirTraceV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1, tir_row_tile_leaves_v1,
     tir_rows_tree_v1,
 };
-pub use inventory::{TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1};
+pub use inventory::{
+    TirByteSourceV1, TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1, TirWholeInstancesV1,
+};
+pub use residency::{
+    TirHeldBytesV1, TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1, TirStoreOpenV1, TirWeightStoreV1,
+    tir_stream_leaves_v1, tir_weight_store_for_root_v1,
+};
 pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;

@@ -76,6 +76,12 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::improve::PalwImproveEvalTaskV1;
 use crate::lineage::PalwTirClassEntryV1;
 
+use kaspa_consensus_core::palw_improve_eval_v1::palw_improve_subject_program_v1;
+use misaka_palw_tir::pipeline::StageStepperV1;
+use misaka_palw_tir::program_v2::TirProgramV2;
+use misaka_palw_tir_exec::{TirLockstepHubV1, TirLockstepSeatV1, TirLockstepServedV1, TirParams, TirPlan, TirStageStepperV1};
+use std::cell::{OnceCell, RefCell};
+
 // ---------------------------------------------------------------------------------------------
 // The subject a node holds
 // ---------------------------------------------------------------------------------------------
@@ -175,26 +181,104 @@ impl ParamSource for ArtifactParamsV1<'_> {
 }
 
 /// **The evaluation pipeline's params**: the subject's for program 0, none for the scoring stages
-/// (weightless: an evaluation pipeline's root is its subject class's `artifact_root`).
+/// (weightless: an evaluation pipeline's root is its subject class's `artifact_root`) — and the subject
+/// stage's positions on the node's executor ([`PalwEvalStepperV1`]), the scoring stages on the reference.
 struct PalwEvalParamsV1<'a> {
     subject: &'a dyn ParamSource,
     none: MapParams,
+    stepper: PalwEvalStepperV1<'a>,
+}
+
+/// **Where the subject stage's positions are computed** (`PipelineParams::stepper`, asked once per run
+/// of the stage). The executor serves the stage exactly when the stage's program is the held class's own
+/// lifted unchanged (`TirStageStepperV1::serves`) — every evaluation's subject — and is then the
+/// reference byte for byte (`tests/improve_eval_exec.rs`); for anything else, and for
+/// [`palw_eval_run_reference_v1`], the reference interpreter runs it.
+enum PalwEvalStepperV1<'a> {
+    /// The reference interpreter over whole `i128` tensors.
+    Reference,
+    /// The executor over a held artifact's plan and params — its residency's rows where it is resident.
+    Artifact(&'a TirArtifactV1),
+    /// The executor over in-memory params, compiled when the stage first asks (tools, tests).
+    Map { program: &'a TirProgramV1, map: &'a MapParams, compiled: Box<OnceCell<Option<(TirPlan, TirParams<'static>)>>> },
+    /// A member of a lockstep batch ([`palw_eval_run_batch_v1`]): the hub steps the member's executor,
+    /// built for `decl`; the seat is handed out once.
+    Seat { seat: RefCell<Option<TirLockstepSeatV1>>, decl: Box<TirProgramV2> },
 }
 
 impl PipelineParams for PalwEvalParamsV1<'_> {
     fn params(&self, program: u16) -> &dyn ParamSource {
         if program == 0 { self.subject } else { &self.none }
     }
+
+    fn stepper(&self, program: u16, decl: &TirProgramV2) -> Option<Box<dyn StageStepperV1 + '_>> {
+        if program != 0 {
+            return None;
+        }
+        fn boxed<'s>(s: TirStageStepperV1<'s>) -> Box<dyn StageStepperV1 + 's> {
+            Box::new(s)
+        }
+        match &self.stepper {
+            PalwEvalStepperV1::Reference => None,
+            PalwEvalStepperV1::Artifact(artifact) => TirStageStepperV1::for_stage(artifact.plan(), artifact.params(), decl).map(boxed),
+            PalwEvalStepperV1::Map { program, map, compiled } => {
+                let (plan, params) = compiled.get_or_init(|| compile_map_v1(program, map)).as_ref()?;
+                TirStageStepperV1::for_stage(plan, params, decl).map(boxed)
+            }
+            PalwEvalStepperV1::Seat { seat, decl: built } => {
+                if decl != built.as_ref() {
+                    return None;
+                }
+                seat.borrow_mut().take().map(|s| Box::new(s) as Box<dyn StageStepperV1 + '_>)
+            }
+        }
+    }
+}
+
+/// In-memory params compiled for the executor: the program's plan and its params bound — `None` where
+/// the executor refuses either (the reference then runs, and refuses them as it does).
+fn compile_map_v1(program: &TirProgramV1, map: &MapParams) -> Option<(TirPlan, TirParams<'static>)> {
+    let plan = TirPlan::compile(program).ok()?;
+    let params = TirParams::from_map(&plan, map).ok()?;
+    Some((plan, params))
+}
+
+/// **How one run computes the subject stage.**
+enum PalwEvalStageV1 {
+    /// The node's executor over the held weights (the default).
+    Executor,
+    /// The reference interpreter ([`palw_eval_run_reference_v1`]).
+    Reference,
+    /// A lockstep batch's member: its seat and the subject program its executor was built for.
+    Seat(TirLockstepSeatV1, Box<TirProgramV2>),
 }
 
 /// Run `f` over the pipeline params of `held`.
 fn with_params<R>(held: &PalwEvalHeldV1, f: impl FnOnce(&dyn PipelineParams) -> R) -> R {
+    with_params_on(held, PalwEvalStageV1::Executor, f)
+}
+
+/// Run `f` over the pipeline params of `held`, its subject stage computed as `stage` says.
+fn with_params_on<R>(held: &PalwEvalHeldV1, stage: PalwEvalStageV1, f: impl FnOnce(&dyn PipelineParams) -> R) -> R {
+    let seat = |seat: TirLockstepSeatV1, decl: Box<TirProgramV2>| PalwEvalStepperV1::Seat { seat: RefCell::new(Some(seat)), decl };
     match &held.weights {
         PalwEvalWeightsV1::Artifact { artifact } => {
             let source = ArtifactParamsV1 { artifact, program: &held.program };
-            f(&PalwEvalParamsV1 { subject: &source, none: MapParams::default() })
+            let stepper = match stage {
+                PalwEvalStageV1::Executor => PalwEvalStepperV1::Artifact(artifact),
+                PalwEvalStageV1::Reference => PalwEvalStepperV1::Reference,
+                PalwEvalStageV1::Seat(s, decl) => seat(s, decl),
+            };
+            f(&PalwEvalParamsV1 { subject: &source, none: MapParams::default(), stepper })
         }
-        PalwEvalWeightsV1::Map(map) => f(&PalwEvalParamsV1 { subject: map, none: MapParams::default() }),
+        PalwEvalWeightsV1::Map(map) => {
+            let stepper = match stage {
+                PalwEvalStageV1::Executor => PalwEvalStepperV1::Map { program: &held.program, map, compiled: Box::default() },
+                PalwEvalStageV1::Reference => PalwEvalStepperV1::Reference,
+                PalwEvalStageV1::Seat(s, decl) => seat(s, decl),
+            };
+            f(&PalwEvalParamsV1 { subject: map, none: MapParams::default(), stepper })
+        }
     }
 }
 
@@ -254,13 +338,27 @@ impl PalwEvalWorkV1 {
 /// **Run an evaluation task on a held subject.** Generating: through the decode stage under the item's
 /// seed (FP Job V4's greedy rules, the policy's budget and stops); teacher-forced: the stream's ids
 /// given (the disclosed reference), nothing selected. The claim's roots either way.
+///
+/// The subject stage runs on the node's typed executor over the held weights (a resident artifact's
+/// rows; `misaka_palw_tir_exec::stage`), byte-identical to the reference interpreter; the scoring stages,
+/// weightless, run on the reference. [`palw_eval_run_reference_v1`] runs every stage on the reference.
 pub fn palw_eval_run_v1(held: &PalwEvalHeldV1, task: &PalwImproveEvalTaskV1) -> Result<PalwEvalWorkV1, String> {
+    eval_run_on_v1(held, task, PalwEvalStageV1::Executor)
+}
+
+/// **[`palw_eval_run_v1`] on the reference interpreter alone** — the meaning the executor is held to (the
+/// differential's other side), and a tool's check.
+pub fn palw_eval_run_reference_v1(held: &PalwEvalHeldV1, task: &PalwImproveEvalTaskV1) -> Result<PalwEvalWorkV1, String> {
+    eval_run_on_v1(held, task, PalwEvalStageV1::Reference)
+}
+
+fn eval_run_on_v1(held: &PalwEvalHeldV1, task: &PalwImproveEvalTaskV1, stage: PalwEvalStageV1) -> Result<PalwEvalWorkV1, String> {
     if task.subject_class != held.class_id {
         return Err(format!("the task's subject is class {}, this node holds {}", task.subject_class, held.class_id));
     }
     let job = task.job();
     let ctx = held.context(&job, task.params)?;
-    let execution = with_params(held, |params| {
+    let execution = with_params_on(held, stage, |params| {
         let given: &[u32] = match task.mode {
             PalwEvalModeV1::TeacherForced { .. } => &task.reference_ids,
             _ => &[],
@@ -497,6 +595,172 @@ pub fn palw_eval_dispute_v1(
         return Ok(PalwEvalDisputeV1::Score { committed: accused.score.clone(), honest: honest.tail.score.clone() });
     }
     Ok(PalwEvalDisputeV1::Agrees)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The executor, and the candidates of one parent in lockstep
+// ---------------------------------------------------------------------------------------------
+
+impl PalwEvalHeldV1 {
+    /// **Does this node's executor compute this subject's evaluations?** True when the held artifact's plan
+    /// is the class's program — every evaluation's subject stage then runs there — and false where the
+    /// reference interpreter would run it (a log line's word; the result is the same either way). Read off
+    /// the plan alone for a held artifact: no executor is built, so no weight is scanned on the caller's
+    /// thread; in-memory weights (tools, tests) are compiled and bound to answer.
+    pub fn evaluates_on_executor_v1(&self) -> bool {
+        let Ok(decl) = palw_improve_subject_program_v1(&self.program) else { return false };
+        match &self.weights {
+            PalwEvalWeightsV1::Artifact { artifact } => TirStageStepperV1::serves(artifact.plan(), &decl),
+            PalwEvalWeightsV1::Map(_) => with_params(self, |params| params.stepper(0, &decl).is_some()),
+        }
+    }
+
+    /// **The weights this subject's executor reads**, by inventory root: a composite candidate's parent's
+    /// (its params `0..p` are the parent's, served from one store per parent root — RFC-0004 §6.3), the
+    /// class's own otherwise. Subjects with one weights root step in lockstep over one store.
+    pub fn weights_root_v1(&self) -> Hash64 {
+        match &self.weights {
+            PalwEvalWeightsV1::Artifact { artifact } => artifact.composite_ref().map_or(self.artifact_root, |r| r.parent_root),
+            PalwEvalWeightsV1::Map(_) => self.artifact_root,
+        }
+    }
+
+    /// **What one run of `positions` positions holds beside the weights** — an upper estimate: the run's
+    /// records, every position's logits, commit points and written `Fixed` states at 16 bytes an element
+    /// (the pipeline keeps them for the step tree, `i128` each, a history-length extent at its longest),
+    /// and the executor's own state (each history at its window, each `Fixed` state twice, every block's
+    /// node values at 8 bytes an element). What a lockstep batch multiplies by its width.
+    pub fn run_bytes_v1(&self, positions: u64) -> u64 {
+        let p = &self.program;
+        let h = positions.max(1);
+        let mut per_position = 0u64;
+        let mut executor = 0u64;
+        let post = &p.blocks[p.schedule.post as usize].nodes;
+        per_position = per_position.saturating_add(post.get(p.logits as usize).map_or(0, |n| n.out.elements_at(h)));
+        for b in &p.blocks {
+            for n in &b.nodes {
+                executor = executor.saturating_add(n.out.elements_at(h).saturating_mul(8));
+            }
+        }
+        for (block, _) in p.occurrences() {
+            for n in &p.blocks[block as usize].nodes {
+                if n.commit {
+                    per_position = per_position.saturating_add(n.out.elements_at(h));
+                }
+                if let misaka_palw_tir::Prim::StateWrite { state } = n.prim
+                    && let Some(s) = p.states.get(state as usize)
+                    && matches!(s.kind, misaka_palw_tir::StateKind::Fixed { .. })
+                {
+                    let elems = s.shape.iter().fold(1u64, |a, d| a.saturating_mul(*d as u64));
+                    per_position = per_position.saturating_add(elems);
+                    executor = executor.saturating_add(elems.saturating_mul(2 * s.dtype.width() as u64));
+                }
+            }
+        }
+        let layers = p.schedule.layers.len().max(1) as u64;
+        for s in &p.states {
+            if let misaka_palw_tir::StateKind::Hist { window } = s.kind {
+                let row = s.shape.iter().fold(1u64, |a, d| a.saturating_mul(*d as u64)).saturating_mul(s.dtype.width() as u64);
+                let instances = if s.per_layer { layers } else { 1 };
+                executor = executor.saturating_add(row.saturating_mul(h.min(window as u64)).saturating_mul(instances));
+            }
+        }
+        positions.saturating_mul(per_position).saturating_mul(16).saturating_add(executor)
+    }
+}
+
+/// **How wide a lockstep batch of runs of `positions` positions over `held`'s weights may be**: every
+/// member's admission of a layer held at once — a resident store's routed capacity over one admission
+/// in flight (`misaka_palw_tir_exec::tir_lockstep_batch_v1`; unbounded by rows where nothing is routed or
+/// the weights are mapped) — and every member's run ([`PalwEvalHeldV1::run_bytes_v1`]) within `spare`
+/// bytes; at most `cap`, at least one (a batch of one is a run alone).
+pub fn palw_eval_lockstep_width_v1(held: &PalwEvalHeldV1, positions: u64, spare: u64, cap: usize) -> usize {
+    let (capacity, in_flight) = match &held.weights {
+        PalwEvalWeightsV1::Artifact { artifact } => artifact.weight_store().map_or((0, 0), |store| {
+            let stats = store.stats();
+            (stats.routed_capacity_bytes, stats.in_flight_bytes)
+        }),
+        PalwEvalWeightsV1::Map(_) => (0, 0),
+    };
+    misaka_palw_tir_exec::tir_lockstep_batch_v1(capacity, in_flight, held.run_bytes_v1(positions), spare).min(cap).max(1)
+}
+
+/// **What a lockstep batch came to**: every member's run, in the order given, and what the hub served.
+pub struct PalwEvalBatchV1 {
+    pub runs: Vec<Result<PalwEvalWorkV1, String>>,
+    /// The members the hub stepped together; the others ran alone, after the batch.
+    pub stepped_together: usize,
+    pub served: TirLockstepServedV1,
+}
+
+/// **Run evaluation tasks of one item over the candidates of one parent, in lockstep** (RFC-0004 §7.2,
+/// `docs/design/palw/tir/runtime-residency.md` §8): each member's run is [`palw_eval_run_v1`]'s — the
+/// same context, pipeline and decode, on its own thread — except that one hub, on this thread, steps
+/// every member's subject stage together, a layer of every member before the next layer of any, so the
+/// parent's weights a layer reads serve the whole batch while they are at hand (a resident store admits
+/// a layer's routed rows once for all of them). Each member's run is exactly its run alone
+/// (`tests/improve_eval_exec.rs`). A member the executor does not serve — another program than its
+/// class's, weights it refuses — and every member of a batch of one run alone, after the batch.
+pub fn palw_eval_run_batch_v1(members: &[(&PalwEvalHeldV1, &PalwImproveEvalTaskV1)]) -> PalwEvalBatchV1 {
+    let n = members.len();
+    let decls: Vec<Option<TirProgramV2>> =
+        members.iter().map(|(held, _)| palw_improve_subject_program_v1(&held.program).ok()).collect();
+    // In-memory weights (tools, tests) are compiled once for the batch's life.
+    let compiled: Vec<Option<(TirPlan, TirParams<'static>)>> = members
+        .iter()
+        .map(|(held, _)| match &held.weights {
+            PalwEvalWeightsV1::Map(map) => compile_map_v1(&held.program, map),
+            PalwEvalWeightsV1::Artifact { .. } => None,
+        })
+        .collect();
+    let mut steppers = Vec::new();
+    let mut seat_of: Vec<Option<usize>> = vec![None; n];
+    for (i, (held, task)) in members.iter().enumerate() {
+        let Some(decl) = decls[i].as_ref().filter(|_| task.subject_class == held.class_id) else { continue };
+        let stepper = match (&held.weights, &compiled[i]) {
+            (PalwEvalWeightsV1::Artifact { artifact }, _) => TirStageStepperV1::for_stage(artifact.plan(), artifact.params(), decl),
+            (PalwEvalWeightsV1::Map(_), Some((plan, params))) => TirStageStepperV1::for_stage(plan, params, decl),
+            (PalwEvalWeightsV1::Map(_), None) => None,
+        };
+        if let Some(stepper) = stepper {
+            seat_of[i] = Some(steppers.len());
+            steppers.push(stepper);
+        }
+    }
+    let mut runs: Vec<Option<Result<PalwEvalWorkV1, String>>> = (0..n).map(|_| None).collect();
+    let mut stepped_together = 0;
+    let mut served = TirLockstepServedV1::default();
+    if steppers.len() >= 2
+        && let Ok((hub, seats)) = TirLockstepHubV1::new(steppers)
+    {
+        let mut seats: Vec<Option<TirLockstepSeatV1>> = seats.into_iter().map(Some).collect();
+        served = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for (i, (held, task)) in members.iter().enumerate() {
+                let (Some(k), Some(decl)) = (seat_of[i], decls[i].clone()) else { continue };
+                let Some(seat) = seats[k].take() else { continue };
+                let (held, task) = (*held, *task);
+                // A thread that cannot start drops its seat (the hub stops waiting for it) and its member
+                // runs alone below.
+                if let Ok(handle) = std::thread::Builder::new()
+                    .name(format!("palw-eval-lockstep-{i}"))
+                    .spawn_scoped(scope, move || eval_run_on_v1(held, task, PalwEvalStageV1::Seat(seat, Box::new(decl))))
+                {
+                    handles.push((i, handle));
+                }
+            }
+            // Seats no member took leave now, before the hub waits on them.
+            drop(seats);
+            stepped_together = handles.len();
+            let served = hub.serve();
+            for (i, handle) in handles {
+                runs[i] = Some(handle.join().unwrap_or_else(|_| Err("the evaluation run panicked".to_string())));
+            }
+            served
+        });
+    }
+    let runs = members.iter().zip(runs).map(|((held, task), run)| run.unwrap_or_else(|| palw_eval_run_v1(held, task))).collect();
+    PalwEvalBatchV1 { runs, stepped_together, served }
 }
 
 // ---------------------------------------------------------------------------------------------

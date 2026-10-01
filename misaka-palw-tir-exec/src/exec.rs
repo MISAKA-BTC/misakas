@@ -13,6 +13,7 @@ use misaka_palw_tir::program::{StateKind, TirProgramV1};
 use misaka_palw_tir::{DType, Dim, Prim, Ref, RunState, Tensor, TirError, TirErrorKind, TirResult};
 
 use crate::elem::{Buf, Elem, Slice};
+use crate::fused::Region;
 use crate::kernels::{Opd, Scratch, elementwise, materialize, matmul, misc, reduce};
 use crate::layout::{Layout, MAX_RANK, numel};
 use crate::params::TirParams;
@@ -254,12 +255,15 @@ pub(crate) fn ref_val(plan: &TirPlan, bp: &BlockPlan, r: Ref, vals: &[Val], laye
     })
 }
 
-/// Evaluate one computing node (everything but `StateWrite` and `HistAppend`). Returns the value
-/// as a view (`Some`) or `None` when the result was written to `out`.
+/// Evaluate one computing node (everything but `StateWrite` and `HistAppend`) — node `at.1` of
+/// block `at.0`. Returns the value as a view (`Some`) or `None` when the result was written to
+/// `out`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn eval_compute(
     plan: &TirPlan,
     bp: &BlockPlan,
     node: &NodePlan,
+    at: (u8, u16),
     rd: &Reader<'_>,
     vals: &[Val],
     out_shape: &[usize],
@@ -295,6 +299,14 @@ pub(crate) fn eval_compute(
             let (a, b) = (*axis as usize, *batch_dims as usize);
             let d = v(0)?;
             let idx = o(1)?;
+            // A residency serves this param by rows (`crate::rows`): read the rows the index names,
+            // never the param — the same elements, checked the same way.
+            let site = plan.rows.gathers.get(at.0 as usize).and_then(|g| g.get(at.1 as usize)).and_then(|s| s.as_ref());
+            if let Some(j) = crate::rows::served_view(rd, d.src, &d.layout, site) {
+                let site = site.expect("served_view saw the site");
+                crate::rows::gather_rows(plan, node, rd, at, site, j, &idx, out, scratch)?;
+                return Ok(None);
+            }
             if idx.layout.rank == 0 && b == 0 {
                 // One row along `axis`: a view of the data (the embedding row, a table entry).
                 let n = d.layout.shape[a];
@@ -475,13 +487,28 @@ impl<'a> TirExecutor<'a> {
     /// (the gate is `tests/fused_gate.rs`); a step whose sink asks for every node's value runs
     /// generic throughout.
     pub fn set_fused(&mut self, on: bool) {
+        let params = self.params;
         self.fused = on.then(|| {
             let regions = self.plan.fused_regions();
             self.plan
                 .occurrences
                 .iter()
                 .zip(&self.occ_plans)
-                .map(|(&(block, _), bp)| crate::fused::enable(&regions[block as usize], bp, &self.plan.program))
+                .map(|(&(block, layer), bp)| {
+                    // A kernel reads its holes whole: a region that would read a row-served param
+                    // runs on the generic kernels, whose gathers read rows.
+                    let held = |r: &Region| {
+                        r.holes.iter().all(|h| !matches!(h, Ref::Param(j) if params.serves_rows(*j, layer)))
+                            && r.nodes.iter().all(|n| {
+                                self.plan.program.blocks[block as usize].nodes[*n as usize]
+                                    .inputs
+                                    .iter()
+                                    .all(|i| !matches!(i, Ref::Param(j) if params.serves_rows(*j, layer)))
+                            })
+                    };
+                    let mine: Vec<Region> = regions[block as usize].iter().filter(|r| held(r)).cloned().collect();
+                    crate::fused::enable(&mine, bp, &self.plan.program)
+                })
                 .collect()
         });
     }
@@ -583,6 +610,17 @@ impl<'a> TirExecutor<'a> {
     /// state (NF-19), so the run state after the position is the same either way; the logits are
     /// then not produced ([`Self::logits`] is empty).
     pub fn step_opt(&mut self, token: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
+        let to = self.begin_step(token, run_post)?;
+        let r = self.run_occurrences(0, to, sink);
+        self.end_step(r)
+    }
+
+    /// **A position's start**: its inputs checked (the position bound, the token bound — before
+    /// anything runs) and set, the carry cleared, and the logits cleared when `post` will not run.
+    /// Returns how many occurrences the position runs. [`Self::step_opt`] is this, every occurrence
+    /// ([`Self::run_occurrences`]), then [`Self::end_step`]; a lockstep batch
+    /// (`lockstep::TirLockstepV1`) interleaves members between the three.
+    pub(crate) fn begin_step(&mut self, token: u32, run_post: bool) -> TirResult<usize> {
         let p = &self.plan.program;
         let pos = self.run.pos;
         if pos >= p.history_bound {
@@ -592,7 +630,18 @@ impl<'a> TirExecutor<'a> {
             return Err(TirError::new(TirErrorKind::Operand, format!("token {token} ≥ token_bound {}", p.token_bound)));
         }
         self.work.inputs = [token, pos];
-        let r = self.step_inner(pos, sink, run_post);
+        self.work.carry.clear();
+        if !run_post {
+            self.work.logits_shape.clear();
+            self.work.logits = Buf::default();
+        }
+        let n = self.plan.occurrences.len();
+        Ok(if run_post { n } else { n - 1 })
+    }
+
+    /// **A position's end**: on success its effects apply and the position advances; on failure the
+    /// run state is exactly as before (spec 04b §9.1(4)).
+    pub(crate) fn end_step(&mut self, r: TirResult<()>) -> TirResult<()> {
         let run = &mut self.run;
         match r {
             Ok(()) => {
@@ -626,20 +675,16 @@ impl<'a> TirExecutor<'a> {
         }
     }
 
-    fn step_inner(&mut self, pos: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
+    /// Occurrences `from..to` of the position [`Self::begin_step`] began, in schedule order.
+    pub(crate) fn run_occurrences(&mut self, from: usize, to: usize, sink: &mut dyn StepSink) -> TirResult<()> {
         let plan = self.plan;
         let params = self.params;
         let every = sink.every_node();
         let n_occ = plan.occurrences.len();
+        let pos = self.run.pos;
         let TirExecutor { run, work, occ_plans, fused, fused_fault, .. } = self;
         let fused_fault = *fused_fault;
-        work.carry.clear();
-        if !run_post {
-            work.logits_shape.clear();
-            work.logits = Buf::default();
-        }
-        let run_occ = if run_post { n_occ } else { n_occ - 1 };
-        for (occ, &(block, layer)) in plan.occurrences.iter().enumerate().take(run_occ) {
+        for (occ, &(block, layer)) in plan.occurrences.iter().enumerate().take(to).skip(from) {
             let bp = &occ_plans[occ];
             let h = bp.window.map(|w| (pos as usize + 1).min(w as usize)).unwrap_or(1);
             let n = bp.nodes.len();
@@ -795,7 +840,7 @@ impl<'a> TirExecutor<'a> {
                                 slots: &slots,
                                 inputs: &work.inputs,
                             };
-                            eval_compute(plan, bp, node, &rd, &vals, out_shape, &mut out, &mut work.scratch)
+                            eval_compute(plan, bp, node, (block, ni as u16), &rd, &vals, out_shape, &mut out, &mut work.scratch)
                         };
                         slots[ni] = out;
                         match r? {

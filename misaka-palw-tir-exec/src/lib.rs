@@ -27,6 +27,15 @@
 //!   success are order-independent (the order-free rule, PALW-TIR-24), so `MatMul` and `ReduceSum`
 //!   vectorise and thread; every lossy site (`Div`, `Clamp`, the transcendentals, selection,
 //!   state) computes each element exactly as spec 04b §6 defines it.
+//! * **Weights within a budget** ([`tiers`], [`rows`], `node::residency`; ADR-0112 for IR classes,
+//!   `docs/design/palw/tir/runtime-residency.md`): the program's dataflow tells the params every
+//!   forward reads whole (pinned) from those a route selects rows of (routed) and those an input
+//!   selects rows of (gathered); a residency serves the last two as the rows a `Gather` names, read
+//!   through the file descriptor, and computes the same bytes. [`lockstep`] steps several executors
+//!   of one parent's candidates a layer at a time over one such store.
+//! * **A pipeline's stage** ([`stage`]): an input-free stage whose program is a held class's own — an
+//!   evaluation's subject (RFC-0004 §7.2) — stepped here for the reference pipeline runner, which
+//!   builds the claim's step tree from what it returns; one parent's candidates step in lockstep.
 //!
 //! Node software only: `kaspa-consensus-core` never depends on this crate. The court runs the
 //! reference; the tests hold the two equal (golden vectors, whole programs, random programs,
@@ -38,15 +47,23 @@ pub mod exec;
 pub mod fused;
 pub mod kernels;
 pub mod layout;
+pub mod lockstep;
 #[cfg(feature = "node")]
 pub mod node;
 pub mod params;
 pub mod plan;
 pub mod ranges;
+pub mod rows;
 pub mod scalar;
+pub mod stage;
+pub mod tiers;
 
 pub use cone::eval_cone;
 pub use elem::{Buf, Elem, Slice};
 pub use exec::{NoSink, NodeValue, StepSink, TirExecutor};
+pub use lockstep::{TirLockstepV1, tir_lockstep_batch_v1, tir_lockstep_step_v1};
 pub use params::{ParamData, TirParams};
 pub use plan::TirPlan;
+pub use rows::{TirRowCountsV1, TirRowSourceV1, TirRowsInMemoryV1};
+pub use stage::{TirLockstepHubV1, TirLockstepSeatV1, TirLockstepServedV1, TirStageStepperV1};
+pub use tiers::{TirResidencyArithmeticV1, TirTierRulesV1, TirTierV1, TirTiersV1};
