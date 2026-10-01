@@ -472,6 +472,50 @@ fn twin_ctx(positions: u32) -> kaspa_consensus_core::palw_v2::PalwJobContextV2 {
     }
 }
 
+/// **The latent is a `post`-written state, and a cone that reads it at a later position must still close and convict** (NF-29: the
+/// court reads the latent at `p` as the committed write at `p − 1`). A lie at the first leaf of position 1, 2 and 3 of the
+/// denoiser's patch-embed commit points — whose cones read the latent — is convicted at its own leaf, and so is a lie at the
+/// latent's own write at position 2 (the write of position 1 is what its cone reads). Before the court source knew post-written
+/// states these closes were refused ("Missing: State") and nobody could be convicted there.
+#[test]
+fn a_lie_at_a_later_denoise_position_that_reads_the_latent_is_convicted() {
+    let Some(c) = sd3_class() else { return };
+    let (held, _file) = held(&c);
+    let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
+    let denoise = c.spec.pipeline.stages.iter().position(|st| st.name == "denoise").expect("a denoise stage") as u8;
+    let one_move_max = palw_gen_one_move_max_proof_bytes_v1() as usize;
+    // First leaf of each position of the denoise stage for two commit kinds: the patch embed (pre) and the latent write (post).
+    let mut sites: Vec<(String, u64)> = Vec::new();
+    for want in ["pre", "post"] {
+        for pos in 1..=3u32 {
+            let leaf = honest
+                .leaf_listing()
+                .into_iter()
+                .find(|l| {
+                    l.stage == denoise && l.pos == pos && l.lanes > 0 && l.kind.starts_with("commit") && {
+                        let (occ, node) = l.kind["commit ".len()..].split_once('.').unwrap();
+                        let prog = &c.spec.programs[c.spec.pipeline.stages[denoise as usize].program as usize];
+                        let (block, _) = prog.occurrences()[occ.parse::<usize>().unwrap()];
+                        let b = &prog.blocks[block as usize];
+                        // `pre`'s patch embed reads the latent through the select; `post`'s own write is the StateWrite.
+                        b.name == want && (want == "pre" || b.nodes[node.parse::<usize>().unwrap()].prim.name() == "StateWrite")
+                    }
+                })
+                .unwrap_or_else(|| panic!("no {want} leaf at position {pos}"));
+            sites.push((format!("{want} @ pos {pos}"), leaf.global));
+        }
+    }
+    for (what, leaf) in &sites {
+        let lying = honest.planted(&GenPlantV1::StepLane { leaf: *leaf, lane: 0, delta: 5 }).expect("the lie plants");
+        let (proof, bytes) = cone_close(&held, &lying, *leaf).unwrap_or_else(|e| panic!("{what} (leaf {leaf}): {e}"));
+        assert_eq!(verdict(&c, &lying, &proof, *leaf), Ok(PalwCourtVerdictV2::ExecutorGuilty), "{what}: convicted at its own leaf");
+        assert!(bytes <= one_move_max, "{what}: {bytes} B");
+        let (hp, _) = cone_close(&held, &honest, *leaf).unwrap();
+        assert_eq!(verdict(&c, &honest, &hp, *leaf), Ok(PalwCourtVerdictV2::ChallengerDefeated), "{what}: honest acquitted");
+        eprintln!("  convicted: {what} (leaf {leaf}), close {bytes} B");
+    }
+}
+
 /// **The court battery**: a lie planted at the FIRST leaf of every commit-point kind is convicted by the cone close at that
 /// leaf and an honest claim is acquitted there, the close riding the one-move accusation.
 ///
