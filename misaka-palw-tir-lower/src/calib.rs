@@ -116,7 +116,7 @@ mod tests {
                 format!("L{i}.attn.q"),
                 SiteStat {
                     absmax: *a,
-                    sum_sq: a * a,
+                    sum_sq: a * 0.5,
                     count: 7 + i as u64,
                     pos0_absmax: a / 3.0,
                     rest_absmax: a * 0.7,
