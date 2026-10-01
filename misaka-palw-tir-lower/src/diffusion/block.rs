@@ -281,9 +281,14 @@ pub fn lower_attn_half_over(b: &mut BlockBuilder<'_>, blk: &QBlock, r: &QBlockRe
 }
 
 /// `Linear → GELU → Linear` of one stream's MLP half over its modulated codes.
+///
+/// The hidden tensor and its activation are commit points: an output tile of the second linear needs ALL of its `4d` inputs, and
+/// without them its cone would open every row of the first linear (256 rows ≈ 300 KB on the fixture).
 fn feed_forward(b: &mut BlockBuilder<'_>, x: Ref, m: &QMlpHalf, r: &QMlpRefs) -> Ref {
     let h = lower_linear_codes(b, x, &r.l1);
+    b.commit(h);
     let a = lower_act_codes(b, h, Act::GeluTanh, m.s_ff1, m.s_ffa);
+    b.commit(a);
     lower_linear_codes(b, a, &r.l2)
 }
 
