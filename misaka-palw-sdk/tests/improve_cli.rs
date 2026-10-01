@@ -138,7 +138,7 @@ fn every_improve_kind_writes_an_object_the_chain_accepts() {
             "line": hex(1), "sequence": 1,
             "policy": {
                 "usage": { "measure": "claims", "value": 3 },
-                "windows": { "grid": 400, "w_collect": 60, "w_submit": 60, "w_holdout": 20, "w_eval": 120, "beacon_delay": 4, "court_margin": 60 },
+                "windows": { "grid": 500, "w_collect": 60, "w_submit": 60, "w_holdout": 20, "w_eval": 120, "beacon_delay": 4, "court_margin": 170 },
                 "eval": { "stages": [{ "kind": "exact_match", "open": -1, "close": -1, "key_cap": 4 }], "n": 8, "n_min": 4,
                           "delta_permille": 100, "max_new_tokens": 4, "stop_ids": [], "regression_items": 0, "safety_items": 0,
                           "setter_cap_permille": 1000, "max_eval_positions": 100000 },
