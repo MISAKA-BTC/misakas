@@ -315,19 +315,25 @@ impl Builder<'_> {
         let mut bk = Bk { nodes: vec![] };
         let table = self.param("embed.table", vec![s.vocab_size, e.dim], false, Init::Normal(0.5))?;
         let mut x = bk.f(Op::Embedding, vec![Ref::Token, table], e.dim, "embed");
-        if e.proj_in {
+        // The width positions, token types and the embedding norm act at: the hidden width, or the table's when the
+        // projection comes after the norm (ALBERT).
+        let dw = if e.proj_in && e.proj_after_norm { e.dim } else { d };
+        if e.proj_in && !e.proj_after_norm {
             x = self.linear(&mut bk, x, "embed.proj_in", d, e.dim, false, false, "embed.proj_in")?;
         }
         if let Some(lp) = &e.positions {
-            let t = self.param("embed.pos_table", vec![lp.rows, d], false, Init::Normal(0.2))?;
-            let pv = bk.f(Op::PosEmbedding { offset: lp.offset }, vec![Ref::Pos, t], d, "embed.pos_row");
-            x = bk.f(Op::Add, vec![x, pv], d, "embed.pos");
+            let t = self.param("embed.pos_table", vec![lp.rows, dw], false, Init::Normal(0.2))?;
+            let pv = bk.f(Op::PosEmbedding { offset: lp.offset }, vec![Ref::Pos, t], dw, "embed.pos_row");
+            x = bk.f(Op::Add, vec![x, pv], dw, "embed.pos");
         }
         if e.scale != 1.0 {
-            x = bk.f(Op::Scale { c: e.scale }, vec![x], d, "embed.scaled");
+            x = bk.f(Op::Scale { c: e.scale }, vec![x], dw, "embed.scaled");
         }
         if let Some(n) = e.norm {
-            x = self.full_norm(&mut bk, x, n, "embed.norm", d, false)?;
+            x = self.full_norm(&mut bk, x, n, "embed.norm", dw, false)?;
+        }
+        if e.proj_in && e.proj_after_norm {
+            x = self.linear(&mut bk, x, "embed.proj_in", d, e.dim, e.proj_in_bias, false, "embed.proj_in")?;
         }
         // Hyper-connections: the embedding is repeated into every stream.
         if let Some(hy) = s.hyper.as_ref().filter(|h| h.streams > 1) {
@@ -336,7 +342,7 @@ impl Builder<'_> {
         // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
         // row 0 into its position rows; a per-position program never reads it.
         if let Some(rows) = e.type_rows {
-            self.param("embed.type_table", vec![rows, d], false, Init::Normal(0.2))?;
+            self.param("embed.type_table", vec![rows, dw], false, Init::Normal(0.2))?;
         }
         // Declared for the binding only, like the token types: `lower::bidir` adds it to the scores.
         if let Some(rb) = e.rel_bias {

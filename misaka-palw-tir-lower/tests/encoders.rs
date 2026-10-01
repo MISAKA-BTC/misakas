@@ -235,6 +235,13 @@ fn modernbert_matches_its_hf_fixture() {
     bidir_case("modernbert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
 }
 
+/// FR-17: ALBERT's factorised embedding (projection after the norm, with a bias) and its one shared layer group.
+#[test]
+fn albert_matches_its_hf_fixture() {
+    bidir_case("albert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+    bidir_case("albert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
+}
+
 #[test]
 fn bert_mean_pooled_and_normalised_matches_its_hf_fixture() {
     bidir_case("bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");

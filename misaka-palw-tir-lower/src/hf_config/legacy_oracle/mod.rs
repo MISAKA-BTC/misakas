@@ -593,7 +593,7 @@ pub(crate) fn llama_names(model: &str, lm_head: &str) -> BTreeMap<String, String
 }
 
 pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
-    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, type_rows: None, rel_bias: None }
+    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, proj_after_norm: false, proj_in_bias: false, type_rows: None, rel_bias: None }
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {

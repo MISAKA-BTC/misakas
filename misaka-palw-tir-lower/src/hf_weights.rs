@@ -162,8 +162,7 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     // Embedding, positions, head.
     m.put("embed.table", Src::t(format!("{}.weight", m.role("embed")?)))?;
     if spec.embedding.proj_in {
-        let w = m.w("proj_in")?;
-        m.put("embed.proj_in.w", w)?;
+        m.lin("embed.proj_in", "proj_in", spec.embedding.proj_in_bias)?;
     }
     if spec.embedding.positions.is_some() {
         m.put("embed.pos_table", Src::t(format!("{}.weight", m.role("pos_embed")?)))?;

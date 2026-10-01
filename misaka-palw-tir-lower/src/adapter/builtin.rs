@@ -31,6 +31,7 @@ pack!(
     "mixin-bert-encoder",
     "nomic-bert",
     "modernbert",
+    "albert",
     "bert",
     "bloom",
     "clip-text",

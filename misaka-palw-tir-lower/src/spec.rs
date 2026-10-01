@@ -744,6 +744,13 @@ pub struct EmbeddingSpec {
     /// `project_in` (OPT-350m).
     #[serde(default)]
     pub proj_in: bool,
+    /// `EMBED_PROJ_IN_AFTER_NORM_V1` (ALBERT's `embedding_hidden_mapping_in`): the projection comes LAST — positions, token
+    /// types and the embedding norm all act at the token table's width, and the projection (with its bias, when
+    /// `proj_in_bias`) lifts the normed row to the hidden width. OPT's projection, the default, comes first.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub proj_after_norm: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub proj_in_bias: bool,
     /// A token-type table of this many rows (BERT's `token_type_embeddings`); a single-segment
     /// encoder adds row 0 to every position.
     #[serde(default)]

@@ -89,6 +89,8 @@ struct Arch {
     pos_offset: usize,
     /// MPNet's bias over bucketed relative positions.
     rel: Option<crate::spec::RelBiasSpec>,
+    /// ALBERT: the embedding is at the table's width and a projection (bias or not) lifts the normed row to the hidden width.
+    proj_in: Option<bool>,
 }
 
 impl Arch {
@@ -184,10 +186,12 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
             place,
         });
     }
-    if spec.embedding.proj_in || spec.embedding.dim != spec.hidden_size || spec.embedding.scale != 1.0 {
-        return bad("an embedding of another width than the hidden size (a factorised embedding with its projection) or an embedding scale: this lowering reads the plain BERT embedding");
-    }
     let e = &spec.embedding;
+    // A factorised embedding is read only as ALBERT's: projection after the norm.
+    let factorised = e.proj_in && e.proj_after_norm && e.dim != spec.hidden_size && e.norm.is_some();
+    if (e.proj_in != factorised) || (e.dim != spec.hidden_size && !factorised) || e.scale != 1.0 {
+        return bad("an embedding of another width than the hidden size without a projection after its norm (OPT's project_in first), or an embedding scale: this lowering reads the plain BERT embedding and ALBERT's factorised one");
+    }
     if e.positions.is_none() && layers.iter().all(|l| l.rope.is_none()) {
         return bad("no positions: neither a learned position table nor a rotary position");
     }
@@ -205,6 +209,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         has_positions: e.positions.is_some(),
         pos_offset: e.positions.as_ref().map_or(0, |p| p.offset),
         rel: e.rel_bias,
+        proj_in: factorised.then_some(e.proj_in_bias),
     })
 }
 
@@ -385,7 +390,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                     &lb,
                     "embed.pos_rows",
                     DType::I32,
-                    &[lr, d],
+                    &[lr, cols],
                     false,
                     Arc::new(move |c| {
                         let sr = c.scale(&ScaleKey::resid())?;
@@ -397,24 +402,30 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                             Some(t) => Some(c.f(t)?),
                             None => None,
                         };
-                        let mut v = Vec::with_capacity(lr * d);
+                        let mut v = Vec::with_capacity(lr * cols);
                         for i in 0..lr {
-                            for j in 0..d {
-                                let x = p.as_ref().map_or(0.0, |p| p.data[(off + i) * d + j] as f64) + t.as_ref().map_or(0.0, |t| t.data[j] as f64);
+                            for j in 0..cols {
+                                let x = p.as_ref().map_or(0.0, |p| p.data[(off + i) * cols + j] as f64) + t.as_ref().map_or(0.0, |t| t.data[j] as f64);
                                 v.push((x / sr).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32);
                             }
                         }
-                        Ok(IntTensor::i32(vec![lr, d], v))
+                        Ok(IntTensor::i32(vec![lr, cols], v))
                     }),
                 )?;
                 let sum = b.add(word, pos, DType::I64);
                 b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32)
             };
-            let sum = rows_val(sum, DType::I32, resid.clone(), d, "embed.sum");
+            let sum = rows_val(sum, DType::I32, resid.clone(), cols, "embed.sum");
             note_resid(cx, &lb, &sum);
-            let normed = match a.embed_norm {
-                Some(n) => norm_rows_kind(&mut b, cx, &mut lb, &sum, n.kind, n.eps, "embed.norm", n.bias, &Want { dt: DType::I32, key: resid.clone() })?,
-                None => sum,
+            let normed = match (a.embed_norm, a.proj_in) {
+                (Some(n), Some(pb)) => {
+                    // ALBERT: the normed row at the table's width, as codes, lifted by the projection.
+                    let c = norm_rows_kind(&mut b, cx, &mut lb, &sum, n.kind, n.eps, "embed.norm", n.bias, &Want { dt: DType::I16, key: site_key("embed.norm") })?;
+                    note_site(cx, tb, &c);
+                    linear_rows(&mut b, cx, &mut lb, &c, "embed.proj_in.w", pb.then_some("embed.proj_in.b"), "embed.proj_in", &Want { dt: DType::I32, key: resid.clone() })?
+                }
+                (Some(n), None) => norm_rows_kind(&mut b, cx, &mut lb, &sum, n.kind, n.eps, "embed.norm", n.bias, &Want { dt: DType::I32, key: resid.clone() })?,
+                (None, _) => sum,
             };
             b.commit(normed.r);
             note_resid(cx, &lb, &normed);
@@ -1040,10 +1051,11 @@ pub fn float_forward(
     let word = p("embed.table", None)?;
     let pos = if a.has_positions { Some(p("embed.pos_table", None)?) } else { None };
     let typ = p("embed.type_table", None).ok();
+    let ed = hl.params[hl_param(hl, "embed.table")? as usize].shape[1];
     let mut x: Vec<Vec<f64>> = (0..l)
         .map(|i| {
-            (0..d)
-                .map(|j| word[seq.ids[i] * d + j] + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * d + j]) + typ.as_ref().map_or(0.0, |t| t[j]))
+            (0..ed)
+                .map(|j| word[seq.ids[i] * ed + j] + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * ed + j]) + typ.as_ref().map_or(0.0, |t| t[j]))
                 .collect()
         })
         .collect();
@@ -1052,6 +1064,12 @@ pub fn float_forward(
         x = x.iter().map(|r| norm(r, n, "embed.norm", None)).collect::<Result<_>>()?;
     }
     observe("pre.embed.norm".into(), &x[..n_real]);
+    if let Some(pb) = a.proj_in {
+        let w = p("embed.proj_in.w", None)?;
+        let bv = if pb { Some(p("embed.proj_in.b", None)?) } else { None };
+        x = x.iter().map(|r| lin(r, &w, bv.as_deref(), d)).collect();
+        observe("pre.embed.proj_in".into(), &x[..n_real]);
+    }
     for li in 0..hl.schedule.len() {
         let la = &a.layers[li];
         let (h, dh) = (la.heads as usize, la.head_dim as usize);
