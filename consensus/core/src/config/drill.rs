@@ -637,7 +637,7 @@ pub fn palw_drill_gen_fence_at_v1(params: &mut crate::config::params::Params, at
 /// machinery for the one-entry drill list [`crate::palw_fp_job_v5::PALW_DRILL_FP_V5_FENCES_V1`]: ARMS
 /// `palw_fp_job_v5` at `at` and moves nothing else. `validate_palw_v2` refuses the result unless
 /// `palw_gen_v1` and `palw_fp_decode_rules` are in force at or below `at` (arm them first with
-/// `--palw-drill-gen-at` and the decode-rules flag day).
+/// `--palw-drill-gen-at` and `--palw-drill-decode-rules-at`).
 pub fn palw_drill_fp_v5_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_V5_V1)
 }
@@ -652,14 +652,26 @@ pub fn palw_drill_tir_fence2_at_v1(params: &mut crate::config::params::Params, a
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1)
 }
 
+/// **A drill arms the decode rules at a low height** (ADR-0082 D10/D11; `--palw-drill-decode-rules-at`) —
+/// [`palw_drill_post_launch_fences_at_v1`]'s machinery for
+/// [`crate::config::params::PALW_T12_DECODE_RULES_FENCES_V1`]: ARMS `palw_fp_decode_rules` at `at` through
+/// the entry's own `set` (which writes the bundle's mirror) and moves nothing else — the release leaves it
+/// dormant, so there is no release height to move from. Every refusal of the post-launch moves applies,
+/// named for this flag. It is the prerequisite RFC-0003's FP Job V5 and RFC-0004's improvement fence name:
+/// arm it at or below `--palw-drill-fp-v5-at` and `--palw-drill-improve-at`.
+pub fn palw_drill_decode_rules_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_DECODE_RULES_V1)
+}
+
 /// **A drill arms the improvement fence at a low height** (RFC-0004; `--palw-drill-improve-at`) —
 /// the same machinery for the one-entry drill list
 /// [`crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1`]: ARMS `palw_improvement_v1` at `at` with
 /// this build's ids and the drill's ceilings, and moves nothing else. The fence is in no network's
 /// release. Every refusal of the post-launch moves applies, named for this flag, and
-/// `validate_palw_v2` refuses the result unless `palw_tir_v1`, `palw_gen_v1` and `palw_kary_court`
-/// are in force at or below `at` (arm them first with `--palw-drill-tir-at`, `--palw-drill-gen-at`
-/// and `--palw-drill-fence-at`).
+/// `validate_palw_v2` refuses the result unless `palw_tir_v1`, `palw_gen_v1`, `palw_tir_fence2`,
+/// `palw_kary_court` and `palw_fp_decode_rules` are in force at or below `at` (arm them first with
+/// `--palw-drill-tir-at`, `--palw-drill-gen-at`, `--palw-drill-tir2-at`, `--palw-drill-fence-at` and
+/// `--palw-drill-decode-rules-at`).
 pub fn palw_drill_improve_fence_at_v1(
     params: &mut crate::config::params::Params,
     at: u64,
@@ -700,6 +712,12 @@ const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1, flag: "--palw-drill-tir2-at" };
+
+/// The decode rules alone (`--palw-drill-decode-rules-at`, ADR-0082 D10/D11): the dormant testnet-12 list.
+const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::config::params::PALW_T12_DECODE_RULES_FENCES_V1,
+    flag: "--palw-drill-decode-rules-at",
+};
 
 /// The improvement fence alone (`--palw-drill-improve-at`, RFC-0004): a drill-only list.
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =

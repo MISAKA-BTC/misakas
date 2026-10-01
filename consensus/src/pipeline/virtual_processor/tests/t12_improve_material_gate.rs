@@ -45,6 +45,9 @@ async fn t12_material_objects_are_signed_by_their_signers() {
         params.sync_palw_tir_fence2();
         params.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(0)));
         params.sync_palw_gen_v1();
+        // The improvement fence names the decode rules a prerequisite (the integration's decision of 2026-10-01).
+        params.palw_fp_decode_rules = Some(ForkActivation::new(0));
+        params.sync_palw_fp_decode_rules();
         params.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(0)));
         params.sync_palw_improvement_v1();
         let armed = ConfigBuilder::new(params).skip_proof_of_work().build();
