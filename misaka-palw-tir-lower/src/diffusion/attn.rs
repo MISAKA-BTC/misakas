@@ -152,7 +152,7 @@ pub fn lower_joint_attention(
 #[cfg(test)]
 mod tests {
     use super::super::linear::QLinear;
-    use super::super::testkit::{Lcg, run_one_block};
+    use super::super::testkit::{Lcg, run_multi};
     use super::*;
 
     /// A float joint attention over `xi:[N,d]`, `xt:[L,d]` with the given float weights (all `[d, d]` + `[d]` bias).
@@ -215,42 +215,39 @@ mod tests {
         let xi: Vec<i128> = (0..spec.n_img * d).map(|_| rng.range(-6_000, 6_000)).collect();
         let xt: Vec<i128> = (0..spec.n_txt * d).map(|_| rng.range(-6_000, 6_000)).collect();
         let (xi2, xt2) = (xi.clone(), xt.clone());
-        let (img, txt) = {
-            let q = &qs;
-            let run = |which: usize| {
-                run_one_block(
-                    |pb, sink| {
-                        let a = sink.put(pb, "x_img", DType::I16, &[spec.n_img as u32, d as u32], xi2.clone());
-                        let c = sink.put(pb, "x_txt", DType::I16, &[spec.n_txt as u32, d as u32], xt2.clone());
-                        let names = ["q", "k", "v", "add_q", "add_k", "add_v", "o", "add_o"];
-                        let refs: Vec<QLinearRefs> = names.iter().enumerate().map(|(i, n)| q[i].declare(pb, sink, n)).collect();
-                        (a, c, refs)
-                    },
-                    |b, (a, c, refs)| {
-                        let r = JointAttnRefs {
-                            q: refs[0],
-                            k: refs[1],
-                            v: refs[2],
-                            add_q: refs[3],
-                            add_k: refs[4],
-                            add_v: refs[5],
-                            o: refs[6],
-                            add_o: Some(refs[7]),
-                        };
-                        let (i, t) = lower_joint_attention(b, a, c, &r, &spec, score, ctxn, (-32_767, 32_767, DType::I16));
-                        if which == 0 { i } else { t.expect("a text output") }
-                    },
-                )
-            };
-            (run(0), run(1))
-        };
+        let q = &qs;
+        let outs = run_multi(
+            |pb, sink| {
+                let a = sink.put(pb, "x_img", DType::I16, &[spec.n_img as u32, d as u32], xi2.clone());
+                let c = sink.put(pb, "x_txt", DType::I16, &[spec.n_txt as u32, d as u32], xt2.clone());
+                let names = ["q", "k", "v", "add_q", "add_k", "add_v", "o", "add_o"];
+                let refs: Vec<QLinearRefs> = names.iter().enumerate().map(|(i, n)| q[i].declare(pb, sink, n)).collect();
+                (a, c, refs)
+            },
+            |b, (a, c, refs)| {
+                let r = JointAttnRefs {
+                    q: refs[0],
+                    k: refs[1],
+                    v: refs[2],
+                    add_q: refs[3],
+                    add_k: refs[4],
+                    add_v: refs[5],
+                    o: refs[6],
+                    add_o: Some(refs[7]),
+                };
+                let (i, t) = lower_joint_attention(b, a, c, &r, &spec, score, ctxn, (-32_767, 32_767, DType::I16));
+                vec![i, t.expect("a text output")]
+            },
+            1,
+        );
+        let (img, txt) = (&outs[0][0], &outs[0][1]);
         let (fi, ft) = float_attention(
             &spec,
             &xi.iter().map(|v| *v as f64 * sx).collect::<Vec<_>>(),
             &xt.iter().map(|v| *v as f64 * sx).collect::<Vec<_>>(),
             &w,
         );
-        for (name, got, want) in [("image", &img, &fi), ("text", &txt, &ft)] {
+        for (name, got, want) in [("image", img, &fi), ("text", txt, &ft)] {
             let amax = want.iter().fold(0f64, |m, v| m.max(v.abs()));
             for (i, wv) in want.iter().enumerate() {
                 let g = got.data[i] as f64 * so;

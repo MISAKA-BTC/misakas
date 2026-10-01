@@ -335,7 +335,8 @@ mod tests {
                     refs,
                 )
             },
-            |b, (ph, pt, pc, refs)| lower_block_over(b, &blk, &refs, [ph, pt, pc])[..2].to_vec(),
+            // All three carry-out nodes are observed: a node nothing reads is refused by normal form.
+            |b, (ph, pt, pc, refs)| lower_block_over(b, &blk, &refs, [ph, pt, pc]).to_vec(),
             1,
         );
         let o = &outs[0];
