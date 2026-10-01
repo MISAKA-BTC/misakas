@@ -1041,7 +1041,9 @@ score stage's output tile, or a committed id from the row it was selected from, 
 `PalwEvalEvidenceV1` builds every close from an executor's run — `cone_close(index)`, `named_leaf_close(index)`,
 `decode_close(t)`, `score_close()`, `root_claim(index)`, `round(phase)`, `bottom(phase)` — each carrying exactly the
 units the court's evaluation reads (the builders record them), the subject's parameters per leaf with their paths and,
-for a composite candidate, per section. Executors, accusers and the tests build their moves through it.
+for a composite candidate, per section. Executors, accusers and the tests build their moves through it. The accused
+execution's leaves are read through `PalwEvalLeafStoreV1` (a whole run, or whatever a challenger holds of one from the
+claim's data-availability units).
 
 #### 17.8.6.3 Dissection
 
