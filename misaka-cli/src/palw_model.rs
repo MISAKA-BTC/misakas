@@ -14,9 +14,9 @@ use crate::node::Ctx;
 use crate::wallet::connect;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PalwModelFeesV1, PalwModelMarketV1,
-    palw_model_buy_quote_with, palw_model_holder_of_pubkey_v1, palw_model_sell_message_v1, palw_model_sell_quote_with,
-    palw_model_sink_spk_v1,
+    PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PALW_MODEL_SUPPLY_UNITS_V1,
+    PalwModelFeesV1, PalwModelMarketV1, palw_model_buy_quote_with, palw_model_holder_of_pubkey_v1, palw_model_seed_deepen_v2,
+    palw_model_sell_message_v1, palw_model_sell_quote_with, palw_model_sink_spk_v1,
 };
 
 /// ADR-0114: the schedule the node says a move is settled under at its tip (a node from before
@@ -31,14 +31,214 @@ pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) ->
 /// the registry has not admitted its class. Asked before a carrier is built: a refused carrier seed
 /// or buy still lands, and its sink output is the payment (P-B1). A node older than version 7 served
 /// no gate — its fold asked none — and reads as `None`. A sell never asks.
+///
+/// It used to say the MSK paid into the sink "would not come back": a node does not relay such a
+/// carrier, and where one is mined anyway the chain pays it back past the 2026-09-23 audit fence
+/// (P-B1) — [`refusal_line`] says which, per network (the 2026-09-25 Position review's N3).
+///
+/// **Past ADR-0162's fence the gate is the BUY's alone** — the market is open from the line's
+/// creation and trades from the class's approval — so the refusal is worded as "does not trade yet"
+/// and a seed does not ask it ([`seed_refusal`]).
 pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
     (!r.market_refusal.is_empty()).then(|| {
-        format!(
-            "line {} takes no seed and no buy now: {} — the chain would refuse the move and the MSK paid into the \
-             sink would not come back (sells stay open)",
-            r.line_id, r.market_refusal
-        )
+        if virtual_regime(r) {
+            format!(
+                "line {} does not trade yet: {} — a buy would be refused (trading starts at the class's approval; a seed is \
+                 still taken before the first trade, and sells stay open)",
+                r.line_id, r.market_refusal
+            )
+        } else {
+            format!(
+                "line {} takes no seed and no buy now: {} — the chain would refuse the move (sells stay open)",
+                r.line_id, r.market_refusal
+            )
+        }
     })
+}
+
+/// **ADR-0162: is the node's tip past `Params::palw_model_virtual_v1`?** There the least seed it
+/// serves is zero — every line's market is open from its creation and a seed is optional depth —
+/// where below it the least seed is ADR-0090's or ADR-0120's, never zero. Read off the answer, as the
+/// fee schedule is ([`served_schedule`]), so the tool follows the node on either side of the fence.
+pub(crate) fn virtual_regime(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> bool {
+    r.found && r.seed_min_sompi == 0 && r.supply_units == PALW_MODEL_SUPPLY_UNITS_V1
+}
+
+/// **Why a seed of this line would be refused, asked before a carrier is built.** Past ADR-0162's
+/// fence: once the market has traded (a seed paid while positions are out is a seed their holders
+/// could sell back out of the curve — ADR-0162 Decision 4), a frozen class, a retired line. Below
+/// it: P-B3's gate and a market already open (ADR-0090: one opening a line). `line_status` is the
+/// line's status from `getPalwModelLine` where the caller read it.
+pub(crate) fn seed_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse, line_status: Option<&str>) -> Option<String> {
+    let line = &r.line_id;
+    if line_status.is_some_and(|s| !s.is_empty() && !s.eq_ignore_ascii_case("active")) {
+        return Some(format!("line {line} is {}, so it takes no seed (sells stay open)", line_status.unwrap_or_default()));
+    }
+    if r.class_status.starts_with("Frozen") {
+        return Some(format!("line {line}'s class is {}, so its line takes no seed", r.class_status));
+    }
+    if virtual_regime(r) {
+        return (r.sold_units > 0).then(|| {
+            format!(
+                "line {line} has traded ({} positions bought), so it takes no seed: a seed is taken only before the first \
+                 trade (ADR-0162) — one paid now would raise the price of positions already out, and their holders could \
+                 sell part of it back out of the curve",
+                r.sold_units / PALW_MODEL_POSITION_UNITS_V1
+            )
+        });
+    }
+    if let Some(why) = market_refusal(r) {
+        return Some(why);
+    }
+    // **Open is `seed_sompi > 0`, not the wire's `opened`** — a node without the 2026-09-23 P10
+    // repair serves that flag as "a market row exists", and the first instalment creates one.
+    market_from_response(r)
+        .is_open()
+        .then(|| format!("line {line} is already seeded ({} locked by {})", msk(r.seed_sompi), r.seeded_by))
+}
+
+/// **What a seed of `msk_seed` does, said before it is signed** (the 2026-09-25 Position review's N1:
+/// the preview ignored what was already pledged — it priced a 600,000 MSK instalment as if it were the
+/// whole seed). Past ADR-0162's fence: the pool it deepens and the floor it raises, by the chain's
+/// own arithmetic. Below it: the pledge it adds to, and the market it opens when the total reaches
+/// the floor.
+pub(crate) fn seed_preview(
+    r: &kaspa_rpc_core::GetPalwModelMarketResponse,
+    seeder: &kaspa_consensus_core::Hash64,
+    msk_seed: u64,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if virtual_regime(r) {
+        let before = market_from_response(r);
+        match palw_model_seed_deepen_v2(&before, seeder, msk_seed) {
+            Some(after) => {
+                out.push(format!("  real reserve   {} -> {}", msk(before.msk_reserve), msk(after.msk_reserve)));
+                out.push(format!("  locked seed    {} -> {}", msk(before.seed_sompi), msk(after.seed_sompi)));
+                out.push(format!(
+                    "  price          {} -> {} per position (the virtual reserve, {}, prices the curve and is never paid)",
+                    msk(before.price_sompi_per_position_v1()),
+                    msk(after.price_sompi_per_position_v1()),
+                    msk(after.virtual_sompi)
+                ));
+                out.push(format!(
+                    "  price floor    {} -> {} per position",
+                    msk(before.price_floor_sompi_per_position_v2()),
+                    msk(after.price_floor_sompi_per_position_v2())
+                ));
+                out.push(
+                    "  OPTIONAL: the market is open since its line's creation; a seed only deepens it and raises its floor.".into(),
+                );
+            }
+            None => out.push("  the chain would refuse this seed (see above)".into()),
+        }
+        out.push(
+            "  LOCKED FOR GOOD, AT YOUR RISK: no object pays a seed out, the seeder holds no position, and a class that is \
+             never approved never trades — its seed stays in the sink."
+                .into(),
+        );
+        return out;
+    }
+    let total = r.seed_pledged_sompi.saturating_add(msk_seed);
+    if total >= r.seed_min_sompi {
+        out.push(format!(
+            "  opens the pair  {} collected in all: first price {} per position ({} positions in the curve)",
+            msk(total),
+            msk(total / PALW_MODEL_POSITION_SUPPLY_V1),
+            PALW_MODEL_POSITION_SUPPLY_V1
+        ));
+    } else {
+        out.push(format!(
+            "  instalment     {} of {} collected after this one, {} to go — the market opens on the payment that reaches the floor",
+            msk(total),
+            msk(r.seed_min_sompi),
+            msk(r.seed_min_sompi - total)
+        ));
+    }
+    out.push(
+        "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
+            .into(),
+    );
+    out
+}
+
+/// **Why a seed this carrier cannot fund is refused, and what to pay instead** (the 2026-09-25
+/// Position review's #5). One carrier spends at most [`PALW_CARRIER_MAX_INPUTS`] utxos, so the advice
+/// is an instalment of what those utxos hold less the fee — in whole MSK, and only when that is at
+/// least one MSK. It used to advise `--msk 0` when the utxos held less than the fee, an amount this
+/// command and the chain both refuse; there the only advice is to fund the address.
+pub(crate) fn seed_shortfall_message(
+    utxos: usize,
+    reach: u64,
+    msk_seed: u64,
+    fee: u64,
+    addr: &impl std::fmt::Display,
+    line: &impl std::fmt::Display,
+    seed_min_sompi: u64,
+) -> String {
+    let instalment_msk = reach.saturating_sub(fee) / SOMPI_PER_MSK;
+    if instalment_msk == 0 {
+        return format!(
+            "the {utxos} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee — nor \
+             even a one-MSK payment and the fee ({}). Fund {addr} first.",
+            msk(reach),
+            msk(msk_seed),
+            msk(fee)
+        );
+    }
+    let tail = if seed_min_sompi == 0 {
+        // ADR-0162: no floor to reach — a seed is optional depth, taken until the market's first trade.
+        "pay more the same way for more depth.\nEvery payment is locked in the line's sink the moment it lands and \
+         deepens the pool, until the market's first trade (ADR-0162)."
+            .to_string()
+    } else {
+        format!(
+            "again until the line has {} in all.\nEvery instalment is locked in the line's sink the moment it lands (ADR-0094); the \
+             market opens on the one that crosses the floor.",
+            msk(seed_min_sompi)
+        )
+    };
+    format!(
+        "the {utxos} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee.\nOne \
+         transaction fits at most {PALW_CARRIER_MAX_INPUTS} post-quantum inputs, so pay in parts: `misaka palw model-seed \
+         --line {line} --msk {instalment_msk}` now, and {tail}",
+        msk(reach),
+        msk(msk_seed)
+    )
+}
+
+/// **An unseeded line, named as one** (the 2026-09-25 Position review's #5): `Some(why)` when the
+/// line has no market yet — what has been pledged toward the floor and what the floor is — so a buy
+/// is refused for the reason it is, before any quote. Past ADR-0162's fence every line is a market
+/// from its creation, and this is `None`.
+pub(crate) fn unseeded_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
+    if virtual_regime(r) || market_from_response(r).is_open() {
+        return None;
+    }
+    Some(format!(
+        "line {} is not seeded (pledged {} / needs {}): it has no market to buy from until a seed reaches the floor — \
+         `misaka palw model-seed --line {} --msk <amount>` pays toward it (ADR-0094)",
+        r.line_id,
+        msk(r.seed_pledged_sompi),
+        msk(r.seed_min_sompi),
+        r.line_id
+    ))
+}
+
+/// **Where a move's owner leg goes, said as the chain pays it** (the 2026-09-25 Position review's
+/// N4: the preview printed "owner 5 %" on a line with no owner, whose leg is burned). `owner` is the
+/// line's owner payout payload from `getPalwModelLine` (`None`: no owner, so the leg is burned);
+/// `contributor_permille` the share an adopted contributor takes while their version is current.
+pub(crate) fn leg_line(leg_permille: u64, leg: u64, owner: Option<&str>, contributor_permille: u32) -> String {
+    match owner {
+        None => format!("  owner {:<8} {} BURNED (this line has no owner)", pct(leg_permille), msk(leg)),
+        Some(_) if contributor_permille > 0 => format!(
+            "  owner {:<8} {} (to the owner; up to {} ‰ of it to an adopted contributor while their version is current)",
+            pct(leg_permille),
+            msk(leg),
+            contributor_permille
+        ),
+        Some(_) => format!("  owner {:<8} {} (to the line's owner)", pct(leg_permille), msk(leg)),
+    }
 }
 
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
@@ -107,10 +307,19 @@ pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketRespons
         seed_pledged_sompi: r.seed_pledged_sompi,
         buyback_sompi: r.buyback_sompi,
         retired_units: r.retired_units,
+        // ADR-0162: the market's own virtual reserve, so every quote this tool makes is the fold's.
+        // Zero for a market opened before the fence (and from every node before ADR-0162).
+        virtual_sompi: r.virtual_sompi,
     }
 }
 
 fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Value {
+    // The 2026-09-25 Position review's #6: a line that is not a market has no opening height and no
+    // curve, whichever node answered — a node served the tip's DAA and the whole supply there. Past
+    // ADR-0162's fence every line is a market from its creation, so this is that market's numbers.
+    let market = market_from_response(r);
+    let open = market.is_open();
+    let (opened_daa, position_units) = if open { (Some(r.opened_daa), r.position_units) } else { (None, 0) };
     serde_json::json!({
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
@@ -119,11 +328,19 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         // same fact from a node with the 2026-09-23 Position route matrix's P10 repair, and "a
         // market row exists" (a pledge makes one) from a node without it.
         "opened": r.opened,
-        "open": market_from_response(r).is_open(),
-        "opened_daa": r.opened_daa,
+        "open": open,
+        "opened_daa": opened_daa,
+        // ADR-0162: the regime the node serves, the market's two reserves, its floor, and whether it
+        // trades and takes a seed at the node's next block.
+        "virtual_regime": virtual_regime(r),
+        "virtual_reserve_sompi": r.virtual_sompi,
+        "price_floor_sompi_per_position": market.price_floor_sompi_per_position_v2(),
+        "positions_out": market.positions_out() / PALW_MODEL_POSITION_UNITS_V1,
+        "trading": open && !r.closed_to_buys,
+        "takes_seed": r.found && seed_refusal(r, None).is_none(),
         "msk_reserve_sompi": r.msk_reserve,
-        "position_units": r.position_units,
-        "positions_in_curve": r.position_units / PALW_MODEL_POSITION_UNITS_V1,
+        "position_units": position_units,
+        "positions_in_curve": position_units / PALW_MODEL_POSITION_UNITS_V1,
         "sold_units": r.sold_units,
         "burned_sompi": r.burned_sompi,
         "registrant_paid_sompi": r.registrant_paid_sompi,
@@ -136,7 +353,7 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "retired_units": r.retired_units,
         "retired_positions": r.retired_units / PALW_MODEL_POSITION_UNITS_V1,
         "closed_to_buys": r.closed_to_buys,
-        "price_sompi_per_position": r.price_sompi_per_position,
+        "price_sompi_per_position": if open { r.price_sompi_per_position } else { 0 },
         "supply_units": r.supply_units,
         "virtual_sompi": r.virtual_sompi,
         "class_status": r.class_status,
@@ -178,6 +395,62 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         println!("{}", serde_json::to_string_pretty(&v).expect("serializable"));
     } else if !r.found {
         println!("this chain holds no line {line}");
+    } else if virtual_regime(&r) {
+        // **ADR-0162: the market is open from the line's creation and trades from the class's
+        // approval.** What every market shows: the virtual reserve (it prices, it is never paid),
+        // the real reserve, the price, the floor, and the positions out.
+        let market = market_from_response(&r);
+        println!("line {}", r.line_id);
+        println!("  class status   {}", r.class_status);
+        if !r.class_lifecycle.is_empty() {
+            println!("  registry       {}", r.class_lifecycle);
+        }
+        if r.closed_to_buys {
+            let why = if r.market_refusal.is_empty() { "the line is not active".to_string() } else { r.market_refusal.clone() };
+            println!("  trading        not yet / not now — {why} (sells stay open)");
+        } else {
+            println!("  trading        open");
+        }
+        println!("  market         open since DAA {} (on the virtual reserve, ADR-0162)", r.opened_daa);
+        println!("  virtual        {} (prices the curve; never paid to anyone)", msk(r.virtual_sompi));
+        println!("  real reserve   {} (what sellers are paid from, above the locked seed)", msk(r.msk_reserve));
+        if r.seed_sompi > 0 {
+            println!("  seed (locked)  {} by {}", msk(r.seed_sompi), if r.seeded_by.is_empty() { "-" } else { &r.seeded_by });
+        } else {
+            println!("  seed           none (optional: a seed before the first trade deepens the pool and raises the floor)");
+        }
+        println!("  price          {} per position", msk(r.price_sompi_per_position));
+        println!(
+            "  price floor    {} per position (every position back in the curve)",
+            msk(market.price_floor_sompi_per_position_v2())
+        );
+        println!(
+            "  positions      {} out · {} in the curve · {} retired (of {})",
+            market.positions_out() / PALW_MODEL_POSITION_UNITS_V1,
+            r.position_units / PALW_MODEL_POSITION_UNITS_V1,
+            r.retired_units / PALW_MODEL_POSITION_UNITS_V1,
+            r.supply_units / PALW_MODEL_POSITION_UNITS_V1
+        );
+        println!("  burned         {}", msk(r.burned_sompi));
+        println!(
+            "  owner          {} paid (the owner's leg, {} of every move now)",
+            msk(r.registrant_paid_sompi),
+            pct(r.leg_permille)
+        );
+        println!("  contributor    {} paid", msk(r.contributor_paid_sompi));
+        println!(
+            "  mining bought  {} (5 % of a claim's escrowed worker reward on this line, at its Final — ADR-0091; {} positions retired)",
+            msk(r.buyback_sompi),
+            r.retired_units / PALW_MODEL_POSITION_UNITS_V1
+        );
+        if let Some((msk_in, q)) = &quote {
+            println!("quote: a buy of {} now", msk(*msk_in));
+            println!("  burn {:<9} {}", pct(r.burn_permille), msk(q.fees.burn));
+            println!("  owner {:<8} {}", pct(r.leg_permille), msk(q.fees.registrant));
+            println!("  into the curve {}", msk(q.fees.net));
+            println!("  positions out  {} ({} units)", q.units_out / PALW_MODEL_POSITION_UNITS_V1, q.units_out);
+            println!("  price after    {} per position", msk(q.after.price_sompi_per_position_v1()));
+        }
     } else {
         println!("line {}", r.line_id);
         println!("  class status   {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
@@ -214,8 +487,15 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         } else {
             println!("  seed           none yet — the market opens with `model-seed` (at least {})", msk(r.seed_min_sompi));
         }
-        println!("  in the curve   {} positions ({} units)", r.position_units / PALW_MODEL_POSITION_UNITS_V1, r.position_units);
-        println!("  price          {} per position", msk(r.price_sompi_per_position));
+        // The 2026-09-25 Position review's #6: an unopened line has no curve — no positions in it and
+        // no price — so nothing is printed for one (a node served the supply as "in the curve" and the
+        // tip's DAA as the opening height).
+        if market_from_response(&r).is_open() {
+            println!("  in the curve   {} positions ({} units)", r.position_units / PALW_MODEL_POSITION_UNITS_V1, r.position_units);
+            println!("  price          {} per position", msk(r.price_sompi_per_position));
+        } else {
+            println!("  curve          none yet — {} positions open in it at the seed", r.supply_units / PALW_MODEL_POSITION_UNITS_V1);
+        }
         println!("  sold (gross)   {} positions", r.sold_units / PALW_MODEL_POSITION_UNITS_V1);
         println!("  burned         {}", msk(r.burned_sompi));
         println!(
@@ -233,7 +513,7 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         }
         println!("  contributor    {} paid", msk(r.contributor_paid_sompi));
         println!(
-            "  mining bought  {} (5 % of every block's reward on this line; {} positions retired)",
+            "  mining bought  {} (5 % of a claim's escrowed worker reward on this line, at its Final — ADR-0091; {} positions retired)",
             msk(r.buyback_sompi),
             r.retired_units / PALW_MODEL_POSITION_UNITS_V1
         );
@@ -387,9 +667,21 @@ pub(crate) async fn submit_move(
     Ok(())
 }
 
+/// The line's own row as the node serves it (`getPalwModelLine`), for the status and the owner a
+/// preview names; `None` where the node answers nothing (an older node, a registry not in force).
+async fn line_row(nv: &crate::wallet::NodeView, line: &kaspa_consensus_core::Hash64) -> Option<kaspa_rpc_core::RpcPalwModelLine> {
+    nv.client.get_palw_model_line(line.to_string()).await.ok().and_then(|r| r.line)
+}
+
 /// `misaka palw model-seed --line <id> --msk <amount> --key … [--yes]` — ADR-0090: open the
 /// line's market by locking the seed (at least the network's least seed) in its sink. The whole
 /// seed becomes the reserve; nothing ever pays it back to anyone.
+///
+/// **ADR-0162: past the virtual fence the seed is OPTIONAL depth.** The line's market is open from
+/// its creation on the virtual reserve; a seed of any amount, paid before the market's first trade,
+/// joins the real reserve and the locked seed and raises the floor `(V + seed) / supply`. It is
+/// locked for good, gives no position, and is at its opener's risk: a class that is never approved
+/// never trades. After the first trade it is refused.
 pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, yes: bool) -> CliResult {
     let line = parse_line(line_id)?;
     let msk_seed = parse_msk_amount(msk_text)?;
@@ -404,25 +696,17 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
-    // P-B3 (the 2026-09-23 Position route matrix): the registry's gate first, as the fold asks it.
-    if let Some(why) = market_refusal(&r) {
+    // What the fold would refuse, before a carrier is built: past ADR-0162's fence a market that
+    // has traded, a frozen class or a retired line; below it P-B3's gate and a market already open.
+    let terms = line_row(&nv, &line).await;
+    if let Some(why) = seed_refusal(&r, terms.as_ref().map(|l| l.status.as_str())) {
         return Err(CliError::new(exit::GENERIC, why));
-    }
-    // **Open is `seed_sompi > 0`, not the wire's `opened`** — a node without the 2026-09-23 P10
-    // repair serves that flag as "a market row exists", and the first instalment creates one: the
-    // second instalment this command's own hint asks for was refused here as "already seeded (0 MSK
-    // locked)". Reading the row works against every node.
-    if market_from_response(&r).is_open() {
-        return Err(CliError::new(
-            exit::GENERIC,
-            format!("line {line} is already seeded ({} locked by {})", msk(r.seed_sompi), r.seeded_by),
-        ));
     }
     // ADR-0094: a payment under the floor is an INSTALMENT, not an error — it lands in the sink
     // and is locked there, and the market opens on the payment that carries the total across.
     // What is still refused is a payment of nothing.
     if msk_seed == 0 {
-        return Err(CliError::new(exit::GENERIC, "a seed of zero pays nothing toward the floor".to_string()));
+        return Err(CliError::new(exit::GENERIC, "a seed of zero pays nothing".to_string()));
     }
     let object = PalwConsensusObjectV2::ModelSeed { line_id: line, seeder, msk_seed, sink_index: 1 };
     let addr = key.funding_address(nv.params.prefix());
@@ -444,16 +728,16 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
         }
     }
     if funding.is_empty() || have <= want {
-        let reach = have;
         return Err(CliError::new(
             exit::GENERIC,
-            format!(
-                "the {} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee.\n                   One transaction fits at most {PALW_CARRIER_MAX_INPUTS} post-quantum inputs, so pay the seed in instalments: \n                   `misaka palw model-seed --line {line} --msk {}` now, and again until the line has {} in all.\n                   Every instalment is locked in the line's sink the moment it lands (ADR-0094); the market opens on the one that crosses the floor.",
+            seed_shortfall_message(
                 funding.len(),
-                msk(reach),
-                msk(msk_seed),
-                (reach.saturating_sub(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI)) / 100_000_000,
-                msk(r.seed_min_sompi)
+                have,
+                msk_seed,
+                kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI,
+                &addr,
+                &line,
+                r.seed_min_sompi,
             ),
         ));
     }
@@ -462,14 +746,9 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if ctx.output != OutputFormat::Json {
         println!("seed {} into line {line}", msk(msk_seed));
         println!("  seeder         {seeder} (for the record; the seeder holds no position)");
-        println!(
-            "  first price    {} per position ({} positions in the curve)",
-            msk(msk_seed / PALW_MODEL_POSITION_SUPPLY_V1),
-            PALW_MODEL_POSITION_SUPPLY_V1
-        );
-        println!(
-            "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
-        );
+        for preview in seed_preview(&r, &seeder, msk_seed) {
+            println!("{preview}");
+        }
         println!("{}", refusal_line(&nv, msk_seed, &addr));
     }
     let what = format!("ModelSeed {} into line {}", msk(msk_seed), line);
@@ -578,12 +857,28 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
     // P-B3 (the 2026-09-23 Position route matrix): named, before the quote the gate also closes.
+    // Past ADR-0162's fence the same answer is "does not trade yet": trading starts at approval.
     if let Some(why) = market_refusal(&r) {
         return Err(CliError::new(exit::GENERIC, why));
     }
+    // The 2026-09-25 Position review's #5: an unseeded line is named as one, with what it has and
+    // what it needs — not "closed to buys, or too small", which describes neither.
+    if let Some(why) = unseeded_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
+    let terms = line_row(&nv, &line).await;
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
-        return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing (closed to buys, or too small)", msk(msk_in))));
+        let why = if r.closed_to_buys {
+            if virtual_regime(&r) {
+                "the market does not trade now (trading starts at the class's approval; a retired line takes no buy)"
+            } else {
+                "the line is closed to buys"
+            }
+        } else {
+            "the payment is too small to release a whole position"
+        };
+        return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing: {why}", msk(msk_in))));
     };
     let min_positions = floor.min_positions(quote.units_out, refused_is_refunded(&nv))?;
     let min_units_out = min_positions.saturating_mul(PALW_MODEL_POSITION_UNITS_V1);
@@ -609,7 +904,15 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
         println!("buy {} of line {line}", msk(msk_in));
         println!("  holder         {holder}");
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
-        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
+        println!(
+            "{}",
+            leg_line(
+                r.leg_permille,
+                quote.fees.registrant,
+                terms.as_ref().and_then(|l| l.owner_payout_payload.as_deref()),
+                terms.as_ref().map(|l| l.contributor_permille_of_leg).unwrap_or(0)
+            )
+        );
         println!("  into the curve {}", msk(quote.fees.net));
         println!(
             "  positions out  {} at least {min_positions} ({} units)",
@@ -742,11 +1045,20 @@ pub async fn sell(
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to fund the carrier")))?;
     let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, Vec::new())?;
     if ctx.output != OutputFormat::Json {
+        let terms = line_row(&nv, &line).await;
         println!("sell {positions} positions of line {line}");
         println!("  holder         {holder}");
-        println!("  gross          {}", msk(quote.fees.gross));
+        println!("  gross          {} (out of the real reserve above the locked seed)", msk(quote.fees.gross));
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
-        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
+        println!(
+            "{}",
+            leg_line(
+                r.leg_permille,
+                quote.fees.registrant,
+                terms.as_ref().and_then(|l| l.owner_payout_payload.as_deref()),
+                terms.as_ref().map(|l| l.contributor_permille_of_leg).unwrap_or(0)
+            )
+        );
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
         // **Where the net leg lands** (the 2026-09-23 Position route matrix, P-B4). Past the
         // 2026-09-23 fence the chain pays this key's own address; below it, the holder id, and an
@@ -782,7 +1094,10 @@ mod tests {
             ..Default::default()
         };
         let why = market_refusal(&refused).expect("refused");
-        assert!(why.contains("Prefetching") && why.contains("would not come back"), "{why}");
+        assert!(why.contains("Prefetching") && why.contains("would refuse"), "{why}");
+        // N3: it no longer promises the MSK is lost — a node does not relay such a carrier, and the
+        // chain pays a mined one back where it refunds (P-B1); `refusal_line` says which, per network.
+        assert!(!why.contains("would not come back"), "{why}");
     }
 
     /// **P-B4: below the 2026-09-23 fence a sell burns its proceeds, so the tool refuses to sign
@@ -795,6 +1110,168 @@ mod tests {
         assert_eq!(sell_payee_refusal(false, true), None, "the override signs, and burns");
         assert_eq!(sell_payee_refusal(true, false), None, "testnet-12 shape: the fence pays the seller's address");
         assert_eq!(sell_payee_refusal(true, true), None);
+    }
+
+    /// A node's answer for a line, serving `seed_min_sompi` as the least seed in force: ADR-0120's
+    /// million below ADR-0162's fence ([`MILLION_MSK`]), zero past it.
+    fn answer(
+        seed_min_sompi: u64,
+        market: kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+    ) -> kaspa_rpc_core::GetPalwModelMarketResponse {
+        use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SUPPLY_UNITS_V1;
+        kaspa_rpc_core::GetPalwModelMarketResponse {
+            found: true,
+            line_id: "ab".repeat(64),
+            opened: market.is_open(),
+            opened_daa: market.opened_daa,
+            msk_reserve: market.msk_reserve,
+            position_units: market.position_units,
+            sold_units: market.sold_units,
+            price_sompi_per_position: market.price_sompi_per_position_v1(),
+            supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            virtual_sompi: market.virtual_sompi,
+            class_status: "Active".into(),
+            seed_sompi: market.seed_sompi,
+            seed_pledged_sompi: market.seed_pledged_sompi,
+            seed_min_sompi,
+            burn_permille: 50,
+            leg_permille: 50,
+            ..Default::default()
+        }
+    }
+
+    /// ADR-0120's least seed, served by every answer below ADR-0162's fence here.
+    const MILLION_MSK: u64 = 1_000_000 * 100_000_000;
+
+    /// **The 2026-09-25 Position review's #5: an unseeded line is refused a buy as one** — with what it
+    /// has collected and what it needs, not "closed to buys, or too small", which describes neither.
+    #[test]
+    fn an_unseeded_line_is_refused_a_buy_as_one_with_what_it_holds_and_needs() {
+        use super::unseeded_refusal;
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        const MSK: u64 = 100_000_000;
+        let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        let why = unseeded_refusal(&answer(MILLION_MSK, pledge)).expect("unseeded");
+        assert!(why.contains("not seeded (pledged 400000.00000000 MSK / needs 1000000.00000000 MSK)"), "{why}");
+        let open = PalwModelMarketV1::seed_v1(5, 1_000_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        assert_eq!(unseeded_refusal(&answer(MILLION_MSK, open)), None, "an open market is not");
+    }
+
+    /// **#5: a short seed never advises `--msk 0`.** Under the fee (or under one MSK after it) the
+    /// advice is to fund the address; above it, a whole-MSK payment of what the utxos hold less the
+    /// fee.
+    #[test]
+    fn a_short_seed_never_advises_zero() {
+        use super::seed_shortfall_message;
+        const MSK: u64 = 100_000_000;
+        const FEE: u64 = 2_000_000;
+        for reach in [0, FEE - 1, FEE, FEE + MSK - 1] {
+            let m = seed_shortfall_message(1, reach, 1_000_000 * MSK, FEE, &"addr", &"line", MILLION_MSK);
+            assert!(!m.contains("--msk 0") && m.contains("Fund addr first"), "reach {reach}: {m}");
+        }
+        let m = seed_shortfall_message(15, FEE + 7 * MSK + 5, 1_000_000 * MSK, FEE, &"addr", &"line", MILLION_MSK);
+        assert!(m.contains("--msk 7`") && m.contains("15 mature utxo(s)") && m.contains("crosses the floor"), "{m}");
+    }
+
+    /// **The 2026-09-25 Position review's #6: an unopened line has no opening height and no curve in
+    /// `model-show --json`** — a node served the tip's DAA as its opening and the whole supply as "in
+    /// the curve".
+    #[test]
+    fn an_unopened_line_has_no_opening_height_and_no_curve_in_the_json() {
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        let unopened = kaspa_rpc_core::GetPalwModelMarketResponse {
+            opened_daa: 66,
+            position_units: 500_000,
+            ..answer(MILLION_MSK, PalwModelMarketV1::pledge_v1(0, 0, Default::default()))
+        };
+        let v = super::market_json(&unopened);
+        assert!(v["opened_daa"].is_null(), "{v}");
+        assert_eq!(
+            (v["open"].as_bool(), v["position_units"].as_u64(), v["price_sompi_per_position"].as_u64()),
+            (Some(false), Some(0), Some(0))
+        );
+    }
+
+    /// **The 2026-09-25 Position review's N1: the seed preview adds the payment to what is already
+    /// pledged** — on the live drill it priced a 600,000 MSK instalment on a 400,000 MSK pledge as a
+    /// whole seed (0.8 and 1.2 MSK) where the market opened at 2.0.
+    #[test]
+    fn the_seed_preview_counts_what_is_already_pledged() {
+        use super::seed_preview;
+        use kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1;
+        const MSK: u64 = 100_000_000;
+        let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        let r = answer(MILLION_MSK, pledge);
+        let opens = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 600_000 * MSK).join("\n");
+        assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 MSK"), "400k + 600k opens at 2.0: {opens}");
+        let part = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 100_000 * MSK).join("\n");
+        assert!(part.contains("500000.00000000 MSK of 1000000.00000000 MSK") && part.contains("500000.00000000 MSK to go"), "{part}");
+    }
+
+    /// **The 2026-09-25 Position review's N4: the owner's leg is named as the chain pays it** — burned
+    /// on a line with no owner, the contributor's share named where the line has one.
+    #[test]
+    fn the_owner_leg_is_named_as_the_chain_pays_it() {
+        use super::leg_line;
+        assert!(leg_line(50, 5, None, 0).contains("BURNED (this line has no owner)"));
+        assert!(leg_line(50, 5, Some("aa"), 0).contains("to the line's owner"));
+        assert!(leg_line(50, 5, Some("aa"), 200).contains("200 ‰ of it to an adopted contributor"));
+    }
+
+    /// **ADR-0162 at the tool: the regime is read off the node's answer, a seed is refused once the
+    /// market has traded, and the preview prices the deepening by the chain's own arithmetic** — the
+    /// real reserve, the locked seed, the price and the floor before and after. Below the fence the
+    /// same question keeps ADR-0090's answer: an open market takes no second seed.
+    #[test]
+    fn past_the_virtual_fence_a_seed_is_optional_depth_and_refused_after_the_first_trade() {
+        use super::{seed_preview, seed_refusal, seed_shortfall_message, unseeded_refusal, virtual_regime};
+        use kaspa_consensus_core::palw_model_market_v1::{
+            PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 as V, PalwModelFeesV1, PalwModelMarketV1, palw_model_buy_quote_with,
+        };
+        const MSK: u64 = 100_000_000;
+        let opening = PalwModelMarketV1::open_virtual_v2(100, V);
+        let r = answer(0, opening);
+        assert!(virtual_regime(&r) && !virtual_regime(&answer(MILLION_MSK, opening)));
+        assert_eq!(seed_refusal(&r, Some("Active")), None, "before the first trade a seed is taken");
+        assert_eq!(unseeded_refusal(&r), None, "every line is a market past the fence");
+        let preview = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(1), 500_000 * MSK).join("\n");
+        assert!(preview.contains("real reserve   0.00000000 MSK -> 500000.00000000 MSK"), "{preview}");
+        assert!(preview.contains("price floor    20.00000000 MSK -> 21.00000000 MSK per position"), "{preview}");
+        assert!(preview.contains("OPTIONAL") && preview.contains("AT YOUR RISK"), "{preview}");
+        let traded = palw_model_buy_quote_with(&opening, 1_000 * MSK, PalwModelFeesV1::V2).unwrap().after;
+        let why = seed_refusal(&answer(0, traded), None).expect("refused after a trade");
+        assert!(why.contains("only before the first trade"), "{why}");
+        assert!(seed_refusal(&r, Some("Retired")).is_some_and(|w| w.contains("Retired")), "a retired line takes no seed");
+        let frozen = kaspa_rpc_core::GetPalwModelMarketResponse { class_status: "Frozen { since_daa: 9 }".into(), ..r.clone() };
+        assert!(seed_refusal(&frozen, None).is_some(), "nor a frozen class");
+        // A short seed's advice past the fence names the deepening, not a floor.
+        let m = seed_shortfall_message(15, 2_000_000 + 7 * MSK + 5, 1_000_000 * MSK, 2_000_000, &"addr", &"line", 0);
+        assert!(m.contains("--msk 7`") && m.contains("ADR-0162") && !m.contains("floor"), "{m}");
+        // Below the fence: a pledge short of the floor takes the next instalment; an open market takes none.
+        let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        assert_eq!(seed_refusal(&answer(MILLION_MSK, pledge), None), None);
+        let open = PalwModelMarketV1::seed_v1(5, 1_000_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
+        assert!(seed_refusal(&answer(MILLION_MSK, open), None).is_some_and(|w| w.contains("already seeded")));
+    }
+
+    /// **ADR-0162 in `model-show --json`: a virtual market shows its two reserves, its floor, its
+    /// positions out, and whether it trades and takes a seed** (trading starts at approval).
+    #[test]
+    fn past_the_fence_the_market_json_shows_both_reserves_the_floor_and_whether_it_trades() {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 as V, PalwModelMarketV1};
+        const MSK: u64 = 100_000_000;
+        let virt = answer(0, PalwModelMarketV1::open_virtual_v2(100, V));
+        let v = super::market_json(&virt);
+        assert_eq!(
+            (v["virtual_regime"].as_bool(), v["virtual_reserve_sompi"].as_u64(), v["price_floor_sompi_per_position"].as_u64()),
+            (Some(true), Some(V), Some(20 * MSK))
+        );
+        assert_eq!(
+            (v["opened_daa"].as_u64(), v["positions_out"].as_u64(), v["trading"].as_bool(), v["takes_seed"].as_bool()),
+            (Some(100), Some(0), Some(true), Some(true))
+        );
+        let pending = kaspa_rpc_core::GetPalwModelMarketResponse { closed_to_buys: true, ..virt };
+        assert_eq!(super::market_json(&pending)["trading"].as_bool(), Some(false), "trading starts at approval");
     }
 
     #[test]

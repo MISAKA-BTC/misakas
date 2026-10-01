@@ -611,6 +611,23 @@ pub fn model_evm_sell(
 /// smaller seed is collected toward it (ADR-0094) — `misaka palw model-market` prints the floor the
 /// node's tip is under.
 #[allow(clippy::too_many_arguments)]
+/// **The AMM window's `market(line)` as words, through `eth_call`** — twelve past ADR-0162's fence
+/// (the twelfth the row's virtual reserve), eleven below it; `None` where the window answers nothing
+/// it can be read as (closed, or a node too old).
+fn amm_market_words(ctx: &Ctx, line: &kaspa_consensus_core::Hash64) -> Option<Vec<u64>> {
+    let mut data = kaspa_consensus_core::evm::model_market::abi_selector("market(bytes32,bytes32)").to_vec();
+    data.extend_from_slice(line.as_byte_slice());
+    let to = format!("0x{}", kaspa_consensus_core::evm::model_market::MISAKA_MODEL_AMM_PRECOMPILE);
+    let out =
+        crate::eth::rpc_call(ctx, "eth_call", json!([{ "to": to, "data": format!("0x{}", faster_hex::hex_string(&data)) }, "latest"]))
+            .ok()?;
+    let hex = out.as_str()?.trim().trim_start_matches("0x").to_string();
+    if hex.len() < 11 * 64 || hex.len() % 64 != 0 {
+        return None;
+    }
+    (0..hex.len() / 64).map(|i| u64::from_str_radix(&hex[i * 64 + 48..(i + 1) * 64], 16).ok()).collect()
+}
+
 pub fn model_evm_seed(
     ctx: &Ctx,
     ks: &EvmKeySource,
@@ -628,16 +645,36 @@ pub fn model_evm_seed(
     if wei == 0 || wei % scale != 0 {
         return Err(CliError::new(exit::GENERIC, format!("--msk {msk} is not a whole number of sompi; the writer refuses it")));
     }
-    let least = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1 as u128;
-    if wei / scale < least {
-        return Err(CliError::new(exit::GENERIC, format!("a seed of {} sompi is under the least seed of {least} sompi", wei / scale)));
-    }
-    let v2 = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V2 as u128;
-    if wei / scale < v2 && !ctx.quiet {
-        eprintln!(
-            "model-evm-seed: note — past ADR-0120's height (testnet-11: DAA 6,900) a pair opens at {v2} sompi paid in; this \
-             seed is then collected toward it (see `misaka palw model-market` for the floor now)"
-        );
+    // **What the window says of this line, before anything is signed.** Past ADR-0162's fence the
+    // market is open from the line's creation and `market()` answers twelve words (the twelfth its
+    // virtual reserve): a seed is optional depth, taken only while nothing has been bought (word 3),
+    // and the writer reverts `SeedAfterTrade()` after that. Below it the window answers eleven words
+    // and the writer takes any nonzero seed, which the fold collects toward the least seed (ADR-0094)
+    // — the old refusal here of anything under ADR-0090's 100,000 MSK refused what the chain takes.
+    match amm_market_words(ctx, &line) {
+        Some(words) if words.len() >= 12 => {
+            if words[3] > 0 {
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    format!(
+                        "line {line} has traded ({} positions bought), so it takes no seed: a seed is taken only before the \
+                         first trade (ADR-0162), and the writer would revert SeedAfterTrade()",
+                        words[3]
+                    ),
+                ));
+            }
+            if !ctx.quiet {
+                eprintln!(
+                    "model-evm-seed: optional depth — this market is open on its virtual reserve; a seed raises its floor, \
+                     is locked for good and gives no position, at your risk (a class never approved never trades)"
+                );
+            }
+        }
+        _ if !ctx.quiet => eprintln!(
+            "model-evm-seed: note — the pair opens once the MSK paid in reaches the least seed (`constants()`, `misaka palw \
+             model-show`); a payment under it is collected toward it where the chain takes instalments (ADR-0094)"
+        ),
+        _ => {}
     }
     let data = kaspa_consensus_core::evm::model_market::send_action_seed_calldata(&line);
     if !ctx.quiet {

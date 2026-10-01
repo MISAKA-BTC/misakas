@@ -17,15 +17,17 @@ pragma solidity ^0.8.20;
 ///           id 2  sell  abi = abi.encode(bytes32 lineA, bytes32 lineB, uint256 unitsIn,
 ///                                        uint256 minMskOutSompi)
 ///           id 3  seed  abi = abi.encode(bytes32 lineA, bytes32 lineB)          (ADR-0090: `msg.value`
-///                       is the seed, at least SEED_MIN_SOMPI × 1e10 wei; nothing else)
+///                       is the seed, a nonzero multiple of 1e10 wei; nothing else — below
+///                       ADR-0162's fence collected toward the least seed, past it optional
+///                       depth before the first trade)
 ///                       msg.value = 0
 ///           3–255       reserved — no action founds a line, publishes a version, sets a
 ///                       role, registers a class or certifies a family: those are ML-DSA-87
 ///                       bond signatures on the UTXO side, and an EVM account has no bond.
 ///
 ///         Every 64-byte line id is two `bytes32` words, high half first (`lineA` = the high
-///         32 bytes). Position amounts are in units (10^6 = one position); `minMskOutSompi` is
-///         NET sompi.
+///         32 bytes). Position amounts are in units (one unit = one position, ADR-0090);
+///         `minMskOutSompi` is NET sompi.
 ///
 ///         WHO MAY CALL. A holder is the signing account and only the signing account (ADR-0089
 ///         Decision 4): the call REVERTS `NotAnAccount()` unless `msg.sender == tx.origin` AND
@@ -35,10 +37,12 @@ pragma solidity ^0.8.20;
 ///
 ///         WHAT ELSE REVERTS AT THE CALL (the "user-input fault ⇒ tx revert, block valid"
 ///         class): malformed data, an unknown version or action id, an unknown line, a
-///         `msg.value` that is zero or not a multiple of 1e10 on a buy or a seed, a seed under
-///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys,
+///         `msg.value` that is zero or not a multiple of 1e10 on a buy or a seed (`BadValue()`), a
+///         nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys,
 ///         a seed or a buy of a line whose class the registry has not admitted (`ClassNotEligible()`, past the
-///         2026-09-23 audit fence only), the 129th action
+///         2026-09-23 audit fence only; past ADR-0162's fence a BUY of a line whose class is not
+///         approved yet — and never a seed, which asks no lifecycle there), a seed of a line whose
+///         market has traded (`SeedAfterTrade()`, past ADR-0162's fence only), the 129th action
 ///         in one EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1` = 128, `TooManyActions()`),
 ///         and the 17th action from ONE ACCOUNT in one EVM block
 ///         (`TooManyActionsForAccount()`; mainnet audit 2026-09-06, M-16/L-6 — the block bound is
@@ -71,7 +75,9 @@ pragma solidity ^0.8.20;
 interface IMisakaModelWriter {
     /// Queue one action. `data` = `[1] ‖ [action id, 3 bytes BE] ‖ abi` as laid out above;
     /// `msg.value` = the gross leg in wei for a buy or the whole seed for a seed (nonzero, a
-    /// multiple of 1e10, a seed at least SEED_MIN_SOMPI × 1e10), 0 for a sell. Returns nothing; the outcome is the fold's and settles at `C`.
+    /// multiple of 1e10), 0 for a sell. A seed under the least seed does not revert (ADR-0094: the
+    /// fold collects it); past ADR-0162's fence there is no least seed. Returns nothing; the
+    /// outcome is the fold's and settles at `C`.
     function sendAction(bytes calldata data) external payable;
 
     /// Emitted at the call, once per accepted action, from `0x…F013` only. `account` is the
@@ -84,8 +90,12 @@ interface IMisakaModelWriter {
     /// interface so that each file stands alone (do not inherit both interfaces into one
     /// contract; nothing real needs to).
     error NotAnAccount();
-    /// ADR-0090: the seed is under the network's least seed.
+    /// ADR-0090: the seed is under the network's least seed. Declared for callers that check for
+    /// it; the writer no longer raises it (ADR-0094 collects such a payment).
     error SeedTooSmall();
+    /// ADR-0162 Decision 4: a seed of a line whose market has traded — a seed is taken only before
+    /// the first trade. Past `palw_model_virtual_v1` only; the caller keeps its value.
+    error SeedAfterTrade();
     /// ADR-0089 Decision 5: this EVM block already queued 128 actions.
     error TooManyActions();
     /// This account already queued its share of the block's 128 actions

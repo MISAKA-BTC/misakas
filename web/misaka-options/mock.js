@@ -6,11 +6,15 @@
  * and EVM JSON-RPC methods the site uses, and plays an EIP-1193 wallet that signs instantly.
  * Blocks tick every 6 seconds; an action sent in block B settles in block B+1, as on the chain.
  *
- * ADR-0090 in the mock: three lines are SEEDED with real seeds (the reserve is the seed plus the
- * net legs since), one founding line of a class that is still `Registered` is UNSEEDED so the
- * seed panel and the "Add model" checklist have something to act on; a seed sent from the mock
- * wallet goes through the real code path (ActionQueued in the next block, Seeded or Refused one
- * block later), and the registered class flips to Active at its activation DAA.
+ * ADR-0162 in the mock: the network is past `palw_model_virtual_v1`, so every line's store is OPEN
+ * from its addition on the virtual reserve (V = 10,000,000 MSK, a first price of 20 MSK) and trades
+ * from its class's approval. Two Active lines were seeded before their first trade (250,000 and
+ * 120,000 MSK, which raised their floors), one was never seeded, and the founding line of a class
+ * that is still `Registered` is open, priced, 承認待ち and untraded, so the optional seed panel and
+ * the "Add model" checklist have something to act on; a seed sent from the mock wallet goes through
+ * the real code path (ActionQueued in the next block, Seeded or Refused one block later), a join
+ * before the class is Active is refused (reason 3), a seed after a trade reverts at the writer
+ * (SeedAfterTrade), and the registered class flips to Active at its activation DAA.
  *
  * Orders: the mock keeps an EVM pool with per-account nonces, replacement by (sender, nonce) at a 10 %
  * fee bump (as the node does), cancels (a zero-value transfer to yourself), eth_getTransactionByHash,
@@ -94,8 +98,9 @@ function applyBuy(line, account, sompi, minUnits) {
   const m = world.markets.get(line);
   const cls = world.classes.get(world.lines.get(line).row.classId);
   if (!m.seeded) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 6 };
+  // ADR-0162 D5: trading starts at the class's approval
   if (cls.status !== 0) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 3 };
-  const q = curve.buyQuote(m.row, sompi, feesC());
+  const q = curve.buyQuote(Object.assign({}, m.row, { closedToBuys: false }), sompi, feesC());
   if (!q) return { kind: 'Refused', actionId: 1, amount: sompi, reason: m.row.closedToBuys ? 3 : 4 };
   if (q.unitsOut < minUnits) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 5 };
   m.row = q.after; m.row.ownerPaid = (m.row.ownerPaid || 0n) + q.fees.leg;
@@ -114,14 +119,16 @@ function applySell(line, account, units, minMsk) {
   posAdd(line, holderOf(account), -units);
   return { kind: 'Sold', units, mskOut: q.fees.net, priceAfter: q.priceAfter };
 }
-// ADR-0090: one seed a line, at least the floor (the writer already reverted under it), none on a frozen class
+// ADR-0162 D4: a seed of any amount deepens an open store before its first trade; after it the fold
+// refuses (reason 14, a same-block trade got there first); none on a frozen class
 function applySeed(line, account, sompi) {
   const m = world.markets.get(line);
   const cls = world.classes.get(world.lines.get(line).row.classId);
-  if (m.seeded) return { kind: 'Refused', actionId: 3, amount: sompi, reason: 10 };
-  if (sompi < C.seedMinSompi) return { kind: 'Refused', actionId: 3, amount: sompi, reason: 11 };
   if (cls.status === 1) return { kind: 'Refused', actionId: 3, amount: sompi, reason: 12 };
-  m.row = curve.seed(sompi, C, holderOf(account), world.daa); m.seeded = true; m.openedDaa = world.daa;
+  const after = curve.seedDeepen(m.row, sompi);
+  if (!after) return { kind: 'Refused', actionId: 3, amount: sompi, reason: m.row.soldUnits > 0n ? 14 : 11 };
+  if (!after.seededBy) after.seededBy = holderOf(account);
+  m.row = after;
   return { kind: 'Seeded', mskIn: sompi, priceAfter: curve.price(m.row) };
 }
 
@@ -136,8 +143,10 @@ function seedWorld() {
   const mkLine = (id, classId, name, ownerLabel, founded, versions, hasRow, seedMsk, seederLabel) => {
     const row = { lineId: id, classId, hasRow, owner: ownerLabel ? bond(ownerLabel) : null, ownerPayoutPayload: ownerLabel ? payload(ownerLabel) : null, developer: ownerLabel ? bond(ownerLabel + '/dev') : null, developerPayoutPayload: ownerLabel ? payload(ownerLabel + '/dev') : null, maintainer: null, maintainerPayoutPayload: null, name, nameHex: MO.bytesToHex(MO.utf8(name)), foundedDaa: founded, current: versions.find((v) => v.status === 'Current').version, previews: versions.filter((v) => v.status === 'Preview').map((v) => v.version), versionsPublished: versions.length, contributorPermilleOfLeg: 0, status: 'Active', retiredDaa: null };
     world.lines.set(id, { row, versions, proposals: [], evaluations: new Map() });
-    if (seedMsk) world.markets.set(id, { seeded: true, openedDaa: founded + 40, row: curve.seed(seedMsk * MO.SOMPI_PER_MSK, C, payload(seederLabel), founded + 40) });
-    else world.markets.set(id, { seeded: false, openedDaa: 0, row: curve.unseeded(C) });
+    // ADR-0162: every line is open from its addition on the virtual reserve; a seed, if any, was paid before its first trade
+    let market = curve.opening(C, founded);
+    if (seedMsk) { market = curve.seedDeepen(market, seedMsk * MO.SOMPI_PER_MSK); market.seededBy = payload(seederLabel); }
+    world.markets.set(id, { seeded: true, openedDaa: founded, row: market });
     world.facades.set(id, MO.facadeDerived(id));
   };
   const ver = (line, n, status, daa, parent, extra) => Object.assign({ lineId: line, version: n, root: h128('root/' + line + '/' + n), parent, adoptedFrom: null, runtimeHash: h128('rt/' + n), datasetCommitment: null, trainingConfigHash: h128('cfg/' + line + '/' + n), notesHash: null, publishedDaa: daa, publishedBy: bond('A/dev'), status, untilDaa: null, inForce: status !== 'Withdrawn', attemptClaims: 0n, fpClaims: 0n, workLeaves: 0n, firstUsedDaa: daa + 3, lastUsedDaa: daa + 3 }, extra || {});
@@ -146,9 +155,9 @@ function seedWorld() {
     ver(CLASS_A, 2, 'Current', 104000, 1, { attemptClaims: 3907n, fpClaims: 1266n, workLeaves: 21872512n * 1266n }),
     ver(CLASS_A, 3, 'Preview', 117200, 2, { attemptClaims: 42n, fpClaims: 9n, workLeaves: 21872512n * 9n }),
   ], true, 250000n, 'A');
-  mkLine(CLASS_B, CLASS_B, 'Qwen/Qwen3.6-35B-A3B/graph-v3', null, 0, [ver(CLASS_B, 1, 'Current', 0, null, { publishedBy: null, attemptClaims: 2210n, fpClaims: 731n, workLeaves: 33554432n * 731n })], false, 100000n, 'S');
+  mkLine(CLASS_B, CLASS_B, 'Qwen/Qwen3.6-35B-A3B/graph-v3', null, 0, [ver(CLASS_B, 1, 'Current', 0, null, { publishedBy: null, attemptClaims: 2210n, fpClaims: 731n, workLeaves: 33554432n * 731n })], false, null, null);
   mkLine(LINE_C, CLASS_A, 'QWEN25-B', 'C', 96000, [ver(LINE_C, 1, 'Superseded', 96000, null, { untilDaa: 116500, attemptClaims: 120n, fpClaims: 31n, workLeaves: 21872512n * 31n }), ver(LINE_C, 2, 'Current', 112500, 1, { attemptClaims: 64n, fpClaims: 12n, workLeaves: 21872512n * 12n, adoptedFrom: h128('proposal/C/1') })], true, 120000n, 'C');
-  // the registered class's founding line: no row yet, no seed yet (the Add model page's subject)
+  // the registered class's founding line: no row yet, open on V, priced, 承認待ち (the Add model page's subject)
   mkLine(CLASS_R, CLASS_R, 'Example/NewModel-3B/graph-v1', 'R', START_DAA - 700, [ver(CLASS_R, 1, 'Current', START_DAA - 700, null, { publishedBy: bond('R/dev'), firstUsedDaa: 0, lastUsedDaa: 0 })], false, null, null);
   world.lines.get(LINE_C).row.contributorPermilleOfLeg = 250;
   world.lines.get(LINE_C).proposals.push({ proposalId: h128('proposal/C/1'), lineId: LINE_C, root: h128('root/' + LINE_C + '/2'), noteHash: h128('note/1'), by: bond('P1'), postedDaa: 110900, adoptedIn: 2 }, { proposalId: h128('proposal/C/2'), lineId: LINE_C, root: h128('root/prop/2'), noteHash: h128('note/2'), by: bond('P2'), postedDaa: 117900, adoptedIn: null });
@@ -160,8 +169,11 @@ function seedWorld() {
   // ADR-0091: every block these Active classes produced since the seed put 5 % of its worker
   // reward into the pair. Applied through the same move the fold performs, so the row stays
   // consistent (reserve, product, retired, M1) — a few thousand blocks' worth, per line's share.
+  // ADR-0162: only a pair that trades takes the slice — a class that is not Active yet keeps its
+  // miner's reward whole, so the registered class's line is still at its opening price.
   for (const [id, m] of world.markets) {
-    if (!m.seeded) continue;
+    const cls = world.classes.get(world.lines.get(id).row.classId);
+    if (!m.seeded || !cls || cls.status !== 0) continue;
     const blocks = id === CLASS_A ? 5200 : id === CLASS_B ? 5400 : 900;
     for (let i = 0; i < blocks; i++) { const q = curve.buyback(m.row, curve.buybackSlice(MOCK_ESCROW_SOMPI, C)); if (q) m.row = q.after; }
   }
@@ -181,8 +193,8 @@ function seedWorld() {
     else out = applyBuy(t.line, who, t.amt * MO.SOMPI_PER_MSK, 0n);
     if (out.kind !== 'Refused') { settlementLog(block, t.line, who, out); MO.history.add(t.line, out.priceAfter, t.ts, 'event'); }
   }
-  // the seeds themselves, as Seeded events at their opening blocks (before the tape)
-  for (const [id, m] of world.markets) if (m.seeded) { const b = START_BLOCK - Math.floor(span / BLOCK_MS) - 20; settlementLog(b, id, OTHERS[0], { kind: 'Seeded', mskIn: m.row.seedSompi, priceAfter: m.row.seedSompi / C.supplyUnits }); }
+  // the seeds themselves, as Seeded events before the first trade (before the tape)
+  for (const [id, m] of world.markets) if (m.row.seedSompi > 0n) { const b = START_BLOCK - Math.floor(span / BLOCK_MS) - 20; settlementLog(b, id, OTHERS[0], { kind: 'Seeded', mskIn: m.row.seedSompi, priceAfter: (m.row.virtualSompi + m.row.seedSompi) / C.supplyUnits }); }
   world.logs.sort((a, b) => Number(BigInt(a.blockNumber)) - Number(BigInt(b.blockNumber)));
 }
 
@@ -228,8 +240,11 @@ function tickBlock() {
     const escrow = tx.kind === 'buy' || tx.kind === 'seed';
     const okValue = !escrow || (tx.sompi > 0n && tx.sompi * MO.NATIVE_SCALE_WEI <= bal);
     const okSell = tx.kind !== 'sell' || tx.units > 0n;
-    const closed = tx.kind === 'buy' && world.markets.get(tx.line).row.closedToBuys;
-    const ok = okValue && okSell && !closed;
+    // ADR-0162: the writer reverts a join before the class's approval and a seed after the first trade
+    const cls = world.classes.get(world.lines.get(tx.line).row.classId);
+    const closed = tx.kind === 'buy' && (world.markets.get(tx.line).row.closedToBuys || cls.status !== 0);
+    const lateSeed = tx.kind === 'seed' && world.markets.get(tx.line).row.soldUnits > 0n;
+    const ok = okValue && okSell && !closed && !lateSeed;
     const logs = [];
     if (ok) {
       if (escrow) world.balances.set(tx.from, bal - tx.sompi * MO.NATIVE_SCALE_WEI);
@@ -263,7 +278,9 @@ function marketResponse(line) {
   if (!l || !m) return { found: false, lineId: line };
   const r = m.row, cls = world.classes.get(l.row.classId);
   const price = curve.price(r);
-  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi), buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n), burnPermille: 50, legPermille: MOCK_LEG_V2 ? 50 : 10, legV2ActivationDaa: MOCK_LEG_V2 ? START_DAA : 0 };
+  // ADR-0162: the node past the fence serves the row's virtual reserve, a least seed of zero, and the
+  // buy's refusal while the class is not approved
+  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: num(r.virtualSompi || 0n), classStatus: classStatusString(cls), classLifecycle: cls.status === 0 ? 'Active' : '', marketRefusal: cls.status === 0 ? '' : 'class ' + l.row.classId.slice(0, 8) + '… is not Active, so its market takes no buys', contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: num(r.seedSompi || 0n), seededBy: r.seededBy || '', seedMinSompi: 0, buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n), burnPermille: 50, legPermille: MOCK_LEG_V2 ? 50 : 10, legV2ActivationDaa: MOCK_LEG_V2 ? START_DAA : 0 };
 }
 const rootsInForce = (classId) => { const roots = []; for (const l of world.lines.values()) if (l.row.classId === classId) for (const v of l.versions) if (v.inForce) roots.push(v.root); return roots; };
 const versionResponse = (v) => Object.assign({}, v, { attemptClaims: num(v.attemptClaims), fpClaims: num(v.fpClaims), workLeaves: v.workLeaves.toString() });
@@ -309,13 +326,17 @@ function ethCall(to, data) {
     return '0x';
   }
   if (to === '000000000000000000000000000000000000f011') {
-    // ADR-0090: the third word of constants() is the least seed (it carried the virtual reserve before)
-    if (sel === S('constants')) return out(W(C.supplyUnits), W(C.unitsPerPosition), W(C.seedMinSompi), W(feesC().burnPermille), W(feesC().legPermille));
+    // ADR-0162: past the virtual fence the third word of constants() is the virtual reserve again
+    if (sel === S('constants')) return out(W(C.supplyUnits), W(C.unitsPerPosition), W(MO.VIRTUAL_V2_SOMPI), W(feesC().burnPermille), W(feesC().legPermille));
     const m = world.markets.get(id2(0));
-    if (sel === S('market')) return m ? out(W(m.openedDaa), W(m.row.mskReserve), W(m.row.positionUnits), W(m.row.soldUnits), W(m.row.burnedSompi), W(m.row.ownerPaid || 0n), W(m.row.contributorPaid || 0n), W(m.row.closedToBuys ? 1 : 0), W(m.seeded ? 1 : 0), W(m.row.buybackSompi || 0n), W(m.row.retiredUnits || 0n)) : out(...Array(11).fill(W(0)));
+    const ml = m && world.lines.get(id2(0));
+    const shut = m && (m.row.closedToBuys || world.classes.get(ml.row.classId).status !== 0);
+    // …and market() answers twelve words, the twelfth the row's own virtual reserve
+    if (sel === S('market')) return m ? out(W(m.openedDaa), W(m.row.mskReserve), W(m.row.positionUnits), W(m.row.soldUnits), W(m.row.burnedSompi), W(m.row.ownerPaid || 0n), W(m.row.contributorPaid || 0n), W(shut ? 1 : 0), W(m.seeded ? 1 : 0), W(m.row.buybackSompi || 0n), W(m.row.retiredUnits || 0n), W(m.row.virtualSompi || 0n)) : out(...Array(12).fill(W(0)));
     if (sel === S('price')) { const p = m ? curve.price(m.row) : null; return out(W(p == null ? 0 : p)); }
     if (sel === S('quoteBuy')) { const q = m && curve.buyQuote(m.row, ABI.u(a[2]), feesC()); return q ? out(W(q.unitsOut), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
-    if (sel === S('quoteSell')) { const q = m && curve.sellQuote(m.row, ABI.u(a[2]), feesC()); return q ? out(W(q.fees.net), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
+    // ADR-0162 (the 2026-09-25 Position review's #2): the first word is the gross mskOut past the fence
+    if (sel === S('quoteSell')) { const q = m && curve.sellQuote(m.row, ABI.u(a[2]), feesC()); return q ? out(W(q.fees.gross), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
     return '0x';
   }
   if (to === '000000000000000000000000000000000000f012') {
@@ -429,9 +450,9 @@ async function walletRequest(w, method, params) {
       else if (sel === ABI.selector(SIG.buy)) { if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 }); Object.assign(rec, { kind: 'buy', sompi: wei / MO.NATIVE_SCALE_WEI, minUnits: ABI.u(a[0]) }); }
       else if (sel === ABI.selector(SIG.sell)) Object.assign(rec, { kind: 'sell', units: ABI.u(a[0]), minMsk: ABI.u(a[1]) });
       else if (sel === ABI.selector(SIG.seed)) {
-        // ADR-0090: the writer reverts at the call for a bad value or a seed under the floor
+        // ADR-0162: the writer reverts a bad value, and a seed after the store's first trade; any amount otherwise
         if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 });
-        if (wei / MO.NATIVE_SCALE_WEI < C.seedMinSompi) throw Object.assign(new Error('execution reverted: SeedTooSmall()'), { code: -32000 });
+        if (world.markets.get(line).row.soldUnits > 0n) throw Object.assign(new Error('execution reverted: SeedAfterTrade()'), { code: -32000 });
         Object.assign(rec, { kind: 'seed', sompi: wei / MO.NATIVE_SCALE_WEI });
       }
       else throw Object.assign(new Error('execution reverted: NonTransferable()'), { code: -32000 });
@@ -505,7 +526,7 @@ function announceWallets() {
 window.addEventListener('eip6963:requestProvider', announceWallets);
 announceWallets();
 
-const WORLD_TAG = 'adr0090-seeded-v1';
+const WORLD_TAG = 'adr0162-virtual-v1';
 M.init = (mo) => {
   MO = mo; C = MO.CURVE_DEFAULTS; ABI = MO.ABI; SIG = MO.SIG; curve = MO.curve;
   // a new mock world starts from its own tape: drop the price samples and the sent transactions an
@@ -519,6 +540,6 @@ M.init = (mo) => {
   seedWorld();
   setInterval(tickBlock, TICK_MS);
   M.world = world; M.CLASS_R = CLASS_R;
-  console.info('[mock] MISAKA Options mock world ready: ' + world.lines.size + ' lines (' + [...world.markets.values()].filter((m) => m.seeded).length + ' seeded), ' + world.logs.length + ' settlement logs, account ' + ACCOUNT + ', unseeded class ' + CLASS_R.slice(0, 8));
+  console.info('[mock] MISAKA Options mock world ready: ' + world.lines.size + ' lines, all open on the virtual reserve (' + [...world.markets.values()].filter((m) => m.row.seedSompi > 0n).length + ' seeded), ' + world.logs.length + ' settlement logs, account ' + ACCOUNT + ', class awaiting approval ' + CLASS_R.slice(0, 8));
 };
 })();

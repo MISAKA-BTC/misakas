@@ -1863,6 +1863,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: false,
+                virtual_v1_from: None,
             },
             expected_settlements: expected,
             chain_id: EVM_CHAIN_ID,
@@ -2139,6 +2140,57 @@ mod tests {
             U256::ZERO,
             "no escrow was taken for a refused move (the writer was never even credited)"
         );
+    }
+
+    /// **ADR-0162 on the EVM lane: past the virtual fence the writer asks a buy whether the market
+    /// trades, and a seed only whether it has traded.** A line with no row whose class does not trade
+    /// yet: its buy reverts `ClassNotEligible()` at the call, and its seed — which P-B3 reverted
+    /// below this fence — queues, at its opener's risk. A line that has traded: its buy queues and its
+    /// seed reverts `SeedAfterTrade()` at the call, moving no value (the fold would refuse it with
+    /// reason 14 and refund it a block later).
+    #[test]
+    fn adr0162_the_writer_takes_a_seed_before_approval_and_refuses_a_late_one() {
+        use crate::model_market::{errors, send_action_buy_calldata, send_action_seed_calldata, writer_address};
+        use kaspa_consensus_core::evm::model_market::PalwEvmMarketActionKindV1;
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+        let (from, buy) = signed_call(0x11, 0, writer, 7 * scale, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let (_, seed) = signed_call(0x11, 1, writer, 5 * scale, 100_000, basefee, send_action_seed_calldata(&line));
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let accepted = [cand(buy, 0xAA), cand(seed, 0xAA)];
+        let past = |view: &std::sync::Arc<PalwEvmViewV1>| {
+            let input = market_input(view, true, &[]);
+            EvmMarketInput { fences: PalwEvmMarketFencesV1 { virtual_v1_from: Some(1), ..input.fences }, ..input }
+        };
+
+        let mut pending = (*line_view(line)).clone();
+        pending.markets.clear();
+        pending.market_refused_classes.insert(line);
+        let pending = std::sync::Arc::new(pending);
+        let (res, mut db) = execute_block_evm(
+            funded_seed(from, HUGE_SEED),
+            &EvmBlockInput { market: past(&pending), ..input_v2(&payload, &accepted) },
+        )
+        .unwrap();
+        assert!(!res.receipts[0].succeeded, "the buy waits for the class's approval");
+        assert!(res.receipts[1].succeeded, "the seed does not");
+        assert_eq!(res.market_actions.len(), 1);
+        assert!(matches!(res.market_actions[0].kind, PalwEvmMarketActionKindV1::Seed));
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::from(5 * scale), "only the seed's value is escrowed");
+
+        let mut traded = (*line_view(line)).clone();
+        traded.markets.get_mut(&line).expect("the line's row").sold_units = 3;
+        let traded = std::sync::Arc::new(traded);
+        let (res, mut db) =
+            execute_block_evm(funded_seed(from, HUGE_SEED), &EvmBlockInput { market: past(&traded), ..input_v2(&payload, &accepted) })
+                .unwrap();
+        assert!(res.receipts[0].succeeded, "the buy queues");
+        assert!(!res.receipts[1].succeeded, "a seed after the first trade reverts at the call");
+        assert_eq!(res.market_actions.len(), 1);
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::from(7 * scale), "and moves no value");
+        assert_eq!(errors::seed_after_trade(), kaspa_consensus_core::evm::model_market::abi_selector("SeedAfterTrade()"));
     }
 
     /// ADR-0089 Decision 6 at the executor: a block's `MarketSettle` ops must equal, in order,

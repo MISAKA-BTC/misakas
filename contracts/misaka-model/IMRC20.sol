@@ -28,8 +28,8 @@ pragma solidity ^0.8.20;
 ///         ever holds or moves a position, and a position's only counterparty is the curve.
 ///         `supportsInterface(type(IMRC20).interfaceId)` is true.
 ///
-///         UNITS. `decimals()` is 6: one position is 10^6 units, and every unit amount here is
-///         ADR-0087's on the wire. MSK amounts in the views and events are in SOMPI (1 MSK =
+///         UNITS. `decimals()` is 0 (ADR-0090 Decision 1): a position is one whole unit, and every
+///         unit amount here is a count of positions. MSK amounts in the views and events are in SOMPI (1 MSK =
 ///         1e8 sompi), the fold's unit. `msg.value` on `buy` is the one WEI quantity: it must
 ///         be a NONZERO MULTIPLE of 1e10 wei (`EVM_NATIVE_SCALE`, the F002 rule) so the fold's
 ///         sompi leg is exact; `buy` reverts `BadValue()` otherwise.
@@ -57,7 +57,7 @@ interface IMRC20 {
     /// "MP-<8 hex of line id>" (same caveat as `name`).
     function symbol() external view returns (string memory);
 
-    /// 6 — one position is 10^6 units (ADR-0087 Decision 1).
+    /// 0 — a position is one whole unit (ADR-0090 Decision 1; ADR-0087's 10^6 units are retired).
     /// ADR-0090 Decision 1: 0 — a position is a whole number, one unit, no fraction.
     function decimals() external view returns (uint8);
 
@@ -93,7 +93,8 @@ interface IMRC20 {
     /// `minUnitsOut` (units) is checked in the fold: a worse fill is refused, never partial.
     /// Reverts at the call: `NotAnAccount()`, `BadValue()`, `ClosedToBuys()` (a retired line —
     /// ADR-0087 D7 / ADR-0088 D6), `ClassNotEligible()` (the registry has not admitted the line's
-    /// class — past the 2026-09-23 audit fence only), or the block's 128-action cap.
+    /// class — past the 2026-09-23 audit fence; past ADR-0162's fence, until the class is APPROVED:
+    /// status and lifecycle exactly Active, trading starts there), or the block's 128-action cap.
     function buy(uint256 minUnitsOut) external payable;
 
     /// Queue a sell: = `IMisakaModelWriter` action 2 with this line. `unitsIn` units are the
@@ -102,13 +103,22 @@ interface IMRC20 {
     /// call: `NotAnAccount()`, `BadValue()` (a sell of zero), or the block's 128-action cap.
     function sell(uint256 unitsIn, uint256 minMskOutSompi) external;
 
-    /// ADR-0090: open this line's market by locking `msg.value` (at least SEED_MIN_SOMPI × 1e10
-    /// wei, a multiple of 1e10) as the curve's reserve for good — 500,000 whole positions open in
-    /// the curve at `seed / 500,000` each. The seeder receives no position and nothing ever pays
-    /// the seed out. Refused at the fold (a `Refused` event, escrow refunded) when the line is
-    /// already seeded or its class is frozen; reverts `SeedTooSmall()` at the call under the floor,
-    /// and `ClassNotEligible()` where the registry has not admitted the class (past the 2026-09-23
-    /// audit fence only).
+    /// Lock `msg.value` (a nonzero multiple of 1e10 wei) into this line's curve for good. The
+    /// seeder receives no position and nothing ever pays a seed out.
+    ///
+    /// **Past ADR-0162's fence the seed is OPTIONAL depth**: the market is open from the line's
+    /// creation on the virtual reserve, and a seed of any amount — paid before the market's first
+    /// trade — joins the real reserve and the locked seed and raises the floor `(V + seed) /
+    /// 500,000`, at its payer's risk (a class never approved never trades; its seed stays locked).
+    /// After the first trade it reverts `SeedAfterTrade()` at the call (and a seed a same-block trade
+    /// overtakes is `Refused`, reason 14, its escrow refunded). It asks no lifecycle.
+    ///
+    /// Below the fence (ADR-0090/0094/0120): the market opens once the line's locked total reaches
+    /// the floor (`IMisakaModelAMM.constants()`' third word); a payment under it is a PLEDGE,
+    /// collected and locked, not a revert. Refused at the fold (`Refused`, escrow refunded) when the
+    /// line is already seeded or its class is frozen; reverts `BadValue()` on a zero value and
+    /// `ClassNotEligible()` where the registry has not admitted the class (past the 2026-09-23
+    /// audit fence only). `SeedTooSmall()` stays declared; the writer no longer raises it.
     function seed() external payable;
 
     /// ERC-165. True for `type(IMRC20).interfaceId`; FALSE for 0x36372b07 (ERC-20): this is a
@@ -124,7 +134,8 @@ interface IMRC20 {
     /// A sell filled: `unitsIn` units debited, `mskOut` NET sompi credited to `holder` in the
     /// EVM (`mskOut × 1e10` wei, a credit with no lock and no tip), `priceAfter` as above.
     event Sold(address indexed holder, uint256 unitsIn, uint256 mskOut, uint256 priceAfter);
-    /// ADR-0090: the seed became the reserve; `priceAfter` is the first price, `mskIn` the seed (sompi).
+    /// ADR-0090: the seed became reserve; `mskIn` the seed (sompi), `priceAfter` the price after it
+    /// (the first price where it opened the market; past ADR-0162, the deepened curve's).
     event Seeded(address indexed holder, uint256 mskIn, uint256 priceAfter);
 
     /// An action refused by the fold: `actionId` 1 (buy: `amount` = the gross sompi, refunded
@@ -152,8 +163,12 @@ interface IMRC20 {
     /// `buy` with a `msg.value` that is zero or not a multiple of 1e10 wei; `sell` of zero
     /// units.
     error BadValue();
-    /// ADR-0090: `seed()` with a value under the network's least seed.
+    /// ADR-0090: `seed()` with a value under the network's least seed. Declared for callers that
+    /// check for it; the writer no longer raises it (ADR-0094 collects such a payment).
     error SeedTooSmall();
+    /// ADR-0162: `seed()` on a line whose market has traded — a seed is taken only before the
+    /// first trade. Past `palw_model_virtual_v1` only.
+    error SeedAfterTrade();
     /// `buy` or `seed()` of a line whose class the model registry has not admitted (lifecycle not
     /// Probation, ActiveLimited or Active) — the fold would refuse it (the 2026-09-23 Position route
     /// matrix, P-B3). The same selector `IMisakaModelWriter` declares. Past the audit fence only.

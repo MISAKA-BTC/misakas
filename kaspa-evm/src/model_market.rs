@@ -175,6 +175,7 @@ struct Selectors {
     bad_input: [u8; 4],
     seed_too_small: [u8; 4],
     class_not_eligible: [u8; 4],
+    seed_after_trade: [u8; 4],
     // ERC-165
     imrc20_interface_id: [u8; 4],
 }
@@ -268,6 +269,7 @@ fn sel() -> &'static Selectors {
             bad_input: selector("BadInput()"),
             seed_too_small: selector("SeedTooSmall()"),
             class_not_eligible: selector("ClassNotEligible()"),
+            seed_after_trade: selector("SeedAfterTrade()"),
             imrc20_interface_id: imrc20,
         }
     })
@@ -351,6 +353,13 @@ pub mod errors {
     /// view's `market_refused_classes` is filled; a sell never raises it.
     pub fn class_not_eligible() -> [u8; 4] {
         super::sel().class_not_eligible
+    }
+    /// `SeedAfterTrade()`: ADR-0162 Decision 4 — a seed of a line whose market has traded; a seed is
+    /// taken only before the first trade. Raised only past `Params::palw_model_virtual_v1`, at the
+    /// call, so the caller keeps its value; the fold refuses the same seed with reason 14
+    /// (`SEED_AFTER_TRADE`) and refunds its escrow, should a same-block trade get there first.
+    pub fn seed_after_trade() -> [u8; 4] {
+        super::sel().seed_after_trade
     }
 }
 
@@ -636,7 +645,21 @@ impl MarketHandlers {
     /// The market row a quote is taken against: the fold's row, or — for a line the fold knows
     /// but nobody has seeded — a zero row that quotes nothing (ADR-0090: a market opens by a seed).
     /// `None` for a line the fold does not know. The bool is `exists`.
+    ///
+    /// **ADR-0162: past the virtual fence every line in the view is a market from its creation** —
+    /// the row, or the opening the fold would move (`palw_model_market_in_force_v2`, the one function
+    /// the fold, the RPC and this window call: `X = V`, the supply in the curve, opened at the line's
+    /// founding or the fence, whichever is later), and it `exists`. The floor's founding line is not
+    /// in the view, so it is opened by nothing here either.
     fn market_row(&self, line: &Hash64) -> Option<(PalwModelMarketV1, bool)> {
+        if let Some(fence_daa) = self.fences.virtual_v1_from {
+            let founded = self.view.line(line)?.founded_daa;
+            let market = kaspa_consensus_core::palw_model_market_v1::palw_model_market_in_force_v2(
+                self.view.markets.get(line),
+                founded.max(fence_daa),
+            );
+            return Some((market, true));
+        }
         if let Some(m) = self.view.markets.get(line) {
             Some((*m, true))
         } else if self.view.line(line).is_some() {
@@ -644,6 +667,17 @@ impl MarketHandlers {
         } else {
             None
         }
+    }
+
+    /// **Is a buy of `line` refused at the call?** Below ADR-0162's fence: the row's `closed_to_buys`
+    /// (ADR-0087 D7) or the P-B3 gate. Past it the row's flag is a record of its last move, not the
+    /// gate (the 2026-09-25 Position review's #4): the line's own status and the fold's trading gate
+    /// (`market_refused_classes`: the class approved, its lifecycle exactly `Active`) decide.
+    fn buys_closed(&self, line: &Hash64, row: Option<&PalwModelMarketV1>) -> bool {
+        if self.fences.virtual_v1_from.is_some() {
+            return self.view.line(line).is_some_and(|l| l.status != 0) || self.view.market_refuses(line);
+        }
+        row.is_some_and(|m| m.closed_to_buys) || self.view.market_refuses(line)
     }
 
     fn lines_of_class(&self, class: &Hash64) -> impl Iterator<Item = &Hash64> {
@@ -845,27 +879,34 @@ impl MarketHandlers {
             x if x == s.market => {
                 let a = Args::parse(input, 2)?;
                 match self.market_row(&a.hash64(0)) {
-                    Some((m, exists)) => Out::default()
-                        .u64(m.opened_daa)
-                        .u64(m.msk_reserve)
-                        .u64(m.position_units)
-                        .u64(m.sold_units)
-                        .u64(m.burned_sompi)
-                        .u64(m.registrant_paid_sompi)
-                        .u64(m.contributor_paid_sompi)
-                        // P-B3: past the audit fence a line whose class the fold's market gate
-                        // refuses is closed to buys here too (the view's set is empty below it).
-                        .bool(m.closed_to_buys || self.view.market_refuses(&a.hash64(0)))
-                        // P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit
-                        // fence `exists` is "a market" — the fold's `is_open` — not "a row", which a
-                        // pledge alone writes (ADR-0094) and which IMisakaModelAMM documents as
-                        // "false until the market is seeded". Below it, the old word byte for byte.
-                        .bool(if self.fences.audit_2026_09_23_active { exists && m.is_open() } else { exists })
-                        // ADR-0091: appended, so every word above keeps its offset.
-                        .u64(m.buyback_sompi)
-                        .u64(m.retired_units)
-                        .finish(),
-                    None => Out::default().zeros(11).finish(),
+                    Some((m, exists)) => {
+                        let out = Out::default()
+                            .u64(m.opened_daa)
+                            .u64(m.msk_reserve)
+                            .u64(m.position_units)
+                            .u64(m.sold_units)
+                            .u64(m.burned_sompi)
+                            .u64(m.registrant_paid_sompi)
+                            .u64(m.contributor_paid_sompi)
+                            // P-B3: past the audit fence a line whose class the fold's market gate
+                            // refuses is closed to buys here too (the view's set is empty below it).
+                            // ADR-0162: past the virtual fence the live gate, not the row's record.
+                            .bool(self.buys_closed(&a.hash64(0), Some(&m)))
+                            // P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit
+                            // fence `exists` is "a market" — the fold's `is_open` — not "a row", which a
+                            // pledge alone writes (ADR-0094) and which IMisakaModelAMM documents as
+                            // "false until the market is seeded". Below it, the old word byte for byte.
+                            .bool(if self.fences.audit_2026_09_23_active { exists && m.is_open() } else { exists })
+                            // ADR-0091: appended, so every word above keeps its offset.
+                            .u64(m.buyback_sompi)
+                            .u64(m.retired_units);
+                        // ADR-0162: the row's own virtual reserve, appended past the fence so every
+                        // earlier word keeps its offset (and below it the answer is eleven words, as
+                        // before) — a market opened before the fence answers 0 here, and its quotes
+                        // are its own curve's.
+                        if self.fences.virtual_v1_from.is_some() { out.u64(m.virtual_sompi).finish() } else { out.finish() }
+                    }
+                    None => Out::default().zeros(if self.fences.virtual_v1_from.is_some() { 12 } else { 11 }).finish(),
                 }
             }
             x if x == s.price_of => {
@@ -891,8 +932,13 @@ impl MarketHandlers {
                 let a = Args::parse(input, 3)?;
                 let units_in = a.u64(2)?;
                 match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_sell_quote_with(&m, units_in, self.schedule())) {
+                    // **The 2026-09-25 Position review's #2: the first word is `mskOut`, the GROSS**
+                    // (ADR-0089, IMisakaModelAMM `quoteSell`): what leaves the curve, of which `burn +
+                    // leg + net` are the parts. It answered the net twice. Fixed with ADR-0162's
+                    // fence, where every quote of the window moves anyway; below it the old word, byte
+                    // for byte, so no execution result moves on a network that has not crossed it.
                     Some(q) => Out::default()
-                        .u64(q.fees.net)
+                        .u64(if self.fences.virtual_v1_from.is_some() { q.fees.gross } else { q.fees.net })
                         .u64(q.fees.burn)
                         .u64(q.fees.registrant)
                         .u64(q.fees.net)
@@ -907,7 +953,13 @@ impl MarketHandlers {
                     .u64(PALW_MODEL_SUPPLY_UNITS_V1)
                     .u64(PALW_MODEL_POSITION_UNITS_V1)
                     // ADR-0120: the floor in force at this block — what the fold will open the pair at.
-                    .u64(kaspa_consensus_core::palw_model_market_v1::palw_model_seed_min_sompi(self.fences.seed_v2_active))
+                    // ADR-0162: past the virtual fence the word carries the virtual reserve again, the
+                    // value ADR-0090 took it from — every market opens on it and no seed is required.
+                    .u64(if self.fences.virtual_v1_from.is_some() {
+                        kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2
+                    } else {
+                        kaspa_consensus_core::palw_model_market_v1::palw_model_seed_min_sompi(self.fences.seed_v2_active)
+                    })
                     // ADR-0114: the schedule in force at this block, so a reader of `constants()` prices a
                     // move the way the fold will settle it.
                     .u64(self.schedule().burn_permille)
@@ -1400,11 +1452,19 @@ fn write_frame<EXT, DB: Database>(
     // (`ModelClassNotEligible`, settled as `Refused { NOT_ACTIVE }` with the escrow refunded one
     // block later); reverting here asks the fold's question at the call, so the caller keeps its
     // value in hand and pays only gas. Empty below the audit fence: testnet-11 reverts nothing new.
-    if id != PALW_EVM_ACTION_SELL && market.view.market_refuses(&line) {
+    // **ADR-0162: past the virtual fence a seed asks no lifecycle** — it is taken from the line's
+    // creation until its first trade, at its opener's risk — and the refused set is the classes whose
+    // market does not trade yet, which only a buy asks.
+    let virtual_active = market.fences.virtual_v1_from.is_some();
+    if (id == PALW_EVM_ACTION_BUY || (id == PALW_EVM_ACTION_SEED && !virtual_active)) && market.view.market_refuses(&line) {
         return Ok(revert(errors::class_not_eligible(), gas, memory));
     }
-    if id == PALW_EVM_ACTION_BUY && market.view.markets.get(&line).is_some_and(|m| m.closed_to_buys) {
+    if id == PALW_EVM_ACTION_BUY && market.buys_closed(&line, market.view.markets.get(&line)) {
         return Ok(revert(errors::closed_to_buys(), gas, memory));
+    }
+    // ADR-0162 Decision 4: a seed is taken only before the first trade.
+    if id == PALW_EVM_ACTION_SEED && virtual_active && market.view.markets.get(&line).is_some_and(|m| m.sold_units > 0) {
+        return Ok(revert(errors::seed_after_trade(), gas, memory));
     }
     if market.queued() >= MAX_MARKET_ACTIONS_PER_EVM_BLOCK {
         return Ok(revert(errors::too_many_actions(), gas, memory));
@@ -1539,6 +1599,7 @@ mod tests {
                     leg_v2_active,
                     seed_v2_active: false,
                     audit_2026_09_23_active: false,
+                    virtual_v1_from: None,
                 },
                 1,
             );
@@ -1584,6 +1645,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: false,
+                virtual_v1_from: None,
             },
             1,
         );
@@ -1642,6 +1704,7 @@ mod tests {
             leg_v2_active: false,
             seed_v2_active: false,
             audit_2026_09_23_active: false,
+            virtual_v1_from: None,
         };
         let closed = |view: &PalwEvmViewV1| {
             let m = MarketHandlers::new(std::sync::Arc::new(view.clone()), fences, 1);
@@ -1661,6 +1724,93 @@ mod tests {
         view.market_refused_classes = [Hash64::from_u64_word(4)].into();
         assert!(!view.market_refuses(&line), "another class's refusal is not this line's");
         assert_eq!(errors::class_not_eligible(), selector("ClassNotEligible()"), "the revert names itself");
+    }
+
+    /// **ADR-0162 in the window: past the virtual fence a line with no row reads as the open market
+    /// it is.** `constants()` names the virtual reserve in its third word (ADR-0090 had put the least
+    /// seed there); `market()` answers the opening — `exists`, the supply in the curve, opened at the
+    /// line's founding, nothing in the reserve — with `V` appended as a twelfth word; `price`,
+    /// `quoteBuy` and `quoteSell` are the fold's own arithmetic on the curve over `V`, and
+    /// `quoteSell`'s first word is the gross `mskOut` (the 2026-09-25 Position review's #2). Below the
+    /// fence every word is the old one: eleven words, the least seed, a line with no row quoting
+    /// nothing, and `quoteSell`'s first word the net.
+    #[test]
+    fn adr0162_the_window_reads_every_line_as_an_open_market_on_the_virtual_reserve() {
+        use kaspa_consensus_core::evm::model_market::PalwEvmLineRowV1;
+        use kaspa_consensus_core::palw_model_market_v1::{
+            PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 as V, PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1, palw_model_sell_quote_with,
+        };
+        const MSK: u64 = 100_000_000;
+        let line = Hash64::from_u64_word(9);
+        let row = PalwEvmLineRowV1 {
+            class_id: Hash64::from_u64_word(3),
+            owner_payload: None,
+            developer_payload: None,
+            maintainer_payload: None,
+            name: b"line".to_vec(),
+            founded_daa: 40,
+            current: 1,
+            versions_published: 1,
+            preview_count: 0,
+            contributor_permille_of_leg: 0,
+            status: 0,
+        };
+        let fresh = std::sync::Arc::new(PalwEvmViewV1 { chain_daa: 66, chain_id: 1, lines: vec![(line, row)], ..Default::default() });
+        let fences = |virtual_v1_from: Option<u64>| PalwEvmMarketFencesV1 {
+            market_active: true,
+            lines_active: true,
+            evm_active: true,
+            leg_v2_active: true,
+            seed_v2_active: false,
+            audit_2026_09_23_active: true,
+            virtual_v1_from,
+        };
+        let (past, below) = (fences(Some(10)), fences(None));
+        let ask = |view: &std::sync::Arc<PalwEvmViewV1>, f: PalwEvmMarketFencesV1, selector: [u8; 4], amount: Option<u64>| {
+            let mut input = selector.to_vec();
+            if selector != sel().constants {
+                input.extend_from_slice(&line.as_byte_slice()[..32]);
+                input.extend_from_slice(&line.as_byte_slice()[32..]);
+            }
+            if let Some(amount) = amount {
+                input.extend_from_slice(&abi::u64(amount));
+            }
+            let Ok(out) = MarketHandlers::new(view.clone(), f, 1).amm(&input) else { panic!("the window answers") };
+            (0..out.len() / 32).map(|i| abi::read_u64(&out, i).unwrap()).collect::<Vec<u64>>()
+        };
+        assert_eq!(ask(&fresh, past, sel().constants, None)[2], V, "past the fence: the virtual reserve");
+        assert_eq!(ask(&fresh, below, sel().constants, None)[2], PALW_MODEL_SEED_MIN_SOMPI_V1, "below: the least seed");
+        let m = ask(&fresh, past, sel().market, None);
+        assert_eq!(m.len(), 12, "a twelfth word, appended");
+        assert_eq!(
+            (m[0], m[1], m[2], m[3], m[7], m[8], m[11]),
+            (40, 0, 500_000, 0, 0, 1, V),
+            "opened at the founding, nothing in the reserve, the supply in the curve, open to buys, a market, on V"
+        );
+        let m = ask(&fresh, below, sel().market, None);
+        assert_eq!((m.len(), m[0], m[8]), (11, 66, 0), "below: eleven words, the head's DAA, and no market");
+        let opening = PalwModelMarketV1::open_virtual_v2(40, V);
+        assert_eq!(ask(&fresh, past, sel().price_of, None), vec![20 * MSK], "the first price is V / 500,000");
+        let qb = palw_model_buy_quote_with(&opening, 1_000 * MSK, PalwModelFeesV1::V2).unwrap();
+        assert_eq!(
+            ask(&fresh, past, sel().quote_buy_of, Some(1_000 * MSK)),
+            vec![qb.units_out, qb.fees.burn, qb.fees.registrant, qb.fees.net, qb.after.price_sompi_per_position_v1()],
+            "the fold's own quote on the opening"
+        );
+        assert_eq!(ask(&fresh, below, sel().quote_buy_of, Some(1_000 * MSK)), vec![0; 5], "below: no market, no quote");
+        // A market someone has bought into: the sell's first word is the gross past the fence.
+        let mut traded = (*fresh).clone();
+        traded.markets.insert(line, qb.after);
+        let traded = std::sync::Arc::new(traded);
+        // Half of what the buy released: a sell may put back no more than holders hold.
+        let units = qb.units_out / 2;
+        let qs = palw_model_sell_quote_with(&qb.after, units, PalwModelFeesV1::V2).unwrap();
+        let sell = ask(&traded, past, sel().quote_sell_of, Some(units));
+        assert_eq!(sell, vec![qs.fees.gross, qs.fees.burn, qs.fees.registrant, qs.fees.net, qs.after.price_sompi_per_position_v1()]);
+        assert_eq!(sell[0], sell[1] + sell[2] + sell[3], "mskOut is the sum of its parts");
+        let old = ask(&traded, below, sel().quote_sell_of, Some(units));
+        assert_eq!(old[0], qs.fees.net, "below the fence the first word stays the net, byte for byte");
+        assert_eq!(old[1..], sell[1..], "and every other word is the curve's either way");
     }
 
     /// **P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit fence
@@ -1684,6 +1834,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: audit,
+                virtual_v1_from: None,
             };
             let m = MarketHandlers::new(view.clone(), fences, 1);
             let mut input = sel().market.to_vec();
@@ -1714,6 +1865,7 @@ mod tests {
                 leg_v2_active: false,
                 seed_v2_active: false,
                 audit_2026_09_23_active: false,
+                virtual_v1_from: None,
             },
             1,
         );

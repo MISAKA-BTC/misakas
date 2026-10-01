@@ -1497,16 +1497,21 @@ enum PalwCmd {
         #[arg(long)]
         address: String,
     },
-    /// **ADR-0090: seed a line's market** — lock at least the network's least seed (100,000 MSK)
-    /// in the line's sink; the whole of it becomes the curve's reserve and nothing ever pays it
-    /// back. Five hundred thousand whole positions open in the curve at `seed / 500,000` each.
+    /// **Seed a line's market — lock MSK in the line's sink, for good.** Past ADR-0162's fence the
+    /// market is already open (from the line's creation, on a 10,000,000 MSK virtual reserve that
+    /// prices and is never paid), and a seed is OPTIONAL depth: any amount, before the market's first
+    /// trade, joining the real reserve and raising the floor `(V + seed) / 500,000`; refused after the
+    /// first trade; at the opener's risk (a class never approved never trades). Below the fence
+    /// (ADR-0090/0094/0120) the market opens once the locked total reaches the least seed
+    /// (`model-show` prints the floor in force), and a payment under it is a pledge toward it. Either
+    /// way the seeder holds no position and nothing ever pays a seed back.
     ModelSeed {
         #[command(flatten)]
         key: KeyArgs,
         /// 128-hex line id (a class id names the class's founding line)
         #[arg(long)]
         line: String,
-        /// MSK to lock (e.g. `100000`, or `10000000000000sompi`)
+        /// MSK to lock (e.g. `250000`, or `25000000000000sompi`)
         #[arg(long)]
         msk: String,
         /// Actually broadcast (otherwise a dry-run preview)
@@ -1535,15 +1540,18 @@ enum PalwCmd {
         /// 128-hex class id (or 8+ hex of one)
         class: String,
     },
-    /// ADR-0090 from the EVM: seed a line's market with the call's value (at least 100,000 MSK)
-    /// through the ModelWriter; settled in the next chain block. [needs --features evm-send]
+    /// Seed a line's market from the EVM with the call's value through the ModelWriter; settled in
+    /// the next chain block. Past ADR-0162's fence: optional depth, before the first trade only (the
+    /// writer reverts `SeedAfterTrade()` after it). Below it: toward the least seed
+    /// (`constants()`), a pledge until the total reaches it. Locked for good either way.
+    /// [needs --features evm-send]
     #[cfg(feature = "evm-send")]
     ModelEvmSeed {
         #[command(flatten)]
         key: EvmKeyArgs,
         #[arg(long)]
         line: String,
-        /// MSK to lock, whole sompi (e.g. "100000")
+        /// MSK to lock, whole sompi (e.g. "250000")
         #[arg(long)]
         msk: String,
         #[arg(long)]
