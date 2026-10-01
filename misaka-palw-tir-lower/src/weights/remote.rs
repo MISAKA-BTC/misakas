@@ -349,4 +349,63 @@ mod tests {
         assert!(RemoteCheckpoint::open(Box::new(MemoryFetcher::new(files)), "https://example.invalid/m").is_err());
         assert!(RemoteCheckpoint::open(Box::new(MemoryFetcher::default()), "https://example.invalid/m").is_err());
     }
+
+    /// The `curl` fetcher against a loopback server that honours `Range` (no network beyond
+    /// 127.0.0.1; compiled only with the `remote` feature, which is off by default).
+    #[cfg(feature = "remote")]
+    #[test]
+    fn the_curl_fetcher_reads_a_repository_by_ranges_over_loopback() {
+        use std::io::{BufRead, BufReader, Write};
+        let f32b = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let big: Vec<f32> = (0..2048).map(|i| i as f32).collect();
+        let shard = safetensors_bytes(&[("x.weight", "F32", vec![2, 1024], f32b(&big))]);
+        let files: BTreeMap<String, Vec<u8>> = [("/m/model.safetensors".to_string(), shard)].into_iter().collect();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let served = std::sync::Arc::new(AtomicU64::new(0));
+        let served2 = served.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let (mut w, mut r) = (stream.try_clone().expect("clone"), BufReader::new(stream));
+                let mut line = String::new();
+                r.read_line(&mut line).expect("request line");
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let mut range: Option<(usize, usize)> = None;
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = v.trim().split_once('-').expect("range");
+                        range = Some((a.parse().expect("start"), b.parse().expect("end")));
+                    }
+                }
+                match files.get(&path) {
+                    None => {
+                        let _ = w.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
+                    Some(body) => {
+                        let (a, b) = range.unwrap_or((0, body.len() - 1));
+                        let b = b.min(body.len() - 1);
+                        served2.fetch_add((b - a + 1) as u64, Ordering::Relaxed);
+                        let head = format!(
+                            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len(),
+                            b - a + 1
+                        );
+                        let _ = w.write_all(head.as_bytes());
+                        let _ = w.write_all(&body[a..=b]);
+                    }
+                }
+            }
+        });
+        let ck = RemoteCheckpoint::open(Box::new(CurlFetcher::new()), &format!("http://127.0.0.1:{port}/m")).expect("opens over loopback");
+        assert_eq!(ck.names(), vec!["x.weight"]);
+        // The header cost kilobytes of a 8 KiB file; one row costs one row.
+        let before = served.load(Ordering::Relaxed);
+        let row = ck.load_rows("x.weight", 1..2).expect("a row");
+        assert_eq!(&row.data[..3], &[1024.0, 1025.0, 1026.0]);
+        assert_eq!(served.load(Ordering::Relaxed) - before, 1024 * 4);
+    }
 }
