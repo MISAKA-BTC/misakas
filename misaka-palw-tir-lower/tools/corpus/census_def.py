@@ -52,7 +52,7 @@ OVERRIDES = {
                            split_ngram_parts=4, make_ngram_vocab_size_divisible_by=8, linear_key_head_dim=8, linear_value_head_dim=8),
     "solar_open": dict(MOE8),
     "xlm": dict(emb_dim=32),
-    "minicpm3": dict(MLA, scale_emb=2.0),
+    "minicpm3": dict(MLA, scale_emb=2.0, dim_model_base=32),
     "youtu": dict(MLA),
     "codegen": dict(rotary_dim=4),
     "gptj": dict(rotary_dim=4),

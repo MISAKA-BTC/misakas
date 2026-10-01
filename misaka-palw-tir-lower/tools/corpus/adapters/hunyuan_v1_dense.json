@@ -1,16 +1,73 @@
 {
   "format": "misaka.palw.model-adapter.v1",
   "id": "hunyuan-v1-dense",
-  "doc": "Hunyuan dense (HunYuanDenseV1: Hunyuan-0.5B/1.8B/4B/7B): Llama with a per-head RMS norm on q and k (query_layernorm, key_layernorm) applied AFTER the rotation. Third-party adapter (lane H): data only EXCEPT the norm placement (feature request FR-02): this adapter norms before the rotation, which is not what the class computes.",
-  "extends": ["decoder-core"],
-  "match": {"architectures": ["HunYuanDenseV1ForCausalLM"], "model_types": ["hunyuan_v1_dense"]},
+  "doc": "Hunyuan dense (HunYuanDenseV1: Hunyuan-0.5B/1.8B/4B/7B): Llama with a per-head RMS norm on q and k (query_layernorm, key_layernorm) applied AFTER the rotation. Third-party adapter (lane H): data only EXCEPT the norm placement (feature request FR-02): the norm placement is `attn_extra.qk_norm_after_rope` (FR-02, landed on tir/generic).",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "HunYuanDenseV1ForCausalLM"
+    ],
+    "model_types": [
+      "hunyuan_v1_dense"
+    ]
+  },
   "config": {
-    "defaults": {"vocab_size": 290943, "hidden_size": 4096, "intermediate_size": 11008, "num_hidden_layers": 32, "num_attention_heads": 32, "num_key_value_heads": 32, "max_position_embeddings": 2048, "rms_norm_eps": 1e-05, "tie_word_embeddings": false, "attention_bias": false},
-    "inert": ["eod_token_id"]
+    "defaults": {
+      "vocab_size": 290943,
+      "hidden_size": 4096,
+      "intermediate_size": 11008,
+      "num_hidden_layers": 32,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 32,
+      "max_position_embeddings": 2048,
+      "rms_norm_eps": 1e-05,
+      "tie_word_embeddings": false,
+      "attention_bias": false
+    },
+    "inert": [
+      "eod_token_id"
+    ]
   },
   "vars": [
-    {"name": "qk_norm", "value": {"norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}, "scope": "PerHeadShared"}},
-    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.q_norm": "{p}layers.{L}.self_attn.query_layernorm", "attn.k_norm": "{p}layers.{L}.self_attn.key_layernorm"}]}},
-    {"name": "model_type", "value": "hunyuan_v1_dense"}
+    {
+      "name": "attn_extra",
+      "value": {
+        "qk_norm_after_rope": true
+      }
+    },
+    {
+      "name": "qk_norm",
+      "value": {
+        "norm": {
+          "kind": "Rms",
+          "eps": {
+            "$var": "eps"
+          },
+          "gain": "W",
+          "bias": false
+        },
+        "scope": "PerHeadShared"
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "attn.q_norm": "{p}layers.{L}.self_attn.query_layernorm",
+            "attn.k_norm": "{p}layers.{L}.self_attn.key_layernorm"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "hunyuan_v1_dense"
+    }
   ]
 }

@@ -1,12 +1,141 @@
 {
   "format": "misaka.palw.model-adapter.v1",
   "id": "granitemoeshared",
-  "doc": "GraniteMoeShared (IBM): GraniteMoE plus an optional shared expert of width shared_intermediate_size (default 0 = none). The shared expert's gate and up are fused into one tensor (shared_mlp.input_linear), which the binder cannot slice yet (FR-01), so this adapter claims the family only for shared_intermediate_size = 0 and REFUSES otherwise, naming FR-01. Third-party adapter (lane H): data only, extends the built-in granitemoe.",
-  "extends": ["granitemoe"],
-  "match": {"architectures": ["GraniteMoeSharedForCausalLM"], "model_types": ["granitemoeshared"]},
-  "config": {"defaults": {"shared_intermediate_size": 0}},
+  "doc": "GraniteMoeShared (IBM): GraniteMoE plus a shared expert of width shared_intermediate_size (default 0 = none) whose gate and up are ONE fused tensor (shared_mlp.input_linear [2*shared, D], gate rows first), sliced by `spec.hf.weights` expressions (FR-01, landed on tir/generic); output_linear is the down projection. Third-party adapter (lane H): data only, extends the built-in granitemoe.",
+  "extends": [
+    "granitemoe"
+  ],
+  "match": {
+    "architectures": [
+      "GraniteMoeSharedForCausalLM"
+    ],
+    "model_types": [
+      "granitemoeshared"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "shared_intermediate_size": 0
+    }
+  },
   "vars": [
-    {"name": "shared_ok", "value": {"$check": [{"$eq": [{"$cfg": "shared_intermediate_size"}, 0]}, "shared_intermediate_size > 0: the shared expert's gate and up are one fused tensor, which needs weights as data (FR-01)"]}},
-    {"name": "model_type", "value": "granitemoeshared"}
-  ]
+    {
+      "name": "shared_inter",
+      "value": {
+        "$cfg": "shared_intermediate_size"
+      }
+    },
+    {
+      "name": "shared",
+      "value": {
+        "$if": [
+          {
+            "$gt": [
+              {
+                "$var": "shared_inter"
+              },
+              0
+            ]
+          },
+          {
+            "intermediate": {
+              "$var": "shared_inter"
+            },
+            "sigmoid_gate": false
+          },
+          null
+        ]
+      }
+    },
+    {
+      "name": "l_ffn",
+      "layer": true,
+      "value": {
+        "Moe": {
+          "experts": {
+            "$var": "e"
+          },
+          "top_k": {
+            "$var": "k"
+          },
+          "intermediate": {
+            "$var": "inter"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "router": {
+            "scoring": "TopKThenSoftmax",
+            "normalize": false
+          },
+          "shared": {
+            "$var": "shared"
+          }
+        }
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "moe.router": "{p}layers.{L}.block_sparse_moe.router.layer",
+            "moe.gate_up.stacked": "{p}layers.{L}.block_sparse_moe.input_linear.weight",
+            "moe.down.stacked": "{p}layers.{L}.block_sparse_moe.output_linear.weight",
+            "moe.shared.down": "{p}layers.{L}.shared_mlp.output_linear"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "granitemoeshared"
+    }
+  ],
+  "spec": {
+    "hf": {
+      "weights": {
+        "$if": [
+          {
+            "$gt": [
+              {
+                "$var": "shared_inter"
+              },
+              0
+            ]
+          },
+          {
+            "moe.shared.gate.w": [
+              "{p}layers.{L}.shared_mlp.input_linear.weight",
+              {
+                "rows": [
+                  0,
+                  {
+                    "$var": "shared_inter"
+                  }
+                ]
+              }
+            ],
+            "moe.shared.up.w": [
+              "{p}layers.{L}.shared_mlp.input_linear.weight",
+              {
+                "rows": [
+                  {
+                    "$var": "shared_inter"
+                  },
+                  {
+                    "$var": "shared_inter"
+                  }
+                ]
+              }
+            ]
+          },
+          {}
+        ]
+      }
+    }
+  }
 }

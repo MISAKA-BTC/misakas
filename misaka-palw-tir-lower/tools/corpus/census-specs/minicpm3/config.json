@@ -5,7 +5,7 @@
   "attention_bias": false,
   "attention_dropout": 0.0,
   "bos_token_id": 1,
-  "dim_model_base": 256,
+  "dim_model_base": 32,
   "dtype": "bfloat16",
   "eos_token_id": 2,
   "head_dim": 4,
@@ -32,7 +32,7 @@
     "rope_type": "default"
   },
   "scale_depth": 1.4,
-  "scale_emb": 12,
+  "scale_emb": 2.0,
   "tie_word_embeddings": true,
   "transformers_version": "5.17.0",
   "use_cache": true,

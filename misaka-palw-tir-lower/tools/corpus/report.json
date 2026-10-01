@@ -10,7 +10,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "llama",
-      "ms": 3190,
+      "ms": 2552,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -153,7 +153,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -187,7 +187,7 @@
           "kl_mean": 0.000042514989783168085,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 144,
+          "ms": 124,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00018177131191632334,
@@ -204,7 +204,7 @@
           },
           "digest": "80eb404d6305888945a3a633f83463eac60c8321422d8e07fee621e89f1320aba086196ae1177e0d92a56675f5c54721a19e6150f04dddc57520cab752b0676d",
           "layers": 2,
-          "ms": 5,
+          "ms": 2,
           "nodes": 317,
           "ok": true,
           "params": 71,
@@ -231,13 +231,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 135,
+          "ms": 52,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2559,
+          "ms": 2139,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -258,7 +258,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "qwen2",
-      "ms": 2733,
+      "ms": 2402,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -380,7 +380,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 3,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -408,7 +408,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -442,7 +442,7 @@
           "kl_mean": 0.00012601485447461772,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 156,
+          "ms": 117,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00065064964421091,
@@ -459,7 +459,7 @@
           },
           "digest": "e3d3c09622f81c3a597aaf8b116e3528681dbadd2d1c27bd809b7718f7a04bb1cb54c91d56f97a7640baadafa1155f48427ec05bdd83a2171874c8113ddb8eba",
           "layers": 2,
-          "ms": 1,
+          "ms": 2,
           "nodes": 314,
           "ok": true,
           "params": 70,
@@ -486,13 +486,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 100,
+          "ms": 53,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2451,
+          "ms": 2202,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -513,7 +513,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "mistral",
-      "ms": 2593,
+      "ms": 2462,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -679,7 +679,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.0624323202457226e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -690,7 +690,7 @@
           "kl_mean": 0.00003801898783611048,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 134,
+          "ms": 113,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.000554994008802101,
@@ -734,13 +734,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 147,
+          "ms": 48,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2293,
+          "ms": 2279,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -761,7 +761,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt2",
-      "ms": 2539,
+      "ms": 2491,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -907,7 +907,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 1152,
@@ -939,7 +939,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 3,
           "ok": true,
           "unused_tensors": 0
         },
@@ -973,7 +973,7 @@
           "kl_mean": 0.00019951503718522708,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 154,
+          "ms": 131,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.002974615251399415,
@@ -990,7 +990,7 @@
           },
           "digest": "89b91d583620149190e824b9b8ee96f6b782fd3fcc132488128e3d1ed9108224eb8564e90cc8bb3ab66fa4dcd585534c849d94b3a787f2029c7f1243eab22ba0",
           "layers": 2,
-          "ms": 1,
+          "ms": 2,
           "nodes": 485,
           "ok": true,
           "params": 116,
@@ -1015,13 +1015,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 137,
+          "ms": 78,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 2222,
+          "ms": 2253,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1042,7 +1042,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "qwen3",
-      "ms": 2639,
+      "ms": 2631,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -1171,7 +1171,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 2,
+          "ms": 3,
           "ok": true,
           "position": {
             "commit_lanes": 1280,
@@ -1233,7 +1233,7 @@
           "kl_mean": 0.00011307166754755756,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 181,
+          "ms": 137,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.01404760813955619,
@@ -1277,13 +1277,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 108,
+          "ms": 62,
           "ok": true,
           "tensors": 134
         },
         "three_way": {
           "equal": true,
-          "ms": 2330,
+          "ms": 2409,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1304,7 +1304,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma2",
-      "ms": 3090,
+      "ms": 2847,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1531,7 +1531,7 @@
           "kl_mean": 2.9683622958344727e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 142,
+          "ms": 134,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00037488164757371045,
@@ -1577,13 +1577,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 70,
+          "ms": 65,
           "ok": true,
           "tensors": 141
         },
         "three_way": {
           "equal": true,
-          "ms": 2857,
+          "ms": 2626,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1604,7 +1604,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma3_text",
-      "ms": 4910,
+      "ms": 3634,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1770,7 +1770,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 8,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 2048,
@@ -1802,7 +1802,7 @@
           }
         },
         "bind": {
-          "ms": 4,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -1825,7 +1825,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 7.250657151226473e-8,
-          "ms": 7,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -1836,7 +1836,7 @@
           "kl_mean": 5.042479552771153e-8,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 274,
+          "ms": 198,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.001922607172485935,
@@ -1853,7 +1853,7 @@
           },
           "digest": "d3a415d5abb2f80a6e132bfdbd102702c1278a34d32609d7fc25abacf796883a3c69653c1de878e81860d5533418fe4edca866dec34761f62fc58a2c7d3d7eef",
           "layers": 3,
-          "ms": 4,
+          "ms": 2,
           "nodes": 790,
           "ok": true,
           "params": 150,
@@ -1880,13 +1880,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 119,
+          "ms": 88,
           "ok": true,
           "tensors": 217
         },
         "three_way": {
           "equal": true,
-          "ms": 4482,
+          "ms": 3322,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1907,7 +1907,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma4_text",
-      "ms": 11017,
+      "ms": 8372,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2202,7 +2202,7 @@
           "kl_mean": 0.00022285751315338288,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 599,
+          "ms": 359,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0011153162137962358,
@@ -2220,7 +2220,7 @@
           },
           "digest": "0bf8314a694cf33b1fa123b9bf89caf1490d84b6c9f585253d70b6e8a0cecdf0c82d67d19c8736023a21cf6d556bb7906e0ea1c243e268e45b5019e903713716",
           "layers": 6,
-          "ms": 6,
+          "ms": 5,
           "nodes": 1490,
           "ok": true,
           "params": 281,
@@ -2248,13 +2248,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 434,
+          "ms": 160,
           "ok": true,
           "tensors": 415
         },
         "three_way": {
           "equal": true,
-          "ms": 9938,
+          "ms": 7804,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2275,7 +2275,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "phi3",
-      "ms": 50705,
+      "ms": 46413,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2455,7 +2455,7 @@
           "kl_mean": 0.00005004424189335193,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 291,
+          "ms": 286,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0006532047708089905,
@@ -2499,13 +2499,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 416,
+          "ms": 254,
           "ok": true,
           "tensors": 124
         },
         "three_way": {
           "equal": true,
-          "ms": 49981,
+          "ms": 45855,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2526,7 +2526,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt_neox",
-      "ms": 2087,
+      "ms": 2066,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2763,13 +2763,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 63,
+          "ms": 57,
           "ok": true,
           "tensors": 121
         },
         "three_way": {
           "equal": true,
-          "ms": 1903,
+          "ms": 1886,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2790,7 +2790,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "opt",
-      "ms": 1990,
+      "ms": 1943,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2997,7 +2997,7 @@
           "kl_mean": 0.00021774930941209723,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 99,
+          "ms": 93,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00541085854233847,
@@ -3039,13 +3039,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 37,
+          "ms": 40,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 1839,
+          "ms": 1793,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3066,7 +3066,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "falcon",
-      "ms": 2295,
+      "ms": 2049,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3219,7 +3219,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -3253,7 +3253,7 @@
           "kl_mean": 0.0001511600082820866,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 147,
+          "ms": 100,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.006851645800986517,
@@ -3297,13 +3297,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 93,
+          "ms": 52,
           "ok": true,
           "tensors": 105
         },
         "three_way": {
           "equal": true,
-          "ms": 2040,
+          "ms": 1874,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3324,7 +3324,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "starcoder2",
-      "ms": 2209,
+      "ms": 2045,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3524,7 +3524,7 @@
           "kl_mean": 0.00024068266079908324,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 113,
+          "ms": 97,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.009020498646432173,
@@ -3568,13 +3568,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 77,
+          "ms": 42,
           "ok": true,
           "tensors": 117
         },
         "three_way": {
           "equal": true,
-          "ms": 2003,
+          "ms": 1889,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3595,7 +3595,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "cohere2",
-      "ms": 4900,
+      "ms": 4203,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3797,7 +3797,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.4554033278244997e-7,
-          "ms": 8,
+          "ms": 7,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -3808,7 +3808,7 @@
           "kl_mean": 6.978858374324798e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 238,
+          "ms": 200,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.000019306725332124408,
@@ -3825,7 +3825,7 @@
           },
           "digest": "6b0d7704ab1fbb88c4c78744ff3d6df0cca1ebe78921902e322d56e2680a0a95d69175b6e1008739a3c7ef598680f7efa14c256344850a6b52d17d3f98e0d053",
           "layers": 4,
-          "ms": 2,
+          "ms": 1,
           "nodes": 501,
           "ok": true,
           "params": 116,
@@ -3852,13 +3852,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 137,
+          "ms": 91,
           "ok": true,
           "tensors": 220
         },
         "three_way": {
           "equal": true,
-          "ms": 4496,
+          "ms": 3887,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3879,7 +3879,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "granite",
-      "ms": 2560,
+      "ms": 2286,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -4059,7 +4059,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.9074810644354734e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -4070,7 +4070,7 @@
           "kl_mean": 1.4033089281533229e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 150,
+          "ms": 115,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00013124041635759198,
@@ -4114,13 +4114,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 94,
+          "ms": 50,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2296,
+          "ms": 2102,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4141,7 +4141,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "glm4",
-      "ms": 2365,
+      "ms": 2826,
       "read": {
         "a_diff": ".hf.mlp: \"FusedGateFirst\" ≠ \"Separate\"",
         "a_same_as_adapter": false,
@@ -4339,7 +4339,7 @@
           "kl_mean": 0.00009018390062215724,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 137,
+          "ms": 128,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00003002041638666686,
@@ -4383,13 +4383,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 58,
+          "ms": 54,
           "ok": true,
           "tensors": 144
         },
         "three_way": {
           "equal": true,
-          "ms": 2151,
+          "ms": 2626,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4410,7 +4410,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "smollm3",
-      "ms": 4560,
+      "ms": 4145,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4599,7 +4599,7 @@
           "kl_mean": 0.0017940252799624784,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 217,
+          "ms": 201,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00782157020574381,
@@ -4616,7 +4616,7 @@
           },
           "digest": "16f93ed1721d1ed9c54697e32d3e5c37e0b436e12f32ab8f95763d467204e9946899df5684be3c2aabb2dad6f212c7c35354054eeb188de95ed9350dc3b2f4e7",
           "layers": 4,
-          "ms": 2,
+          "ms": 1,
           "nodes": 526,
           "ok": true,
           "params": 122,
@@ -4643,13 +4643,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 148,
+          "ms": 119,
           "ok": true,
           "tensors": 232
         },
         "three_way": {
           "equal": true,
-          "ms": 4169,
+          "ms": 3800,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4670,7 +4670,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "arcee",
-      "ms": 2328,
+      "ms": 1990,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -4751,11 +4751,17 @@
               "status": "SUPPORTED"
             }
           ],
-          "level": "A",
-          "missing": [],
+          "level": "C",
+          "missing": [
+            {
+              "general_primitive": null,
+              "what": "the checkpoint does not fit the reading",
+              "why": "param `mlp.gate.w` (layer 0): weights: missing tensor `model.layers.0.mlp.gate_proj.weight`, param `mlp.gate.w` (layer 1): weights: missing tensor `model.layers.1.mlp.gate_proj.weight`"
+            }
+          ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "LOWERABLE",
+          "result": "NOT_LOWERABLE: missing: the checkpoint does not fit the reading",
           "unmapped_config_keys": []
         },
         "user": {
@@ -4854,7 +4860,7 @@
           "kl_mean": 0.00004352600916917292,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 125,
+          "ms": 97,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0006134348756217101,
@@ -4898,13 +4904,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 61,
+          "ms": 33,
           "ok": true,
           "tensors": 104
         },
         "three_way": {
           "equal": true,
-          "ms": 2118,
+          "ms": 1838,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4925,7 +4931,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "apertus",
-      "ms": 11,
+      "ms": 12,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4986,7 +4992,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "helium",
-      "ms": 2457,
+      "ms": 2279,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -5159,7 +5165,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.1781092188169734e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -5170,7 +5176,7 @@
           "kl_mean": 0.00003488190919488295,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 140,
+          "ms": 111,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00004242179498670229,
@@ -5214,13 +5220,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 93,
+          "ms": 43,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2192,
+          "ms": 2095,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5241,7 +5247,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "hunyuan_v1_dense",
-      "ms": 40,
+      "ms": 52,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5490,7 +5496,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "seed_oss",
-      "ms": 2609,
+      "ms": 2305,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5667,7 +5673,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.461687283790006e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -5678,7 +5684,7 @@
           "kl_mean": 0.00004503505120486829,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 133,
+          "ms": 116,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0014356082757542854,
@@ -5722,13 +5728,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 60,
+          "ms": 64,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2396,
+          "ms": 2103,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5749,7 +5755,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "ernie4_5",
-      "ms": 2626,
+      "ms": 2321,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5935,7 +5941,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.5142692608117274e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -5946,7 +5952,7 @@
           "kl_mean": 0.00017004798849763975,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 139,
+          "ms": 108,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00011989390595412708,
@@ -5990,13 +5996,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 149,
+          "ms": 47,
           "ok": true,
           "tensors": 122
         },
         "three_way": {
           "equal": true,
-          "ms": 2317,
+          "ms": 2145,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6017,7 +6023,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "bitnet",
-      "ms": 37,
+      "ms": 32,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -6100,11 +6106,17 @@
               "status": "SUPPORTED"
             }
           ],
-          "level": "A",
-          "missing": [],
+          "level": "C",
+          "missing": [
+            {
+              "general_primitive": null,
+              "what": "checkpoint tensors the reading never uses",
+              "why": "4 tensor(s): model.layers.0.mlp.ffn_sub_norm.weight, model.layers.0.self_attn.attn_sub_norm.weight, model.layers.1.mlp.ffn_sub_norm.weight, model.layers.1.self_attn.attn_sub_norm.weight — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)"
+            }
+          ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "LOWERABLE",
+          "result": "NOT_LOWERABLE: missing: checkpoint tensors the reading never uses",
           "unmapped_config_keys": []
         }
       },
@@ -6130,7 +6142,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -6232,7 +6244,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "persimmon",
-      "ms": 2462,
+      "ms": 2254,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6418,7 +6430,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -6452,7 +6464,7 @@
           "kl_mean": 0.000045507821503130966,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 132,
+          "ms": 124,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0005351718041705089,
@@ -6496,13 +6508,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 83,
+          "ms": 36,
           "ok": true,
           "tensors": 137
         },
         "three_way": {
           "equal": true,
-          "ms": 2224,
+          "ms": 2069,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6592,7 +6604,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "cwm",
-      "ms": 2351,
+      "ms": 2263,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -6778,7 +6790,7 @@
           "kl_mean": 0.000050995771652227144,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 128,
+          "ms": 116,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0007453407783926114,
@@ -6822,13 +6834,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 64,
+          "ms": 48,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2139,
+          "ms": 2078,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6849,7 +6861,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "gemma3n_text",
-      "ms": 2,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6956,7 +6968,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mixtral",
-      "ms": 4117,
+      "ms": 3827,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7144,7 +7156,7 @@
           "kl_mean": 0.00005295271858742145,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 133,
+          "ms": 131,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0006910002330460241,
@@ -7190,13 +7202,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 101,
+          "ms": 68,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 3863,
+          "ms": 3605,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7217,7 +7229,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen2_moe",
-      "ms": 3407,
+      "ms": 3610,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7370,7 +7382,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 1318,
@@ -7402,7 +7414,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -7426,7 +7438,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.762153007117999e-7,
-          "ms": 4,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -7437,7 +7449,7 @@
           "kl_mean": 0.0000400427795356874,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 136,
+          "ms": 141,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0005302478477562378,
@@ -7483,13 +7495,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 80,
+          "ms": 73,
           "ok": true,
           "tensors": 149
         },
         "three_way": {
           "equal": true,
-          "ms": 3168,
+          "ms": 3368,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7510,7 +7522,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen3_moe",
-      "ms": 2607,
+      "ms": 2805,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7706,7 +7718,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.423086783176217e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -7717,7 +7729,7 @@
           "kl_mean": 0.000027297603054603785,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 136,
+          "ms": 175,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0007474707628387645,
@@ -7763,13 +7775,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 79,
+          "ms": 94,
           "ok": true,
           "tensors": 130
         },
         "three_way": {
           "equal": true,
-          "ms": 2373,
+          "ms": 2516,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7790,7 +7802,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "granitemoe",
-      "ms": 2506,
+      "ms": 2543,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7993,7 +8005,7 @@
           "kl_mean": 3.2648533263794608e-6,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 109,
+          "ms": 115,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0007891695178304792,
@@ -8039,13 +8051,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 73,
+          "ms": 75,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 2308,
+          "ms": 2336,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8066,7 +8078,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "deepseek_v3",
-      "ms": 3060,
+      "ms": 3024,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8314,7 +8326,7 @@
           "kl_mean": 0.0000429312164935884,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 160,
+          "ms": 152,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00009161253323275442,
@@ -8364,13 +8376,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 78,
+          "ms": 97,
           "ok": true,
           "tensors": 172
         },
         "three_way": {
           "equal": true,
-          "ms": 2796,
+          "ms": 2748,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8391,7 +8403,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt_oss",
-      "ms": 3799,
+      "ms": 3317,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8617,7 +8629,7 @@
           "kl_mean": 0.00023534218287726564,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 134,
+          "ms": 124,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.006832286411277755,
@@ -8666,13 +8678,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 75,
+          "ms": 53,
           "ok": true,
           "tensors": 138
         },
         "three_way": {
           "equal": true,
-          "ms": 3570,
+          "ms": 3118,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8693,7 +8705,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "llama4_text",
-      "ms": 7933,
+      "ms": 7582,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8893,7 +8905,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 20,
           "ok": true,
           "position": {
             "commit_lanes": 2052,
@@ -8925,7 +8937,7 @@
           }
         },
         "bind": {
-          "ms": 3,
+          "ms": 6,
           "ok": true,
           "unused_tensors": 0
         },
@@ -8950,7 +8962,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.7184458264833365e-7,
-          "ms": 6,
+          "ms": 7,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -8961,7 +8973,7 @@
           "kl_mean": 0.00023119350567398105,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 383,
+          "ms": 287,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0047500574175038945,
@@ -8979,7 +8991,7 @@
           },
           "digest": "52289e0c9cf3a660045f4e632ecaaee1740838f233a81bd3d2f63f880124cc2652868cc4d5aabf7a9bc4bb5eefb6d73b4e3bac10b8cafbe6a5a6ddb2aa587193",
           "layers": 4,
-          "ms": 19,
+          "ms": 3,
           "nodes": 687,
           "ok": true,
           "params": 146,
@@ -9010,13 +9022,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 303,
+          "ms": 147,
           "ok": true,
           "tensors": 275
         },
         "three_way": {
           "equal": true,
-          "ms": 7202,
+          "ms": 7087,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -9037,7 +9049,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "glm4_moe",
-      "ms": 3509,
+      "ms": 3909,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9226,7 +9238,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 8,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 1326,
@@ -9293,7 +9305,7 @@
           "kl_mean": 0.003686264322969756,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 144,
+          "ms": 209,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0018904036317695105,
@@ -9311,7 +9323,7 @@
           },
           "digest": "45cddebe6fab36a4d721a171950dd4511759064b862e61134199daaa7bda05acb0b1c36310d3e7eaf2544059fed69609162c2d8607bc962fea684908d56637a0",
           "layers": 2,
-          "ms": 2,
+          "ms": 12,
           "nodes": 805,
           "ok": true,
           "params": 156,
@@ -9343,13 +9355,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 95,
+          "ms": 186,
           "ok": true,
           "tensors": 156
         },
         "three_way": {
           "equal": true,
-          "ms": 3245,
+          "ms": 3474,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -9363,31 +9375,27 @@
     {
       "category": "text/moe",
       "claimed_level": "B",
-      "failed_stage": "bind",
+      "failed_stage": null,
       "heavy_fixture": true,
       "hf_arch": "DbrxForCausalLM",
       "id": "dbrx",
-      "level": "C",
-      "level_label": "C",
+      "level": "B",
+      "level_label": "B",
       "model_type": "dbrx",
-      "ms": 34,
+      "ms": 7535,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
         "auto": {
-          "failure": {
-            "error": "NOT_LOWERABLE(DbrxForCausalLM: config key(s) this lowerer does not model: attn_config, d_model, ffn_config, max_seq_len, n_heads, n_layers — a key that might change the math is refused, not ignored)",
-            "missing": [],
-            "unmapped_config_keys": [
-              "attn_config",
-              "d_model",
-              "ffn_config",
-              "max_seq_len",
-              "n_heads",
-              "n_layers"
-            ]
+          "adapter": {
+            "hash": "4549dab808bc71b6cf4c87c119c575f0b5b53ee3a7eea1fafba386ad0329b79aa246caa2b09c36fa74716300e1480069b0e98a1b10b78e1508c5d1eb85ae6e47",
+            "id": "dbrx",
+            "kind": "built_in"
           },
-          "ok": false
+          "layers": 2,
+          "missing": [],
+          "ok": true,
+          "supported": true
         },
         "claimed_level": "B",
         "none": {
@@ -9409,9 +9417,9 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "hash": "9456f71a780b1d35124e616ac0b1f7111ad8c97eb7413a5feb44efd7d2921c747a5df635146a659f2606941ae0edab24334830ec40bf1f6858ee83c049165bed",
+            "hash": "4549dab808bc71b6cf4c87c119c575f0b5b53ee3a7eea1fafba386ad0329b79aa246caa2b09c36fa74716300e1480069b0e98a1b10b78e1508c5d1eb85ae6e47",
             "id": "dbrx",
-            "kind": "user_file"
+            "kind": "built_in"
           },
           "assumed_defaults": [
             "attention_bias",
@@ -9487,6 +9495,13 @@
               "id": "ROPE_DEFAULT_V1",
               "layers": 2,
               "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "3 param(s) bound by expression: moe.experts.down, moe.experts.gate, moe.experts.up",
+              "id": "WEIGHTS_EXPR_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
           "level": "B",
@@ -9508,14 +9523,7 @@
           "supported": true
         }
       },
-      "refuted_routes": [
-        {
-          "error": "weights: param `moe.experts.gate` layer 0: weights: missing tensor `transformer.blocks.0.ffn.experts.mlp.w1.weight`",
-          "failed_stage": "bind",
-          "level": "B",
-          "via": "third-party adapter `dbrx` (tools/corpus/adapters)"
-        }
-      ],
+      "refuted_routes": [],
       "route": "decoder",
       "share": null,
       "stages": {
@@ -9530,7 +9538,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 2,
+          "ms": 3,
           "ok": true,
           "position": {
             "commit_lanes": 1960,
@@ -9558,14 +9566,46 @@
           }
         },
         "bind": {
-          "error": "weights: param `moe.experts.gate` layer 0: weights: missing tensor `transformer.blocks.0.ffn.experts.mlp.w1.weight`",
-          "ms": 1,
-          "ok": false
+          "ms": 3,
+          "ok": true,
+          "unused_tensors": 0
+        },
+        "court": {
+          "all_equal": true,
+          "by_terminal_primitive": {
+            "Clamp": 648,
+            "Gather": 192,
+            "Reshape": 144,
+            "TopK": 48
+          },
+          "commit_points_replayed": 1032,
+          "ms": 0,
+          "ok": true,
+          "replayed_on_exec": 1032
         },
         "fixture": {
           "available": true,
           "ms": 0,
           "ok": true
+        },
+        "float_vs_hf": {
+          "max_rel_vs_hf": 2.895465794668188e-7,
+          "ms": 6,
+          "near_ties": 0,
+          "ok": true,
+          "positions": 10,
+          "reference": "full"
+        },
+        "int_vs_float": {
+          "kl_max": 0.00011527594357333402,
+          "kl_mean": 0.00003766290204613362,
+          "max_kl": 0.02,
+          "min_top1": 0.85,
+          "ms": 166,
+          "ok": true,
+          "positions": 72,
+          "ppl_delta": -0.0006755727786762478,
+          "top1": 0.9583333333333334
         },
         "lower": {
           "blocks": 3,
@@ -9579,7 +9619,7 @@
           },
           "digest": "8cb5fcd67fafb868e84e1ca202e31ca8447a2dc879ce480f9b923df7b2d72bc6d2c806956e94708b34e94923c52ba0a491b2e7d3fcf140a65cd3ef202ed6044b",
           "layers": 2,
-          "ms": 1,
+          "ms": 2,
           "nodes": 365,
           "ok": true,
           "params": 70,
@@ -9605,22 +9645,24 @@
             "Transpose": 2
           },
           "states": 2
+        },
+        "materialise": {
+          "ms": 110,
+          "ok": true,
+          "tensors": 124
+        },
+        "three_way": {
+          "equal": true,
+          "ms": 7221,
+          "ok": true,
+          "positions": 24,
+          "sequences": 2
         }
       },
-      "synthesized": {
-        "blocked_by_keys": [
-          "attn_config",
-          "d_model",
-          "ffn_config",
-          "max_seq_len",
-          "n_heads",
-          "n_layers"
-        ],
-        "tried": []
-      },
+      "synthesized": null,
       "tensors": 19,
       "usage": "l",
-      "via": "third-party adapter `dbrx` (tools/corpus/adapters) (refuted: bind)"
+      "via": "built-in adapter `dbrx`"
     },
     {
       "category": "text/moe",
@@ -9632,7 +9674,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "jetmoe",
-      "ms": 8,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9710,34 +9752,27 @@
     {
       "category": "text/moe",
       "claimed_level": "B",
-      "failed_stage": "bind",
+      "failed_stage": null,
       "heavy_fixture": true,
       "hf_arch": "Ernie4_5_MoeForCausalLM",
       "id": "ernie4_5_moe",
-      "level": "C",
-      "level_label": "C",
+      "level": "B",
+      "level_label": "B",
       "model_type": "ernie4_5_moe",
-      "ms": 23,
+      "ms": 3856,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
         "auto": {
-          "failure": {
-            "error": "NOT_LOWERABLE(Ernie4_5_MoeForCausalLM: config key(s) this lowerer does not model: moe_intermediate_size, moe_k, moe_layer_end_index, moe_layer_interval, moe_layer_start_index, moe_norm_min, moe_num_experts, moe_num_shared_experts, use_bias — a key that might change the math is refused, not ignored)",
-            "missing": [],
-            "unmapped_config_keys": [
-              "moe_intermediate_size",
-              "moe_k",
-              "moe_layer_end_index",
-              "moe_layer_interval",
-              "moe_layer_start_index",
-              "moe_norm_min",
-              "moe_num_experts",
-              "moe_num_shared_experts",
-              "use_bias"
-            ]
+          "adapter": {
+            "hash": "ea918a0bff2c820e8026255cdfbce80f16b7152b5a75c6d93656c3ea1165b3f48b213515f86ef53f22fcf1f7489186d4fdb283413961d8e62dca0c8fab7510b7",
+            "id": "ernie4-5-moe",
+            "kind": "built_in"
           },
-          "ok": false
+          "layers": 2,
+          "missing": [],
+          "ok": true,
+          "supported": true
         },
         "claimed_level": "B",
         "none": {
@@ -9762,9 +9797,9 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "hash": "4bca794c325dd25c130db244199a0010f63b7e7ea9af290a8827d0891cc0263c0d439a87cebd8be8b6fd516307cf0bb3656d171e6090ff015a51cf2c5e810cb1",
+            "hash": "ea918a0bff2c820e8026255cdfbce80f16b7152b5a75c6d93656c3ea1165b3f48b213515f86ef53f22fcf1f7489186d4fdb283413961d8e62dca0c8fab7510b7",
             "id": "ernie4-5-moe",
-            "kind": "user_file"
+            "kind": "built_in"
           },
           "assumed_defaults": [
             "attention_bias"
@@ -9867,6 +9902,13 @@
               "id": "ROPE_INTERLEAVED_V1",
               "layers": 2,
               "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "1 param(s) bound by expression: moe.sel_bias",
+              "id": "WEIGHTS_EXPR_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
           "level": "B",
@@ -9888,21 +9930,14 @@
           "supported": true
         }
       },
-      "refuted_routes": [
-        {
-          "error": "weights: param `moe.sel_bias`: checkpoint gives [1, 8], graph needs [8]",
-          "failed_stage": "bind",
-          "level": "B",
-          "via": "third-party adapter `ernie4-5-moe` (tools/corpus/adapters)"
-        }
-      ],
+      "refuted_routes": [],
       "route": "decoder",
       "share": null,
       "stages": {
         "admit": {
           "admitted": true,
           "checkpoint_interval": 65536,
-          "cone_work": 1851,
+          "cone_work": 1856,
           "cones": 39,
           "dissected_cones": 2,
           "inputs": {
@@ -9914,7 +9949,7 @@
           "ok": true,
           "position": {
             "commit_lanes": 1220,
-            "elementwise": 75513555,
+            "elementwise": 75513571,
             "macs": 33576896,
             "peak_live_bytes": 50332232,
             "state_bytes": 33554432,
@@ -9942,14 +9977,46 @@
           }
         },
         "bind": {
-          "error": "weights: param `moe.sel_bias`: checkpoint gives [1, 8], graph needs [8]",
           "ms": 1,
-          "ok": false
+          "ok": true,
+          "unused_tensors": 0
+        },
+        "court": {
+          "all_equal": true,
+          "by_terminal_primitive": {
+            "Clamp": 696,
+            "Gather": 72,
+            "Reshape": 144,
+            "TopK": 24
+          },
+          "commit_points_replayed": 936,
+          "ms": 0,
+          "ok": true,
+          "replayed_on_exec": 936
         },
         "fixture": {
           "available": true,
           "ms": 0,
           "ok": true
+        },
+        "float_vs_hf": {
+          "max_rel_vs_hf": 1.592873001955857e-7,
+          "ms": 6,
+          "near_ties": 0,
+          "ok": true,
+          "positions": 10,
+          "reference": "full"
+        },
+        "int_vs_float": {
+          "kl_max": 0.0061359182706700035,
+          "kl_mean": 0.00011143985833971749,
+          "max_kl": 0.02,
+          "min_top1": 0.85,
+          "ms": 163,
+          "ok": true,
+          "positions": 72,
+          "ppl_delta": -0.0018894492770286098,
+          "top1": 0.9861111111111112
         },
         "lower": {
           "blocks": 4,
@@ -9961,16 +10028,16 @@
             "lowerer_cone_split": 30,
             "topk": 1
           },
-          "digest": "8442ae0d61b8ede4b4ed1fc2dcfd29dac49a091d0ad4848cd9db3ff8b7d34c518e845ec139b722138a0ae31e81f04975d904332515dc52742ae9a4059c693300",
+          "digest": "e0279fee975225002208069ceb249f284af735dd2bbd51b3895b7689d47d746cd335d2b93f85dc9e56e1ee55f075dbb237a2d3e51025cafedb80d01170974b71",
           "layers": 2,
-          "ms": 2,
-          "nodes": 668,
+          "ms": 11,
+          "nodes": 670,
           "ok": true,
-          "params": 133,
+          "params": 134,
           "prim_kinds": 18,
           "prims": {
-            "Add": 32,
-            "Clamp": 150,
+            "Add": 33,
+            "Clamp": 151,
             "Concat": 4,
             "Div": 75,
             "Gather": 91,
@@ -9989,24 +10056,24 @@
             "Transpose": 4
           },
           "states": 2
+        },
+        "materialise": {
+          "ms": 202,
+          "ok": true,
+          "tensors": 134
+        },
+        "three_way": {
+          "equal": true,
+          "ms": 3432,
+          "ok": true,
+          "positions": 24,
+          "sequences": 2
         }
       },
-      "synthesized": {
-        "blocked_by_keys": [
-          "moe_intermediate_size",
-          "moe_k",
-          "moe_layer_end_index",
-          "moe_layer_interval",
-          "moe_layer_start_index",
-          "moe_norm_min",
-          "moe_num_experts",
-          "moe_num_shared_experts"
-        ],
-        "tried": []
-      },
+      "synthesized": null,
       "tensors": 46,
       "usage": "m",
-      "via": "third-party adapter `ernie4-5-moe` (tools/corpus/adapters) (refuted: bind)"
+      "via": "built-in adapter `ernie4-5-moe`"
     },
     {
       "category": "text/moe",
@@ -10018,7 +10085,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "hunyuan_v1_moe",
-      "ms": 31,
+      "ms": 33,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10288,7 +10355,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "minimax_m2",
-      "ms": 2887,
+      "ms": 3079,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10477,7 +10544,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -10512,7 +10579,7 @@
           "kl_mean": 0.00031763925938845764,
           "max_kl": 0.02,
           "min_top1": 0.85,
-          "ms": 153,
+          "ms": 168,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.003172535966361023,
@@ -10560,13 +10627,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 117,
+          "ms": 148,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2595,
+          "ms": 2739,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -10587,7 +10654,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "longcat_flash",
-      "ms": 10,
+      "ms": 14,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10704,7 +10771,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "deepseek_v32",
-      "ms": 11,
+      "ms": 17,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10765,7 +10832,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "deepseek_v4",
-      "ms": 11,
+      "ms": 16,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10826,7 +10893,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen3_next",
-      "ms": 11418,
+      "ms": 13533,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11019,7 +11086,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 12,
+          "ms": 14,
           "ok": true,
           "position": {
             "commit_lanes": 3338,
@@ -11047,7 +11114,7 @@
           }
         },
         "bind": {
-          "ms": 4,
+          "ms": 6,
           "ok": true,
           "unused_tensors": 0
         },
@@ -11074,7 +11141,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 9.79921905913968e-7,
-          "ms": 9,
+          "ms": 14,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -11085,7 +11152,7 @@
           "kl_mean": 0.001728695629414552,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 409,
+          "ms": 374,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.004604877637768956,
@@ -11103,7 +11170,7 @@
           },
           "digest": "6a4a5749ed3c0ceadfd5e45b5c5ffe5e8c745792164cc2d64f0f04fe7ae1d2e10919314543c7c7b8382d6bd9c8399f956691234b58ff3812b5428adaf475ee6b",
           "layers": 4,
-          "ms": 9,
+          "ms": 13,
           "nodes": 1392,
           "ok": true,
           "params": 274,
@@ -11136,13 +11203,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 347,
+          "ms": 413,
           "ok": true,
           "tensors": 359
         },
         "three_way": {
           "equal": true,
-          "ms": 10617,
+          "ms": 12683,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11163,7 +11230,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen3_5_moe_text",
-      "ms": 11436,
+      "ms": 12267,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11415,7 +11482,7 @@
           "kl_mean": 0.006632809715832346,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 330,
+          "ms": 584,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.022489220278575472,
@@ -11466,13 +11533,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 235,
+          "ms": 469,
           "ok": true,
           "tensors": 358
         },
         "three_way": {
           "equal": true,
-          "ms": 10835,
+          "ms": 11177,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11493,7 +11560,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "jamba",
-      "ms": 8539,
+      "ms": 8634,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11675,7 +11742,7 @@
           }
         },
         "bind": {
-          "ms": 4,
+          "ms": 5,
           "ok": true,
           "unused_tensors": 0
         },
@@ -11699,7 +11766,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 7.096484433151747e-7,
-          "ms": 11,
+          "ms": 12,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -11710,7 +11777,7 @@
           "kl_mean": 0.00021874182261470972,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 294,
+          "ms": 323,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00233380442084119,
@@ -11760,13 +11827,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 178,
+          "ms": 215,
           "ok": true,
           "tensors": 272
         },
         "three_way": {
           "equal": true,
-          "ms": 8032,
+          "ms": 8060,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11787,7 +11854,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mamba",
-      "ms": 3370,
+      "ms": 3595,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11950,7 +12017,7 @@
           "kl_mean": 1.5113778050138095e-6,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 126,
+          "ms": 197,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00046502242023049867,
@@ -11995,13 +12062,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 105,
+          "ms": 101,
           "ok": true,
           "tensors": 106
         },
         "three_way": {
           "equal": true,
-          "ms": 3125,
+          "ms": 3281,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12022,7 +12089,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mamba2",
-      "ms": 3123,
+      "ms": 3007,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12184,7 +12251,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.300086882269052e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -12195,7 +12262,7 @@
           "kl_mean": 0.0000804354845285936,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 114,
+          "ms": 111,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00035327402866358604,
@@ -12241,13 +12308,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 76,
+          "ms": 60,
           "ok": true,
           "tensors": 108
         },
         "three_way": {
           "equal": true,
-          "ms": 2915,
+          "ms": 2819,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12268,7 +12335,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "falcon_mamba",
-      "ms": 3561,
+      "ms": 3386,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12431,7 +12498,7 @@
           "kl_mean": 1.5682842685691875e-6,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 171,
+          "ms": 136,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0038254674845428216,
@@ -12476,13 +12543,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 89,
+          "ms": 68,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 3285,
+          "ms": 3167,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12503,7 +12570,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "rwkv",
-      "ms": 7687,
+      "ms": 7788,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12617,7 +12684,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 7,
+          "ms": 5,
           "ok": true,
           "position": {
             "commit_lanes": 3232,
@@ -12673,7 +12740,7 @@
           "kl_mean": 0.000038797700562099544,
           "max_kl": 0.03,
           "min_top1": 0.8,
-          "ms": 268,
+          "ms": 265,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00010754835483850478,
@@ -12690,7 +12757,7 @@
           },
           "digest": "a06ffd97ad4859ea4b70230c9d23bf6450c8126225a564d7c69fd9f6b23897e52f2683f76427ceb4ba6e6f575a82f11f01cf704305f90236b2b507ea72d8b0a2",
           "layers": 4,
-          "ms": 3,
+          "ms": 2,
           "nodes": 691,
           "ok": true,
           "params": 169,
@@ -12715,13 +12782,13 @@
           "states": 5
         },
         "materialise": {
-          "ms": 146,
+          "ms": 181,
           "ok": true,
           "tensors": 321
         },
         "three_way": {
           "equal": true,
-          "ms": 7245,
+          "ms": 7314,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12742,7 +12809,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "falcon_h1",
-      "ms": 2,
+      "ms": 5,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12817,7 +12884,31 @@
       "share": null,
       "stages": {},
       "synthesized": {
-        "blocked_by_keys": [],
+        "blocked_by_keys": [
+          "attention_in_multiplier",
+          "attention_out_multiplier",
+          "key_multiplier",
+          "lm_head_multiplier",
+          "mamba_chunk_size",
+          "mamba_conv_bias",
+          "mamba_d_conv",
+          "mamba_d_head",
+          "mamba_d_ssm",
+          "mamba_d_state",
+          "mamba_expand",
+          "mamba_n_groups",
+          "mamba_n_heads",
+          "mamba_norm_before_gate",
+          "mamba_proj_bias",
+          "mamba_rms_norm",
+          "mlp_multipliers",
+          "num_logits_to_keep",
+          "projectors_bias",
+          "ssm_in_multiplier",
+          "ssm_multipliers",
+          "ssm_out_multiplier",
+          "time_step_limit"
+        ],
         "tried": []
       },
       "tensors": 35,
@@ -12827,53 +12918,44 @@
     {
       "category": "text/hybrid",
       "claimed_level": "B",
-      "failed_stage": "bind",
+      "failed_stage": null,
       "heavy_fixture": true,
       "hf_arch": "GraniteMoeHybridForCausalLM",
       "id": "granitemoehybrid",
-      "level": "C",
-      "level_label": "C",
+      "level": "B",
+      "level_label": "B",
       "model_type": "granitemoehybrid",
-      "ms": 22,
+      "ms": 5918,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
         "auto": {
-          "failure": {
-            "error": "NOT_LOWERABLE(GraniteMoeHybridForCausalLM: Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)",
-            "missing": [
-              {
-                "general_primitive": null,
-                "what": "MIXER_LAYER_PATTERN_HYBRID_V1",
-                "why": "per-layer mixer pattern with Mamba-2 and attention sharing an MoE feed-forward"
-              }
-            ],
-            "unmapped_config_keys": []
+          "adapter": {
+            "hash": "f3841398440270d0dd4da56398f10c0a1934aa0727f5f2e629954f5aae79fb0d8b37b43b3dc01cc9fb29437ff7ebd2f40a74e37c881a5829a32f3c6359024ee0",
+            "id": "granitemoehybrid",
+            "kind": "built_in"
           },
-          "ok": false
+          "layers": 2,
+          "missing": [],
+          "ok": true,
+          "supported": true
         },
         "claimed_level": "B",
         "none": {
           "failure": {
-            "error": "NOT_LOWERABLE(GraniteMoeHybridForCausalLM: Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)",
-            "missing": [
-              {
-                "general_primitive": null,
-                "what": "MIXER_LAYER_PATTERN_HYBRID_V1",
-                "why": "per-layer mixer pattern with Mamba-2 and attention sharing an MoE feed-forward"
-              }
-            ],
+            "error": "NOT_LOWERABLE(GraniteMoeHybridForCausalLM: layer type `linear_attention` is not modelled [in variable `types`])",
+            "missing": [],
             "unmapped_config_keys": []
           },
           "ok": false
         },
-        "refusal_bypassed_for_user_adapter": true,
-        "refusal_overridden": "user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)",
+        "refusal_bypassed_for_user_adapter": false,
+        "refusal_overridden": null,
         "report": {
           "adapter": {
-            "hash": "c6524c95b5da443ed86ac39236482f070c46e94112f378aed670d3498838240a5ab3b19a70fc286cb19974f353b4162ad9a0dd168625fc730b05b4b1060067f5",
+            "hash": "f3841398440270d0dd4da56398f10c0a1934aa0727f5f2e629954f5aae79fb0d8b37b43b3dc01cc9fb29437ff7ebd2f40a74e37c881a5829a32f3c6359024ee0",
             "id": "granitemoehybrid",
-            "kind": "user_file"
+            "kind": "built_in"
           },
           "assumed_defaults": [
             "mlp_bias"
@@ -12955,6 +13037,13 @@
               "id": "RESIDUAL_PRE_NORM_V1",
               "layers": 2,
               "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 param(s) bound by expression: moe.shared.gate.w, moe.shared.up.w",
+              "id": "WEIGHTS_EXPR_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
           "level": "B",
@@ -12976,14 +13065,7 @@
           "supported": true
         }
       },
-      "refuted_routes": [
-        {
-          "error": "weights: param `moe.shared.up.w`: checkpoint gives [32, 32], graph needs [16, 32]",
-          "failed_stage": "bind",
-          "level": "B",
-          "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters); user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet)"
-        }
-      ],
+      "refuted_routes": [],
       "route": "decoder",
       "share": null,
       "stages": {
@@ -12998,7 +13080,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 10,
           "ok": true,
           "position": {
             "commit_lanes": 2256,
@@ -13026,14 +13108,46 @@
           }
         },
         "bind": {
-          "error": "weights: param `moe.shared.up.w`: checkpoint gives [32, 32], graph needs [16, 32]",
-          "ms": 4,
-          "ok": false
+          "ms": 5,
+          "ok": true,
+          "unused_tensors": 0
+        },
+        "court": {
+          "all_equal": true,
+          "by_terminal_primitive": {
+            "Clamp": 888,
+            "Gather": 144,
+            "Reshape": 24,
+            "TopK": 48
+          },
+          "commit_points_replayed": 1104,
+          "ms": 0,
+          "ok": true,
+          "replayed_on_exec": 1104
         },
         "fixture": {
           "available": true,
           "ms": 0,
           "ok": true
+        },
+        "float_vs_hf": {
+          "max_rel_vs_hf": 4.388786183164821e-7,
+          "ms": 9,
+          "near_ties": 0,
+          "ok": true,
+          "positions": 10,
+          "reference": "full"
+        },
+        "int_vs_float": {
+          "kl_max": 0.031256320765229884,
+          "kl_mean": 0.0006560684690563531,
+          "max_kl": 0.03,
+          "min_top1": 0.8,
+          "ms": 189,
+          "ok": true,
+          "positions": 72,
+          "ppl_delta": 0.003934688940328668,
+          "top1": 0.9583333333333334
         },
         "lower": {
           "blocks": 4,
@@ -13047,7 +13161,7 @@
           },
           "digest": "164547d8c273f6438128ff733e508cb87192fbad485fb947c56f1d67ee3406ec7bbee3086862b495fd152f1d70bdd70488b6690b9e3fd3cc783074c2bbb69a15",
           "layers": 2,
-          "ms": 2,
+          "ms": 3,
           "nodes": 694,
           "ok": true,
           "params": 157,
@@ -13078,15 +13192,24 @@
             "Transpose": 3
           },
           "states": 4
+        },
+        "materialise": {
+          "ms": 115,
+          "ok": true,
+          "tensors": 157
+        },
+        "three_way": {
+          "equal": true,
+          "ms": 5572,
+          "ok": true,
+          "positions": 24,
+          "sequences": 2
         }
       },
-      "synthesized": {
-        "blocked_by_keys": [],
-        "tried": []
-      },
+      "synthesized": null,
       "tensors": 29,
       "usage": "m",
-      "via": "third-party adapter `granitemoehybrid` (tools/corpus/adapters); user adapter overrides built-in refusal: MIXER_LAYER_PATTERN_HYBRID_V1 (Granite-4 hybrid (Mamba2 + attention + MoE per layer) is not modelled yet) (refuted: bind)"
+      "via": "built-in adapter `granitemoehybrid`"
     },
     {
       "category": "text/hybrid",
@@ -13098,7 +13221,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "zamba2",
-      "ms": 1,
+      "ms": 5,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13158,7 +13281,34 @@
       "share": null,
       "stages": {},
       "synthesized": {
-        "blocked_by_keys": [],
+        "blocked_by_keys": [
+          "adapter_rank",
+          "add_bias_linear",
+          "attention_head_dim",
+          "attention_hidden_size",
+          "chunk_size",
+          "hybrid_layer_ids",
+          "kv_channels",
+          "layers_block_type",
+          "mamba_d_conv",
+          "mamba_d_state",
+          "mamba_expand",
+          "mamba_headdim",
+          "mamba_ngroups",
+          "n_mamba_heads",
+          "num_logits_to_keep",
+          "num_mem_blocks",
+          "num_query_groups",
+          "time_step_floor",
+          "time_step_max",
+          "time_step_min",
+          "use_conv_bias",
+          "use_long_context",
+          "use_mamba_kernels",
+          "use_mem_eff_path",
+          "use_mem_rope",
+          "use_shared_attention_adapter"
+        ],
         "tried": []
       },
       "tensors": 40,
@@ -13175,7 +13325,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "nemotron_h",
-      "ms": 1,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13235,7 +13385,43 @@
       "share": null,
       "stages": {},
       "synthesized": {
-        "blocked_by_keys": [],
+        "blocked_by_keys": [
+          "chunk_size",
+          "conv_kernel",
+          "expand",
+          "layer_norm_epsilon",
+          "layers_block_type",
+          "mamba_head_dim",
+          "mamba_hidden_act",
+          "mamba_num_heads",
+          "mamba_proj_bias",
+          "mamba_ssm_cache_dtype",
+          "mlp_hidden_act",
+          "moe_intermediate_size",
+          "moe_latent_size",
+          "moe_shared_expert_intermediate_size",
+          "moe_shared_expert_overlap",
+          "mtp_layers_block_type",
+          "n_group",
+          "n_groups",
+          "n_routed_experts",
+          "n_shared_experts",
+          "norm_topk_prob",
+          "num_experts_per_tok",
+          "num_logits_to_keep",
+          "num_nextn_predict_layers",
+          "rescale_prenorm_residual",
+          "residual_in_fp32",
+          "routed_scaling_factor",
+          "ssm_state_size",
+          "time_step_floor",
+          "time_step_limit",
+          "time_step_max",
+          "time_step_min",
+          "topk_group",
+          "use_conv_bias",
+          "use_mamba_kernels"
+        ],
         "tried": []
       },
       "tensors": 33,
@@ -13252,7 +13438,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "lfm2",
-      "ms": 11,
+      "ms": 12,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13374,7 +13560,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "bert",
-      "ms": 899,
+      "ms": 929,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13541,13 +13727,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.0108130338727388e-7,
-          "ms": 7,
+          "ms": 8,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999479084559845,
-          "ms": 112,
+          "ms": 116,
           "ok": true
         },
         "lower": {
@@ -13586,12 +13772,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 64,
+          "ms": 65,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 699,
+          "ms": 722,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -13612,7 +13798,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "roberta",
-      "ms": 891,
+      "ms": 1122,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13779,13 +13965,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.4775875375535775e-7,
-          "ms": 7,
+          "ms": 10,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999174291031367,
-          "ms": 110,
+          "ms": 114,
           "ok": true
         },
         "lower": {
@@ -13824,12 +14010,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 61,
+          "ms": 154,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 696,
+          "ms": 827,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -13850,7 +14036,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "xlm-roberta",
-      "ms": 1321,
+      "ms": 1477,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14062,12 +14248,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 92,
+          "ms": 94,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1038,
+          "ms": 1190,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -14088,7 +14274,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "distilbert",
-      "ms": 904,
+      "ms": 935,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14227,7 +14413,7 @@
           "cone_work": 621,
           "cones": 17,
           "job_macs": 215040,
-          "ms": 5,
+          "ms": 7,
           "ok": true,
           "step_leaves": 189
         },
@@ -14256,7 +14442,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.930787324496933e-7,
-          "ms": 7,
+          "ms": 9,
           "ok": true,
           "sequences": 2
         },
@@ -14301,12 +14487,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 61,
+          "ms": 64,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 704,
+          "ms": 724,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -14327,7 +14513,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mpnet",
-      "ms": 923,
+      "ms": 984,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14496,13 +14682,13 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.9314177274836601e-7,
-          "ms": 7,
+          "ms": 8,
           "ok": true,
           "sequences": 2
         },
         "int_vs_hf": {
           "min_cosine_vs_hf": 0.9999580368408341,
-          "ms": 115,
+          "ms": 125,
           "ok": true
         },
         "lower": {
@@ -14541,12 +14727,12 @@
           "states": 0
         },
         "materialise": {
-          "ms": 63,
+          "ms": 76,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 721,
+          "ms": 759,
           "ok": true,
           "positions": 2,
           "sequences": 2
@@ -14642,14 +14828,14 @@
     {
       "category": "encoder",
       "claimed_level": "B",
-      "failed_stage": "panic",
+      "failed_stage": "lower",
       "heavy_fixture": true,
       "hf_arch": "AlbertModel",
       "id": "albert",
       "level": "C",
       "level_label": "C",
       "model_type": "albert",
-      "ms": 11,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14787,11 +14973,22 @@
               "status": "SUPPORTED"
             }
           ],
-          "level": "B",
-          "missing": [],
+          "level": "C",
+          "missing": [
+            {
+              "general_primitive": null,
+              "what": "checkpoint tensors the reading never uses",
+              "why": "1 tensor(s): encoder.embedding_hidden_mapping_in.bias — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)"
+            },
+            {
+              "general_primitive": null,
+              "what": "the checkpoint does not fit the reading",
+              "why": "param `embed.pos_table`: checkpoint gives [32, 16], graph needs [32, 32], param `embed.norm.gain`: checkpoint gives [16], graph needs [32], param `embed.norm.bias`: checkpoint gives [16], graph needs [32], … (4 in all)"
+            }
+          ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "LOWERABLE",
+          "result": "NOT_LOWERABLE: missing: checkpoint tensors the reading never uses, the checkpoint does not fit the reading",
           "unmapped_config_keys": []
         },
         "user": {
@@ -14808,8 +15005,8 @@
       },
       "refuted_routes": [
         {
-          "error": "Add operands do not broadcast",
-          "failed_stage": "panic",
+          "error": "NOT_LOWERABLE(AlbertModel: an embedding of another width than the hidden size (a factorised embedding with its projection) or an embedding scale: this lowering reads the plain BERT embedding)",
+          "failed_stage": "lower",
           "level": "B",
           "via": "third-party adapter `albert` (tools/corpus/adapters)"
         }
@@ -14817,8 +15014,8 @@
       "route": "encoder-bidir",
       "share": null,
       "stages": {
-        "panic": {
-          "error": "Add operands do not broadcast",
+        "lower": {
+          "error": "NOT_LOWERABLE(AlbertModel: an embedding of another width than the hidden size (a factorised embedding with its projection) or an embedding scale: this lowering reads the plain BERT embedding)",
           "ms": 0,
           "ok": false
         }
@@ -14826,7 +15023,7 @@
       "synthesized": null,
       "tensors": 25,
       "usage": "m",
-      "via": "third-party adapter `albert` (tools/corpus/adapters) (refuted: panic)"
+      "via": "third-party adapter `albert` (tools/corpus/adapters) (refuted: lower)"
     },
     {
       "category": "encoder",
@@ -14977,7 +15174,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "clip_text_model",
-      "ms": 1315,
+      "ms": 1304,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15203,12 +15400,12 @@
           "states": 2
         },
         "materialise": {
-          "ms": 47,
+          "ms": 45,
           "ok": true
         },
         "three_way": {
           "equal": true,
-          "ms": 1114,
+          "ms": 1106,
           "ok": true,
           "positions": 15,
           "sequences": 2
@@ -15306,7 +15503,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "t5",
-      "ms": 7,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15337,21 +15534,81 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "kind": "none"
+            "hash": "d74175ed7ab1494f77b6a7716dc107db3d39d25c521a8b27d63a8fd357ce554774bac7120680ac7c2a0becc2bb929c04afe72d2a72713ad22ace785d7a15a555",
+            "id": "t5",
+            "kind": "built_in"
           },
           "assumed_defaults": [],
-          "features": [],
-          "level": "C",
-          "missing": [
+          "features": [
             {
-              "general_primitive": null,
-              "what": "an adapter for `T5ForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_CROSS_ENCDEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "64 × 32",
+              "id": "EMBED_TOKEN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 + 2 layers of 32",
+              "id": "ENCDEC_FROM_SPEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "HEAD_PRE_SCALE_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_DENSE_PLAIN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "NORM_RMS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "OUTPUT_LOGITS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "8 buckets",
+              "id": "POS_RELATIVE_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "RESIDUAL_PRE_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
+          "level": "B",
+          "missing": [],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`T5ForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "LOWERABLE",
           "unmapped_config_keys": []
         }
       },
@@ -15482,21 +15739,74 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "kind": "none"
+            "hash": "d74175ed7ab1494f77b6a7716dc107db3d39d25c521a8b27d63a8fd357ce554774bac7120680ac7c2a0becc2bb929c04afe72d2a72713ad22ace785d7a15a555",
+            "id": "t5",
+            "kind": "built_in"
           },
           "assumed_defaults": [],
-          "features": [],
-          "level": "C",
-          "missing": [
+          "features": [
             {
-              "general_primitive": null,
-              "what": "an adapter for `T5ForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_CROSS_ENCDEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "64 × 32",
+              "id": "EMBED_TOKEN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 + 2 layers of 32",
+              "id": "ENCDEC_FROM_SPEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_DENSE_GATED_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "NORM_RMS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "OUTPUT_LOGITS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "8 buckets",
+              "id": "POS_RELATIVE_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "RESIDUAL_PRE_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
+          "level": "B",
+          "missing": [],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`T5ForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "LOWERABLE",
           "unmapped_config_keys": []
         }
       },
@@ -15597,7 +15907,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "bart",
-      "ms": 8,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15628,21 +15938,102 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "kind": "none"
+            "hash": "89cf59566e3d061e7f8a97be096f207e1a75d27b1a23726d37becfea1c9969193a3a28b2e67e2dd2ada082959bfe54f71334980fa54d2d07db77ef2a3e56e1e4",
+            "id": "bart",
+            "kind": "built_in"
           },
           "assumed_defaults": [],
-          "features": [],
-          "level": "C",
-          "missing": [
+          "features": [
             {
-              "general_primitive": null,
-              "what": "an adapter for `BartForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_CROSS_ENCDEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_POSITION_LEARNED_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "64 × 32",
+              "id": "EMBED_TOKEN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 + 2 layers of 32",
+              "id": "ENCDEC_FROM_SPEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "HEAD_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_DENSE_PLAIN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "NORM_LAYER_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "OUTPUT_LOGITS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "RESIDUAL_POST_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
+          "level": "B",
+          "missing": [],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`BartForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "LOWERABLE",
           "unmapped_config_keys": []
         }
       },
@@ -15743,7 +16134,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "mbart",
-      "ms": 9,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15774,21 +16165,109 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "kind": "none"
+            "hash": "8ae3fc320a17c40d873e11ad930ddcb012bc7321dacf26067d60eff2cd179717900f1d4be69ed6e0aed48a37be58bf7eaad3ffc39e77e52339cc7217becfed39",
+            "id": "mbart",
+            "kind": "built_in"
           },
           "assumed_defaults": [],
-          "features": [],
-          "level": "C",
-          "missing": [
+          "features": [
             {
-              "general_primitive": null,
-              "what": "an adapter for `MBartForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_CROSS_ENCDEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_POSITION_LEARNED_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_SCALE_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "64 × 32",
+              "id": "EMBED_TOKEN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 + 2 layers of 32",
+              "id": "ENCDEC_FROM_SPEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "HEAD_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_DENSE_PLAIN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "NORM_LAYER_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "OUTPUT_LOGITS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "RESIDUAL_PRE_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
+          "level": "B",
+          "missing": [],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MBartForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "LOWERABLE",
           "unmapped_config_keys": []
         }
       },
@@ -15889,7 +16368,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "marian",
-      "ms": 7,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15920,21 +16399,102 @@
         "refusal_overridden": null,
         "report": {
           "adapter": {
-            "kind": "none"
+            "hash": "2764c43345391ec572ba09d126f7ecafccbf43fbaa7af7969145dd1a9eac8671e460660be23a695188895560c983268090f54dde46a8395d8b21fc38f60681a0",
+            "id": "marian",
+            "kind": "built_in"
           },
           "assumed_defaults": [],
-          "features": [],
-          "level": "C",
-          "missing": [
+          "features": [
             {
-              "general_primitive": null,
-              "what": "an adapter for `MarianMTModel`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "ATTN_CROSS_ENCDEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "EMBED_SCALE_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "64 × 32",
+              "id": "EMBED_TOKEN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "2 + 2 layers of 32",
+              "id": "ENCDEC_FROM_SPEC_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "HEAD_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_BIAS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "MLP_DENSE_PLAIN_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "NORM_LAYER_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "OUTPUT_LOGITS_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "POS_SINUSOID_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
+            },
+            {
+              "capability": null,
+              "detail": "",
+              "id": "RESIDUAL_POST_NORM_V1",
+              "layers": 0,
+              "status": "SUPPORTED"
             }
           ],
+          "level": "B",
+          "missing": [],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MarianMTModel` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "LOWERABLE",
           "unmapped_config_keys": []
         }
       },
@@ -16000,13 +16560,13 @@
           "missing": [
             {
               "general_primitive": null,
-              "what": "an adapter for `LongT5ForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "what": "an encoder–decoder adapter for `LongT5ForConditionalGeneration`",
+              "why": "no built-in adapter of kind `encdec` claims this architecture"
             }
           ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`LongT5ForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`LongT5ForConditionalGeneration` is an encoder–decoder no adapter of kind `encdec` claims)",
           "unmapped_config_keys": []
         }
       },
@@ -16116,7 +16676,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "llava",
-      "ms": 3289,
+      "ms": 2365,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16283,7 +16843,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.7283349353856235e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -16294,7 +16854,7 @@
           "kl_mean": 0.00004299785464582157,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 126,
+          "ms": 117,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00044524224948483404,
@@ -16338,13 +16898,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 58,
+          "ms": 51,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 3084,
+          "ms": 2174,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16365,7 +16925,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen2_vl",
-      "ms": 2497,
+      "ms": 2527,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16493,7 +17053,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 2,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -16521,7 +17081,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 3,
           "ok": true,
           "unused_tensors": 0
         },
@@ -16544,7 +17104,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.513669532666341e-7,
-          "ms": 4,
+          "ms": 6,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -16555,7 +17115,7 @@
           "kl_mean": 0.000038770329270355674,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 147,
+          "ms": 151,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.001291733058095268,
@@ -16599,13 +17159,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 64,
+          "ms": 126,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2264,
+          "ms": 2217,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16626,7 +17186,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen2_5_vl",
-      "ms": 2418,
+      "ms": 2361,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16816,7 +17376,7 @@
           "kl_mean": 0.000043175217997752,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 132,
+          "ms": 120,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00021536858845783158,
@@ -16860,13 +17420,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 78,
+          "ms": 82,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2186,
+          "ms": 2134,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16887,7 +17447,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen3_vl",
-      "ms": 2594,
+      "ms": 2452,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17100,7 +17660,7 @@
           "kl_mean": 0.000044180493213625405,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 133,
+          "ms": 136,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0003029459893957309,
@@ -17144,13 +17704,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 66,
+          "ms": 67,
           "ok": true,
           "tensors": 138
         },
         "three_way": {
           "equal": true,
-          "ms": 2366,
+          "ms": 2221,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17171,7 +17731,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma3",
-      "ms": 2508,
+      "ms": 3236,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17403,7 +17963,7 @@
           "kl_mean": 6.847584243221806e-10,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 144,
+          "ms": 139,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0018083667384980462,
@@ -17453,7 +18013,7 @@
         },
         "three_way": {
           "equal": true,
-          "ms": 2268,
+          "ms": 3001,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17548,7 +18108,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "idefics3",
-      "ms": 2679,
+      "ms": 2558,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17725,7 +18285,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.855507874919617e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -17736,7 +18296,7 @@
           "kl_mean": 0.00004293954374440663,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 117,
+          "ms": 128,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0006096541640765452,
@@ -17780,13 +18340,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 71,
+          "ms": 77,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2464,
+          "ms": 2327,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17807,7 +18367,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "mllama",
-      "ms": 5,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17920,7 +18480,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "clip_vision_model",
-      "ms": 9,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18031,7 +18591,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "siglip_vision_model",
-      "ms": 8,
+      "ms": 7,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18109,7 +18669,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "vit",
-      "ms": 5,
+      "ms": 7,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18269,7 +18829,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "unet",
-      "ms": 3,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18325,7 +18885,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "unet",
-      "ms": 3,
+      "ms": 4,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18493,7 +19053,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "sd3",
-      "ms": 1,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18549,7 +19109,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "vae",
-      "ms": 2,
+      "ms": 1,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18605,7 +19165,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "whisper",
-      "ms": 2,
+      "ms": 1,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18644,13 +19204,13 @@
           "missing": [
             {
               "general_primitive": null,
-              "what": "an adapter for `WhisperForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "what": "an encoder–decoder adapter for `WhisperForConditionalGeneration`",
+              "why": "no built-in adapter of kind `encdec` claims this architecture"
             }
           ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`WhisperForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`WhisperForConditionalGeneration` is an encoder–decoder no adapter of kind `encdec` claims)",
           "unmapped_config_keys": []
         }
       },
@@ -18673,7 +19233,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "wav2vec2",
-      "ms": 3,
+      "ms": 5,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18784,7 +19344,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "speecht5",
-      "ms": 4,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18823,13 +19383,13 @@
           "missing": [
             {
               "general_primitive": null,
-              "what": "an adapter for `SpeechT5ForTextToSpeech`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "what": "an encoder–decoder adapter for `SpeechT5ForTextToSpeech`",
+              "why": "no built-in adapter of kind `encdec` claims this architecture"
             }
           ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`SpeechT5ForTextToSpeech` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`SpeechT5ForTextToSpeech` is an encoder–decoder no adapter of kind `encdec` claims)",
           "unmapped_config_keys": []
         }
       },
@@ -18852,7 +19412,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "musicgen",
-      "ms": 3,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -18891,13 +19451,13 @@
           "missing": [
             {
               "general_primitive": null,
-              "what": "an adapter for `MusicgenForConditionalGeneration`",
-              "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+              "what": "an encoder–decoder adapter for `MusicgenForConditionalGeneration`",
+              "why": "no built-in adapter of kind `encdec` claims this architecture"
             }
           ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MusicgenForConditionalGeneration` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+          "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MusicgenForConditionalGeneration` is an encoder–decoder no adapter of kind `encdec` claims)",
           "unmapped_config_keys": []
         }
       },
@@ -18920,7 +19480,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "encodec",
-      "ms": 3,
+      "ms": 2,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -19062,7 +19622,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "internlm2",
-      "ms": 14,
+      "ms": 24,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -19187,7 +19747,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "minicpm",
-      "ms": 16,
+      "ms": 26,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -19327,7 +19887,7 @@
     }
   ],
   "full": true,
-  "pack_hash": "b322735f7d207a4c9081ccf442b5155a2b9fa03d754ad0c8cc1072074829781982b37607498158d891c2c821dc0e17d212f463593b7b5628f1806b643a5ba175",
+  "pack_hash": "b779a4796e0de7105e803d35cf5adee1bffde05f73b3396ba3480daec5820f5a95b4b45636bd0b970cb88124010d56077456843ca4760fe325f5d30cd217e73a",
   "schema": "misaka.palw.corpus-report.v2",
   "transformers": "5.17.0",
   "usage_weight": {

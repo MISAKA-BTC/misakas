@@ -927,7 +927,9 @@
     "q_lora_rank": 12,
     "qk_rope_head_dim": 4,
     "qk_nope_head_dim": 8,
-    "v_head_dim": 8
+    "v_head_dim": 8,
+    "scale_emb": 2.0,
+    "dim_model_base": 32
    },
    "usage": "l",
    "share": null,

@@ -10,7 +10,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "afmoe",
-      "ms": 216,
+      "ms": 222,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -210,11 +210,17 @@
               "status": "SUPPORTED"
             }
           ],
-          "level": "B",
-          "missing": [],
+          "level": "C",
+          "missing": [
+            {
+              "general_primitive": null,
+              "what": "the checkpoint does not fit the reading",
+              "why": "param `moe.experts.gate` (layer 0): weights: slice reaches 63 of an axis of 32 (shape [8, 32, 128]), param `moe.experts.gate` (layer 1): weights: slice reaches 63 of an axis of 32 (shape [8, 32, 128]), param `moe.experts.up` (layer 0): weights: slice reaches 127 of an axis of 32 (shape [8, 32, 128]), … (6 in all)"
+            }
+          ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "LOWERABLE",
+          "result": "NOT_LOWERABLE: missing: the checkpoint does not fit the reading",
           "unmapped_config_keys": []
         },
         "user": {
@@ -350,7 +356,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "axk1",
-      "ms": 3027,
+      "ms": 3208,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -624,7 +630,7 @@
           "kl_mean": 0.003627453176323961,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 164,
+          "ms": 153,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.013714347705603425,
@@ -674,13 +680,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 66,
+          "ms": 68,
           "ok": true,
           "tensors": 179
         },
         "three_way": {
           "equal": true,
-          "ms": 2763,
+          "ms": 2952,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -701,7 +707,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "axk2",
-      "ms": 12,
+      "ms": 13,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -762,7 +768,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "bert-generation",
-      "ms": 1937,
+      "ms": 1998,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -957,7 +963,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 4,
           "ok": true,
           "unused_tensors": 0
         },
@@ -991,7 +997,7 @@
           "kl_mean": 0.0006089039150257808,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 97,
+          "ms": 96,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00767744282591365,
@@ -1033,13 +1039,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 61,
+          "ms": 73,
           "ok": true,
           "tensors": 123
         },
         "three_way": {
           "equal": true,
-          "ms": 1760,
+          "ms": 1796,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1276,7 +1282,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "biogpt",
-      "ms": 27,
+      "ms": 24,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1498,7 +1504,7 @@
           },
           "digest": "8bb7a7d8399b5136c443fefacfcb952472e4df946786ab6ae1387ae497588d8b667e1c27ac6ae043421513c99c81fb306febeb4780d5af1ab24cf7d8dc1687bc",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 273,
           "ok": true,
           "params": 64,
@@ -1653,7 +1659,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "bloom",
-      "ms": 2320,
+      "ms": 2334,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -1849,7 +1855,7 @@
           "kl_mean": 0.00030877391186502536,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 128,
+          "ms": 118,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0030571133294030606,
@@ -1892,13 +1898,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 86,
+          "ms": 78,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 2089,
+          "ms": 2120,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -1992,7 +1998,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "codegen",
-      "ms": 1,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2052,7 +2058,17 @@
       "share": null,
       "stages": {},
       "synthesized": {
-        "blocked_by_keys": [],
+        "blocked_by_keys": [
+          "activation_function",
+          "layer_norm_epsilon",
+          "n_ctx",
+          "n_embd",
+          "n_head",
+          "n_inner",
+          "n_layer",
+          "n_positions",
+          "rotary_dim"
+        ],
         "tried": []
       },
       "tensors": 21,
@@ -2069,7 +2085,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "cohere",
-      "ms": 2303,
+      "ms": 2331,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2265,7 +2281,7 @@
           "kl_mean": 3.853602065312996e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 110,
+          "ms": 119,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00025862535410525744,
@@ -2309,13 +2325,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 57,
+          "ms": 62,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 2120,
+          "ms": 2134,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2336,7 +2352,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "cohere2_moe",
-      "ms": 4052,
+      "ms": 4690,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2514,7 +2530,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1768,
@@ -2566,7 +2582,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.7234064935474973e-7,
-          "ms": 6,
+          "ms": 7,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -2577,7 +2593,7 @@
           "kl_mean": 0.00007179121971956889,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 164,
+          "ms": 139,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0009139031210154691,
@@ -2595,7 +2611,7 @@
           },
           "digest": "de9ade404f43238d06534a51b4647f415363bfbdafd682da382a1be749b5f5377c13da8105ecb7e25acb02c0c0fc2be2cff25aa19d91ae2acb7b94689af20e79",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 297,
           "ok": true,
           "params": 51,
@@ -2623,13 +2639,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 95,
+          "ms": 89,
           "ok": true,
           "tensors": 90
         },
         "three_way": {
           "equal": true,
-          "ms": 3742,
+          "ms": 4423,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -2650,7 +2666,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "cpmant",
-      "ms": 10,
+      "ms": 8,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2751,7 +2767,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "ctrl",
-      "ms": 8,
+      "ms": 17,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2826,7 +2842,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "data2vec-text",
-      "ms": 9,
+      "ms": 19,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -2899,7 +2915,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "deepseek_v2",
-      "ms": 3591,
+      "ms": 4102,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3046,7 +3062,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 1576,
@@ -3109,7 +3125,7 @@
           "kl_mean": 0.00035891063872395745,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 156,
+          "ms": 169,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.002167267358789804,
@@ -3155,13 +3171,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 91,
+          "ms": 361,
           "ok": true,
           "tensors": 182
         },
         "three_way": {
           "equal": true,
-          "ms": 3322,
+          "ms": 3545,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3267,7 +3283,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "electra",
-      "ms": 8,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3428,7 +3444,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "exaone4",
-      "ms": 2318,
+      "ms": 2472,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3630,7 +3646,7 @@
           "kl_mean": 0.000093757252733131,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 134,
+          "ms": 133,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0005453823416707859,
@@ -3674,13 +3690,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 58,
+          "ms": 100,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2109,
+          "ms": 2220,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -3701,7 +3717,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "exaone_moe",
-      "ms": 88801,
+      "ms": 102055,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -3938,7 +3954,7 @@
           }
         },
         "bind": {
-          "ms": 253,
+          "ms": 283,
           "ok": true,
           "unused_tensors": 0
         },
@@ -3962,7 +3978,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 6.379202669752455e-7,
-          "ms": 153,
+          "ms": 166,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -3973,7 +3989,7 @@
           "kl_mean": 0.00011973870625426439,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 1240,
+          "ms": 1816,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00033755566842064155,
@@ -4023,13 +4039,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 932,
+          "ms": 1058,
           "ok": true,
           "tensors": 150
         },
         "three_way": {
           "equal": true,
-          "ms": 86195,
+          "ms": 98701,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4050,7 +4066,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "flex_olmo",
-      "ms": 6628,
+      "ms": 7811,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4203,7 +4219,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 3988,
@@ -4266,7 +4282,7 @@
           "kl_mean": 0.00014681165326564088,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 196,
+          "ms": 230,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0008126972134401278,
@@ -4312,13 +4328,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 102,
+          "ms": 188,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 6293,
+          "ms": 7352,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4339,7 +4355,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "fuyu",
-      "ms": 10,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4431,7 +4447,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma",
-      "ms": 2308,
+      "ms": 3143,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4625,7 +4641,7 @@
           "kl_mean": 4.364782664218938e-9,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 123,
+          "ms": 201,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0008424098417999515,
@@ -4669,13 +4685,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 60,
+          "ms": 155,
           "ok": true,
           "tensors": 122
         },
         "three_way": {
           "equal": true,
-          "ms": 2110,
+          "ms": 2772,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -4696,7 +4712,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gemma4_unified_text",
-      "ms": 18493,
+      "ms": 22498,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -4908,7 +4924,7 @@
           }
         },
         "bind": {
-          "ms": 8,
+          "ms": 34,
           "ok": true,
           "unused_tensors": 0
         },
@@ -4931,7 +4947,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.2874795594948823e-7,
-          "ms": 35,
+          "ms": 110,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -4942,7 +4958,7 @@
           "kl_mean": 4.594857556172582e-6,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 667,
+          "ms": 1339,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.002536280713270167,
@@ -4986,13 +5002,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 415,
+          "ms": 684,
           "ok": true,
           "tensors": 158
         },
         "three_way": {
           "equal": true,
-          "ms": 17340,
+          "ms": 20290,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5013,7 +5029,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "glm",
-      "ms": 2252,
+      "ms": 2456,
       "read": {
         "a_diff": ".hf.mlp: \"FusedGateFirst\" ≠ \"Separate\"",
         "a_same_as_adapter": false,
@@ -5193,7 +5209,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 4.6251439252286653e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -5204,7 +5220,7 @@
           "kl_mean": 0.00005680603764236148,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 122,
+          "ms": 143,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00010009684330292146,
@@ -5248,13 +5264,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 70,
+          "ms": 102,
           "ok": true,
           "tensors": 132
         },
         "three_way": {
           "equal": true,
-          "ms": 2042,
+          "ms": 2193,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5275,7 +5291,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "glm4_moe_lite",
-      "ms": 2976,
+      "ms": 3382,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5543,7 +5559,7 @@
           "kl_mean": 0.0005707017765042674,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 152,
+          "ms": 172,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0029780548110304172,
@@ -5593,13 +5609,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 63,
+          "ms": 66,
           "ok": true,
           "tensors": 172
         },
         "three_way": {
           "equal": true,
-          "ms": 2726,
+          "ms": 3109,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5620,7 +5636,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "glm_moe_dsa",
-      "ms": 17,
+      "ms": 13,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5681,7 +5697,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt-sw3",
-      "ms": 2518,
+      "ms": 2792,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -5855,7 +5871,7 @@
           }
         },
         "bind": {
-          "ms": 3,
+          "ms": 4,
           "ok": true,
           "unused_tensors": 0
         },
@@ -5878,7 +5894,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.293254898501884e-7,
-          "ms": 6,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -5889,7 +5905,7 @@
           "kl_mean": 0.0003267929334249185,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 117,
+          "ms": 169,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0002057758894765671,
@@ -5931,13 +5947,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 108,
+          "ms": 81,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 2267,
+          "ms": 2516,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -5958,7 +5974,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt_bigcode",
-      "ms": 2365,
+      "ms": 2519,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6167,7 +6183,7 @@
           "kl_mean": 0.00037110831373661214,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 107,
+          "ms": 113,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00007144600974262616,
@@ -6209,13 +6225,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 63,
+          "ms": 73,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 2171,
+          "ms": 2309,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6236,7 +6252,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gpt_neo",
-      "ms": 2043,
+      "ms": 2320,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6378,7 +6394,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 896,
@@ -6433,7 +6449,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.4486426892240216e-7,
-          "ms": 3,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -6444,7 +6460,7 @@
           "kl_mean": 0.0002526694383754879,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 112,
+          "ms": 153,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.007541352229054388,
@@ -6461,7 +6477,7 @@
           },
           "digest": "ac3d7e4dbb9ec71d7c158c1fa05438e7889e86eb66cab8a00b87274a2a2470c8b3a17dee568e5d1a37b835c9e36a44e12b6858caf1651a98fa4f60a812577f58",
           "layers": 2,
-          "ms": 1,
+          "ms": 3,
           "nodes": 473,
           "ok": true,
           "params": 110,
@@ -6486,13 +6502,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 72,
+          "ms": 107,
           "ok": true,
           "tensors": 110
         },
         "three_way": {
           "equal": true,
-          "ms": 1841,
+          "ms": 2039,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6513,7 +6529,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "gpt_neox_japanese",
-      "ms": 8,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6586,7 +6602,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "gptj",
-      "ms": 2447,
+      "ms": 2938,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -6758,7 +6774,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -6781,7 +6797,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.9562152612222645e-7,
-          "ms": 4,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -6792,7 +6808,7 @@
           "kl_mean": 0.00003681641782694837,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 122,
+          "ms": 226,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00003666353709186332,
@@ -6836,13 +6852,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 66,
+          "ms": 147,
           "ok": true,
           "tensors": 106
         },
         "three_way": {
           "equal": true,
-          "ms": 2237,
+          "ms": 2541,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -6863,7 +6879,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "granite_swa",
-      "ms": 2555,
+      "ms": 2769,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7003,7 +7019,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 9,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -7035,7 +7051,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -7058,7 +7074,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 3.7049115361241e-7,
-          "ms": 8,
+          "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -7069,7 +7085,7 @@
           "kl_mean": 0.0006081437734624825,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 210,
+          "ms": 131,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.019081870718499427,
@@ -7086,7 +7102,7 @@
           },
           "digest": "3c510c174de240961de3122feaab6c5c02de11c4b8cee03b182becdb52fb5d51cadda64c96df45b62f29ec05d083fca136820a02005a5f554eb776ac0738c6ca",
           "layers": 2,
-          "ms": 2,
+          "ms": 10,
           "nodes": 596,
           "ok": true,
           "params": 124,
@@ -7116,13 +7132,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 127,
+          "ms": 83,
           "ok": true,
           "tensors": 124
         },
         "three_way": {
           "equal": true,
-          "ms": 2187,
+          "ms": 2496,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7143,7 +7159,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "granitemoe_swa",
-      "ms": 4032,
+      "ms": 4714,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7358,7 +7374,7 @@
           "kl_mean": 0.00007758576768620482,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 141,
+          "ms": 159,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0018463894524458624,
@@ -7407,13 +7423,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 69,
+          "ms": 145,
           "ok": true,
           "tensors": 120
         },
         "three_way": {
           "equal": true,
-          "ms": 3789,
+          "ms": 4374,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7434,7 +7450,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "granitemoeshared",
-      "ms": 4022,
+      "ms": 4408,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7629,7 +7645,7 @@
           "kl_mean": 0.0010582334054490357,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 128,
+          "ms": 153,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0018379463581170707,
@@ -7675,13 +7691,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 72,
+          "ms": 133,
           "ok": true,
           "tensors": 118
         },
         "three_way": {
           "equal": true,
-          "ms": 3793,
+          "ms": 4091,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -7702,7 +7718,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "hrm_text",
-      "ms": 17,
+      "ms": 18,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -7791,7 +7807,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "hy_v3",
-      "ms": 3175,
+      "ms": 3432,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8003,7 +8019,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -8027,7 +8043,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.5022247052379293e-7,
-          "ms": 4,
+          "ms": 10,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -8038,7 +8054,7 @@
           "kl_mean": 0.00021719659062952135,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 138,
+          "ms": 166,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0026799168149149732,
@@ -8086,13 +8102,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 60,
+          "ms": 174,
           "ok": true,
           "tensors": 150
         },
         "three_way": {
           "equal": true,
-          "ms": 2948,
+          "ms": 3051,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8174,7 +8190,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "hyperclovax",
-      "ms": 2429,
+      "ms": 2720,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8362,7 +8378,7 @@
           "kl_mean": 0.00007105230546004678,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 132,
+          "ms": 197,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0012084146704924859,
@@ -8406,13 +8422,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 53,
+          "ms": 93,
           "ok": true,
           "tensors": 138
         },
         "three_way": {
           "equal": true,
-          "ms": 2223,
+          "ms": 2407,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8433,7 +8449,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "jais2",
-      "ms": 2099,
+      "ms": 2441,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8628,7 +8644,7 @@
           "kl_mean": 0.000040011179288157386,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 106,
+          "ms": 146,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0007055889078649846,
@@ -8672,13 +8688,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 35,
+          "ms": 124,
           "ok": true,
           "tensors": 121
         },
         "three_way": {
           "equal": true,
-          "ms": 1938,
+          "ms": 2150,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -8760,7 +8776,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "megatron-bert",
-      "ms": 8,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -8833,7 +8849,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mellum",
-      "ms": 148708,
+      "ms": 194459,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9007,7 +9023,7 @@
           }
         },
         "bind": {
-          "ms": 452,
+          "ms": 517,
           "ok": true,
           "unused_tensors": 0
         },
@@ -9031,7 +9047,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 5.832751394866041e-7,
-          "ms": 220,
+          "ms": 281,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -9042,7 +9058,7 @@
           "kl_mean": 0.004655814796501097,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 1789,
+          "ms": 5436,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0006160592322626002,
@@ -9088,13 +9104,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 1330,
+          "ms": 2010,
           "ok": true,
           "tensors": 130
         },
         "three_way": {
           "equal": true,
-          "ms": 144893,
+          "ms": 186187,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -9115,7 +9131,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "mimo_v2_flash",
-      "ms": 16,
+      "ms": 19,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9177,14 +9193,14 @@
     {
       "category": "census/text",
       "claimed_level": "B",
-      "failed_stage": "materialise",
+      "failed_stage": null,
       "heavy_fixture": true,
       "hf_arch": "MiniCPM3ForCausalLM",
       "id": "minicpm3",
-      "level": "C",
-      "level_label": "C",
+      "level": "B",
+      "level_label": "B",
       "model_type": "minicpm3",
-      "ms": 86,
+      "ms": 2534,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9264,13 +9280,6 @@
             {
               "capability": null,
               "detail": "",
-              "id": "HEAD_PRE_SCALE_V1",
-              "layers": 0,
-              "status": "SUPPORTED"
-            },
-            {
-              "capability": null,
-              "detail": "",
               "id": "HEAD_TIED_V1",
               "layers": 0,
               "status": "SUPPORTED"
@@ -9344,14 +9353,7 @@
           "supported": true
         }
       },
-      "refuted_routes": [
-        {
-          "error": "materialise: NOT_LOWERABLE(LOGITS_Q24_V1: the calibrated logits reach 305.7 natural-log units; the Q24 logits of a text program hold |logit| < 128)",
-          "failed_stage": "materialise",
-          "level": "B",
-          "via": "third-party adapter `minicpm3` (tools/corpus/census-adapters); user adapter overrides built-in refusal: REFERENCE_REMOTE_CODE_V1, SCALE_MUP_V1 (MiniCPM3 (MLA + muP remote code) is not modelled yet)"
-        }
-      ],
+      "refuted_routes": [],
       "route": "decoder",
       "share": null,
       "stages": {
@@ -9398,18 +9400,41 @@
           "ok": true,
           "unused_tensors": 0
         },
+        "court": {
+          "all_equal": true,
+          "by_terminal_primitive": {
+            "Clamp": 840,
+            "Gather": 48,
+            "Reshape": 96
+          },
+          "commit_points_replayed": 984,
+          "ms": 0,
+          "ok": true,
+          "replayed_on_exec": 984
+        },
         "fixture": {
           "available": true,
           "ms": 0,
           "ok": true
         },
         "float_vs_hf": {
-          "max_rel_vs_hf": 1.4425466191661163e-7,
+          "max_rel_vs_hf": 1.3719228642475823e-6,
           "ms": 4,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
           "reference": "full"
+        },
+        "int_vs_float": {
+          "kl_max": 0.00002076798682218809,
+          "kl_mean": 7.338799558640039e-7,
+          "max_kl": 0.01,
+          "min_top1": 0.9,
+          "ms": 170,
+          "ok": true,
+          "positions": 72,
+          "ppl_delta": 0.0026676442950737123,
+          "top1": 1.0
         },
         "lower": {
           "blocks": 3,
@@ -9449,18 +9474,22 @@
           "states": 2
         },
         "materialise": {
-          "error": "materialise: NOT_LOWERABLE(LOGITS_Q24_V1: the calibrated logits reach 305.7 natural-log units; the Q24 logits of a text program hold |logit| < 128)",
-          "ms": 63,
-          "ok": false
+          "ms": 94,
+          "ok": true,
+          "tensors": 156
+        },
+        "three_way": {
+          "equal": true,
+          "ms": 2244,
+          "ok": true,
+          "positions": 24,
+          "sequences": 2
         }
       },
-      "synthesized": {
-        "blocked_by_keys": [],
-        "tried": []
-      },
+      "synthesized": null,
       "tensors": 26,
       "usage": "l",
-      "via": "third-party adapter `minicpm3` (tools/corpus/census-adapters); user adapter overrides built-in refusal: REFERENCE_REMOTE_CODE_V1, SCALE_MUP_V1 (MiniCPM3 (MLA + muP remote code) is not modelled yet) (refuted: materialise)"
+      "via": "third-party adapter `minicpm3` (tools/corpus/census-adapters); user adapter overrides built-in refusal: REFERENCE_REMOTE_CODE_V1, SCALE_MUP_V1 (MiniCPM3 (MLA + muP remote code) is not modelled yet)"
     },
     {
       "category": "census/text",
@@ -9533,7 +9562,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "minimax_m3_vl_text",
-      "ms": 8,
+      "ms": 10,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9658,7 +9687,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "ministral3",
-      "ms": 2349,
+      "ms": 2540,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9841,7 +9870,7 @@
           "kl_mean": 0.0000607363610576608,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 125,
+          "ms": 139,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0009109923394226005,
@@ -9885,13 +9914,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 52,
+          "ms": 74,
           "ok": true,
           "tensors": 131
         },
         "three_way": {
           "equal": true,
-          "ms": 2155,
+          "ms": 2309,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -9912,7 +9941,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "modernbert-decoder",
-      "ms": 11,
+      "ms": 13,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -9973,7 +10002,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "moshi",
-      "ms": 9,
+      "ms": 12,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10058,7 +10087,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mpt",
-      "ms": 2215,
+      "ms": 2242,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10247,7 +10276,7 @@
           "kl_mean": 0.00041103698852626,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 108,
+          "ms": 126,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0040478971730434354,
@@ -10290,13 +10319,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 73,
+          "ms": 77,
           "ok": true,
           "tensors": 97
         },
         "three_way": {
           "equal": true,
-          "ms": 2010,
+          "ms": 2013,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -10317,7 +10346,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "mvp",
-      "ms": 30,
+      "ms": 31,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10438,7 +10467,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "nanochat",
-      "ms": 41,
+      "ms": 43,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -10528,11 +10557,22 @@
               "status": "SUPPORTED"
             }
           ],
-          "level": "A",
-          "missing": [],
+          "level": "C",
+          "missing": [
+            {
+              "general_primitive": null,
+              "what": "checkpoint tensors the reading never uses",
+              "why": "4 tensor(s): model.layers.0.mlp.fc1.weight, model.layers.0.mlp.fc2.weight, model.layers.1.mlp.fc1.weight, model.layers.1.mlp.fc2.weight — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)"
+            },
+            {
+              "general_primitive": null,
+              "what": "the checkpoint does not fit the reading",
+              "why": "param `norm.mix.gain` (layer 0): weights: missing tensor `model.layers.0.input_layernorm.weight`, param `norm.mix.gain` (layer 1): weights: missing tensor `model.layers.1.input_layernorm.weight`, param `norm.ffn.gain` (layer 0): weights: missing tensor `model.layers.0.post_attention_layernorm.weight`, … (11 in all)"
+            }
+          ],
           "new_court_kernel_required": false,
           "new_primitive_required": false,
-          "result": "LOWERABLE",
+          "result": "NOT_LOWERABLE: missing: checkpoint tensors the reading never uses, the checkpoint does not fit the reading",
           "unmapped_config_keys": []
         },
         "user": {
@@ -10575,7 +10615,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 1184,
@@ -10682,7 +10722,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "nemotron",
-      "ms": 2085,
+      "ms": 2074,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -10833,7 +10873,7 @@
           }
         },
         "bind": {
-          "ms": 1,
+          "ms": 0,
           "ok": true,
           "unused_tensors": 0
         },
@@ -10867,7 +10907,7 @@
           "kl_mean": 0.0005775873492433906,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 102,
+          "ms": 113,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.00484742878569322,
@@ -10911,13 +10951,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 31,
+          "ms": 55,
           "ok": true,
           "tensors": 109
         },
         "three_way": {
           "equal": true,
-          "ms": 1937,
+          "ms": 1889,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -10938,7 +10978,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "olmo",
-      "ms": 2436,
+      "ms": 2500,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11118,7 +11158,7 @@
           "kl_mean": 0.00004871962002436213,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 124,
+          "ms": 129,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00014405685355645126,
@@ -11162,13 +11202,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 54,
+          "ms": 85,
           "ok": true,
           "tensors": 126
         },
         "three_way": {
           "equal": true,
-          "ms": 2242,
+          "ms": 2269,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11189,7 +11229,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "olmo2",
-      "ms": 2429,
+      "ms": 2322,
       "read": {
         "a_diff": ".hf.names.norm.post_ffn: \"model.layers.{L}.post_feedforward_layernorm\" ≠ null",
         "a_same_as_adapter": false,
@@ -11348,7 +11388,7 @@
           }
         },
         "bind": {
-          "ms": 4,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -11382,7 +11422,7 @@
           "kl_mean": 0.0001226064762845099,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 143,
+          "ms": 125,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.000275912332675432,
@@ -11426,13 +11466,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 103,
+          "ms": 64,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2161,
+          "ms": 2115,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11453,7 +11493,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "olmo3",
-      "ms": 2296,
+      "ms": 2322,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11652,7 +11692,7 @@
           "kl_mean": 0.00008641842963347817,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 114,
+          "ms": 121,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0020279701662874183,
@@ -11696,13 +11736,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 65,
+          "ms": 59,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2100,
+          "ms": 2125,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -11784,7 +11824,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "olmoe",
-      "ms": 14005,
+      "ms": 12830,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -11947,7 +11987,7 @@
           }
         },
         "bind": {
-          "ms": 31,
+          "ms": 33,
           "ok": true,
           "unused_tensors": 0
         },
@@ -11982,7 +12022,7 @@
           "kl_mean": 0.00009214469861089993,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 267,
+          "ms": 294,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.002231469449781698,
@@ -12028,13 +12068,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 147,
+          "ms": 159,
           "ok": true,
           "tensors": 130
         },
         "three_way": {
           "equal": true,
-          "ms": 13522,
+          "ms": 12303,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12055,7 +12095,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "openai-gpt",
-      "ms": 2232,
+      "ms": 2405,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12276,7 +12316,7 @@
           "kl_mean": 0.0009017380769509532,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 97,
+          "ms": 117,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.027298124675069313,
@@ -12318,13 +12358,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 55,
+          "ms": 99,
           "ok": true,
           "tensors": 114
         },
         "three_way": {
           "equal": true,
-          "ms": 2052,
+          "ms": 2158,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12345,7 +12385,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "pegasus",
-      "ms": 32,
+      "ms": 37,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12454,7 +12494,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "phi",
-      "ms": 2208,
+      "ms": 2317,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12592,7 +12632,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 3,
+          "ms": 2,
           "ok": true,
           "position": {
             "commit_lanes": 864,
@@ -12654,7 +12694,7 @@
           "kl_mean": 0.000026301921240612025,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 157,
+          "ms": 102,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0004897342185914422,
@@ -12671,7 +12711,7 @@
           },
           "digest": "3d2b69e531903db0692b04cf3d968a708f8ca7b4048d031ea26e9e8aed7c1602c9efecc66ed835b7d3b92350ea37cf66b0c31231a0c1d7759a0b1b0eb8b18db5",
           "layers": 2,
-          "ms": 2,
+          "ms": 1,
           "nodes": 293,
           "ok": true,
           "params": 66,
@@ -12698,13 +12738,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 121,
+          "ms": 81,
           "ok": true,
           "tensors": 114
         },
         "three_way": {
           "equal": true,
-          "ms": 1909,
+          "ms": 2116,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12725,7 +12765,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "phimoe",
-      "ms": 4762,
+      "ms": 4984,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -12875,7 +12915,7 @@
           }
         },
         "bind": {
-          "ms": 9,
+          "ms": 11,
           "ok": true,
           "unused_tensors": 0
         },
@@ -12900,7 +12940,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.549747485757748e-7,
-          "ms": 6,
+          "ms": 7,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -12911,7 +12951,7 @@
           "kl_mean": 0.0030965747182524453,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 153,
+          "ms": 161,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.002329955373746029,
@@ -12960,13 +13000,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 68,
+          "ms": 109,
           "ok": true,
           "tensors": 123
         },
         "three_way": {
           "equal": true,
-          "ms": 4512,
+          "ms": 4680,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -12987,7 +13027,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "prophetnet",
-      "ms": 11,
+      "ms": 12,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13048,7 +13088,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen3_5_text",
-      "ms": 350600,
+      "ms": 357102,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13206,7 +13246,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 7,
           "ok": true,
           "position": {
             "commit_lanes": 46304,
@@ -13234,7 +13274,7 @@
           }
         },
         "bind": {
-          "ms": 38,
+          "ms": 44,
           "ok": true,
           "unused_tensors": 0
         },
@@ -13260,7 +13300,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.2211961141826988e-6,
-          "ms": 405,
+          "ms": 364,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -13271,7 +13311,7 @@
           "kl_mean": 0.00009414351722191034,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 7857,
+          "ms": 7778,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0003577771097259541,
@@ -13320,13 +13360,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 3655,
+          "ms": 2310,
           "ok": true,
           "tensors": 172
         },
         "three_way": {
           "equal": true,
-          "ms": 338625,
+          "ms": 346585,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -13347,7 +13387,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "recurrent_gemma",
-      "ms": 16,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13444,7 +13484,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "rembert",
-      "ms": 18,
+      "ms": 9,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13529,7 +13569,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "roberta-prelayernorm",
-      "ms": 9,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -13784,7 +13824,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "solar_open",
-      "ms": 3622,
+      "ms": 3630,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14006,7 +14046,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.6573025756537082e-7,
-          "ms": 4,
+          "ms": 5,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -14067,13 +14107,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 95,
+          "ms": 80,
           "ok": true,
           "tensors": 150
         },
         "three_way": {
           "equal": true,
-          "ms": 3356,
+          "ms": 3377,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -14094,7 +14134,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "stablelm",
-      "ms": 2332,
+      "ms": 2312,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14266,7 +14306,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.723104088134898e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -14277,7 +14317,7 @@
           "kl_mean": 0.000046372574428653796,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 145,
+          "ms": 123,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.0009767729154690485,
@@ -14321,13 +14361,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 80,
+          "ms": 57,
           "ok": true,
           "tensors": 131
         },
         "three_way": {
           "equal": true,
-          "ms": 2088,
+          "ms": 2113,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -14348,7 +14388,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "trocr",
-      "ms": 32,
+      "ms": 31,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14449,7 +14489,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "vaultgemma",
-      "ms": 2923,
+      "ms": 2864,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -14678,7 +14718,7 @@
           "kl_mean": 1.0195038289646791e-7,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 134,
+          "ms": 132,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.001822234764876196,
@@ -14730,7 +14770,7 @@
         },
         "three_way": {
           "equal": true,
-          "ms": 2686,
+          "ms": 2632,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -14751,7 +14791,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "xglm",
-      "ms": 29,
+      "ms": 28,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15087,7 +15127,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "youtu",
-      "ms": 2442,
+      "ms": 2525,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15306,7 +15346,7 @@
           "kl_mean": 0.0000488672728654203,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 137,
+          "ms": 143,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.008735127095142126,
@@ -15350,13 +15390,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 55,
+          "ms": 81,
           "ok": true,
           "tensors": 156
         },
         "three_way": {
           "equal": true,
-          "ms": 2223,
+          "ms": 2274,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -15377,7 +15417,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "zaya",
-      "ms": 13,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15438,7 +15478,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "qwen4_exp_text",
-      "ms": 31779,
+      "ms": 30788,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -15638,7 +15678,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 19,
+          "ms": 17,
           "ok": true,
           "position": {
             "commit_lanes": 11698,
@@ -15666,7 +15706,7 @@
           }
         },
         "bind": {
-          "ms": 9,
+          "ms": 7,
           "ok": true,
           "unused_tensors": 0
         },
@@ -15693,7 +15733,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.7103005174437995e-7,
-          "ms": 19,
+          "ms": 18,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -15704,7 +15744,7 @@
           "kl_mean": 0.000028019921547410102,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 710,
+          "ms": 827,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0024107037032878864,
@@ -15722,7 +15762,7 @@
           },
           "digest": "b643243e6ca99de61faff774d1bad2920dd27fc846e49140bb606dea1e92b455866bc1305e442420a1770cdb7bf0e69634dfd2610e5417a34970327f493a5f66",
           "layers": 10,
-          "ms": 14,
+          "ms": 11,
           "nodes": 2130,
           "ok": true,
           "params": 433,
@@ -15757,13 +15797,13 @@
           "states": 8
         },
         "materialise": {
-          "ms": 572,
+          "ms": 1325,
           "ok": true,
           "tensors": 590
         },
         "three_way": {
           "equal": true,
-          "ms": 30420,
+          "ms": 28563,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -15784,7 +15824,7 @@
       "level": "A",
       "level_label": "A",
       "model_type": "ministral",
-      "ms": 5207,
+      "ms": 5106,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": true,
@@ -15899,7 +15939,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 6,
+          "ms": 4,
           "ok": true,
           "position": {
             "commit_lanes": 2144,
@@ -15931,7 +15971,7 @@
           }
         },
         "bind": {
-          "ms": 8,
+          "ms": 2,
           "ok": true,
           "unused_tensors": 0
         },
@@ -15954,7 +15994,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 4.4458384617932424e-7,
-          "ms": 13,
+          "ms": 7,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -15965,7 +16005,7 @@
           "kl_mean": 0.00008051806414597738,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 218,
+          "ms": 264,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.00009129899438731215,
@@ -15982,7 +16022,7 @@
           },
           "digest": "b9613b76ff50a1ffb814795490c6ee31b10b17fad6a0198978a949c8cdf1fbb7958f9989b19a94c3a4c2d2dd4421eea6d6da53a14bd5663f925b26ff5a801d34",
           "layers": 3,
-          "ms": 4,
+          "ms": 2,
           "nodes": 583,
           "ok": true,
           "params": 126,
@@ -16009,13 +16049,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 198,
+          "ms": 201,
           "ok": true,
           "tensors": 181
         },
         "three_way": {
           "equal": true,
-          "ms": 4740,
+          "ms": 4612,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16036,7 +16076,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "granitemoeshared",
-      "ms": 13,
+      "ms": 11,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16121,7 +16161,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "mimo_v2_flash",
-      "ms": 2665,
+      "ms": 2985,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16294,7 +16334,7 @@
             "max_tile_macs": 16777216,
             "tile_len": 64
           },
-          "ms": 5,
+          "ms": 6,
           "ok": true,
           "position": {
             "commit_lanes": 1175,
@@ -16326,7 +16366,7 @@
           }
         },
         "bind": {
-          "ms": 2,
+          "ms": 1,
           "ok": true,
           "unused_tensors": 0
         },
@@ -16350,7 +16390,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.2410625146309366e-7,
-          "ms": 4,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -16361,7 +16401,7 @@
           "kl_mean": 0.00003999601025632537,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 144,
+          "ms": 181,
           "ok": true,
           "positions": 72,
           "ppl_delta": 0.000735156102895429,
@@ -16412,13 +16452,13 @@
           "states": 4
         },
         "materialise": {
-          "ms": 116,
+          "ms": 93,
           "ok": true,
           "tensors": 128
         },
         "three_way": {
           "equal": true,
-          "ms": 2377,
+          "ms": 2680,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16439,7 +16479,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "biogpt",
-      "ms": 2140,
+      "ms": 2691,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16645,7 +16685,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 1.9719780343733125e-7,
-          "ms": 5,
+          "ms": 3,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -16656,7 +16696,7 @@
           "kl_mean": 0.00015589071137535278,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 136,
+          "ms": 148,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.007925078519005369,
@@ -16698,13 +16738,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 98,
+          "ms": 224,
           "ok": true,
           "tensors": 116
         },
         "three_way": {
           "equal": true,
-          "ms": 1879,
+          "ms": 2297,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -16725,7 +16765,7 @@
       "level": "B",
       "level_label": "B",
       "model_type": "cohere2_moe",
-      "ms": 5642,
+      "ms": 6534,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -16962,7 +17002,7 @@
         },
         "float_vs_hf": {
           "max_rel_vs_hf": 2.3526211461869843e-7,
-          "ms": 8,
+          "ms": 10,
           "near_ties": 0,
           "ok": true,
           "positions": 10,
@@ -16973,7 +17013,7 @@
           "kl_mean": 0.00046197000292280487,
           "max_kl": 0.01,
           "min_top1": 0.9,
-          "ms": 213,
+          "ms": 214,
           "ok": true,
           "positions": 72,
           "ppl_delta": -0.0005637019804186627,
@@ -17019,13 +17059,13 @@
           "states": 2
         },
         "materialise": {
-          "ms": 141,
+          "ms": 233,
           "ok": true,
           "tensors": 120
         },
         "three_way": {
           "equal": true,
-          "ms": 5253,
+          "ms": 6050,
           "ok": true,
           "positions": 24,
           "sequences": 2
@@ -17046,7 +17086,7 @@
       "level": "C",
       "level_label": "C",
       "model_type": "cohere2_moe",
-      "ms": 13,
+      "ms": 19,
       "read": {
         "a_diff": null,
         "a_same_as_adapter": null,
@@ -17159,7 +17199,7 @@
     }
   ],
   "full": true,
-  "pack_hash": "b322735f7d207a4c9081ccf442b5155a2b9fa03d754ad0c8cc1072074829781982b37607498158d891c2c821dc0e17d212f463593b7b5628f1806b643a5ba175",
+  "pack_hash": "b779a4796e0de7105e803d35cf5adee1bffde05f73b3396ba3480daec5820f5a95b4b45636bd0b970cb88124010d56077456843ca4760fe325f5d30cd217e73a",
   "schema": "misaka.palw.corpus-report.v2",
   "transformers": "5.17.0",
   "usage_weight": {
