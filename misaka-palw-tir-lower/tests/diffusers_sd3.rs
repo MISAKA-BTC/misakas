@@ -61,6 +61,19 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
         pipe.params.iter().map(|p| p.tensors.values().map(|t| t.data.len()).sum::<usize>()).collect::<Vec<_>>()
     );
 
+    // The programs: blocks, nodes (the largest block is held to 512 by normal form), commit points, params.
+    for (k, prog) in pipe.programs.iter().enumerate() {
+        let nodes: usize = prog.blocks.iter().map(|b| b.nodes.len()).sum();
+        let widest = prog.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
+        let commits: usize = prog.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
+        eprintln!(
+            "  program {k:>2} {:<12} {:>2} blocks, {nodes:>5} nodes (widest block {widest:>3}), {commits:>4} commit points, {:>7} param elements",
+            pipe.pipeline.stages[k].name,
+            prog.blocks.len(),
+            pipe.params[k].tensors.values().map(|t| t.data.len()).sum::<usize>()
+        );
+    }
+
     let mut worst_lat = 0f64;
     for (k, (prompt, seed, steps)) in evaluation_cases().into_iter().enumerate() {
         let si = COUNTS.iter().position(|c| *c == steps).unwrap();
