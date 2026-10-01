@@ -75,6 +75,8 @@ pub fn builtin_lineages_v1() -> Vec<Arc<dyn PalwModelLineageV1>> {
         Arc::new(crate::lineages::qwen36::Qwen36LineageV1),
         // RFC-0002 Phase F: IR classes, the classes of the PALWTIR1 artifacts this node loads.
         Arc::new(crate::lineages::tir::TirLineageV1::new()),
+        // RFC-0003: generative (pipeline) classes, the classes of the PALWTIR2 artifacts this node loads.
+        Arc::new(crate::lineages::gen::GenLineageV1::new()),
     ]
 }
 
@@ -247,6 +249,12 @@ impl PalwClassSdk {
     /// [`crate::PalwTirClassEntryV1`].
     pub fn tir_ledger(&self) -> Vec<crate::lineage::PalwTirClassEntryV1> {
         self.lineages.iter().flat_map(|l| l.tir_classes()).collect()
+    }
+
+    /// **Every generative class this node holds** (RFC-0003) — the classes of the PALWTIR2 artifacts its
+    /// lineages loaded, beside the IR ledger for the same reason (see [`crate::PalwGenClassEntryV1`]).
+    pub fn gen_ledger(&self) -> Vec<crate::lineage::PalwGenClassEntryV1> {
+        self.lineages.iter().flat_map(|l| l.gen_classes()).collect()
     }
 
     /// **Load one `--palw-class-artifact` path, dispatched by the file's own magic.** The lineage

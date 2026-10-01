@@ -158,6 +158,18 @@ fn walk(
     Ok(all.len() as u32)
 }
 
+/// **Walk a pipeline class's inventory in order, one param instance resident at a time**: `visit(name, layer,
+/// row_start, bytes)` is each leaf's operand. Returns the leaf count. The public face of the walk the root, the
+/// operands and the readiness material are all built from, so a node that proves possession (a readiness
+/// multiproof) or serves an opening streams the one walk and never holds the artifact.
+pub fn palw_gen_visit_inventory_v1(
+    programs: &[TirProgramV2],
+    params: &dyn PipelineParams,
+    visit: &mut dyn FnMut(&str, Option<u16>, u32, &[u8]),
+) -> Result<u32, PalwTirInventoryError> {
+    walk(programs, params, visit)
+}
+
 /// **A pipeline class's artifact root, streamed** from its programs and their params. Returns
 /// `(root, leaf_count)`.
 pub fn palw_gen_inventory_root_v1(
