@@ -1,0 +1,6 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-qwen2",
+  "doc": "Wrappers over a Qwen2 text decoder (language_model.model.* names).",
+  "extends": ["qwen2", "mixin-vlm"]
+}

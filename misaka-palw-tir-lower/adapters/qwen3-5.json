@@ -1,0 +1,14 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen3-5",
+  "doc": "Qwen3.5 text decoder (dense): Qwen3-Next's hybrid with split GDN projections (in_proj_qkv / _z / _b / _a); attention always gates its output.",
+  "extends": ["decoder-core", "mixin-gdn-hybrid"],
+  "match": {"architectures": ["Qwen3_5ForCausalLM"], "model_types": ["qwen3_5_text"]},
+  "config": {"defaults": {"vocab_size": 248320, "hidden_size": 4096, "num_hidden_layers": 32, "num_key_value_heads": 4, "intermediate_size": 12288}, "inert": ["mlp_only_layers", "mamba_ssm_dtype"]},
+  "vars": [
+    {"name": "gdn_layout", "value": "Split"},
+    {"name": "out_gate_ok", "value": {"$require_eq": ["attn_output_gate", true, "transformers' Qwen3.5 attention always gates its output"]}},
+    {"name": "families", "value": ["C4", "C7"]},
+    {"name": "model_type", "value": "qwen3_5_text"}
+  ]
+}

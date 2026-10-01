@@ -1,0 +1,29 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "rwkv4",
+  "doc": "RWKV-4 (RwkvForCausalLM, the only RWKV in transformers): token shift, the (num, den, max) WKV recurrence, squared-ReLU channel mix, and inference-time rescale_every (the hidden state halves after every N-th block).",
+  "extends": ["spec-frame"],
+  "match": {"architectures": ["RwkvForCausalLM"], "model_types": ["rwkv"]},
+  "config": {"defaults": {"vocab_size": 50277, "hidden_size": 4096, "num_hidden_layers": 32, "layer_norm_epsilon": 1e-05, "rescale_every": 6, "tie_word_embeddings": false}, "inert": ["context_length"]},
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "hidden", "value": {"$cfg": "hidden_size"}},
+    {"name": "n", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "attn_dim", "value": {"$let": ["a", {"$cfg?": "attention_hidden_size"}, {"$if": [{"$ne": [{"$var": "a"}, null]}, {"$var": "a"}, {"$var": "hidden"}]}]}},
+    {"name": "inter", "value": {"$let": ["i", {"$cfg?": "intermediate_size"}, {"$if": [{"$ne": [{"$var": "i"}, null]}, {"$var": "i"}, {"$mul": [4, {"$var": "hidden"}]}]}]}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_epsilon"}},
+    {"name": "rescale", "value": {"$cfg": "rescale_every"}},
+    {"name": "tied", "value": {"$cfg": "tie_word_embeddings"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "l_mixer", "value": {"RwkvTime": {"version": 4, "attn_dim": {"$var": "attn_dim"}, "heads": 1, "head_size": {"$var": "attn_dim"}, "head_size_divisor": 1.0, "gn_eps": 0.0, "lora": []}}, "layer": true},
+    {"name": "l_ffn", "value": {"RwkvChannel": {"version": 4, "intermediate": {"$var": "inter"}}}, "layer": true},
+    {"name": "l_residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": null, "pre_ffn": {"$var": "norm"}, "post_ffn": null, "multiplier": 1.0}}, "layer": true},
+    {"name": "l_post_scale", "value": {"$if": [{"$and": [{"$gt": [{"$var": "rescale"}, 0]}, {"$eq": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$max": [{"$var": "rescale"}, 1]}]}, 0]}]}, 0.5, 1.0]}, "layer": true},
+    {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "norm": {"$var": "norm"}}},
+    {"name": "final_norm", "value": {"$var": "norm"}},
+    {"name": "names", "value": {"embed": "rwkv.embeddings", "embed_norm": "rwkv.blocks.0.pre_ln", "final_norm": "rwkv.ln_out", "lm_head": {"$if": [{"$var": "tied"}, "rwkv.embeddings", "head"]}, "norm.mix": "rwkv.blocks.{L}.ln1", "norm.ffn": "rwkv.blocks.{L}.ln2", "rwkv.att.mix_k": "rwkv.blocks.{L}.attention.time_mix_key", "rwkv.att.mix_v": "rwkv.blocks.{L}.attention.time_mix_value", "rwkv.att.mix_r": "rwkv.blocks.{L}.attention.time_mix_receptance", "rwkv.att.decay": "rwkv.blocks.{L}.attention.time_decay", "rwkv.att.first": "rwkv.blocks.{L}.attention.time_first", "rwkv.att.k": "rwkv.blocks.{L}.attention.key", "rwkv.att.v": "rwkv.blocks.{L}.attention.value", "rwkv.att.r": "rwkv.blocks.{L}.attention.receptance", "rwkv.att.o": "rwkv.blocks.{L}.attention.output", "rwkv.ffn.mix_k": "rwkv.blocks.{L}.feed_forward.time_mix_key", "rwkv.ffn.mix_r": "rwkv.blocks.{L}.feed_forward.time_mix_receptance", "rwkv.ffn.k": "rwkv.blocks.{L}.feed_forward.key", "rwkv.ffn.r": "rwkv.blocks.{L}.feed_forward.receptance", "rwkv.ffn.v": "rwkv.blocks.{L}.feed_forward.value"}},
+    {"name": "families", "value": ["C6"]},
+    {"name": "model_type", "value": "rwkv"}
+  ],
+  "spec": {"layers": {"$layers": {"count": {"$var": "n"}, "each": {"mixer": {"$var": "l_mixer"}, "ffn": {"$var": "l_ffn"}, "residual": {"$var": "l_residual"}, "post_scale": {"$var": "l_post_scale"}}}}}
+}

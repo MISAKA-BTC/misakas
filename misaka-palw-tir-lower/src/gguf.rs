@@ -1363,6 +1363,8 @@ impl GgufModel {
                             w(n);
                         }
                     }
+                    // No GGUF architecture stores hyper-connections.
+                    Residual::HyperConnection { .. } => {}
                 }
                 if let crate::spec::Mixer::Attention(a) = &mut ls.mixer
                     && let Some(qk) = a.qk_norm.as_mut()

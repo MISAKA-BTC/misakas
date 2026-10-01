@@ -1,0 +1,6 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-llama",
+  "doc": "LLaVA / Mistral-3 / Qwen-VL wrappers over a Llama text decoder.",
+  "extends": ["llama", "mixin-vlm"]
+}

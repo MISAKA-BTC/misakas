@@ -1,0 +1,20 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "olmo3",
+  "doc": "OLMo-3: OLMo-2 with layer_types (every fourth layer full, the rest sliding) over sliding_window and rope parameters per layer type (theta 500,000 both; a legacy rope_scaling applies to the full layers).",
+  "extends": ["olmo2"],
+  "match": {"architectures": ["Olmo3ForCausalLM"], "model_types": ["olmo3"]},
+  "vars": [
+    {"name": "no_clip", "value": {"$let": ["_", {"$forbid": ["clip_qkv", "Olmo3Config has no clip_qkv"]}, false]}},
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, 4]}, 0]}, "sliding_attention", "full_attention"]}}}},
+    {"name": "rope", "value": null},
+    {"name": "rope_params", "value": {"$cfg?": "rope_parameters"}},
+    {"name": "keyed", "value": {"$and": [{"$ne": [{"$var": "rope_params"}, null]}, {"$or": [{"$ne": [{"$get": [{"$var": "rope_params"}, "full_attention"]}, null]}, {"$ne": [{"$get": [{"$var": "rope_params"}, "sliding_attention"]}, null]}]}]}},
+    {"name": "rope_full", "value": {"$if": [{"$var": "keyed"}, {"$rope": {"dim": {"$var": "hd"}, "theta": 500000.0, "layer_type": "full_attention", "max_pos": {"$var": "max_pos"}}}, {"$rope": {"dim": {"$var": "hd"}, "theta": 500000.0, "max_pos": {"$var": "max_pos"}}}]}},
+    {"name": "rope_local", "value": {"$if": [{"$var": "keyed"}, {"$rope": {"dim": {"$var": "hd"}, "theta": 500000.0, "layer_type": "sliding_attention", "max_pos": {"$var": "max_pos"}}}, {"$var": "rope_full"}]}},
+    {"name": "l_position", "value": {"Rope": {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "sliding_attention"]}, {"$var": "rope_local"}, {"$var": "rope_full"}]}}, "layer": true},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "olmo3"}
+  ]
+}

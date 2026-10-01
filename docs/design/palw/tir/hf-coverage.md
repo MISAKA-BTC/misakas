@@ -15,7 +15,7 @@
 - **保守的**: config のキーは「数式を変えるので読む」「数式を変えないと分かっている(dropout・生成設定など)」のどちらかに
   分類され、どちらでもないキー・未実装の値・未知の architecture・未モデル化の remote code・量子化済み checkpoint は
   すべて `NOT_LOWERABLE(理由)`。黙って無視するものはない。
-- **HL グラフは frontend 中立**: HF のキー名・テンソル名・融合レイアウトは `hf_config` と `hf_weights` にしかなく、HL の
+- **HL グラフは frontend 中立**: HF のキー名・テンソル名・融合レイアウトは `hf_schema`(アダプタ = データファイル `adapters/*.json`、[model-adapter-v1.md](model-adapter-v1.md))と `hf_weights` にしかなく、HL の
   op と param は数学的な属性(rope 変種、norm の `1+w`、GQA のグルーピング規則など)だけを持つ(テストで強制)。
 - **推定カバー率**: HF の decoder-only テキスト生成 checkpoint の約 **91%**(件数ベース、`architectures[0]` 別)。
 - **HF 側の曖昧さ**: 参照そのものが割れている箇所がある(Gemma-2 の soft-cap を sdpa が落とす、Falcon の eager ALiBi が
@@ -28,7 +28,7 @@
 
 A decoder architecture is **covered** when all of the following hold:
 
-1. `hf_config` parses its `config.json` into an `ArchSpec` using the config class's own defaults
+1. The HF schema reader (`hf_schema`, with the architecture's adapter — a data file, `adapters/*.json`; `hf_config` is the entry point) parses its `config.json` into a `ModelSpec` (`ArchSpec`) using the config class's own defaults
    (these matter: `save_pretrained` diffs a nested `text_config` against the class defaults, so a
    VLM's text config often names only the fields that differ), and refuses anything it does not model.
 2. `hl::build_program` builds the HL program; `hf_weights::bind` maps every HL param to HF tensors.
@@ -234,7 +234,7 @@ max |Δlogit| (scale = max |logit|); "decode" = one-token-at-a-time reference.
   VLM's text decoder alone is in scope (§3.7).
 
 **Decoders in transformers 5.17 that are refused today** (`NOT_LOWERABLE` naming the reason; each is
-a new `hf_config` parser over existing HL ops unless stated):
+a new adapter (a data file) over existing HL ops unless stated):
 
 | Architecture | Why not yet |
 | --- | --- |
@@ -288,8 +288,8 @@ One program step computes one position.
 `moe.route.logits`). `float_ref::Session::with_site_stats` records absmax / rms / count per
 `L{layer}.{site}` — what Gate 2 calibrates from. A test checks every site of every layer records.
 
-**Frontend neutrality.** HF config keys, tensor names and fused layouts live only in `hf_config`
-(`ArchSpec::hf: HfStorage`) and `hf_weights` (param ← tensor expression: row slices of fused tensors,
+**Frontend neutrality.** HF config keys, tensor names and fused layouts live only in the adapters and the schema reader
+(`ModelSpec::hf: HfStorage`) and `hf_weights` (param ← tensor expression: row slices of fused tensors,
 per-head strides, Conv1D transposes, expert stacking, `−exp(A_log)`, RWKV rescale). The HL builder
 never reads `HfStorage`; a test asserts no HF tensor name appears in a serialised HL program. A GGUF
 or ONNX importer fills its own storage description and produces the same graph.
