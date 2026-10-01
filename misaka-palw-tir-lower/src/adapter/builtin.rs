@@ -36,6 +36,7 @@ pack!(
     "gemma",
     "gemma2",
     "gemma3-text",
+    "gemma4-text",
     "glm",
     "glm4",
     "glm4-moe",

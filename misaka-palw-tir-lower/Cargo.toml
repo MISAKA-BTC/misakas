@@ -51,6 +51,10 @@ misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 
 [features]
+# The per-architecture Rust parsers this crate had before model adapters became data
+# (`src/hf_config/legacy_oracle`): compiled only to serve as the differential oracle of
+# `tests/adapters.rs`. No default build carries per-family code.
+legacy-oracle = []
 # `curl`-backed range fetching for remote checkpoints (`weights::CurlFetcher`). Off by default: the
 # library never opens a network connection on its own, and no test does.
 remote = []

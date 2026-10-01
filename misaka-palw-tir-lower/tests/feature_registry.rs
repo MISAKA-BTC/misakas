@@ -19,7 +19,7 @@ fn crate_dir() -> PathBuf {
 /// Every fixture checkpoint and real config this crate lowers, by name.
 fn corpus() -> Vec<(String, String)> {
     let mut v = Vec::new();
-    for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf"] {
+    for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf", "tests/fixtures/hf-enc", "tests/fixtures/hf-lora"] {
         let dir = crate_dir().join(root);
         let mut names: Vec<PathBuf> = std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").path()).collect();
         names.sort();
@@ -51,7 +51,7 @@ fn real_configs() -> Vec<(String, String)> {
 fn every_feature_a_lowered_fixture_uses_is_in_the_registry_and_implemented() {
     let mut bad = Vec::new();
     let mut seen: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for (name, cfg) in corpus() {
+    for (name, cfg) in corpus().into_iter().chain(real_configs().into_iter().map(|(n, c)| (format!("real/{n}"), c))) {
         let spec = match misaka_palw_tir_lower::parse_config_str(&cfg) {
             Ok(s) => s,
             Err(e) => {

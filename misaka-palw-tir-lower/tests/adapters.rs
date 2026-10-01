@@ -3,8 +3,8 @@
 //! Every built-in adapter is read through the generic reader's evaluator and must produce, for each
 //! fixture of its family, exactly the `ModelSpec` the per-architecture Rust parser produced (notes,
 //! confidence and the reference label aside). The Rust parsers stay in the tree only as this oracle
-//! until the last family is converted; the golden lowering gate (`tests/golden_lowering.rs`) is the
-//! permanent one.
+//! (cargo feature `legacy-oracle`, `src/hf_config/legacy_oracle`); the golden lowering gate
+//! (`tests/golden_lowering.rs`) is the permanent one.
 
 use misaka_palw_tir_lower::adapter::{self, builtin};
 use misaka_palw_tir_lower::spec::{Confidence, ModelSpec, Reference};
@@ -94,6 +94,13 @@ fn pairs() -> Vec<(String, String, Value)> {
     }
     out
 }
+
+/// **The differential oracle** (feature `legacy-oracle`): the per-architecture Rust parsers this
+/// crate had before adapters became data (`src/hf_config/legacy_oracle`). Run it with
+/// `cargo test -p misaka-palw-tir-lower --features legacy-oracle --test adapters`.
+#[cfg(feature = "legacy-oracle")]
+mod oracle {
+    use super::*;
 
 /// What the two readers said about one configuration.
 enum Outcome {
@@ -277,6 +284,8 @@ fn adapters_agree_with_the_rust_parsers_on_single_key_mutants() {
         eprintln!("  {d}");
     }
     assert!(bad.is_empty(), "{} mutants on which an adapter and the Rust parser disagree", bad.len());
+}
+
 }
 
 #[test]

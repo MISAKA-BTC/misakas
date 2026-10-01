@@ -32,7 +32,7 @@ HF config / tensor names ──hf_schema──▶ ModelSpec ──features()─�
 | Level | Meaning | Reported adapter |
 | --- | --- | --- |
 | **A** | the standard keys and tensor names suffice: the reader's own template (`standard-decoder`, itself data) reads the configuration; applied only to a `…ForCausalLM` class no adapter claims | `none` |
-| **B** | an adapter file maps the class's keys onto features; config → ModelSpec only, no protocol change | built-in data file, user-supplied data file, (temporarily) a legacy Rust parser |
+| **B** | an adapter file maps the class's keys onto features; config → ModelSpec only, no protocol change | built-in data file, user-supplied data file |
 | **C** | a capability is missing: a feature that cannot be lowered (named), or a protocol gap (named, with its general closing primitive) | — |
 
 `ModelRead::adapter` (`hf_schema::AdapterSource`) says which. A configuration read without tensor

@@ -247,7 +247,7 @@ impl<'a> Env<'a> {
         if !self.in_progress.borrow_mut().insert(format!("g:{name}")) {
             return Err(bad(format!("{}: variable `{name}` is defined in terms of itself", self.arch)));
         }
-        let r = self.ev(&expr, 1);
+        let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
         self.in_progress.borrow_mut().remove(&format!("g:{name}"));
         let v = r?;
         self.globals_done.borrow_mut().insert(name.to_string(), v.clone());
@@ -266,7 +266,7 @@ impl<'a> Env<'a> {
             if !self.in_progress.borrow_mut().insert(format!("l:{name}")) {
                 return Err(bad(format!("{}: layer variable `{name}` is defined in terms of itself", self.arch)));
             }
-            let r = self.ev(&expr, 1);
+            let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
             self.in_progress.borrow_mut().remove(&format!("l:{name}"));
             let v = r?;
             self.layer_done.borrow_mut().insert(name.to_string(), v.clone());
@@ -588,7 +588,11 @@ impl<'a> Env<'a> {
                 }
             }
             "$min" | "$max" => {
-                let a = self.args(arg, d)?;
+                let mut a = self.args(arg, d)?;
+                // `{"$max": <expression that is a list>}`: the elements are the operands.
+                if a.len() == 1 && let Value::Array(l) = &a[0] {
+                    a = l.clone();
+                }
                 if a.is_empty() {
                     return Err(bad(format!("`{op}` takes at least one argument")));
                 }
@@ -917,6 +921,38 @@ impl<'a> Env<'a> {
                 let spec = crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
             }
+            "$per_layer" => {
+                // A per-layer override object keyed by layer index (`per_layer_config`): a list of
+                // `n` entries, each the layer's object or null. Keys must be indices; an entry's keys
+                // must be among `allowed` (anything else is a rule this lowerer does not model); an
+                // index past the last layer is ignored. A null/absent object gives null.
+                let o = arg.as_object().ok_or_else(|| bad("`$per_layer` takes {object, allowed, n}"))?;
+                let n = as_usize(&self.ev(o.get("n").ok_or_else(|| bad("`$per_layer`: n"))?, d)?, op)?;
+                if n > MAX_LAYERS {
+                    return Err(bad("`$per_layer`: too many layers"));
+                }
+                let allowed: Vec<String> = match o.get("allowed") {
+                    Some(e) => self.ev(e, d)?.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let obj = self.ev(o.get("object").ok_or_else(|| bad("`$per_layer`: object"))?, d)?;
+                let m = match &obj {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Object(m) => m,
+                    other => return Err(bad(format!("{}: per-layer overrides must be an object, got {other}", self.arch))),
+                };
+                let mut out = vec![Value::Null; n];
+                for (k, v) in m {
+                    let i: usize = k.parse().map_err(|_| bad(format!("{}: per-layer key `{k}` is not a layer index", self.arch)))?;
+                    if let Some(x) = v.as_object().and_then(|e| e.keys().find(|k| !allowed.contains(k))) {
+                        return Err(LowerError::not_lowerable(format!("{}: per-layer entry `{x}` is not modelled", self.arch)));
+                    }
+                    if i < n {
+                        out[i] = v.clone();
+                    }
+                }
+                Ok(Value::Array(out))
+            }
             "$rope_config" => {
                 // The rope parameters the configuration names, before any computation: {rope_type,
                 // theta, params} (the keys are read, so they count as used). For a rule that depends on
@@ -1042,6 +1078,17 @@ impl<'a> Env<'a> {
 
     pub fn steps_used(&self) -> usize {
         self.steps.get()
+    }
+}
+
+/// Name the variable an evaluation error arose in (the innermost one only), so an adapter author
+/// can find the expression.
+fn in_var(e: LowerError, name: &str) -> LowerError {
+    let tag = format!(" [in variable `{name}`]");
+    match e {
+        LowerError::NotLowerable(m) if !m.contains("[in variable") => LowerError::NotLowerable(m + &tag),
+        LowerError::BadConfig(m) if !m.contains("[in variable") => LowerError::BadConfig(m + &tag),
+        e => e,
     }
 }
 

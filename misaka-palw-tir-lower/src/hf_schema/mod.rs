@@ -39,8 +39,6 @@ pub enum AdapterSource {
     BuiltIn { id: String, hash: String },
     /// A data file the caller supplied.
     UserFile { id: String, hash: String },
-    /// A parser still written in Rust (being converted to data files; reported as such).
-    LegacyRust { parser: String },
 }
 
 impl AdapterSource {
@@ -50,7 +48,6 @@ impl AdapterSource {
             AdapterSource::None => "none (Level A: the standard keys and tensor names)".into(),
             AdapterSource::BuiltIn { id, hash } => format!("built-in data file `{id}` ({})", &hash[..16.min(hash.len())]),
             AdapterSource::UserFile { id, hash } => format!("user-supplied data file `{id}` ({})", &hash[..16.min(hash.len())]),
-            AdapterSource::LegacyRust { parser } => format!("legacy Rust parser `{parser}` (not yet a data file)"),
         }
     }
 }
@@ -58,8 +55,7 @@ impl AdapterSource {
 /// How to choose the adapter.
 #[derive(Clone, Debug, Default)]
 pub enum AdapterChoice {
-    /// The built-in adapter that claims the configuration; else the legacy parsers while they last;
-    /// else none (Level A).
+    /// The built-in adapter that claims the configuration; else none (Level A).
     #[default]
     Auto,
     /// No adapter: Level A only.
@@ -204,7 +200,6 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
     // Choose the route.
     enum Route {
         Adapter(Adapter),
-        Legacy,
         Generic,
     }
     let route = match &opts.adapter {
@@ -215,7 +210,6 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
         AdapterChoice::None => Route::Generic,
         AdapterChoice::Auto => match builtin::find_for(&arch, model_type) {
             Some(a) => Route::Adapter(a.clone()),
-            None if crate::hf_config::knows(&arch) => Route::Legacy,
             None => Route::Generic,
         },
     };
@@ -254,10 +248,6 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
         other => other,
     };
     match route {
-        Route::Legacy => match crate::hf_config::parse_legacy(config) {
-            Ok(spec) => Ok(ModelRead { spec, adapter: AdapterSource::LegacyRust { parser: arch }, assumed_defaults: Vec::new() }),
-            Err(e) => Err(fail(e, AdapterSource::LegacyRust { parser: arch })),
-        },
         Route::Adapter(a) => read_with(&a, &arch, config, tensors),
         Route::Generic => {
             // The standard decoder template is the reading of a causal language model whose class

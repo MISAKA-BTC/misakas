@@ -320,6 +320,31 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
     if dim == 0 || !dim.is_multiple_of(2) {
         return Err(LowerError::bad(format!("{arch}: rotary dim {dim} must be even and positive")));
     }
+    // `proportional` (Gemma-4's full-attention rope, `ROPE_PROPORTIONAL_V1`): frequencies on the
+    // first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), all
+    // divided by `factor`; its `partial_rotary_factor` is a property of the rope, not the caller's.
+    if rc.rope_type == "proportional" {
+        let prop = take_f64(&mut m, "partial_rotary_factor")?.unwrap_or(1.0);
+        let factor = take_f64(&mut m, "factor")?.unwrap_or(1.0);
+        if let Some(k) = m.keys().next() {
+            return Err(LowerError::not_lowerable(format!("{arch}: proportional rope parameter `{k}`")));
+        }
+        // transformers: `rope_angles = int(prop · head_dim // 2)` frequencies over the head width.
+        let angles = (prop * dim as f64 / 2.0).floor() as usize;
+        let mut out = RopeFreqs::plain(rc.theta, dim);
+        out.rope_type = rc.rope_type.clone();
+        out.inv_freq = (0..dim / 2)
+            .map(|i| {
+                if i < angles {
+                    let e = (2 * i) as f32 / dim as f32;
+                    (1.0f32 / rc.theta.powf(e as f64) as f32) / factor as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        return Ok(out);
+    }
     if let Some(p) = take_f64(&mut m, "partial_rotary_factor")?
         && (p - ctx.partial_rotary_factor).abs() > 1e-9
     {

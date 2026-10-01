@@ -139,6 +139,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ROPE_YARN_V1", Position, "YaRN rope", Implemented, [], NoReq, ["fidelity_tiny::qwen3_yarn"], "Ramp between interpolated and extrapolated frequencies, with an attention factor."),
     feature!("ROPE_LLAMA3_V1", Position, "Llama-3.1 rope scaling", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Smooth interpolation by wavelength."),
     feature!("ROPE_LONGROPE_V1", Position, "LongRoPE (Phi-3)", Implemented, [], NoReq, ["fidelity_tiny::phi3_longrope"], "Short/long factor lists switching at the original length."),
+    feature!("ROPE_PROPORTIONAL_V1", Position, "proportional rope", Implemented, [], NoReq, ["fidelity_tiny::gemma4", "fidelity_tiny::gemma4_kvshare"], "Gemma-4's full-attention rope: frequencies on the first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), divided by `factor`."),
     feature!("ROPE_PARTIAL_V1", Position, "rotation of a prefix of each head", Implemented, [], NoReq, ["fidelity_tiny::phi", "fidelity_tiny::stablelm_parallel"], "`partial_rotary_factor` < 1: the rest of the head passes through."),
     feature!("ROPE_INTERLEAVED_V1", Position, "interleaved rotary pairs", Implemented, [], NoReq, ["fidelity_tiny::gptj", "fidelity_tiny::glm"], "(2i, 2i+1) pairs instead of (i, i + d/2)."),
     feature!("ROPE_MROPE_V1", Position, "multimodal rope sections", Implemented, [], NoReq, ["fidelity_tiny::qwen3_5"], "Sections of the frequencies take the t/h/w position components; text-only they are all the position."),
@@ -279,6 +280,7 @@ fn rope_features(u: &mut Uses, r: &crate::rope::RopeSpec, head_dim: usize, layer
         "yarn" => "ROPE_YARN_V1",
         "llama3" => "ROPE_LLAMA3_V1",
         "longrope" | "su" => "ROPE_LONGROPE_V1",
+        "proportional" => "ROPE_PROPORTIONAL_V1",
         _ => "ROPE_DEFAULT_V1",
     };
     u.add(t, Some(layer), "");
