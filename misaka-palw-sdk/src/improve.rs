@@ -30,9 +30,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;
 use kaspa_consensus_core::palw_improve_material_v1::PalwCaseReferenceV1;
+use kaspa_consensus_core::palw_improve_eval_v1::{
+    PalwEvalJobV1, PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_eval_job_id_v1, palw_improve_eval_mode_v1,
+};
 use kaspa_consensus_core::palw_improve_state_v1::{
-    PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalModeV1, PalwEvalSubjectV1,
-    PalwImprovementEpochViewV1, PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_job_id_v1, palw_improve_eval_seed_v1,
+    PalwEpochCandidateV1, PalwEpochStateV1, PalwEpochTimesV1, PalwEvalItemV1, PalwEvalSubjectV1, PalwImprovementEpochViewV1,
+    PalwImprovementPolicyV1, PalwScoringKindV1, palw_improve_eval_seed_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwChainStateV2;
 
@@ -78,6 +81,10 @@ pub struct PalwImproveEpochViewV1 {
 pub struct PalwEvalCaseViewV1 {
     pub prompt_ids: Vec<u32>,
     pub reference: PalwCaseReferenceV1,
+    /// The disclosed continuation of a likelihood item (RFC-0004 §7.1: from the draw on, as the
+    /// material lane opens it) — the stream a teacher-forced job's prefill carries. `None` while the
+    /// reference is still committed only.
+    pub reference_ids: Option<Vec<u32>>,
     pub domain: u16,
 }
 
@@ -318,8 +325,9 @@ pub fn palw_improve_subjects_v1(epoch: &PalwImproveEpochViewV1) -> Vec<(PalwEval
         .collect()
 }
 
-/// **The scoring stage a case is scored by** (provisional until A6's derivation): an exact key by
-/// `ExactMatch`, a continuation by `RefLogLik`, a case with no reference by a `Judge`.
+/// **The scoring stage a case is scored by** (A6's mapping): an exact key by `ExactMatch`, a
+/// continuation by `RefLogLik`, a case with no reference by a `Judge` (which this build cannot run yet,
+/// [`palw_improve_kind_runnable_v1`]).
 pub fn palw_improve_scoring_kind_of_v1(reference: &PalwCaseReferenceV1) -> PalwScoringKindV1 {
     match reference {
         PalwCaseReferenceV1::ExactKey { .. } => PalwScoringKindV1::ExactMatch,
@@ -328,7 +336,9 @@ pub fn palw_improve_scoring_kind_of_v1(reference: &PalwCaseReferenceV1) -> PalwS
     }
 }
 
-/// **An evaluation task**: what the job is derived from, and the id the chain keys it by.
+/// **An evaluation task**: what the job is derived from, the id the chain keys it by, and what a run
+/// needs besides the subject's weights — the item's prompt, a likelihood item's disclosed reference,
+/// and the scoring stage's parameters as the policy fixes them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwImproveEvalTaskV1 {
     pub line_id: Hash64,
@@ -340,25 +350,67 @@ pub struct PalwImproveEvalTaskV1 {
     pub kind: PalwScoringKindV1,
     pub mode: PalwEvalModeV1,
     pub job_id: Hash64,
+    /// The item's disclosed prompt (the chain holds it: a hold-out case's, or a setter's once
+    /// revealed).
+    pub prompt_ids: Vec<u32>,
+    /// A teacher-forced item's disclosed continuation; empty for a generating job.
+    pub reference_ids: Vec<u32>,
+    /// The scoring stage's parameters, from the policy (what the evaluation context is derived with).
+    pub params: PalwEvalStageParamsV1,
 }
 
-/// **The job id a task is claimed under** — the one place the node computes it (the core lane's
-/// formula now; A6's, which binds the kind too, when it lands).
+impl PalwImproveEvalTaskV1 {
+    /// **The evaluation job** the chain derives for this task (A6's type): its id is [`Self::job_id`].
+    pub fn job(&self) -> PalwEvalJobV1 {
+        PalwEvalJobV1 {
+            line_id: self.line_id,
+            epoch: self.epoch,
+            item: self.item,
+            subject: self.subject,
+            kind: self.kind,
+            mode: self.mode.clone(),
+        }
+    }
+}
+
+/// **The job id a task is claimed under** — the one place the node computes it (A6's formula, which
+/// binds the kind: a subject's primary and judge jobs share an item).
 pub fn palw_improve_task_job_id_v1(
     line_id: &Hash64,
     epoch: u64,
     item: u32,
     subject: &PalwEvalSubjectV1,
-    _kind: PalwScoringKindV1,
+    kind: PalwScoringKindV1,
 ) -> Hash64 {
-    palw_improve_eval_job_id_v1(line_id, epoch, item, subject)
+    palw_improve_eval_job_id_v1(line_id, epoch, item, subject, kind)
+}
+
+/// **The scoring stage's parameters for a kind, as the policy fixes them** — what the chain derives
+/// the evaluation context with (`palw_improve_eval_fold_v1`'s `palw_improve_eval_stage_params_of_v1`);
+/// the revealed key's length bound is no context's.
+pub fn palw_improve_stage_params_of_v1(policy: &PalwImprovementPolicyV1, kind: PalwScoringKindV1) -> Option<PalwEvalStageParamsV1> {
+    use kaspa_consensus_core::palw_improve_state_v1::PalwScoringParamsV1 as P;
+    policy.eval.stages.iter().find(|stage| stage.kind == kind).map(|stage| match stage.params {
+        P::ExactMatch { open, close, .. } => PalwEvalStageParamsV1::ExactMatch { open, close },
+        P::RefLogLik { logit_scale_q24 } => PalwEvalStageParamsV1::RefLogLik { logit_scale_q24 },
+        P::Judge { lo, hi } => PalwEvalStageParamsV1::Judge { lo, hi },
+        P::Pairwise { margin } => PalwEvalStageParamsV1::Pairwise { margin },
+    })
+}
+
+/// **Can this build run a job of `kind` yet?** A6 derives a context for ExactMatch (the subject's
+/// generation, scored by the fold at the key's reveal) and RefLogLik; judged kinds wait for the judge
+/// set's class kind (`PalwEvalErrorV1::JudgedNotYet`), so a node plans none.
+pub const fn palw_improve_kind_runnable_v1(kind: PalwScoringKindV1) -> bool {
+    matches!(kind, PalwScoringKindV1::ExactMatch | PalwScoringKindV1::RefLogLik)
 }
 
 /// **The task of `item` for `subject`, derived as the chain derives it**. The item's seed must be the
 /// epoch's (`H(epoch seed ‖ item)`, the same for every subject, so pairing is exact); a dropped item
-/// derives nothing; the kind follows the case, and the policy must score it; the mode is teacher-forced
-/// over a continuation and otherwise generated under the item's seed with the policy's budget and stop
-/// ids.
+/// derives nothing; the kind follows the case, and the policy must score it; the mode is A6's
+/// (`palw_improve_eval_mode_v1`): teacher-forced over a continuation, otherwise generated under the
+/// item's seed with the policy's budget and stop ids; a judged kind waits (a build that cannot run it
+/// plans nothing); a teacher-forced task needs the reference disclosed.
 pub fn palw_improve_eval_task_v1(
     line: &PalwImproveLineViewV1,
     epoch: &PalwImproveEpochViewV1,
@@ -376,14 +428,18 @@ pub fn palw_improve_eval_task_v1(
     }
     let eval = &line.policy.eval;
     let kind = palw_improve_scoring_kind_of_v1(&case.reference);
-    if !eval.stages.iter().any(|stage| stage.kind == kind) {
-        return Err("the policy's eval spec has no stage of the case's scoring kind");
+    let params = palw_improve_stage_params_of_v1(&line.policy, kind).ok_or("the policy's eval spec has no stage of the case's scoring kind")?;
+    if !palw_improve_kind_runnable_v1(kind) {
+        return Err("a judged kind waits for the judge set's class kind (A6)");
     }
-    let mode = match case.reference {
-        PalwCaseReferenceV1::Continuation { commitment } => PalwEvalModeV1::TeacherForced { reference_commitment: commitment },
-        PalwCaseReferenceV1::ExactKey { .. } | PalwCaseReferenceV1::None => {
-            PalwEvalModeV1::Generate { seed: item.seed, max_new: eval.max_new_tokens, stop_ids: eval.stop_ids.clone() }
-        }
+    let reference_commitment = match case.reference {
+        PalwCaseReferenceV1::Continuation { commitment } => Some(commitment),
+        PalwCaseReferenceV1::ExactKey { .. } | PalwCaseReferenceV1::None => None,
+    };
+    let mode = palw_improve_eval_mode_v1(kind, eval, item.seed, reference_commitment, item.judge).map_err(|_| "the item names no mode")?;
+    let reference_ids = match &mode {
+        PalwEvalModeV1::TeacherForced { .. } => case.reference_ids.clone().ok_or("the item's reference is not disclosed yet")?,
+        _ => Vec::new(),
     };
     let job_id = palw_improve_task_job_id_v1(&line.line_id, epoch.epoch, item.item, &subject, kind);
     Ok(PalwImproveEvalTaskV1 {
@@ -395,6 +451,9 @@ pub fn palw_improve_eval_task_v1(
         kind,
         mode,
         job_id,
+        prompt_ids: case.prompt_ids.clone(),
+        reference_ids,
+        params,
     })
 }
 
@@ -629,7 +688,12 @@ mod tests_fixtures {
             candidates: vec![candidate(0xC1, composite, 2), candidate(0xC2, PalwTirArtifactRefV1::Single { root: h(0xF0) }, 3)],
             seed: Some(seed),
         };
-        let case = |reference: PalwCaseReferenceV1| PalwEvalCaseViewV1 { prompt_ids: vec![1, 5, 9], reference, domain: 0 };
+        let case = |reference: PalwCaseReferenceV1| PalwEvalCaseViewV1 {
+            prompt_ids: vec![1, 5, 9],
+            reference_ids: matches!(reference, PalwCaseReferenceV1::Continuation { .. }).then(|| vec![6, 7]),
+            reference,
+            domain: 0,
+        };
         PalwImproveMemChainV1 {
             lines: [(h(LINE), line)].into(),
             epochs: [((h(LINE), 3), epoch)].into(),
@@ -720,10 +784,12 @@ mod tests {
         let mut chain = chain(PalwEpochStateV1::Evaluating, false);
         let node = PalwImproveNodeV1 { holds: [h(HEAD), h(0xC1), h(PREVIOUS)].into(), evaluates: true, prefetch_full: false };
         let planned = tasks(&chain, &node, 250, 64);
-        assert_eq!(planned.len(), 9, "three items × the parent, the held candidate and the predecessor");
+        assert_eq!(planned.len(), 6, "two runnable items × the parent, the held candidate and the predecessor (the judged item waits)");
         let seed = chain.epochs[&(h(LINE), 3)].seed.unwrap();
         for task in &planned {
-            assert_eq!(task.job_id, palw_improve_eval_job_id_v1(&h(LINE), 3, task.item, &task.subject), "the chain's id");
+            assert_eq!(task.job_id, palw_improve_eval_job_id_v1(&h(LINE), 3, task.item, &task.subject, task.kind), "the chain's id");
+            assert_eq!(task.job().id(), task.job_id, "A6's job type derives the same id");
+            assert_eq!(task.prompt_ids, vec![1, 5, 9]);
             let expected_class = match task.subject {
                 PalwEvalSubjectV1::Parent => h(HEAD),
                 PalwEvalSubjectV1::Candidate(c) => c,
@@ -735,12 +801,14 @@ mod tests {
                     assert_eq!(*s, palw_improve_eval_seed_v1(&seed, 0));
                     assert_eq!(stop_ids, &vec![2]);
                     assert_eq!(task.kind, PalwScoringKindV1::ExactMatch);
+                    assert_eq!(task.params, PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 });
                 }
                 (1, PalwEvalModeV1::TeacherForced { reference_commitment }) => {
                     assert_eq!(*reference_commitment, h(0xB1));
                     assert_eq!(task.kind, PalwScoringKindV1::RefLogLik);
+                    assert_eq!(task.reference_ids, vec![6, 7], "the disclosed continuation rides the task");
+                    assert_eq!(task.params, PalwEvalStageParamsV1::RefLogLik { logit_scale_q24: 1 << 20 });
                 }
-                (2, PalwEvalModeV1::Generate { .. }) => assert_eq!(task.kind, PalwScoringKindV1::Judge),
                 other => panic!("unexpected task {other:?}"),
             }
         }
@@ -790,7 +858,11 @@ mod tests {
         missing.cases.remove(&h(0xCA0));
         let node = PalwImproveNodeV1 { holds: [h(HEAD)].into(), evaluates: true, prefetch_full: false };
         let planned: Vec<u32> = tasks(&missing, &node, 250, 64).into_iter().map(|t| t.item).collect();
-        assert_eq!(planned, vec![1, 2], "items 1 and 2 for the parent: item 0's case is not on chain yet");
+        assert_eq!(planned, vec![1], "item 1 for the parent: item 0's case is not on chain yet, item 2 is judged and waits");
+        // A likelihood item whose reference is not disclosed yet derives no task: its prefill needs it.
+        let mut undisclosed = chain.clone();
+        undisclosed.cases.get_mut(&h(0xCA1)).unwrap().reference_ids = None;
+        assert_eq!(tasks(&undisclosed, &node, 250, 64).into_iter().map(|t| t.item).collect::<Vec<_>>(), vec![0]);
         // The watcher's log: a change once, then nothing.
         let e = |s| Some((3, s));
         assert_eq!(palw_improve_epoch_moved_v1(None, e(PalwEpochStateV1::Open)), e(PalwEpochStateV1::Open));
