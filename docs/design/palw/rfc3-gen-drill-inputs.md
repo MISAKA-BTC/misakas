@@ -17,7 +17,7 @@ Written by `cargo test -p misaka-palw-sdk --test gen_drill_classes -- --ignored 
 | `toy-image` (Plan B) | image claim, one-move court (DG-3/4/5) | 6,112 B | 120 | 2,628 B | 1,657 B |
 | `toy-embed` | embedding claim, readiness (DG-2/3) | 326,785 B | 750 | 51,784 B | 8,213 B |
 | `wide-embed` | held leaf challenge (DG-6/7a/7b) | 329,600 B | 4 | 8,736 B | 605,362 B (over one carrier: tag 90 only) |
-| `sd3-tiny` (Plan A) | the reduced SD3 pipeline replaces `toy-image` | 2,301,248 B | 20,922 | 1,418,128 B | 73,676 B (every cone-closable commit point under one carrier) |
+| `sd3-tiny` (Plan A) | the reduced SD3 pipeline replaces `toy-image` | 1,141,016 B | 20,922 | 1,420,712 B | 72,916 B priced, 72,832 B measured (every commit point under one carrier; class `6a88a17d003f…`) |
 
 Plan A is selected with `IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2` (audit-gen/dg.sh). Plan B stays the default; Plan A replaces it
 only on the coordinator's word. A `sd3-tiny` claim is ~1.4 MB of material and 13 stages (text rows, text pooled, denoise,
@@ -65,14 +65,26 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
   `palw_gen_claim_fold` 8/8, `palw_gen_dissect` 3/3, in-crate `held_close_chunks_clock` 6/6, goldens pin tests 6/6.
 * kaspad: `palw_panel::held_chunks` 5/5 and the verdict-block pin; processor gate test for tag 90 1/1.
 * SDK: `gen_drill_classes` 2/2 (each Plan B class passes the gate; a planted lie is convicted with the close the lane expects);
-  `gen_sd3_class`: the class passes the gate; 166 commit points measured at three leaves each, the largest cone close 73,676 B (one-move
-  carrier 95,037 B); a 519-leaf strided sweep of the widest job (all positions) found none above that; a lie at the first leaf of
-  every cone-closable kind (61) convicted in one lying run and 32 independent single lies convicted at their own leaves, honest claims
-  acquitted, every close admissible in the one-move accusation; lies at denoise positions 1–3 through the post-written latent
-  convicted. 2 kinds are dissected (the CLIP stages' fused-attention outputs: ADR-0103's held dissection, as every LLM class).
-* Consensus-core changes this layer carries (dormant behind `palw_gen_v1`, tests pass): the generative court source reads a
-  post-written `Fixed` state as the committed write of the previous position; a worker's openings share one build of the artifact
-  tree and of each stage's step tree; the close twin has a depth-parameterised entry. `palw_gen_one_move` 6/6, `palw_gen_dissect` 3/3,
-  `palw_gen_tensor` 14/14, `palw_gen_vectors_v1` 6/6, `palw_held_close_chunks` 7/7 re-run on this tip.
+  `gen_sd3_class` (**PALW-GEN-20, the sound gate; the class re-lowered with static maps and two-piece tables, so the artifact and the
+  class id changed: 36643dd0… → 6a88a17d…, 2,301,248 B → 1,141,016 B**): the class passes the gate AND registers where a close can only ride
+  one carrier (the catalog's worst close 72,916 B, one-move carrier 95,037 B); the gate's price is held to the measurement at 1,215
+  sampled cone closes of the widest job — priced ≥ measured at every one, ratio 1.001–1.57, smallest margin 68 B
+  (`docs/evidence/rfc3-gen-close-price-2026-10-02.md`); a lie at the first leaf of every cone-closable kind (61) convicted in one lying run
+  and 32 independent single lies convicted at their own leaves, honest claims acquitted, every close admissible in the one-move
+  accusation; lies at denoise positions 1–3 through the post-written latent convicted, the price counting the committed write of the
+  previous position for every element a cone reads. 2 kinds are dissected (the CLIP stages' fused-attention outputs: ADR-0103's held
+  dissection, as every LLM class; root claim 15,863 B measured / 15,883 B priced).
+* **CHECKPOINT 4** (`misaka-palw-tir-lower/tests/sd3_three_way.rs`): the SD3 pipeline composed by each of the reference evaluator, the typed
+  backend and ref2 from its OWN earlier stages' outputs — 102 stage positions and 2,176 committed nodes over the four evaluation jobs,
+  every output and every commit (slot, block, layer, node, values) bit-identical; the reference composition equals `run_pipeline`'s.
+* Consensus-core changes this layer carries (dormant behind `palw_gen_v1`, t12's fingerprint unmoved — `scripts/t12-repin.sh --drift-only`:
+  no drift): the generative court source reads a post-written `Fixed` state as the committed write of the previous position; a worker's
+  openings share one build of the artifact tree and of each stage's step tree; **the pipeline admission prices every close as the builder
+  carries it** (`palw_gen_close_price_v1`: the PALW-TIR-38 twin over every stage, the generative court's reading of inputs and of
+  `post`-written states, per-leaf paths at the stage's depth, params at the class's depth, the frame at its widest binding, checkpoint
+  leaves; work cap 2^27, the reduced SD3 class needs 66.9 M) in place of the operand-bytes necessary condition. `palw_gen_close_price` 4/4
+  (every non-dissected commit leaf of the toy image, embedding and VLM classes, checkpoint leaves included), `palw_gen_one_move` 6/6,
+  `palw_gen_dissect` 3/3, `palw_gen_tensor` 14/14, `palw_gen_vlm_admission` 4/4 (asking the carried bound: the HF activation tables are
+  four pieces), `palw_held_close_chunks` 7/7, `palw_tir_close_size` 1/1 (the IR twin unchanged).
 * NOT exercised: `gen-claim --plant`/`--list-leaves` against a node, the filer's chunk delivery against a live chain, the
   capture fetch of a 1 MB sd3 claim. Those are what the drill is for.
