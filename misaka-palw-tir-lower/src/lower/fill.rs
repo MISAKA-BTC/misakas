@@ -447,6 +447,16 @@ impl<'a> FillCtx<'a> {
         Ok(rc)
     }
 
+    /// Hand the context the split of HL param `p` under `kx` and `f_max` ready-made, so
+    /// [`split_rows`](Self::split_rows) answers from it without the weight (a streaming conversion
+    /// computes the small per-row parts — scales, shifts, outlier columns — in a pass over blocks and
+    /// keeps no codes: `sc.main.codes` is empty).
+    pub fn inject_split(&self, p: u32, kx: &ScaleKey, f_max: i32, sc: SplitCodes) -> Result<()> {
+        let out = self.outliers(kx)?;
+        self.split_memo.lock().expect("memo").insert(format!("{p}:{out:?}:{f_max}"), Arc::new(sc));
+        Ok(())
+    }
+
     /// The split form of an HL `[out, in]` weight read by a split input `kx`: the main codes (the
     /// outlier columns zeroed, per-row scale over the rest), and the outlier columns in `i32`
     /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /

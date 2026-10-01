@@ -107,3 +107,19 @@ fn every_fixture_converts_to_the_same_file_streamed_or_whole() {
     assert!(ok >= 50, "only {ok} fixtures converted");
     assert!(by_blocks > 100, "the row-block path produced {by_blocks} instances");
 }
+
+/// The bytes of a conversion do not depend on how many threads ran it: every parallel step is per
+/// row (a row's codes and scale), never a reduction across rows.
+#[test]
+fn the_conversion_does_not_depend_on_the_thread_count() {
+    let options = [("rows1", StreamOpts { defer_min_elems: 0, block_elems: 1 }), ("never", StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 })];
+    let pick = ["llama", "gemma2", "mixtral", "deepseek_v2_lite", "qwen3_5", "mamba2"];
+    let pool = |n: usize| rayon::ThreadPoolBuilder::new().num_threads(n).build().expect("pool");
+    let (one, many) = (pool(1), pool(7));
+    for name in pick {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf").join(name);
+        let a = one.install(|| run(&dir, &options[..1])).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let b = many.install(|| run(&dir, &options[1..])).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(a.old == b.old && a.news[0].1 == b.news[0].1 && a.news[0].1 == a.old, "{name}: the artifact depends on the thread count");
+    }
+}

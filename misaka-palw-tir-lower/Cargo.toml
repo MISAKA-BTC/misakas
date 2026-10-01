@@ -22,6 +22,10 @@ path = "src/bin/palw-tir-generate.rs"
 name = "palw-tir-fidelity"
 path = "src/bin/palw-tir-fidelity.rs"
 
+[[bin]]
+name = "palw-tir-convert"
+path = "src/bin/palw-tir-convert.rs"
+
 # Deliberately light: no kaspa-consensus-core, no misaka-palw-base0. This crate reads a Hugging
 # Face checkpoint, lowers it to a PALW-TIR program plus integer params, and measures fidelity;
 # nothing here is on a validation path. `misaka-palw-tir` is the IR itself (a leaf crate): the

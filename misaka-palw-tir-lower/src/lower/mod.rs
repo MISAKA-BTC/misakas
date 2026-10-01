@@ -188,18 +188,25 @@ impl ScaleKey {
 pub type FillFn = Arc<dyn Fn(&FillCtx<'_>) -> Result<IntTensor> + Send + Sync>;
 
 /// How a param's integers derive from ONE float param, row by row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RowKind {
     /// Per-row `i8` codes (`quantize_rows`): the row's absmax maps to ±127.
     W8,
     /// Per-row `i16` codes (`quantize_rows16`): a gathered table, and a head that reads it.
     T16,
+    /// The main codes of a projection whose input has split outlier channels
+    /// ([`FillCtx::split_rows`]): per-row `i8` codes of the weight with the outlier columns zeroed.
+    /// The same split yields the projection's outlier columns (`.wo`), their shifts (`.of`) and the
+    /// per-row scales its narrowing needs — all per row, all small — which a streaming conversion
+    /// computes in a first pass over the blocks and hands the sibling fills ready-made
+    /// ([`FillCtx::inject_split`]); this param's own codes are made in a second.
+    SplitMain { kx: ScaleKey, f_max: i32 },
 }
 
 /// A TIR param whose integers are [`RowKind`] codes of the HL param `hl`: row `r` of the artifact's
 /// tensor is a function of row `r` of the checkpoint's alone, so a conversion can produce it a block
 /// of rows at a time (`crate::lower::stream`) and never hold the whole weight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RowParam {
     pub hl: u32,
     pub kind: RowKind,
@@ -1113,7 +1120,25 @@ fn decl_rows(
     let (dt, fill) = match kind {
         RowKind::W8 => (DType::I8, weight_codes(hl_p)),
         RowKind::T16 => (DType::I16, table_codes(hl_p)),
+        RowKind::SplitMain { .. } => return Err(LowerError::eval("internal: a split main is declared with decl_rows_with")),
     };
+    decl_rows_with(b, cx, lb, name, dt, shape, per_layer, kind, hl_p, fill)
+}
+
+/// [`decl_rows`] with the fill given (the split projection's main codes).
+#[allow(clippy::too_many_arguments)]
+fn decl_rows_with(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    name: &str,
+    dt: DType,
+    shape: &[usize],
+    per_layer: bool,
+    kind: RowKind,
+    hl_p: u32,
+    fill: FillFn,
+) -> Result<tir::Ref> {
     let before = cx.fills.len();
     let r = decl(b, cx, lb, name, dt, shape, per_layer, fill)?;
     if let tir::Ref::Param(j) = r {
@@ -2096,7 +2121,7 @@ fn lower_linear(
         let acc_bits = 22 + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());
-        let wt = decl(
+        let wt = decl_rows_with(
             b,
             cx,
             lb,
@@ -2104,6 +2129,8 @@ fn lower_linear(
             DType::I8,
             &[out, inp],
             d.per_layer,
+            RowKind::SplitMain { kx: kx.clone(), f_max },
+            w,
             Arc::new(move |c| {
                 let sc = c.split_rows(w, &k1, f_max)?;
                 Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))

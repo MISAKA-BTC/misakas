@@ -25,13 +25,13 @@
 //! come out of every block size, chunk size, thread count and deferral threshold
 //! (`tests/streaming_convert.rs`).
 
-use super::fill::{DEFERRED_MARK, FillCtx, IntTensor, deferred_param_of, params_of_blocks, residual_scale};
-use super::{Lowered, RowParam, occurrences};
+use super::fill::{DEFERRED_MARK, FillCtx, IntTensor, SplitCodes, deferred_param_of, params_of_blocks, residual_scale};
+use super::{Lowered, RowKind, RowParam, occurrences};
 use crate::error::{LowerError, Result};
 use crate::float_ref::stream::OccParams;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::hl::HlProgram;
-use crate::quant::QuantPolicy;
+use crate::quant::{QuantPolicy, RowCodes};
 use crate::weights::stream::row_blocks;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, ChunkedArtifactV1, InstanceWriter};
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,6 +169,18 @@ pub fn materialise_stream(
             let store = if defer.is_empty() { loader.load(hbk, layer)? } else { loader.load_deferring(hbk, layer, &defer)? };
             let ctx = FillCtx::streaming(hl, &store, layer, &prefix, calib, resid, policy, &defer, loader.row_source(), opts.block_elems);
             let attempt = (|| -> Result<()> {
+                // A deferred projection with split outlier channels: its small per-row parts first
+                // (one pass over the blocks, no codes kept), so the sibling params (`.wo`, `.of`, the
+                // narrowing's scales) fill from them while its codes are made by blocks.
+                for &pi in &used[tb] {
+                    let d = &lw.program.params[pi as usize];
+                    if let Some(RowParam { hl: hp, kind: RowKind::SplitMain { kx, f_max } }) = lw.row_params.get(&d.name)
+                        && defer.contains(hp)
+                    {
+                        let sc = split_meta(hl, loader, calib, policy, opts, resid, (&prefix, layer), *hp, kx, *f_max)?;
+                        ctx.inject_split(*hp, kx, *f_max, sc)?;
+                    }
+                }
                 for &pi in &used[tb] {
                     let d = &lw.program.params[pi as usize];
                     let key = (pi, if d.per_layer { layer.map(|l| l as u16) } else { None });
@@ -176,7 +188,7 @@ pub fn materialise_stream(
                         continue;
                     }
                     let bytes = d.shape.iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64;
-                    let by_rows = lw.row_params.get(&d.name).filter(|rp| defer.contains(&rp.hl)).copied();
+                    let by_rows = lw.row_params.get(&d.name).filter(|rp| defer.contains(&rp.hl));
                     match by_rows {
                         Some(rp) => fill_by_blocks(lw, hl, loader, calib, policy, opts, resid, (&prefix, layer), pi, rp, key, bytes, sink, &mut st)?,
                         None => {
@@ -237,7 +249,7 @@ fn fill_by_blocks(
     resid: f64,
     (prefix, layer): (&str, Option<usize>),
     pi: u16,
-    rp: RowParam,
+    rp: &RowParam,
     key: (u16, Option<u16>),
     bytes: u64,
     sink: &mut dyn TensorSink,
@@ -275,4 +287,39 @@ fn fill_by_blocks(
     sink.end()?;
     st.by_blocks += 1;
     Ok(())
+}
+
+/// The split of a deferred projection's weight without its codes: the per-row scales, shifts and
+/// outlier columns of every row, from one pass over the blocks (`SplitCodes::main.codes` is empty).
+#[allow(clippy::too_many_arguments)]
+fn split_meta(
+    hl: &HlProgram,
+    loader: &dyn OccParams,
+    calib: &BTreeMap<String, SiteStat>,
+    policy: &QuantPolicy,
+    opts: &StreamOpts,
+    resid: f64,
+    (prefix, layer): (&str, Option<usize>),
+    hp: u32,
+    kx: &super::ScaleKey,
+    f_max: i32,
+) -> Result<SplitCodes> {
+    let rs = loader.row_source().ok_or_else(|| LowerError::eval("internal: a deferred param without a row source"))?;
+    let (rows, cols) = rs
+        .row_space(hp, layer)?
+        .ok_or_else(|| LowerError::eval(format!("{DEFERRED_MARK}{hp}: not readable by rows")))?;
+    let step = (opts.block_elems / cols.max(1)).max(1);
+    let (mut scales, mut f, mut wo, mut outliers) = (Vec::with_capacity(rows), Vec::with_capacity(rows), Vec::new(), Vec::new());
+    for blk in row_blocks(rows, step) {
+        let t = rs.rows(hp, layer, blk)?;
+        let mut bstore = ParamStore::default();
+        bstore.insert(hp, None, t, None);
+        let bctx = FillCtx::for_scales(hl, &bstore, layer, prefix, calib, resid, policy);
+        let sc = bctx.split_rows(hp, kx, f_max)?;
+        scales.extend_from_slice(&sc.main.scales);
+        f.extend_from_slice(&sc.f);
+        wo.extend_from_slice(&sc.wo);
+        outliers.clone_from(&sc.outliers);
+    }
+    Ok(SplitCodes { main: RowCodes { rows, cols, codes: Vec::new(), scales }, outliers, wo, f })
 }
