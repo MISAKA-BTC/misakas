@@ -170,6 +170,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            tail: None,
         };
         let result = PalwFpWorkerResultV3 {
             version: PALW_FP_V3_VERSION,
