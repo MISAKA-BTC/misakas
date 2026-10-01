@@ -73,9 +73,24 @@ impl PalwTirManifestV1 {
     /// **The one derivation**: open the container (every header claim checked against the program),
     /// hash the file, and stream the consensus inventory root over its tensors.
     pub fn derive(path: &Path) -> Result<Self, String> {
+        Self::derive_with(path, false)
+    }
+
+    /// [`derive`](Self::derive) with the inventory root streamed by leaf (`crate::tir_stream`): one
+    /// leaf and a read-ahead window resident instead of one whole tensor. The same manifest — the
+    /// two roots are pinned equal by `tir_stream`'s tests — for artifacts whose tensors are large.
+    pub fn derive_streamed(path: &Path) -> Result<Self, String> {
+        Self::derive_with(path, true)
+    }
+
+    fn derive_with(path: &Path, streamed: bool) -> Result<Self, String> {
         let c = PalwTirContainerV1::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let (inventory_root, leaf_count) =
-            palw_tir_inventory_root_v1(&c.program, &PalwTirContainerSourceV1(&c)).map_err(|e| format!("{}: {e}", path.display()))?;
+        let (inventory_root, leaf_count) = if streamed {
+            crate::tir_stream::palw_tir_inventory_root_streamed_v1(&c.program, &crate::tir_stream::ContainerRanges::open(&c)?)
+                .map_err(|e| format!("{}: {e}", path.display()))?
+        } else {
+            palw_tir_inventory_root_v1(&c.program, &PalwTirContainerSourceV1(&c)).map_err(|e| format!("{}: {e}", path.display()))?
+        };
         let (layout_digest, class_id) = match c.header.layout.is_empty() {
             true => (None, None),
             false => {

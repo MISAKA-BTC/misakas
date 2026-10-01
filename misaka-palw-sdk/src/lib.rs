@@ -46,6 +46,7 @@ pub mod sdk;
 /// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
 pub mod tir_equiv;
 pub mod tir_manifest;
+pub mod tir_stream;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
 pub mod tir_layout;
