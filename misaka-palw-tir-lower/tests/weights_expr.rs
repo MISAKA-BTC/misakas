@@ -361,6 +361,11 @@ fn the_three_corpus_families_that_needed_weights_as_data_are_level_b_now() {
         assert!(after.weight_errors.is_empty() && after.unread_tensors.is_empty(), "{id}: {:?} {:?}", after.weight_errors, after.unread_tensors);
         assert!(after.features.iter().any(|f| f.id == "WEIGHTS_EXPR_V1"), "{id}: {:?}", after.features.iter().map(|f| &f.id).collect::<Vec<_>>());
         assert!(!after.new_consensus_primitive_required && !after.new_court_kernel_required, "{id}");
+        // The pack carries them now: with no adapter given, the built-in one claims the class and says the same.
+        let auto = analyze(&cfg, Some(&tensors), &ReadOptions::default());
+        assert_eq!(auto.result, ReportResult::Lowerable, "{id}: {}", auto.render());
+        assert_eq!(auto.level, Level::B, "{id}");
+        assert!(matches!(&auto.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id: a, .. } if a.starts_with(&id[..4])), "{id}: {:?}", auto.adapter);
         // Before: refused, with the numbers (a missing tensor, or a shape the graph does not accept).
         let before = run("before.json");
         assert!(matches!(before.result, ReportResult::NotLowerable { .. }), "{id}: the names-only adapter must not pass:\n{}", before.render());

@@ -187,21 +187,24 @@ fn an_unread_tensor_or_a_wrong_shape_in_the_index_refuses_the_model() {
 }
 
 /// FR-25: an architecture the build refuses on purpose (`adapters/refusals.json`) can be read anyway by an
-/// adapter the CALLER supplies, which passes the same validation as any adapter; the report says so.
+/// adapter the CALLER supplies, which passes the same validation as any adapter; the report says so. The example is
+/// MiniCPM3: the build refuses it by name (remote-code muP), while the native transformers-5 class is DeepSeek-V2's
+/// MLA with the plain rotation, a dense MLP and muP scalings — all existing features, which a 25-line adapter
+/// (the corpus lane's, extending the built-in `deepseek-v3`) says in data.
 #[test]
 fn a_user_adapter_may_override_a_built_in_refusal_and_the_report_says_so() {
-    let dir = root().join("tests/fixtures/fr01/granitemoehybrid");
+    let dir = root().join("tests/fixtures/fr25/minicpm3");
     let cfg = json(&dir.join("config.json"));
     let index: Value = json(&dir.join("tensors.json"));
     let tensors = TensorIndex::from_shapes(index.as_object().unwrap().iter().map(|(n, e)| {
         (n.clone(), e["shape"].as_array().unwrap().iter().map(|d| d.as_u64().unwrap() as usize).collect::<Vec<usize>>())
     }));
-    // By default the class is refused, by the feature it lacks.
+    // By default the class is refused, by the features it lacks.
     let by_default = analyze(&cfg, Some(&tensors), &ReadOptions::default());
     assert!(matches!(by_default.result, ReportResult::NotLowerable { .. }) && by_default.overrides_refusal.is_none(), "{}", by_default.render());
-    assert!(by_default.missing.iter().any(|m| m.what == "MIXER_LAYER_PATTERN_HYBRID_V1"), "{:?}", by_default.missing);
+    assert!(by_default.missing.iter().any(|m| m.what == "SCALE_MUP_V1"), "{:?}", by_default.missing);
     // A built-in adapter chosen by id does not override a refusal either: the data must not contradict itself.
-    let forced = analyze(&cfg, Some(&tensors), &ReadOptions { adapter: AdapterChoice::BuiltIn("granitemoe".into()) });
+    let forced = analyze(&cfg, Some(&tensors), &ReadOptions { adapter: AdapterChoice::BuiltIn("deepseek-v3".into()) });
     assert!(forced.overrides_refusal.is_none() && matches!(forced.result, ReportResult::NotLowerable { .. }));
     // The adapter the caller wrote overrides it, with the same validation as any adapter, and the report says so.
     let text = std::fs::read_to_string(dir.join("adapter.json")).unwrap();
@@ -209,9 +212,9 @@ fn a_user_adapter_may_override_a_built_in_refusal_and_the_report_says_so() {
     assert_eq!(r.result, ReportResult::Lowerable, "{}", r.render());
     assert_eq!(r.level, Level::B);
     let why = r.overrides_refusal.as_deref().expect("the override is recorded");
-    assert!(why.contains("GraniteMoeHybridForCausalLM") && why.contains("not modelled"), "{why}");
+    assert!(why.contains("MiniCPM3ForCausalLM") && why.contains("not modelled"), "{why}");
     let out = r.render();
-    assert!(out.contains("user adapter overrides built-in refusal: GraniteMoeHybridForCausalLM"), "{out}");
+    assert!(out.contains("user adapter overrides built-in refusal: MiniCPM3ForCausalLM"), "{out}");
     assert!(serde_json::to_value(&r).unwrap()["overrides_refusal"].is_string());
     // The override cannot launder a feature the vocabulary lacks: Gemma-3n's AltUp has no field to say it in.
     let g = json(&root().join("tests/configs/real/gemma-3n-e4b.json"));

@@ -233,6 +233,10 @@ fn run(args: &[String]) -> Result<(), String> {
             };
             let tile_len = number(take_flag(&mut args, "--tile-len"), "--tile-len", 64)?;
             let h_chunk = number(take_flag(&mut args, "--h-chunk"), "--h-chunk", 64)?;
+            // An encoder-decoder is judged at a source length and a target window (defaults 128 and 128): a registration
+            // declares its own.
+            let source_len = number(take_flag(&mut args, "--source-len"), "--source-len", 128)?;
+            let target_len = number(take_flag(&mut args, "--target-len"), "--target-len", 128)?;
             // The model may also be given as the first plain argument: `check-architecture <hf dir | config.json>`
             // (after every flag that takes a value has taken it).
             if config.is_none()
@@ -244,7 +248,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let legacy = args.iter().any(|a| a == "--legacy");
             let held = args.iter().any(|a| a == "--held");
             let json = args.iter().any(|a| a == "--json");
-            let flags = ArchFlags { legacy, held, json, tile_len, h_chunk, adapter };
+            let flags = ArchFlags { legacy, held, json, tile_len, h_chunk, adapter, source_len, target_len };
             match check_architecture(&view, config.as_deref(), tir.as_deref(), &flags)? {
                 true => Ok(()),
                 false => std::process::exit(2),
@@ -321,6 +325,9 @@ struct ArchFlags {
     /// The layout facts IR mode admits with (`--tile-len`, `--h-chunk`).
     tile_len: u32,
     h_chunk: u32,
+    /// `--source-len` / `--target-len`: the lengths an encoder–decoder is judged at.
+    source_len: u32,
+    target_len: u32,
     /// `--adapter`: a user-supplied adapter file, `builtin:<id>`, `none` or `auto` (the default).
     adapter: Option<String>,
 }
@@ -341,7 +348,7 @@ fn read_model_config(path: &str) -> Result<(String, Option<misaka_palw_tir_lower
 /// `check-architecture`: returns whether the verdict is ADMISSIBLE.
 fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str>, flags: &ArchFlags) -> Result<bool, String> {
     use misaka_palw_sdk::check_architecture::*;
-    let ArchFlags { legacy, held, json, tile_len, h_chunk, adapter } = flags;
+    let ArchFlags { legacy, held, json, tile_len, h_chunk, adapter, source_len, target_len } = flags;
     let (legacy, held, json, tile_len, h_chunk) = (*legacy, *held, *json, *tile_len, *h_chunk);
     if legacy {
         let path = config.ok_or("--legacy needs --config")?;
@@ -388,7 +395,8 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
                     None => misaka_palw_tir_lower::hf_schema::AdapterChoice::Auto,
                 },
             };
-            check_ir_config_read_v1(&view.params, &text, tensors.as_ref(), &read, held, tile_len, h_chunk)
+            let shape = IrShapeV1 { source_len: *source_len, target_len: *target_len };
+            check_ir_config_shaped_v1(&view.params, &text, tensors.as_ref(), &read, held, tile_len, h_chunk, shape)
         }
         (None, Some(path)) => {
             let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -403,7 +411,7 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
             serde_json::to_string_pretty(&serde_json::json!({ "mode": "ir", "network": view.network_id.to_string(),
                 "architecture": r.architecture, "architecture_report": r.architecture_report,
                 "verdict": r.verdict.to_string(), "ceilings": r.ceilings_source,
-                "program_bytes": r.program_bytes, "blocks": r.blocks, "nodes": r.nodes, "unrolled_nodes": r.unrolled_nodes,
+                "program_bytes": r.program_bytes, "artifact_bytes": r.artifact_bytes.to_string(), "blocks": r.blocks, "nodes": r.nodes, "unrolled_nodes": r.unrolled_nodes,
                 "max_context": r.max_context, "graph_ir_root": r.graph_ir_root.map(|h| h.to_string()),
                 "admission": r.admission_json, "unverified": r.unverified }))
             .unwrap_or_default()
@@ -420,6 +428,10 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
         println!("  ceilings: {}", r.ceilings_source);
         if r.program_bytes > 0 {
             println!("  program: {} bytes, {} blocks, {} nodes", r.program_bytes, r.blocks, r.nodes);
+        }
+        if r.artifact_bytes > 0 {
+            // Reported, never judged: a registration may carry any artifact size; a seat's resources gate its readiness.
+            println!("  seat need: {:.2} GiB of integer parameters resident (a seat's resources gate readiness, not admission)", r.artifact_bytes as f64 / (1u64 << 30) as f64);
         }
         if let Some(h) = r.graph_ir_root {
             println!("  graph_ir_root {h}");

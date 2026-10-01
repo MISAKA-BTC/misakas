@@ -305,8 +305,10 @@ report says so. Implemented as: the refusal applies to `Auto`, `BuiltIn` and `No
 `user adapter overrides built-in refusal: <the refusal>` and the JSON field. The override cannot launder a missing feature: the
 adapter can only emit a `ModelSpec` from the existing vocabulary, so a refusal naming a feature the vocabulary lacks
 (`RESIDUAL_ALTUP_V1`) still ends in Level C when the adapter cannot express it. A refusal that has become stale — a built-in
-adapter now exists for the architecture — is **deleted from `refusals.json`** in the commit that adds the adapter
-(Granite-hybrid's, MiniCPM3's), so the data never contradicts itself.
+adapter now exists for the architecture — is **deleted from `refusals.json`** in the commit that adds the adapter, so the data
+never contradicts itself: Granite-hybrid's went with the built-in `granitemoehybrid` adapter (together with `dbrx` and `ernie4-5-moe`,
+the three corpus entries FR-01 unlocked; coordinator, 2026-10-01); MiniCPM3's stays, as the worked example of an override
+(`tests/fixtures/fr25/minicpm3`).
 
 ### 6.2 FR-26 — Level A is a guess until a reference says otherwise
 
@@ -385,6 +387,8 @@ being compiled or run**; the first action after the window lifts is a build, the
 | FR-02 | `AttnSpec.qk_norm_after_rope`, the HL order | `tests/qk_norm_post_rope.rs`; the corpus entries `hunyuan_v1_dense`, `hunyuan_v1_moe` |
 | FR-18 Phase 1 | `EncDecSpec` as data (`EncDecNames`, `family_names`, validation), adapters of kind `encdec` (`encdec-frame`, `mixin-bart-lineage`, `t5`, `bart`, `mbart`, `marian`, `pegasus`), `hf_schema::read_encdec`, the report, the SDK's two-stage check | `tests/encdec_adapters.rs` (the oracle: adapter = `parse_encdec` on every fixture, real config and single-key mutant), `tests/encdec.rs` unchanged and green |
 | FR-17 step 1 / FR-26 | `lower::bidir::arch_of` is a strict allow-list: a RoPE encoder, a final norm, a factorised embedding (ALBERT's panic) or an unread attention feature is `NOT_LOWERABLE` naming the field, never a wrong program | `tests/encoders.rs::the_bidirectional_lowering_refuses_a_spec_field_it_does_not_read`; the encoder fixtures must still lower |
+| coordinator decisions (2026-10-01) | built-in `dbrx`, `granitemoehybrid`, `ernie4-5-moe` (the stale Granite-hybrid refusal and its registry entry deleted; MiniCPM3 is the worked override example); `--source-len`/`--target-len` and the seat need (`artifact_bytes`) in `palw-class check-architecture` | `tests/weights_expr.rs` (the pack reads them like the files), `tests/architecture_report.rs` (FR-25 on MiniCPM3) |
+| designed, after the window | the PLE streamed-fill hooks (row map, table-wide scale as a first pass; `generic-frontend-v1.md` §9.4), for lane F's writer | byte-for-byte against the whole-tensor path (`tests/streaming_convert.rs`) |
 | not started | FR-18 Phase 2, FR-17 steps 2–4, FR-19, FR-09 | — |
 
 Until the build, the commit is a design with a reviewed draft, nothing more.

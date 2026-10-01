@@ -276,6 +276,28 @@ per chunk** and a `Select` by the chunk index. Published sizes (20 M rows a head
 unchunked lowering's, equal on the three implementations. What *is* large at published size is the artifact (hundreds of GB of
 `i16` codes for the PLE layers), a matter of the conversion's streamed fill and of what a registration may carry, not of the IR.
 
+**The streamed fill of a table that large (the hooks lane F's writer calls).** A registration may carry any artifact size:
+seat resources gate readiness (staged enablement), never admission, and the preflight reports the seat need
+(`palw-class check-architecture` prints `seat need: … GiB`; `artifact_bytes` in its JSON). What stands between the IR and a
+published-size `Qwen4-Exp` artifact is therefore the CONVERSION, and it is built from the loader lane F owns (a `TensorSource`
+that serves row ranges and a chunked writer), which already generalises to any huge `Gather` table. The hooks this feature
+provides, designed here and implemented after the quiet window (they touch `RowParam`, `lower/stream.rs` and `lower/fill.rs`, and each
+step has a byte-for-byte test against the whole-tensor path):
+
+1. **A row map.** `RowParam` says which HL rows feed which artifact rows. Today it is the identity (`row r ← row r`); the PLE
+   chunks need *runs*: chunk `k` of the layer's table is `[heads, rows_k, dim]` and its row `(h, r)` comes from HL row
+   `head_offset[h] + k·chunk_rows + r` — one run per hash head (`dest = h·rows_k`, `src = head_offset[h] + k·chunk_rows`,
+   `len = min(rows_k, size_h − k·chunk_rows)`); rows no run covers (past a head's size) are zero.
+2. **A table-wide scale as a first pass.** The table's `i16` codes share ONE scale per layer (a per-row scale would need a gather of
+   `[heads, rows]` more parameters at every position). `RowKind::TableShared` makes the scale a reduction (`max|x|/32767` over the rows
+   the heads use) computed in a first pass over the blocks that keeps nothing but the maximum — the shape of `SplitMain`'s meta pass —
+   and handed to the block fills ready-made; the whole-tensor path computes the same number, so the two agree to the byte. The narrowing
+   `(m, s, z)` that reads the table's scale takes it from the same pass.
+3. **Streaming-friendly by construction.** The lowering never asks for the whole table: the chunk fills read only through the row
+   map, the hash's tables (`NgramTables`) are tiny (primes and offsets), and the ids and the table read are already chunked by NF-8 at
+   `2^24` rows. The cost at published size is two reads of the rows used (`16 × 20 M × 128` values per layer: ≈ 82 GB of codes written,
+   about twice that read per pass from bf16), which is a property of the model, not of the IR.
+
 ### 9.5 The gate activations
 
 A gated norm's gate is data (`Op::GatedRmsNorm.act`: SiLU or sigmoid), a table over the `i16` grid like any activation;

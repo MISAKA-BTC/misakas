@@ -1,0 +1,88 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "minicpm3",
+ "doc": "MiniCPM3 (OpenBMB), the NATIVE transformers 5 class: DeepSeek-V2's multi-head latent attention with the plain cos/sin rotation (rope_interleave false), a dense gated MLP in every layer and the muP scalings - the embedding times scale_emb, each residual branch times scale_depth/sqrt(num_hidden_layers). the head input is divided by hidden_size/dim_model_base (config.logits_scaling). The built-in refusal of this architecture is by name, so the harness reads it under a renamed architecture (FR-25). Third-party adapter (lane H): data only, extends the built-in deepseek-v3.",
+ "extends": [
+  "deepseek-v3"
+ ],
+ "match": {
+  "architectures": [
+   "MiniCPM3ForCausalLM"
+  ],
+  "model_types": [
+   "minicpm3"
+  ]
+ },
+ "config": {
+  "inert": [
+   "initializer_range",
+   "pretraining_tp"
+  ],
+  "defaults": {
+   "tie_word_embeddings": true,
+   "rope_interleave": false,
+   "scale_emb": 1.0,
+   "scale_depth": 1.0,
+   "dim_model_base": 256
+  }
+ },
+ "vars": [
+  {
+   "name": "first_dense",
+   "value": {
+    "$var": "n"
+   }
+  },
+  {
+   "name": "interleave",
+   "value": false
+  },
+  {
+   "name": "emb_scale",
+   "value": {
+    "$cfg": [
+     "scale_emb",
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "res_mult",
+   "value": {
+    "$div": [
+     {
+      "$cfg": [
+       "scale_depth",
+       1.0
+      ]
+     },
+     {
+      "$sqrt": {
+       "$var": "n"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "pre_scale",
+   "value": {
+    "$div": [
+     {
+      "$cfg": [
+       "dim_model_base",
+       256
+      ]
+     },
+     {
+      "$var": "hidden"
+     }
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "minicpm3"
+  }
+ ]
+}

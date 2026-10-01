@@ -221,7 +221,6 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches and logits", Missing, [], NoReq, [], "Per-model constants over existing multiplier features; an adapter once a rule names them."),
     feature!("REFERENCE_REMOTE_CODE_V1", Storage, "a reference implementation that is remote Python code outside transformers", Missing, [], NoReq, [], "The semantics cannot be pinned to a library version; confirm against the module before an adapter may claim it."),
     feature!("WEIGHTS_QKV_MP_PARTITIONED_V1", Storage, "mp_num-partitioned fused qkv weight layout", Missing, [], NoReq, [], "CodeGen."),
-    feature!("MIXER_LAYER_PATTERN_HYBRID_V1", Mixer, "per-layer mixer pattern with Mamba-2 and attention sharing an MoE feed-forward", Missing, [], NoReq, [], "Granite-4 hybrid: all parts exist; the layer pattern keys are not mapped yet."),
     feature!("LAYER_FFN_ONLY_V1", Mixer, "layers that are a single block (a mixer or an FFN, not both)", Missing, [], NoReq, [], "Nemotron-H."),
     feature!("MIXER_PARALLEL_BRANCH_V1", Mixer, "two mixers in parallel in one layer, summed", Missing, [], NoReq, [], "Falcon-H1."),
     feature!("ATTN_SHARED_BLOCK_V1", Attention, "one attention block's weights reused at several depths", Missing, [], NoReq, [], "Zamba2."),

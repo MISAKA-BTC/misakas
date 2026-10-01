@@ -241,7 +241,7 @@ a new adapter (a data file) over existing HL ops unless stated):
 | `Llama4ForCausalLM`/`…ConditionalGeneration` | chunked attention (a new window shape), NoPE layers with attention temperature tuning, Llama-4 MoE — needs a `chunked` Hist read |
 | `Gemma3nForConditionalGeneration` | AltUp, Laurel, per-layer embeddings, activation sparsity (a top-k-by-value gate) |
 | `Glm4ForCausalLM`, `GlmForCausalLM`, `Glm4MoeForCausalLM`, ChatGLM (remote) | not modelled yet; GLM-4.5 is DeepSeek-V3-style routing with partial rope — mostly existing ops |
-| `Olmo3ForCausalLM`, `GraniteMoeHybridForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
+| `Olmo3ForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
 | `PhimoeForCausalLM` | sparsemixer routing (a second top-1 over a masked, jittered distribution) |
 | `DbrxForCausalLM`, `JetMoeForCausalLM`, `Ernie4_5*`, `HunYuan*`, `MiniMax*`, `Lfm2*`, `RecurrentGemma`, `xLSTM`, `DiffLlama`, `BitNet`, … | long tail; each needs its parser, some a new op (xLSTM's exponential gating, BitNet's ternary weights) |
 | `Rwkv5ForCausalLM`, `Rwkv6ForCausalLM` (remote), `RWKV7ForCausalLM` (flash-linear-attention) | not in transformers 5.17: the group-norm eps, rescale and LoRA widths cannot be checked offline. The **recurrences are HL ops** (`Wkv6` covers RWKV-5/6 with a per-channel decay, `Wkv7` the RWKV-7 generalised delta rule), tested against their closed forms |
