@@ -1,0 +1,257 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "modernbert_decoder",
+ "doc": "ModernBERT-decoder: ModernBERT's block run causally - an embedding LayerNorm (no bias), pre-norm layers with the attention norm absent in layer 0 (Identity), separate q/k/v and Wo, a fused GeGLU Wi (input|gate: gate-first), sliding/full layers (layer_types, sliding_window) with a rotary base keyed by layer type - and a PREDICTION HEAD (lm_head.dense, GELU, lm_head.norm) before the tied vocabulary projection and decoder.bias (HEAD_TRANSFORM_V1, FR-29). Third-party adapter (lane H): data only.",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "ModernBertDecoderForCausalLM"
+  ],
+  "model_types": [
+   "modernbert-decoder"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "norm_eps": 1e-05,
+   "norm_bias": false,
+   "attention_bias": false,
+   "mlp_bias": false,
+   "hidden_activation": "gelu",
+   "tie_word_embeddings": true,
+   "decoder_bias": true,
+   "classifier_activation": "gelu",
+   "classifier_bias": false,
+   "sliding_window": 128
+  },
+  "inert": [
+   "classifier_dropout",
+   "cls_token_id",
+   "sep_token_id",
+   "embedding_dropout",
+   "initializer_cutoff_factor",
+   "local_attention",
+   "mlp_dropout"
+  ]
+ },
+ "vars": [
+  {
+   "name": "eps",
+   "value": {
+    "$cfg": "norm_eps"
+   }
+  },
+  {
+   "name": "act",
+   "value": {
+    "$act": {
+     "$cfg": "hidden_activation"
+    }
+   }
+  },
+  {
+   "name": "nb",
+   "value": {
+    "$cfg": "norm_bias"
+   }
+  },
+  {
+   "name": "norm",
+   "value": {
+    "kind": "Layer",
+    "eps": {
+     "$var": "eps"
+    },
+    "gain": "W",
+    "bias": {
+     "$var": "nb"
+    }
+   }
+  },
+  {
+   "name": "sw",
+   "value": {
+    "$cfgn": [
+     "sliding_window",
+     128
+    ]
+   }
+  },
+  {
+   "name": "types",
+   "value": {
+    "$layer_types": {
+     "n": {
+      "$var": "n"
+     },
+     "allowed": [
+      "full_attention",
+      "sliding_attention"
+     ],
+     "each": "full_attention"
+    }
+   }
+  },
+  {
+   "name": "rope",
+   "value": {
+    "$rope": {
+     "dim": {
+      "$var": "hd"
+     },
+     "theta": 160000.0,
+     "layer_type": "full_attention",
+     "max_pos": {
+      "$var": "max_pos"
+     }
+    }
+   }
+  },
+  {
+   "name": "l_position",
+   "layer": true,
+   "value": {
+    "Rope": {
+     "$if": [
+      {
+       "$eq": [
+        {
+         "$index": [
+          {
+           "$var": "types"
+          },
+          {
+           "$var": "i"
+          }
+         ]
+        },
+        "sliding_attention"
+       ]
+      },
+      {
+       "$rope": {
+        "dim": {
+         "$var": "hd"
+        },
+        "theta": 10000.0,
+        "layer_type": "sliding_attention",
+        "max_pos": {
+         "$var": "max_pos"
+        }
+       }
+      },
+      {
+       "$var": "rope"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "mlp_layout",
+   "value": "FusedGateFirst"
+  },
+  {
+   "name": "l_residual",
+   "layer": true,
+   "value": {
+    "Sequential": {
+     "pre_mixer": {
+      "$if": [
+       {
+        "$eq": [
+         {
+          "$var": "i"
+         },
+         0
+        ]
+       },
+       null,
+       {
+        "$var": "norm"
+       }
+      ]
+     },
+     "pre_ffn": {
+      "$var": "norm"
+     },
+     "multiplier": 1.0
+    }
+   }
+  },
+  {
+   "name": "embedding",
+   "value": {
+    "dim": {
+     "$var": "hidden"
+    },
+    "scale": 1.0,
+    "norm": {
+     "$var": "norm"
+    }
+   }
+  },
+  {
+   "name": "head",
+   "value": {
+    "tied": {
+     "$var": "tied"
+    },
+    "bias": {
+     "$cfg": "decoder_bias"
+    },
+    "transform": {
+     "bias": {
+      "$cfg": "classifier_bias"
+     },
+     "act": {
+      "$act": {
+       "$cfg": "classifier_activation"
+      }
+     },
+     "norm": {
+      "$var": "norm"
+     }
+    }
+   }
+  },
+  {
+   "name": "names",
+   "value": {
+    "embed": "model.embeddings.tok_embeddings",
+    "final_norm": "model.final_norm",
+    "embed_norm": "model.embeddings.norm",
+    "lm_head": {
+     "$if": [
+      {
+       "$var": "tied"
+      },
+      "model.embeddings.tok_embeddings",
+      "lm_head"
+     ]
+    },
+    "lm_head_bias": "decoder.bias",
+    "head.transform.dense": "lm_head.dense",
+    "head.transform.norm": "lm_head.norm",
+    "norm.mix": "model.layers.{L}.attn_norm",
+    "norm.ffn": "model.layers.{L}.mlp_norm",
+    "attn.q": "model.layers.{L}.attn.q_proj",
+    "attn.k": "model.layers.{L}.attn.k_proj",
+    "attn.v": "model.layers.{L}.attn.v_proj",
+    "attn.o": "model.layers.{L}.attn.Wo",
+    "mlp.gate_up": "model.layers.{L}.mlp.Wi",
+    "mlp.down": "model.layers.{L}.mlp.Wo"
+   }
+  },
+  {
+   "name": "p",
+   "value": "model."
+  },
+  {
+   "name": "model_type",
+   "value": "modernbert-decoder"
+  }
+ ]
+}
