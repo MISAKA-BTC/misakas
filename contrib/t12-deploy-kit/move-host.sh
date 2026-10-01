@@ -140,6 +140,16 @@ shares_running_mib() { # the --palw-host-memory-share of every running t12 kaspa
     echo "$total"
 }
 
+pinned_once_mib() { # int-10.2 A1: the class artifacts this host's seats pin, each ONCE for the host, MiB (0 before int-10.2)
+    # A release whose kaspad pins (its --help knows --palw-no-artifact-pin) locks each artifact a replay reads in place:
+    # one page-cache copy for the host however many seats lock it, outside every seat's --palw-host-memory-share. The
+    # declared arithmetic therefore adds each distinct file once -- the 8k .palwart and, with Phase H, the IR container.
+    "$REL/bin/kaspad" --help 2>/dev/null | grep -q -- '--palw-no-artifact-pin' || { echo 0; return; }
+    local mib=$(( (ART_8K_BYTES + 1048575) / 1048576 ))
+    [ -n "${ART_PH:-}" ] && mib=$((mib + (ART_PH_BYTES + 1048575) / 1048576))
+    echo "$mib"
+}
+
 add_checks() { # <id> <hard: 1 = die on what add needs, 0 = warn (the key is copied after the preflight)>
     local id=$1 hard=$2 ok=1 port holder shares memtotal free_gb need
     local spec; spec=$(move_target_spec "$id" "$HOST_KEY") || die "b$id does not move to this host ($HOST_KEY) (move-nodes.sh)"
@@ -165,9 +175,10 @@ add_checks() { # <id> <hard: 1 = die on what add needs, 0 = warn (the key is cop
         [ -z "$holder" ] || flag "port $port is held (${holder:0:100})"
     done
     [ -z "$(bond_procs "$id")" ] || flag "a process on THIS host already holds bond $id"
-    shares=$(shares_running_mib); memtotal=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo); need=$((shares + N_SHARE + $(move_reserve_mib "$HOST_KEY")))
-    say "  memory: running shares ${shares} MiB + b$id ${N_SHARE} + reserve $(move_reserve_mib "$HOST_KEY") = ${need} MiB of MemTotal ${memtotal} MiB"
-    [ "$need" -le "$memtotal" ] || flag "shares + reserve ${need} MiB exceed MemTotal ${memtotal} MiB"
+    local pinned; pinned=$(pinned_once_mib)
+    shares=$(shares_running_mib); memtotal=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo); need=$((shares + N_SHARE + pinned + $(move_reserve_mib "$HOST_KEY")))
+    say "  memory: running shares ${shares} MiB + b$id ${N_SHARE} + pinned artifacts (once for the host) ${pinned} + reserve $(move_reserve_mib "$HOST_KEY") = ${need} MiB of MemTotal ${memtotal} MiB"
+    [ "$need" -le "$memtotal" ] || flag "shares + pinned artifacts + reserve ${need} MiB exceed MemTotal ${memtotal} MiB"
     free_gb=$(df -BG --output=avail "$(dirname "$N_APPDIR")" | tail -1 | tr -dc 0-9)
     [ "$free_gb" -ge 12 ] || flag "only ${free_gb} GB free next to $N_APPDIR (a seat appdir is ~5 GB; 12 GB keeps the rest of the host breathing)"
     require_public_nodes_up "b$id"

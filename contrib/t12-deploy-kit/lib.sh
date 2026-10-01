@@ -220,6 +220,11 @@ unit_body_service() { # the [Service] lines both modes share
     # `Environment=` / `EnvironmentFile=` with no value RESET what the base unit (or an earlier drop-in)
     # set: kaspad reads ~100 KASPAD_* variables, and one left on an old unit (a KASPAD_PALW_PRODUCE, a
     # KASPAD_PALW_DRILL_TAMPER_LEAF) would add a flag the launch script does not show.
+    # LimitMEMLOCK=infinity (int-10.2 A1): kaspad pins the class artifacts a replay reads in place (mlock of
+    # the file's one page-cache copy, shared by every seat on the host). The kit's units run as root, whose
+    # CAP_IPC_LOCK already lifts the limit; the line keeps the pin working under a unit without it (and says
+    # what the node needs). A refused pin is not fatal: the node logs `not pinned: ... RLIMIT_MEMLOCK ...` and
+    # reserves the file per replay, as before.
     cat <<EOF
 Environment=
 EnvironmentFile=
@@ -236,6 +241,7 @@ StandardOutput=journal
 StandardError=journal
 MemoryHigh=infinity
 MemoryMax=$( [ "$N_MEMMAX" = - ] && echo infinity || echo "${N_MEMMAX}G" )
+LimitMEMLOCK=infinity
 EOF
 }
 

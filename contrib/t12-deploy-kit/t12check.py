@@ -279,6 +279,14 @@ def main():
                 print(f"  WARNING: this seat's oldest duty has waited {wait} DAA for its panel's quorum (healthy: 2-6)")
             if num("seat_receipts_1h") is not None and (num("seat_duties") or 0) > 20 and num("seat_receipts_1h") < 20:
                 print(f"  WARNING: this seat filed only {num('seat_receipts_1h')} receipts in the last hour with {num('seat_duties')} duties on the chain")
+            # 10-01 int-10.2 A1: the class artifacts this node pinned -- resident once on the HOST (count each distinct file once
+            # across the seats that report it), outside the ledger, charged to the cgroup of the seat that faulted it in first.
+            if num("pinned_mib") is not None:
+                print(f"  pinned class artifacts: {num('pinned_mib')} MiB in {num('pinned_files') or 0} file(s) (resident once on the host, "
+                      f"not reserved per replay)")
+                if (num("pinned_files") or 0) == 0:
+                    print("  NOTE: no class artifact is pinned -- expected on a node that holds the 8k or IR artifact; its journal says why "
+                          "(`is not pinned:` -- RLIMIT_MEMLOCK, the cap, or the host's room), and its replays reserve the file as before")
         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
         # inbox was free).

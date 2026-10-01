@@ -156,6 +156,11 @@ impl PalwBackendRegistry {
             .and_then(holding_replay_bytes_v1)
     }
 
+    /// The holdings as the need memo keys them: each path, with what of it this process has pinned.
+    fn memo_holdings_v1(&self) -> Vec<(PathBuf, u64)> {
+        self.holdings.iter().map(|h| (h.path.clone().unwrap_or_default(), crate::palw_artifact_pin::pinned_bytes_of_v1(h))).collect()
+    }
+
     /// **Does this class resolve with no holding at all?** The derived floor does (its artifact is
     /// derived from a seed, `ArtifactSourceV1::Derived`): its replay touches none of this node's
     /// holdings, so it is priced with none of their bytes.
@@ -196,13 +201,7 @@ impl PalwBackendRegistry {
     /// A partial seat's figure is a function of the claim as well and is not memoized here — the
     /// caller that holds the claim asks [`Self::role_memory_need_for_backend_v1`].
     pub fn role_memory_need_v1(&self, class_id: Hash64, artifact_root: Hash64, role: PalwResourceRoleV1) -> Option<PalwRoleMemoryNeedV1> {
-        let key = (
-            self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
-            class_id,
-            artifact_root,
-            role,
-            false,
-        );
+        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, false);
         let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
         if memoized
             && let Ok(memo) = replay_bytes_memo_v1().lock()
@@ -213,11 +212,10 @@ impl PalwBackendRegistry {
         // A derived class (the floor) first: it resolves with no holding, so none of theirs is
         // its bytes ([`Self::serves_without_a_holding_v1`]).
         let figure = match self.sdk.resolve(class_id, artifact_root, &[]) {
-            Ok(backend) => Some(Self::compose_need_v1(backend.as_ref(), 0, None, role)),
+            Ok(backend) => Some(Self::compose_need_v1(backend.as_ref(), (0, 0), None, role)),
             Err(_) => self.holdings.iter().find_map(|holding| {
                 let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
-                let holding_bytes = incremental_replay_bytes_v1(holding)?;
-                Some(Self::compose_need_v1(backend.as_ref(), holding_bytes, None, role))
+                Some(Self::compose_need_v1(backend.as_ref(), holding_terms_v1(holding)?, None, role))
             }),
         };
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
@@ -236,16 +234,16 @@ impl PalwBackendRegistry {
         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
         role: PalwResourceRoleV1,
     ) -> PalwRoleMemoryNeedV1 {
-        let holding_bytes = if self.serves_without_a_holding_v1(class_id, artifact_root) {
-            0
+        let terms = if self.serves_without_a_holding_v1(class_id, artifact_root) {
+            (0, 0)
         } else {
             self.holdings
                 .iter()
                 .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
-                .and_then(incremental_replay_bytes_v1)
-                .unwrap_or(0)
+                .and_then(holding_terms_v1)
+                .unwrap_or((0, 0))
         };
-        Self::compose_need_v1(backend, holding_bytes, job, role)
+        Self::compose_need_v1(backend, terms, job, role)
     }
 
     /// **The holding that serves `(class_id, artifact_root)`, through [`Self::resolve_or_chain`]'s
@@ -311,13 +309,7 @@ impl PalwBackendRegistry {
         if let Some(need) = self.role_memory_need_v1(class_id, artifact_root, role) {
             return Some(need);
         }
-        let key = (
-            self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
-            class_id,
-            artifact_root,
-            role,
-            true,
-        );
+        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, true);
         let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
         if memoized
             && let Ok(memo) = replay_bytes_memo_v1().lock()
@@ -326,7 +318,7 @@ impl PalwBackendRegistry {
             return Some(hit.clone());
         }
         let (holding, backend) = self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)?;
-        let need = Self::compose_need_v1(backend.as_ref(), incremental_replay_bytes_v1(holding)?, None, role);
+        let need = Self::compose_need_v1(backend.as_ref(), holding_terms_v1(holding)?, None, role);
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
             memo.insert(key, Some(need.clone()));
         }
@@ -352,14 +344,14 @@ impl PalwBackendRegistry {
         )
             -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
     {
-        let holding_bytes = if self.serves_without_a_holding_v1(class_id, artifact_root) {
-            0
+        let terms = if self.serves_without_a_holding_v1(class_id, artifact_root) {
+            (0, 0)
         } else {
             self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)
-                .and_then(|(holding, _)| incremental_replay_bytes_v1(holding))
-                .unwrap_or(0)
+                .and_then(|(holding, _)| holding_terms_v1(holding))
+                .unwrap_or((0, 0))
         };
-        Self::compose_need_v1(backend, holding_bytes, job, role)
+        Self::compose_need_v1(backend, terms, job, role)
     }
 
     /// **What laying `capture` out WHOLE costs this node** (DoS audit 2026-09-24, #4) — the need a
@@ -418,13 +410,14 @@ impl PalwBackendRegistry {
 
     fn compose_need_v1(
         backend: &dyn PalwExecutionBackendV1,
-        holding_bytes: u64,
+        (holding_bytes, pinned_bytes): (u64, u64),
         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
         role: PalwResourceRoleV1,
     ) -> PalwRoleMemoryNeedV1 {
         PalwRoleMemoryNeedV1 {
             role,
             holding_bytes,
+            pinned_bytes,
             derived_bytes: backend.artifact_derived_resident_bytes_v1(),
             runtime: backend.runtime_profile_v1(),
             profile: backend.resource_profile_v1(job, role),
@@ -653,6 +646,9 @@ pub fn evict_held_artifacts_v1(paths: &[PathBuf]) -> usize {
         held.retain(|key, _| key.path != canonical);
         released += before - held.len();
     }
+    // A released holding is a file this process no longer needs resident: its pin goes with it
+    // (int-10.2 A1, `palw_artifact_pin`).
+    crate::palw_artifact_pin::unpin_paths_v1(paths);
     // The negative verdicts go with them. This is the SECOND door, not the only one: a mark is
     // already checked against its holdings at every read (see `unservable_chain_classes`), so an
     // operator flush does not have to be the thing that keeps the map honest — which is just as
@@ -668,6 +664,7 @@ pub fn evict_all_held_artifacts_v1() -> usize {
     let released = held.len();
     held.clear();
     unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    crate::palw_artifact_pin::unpin_all_v1();
     released
 }
 
@@ -824,7 +821,12 @@ fn class_manifest_verification_armed_v1() -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwRoleMemoryNeedV1 {
     pub role: PalwResourceRoleV1,
+    /// What the holding still takes from `MemAvailable` (`incremental_replay_bytes_v1`): the file for
+    /// an unpinned mapping, zero for a pinned one or a residency.
     pub holding_bytes: u64,
+    /// **The holding's pinned file, resident already** (int-10.2 A1, `palw_artifact_pin`): reported
+    /// beside the need and never reserved — it is the host's one locked copy, not this role's.
+    pub pinned_bytes: u64,
     /// Tables the backend derived at load and holds for the artifact's life (the dense tier's
     /// rotary table: 1.07 GiB at 2M). Resident already, so reported and not reserved.
     pub derived_bytes: u64,
@@ -839,20 +841,30 @@ impl PalwRoleMemoryNeedV1 {
         self.holding_bytes.saturating_add(working_set)
     }
 
-    /// The artifact's resident bytes: its file (or its pinned residency) plus the derived tables.
+    /// The artifact's resident bytes: its file (or its pinned residency, or its pinned file) plus the
+    /// derived tables.
     pub fn artifact_resident_bytes(&self) -> u64 {
-        self.holding_bytes.saturating_add(self.derived_bytes)
+        self.holding_bytes.saturating_add(self.pinned_bytes).saturating_add(self.derived_bytes)
+    }
+
+    /// `" (1.68 GiB pinned: resident once on this host, not reserved)"` for a pinned holding, else empty.
+    fn pinned_note(&self) -> String {
+        if self.pinned_bytes == 0 {
+            return String::new();
+        }
+        format!(" ({:.2} GiB pinned: resident once on this host, not reserved)", gib(self.pinned_bytes))
     }
 
     /// The decomposition, for a hold line or a telemetry field.
     pub fn describe(&self) -> String {
         match self.profile {
             Some(p) => format!(
-                "{:.2} GiB as {} (artifact {:.2} GiB + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB \
+                "{:.2} GiB as {} (artifact {:.2} GiB{} + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB \
                  + capture {:.2} GiB ({:?}) + checkpoint leg {:.2} GiB{}) under {}",
                 gib(self.total_bytes()),
                 self.role.name(),
                 gib(self.holding_bytes),
+                self.pinned_note(),
                 gib(p.kv_resident_bytes),
                 p.end_rows,
                 if p.opening_bytes > 0 { format!(" + opening {:.2} GiB", gib(p.opening_bytes)) } else { String::new() },
@@ -869,10 +881,11 @@ impl PalwRoleMemoryNeedV1 {
                 self.runtime.map(|r| r.name()).unwrap_or("no runtime profile"),
             ),
             None => format!(
-                "{:.2} GiB as {} (artifact {:.2} GiB + the {:.2} GiB scratch estimate; this family derives no resource profile)",
+                "{:.2} GiB as {} (artifact {:.2} GiB{} + the {:.2} GiB scratch estimate; this family derives no resource profile)",
                 gib(self.total_bytes()),
                 self.role.name(),
                 gib(self.holding_bytes),
+                self.pinned_note(),
                 gib(PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
             ),
         }
@@ -983,7 +996,10 @@ pub fn palw_partial_seat_streamed_need_v1(mut need: PalwRoleMemoryNeedV1) -> Pal
 
 /// The per-(holdings, class, root, role, door) need figures — see `role_memory_need_v1`. The door
 /// flag keeps a table-only miss (`false`) from answering for the chain arm (`true`).
-type NeedMemoKey = (Vec<PathBuf>, Hash64, Hash64, PalwResourceRoleV1, bool);
+///
+/// Each holding enters the key with the bytes this process has pinned of it (int-10.2 A1): a figure
+/// computed before a pin carried the file as the holding's bytes, and must not answer after it.
+type NeedMemoKey = (Vec<(PathBuf, u64)>, Hash64, Hash64, PalwResourceRoleV1, bool);
 fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>> {
     static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>>> =
         std::sync::OnceLock::new();
@@ -1160,7 +1176,15 @@ pub fn load_class_holdings_v1(
     let mut policy = residency;
     let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
         held_or_load_locked(&mut held, role, path, |p| {
+            // **Pin what a replay reads in place, BEFORE the lineage maps it** (int-10.2 A1,
+            // `palw_artifact_pin`): a whole-file mapping read in place is locked first — by large reads,
+            // so the decoder's own pass then reads a resident page cache instead of faulting the file in
+            // 4 KiB at a time — and handed to the holding the lineage builds, against what the host can
+            // spare now. A file this process holds already never reaches here (the map above answers),
+            // so the other service's load locks nothing twice.
+            let prepin = crate::palw_artifact_pin::prepin_file_v1(p, sdk.lineage_id_for_file_v1(p), host_available_bytes_v1());
             let loaded = sdk.load_artifact_with(p, policy);
+            crate::palw_artifact_pin::settle_prepin_v1(role, p, prepin, &loaded);
             if let (Ok(holding), misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare)) = (&loaded, policy)
                 && let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding)
             {
@@ -1673,11 +1697,14 @@ pub fn process_memory_line_v1() -> String {
 /// did it grow".
 pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
     let caches = kaspa_consensus::consensus::storage::declared_cache_budget_bytes_v1(ram_scale);
+    // The pinned artifacts (int-10.2 A1): in `file` above for every process that maps them, resident
+    // once on the host, outside the ledger, and in the memory cgroup of whoever faulted them in first.
+    let pinned = crate::palw_artifact_pin::pinned_memory_note_v1();
     match process_memory_v1() {
         Some(m) => {
             let unaccounted = m.pss_anon_bytes.saturating_sub(caches);
             info!(
-                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live",
+                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live; {pinned}",
                 gib(m.rss_bytes),
                 gib(m.pss_bytes),
                 gib(m.pss_anon_bytes),
@@ -1690,7 +1717,7 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
             );
         }
         None => info!(
-            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}",
+            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}; {pinned}",
             gib(caches)
         ),
     }
@@ -1723,13 +1750,27 @@ pub fn holding_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
 
 /// **What a replay of this holding still has to take from MemAvailable.** A resident Qwen3.6
 /// mapping has already pinned its budget; charging it again against leftover MemAvailable is the
-/// 6.50-vs-3 GiB deferral on a host that just mapped the class. Page-cache and dense holdings
-/// still report the file.
+/// 6.50-vs-3 GiB deferral on a host that just mapped the class. A pinned file (int-10.2 A1) is
+/// resident too. Page-cache and unpinned dense holdings still report the file.
 pub fn incremental_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
     if misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding).is_some() {
         return Some(0);
     }
+    // **A pinned file is resident already** (int-10.2 A1): its one page-cache copy is locked for the
+    // process's life and shared by every process on the host that maps it, so a replay takes none of
+    // it from `MemAvailable` — and charging it per replay was five seats paying five times for the one
+    // copy `smaps` showed as `Shared_Clean` in each (5.104, 2026-10-01). Reported, never reserved
+    // (`PalwRoleMemoryNeedV1::pinned_bytes`).
+    if crate::palw_artifact_pin::holding_is_pinned_v1(holding) {
+        return Some(0);
+    }
     holding_replay_bytes_v1(holding)
+}
+
+/// A holding's two terms in a role's need: what it still takes from `MemAvailable`
+/// ([`incremental_replay_bytes_v1`]) and what of it is pinned already (reported, never reserved).
+fn holding_terms_v1(holding: &PalwLoadedArtifactV1) -> Option<(u64, u64)> {
+    Some((incremental_replay_bytes_v1(holding)?, crate::palw_artifact_pin::pinned_bytes_of_v1(holding)))
 }
 
 /// Whether a replay that needs `need_bytes` (the class's artifact plus its scratch) fits this
@@ -1761,8 +1802,12 @@ fn host_headroom_of_v1(available: u64) -> u64 {
 /// `MemAvailable`, the cgroup headroom as the kernel's `memory.max − memory.current` says it
 /// (`cgroup_naive`) and as the ledger now reads it with the clean `MADV_FREE`d pages credited
 /// (`cgroup_credited`), and those pages themselves (`lazyfree`) — so the difference that held every duty
-/// on b6 is readable on a live node. Empty off Linux.
+/// on b6 is readable on a live node — and the class artifacts this process pinned (`pinned_mib`,
+/// `pinned_files`, int-10.2 A1). Off Linux, the pin half alone.
 pub fn host_memory_status_v1() -> String {
+    // The pin half (int-10.2 A1) on every platform that pins: what this process locked, which a host's
+    // arithmetic counts once per distinct file however many seats report it.
+    let pinned = crate::palw_artifact_pin::pinned_status_v1();
     #[cfg(target_os = "linux")]
     {
         let mib = |bytes: u64| bytes >> 20;
@@ -1773,7 +1818,7 @@ pub fn host_memory_status_v1() -> String {
         let credited = own.as_deref().and_then(|text| cgroup_headroom_from_v1(text, lazy, read));
         let field = |name: &str, value: Option<u64>| format!("{name}={}", value.map_or("none".to_string(), |v| mib(v).to_string()));
         format!(
-            "{} {} {} {} host_load_milli={}",
+            "{} {} {} {} host_load_milli={} {pinned}",
             field("mem_available_mib", mem_available_bytes_v1()),
             field("cgroup_naive_mib", naive),
             field("cgroup_credited_mib", credited),
@@ -1783,7 +1828,7 @@ pub fn host_memory_status_v1() -> String {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        String::new()
+        pinned
     }
 }
 
@@ -2491,6 +2536,111 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// A small `PALWTIR1` container on disk — the golden `dense-gqa-2layer` program under the flat
+    /// logits scheme, the shape `palw_panel`'s IR court tests load — in its own temp directory. An IR
+    /// class is DATA, so a fixture of it resolves to its own class through the SDK's door, which is
+    /// what lets a test price a replay of a holding it wrote.
+    fn write_tir_fixture(tag: &str) -> (PathBuf, PathBuf) {
+        use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+        use misaka_palw_tir::TirProgramV1;
+        let unhex =
+            |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() };
+        let vector = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs/dense-gqa-2layer.json");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&vector).expect("the golden program")).expect("json");
+        let mut program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
+        let scheme = kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1();
+        program.logits_scheme_id.copy_from_slice(scheme.as_byte_slice());
+        let program = TirProgramV1::decode_canonical(&program.encode()).expect("still canonical");
+        let mut tensors = std::collections::BTreeMap::new();
+        for t in v["params"].as_array().unwrap() {
+            tensors.insert(
+                (t["param"].as_u64().unwrap() as u16, t["layer"].as_u64().map(|l| l as u16)),
+                unhex(t["le_hex"].as_str().unwrap()),
+            );
+        }
+        let commit_tiles = program.blocks.iter().flat_map(|b| b.nodes.iter().filter(|n| n.commit).map(|_| 8u32)).collect();
+        let layout = PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: 64,
+            checkpoint_interval: 2,
+            h_tile: 4,
+            commit_tiles,
+            state_tiles: program.states.iter().map(|_| 4).collect(),
+        };
+        let dir = std::env::temp_dir().join(format!("kaspad-backends-tir-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tiny.palwtir");
+        let meta = serde_json::json!({ "model_id": format!("test/tiny-ir-{tag}") }).to_string();
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&layout).unwrap(), [9; 64], meta, &mut |j, l| {
+            tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}"))
+        })
+        .expect("the container");
+        (dir, path)
+    }
+
+    /// **A pinned holding is resident: a replay of its class reserves none of its file, and the need
+    /// says so** (int-10.2 A1; 5.104, 2026-10-01: five seats each reserved the 8k file's 1.68 GiB per
+    /// replay for the one copy `smaps` showed as `Shared_Clean` in all five). An IR container — read in
+    /// place from its mapping, so a pin serves it — is locked before it loads (as the node's load does,
+    /// under a stated policy: no daemon armed one here, so the load itself pins nothing) and priced at
+    /// its file until the lock is handed to the holding, as before this release; once settled, the full
+    /// seat's need drops by exactly the file, the file is reported beside it (`pinned_bytes`, the
+    /// `describe` line) and is still what a replay touches; an eviction releases the pin and the price
+    /// comes back. The memo cannot answer across the pin: it keys every holding on what of it is pinned.
+    #[test]
+    fn a_pinned_holding_is_priced_resident_and_reported_beside_the_need() {
+        use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
+        let _guard = exclusive();
+        let (dir, path) = write_tir_fixture("pinned");
+        let file = std::fs::metadata(&path).expect("on disk").len();
+        let policy = crate::palw_artifact_pin::PalwArtifactPinPolicyV1 { enabled: true, max_bytes: 1 << 30 };
+        let prepin = crate::palw_artifact_pin::prepin_file_with_policy_v1(&path, sdk().lineage_id_for_file_v1(&path), None, policy);
+        assert!(prepin.is_ok(), "an IR container is locked before it loads: {:?}", prepin.as_ref().err());
+        let holdings = load_class_holdings_v1(
+            "test-pin",
+            &sdk(),
+            std::slice::from_ref(&path),
+            0,
+            misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+        );
+        assert_eq!(holdings.len(), 1);
+        assert!(crate::palw_artifact_pin::palw_pin_eligibility_v1(&holdings[0]).is_ok(), "an IR container is read in place");
+        assert!(
+            !crate::palw_artifact_pin::holding_is_pinned_v1(&holdings[0]),
+            "no policy armed: the load pins nothing, and the lock is not yet handed over"
+        );
+        assert_eq!(incremental_replay_bytes_v1(&holdings[0]), Some(file), "unpinned: the file, as before");
+        let registry = PalwBackendRegistry::new(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            holdings.clone(),
+            b"misaka-palw-rc".to_vec(),
+        );
+        let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).remove(0);
+        let (class_id, root) = (entry.class_id(), entry.artifact_root);
+        let before = registry.role_memory_need_v1(class_id, root, PalwResourceRoleV1::FullSeat).expect("the IR class resolves");
+        assert_eq!((before.holding_bytes, before.pinned_bytes), (file, 0));
+
+        let outcome = crate::palw_artifact_pin::settle_prepin_v1("test-pin", &path, prepin, &Ok(holdings[0].clone()));
+        assert!(matches!(outcome, crate::palw_artifact_pin::PalwPinOutcomeV1::Pinned { bytes, .. } if bytes == file), "{outcome:?}");
+        assert_eq!(incremental_replay_bytes_v1(&holdings[0]), Some(0), "pinned: resident already");
+        assert_eq!(holding_replay_bytes_v1(&holdings[0]), Some(file), "what a replay touches is still the file");
+        let after = registry.role_memory_need_v1(class_id, root, PalwResourceRoleV1::FullSeat).expect("resolves");
+        assert_eq!((after.holding_bytes, after.pinned_bytes), (0, file), "the memo did not answer across the pin");
+        assert_eq!(after.total_bytes(), before.total_bytes() - file, "the need falls by exactly the file");
+        assert_eq!(after.artifact_resident_bytes(), before.artifact_resident_bytes(), "and the file is still reported resident");
+        assert!(after.describe().contains("pinned: resident once on this host, not reserved"), "{}", after.describe());
+        let backend = registry.resolve(class_id, root).expect("the trait door serves it");
+        let seat = registry.role_memory_need_for_backend_v1(backend.as_ref(), class_id, root, None, PalwResourceRoleV1::FullSeat);
+        assert_eq!((seat.holding_bytes, seat.pinned_bytes), (0, file), "a seat's figure through its own backend agrees");
+        assert!(crate::palw_artifact_pin::pinned_status_v1().contains("pinned_files="));
+
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        assert!(!crate::palw_artifact_pin::holding_is_pinned_v1(&holdings[0]), "the eviction released the pin");
+        assert_eq!(incremental_replay_bytes_v1(&holdings[0]), Some(file), "and the file is charged again");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **A cgroup's headroom is the least over the process's cgroup and its ancestors**, v2 first
     /// and v1 where v2 sets nothing — the reading that tells a pool slot in a 6 GiB cgroup from
     /// the host it runs on.
@@ -3022,6 +3172,7 @@ mod tests {
         let fold = |leaves: u64| PalwRoleMemoryNeedV1 {
             role: PalwResourceRoleV1::FullSeat,
             holding_bytes: 0,
+            pinned_bytes: 0,
             derived_bytes: 0,
             runtime: Some(PalwRuntimeProfileV1::A16KvI32),
             profile: palw_resource_profile_v1(
@@ -3063,6 +3214,7 @@ mod tests {
         let unprofiled = PalwRoleMemoryNeedV1 {
             role: PalwResourceRoleV1::FullSeat,
             holding_bytes: 0,
+            pinned_bytes: 0,
             derived_bytes: 0,
             runtime: None,
             profile: None,

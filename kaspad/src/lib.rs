@@ -4,6 +4,9 @@ pub mod daemon;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod palw_agent;
+/// int-10.2 A1: the class artifacts a replay reads in place, pinned in RAM and counted once — the
+/// 2026-10-01 replay-memory note (node policy).
+pub mod palw_artifact_pin;
 pub mod palw_backends;
 /// The Activation Pool research's P3: a `Candidate` class is proved for its own admission audit
 /// (node policy).

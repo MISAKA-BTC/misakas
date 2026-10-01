@@ -2247,9 +2247,24 @@ impl Qwen25A16Backend {
         kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1
     }
 
-    /// **ADR-0077 SA-6, at the job boundary.** This tier's artifact is owned memory (the converter
-    /// writes a `Base0ArtifactV1`), so no mapped page can fault under a job. Stated rather than
-    /// assumed — the hybrid answers differently and one seam serves both.
+    /// **ADR-0077 SA-6, at the job boundary — and what this tier's artifact actually is.**
+    ///
+    /// On a POSIX node it is a MAPPING, not owned memory: `DenseLineageV1::load` maps the `.palwart`
+    /// read-only and every int8 slab is an `Int8SlabV1::Mapped` view of the file's page-cache pages
+    /// (measured 2026-10-01: 1,694.6 of the 8k artifact's 1,716.0 MiB; the a16 store, 17.35 MiB, the
+    /// rotary table and the small tables are the owned part). Those pages are shared by every process
+    /// on the host that maps the file — one copy, `Shared_Clean` in each seat's `smaps` — and they CAN
+    /// be evicted under pressure and refaulted under a job, 4 KiB a fault at 6–11 MB/s on the fleet's
+    /// virtio disks: what the five 5.104 seats spent their 7–50-minute replays on. A node pins them
+    /// when its policy allows (kaspad `palw_artifact_pin`, int-10.2): then no page of the weights
+    /// faults under a job. The owned decode (`decode_artifact_file_v1`) is only what a platform that
+    /// cannot map gets.
+    ///
+    /// The probe still answers `Ok`, and that is a known gap rather than a guarantee: a mapped page
+    /// that refaults is slow, never wrong, but a file TRUNCATED in place under the mapping would fault
+    /// past its end, and this tier does not yet walk its extents against the file's length the way
+    /// the hybrid does (`Qwen36Backend::artifact_read_probe_v1`). A replacement by rename leaves the
+    /// mapped inode untouched; an in-place rewrite of a held artifact is what this does not catch.
     fn artifact_read_probe_v1(&self) -> Result<(), String> {
         Ok(())
     }

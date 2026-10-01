@@ -4946,6 +4946,7 @@ impl PalwPanelService {
             .unwrap_or_else(|| crate::palw_backends::PalwRoleMemoryNeedV1 {
                 role: PalwResourceRoleV1::FullSeat,
                 holding_bytes: self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0),
+                pinned_bytes: 0,
                 derived_bytes: 0,
                 runtime: None,
                 profile: None,
@@ -19380,6 +19381,7 @@ mod seat_s_tests {
         let need = |role, capture| PalwRoleMemoryNeedV1 {
             role,
             holding_bytes: 11,
+            pinned_bytes: 0,
             derived_bytes: 0,
             runtime: None,
             profile: Some(profile(role, capture, two_m_segment)),

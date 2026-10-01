@@ -492,6 +492,14 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // them (see `arm_class_manifest_verification_v1`).
     crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
     crate::palw_backends::arm_ram_scale_v1(args.ram_scale);
+    // int-10.2 A1: the class artifacts a replay reads in place are pinned at load unless the operator
+    // said not to, under a cap (a quarter of the host's memory unless stated) — armed before any
+    // service loads one, like the two above, so both services' loads answer to one policy.
+    crate::palw_artifact_pin::arm_artifact_pin_policy_v1(
+        !args.palw_no_artifact_pin,
+        args.palw_artifact_pin_max_bytes,
+        SystemInfo::default().total_memory,
+    );
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));

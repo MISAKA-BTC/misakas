@@ -265,6 +265,18 @@ impl PalwClassSdk {
         path: &Path,
         residency: crate::lineage::PalwWeightResidencyV1,
     ) -> Result<PalwLoadedArtifactV1, String> {
+        self.lineage_for_file_v1(path)?.load(path, residency)
+    }
+
+    /// **The lineage that would load `path`**, by the file's own magic — [`Self::load_artifact_with`]'s
+    /// dispatch without the load. What a node asks BEFORE it maps a file, to decide whether the file is
+    /// one it pins (kaspad's `palw_artifact_pin`: a whole-file mapping read in place is pinned, a
+    /// residency's container never is) while nothing has faulted its pages through another mapping yet.
+    pub fn lineage_id_for_file_v1(&self, path: &Path) -> Result<&'static str, String> {
+        self.lineage_for_file_v1(path).map(|lineage| lineage.lineage_id())
+    }
+
+    fn lineage_for_file_v1(&self, path: &Path) -> Result<&Arc<dyn PalwModelLineageV1>, String> {
         let mut head = [0u8; 8];
         {
             use std::io::Read;
@@ -274,13 +286,11 @@ impl PalwClassSdk {
                 return Err(format!("{}: shorter than any artifact magic", path.display()));
             }
         }
-        let lineage = self
-            .lineages
+        self.lineages
             .iter()
             .find(|l| l.sniffs(&head))
             .or_else(|| self.lineages.iter().find(|l| l.is_container_fallback()))
-            .ok_or_else(|| format!("{}: no lineage in this build claims this container", path.display()))?;
-        lineage.load(path, residency)
+            .ok_or_else(|| format!("{}: no lineage in this build claims this container", path.display()))
     }
 
     /// Every `(entry, pairing result)` for one artifact against its own lineage's classes — the

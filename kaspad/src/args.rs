@@ -505,6 +505,13 @@ pub struct Args {
     /// an over-committed host lowers it — and the memory ledger still gates every start. A host
     /// whose load average per CPU is over 3 runs one regardless (the 2026-10-01 backlog).
     pub palw_seat_replay_slots: Option<u32>,
+    /// int-10.2 A1: do NOT pin the class artifacts this node reads in place (`palw_artifact_pin`).
+    /// Pinning is on by default: the one page-cache copy of each such file is locked in RAM and a
+    /// replay of its class reserves none of its bytes. Off, every replay reserves the file again, as
+    /// before this release.
+    pub palw_no_artifact_pin: bool,
+    /// int-10.2 A1: the most file bytes this process pins (`None` = a quarter of the host's memory).
+    pub palw_artifact_pin_max_bytes: Option<u64>,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -666,6 +673,8 @@ impl Default for Args {
             palw_host_node_count: 1,
             palw_host_memory_share: None,
             palw_seat_replay_slots: None,
+            palw_no_artifact_pin: false,
+            palw_artifact_pin_max_bytes: None,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -2305,6 +2314,33 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-no-artifact-pin")
+                .long("palw-no-artifact-pin")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: do not pin the class artifacts this node reads in place (a dense .palwart, an IR \
+                     container). By default each is mapped shared and locked in RAM at load: the host's one page-cache \
+                     copy of the file — shared by every node on the host that maps it — is no longer evicted under memory \
+                     pressure and refaulted 4 KiB at a time under a replay, and a replay of its class no longer reserves \
+                     the file's bytes on this node's memory ledger (five seats charged five times for one copy on \
+                     testnet-12's 5.104). A pin the kernel refuses (RLIMIT_MEMLOCK: LimitMEMLOCK=infinity in a systemd \
+                     unit, ulimit -l unlimited in a shell), a cap it would pass or a host without the room keeps the old \
+                     behaviour and says so in the log. A Qwen3.6 artifact is never pinned: its residency decides.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-artifact-pin-max-bytes")
+                .long("palw-artifact-pin-max-bytes")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: the most file bytes this node pins, over every class artifact it pins (default: a \
+                     quarter of the host's memory — on a 24 GiB host 6 GiB, which holds the 8k .palwart and the IR \
+                     container). A file that would pass it is not pinned and its replays reserve its bytes as before. \
+                     Several nodes on one host pinning the same file pay for it once: the cap is per process.",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2670,6 +2706,11 @@ impl Args {
             palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
             palw_host_memory_share: m.get_one::<u64>("palw-host-memory-share").copied().or(defaults.palw_host_memory_share),
             palw_seat_replay_slots: m.get_one::<u32>("palw-seat-replay-slots").copied().or(defaults.palw_seat_replay_slots),
+            palw_no_artifact_pin: arg_match_unwrap_or::<bool>(&m, "palw-no-artifact-pin", defaults.palw_no_artifact_pin),
+            palw_artifact_pin_max_bytes: m
+                .get_one::<u64>("palw-artifact-pin-max-bytes")
+                .copied()
+                .or(defaults.palw_artifact_pin_max_bytes),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]

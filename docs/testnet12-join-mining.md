@@ -331,6 +331,11 @@ ONE process …`). It prints it as a warning on a `--palw-register-class` run.
      (`5368709120`).
    * `misaka mining start` does not pass this flag. Put it in `[advanced] extra_kaspad_args` in
      `~/.misaka/mining.toml`.
+   * **The artifact is pinned in RAM (int-10.2).** The node locks the file's page-cache copy once — shared by
+     every node on the host that maps it — and a replay then reserves only its own working set. The lock needs
+     `RLIMIT_MEMLOCK` at least the file's size: `LimitMEMLOCK=infinity` in a systemd unit, `ulimit -l unlimited`
+     in a shell (root already has it). If the kernel refuses, the log says `is not pinned: … RLIMIT_MEMLOCK …`
+     and the node reserves the file per replay as before; `--palw-no-artifact-pin` turns pinning off.
 3. **Start.** Use `misaka mining setup --model <class-id> --artifact <path>`, then `mining start`, or
    add `--palw-producer-class=<class-id> --palw-class-artifact=/path/qwen25-1.5b-a16-8k.palwart` to the
    manual shape. Add `--palw-verify-class-manifest` to re-derive every sidecar at startup and refuse
