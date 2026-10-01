@@ -4,6 +4,7 @@
     python report.py REPORT.json                       summary + tables on stdout
     python report.py REPORT.json --md OUT.md           the generated sections, between markers, into OUT.md
     python report.py REPORT.json --json SUMMARY.json   the summary numbers as JSON
+    python report.py REPORT.json --md OUT.md --census census_report.json   also the census section
 
 Reads `corpus_v2.json` (what each entry is) and `blockers.json` (this lane's classification of
 every Level C entry: which kind of gap it is, which feature request names it).
@@ -68,6 +69,8 @@ def summarise(rep, man, blk):
     # data-expressible = Level A or B (and the later stages did not disprove it)
     proven = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is None]
     refuted = [e for e in ents if e["level"] in ("A", "B") and e.get("failed_stage") is not None]
+    # an A/B entry whose reference is remote code has no weights to run: it is Level B at the READ stage only
+    read_only = [e["id"] for e in proven if "lower" not in e.get("stages", {})]
     cls = Counter()
     core_routes = []
     for e in ents:
@@ -98,6 +101,7 @@ def summarise(rep, man, blk):
         "level_pct": {k: 100.0 * v / n for k, v in lv.items()},
         "usage_weighted_pct": {k: 100.0 * v / tot for k, v in wt.items()},
         "data_expressible_proven": len(proven), "data_expressible_refuted": [e["id"] for e in refuted],
+        "read_only": read_only,
         "level_c_by_class": dict(cls),
         "core_rust_routes": core_routes,
         "by_category": {k: dict(v) for k, v in by_cat.items()},
@@ -150,6 +154,10 @@ def summary_md(s):
         lines.append(f"| {name} | {lv.get(k, 0)} | {pct(lv.get(k, 0), n)} | {s['usage_weighted_pct'].get(k, 0):.0f} % |")
     ab = lv.get("A", 0) + lv.get("B", 0)
     lines.append(f"| **A + B (expressible with existing features)** | **{ab}** | **{pct(ab, n)}** | **{s['usage_weighted_pct'].get('A', 0) + s['usage_weighted_pct'].get('B', 0):.0f} %** |")
+    if s.get("read_only"):
+        k = len(s["read_only"])
+        lines.append(f"| *of the A + B, read-level only (the reference is remote code, no weights to run): {', '.join('`'+i+'`' for i in s['read_only'])}* | {k} | {pct(k, n)} | |")
+        lines.append(f"| *A + B with every stage proven on weights* | {ab - k} | {pct(ab - k, n)} | |")
     if s.get("core_rust_routes"):
         k = len(s["core_rust_routes"])
         lines.append(f"| *Level C, but lowered today by a per-family Rust route (not data): {', '.join('`'+i+'`' for i in s['core_rust_routes'])}* | {k} | {pct(k, n)} | |")
@@ -246,6 +254,98 @@ def uplift_md(rep):
     return head + "\n".join(rows)
 
 
+def census_reason(e):
+    """Why a census family is Level C, from the read stage: a refusal (named by its message) or the groups of unmodelled keys."""
+    f = ((e.get("read") or {}).get("auto") or {}).get("failure") or {}
+    if e.get("failed_stage") != "read":
+        return ("later stage: " + str(e.get("failed_stage")), [])
+    ks = f.get("unmapped_config_keys") or []
+    if ks:
+        return ("config keys the template does not model", ks)
+    msg = f.get("error") or ""
+    msg = msg.replace("NOT_LOWERABLE(", "")
+    # drop the leading class name
+    if ":" in msg and msg.split(":", 1)[0].replace("`", "").replace(" ", "").isalnum():
+        msg = msg.split(":", 1)[1].strip()
+    for pat, name in (
+        ("is not a causal language model class", "not a causal language model class (no adapter)"),
+        ("rope_parameters is keyed by layer type", "rope parameters keyed by layer type, layer has none"),
+        ("deepseek_sparse_attention", "layer type `deepseek_sparse_attention` (FR-09)"),
+        ("linear_attention", "layer type `linear_attention` not modelled"),
+        ("cross-attention", "cross-attention (decoder half of an encoder-decoder)"),
+        ("mp_num", "weights layout the binder cannot express (FR-01)"),
+        ("MLA + muP remote code", "MiniCPM3 (MLA + muP) refused by name"),
+        ("multi_query", "bad config in the tiny fixture (multi_query)"),
+    ):
+        if pat in msg:
+            return (name, [])
+    return (msg[:80], [])
+
+
+def census_md(rep, cman):
+    ents = rep["entries"]
+    n = len(ents)
+    cen = cman.get("census", {})
+    lv = Counter(e["level"] for e in ents)
+    via = Counter()
+    for e in ents:
+        if e["level"] == "B":
+            v = e.get("via", "")
+            via["synthesized" if (e.get("synthesized") or {}).get("adapter") else ("built-in" if "built-in" in v else "user adapter")] += 1
+    total = n + len(cen.get("not_derivable", [])) + len(cen.get("excluded", []))
+    rows = ["| outcome | families | share of the " + str(total) + " |", "| --- | ---: | ---: |"]
+    rows.append(f"| Level A (the standard template alone) | {lv.get('A', 0)} | {pct(lv.get('A', 0), total)} |")
+    rows.append(f"| Level B through the built-in adapter pack (nobody wrote anything for this run) | {via.get('built-in', 0)} | {pct(via.get('built-in', 0), total)} |")
+    rows.append(f"| Level B through a synthesised adapter (convention search) | {via.get('synthesized', 0)} | {pct(via.get('synthesized', 0), total)} |")
+    rows.append(f"| Level C (read refused or a later stage failed) | {lv.get('C', 0)} | {pct(lv.get('C', 0), total)} |")
+    rows.append(f"| no automatic tiny config (listed below) | {len(cen.get('not_derivable', []))} | {pct(len(cen.get('not_derivable', [])), total)} |")
+    rows.append(f"| excluded: not a standalone text decoder (listed below, with the reason) | {len(cen.get('excluded', []))} | {pct(len(cen.get('excluded', [])), total)} |")
+    out = ["\n".join(rows), ""]
+    groups = defaultdict(list)
+    keyed = defaultdict(set)
+    for e in ents:
+        if e["level"] != "C":
+            continue
+        why, ks = census_reason(e)
+        groups[why].append(e["id"])
+        for k in ks:
+            keyed[k].add(e["id"])
+    out.append("Why the Level C families are Level C (read-stage evidence, `census_report.json`):")
+    out.append("")
+    out.append("| reason | families | which |")
+    out.append("| --- | ---: | --- |")
+    for why, ids in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        out.append(f"| {why} | {len(ids)} | {', '.join('`'+i+'`' for i in sorted(ids))} |")
+    out.append("")
+    # the unmodelled-key groups
+    seen = set()
+    rows = ["| convention the template lacks | families it blocks | the keys |", "| --- | ---: | --- |"]
+    for name, ks in UPLIFT_GROUPS:
+        ids, used = set(), []
+        for k in ks:
+            if k in keyed:
+                ids |= keyed[k]
+                used.append(k)
+                seen.add(k)
+        if ids:
+            rows.append(f"| {name} | {len(ids)} | {', '.join('`'+k+'`' for k in sorted(used))} |")
+    rest = sorted(set(keyed) - seen)
+    other = set()
+    for k in rest:
+        other |= keyed[k]
+    rows.append(f"| everything else (family-specific keys) | {len(other)} | {len(rest)} distinct keys |")
+    out.append("\n".join(rows))
+    nd = cen.get("not_derivable", [])
+    if nd:
+        out.append("")
+        out.append("No automatic tiny config (the family's defaults are over the size guard or its tiny build fails; recorded, not dropped): " + ", ".join(f"`{r['model_type']}`" for r in nd) + ".")
+    ex = cen.get("excluded", [])
+    if ex:
+        out.append("")
+        out.append("Excluded, with the reason: " + "; ".join(f"`{r['model_type']}` ({r['why']})" for r in ex) + ".")
+    return "\n".join(out)
+
+
 def splice(path, name, body):
     b, e = BEGIN.format(name), END.format(name)
     text = open(path).read() if os.path.exists(path) else ""
@@ -264,6 +364,7 @@ def main():
     ap.add_argument("report")
     ap.add_argument("--md")
     ap.add_argument("--json")
+    ap.add_argument("--census", help="census_report.json: also render the census section (needs census_v2.json next to this script)")
     a = ap.parse_args()
     rep, man, blk = load(a.report), manifest(), blockers()
     s = summarise(rep, man, blk)
@@ -276,6 +377,8 @@ def main():
         splice(a.md, "results", table_results(rep, man, blk))
         splice(a.md, "frs", fr_table(blk))
         splice(a.md, "uplift", uplift_md(rep))
+        if a.census:
+            splice(a.md, "census", census_md(load(a.census), load(os.path.join(HERE, "census_v2.json"))))
     else:
         print(summary_md(s))
         print()

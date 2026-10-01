@@ -1,0 +1,326 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "standard-decoder-v3-candidate",
+ "doc": "A CANDIDATE Level A template (lane H experiment, data only), v2 plus ONE more convention: when `rope_parameters` is keyed by layer type (full_attention / sliding_attention, as Gemma-3 and a dozen 2025-26 families write it) each layer takes the rope of ITS type, with the partial-rotary factor of that type. v2 added: the MLP is gated exactly when the checkpoint has `mlp.gate_proj`; bias switches under other names and bookkeeping keys are inert.",
+ "extends": [
+  "standard-decoder"
+ ],
+ "config": {
+  "inert": [
+   "use_bias",
+   "attention_out_bias",
+   "residual_dropout",
+   "eod_token_id",
+   "sep_token_id",
+   "hidden_dropout",
+   "embd_pdrop",
+   "resid_pdrop",
+   "attention_probs_dropout_prob"
+  ]
+ },
+ "vars": [
+  {
+   "name": "mlp_gated",
+   "value": {
+    "$tensor_flag": [
+     {
+      "$cat": [
+       {
+        "$var": "layer0"
+       },
+       "mlp.gate_proj.weight"
+      ]
+     },
+     true
+    ]
+   }
+  },
+  {
+   "name": "rp",
+   "value": {
+    "$cfg?": "rope_parameters"
+   }
+  },
+  {
+   "name": "keyed",
+   "value": {
+    "$if": [
+     {
+      "$eq": [
+       {
+        "$var": "rp"
+       },
+       null
+      ]
+     },
+     false,
+     {
+      "$and": [
+       {
+        "$eq": [
+         {
+          "$get": [
+           {
+            "$var": "rp"
+           },
+           "rope_type",
+           null
+          ]
+         },
+         null
+        ]
+       },
+       {
+        "$eq": [
+         {
+          "$get": [
+           {
+            "$var": "rp"
+           },
+           "rope_theta",
+           null
+          ]
+         },
+         null
+        ]
+       },
+       {
+        "$eq": [
+         {
+          "$get": [
+           {
+            "$var": "rp"
+           },
+           "type",
+           null
+          ]
+         },
+         null
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "rope",
+   "value": {
+    "$if": [
+     {
+      "$var": "keyed"
+     },
+     {
+      "$rope": {
+       "dim": {
+        "$floor": {
+         "$mul": [
+          {
+           "$var": "hd"
+          },
+          {
+           "$get": [
+            {
+             "$get": [
+              {
+               "$var": "rp"
+              },
+              "full_attention",
+              {}
+             ]
+            },
+            "partial_rotary_factor",
+            1.0
+           ]
+          }
+         ]
+        }
+       },
+       "style": {
+        "$var": "rope_style"
+       },
+       "theta": {
+        "$var": "rope_theta"
+       },
+       "partial": {
+        "$get": [
+         {
+          "$get": [
+           {
+            "$var": "rp"
+           },
+           "full_attention",
+           {}
+          ]
+         },
+         "partial_rotary_factor",
+         1.0
+        ]
+       },
+       "max_pos": {
+        "$var": "max_pos"
+       },
+       "q_scaled": {
+        "$var": "q_scaled"
+       },
+       "layer_type": "full_attention"
+      }
+     },
+     {
+      "$rope": {
+       "dim": {
+        "$var": "rope_dim"
+       },
+       "style": {
+        "$var": "rope_style"
+       },
+       "theta": {
+        "$var": "rope_theta"
+       },
+       "partial": {
+        "$var": "rope_partial"
+       },
+       "max_pos": {
+        "$var": "max_pos"
+       },
+       "q_scaled": {
+        "$var": "q_scaled"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "l_position",
+   "layer": true,
+   "value": {
+    "$if": [
+     {
+      "$and": [
+       {
+        "$ne": [
+         {
+          "$var": "no_rope"
+         },
+         null
+        ]
+       },
+       {
+        "$eq": [
+         {
+          "$index": [
+           {
+            "$var": "no_rope"
+           },
+           {
+            "$var": "i"
+           }
+          ]
+         },
+         0
+        ]
+       }
+      ]
+     },
+     "None",
+     {
+      "Rope": {
+       "$if": [
+        {
+         "$var": "keyed"
+        },
+        {
+         "$rope": {
+          "dim": {
+           "$floor": {
+            "$mul": [
+             {
+              "$var": "hd"
+             },
+             {
+              "$get": [
+               {
+                "$get": [
+                 {
+                  "$var": "rp"
+                 },
+                 {
+                  "$index": [
+                   {
+                    "$var": "types"
+                   },
+                   {
+                    "$var": "i"
+                   }
+                  ]
+                 },
+                 {}
+                ]
+               },
+               "partial_rotary_factor",
+               1.0
+              ]
+             }
+            ]
+           }
+          },
+          "style": {
+           "$var": "rope_style"
+          },
+          "theta": {
+           "$var": "rope_theta"
+          },
+          "partial": {
+           "$get": [
+            {
+             "$get": [
+              {
+               "$var": "rp"
+              },
+              {
+               "$index": [
+                {
+                 "$var": "types"
+                },
+                {
+                 "$var": "i"
+                }
+               ]
+              },
+              {}
+             ]
+            },
+            "partial_rotary_factor",
+            1.0
+           ]
+          },
+          "max_pos": {
+           "$var": "max_pos"
+          },
+          "q_scaled": {
+           "$var": "q_scaled"
+          },
+          "layer_type": {
+           "$index": [
+            {
+             "$var": "types"
+            },
+            {
+             "$var": "i"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "$var": "rope"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "flex_olmo",
+  "doc": "FlexOlmo (AllenAI): OLMoE's softmax top-k MoE (per-expert tensors, norm_topk_prob) inside OLMo-2's block: post-norms only (post_attention_layernorm after the attention output, post_feedforward_layernorm after the MoE output) and the whole-projection q/k RMS norm. Third-party adapter (lane H): data only, extends the built-in olmoe and the post-norm mixin.",
+  "extends": ["olmoe", "mixin-post-norm"],
+  "match": {"architectures": ["FlexOlmoForCausalLM"], "model_types": ["flex_olmo"]},
+  "config": {"inert": ["router_aux_loss_coef", "output_router_logits"]},
+  "vars": [
+    {"name": "names", "value": {"$merge": [{"$omit": [{"$var": "names_base"}, ["norm.mix", "norm.ffn"]]}, {"moe.router": "{p}layers.{L}.mlp.gate", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj", "norm.post_mix": "{p}layers.{L}.post_attention_layernorm", "norm.post_ffn": "{p}layers.{L}.post_feedforward_layernorm"}]}},
+    {"name": "model_type", "value": "flex_olmo"}
+  ]
+}

@@ -1,0 +1,111 @@
+{"model_type": "afmoe", "class": "AfmoeForCausalLM", "ok": true, "params": 8941952, "s": 1.0}
+{"model_type": "aria_text", "class": "AriaTextForCausalLM", "ok": true, "params": 133792, "s": 0.9}
+{"model_type": "axk1", "class": "AXK1ForCausalLM", "ok": true, "params": 30312, "s": 1.3}
+{"model_type": "axk2", "class": "AXK2ForCausalLM", "ok": true, "params": 37096, "s": 1.2}
+{"model_type": "bamba", "ok": false, "error": "ValueError: `get_seq_length` can only be called on Attention layers, and the current Cache seem to only contain LinearAttention layers.", "class": "BambaForCausalLM"}
+{"model_type": "bert-generation", "class": "BertGenerationDecoder", "ok": true, "params": 23360, "s": 0.9}
+{"model_type": "big_bird", "class": "BigBirdForCausalLM", "ok": true, "params": 25600, "s": 0.8}
+{"model_type": "bigbird_pegasus", "class": "BigBirdPegasusForCausalLM", "ok": true, "params": 4402752, "s": 1.0}
+{"model_type": "biogpt", "class": "BioGptForCausalLM", "ok": true, "params": 23360, "s": 0.7}
+{"model_type": "blenderbot", "ok": false, "error": "IndexError: list index out of range", "class": "BlenderbotForCausalLM"}
+{"model_type": "blenderbot-small", "class": "BlenderbotSmallForCausalLM", "ok": true, "params": 1140544, "s": 1.0}
+{"model_type": "bloom", "class": "BloomForCausalLM", "ok": true, "params": 27584, "s": 1.1}
+{"model_type": "blt", "ok": false, "error": "RuntimeError: not tiny: 4,632,926,976 parameters, largest tensor 11719 MiB (shrink its config keys)", "class": "BltForCausalLM"}
+{"model_type": "camembert", "class": "CamembertForCausalLM", "ok": true, "params": 24544, "s": 0.9}
+{"model_type": "codegen", "class": "CodeGenForCausalLM", "ok": true, "params": 29248, "s": 1.7}
+{"model_type": "cohere", "class": "CohereForCausalLM", "ok": true, "params": 20576, "s": 1.0}
+{"model_type": "cohere2_moe", "class": "Cohere2MoeForCausalLM", "ok": true, "params": 107104, "s": 1.3}
+{"model_type": "cohere_compass_text", "ok": false, "error": "KeyError: 'full_attention'", "class": "CohereCompassForCausalLM"}
+{"model_type": "cpmant", "class": "CpmAntForCausalLM", "ok": true, "params": 2141344, "s": 1.2}
+{"model_type": "ctrl", "class": "CTRLLMHeadModel", "ok": true, "params": 1075904, "s": 1.2}
+{"model_type": "data2vec-text", "class": "Data2VecTextForCausalLM", "ok": true, "params": 24544, "s": 1.4}
+{"model_type": "deepseek_v2", "class": "DeepseekV2ForCausalLM", "ok": true, "params": 41288, "s": 1.3}
+{"model_type": "doge", "class": "DogeForCausalLM", "ok": true, "params": 22916, "s": 1.0}
+{"model_type": "dots1", "ok": false, "error": "TypeError: empty() takes 1 positional argument but 3 were given", "class": "Dots1ForCausalLM"}
+{"model_type": "electra", "class": "ElectraForCausalLM", "ok": true, "params": 50848, "s": 1.3}
+{"model_type": "emu3", "ok": false, "error": "RuntimeError: not tiny: 8,492,011,520 parameters, largest tensor 2885 MiB (shrink its config keys)", "class": "Emu3ForCausalLM"}
+{"model_type": "ernie", "class": "ErnieForCausalLM", "ok": true, "params": 24544, "s": 1.2}
+{"model_type": "exaone4", "class": "Exaone4ForCausalLM", "ok": true, "params": 22720, "s": 1.4}
+{"model_type": "exaone_moe", "class": "ExaoneMoeForCausalLM", "ok": true, "params": 6408384, "s": 1.4}
+{"model_type": "flex_olmo", "class": "FlexOlmoForCausalLM", "ok": true, "params": 96960, "s": 1.4}
+{"model_type": "fuyu", "class": "FuyuForCausalLM", "ok": true, "params": 107744, "s": 1.4}
+{"model_type": "gemma", "class": "GemmaForCausalLM", "ok": true, "params": 20640, "s": 1.2}
+{"model_type": "gemma3n", "ok": false, "error": "ImportError:  TimmWrapperModel requires the timm library but it was not found in your environment. You can install it with pip: `pip install timm`. Please note that you may ", "class": "Gemma3nForConditionalGeneration"}
+{"model_type": "gemma4", "ok": false, "error": "RuntimeError: not tiny: 5,077,177,856 parameters, largest tensor 7680 MiB (shrink its config keys)", "class": "Gemma4ForConditionalGeneration"}
+{"model_type": "gemma4_assistant", "ok": false, "error": "AttributeError: 'Gemma4AssistantConfig' object has no attribute 'vocab_size'", "class": "Gemma4AssistantForCausalLM"}
+{"model_type": "gemma4_unified", "ok": false, "error": "RuntimeError: not tiny: 3,010,758,400 parameters, largest tensor 2304 MiB (shrink its config keys)", "class": "Gemma4UnifiedForConditionalGeneration"}
+{"model_type": "gemma4_unified_assistant", "ok": false, "error": "AttributeError: 'Gemma4UnifiedAssistantConfig' object has no attribute 'vocab_size'", "class": "Gemma4UnifiedAssistantForCausalLM"}
+{"model_type": "gemma4_unified_text", "class": "Gemma4UnifiedForCausalLM", "ok": true, "params": 215344, "s": 1.2}
+{"model_type": "git", "ok": false, "error": "RuntimeError: not tiny: 85,849,504 parameters, largest tensor 9 MiB (shrink its config keys)", "class": "GitForCausalLM"}
+{"model_type": "glm", "class": "GlmForCausalLM", "ok": true, "params": 22816, "s": 1.7}
+{"model_type": "glm4_moe_lite", "class": "Glm4MoeLiteForCausalLM", "ok": true, "params": 30280, "s": 2.1}
+{"model_type": "glm_moe_dsa", "class": "GlmMoeDsaForCausalLM", "ok": true, "params": 23400, "s": 1.0}
+{"model_type": "got_ocr2", "ok": false, "error": "RuntimeError: not tiny: 560,528,640 parameters, largest tensor 593 MiB (shrink its config keys)", "class": "GotOcr2ForConditionalGeneration"}
+{"model_type": "gpt-sw3", "class": "GPT2LMHeadModel", "ok": true, "params": 60288, "s": 1.3}
+{"model_type": "gpt_bigcode", "class": "GPTBigCodeForCausalLM", "ok": true, "params": 57120, "s": 0.9}
+{"model_type": "gpt_neo", "class": "GPTNeoForCausalLM", "ok": true, "params": 23104, "s": 1.0}
+{"model_type": "gpt_neox_japanese", "class": "GPTNeoXJapaneseForCausalLM", "ok": true, "params": 26976, "s": 1.0}
+{"model_type": "gptj", "class": "GPTJForCausalLM", "ok": true, "params": 29248, "s": 0.9}
+{"model_type": "granite_swa", "class": "GraniteSWAForCausalLM", "ok": true, "params": 20648, "s": 1.1}
+{"model_type": "granitemoe_swa", "class": "GraniteMoeSWAForCausalLM", "ok": true, "params": 109224, "s": 1.2}
+{"model_type": "granitemoeshared", "class": "GraniteMoeSharedForCausalLM", "ok": true, "params": 109216, "s": 1.5}
+{"model_type": "hrm_text", "class": "HrmTextForCausalLM", "ok": true, "params": 49184, "s": 1.2}
+{"model_type": "hy_v3", "class": "HYV3ForCausalLM", "ok": true, "params": 30656, "s": 0.9}
+{"model_type": "hy_v4", "class": "HYV4ForCausalLM", "ok": true, "params": 38045, "s": 1.0}
+{"model_type": "hyperclovax", "class": "HyperCLOVAXForCausalLM", "ok": true, "params": 22816, "s": 0.9}
+{"model_type": "inkling_text", "ok": false, "error": "RuntimeError: The size of tensor a (4) must match the size of tensor b (16) at non-singleton dimension 1", "class": "InklingForCausalLM"}
+{"model_type": "jais2", "class": "Jais2ForCausalLM", "ok": true, "params": 19136, "s": 1.0}
+{"model_type": "laguna", "class": "LagunaForCausalLM", "ok": true, "params": 12657344, "s": 1.3}
+{"model_type": "lfm2_moe", "ok": false, "error": "TypeError: 'NoneType' object is not subscriptable", "class": "Lfm2MoeForCausalLM"}
+{"model_type": "llama4", "ok": false, "error": "RuntimeError: not tiny: 107,769,861,120 parameters, largest tensor 5120 MiB (shrink its config keys)", "class": "Llama4ForCausalLM"}
+{"model_type": "megatron-bert", "class": "MegatronBertForCausalLM", "ok": true, "params": 24544, "s": 1.3}
+{"model_type": "mellum", "class": "MellumForCausalLM", "ok": true, "params": 11024576, "s": 1.4}
+{"model_type": "mimo_v2_flash", "class": "MiMoV2FlashForCausalLM", "ok": true, "params": 30116, "s": 1.1}
+{"model_type": "minicpm3", "class": "MiniCPM3ForCausalLM", "ok": true, "params": 20296, "s": 0.9}
+{"model_type": "minimax", "class": "MiniMaxForCausalLM", "ok": true, "params": 111296, "s": 1.0}
+{"model_type": "minimax_m3_vl_text", "class": "MiniMaxM3VLForCausalLM", "ok": true, "params": 2181312, "s": 2.0}
+{"model_type": "ministral", "ok": false, "error": "TypeError: unsupported operand type(s) for ** or pow(): 'NoneType' and 'float'", "class": "MinistralForCausalLM"}
+{"model_type": "ministral3", "class": "Ministral3ForCausalLM", "ok": true, "params": 22688, "s": 1.7}
+{"model_type": "modernbert-decoder", "class": "ModernBertDecoderForCausalLM", "ok": true, "params": 23808, "s": 1.5}
+{"model_type": "moshi", "class": "MoshiForCausalLM", "ok": true, "params": 16576, "s": 1.3}
+{"model_type": "mpt", "class": "MptForCausalLM", "ok": true, "params": 26784, "s": 1.4}
+{"model_type": "musicgen_melody", "ok": false, "error": "StrictDataclassFieldValidationError: Validation error for field 'text_encoder':     TypeError: Field 'text_encoder' with value None doesn't match any type in (<class 'dict'>, <class 'transformers.c", "class": "MusicgenMelodyForCausalLM"}
+{"model_type": "mvp", "class": "MvpForCausalLM", "ok": true, "params": 3305216, "s": 1.5}
+{"model_type": "nanochat", "class": "NanoChatForCausalLM", "ok": true, "params": 18432, "s": 1.3}
+{"model_type": "nemotron", "class": "NemotronForCausalLM", "ok": true, "params": 18752, "s": 1.3}
+{"model_type": "olmo", "class": "OlmoForCausalLM", "ok": true, "params": 22528, "s": 1.3}
+{"model_type": "olmo2", "class": "Olmo2ForCausalLM", "ok": true, "params": 22784, "s": 1.3}
+{"model_type": "olmo3", "class": "Olmo3ForCausalLM", "ok": true, "params": 22784, "s": 1.9}
+{"model_type": "olmo_hybrid", "class": "OlmoHybridForCausalLM", "ok": true, "params": 26468, "s": 1.7}
+{"model_type": "olmoe", "class": "OlmoeForCausalLM", "ok": true, "params": 801024, "s": 1.6}
+{"model_type": "openai-gpt", "class": "OpenAIGPTLMHeadModel", "ok": true, "params": 43840, "s": 1.0}
+{"model_type": "pegasus", "class": "PegasusForCausalLM", "ok": true, "params": 3305152, "s": 1.3}
+{"model_type": "phi", "class": "PhiForCausalLM", "ok": true, "params": 19072, "s": 1.5}
+{"model_type": "phi4_multimodal", "ok": false, "error": "RuntimeError: not tiny: 869,950,240 parameters, largest tensor 40 MiB (shrink its config keys)", "class": "Phi4MultimodalForCausalLM"}
+{"model_type": "phimoe", "class": "PhimoeForCausalLM", "ok": true, "params": 208192, "s": 1.5}
+{"model_type": "plbart", "ok": false, "error": "ValueError: embed_dim must be divisible by num_heads (got `embed_dim`: 32 and `num_heads`: 12).", "class": "PLBartForCausalLM"}
+{"model_type": "prophetnet", "class": "ProphetNetForCausalLM", "ok": true, "params": 3507968, "s": 1.2}
+{"model_type": "qwen3_5", "ok": false, "error": "RuntimeError: not tiny: 8,953,803,264 parameters, largest tensor 3880 MiB (shrink its config keys)", "class": "Qwen3_5ForCausalLM"}
+{"model_type": "qwen3_5_moe", "ok": false, "error": "RuntimeError: not tiny: 34,660,610,688 parameters, largest tensor 2048 MiB (shrink its config keys)", "class": "Qwen3_5MoeForCausalLM"}
+{"model_type": "qwen3_5_text", "class": "Qwen3_5ForCausalLM", "ok": true, "params": 579952, "s": 1.0}
+{"model_type": "qwen4_exp", "ok": false, "error": "TypeError: unsupported operand type(s) for //: 'NoneType' and 'NoneType'", "class": "Qwen4ExpForCausalLM"}
+{"model_type": "qwen4_exp_text", "ok": false, "error": "ValueError: `get_seq_length` can only be called on Attention layers, and the current Cache seem to only contain LinearAttention layers.", "class": "Qwen4ExpForCausalLM"}
+{"model_type": "recurrent_gemma", "class": "RecurrentGemmaForCausalLM", "ok": true, "params": 22752, "s": 1.1}
+{"model_type": "reformer", "ok": false, "error": "AssertionError: If you want to use `ReformerModelWithLMHead` make sure that `is_decoder=True`.", "class": "ReformerModelWithLMHead"}
+{"model_type": "rembert", "class": "RemBertForCausalLM", "ok": true, "params": 240288, "s": 1.1}
+{"model_type": "roberta-prelayernorm", "class": "RobertaPreLayerNormForCausalLM", "ok": true, "params": 24608, "s": 1.0}
+{"model_type": "roc_bert", "class": "RoCBertForCausalLM", "ok": true, "params": 13492736, "s": 1.5}
+{"model_type": "roformer", "class": "RoFormerForCausalLM", "ok": true, "params": 21472, "s": 1.5}
+{"model_type": "solar_open", "class": "SolarOpenForCausalLM", "ok": true, "params": 38560, "s": 0.9}
+{"model_type": "stablelm", "class": "StableLmForCausalLM", "ok": true, "params": 22848, "s": 1.2}
+{"model_type": "trocr", "class": "TrOCRForCausalLM", "ok": true, "params": 3305216, "s": 1.4}
+{"model_type": "vaultgemma", "class": "VaultGemmaForCausalLM", "ok": true, "params": 20640, "s": 1.5}
+{"model_type": "xglm", "class": "XGLMForCausalLM", "ok": true, "params": 19200, "s": 1.4}
+{"model_type": "xlm", "class": "XLMWithLMHeadModel", "ok": true, "params": 31680, "s": 0.9}
+{"model_type": "xlm-roberta-xl", "class": "XLMRobertaXLForCausalLM", "ok": true, "params": 24512, "s": 1.5}
+{"model_type": "xlnet", "class": "XLNetLMHeadModel", "ok": true, "params": 545504, "s": 1.2}
+{"model_type": "xlstm", "ok": false, "error": "ValueError: matC_old has wrong shape, got torch.Size([1, 4, 16, 16])", "class": "xLSTMForCausalLM"}
+{"model_type": "xmod", "ok": false, "error": "ValueError: Input language unknown. Please call `XmodPreTrainedModel.set_default_language()`", "class": "XmodForCausalLM"}
+{"model_type": "youtu", "class": "YoutuForCausalLM", "ok": true, "params": 20296, "s": 1.5}
+{"model_type": "zamba", "ok": false, "error": "ValueError: There is an issue with your definition of `tie_weights_keys` for ^layers.1.shared_transf:^layers.(?!1\\.)\\d+.shared_transf. We found ['layers.1.shared_transf.fee", "class": "ZambaForCausalLM"}
+{"model_type": "zaya", "class": "ZayaForCausalLM", "ok": true, "params": 6591844, "s": 1.5}

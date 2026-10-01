@@ -13,7 +13,7 @@
 
 The harness plays a **third party**. It adds models with DATA ONLY — model-adapter files and (later) quant-format
 descriptors — and never edits Rust. When data cannot express a model that is a missing generic *feature*; it is
-reported, precisely, as a feature request (§6) for the lowering lane. Nothing in the lowering crate was edited
+reported, precisely, as a feature request (`feature-requests.md`) for the lowering lane. Nothing in the lowering crate was edited
 for this document.
 
 For every corpus entry the harness builds a tiny random-init model with `transformers`/`diffusers` (fixed seed,
@@ -92,7 +92,7 @@ architectures here (§8).
 | 17 | `smollm3` | text/dense | `SmolLM3ForCausalLM` | m | 0.3 % | NoPE every n-th layer |
 | 18 | `arcee` | text/dense | `ArceeForCausalLM` | l | unknown | Llama with a non-gated ReLU² MLP (AFM-4.5B) |
 | 19 | `apertus` | text/dense | `ApertusForCausalLM` | l | unknown | xIELU activation with learned per-layer parameters, QK-norm, llama3 rope (Swiss AI) |
-| 20 | `helium` | text/dense | `HeliumForCausalLM` | l | unknown | Llama-shaped (Kyutai) with its own norm epsilon: a Level A control |
+| 20 | `helium` | text/dense | `HeliumForCausalLM` | l | unknown | Llama-shaped (Kyutai) with INTERLEAVED rotary pairs: reads cleanly as Level A and is wrong, because the pairing is class code |
 | 21 | `hunyuan_v1_dense` | text/dense | `HunYuanDenseV1ForCausalLM` | m | unknown | Llama + QK-norm placed after the rotation (Hunyuan-7B/4B/1.8B) |
 | 22 | `seed_oss` | text/dense | `SeedOssForCausalLM` | l | unknown | Llama with q/k/v bias and a bias-free output projection (ByteDance Seed-OSS) |
 | 23 | `ernie4_5` | text/dense | `Ernie4_5ForCausalLM` | m | unknown | Llama with GLM-style interleaved rotary pairs (ERNIE 4.5 dense) |
@@ -184,6 +184,8 @@ architectures here (§8).
 | Level B — a thin data adapter | 47 | 47 % | 46 % |
 | Level C — a capability is missing | 47 | 47 % | 45 % |
 | **A + B (expressible with existing features)** | **53** | **53 %** | **55 %** |
+| *Level C, but lowered today by a per-family Rust route (not data): `t5`, `t5_gated`, `bart`, `mbart`, `marian`, `clip_vision`, `siglip_vision`* | 7 | 7 % | |
+| *supported today by any route (A + B + Rust routes)* | 60 | 60 % | |
 
 Level C by kind of gap (this lane's classification, `tools/corpus/blockers.json`):
 
@@ -447,6 +449,14 @@ The standard template (no adapter) reads 10 of the 65 decoder-route entries with
 | rope / position keys | 4 | `alibi`, `multi_query`, `new_decoder_architecture`, `no_rope_layer_interval`, `original_max_position_embeddings`, `use_parallel_residual` |
 | everything else (family-specific keys) | 18 | 60 distinct keys |
 <!-- END GENERATED: uplift -->
+
+**Measured.** `tools/corpus/a-candidates/standard-v2.json` is a 14-line data file that extends the built-in template with
+the two conventions a checkpoint's *tensor names* reveal (the MLP is gated exactly when `mlp.gate_proj` exists; bias
+switches under other names and bookkeeping keys of new families are inert, because the biases are read from the `.bias`
+tensors). Run with `PALW_CORPUS_STANDARD=<file>` it moves `arcee` and `seed_oss` to Level A with every stage holding;
+`helium` and `ernie4_5` still fall back to a Level B adapter (the rope pairing, refuted at `float_vs_hf`), `hunyuan_v1_*`
+stay C (the norm placement) and `bitnet` stays C (sub-layer norms, refuted at `bind`). None of the 39 built-in adapters
+becomes redundant: their families differ in names, layouts and scoring, not just in switches.
 
 A key group blocks an entry if the template refuses one of its keys; removing the group is *necessary* for the entry
 to become Level A, not sufficient (the third column of every entry is checked by the later stages). Two things bound

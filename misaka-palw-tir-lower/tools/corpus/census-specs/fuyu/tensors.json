@@ -1,0 +1,241 @@
+{
+ "language_model.lm_head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "language_model.model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "language_model.model.final_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.final_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.input_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.mlp.dense_4h_to_h.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "language_model.model.layers.0.mlp.dense_h_to_4h.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "language_model.model.layers.0.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "language_model.model.layers.0.post_attention_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.self_attn.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.0.self_attn.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "language_model.model.layers.0.self_attn.k_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.0.self_attn.k_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.0.self_attn.q_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.0.self_attn.q_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.0.self_attn.query_key_value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   96
+  ]
+ },
+ "language_model.model.layers.0.self_attn.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   96,
+   32
+  ]
+ },
+ "language_model.model.layers.1.input_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.mlp.dense_4h_to_h.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "language_model.model.layers.1.mlp.dense_h_to_4h.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "language_model.model.layers.1.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "language_model.model.layers.1.post_attention_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.self_attn.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "language_model.model.layers.1.self_attn.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "language_model.model.layers.1.self_attn.k_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.1.self_attn.k_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.1.self_attn.q_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.1.self_attn.q_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "language_model.model.layers.1.self_attn.query_key_value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   96
+  ]
+ },
+ "language_model.model.layers.1.self_attn.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   96,
+   32
+  ]
+ },
+ "vision_embed_tokens.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   2700
+  ]
+ }
+}

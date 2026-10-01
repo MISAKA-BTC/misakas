@@ -1,0 +1,380 @@
+{
+ "model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.final_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.channel_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.down_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.gate_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.up_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp_block.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.conv_1d.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.conv_1d.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   1,
+   4
+  ]
+ },
+ "model.layers.0.temporal_block.linear_out.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.linear_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.linear_x.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.linear_x.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.linear_y.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.linear_y.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.temporal_block.rg_lru.input_gate_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8
+  ]
+ },
+ "model.layers.0.temporal_block.rg_lru.input_gate_weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8,
+   8
+  ]
+ },
+ "model.layers.0.temporal_block.rg_lru.recurrent_gate_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8
+  ]
+ },
+ "model.layers.0.temporal_block.rg_lru.recurrent_gate_weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8,
+   8
+  ]
+ },
+ "model.layers.0.temporal_block.rg_lru.recurrent_param": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.temporal_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.channel_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.down_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.gate_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.up_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp_block.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.conv_1d.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.conv_1d.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   1,
+   4
+  ]
+ },
+ "model.layers.1.temporal_block.linear_out.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.linear_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.linear_x.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.linear_x.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.linear_y.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.linear_y.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.temporal_block.rg_lru.input_gate_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8
+  ]
+ },
+ "model.layers.1.temporal_block.rg_lru.input_gate_weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8,
+   8
+  ]
+ },
+ "model.layers.1.temporal_block.rg_lru.recurrent_gate_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8
+  ]
+ },
+ "model.layers.1.temporal_block.rg_lru.recurrent_gate_weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   8,
+   8
+  ]
+ },
+ "model.layers.1.temporal_block.rg_lru.recurrent_param": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.temporal_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.channel_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.down_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.gate_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.up_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.mlp_block.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.temporal_block.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.temporal_block.o_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.temporal_block.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.temporal_block.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.temporal_block.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.temporal_pre_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

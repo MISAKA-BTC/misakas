@@ -40,7 +40,7 @@ MLA = dict(head_dim=4, num_key_value_heads=4, kv_lora_rank=8, q_lora_rank=12, qk
 MOE8 = dict(n_routed_experts=8, num_experts_per_tok=2, moe_intermediate_size=16)
 INDEX = dict(index_n_heads=2, index_head_dim=8, index_topk=4)
 OVERRIDES = {
-    "axk1": dict(MLA, **MOE8),
+    "axk1": dict(MLA, **MOE8, n_group=4, topk_group=2),
     "axk2": dict(MLA, **MOE8, **INDEX),
     "deepseek_v2": dict(MLA, **MOE8),
     "glm_moe_dsa": dict(MLA, **MOE8, **INDEX),
@@ -48,7 +48,7 @@ OVERRIDES = {
     "hy_v4": dict(MLA, **MOE8, **INDEX),
     "inkling_text": dict(n_routed_experts=8, moe_intermediate_size=16, swa_head_dim=8, swa_num_attention_heads=4, sliding_window_size=8, rel_extent=16),
     "mimo_v2_flash": dict(MOE8, v_head_dim=8, sliding_window=8),
-    "qwen4_exp_text": dict(num_experts=8, moe_intermediate_size=16, shared_expert_intermediate_size=16, hc_lowrank=8, ngram_vocab_size_base=64,
+    "qwen4_exp_text": dict(num_experts=8, num_experts_per_tok=2, moe_intermediate_size=16, shared_expert_intermediate_size=16, hc_lowrank=8, ngram_vocab_size_base=64,
                            split_ngram_parts=4, make_ngram_vocab_size_divisible_by=8, linear_key_head_dim=8, linear_value_head_dim=8),
     "solar_open": dict(MOE8),
     "xlm": dict(emb_dim=32),
@@ -56,6 +56,8 @@ OVERRIDES = {
     "youtu": dict(MLA),
     "codegen": dict(rotary_dim=4),
     "gptj": dict(rotary_dim=4),
+    "gpt_bigcode": dict(num_key_value_heads=1),
+    "glm4_moe_lite": dict(MLA, **MOE8),
     "gpt_neo": dict(attention_types=[[["global", "local"], 1]]),
     "bamba": dict(mamba_n_heads=4, mamba_d_head=16),
     "lfm2_moe": dict(num_dense_layers=1),
@@ -158,8 +160,8 @@ def reprobe():
     recs = [json.loads(l) for l in open(path) if l.startswith("{")]
     by = {r["model_type"]: r for r in recs}
     from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES as M
-    for mt in sorted(OVERRIDES):
-        if mt in M:
+    for mt in (sys.argv[2:] or sorted(OVERRIDES)):
+        if mt in M and mt in OVERRIDES:
             by[mt] = run_child(mt, M[mt])
             print(json.dumps(by[mt]), flush=True)
     with open(path, "w") as f:
