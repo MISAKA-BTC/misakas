@@ -537,14 +537,19 @@ pub fn palw_gen_payload_v1(
     prompt_token_ids: Vec<u32>,
     signature: Vec<u8>,
 ) -> PalwFpCommitmentTxPayloadV3 {
+    // A tensor job decodes nothing (`decode_token_limit` is 0, §I.4.1): the run facts are the lane's one derivation's
+    // (ADR-0074 Decision 7, `palw_fp_run_facts_for_executed_v1`) — 0 executed at a budget of 0 is `ExactBudgetReached` —
+    // and not a second spelling of the pairing, which the tree guard forbids.
+    let carried = job.into_carried();
+    let facts = crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&carried, 0);
     let mut commitment = PalwFreePromptCommitmentV3 {
-        job: job.into_carried(),
+        job: carried,
         trace_root: step_root,
         output_root,
         schedule_root: Hash64::default(),
         execution_root: Hash64::default(),
-        decode_tokens_executed: 0,
-        stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+        decode_tokens_executed: facts.decode_tokens_executed,
+        stop_reason: facts.stop_reason,
         work_leaves,
         trace_manifest_root: Hash64::default(),
         trace_chunk_count: 1,

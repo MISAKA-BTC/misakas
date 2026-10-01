@@ -2267,6 +2267,7 @@ pub(crate) fn palw_da_unit_answer_v1(
                 "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
             ));
         }
+    };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
             backend,
