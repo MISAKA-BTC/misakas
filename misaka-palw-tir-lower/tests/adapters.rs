@@ -17,12 +17,6 @@ fn fixture_config(root: &str, name: &str) -> Value {
         .expect("json")
 }
 
-fn real_config(name: &str) -> Value {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real").join(format!("{name}.json"));
-    serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))))
-        .expect("json")
-}
-
 /// The first path at which two JSON values differ.
 fn first_diff(a: &Value, b: &Value, path: &str) -> Option<String> {
     match (a, b) {
@@ -62,22 +56,36 @@ fn arch_of(cfg: &Value) -> String {
     cfg.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// Every (fixture or real config, built-in adapter claiming its architecture) pair.
+/// Every (fixture or real config, built-in adapter claiming its architecture) pair, over every
+/// fixture root and config directory the crate carries.
 fn pairs() -> Vec<(String, String, Value)> {
     let mut out = Vec::new();
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(tests.join("fixtures/hf")).expect("fixtures").map(|e| e.expect("entry").path()).collect();
-    dirs.sort();
-    let mut cfgs: Vec<(String, Value)> = dirs
-        .iter()
-        .map(|d| (format!("hf/{}", d.file_name().unwrap_or_default().to_string_lossy()), fixture_config("hf", &d.file_name().unwrap_or_default().to_string_lossy())))
-        .collect();
-    let mut reals: Vec<PathBuf> = std::fs::read_dir(tests.join("configs/real")).expect("configs").map(|e| e.expect("entry").path()).collect();
-    reals.sort();
-    cfgs.extend(reals.iter().map(|p| {
-        let n = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        (format!("real/{n}"), real_config(&n))
-    }));
+    let mut cfgs: Vec<(String, Value)> = Vec::new();
+    // `tests/fixtures/<root>/<name>/config.json`
+    for root in ["hf", "hf-enc", "hf-quant", "hf-lora", "hf-vis", "hf-encdec"] {
+        let Ok(rd) = std::fs::read_dir(tests.join("fixtures").join(root)) else { continue };
+        let mut dirs: Vec<PathBuf> = rd.map(|e| e.expect("entry").path()).collect();
+        dirs.sort();
+        for d in dirs {
+            let n = d.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if d.join("config.json").exists() {
+                cfgs.push((format!("{root}/{n}"), fixture_config(root, &n)));
+            }
+        }
+    }
+    // `tests/configs/<dir>/<name>.json`: configs of published checkpoints
+    for dir in ["real", "encoders", "legacy", "tiny", "encdec"] {
+        let Ok(rd) = std::fs::read_dir(tests.join("configs").join(dir)) else { continue };
+        let mut files: Vec<PathBuf> = rd.map(|e| e.expect("entry").path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+        files.sort();
+        for p in files {
+            let n = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            let v: Value = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text)).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            cfgs.push((format!("{dir}/{n}"), v));
+        }
+    }
     for (name, cfg) in cfgs {
         let arch = arch_of(&cfg);
         if let Some(a) = builtin::all().iter().find(|a| a.architectures().contains(&arch.as_str())) {
