@@ -512,6 +512,10 @@ pub struct Args {
     pub palw_no_artifact_pin: bool,
     /// int-10.2 A1: the most file bytes this process pins (`None` = a quarter of the host's memory).
     pub palw_artifact_pin_max_bytes: Option<u64>,
+    /// int-10.2 A2: the widest prefill run (positions a layer at a time) a replay or an attempt runs at
+    /// (`None` = 64, the engine's). Each reservation takes the widest width up to this whose need the
+    /// memory ledger can grant, and runs at it; a narrower width trades speed for trace scratch.
+    pub palw_prefill_run_max: Option<u32>,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -675,6 +679,7 @@ impl Default for Args {
             palw_seat_replay_slots: None,
             palw_no_artifact_pin: false,
             palw_artifact_pin_max_bytes: None,
+            palw_prefill_run_max: None,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -2341,6 +2346,20 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-prefill-run-max")
+                .long("palw-prefill-run-max")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32).range(1..=64))
+                .help(
+                    "MISAKA PALW: the widest prefill run a replay or an attempt of a dense class walks (positions run \
+                     through each layer together; default 64, 1 to 64). Each run holds its positions' committed traces \
+                     until they are captured — at 64 an 8k replay's trace scratch is 1.67 GiB, at 32 0.84, at 16 0.42 — \
+                     so a reservation takes the widest width up to this whose need the memory ledger can grant now, and \
+                     the replay runs at exactly that width; every width commits the same bits. Lower it to make every \
+                     replay lighter and slower (stepped one position at a time a replay is ~2.5x slower than at 64).",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2711,6 +2730,7 @@ impl Args {
                 .get_one::<u64>("palw-artifact-pin-max-bytes")
                 .copied()
                 .or(defaults.palw_artifact_pin_max_bytes),
+            palw_prefill_run_max: m.get_one::<u32>("palw-prefill-run-max").copied().or(defaults.palw_prefill_run_max),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]

@@ -137,6 +137,12 @@ pub fn qwen25_a16_roots_v1(
 /// canonical prefill — step at 36.3 ms a position, and run at 16.3 ms in runs of 32 and 14.7 ms in
 /// runs of 64 (2.45×); 256 positions, 33.8 against 15.4 ms. Every row, the cache and the logits the
 /// same bits.
+///
+/// **The default, not the only width** (int-10.2 A2): a backend runs at its own
+/// `prefill_run_positions` ([`Qwen25A16Backend::with_prefill_run_positions`], the trait's
+/// `set_prefill_run_positions_v1`), which starts here; a node narrows it when the memory a replay can
+/// be granted does not hold this width's trace scratch, and the instance it narrowed is the one that
+/// runs. The free functions below keep this width.
 pub const A16_PREFILL_RUN_POSITIONS: usize = 64;
 
 /// The same object the floor's [`crate::produce::base0_execute_for_attempt_v1`] returns, because
@@ -226,6 +232,7 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         on_token,
         None,
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        A16_PREFILL_RUN_POSITIONS,
     )
 }
 
@@ -248,6 +255,40 @@ pub fn a16_execute_in_storage_v1(
     drill_fault_leaf: Option<u64>,
     kv_storage: crate::engine_a16::KvStorageProfileV1,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_in_storage_at_run_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        capture_kind,
+        on_token,
+        drill_fault_leaf,
+        kv_storage,
+        A16_PREFILL_RUN_POSITIONS,
+    )
+}
+
+/// [`a16_execute_in_storage_v1`] at a stated prefill run width (int-10.2 A2): the one capture core,
+/// walking the prompt `run_positions` positions at a time where the plan allows a run (one at a time
+/// where it does not, whatever is asked). The width is node-local — every width commits the same rows
+/// and roots (`the_backend_commits_the_same_roots_at_every_prefill_run_width`) — and sizes the trace
+/// scratch the resource profile prices; a backend passes its own (`Qwen25A16Backend::prefill_run_positions`).
+#[allow(clippy::too_many_arguments)]
+pub fn a16_execute_in_storage_at_run_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    capture_kind: crate::legs::Base0CaptureKindV1,
+    on_token: &mut dyn FnMut(u32),
+    drill_fault_leaf: Option<u64>,
+    kv_storage: crate::engine_a16::KvStorageProfileV1,
+    run_positions: usize,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     a16_execute_streaming_v1(
         artifact,
         profile,
@@ -259,6 +300,7 @@ pub fn a16_execute_in_storage_v1(
         on_token,
         drill_fault_leaf.map(A16DrillLieV1::tile_v1),
         kv_storage,
+        run_positions,
     )
 }
 
@@ -289,6 +331,7 @@ pub fn a16_execute_free_prompt_streaming_v1(
         on_token,
         None,
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        A16_PREFILL_RUN_POSITIONS,
     )
 }
 
@@ -321,6 +364,7 @@ pub fn a16_execute_free_prompt_streaming_with_drill_fault_v1(
         on_token,
         Some(A16DrillLieV1::tile_v1(leaf)),
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        A16_PREFILL_RUN_POSITIONS,
     )
 }
 
@@ -502,6 +546,7 @@ fn a16_execute_streaming_v1(
     on_token: &mut dyn FnMut(u32),
     drill: Option<A16DrillLieV1>,
     kv_storage: crate::engine_a16::KvStorageProfileV1,
+    run_positions: usize,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
 
@@ -618,7 +663,8 @@ fn a16_execute_streaming_v1(
     //
     // **A run of positions at a time through each layer** (ADR-0117 Decision 2, the dense tier's
     // half): `forward_prefill_planned` walks the registered plan a layer at a time over
-    // `A16_PREFILL_RUN_POSITIONS` positions, each projection's weights read once for the run
+    // `run_positions` positions (the caller's width, int-10.2 A2; `A16_PREFILL_RUN_POSITIONS` unless a
+    // node narrowed it), each projection's weights read once for the run
     // instead of once a position, and hands back the rows the stepped walk commits in the order it
     // commits them. The runs are pushed in position order, so the capture — dense or fold — sees
     // what it always saw. A checkpoint after a prefill position (the held map's, after every one)
@@ -629,7 +675,7 @@ fn a16_execute_streaming_v1(
     let mut position = 0usize;
     while position < prefill {
         let end = match run_plan {
-            Some(_) => (position + A16_PREFILL_RUN_POSITIONS).min(prefill),
+            Some(_) => (position + run_positions.max(1)).min(prefill),
             None => position + 1,
         };
         let last = end == prefill;
@@ -892,6 +938,11 @@ pub struct Qwen25A16Backend {
     runtime_profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **How many prompt positions this instance's prefill walks a layer at a time** (int-10.2 A2):
+    /// [`A16_PREFILL_RUN_POSITIONS`] unless a node narrowed it for the memory it could reserve. Read by
+    /// the resource profile (the trace scratch it prices) and by every execution this instance runs —
+    /// one field, so the figure reserved and the run that spends it cannot be two numbers.
+    prefill_run_positions: usize,
     /// **Which attempt rule this instance runs** (ADR-0152 v3.1, addendum §4-bis.1): the family's own
     /// (`Legacy`) or the chain's `CoreV1` — the job an anchor implies and the rendered rule of every
     /// output root, attempt and free prompt alike. Set by the node from its params
@@ -984,6 +1035,7 @@ impl Qwen25A16Backend {
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
+            prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
         })
     }
 
@@ -992,6 +1044,19 @@ impl Qwen25A16Backend {
     pub fn with_runtime_profile(mut self, profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1) -> Self {
         self.runtime_profile = profile;
         self
+    }
+
+    /// **Walk the prefill `positions` at a time** (int-10.2 A2; `0` reads as one) — the builder form of
+    /// [`PalwExecutionBackendV1::set_prefill_run_positions_v1`]. A node-local choice: every root this
+    /// backend commits is the same at every width.
+    pub fn with_prefill_run_positions(mut self, positions: usize) -> Self {
+        self.prefill_run_positions = positions.max(1);
+        self
+    }
+
+    /// The width this instance's prefill runs at.
+    pub fn prefill_run_positions(&self) -> usize {
+        self.prefill_run_positions
     }
 
     /// The job context the resource profile is derived on when a caller names none: this class's
@@ -1019,11 +1084,12 @@ impl Qwen25A16Backend {
     }
 
     /// The node-local limits the resource profile sizes its scratch terms with: this process's
-    /// pool and this build's prefill run width.
-    fn runtime_limits_v1() -> kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeLimitsV1 {
+    /// pool and this INSTANCE's prefill run width — the width its executions walk at, so the figure a
+    /// node reserves for a run of this instance is the run's (int-10.2 A2).
+    fn runtime_limits_v1(&self) -> kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeLimitsV1 {
         kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeLimitsV1 {
             threads: rayon::current_num_threads().max(1) as u32,
-            prefill_run_positions: A16_PREFILL_RUN_POSITIONS as u32,
+            prefill_run_positions: self.prefill_run_positions.max(1) as u32,
         }
     }
 
@@ -1232,6 +1298,7 @@ impl Qwen25A16Backend {
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
+            prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
         })
     }
 
@@ -1353,6 +1420,7 @@ impl Qwen25A16Backend {
             on_token,
             drill,
             self.runtime_profile,
+            self.prefill_run_positions,
         )?;
         if let Some(lie) = drill {
             // What this instance serves for the job from now on replays the lie it committed.
@@ -1422,7 +1490,7 @@ impl Qwen25A16Backend {
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
         // An HONEST dense re-execution, in this instance's own cache representation: a fold is judged
         // by re-deriving it, and a re-derivation that reproduced a lie would be evidence of nothing.
-        let run = a16_execute_in_storage_v1(
+        let run = a16_execute_in_storage_at_run_v1(
             &self.artifact,
             &material.binding.shape_profile,
             self.plan.as_ref(),
@@ -1433,6 +1501,7 @@ impl Qwen25A16Backend {
             &mut |_| {},
             None,
             self.runtime_profile,
+            self.prefill_run_positions,
         )?;
         if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());
@@ -1536,14 +1605,18 @@ impl Qwen25A16Backend {
         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
         // A DENSE re-execution: bounded by the materialization cap, not the network's ladder (DoS
         // audit 2026-09-24, #4) — the dense sink ignores the ladder but for this bound.
-        a16_execute_for_attempt_streaming_capped_v1(
+        a16_execute_in_storage_at_run_v1(
             &self.artifact,
             &binding.shape_profile,
             self.plan.as_ref(),
             &binding.job_context,
             &prompt,
             self.materialize_cap(),
+            crate::legs::Base0CaptureKindV1::DenseTiles,
             &mut |_| {},
+            None,
+            crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+            self.prefill_run_positions,
         )
     }
 
@@ -1674,6 +1747,7 @@ impl Qwen25A16Backend {
             plan: self.plan.as_ref(),
             fault: self.drill_fault_v1(),
             storage: self.runtime_profile,
+            run_positions: self.prefill_run_positions,
         };
         let mut opened = crate::fp_interval::base0_fp_leaf_openings_from_fold_v1(
             fold,
@@ -1753,7 +1827,13 @@ impl Qwen25A16Backend {
         let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
         cache.reserve_positions(step as usize, row_elements);
         let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
-        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan.as_ref(), vocab: self.artifact.shape.vocab };
+        let mut replay = A16ReplayEngineV1 {
+            engine,
+            cache,
+            plan: self.plan.as_ref(),
+            vocab: self.artifact.shape.vocab,
+            run: self.prefill_run_positions,
+        };
         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
         let mut query_tile = None;
         let mut pushed: Result<(), String> = Ok(());
@@ -1884,7 +1964,13 @@ impl Qwen25A16Backend {
         let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
         cache.reserve_positions(step as usize, row_elements);
         let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
-        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan.as_ref(), vocab: self.artifact.shape.vocab };
+        let mut replay = A16ReplayEngineV1 {
+            engine,
+            cache,
+            plan: self.plan.as_ref(),
+            vocab: self.artifact.shape.vocab,
+            run: self.prefill_run_positions,
+        };
         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
         let mut kept: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)> = Vec::new();
         let mut pushed: Result<(), String> = Ok(());
@@ -2118,7 +2204,13 @@ pub(crate) fn a16_interval_kernels_for_tests_v1<'a>(
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
 ) -> impl crate::fp_interval::Base0FpIntervalKernelsV1 + 'a {
-    A16IntervalKernels { artifact, plan, fault: None, storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1 }
+    A16IntervalKernels {
+        artifact,
+        plan,
+        fault: None,
+        storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+        run_positions: A16_PREFILL_RUN_POSITIONS,
+    }
 }
 
 struct A16IntervalKernels<'a> {
@@ -2131,6 +2223,8 @@ struct A16IntervalKernels<'a> {
     /// The representation the replay's cache is held in — the seat's own choice, whatever the
     /// producer's was: the chunks it decodes are the map's `i32` rows either way.
     storage: crate::engine_a16::KvStorageProfileV1,
+    /// The prefill run width the replay walks at (int-10.2 A2): the backend's own.
+    run_positions: usize,
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
@@ -2183,7 +2277,8 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         };
         // The window's rows, reserved once (an upper bound: virtual until touched).
         cache.reserve_positions(ctx.declared_prefill_tokens as usize + ctx.exact_decode_tokens as usize, row_elements);
-        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan, vocab: self.artifact.shape.vocab };
+        let mut replay =
+            A16ReplayEngineV1 { engine, cache, plan: self.plan, vocab: self.artifact.shape.vocab, run: self.run_positions };
         crate::fp_interval::base0_fp_replay_interval_with_v1(profile, ctx, start, window, step_leaf_count, &mut replay, sink)
     }
 }
@@ -2192,12 +2287,15 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
 /// program), and, where the plan allows it, a run of prefill positions a layer at a time
 /// (`A16Engine::forward_prefill_planned`, ADR-0117 Decision 2): a seat replaying a held interval of
 /// prompt positions, or a shipped class's interval 0 (the whole prefill), reads each layer's
-/// weights once a run of [`A16_PREFILL_RUN_POSITIONS`], and commits the same rows.
+/// weights once a run of the backend's width ([`A16_PREFILL_RUN_POSITIONS`] unless narrowed), and
+/// commits the same rows.
 struct A16ReplayEngineV1<'a> {
     engine: A16Engine<'a>,
     cache: A16Cache,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
     vocab: usize,
+    /// The prefill run width (int-10.2 A2): the backend's own, from its interval kernels.
+    run: usize,
 }
 
 impl crate::fp_interval::Base0FpReplayForwardV1 for A16ReplayEngineV1<'_> {
@@ -2217,7 +2315,7 @@ impl crate::fp_interval::Base0FpReplayForwardV1 for A16ReplayEngineV1<'_> {
 
     fn run_positions(&self) -> usize {
         match self.plan {
-            Some(plan) if plan.one_pass_prefill_supported() => A16_PREFILL_RUN_POSITIONS,
+            Some(plan) if plan.one_pass_prefill_supported() => self.run.max(1),
             _ => 1,
         }
     }
@@ -2277,6 +2375,7 @@ impl Qwen25A16Backend {
             plan: self.plan.as_ref(),
             fault: self.drill_fault_v1(),
             storage: self.runtime_profile,
+            run_positions: self.prefill_run_positions,
         }
     }
 }
@@ -2384,7 +2483,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             });
         }
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
-        let run = a16_execute_in_storage_v1(
+        let run = a16_execute_in_storage_at_run_v1(
             &self.artifact,
             &self.profile,
             self.plan.as_ref(),
@@ -2395,6 +2494,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             &mut |_| {},
             None,
             self.runtime_profile,
+            self.prefill_run_positions,
         )?;
         // SEAT-S2: the output root the producer's `execute` puts in the claim — the same run
         // struct's, computed by the same executor over the ids this replay generated.
@@ -2534,7 +2634,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             let cap = self.network_ladder;
             let folds = kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile);
             let kind = if folds { crate::legs::Base0CaptureKindV1::Fold } else { crate::legs::Base0CaptureKindV1::DenseTiles };
-            let run = a16_execute_in_storage_v1(
+            let run = a16_execute_in_storage_at_run_v1(
                 &self.artifact,
                 &self.profile,
                 self.plan.as_ref(),
@@ -2545,6 +2645,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 &mut |_| {},
                 None,
                 self.runtime_profile,
+                self.prefill_run_positions,
             )?;
             let material = if folds {
                 let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
@@ -2846,7 +2947,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                         prompt_token_ids,
                         self.checkpoint_interval(),
                         self.step_ladder_cap(),
-                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                        &self.interval_kernels_v1(),
                         &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                         self.prompt_ids_form,
                     )
@@ -2895,7 +2996,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.checkpoint_interval(),
             self.step_ladder_cap(),
             state.as_ref(),
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &self.interval_kernels_v1(),
             self.prompt_ids_form,
         )
         .to_consensus_v1()
@@ -3009,7 +3110,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                &self.interval_kernels_v1(),
                 &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 self.prompt_ids_form,
                 disputed,
@@ -3048,7 +3149,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                &self.interval_kernels_v1(),
                 &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
@@ -3102,7 +3203,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             prompt_token_ids,
             self.checkpoint_interval(),
             cap,
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &self.interval_kernels_v1(),
             &|covered| match &retention {
                 crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 crate::produce::Base0RetentionV1::Dense(_) => None,
@@ -3150,7 +3251,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &self.interval_kernels_v1(),
             self.prompt_ids_form,
         )
     }
@@ -3195,7 +3296,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &self.interval_kernels_v1(),
             self.prompt_ids_form,
         )
     }
@@ -3224,7 +3325,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     prompt_token_ids,
                     self.checkpoint_interval(),
                     self.step_ladder_cap(),
-                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                    &self.interval_kernels_v1(),
                     &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                     self.prompt_ids_form,
                 )
@@ -3283,7 +3384,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &self.interval_kernels_v1(),
             self.prompt_ids_form,
         )
     }
@@ -3596,6 +3697,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         Some(self.runtime_profile)
     }
 
+    /// **The width this instance's prefill runs at** — `None` where its plan cannot run a prefill a
+    /// layer at a time (the v2 reference route, a plan that reads the cache before a position writes
+    /// it): every execution of it steps one position at a time, whatever is set, so its memory does not
+    /// move with the width and a node prices it once (int-10.2 A2).
+    fn prefill_run_positions_v1(&self) -> Option<u32> {
+        self.plan.as_ref().filter(|plan| plan.one_pass_prefill_supported()).map(|_| self.prefill_run_positions as u32)
+    }
+
+    fn set_prefill_run_positions_v1(&mut self, positions: u32) {
+        self.prefill_run_positions = (positions as usize).max(1);
+    }
+
     /// The rotary table, generated at decode and resident for the artifact's life: `cos_q` and
     /// `sin_q`, `max_position × d_head / 2` lanes of `i32` each.
     fn artifact_derived_resident_bytes_v1(&self) -> u64 {
@@ -3641,7 +3754,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             leaf_count,
             self.runtime_profile,
             role,
-            Self::runtime_limits_v1(),
+            self.runtime_limits_v1(),
             capture,
         )
     }
@@ -3982,6 +4095,178 @@ mod free_prompt_tests {
                 }
             }
             assert!(resumed >= palw_segment_count_v2(seats) as usize, "{name}: every segment resumes");
+        }
+    }
+
+    /// **Every prefill run width a node can choose commits the same bits, on the producer's path and the
+    /// replay's** (int-10.2 A2; ADR-0117 Decision 2). A node narrows the width on the instance it reserved
+    /// memory for (`set_prefill_run_positions_v1`, the trait door it uses) when the ledger cannot grant the
+    /// default's trace scratch; that instance must then commit what the default would. Over the v2, v5 and
+    /// v7 graphs, on a 13-position prefill — so 64, 32 and 16 walk it in one run and 8, 4, 2 and 1 in two to
+    /// thirteen — at every width the node may choose: the attempt (`execute`: the four roots, the manifest
+    /// and the retained material byte for byte), the verdict replay (`execute_for_verdict`), the free
+    /// prompt (`execute_free_prompt`: the outcome, the facts and the output ids), and every segment of
+    /// the default-width producer's capture resumed by a seat at that width (`replay_accused_segment_v1`:
+    /// the same leaf hashes, a match) are the default width's. And the resource profile prices exactly the
+    /// width the instance runs: the trace scratch is proportional to it and nothing else moves.
+    #[test]
+    fn the_backend_commits_the_same_roots_at_every_prefill_run_width() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_profile_v5, qwen25_a16_profile_v7};
+        use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
+        use kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2;
+        let (artifact, v2) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let v5 = qwen25_a16_profile_v5(geometry).expect("the v5 row projects");
+        let v7 = qwen25_a16_profile_v7(geometry).expect("the v7 row projects");
+        let widths = [64u32, 32, 16, 8, 4, 2, 1];
+        // The free-prompt job builder, named apart from the anchor's `job` below.
+        let fp_job_of = job;
+        let mut checked = 0usize;
+        for (name, profile) in [("v2", v2), ("v5", v5), ("v7", v7)] {
+            let build = || {
+                Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (13, 3))
+                    .expect("the fixture's declaration is this engine's program")
+            };
+            let reference = build();
+            assert_eq!(reference.prefill_run_positions_v1(), Some(A16_PREFILL_RUN_POSITIONS as u32), "{name}: the default width");
+            let anchor = Hash64::from_u64_word(0x2026_1001);
+            let (job, prompt) = reference.job_for_anchor(anchor).expect("the anchor implies a job");
+            assert_eq!(job.declared_prefill_tokens, 13, "the premise: a prefill narrower widths split");
+            let want = reference.execute(&job, &prompt).expect("the default width executes");
+            let want_verdict = reference.execute_for_verdict(&job, &prompt).expect("the default width replays");
+            let fp_prompt: Vec<usize> = (0..11).map(|i| (i * 7 + 3) % 64).collect();
+            let fp_ids: Vec<u32> = fp_prompt.iter().map(|t| *t as u32).collect();
+            let fp = PalwFreePromptJobV3 {
+                prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                    reference.prompt_ids_form(),
+                    &fp_ids,
+                )
+                .expect("the ids commit"),
+                ..fp_job_of(&profile, 11, 3)
+            };
+            let want_fp = reference.execute_free_prompt(&fp, &fp_prompt).expect("the default width runs a free prompt");
+            let want_profile = reference.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).expect("a profile");
+            let seats = 4u16;
+            for width in widths {
+                let mut b = build();
+                b.set_prefill_run_positions_v1(width);
+                assert_eq!(b.prefill_run_positions_v1(), Some(width), "{name} {width}: the instance runs at the width it was set to");
+                let at = format!("{name} at a prefill run of {width}");
+                let got = b.execute(&job, &prompt).unwrap_or_else(|e| panic!("{at}: {e}"));
+                assert_eq!(
+                    (got.execution_root, got.trace_root, got.output_root, got.trace_manifest_root, got.trace_chunk_count),
+                    (want.execution_root, want.trace_root, want.output_root, want.trace_manifest_root, want.trace_chunk_count),
+                    "{at}: the attempt's roots"
+                );
+                assert_eq!(got.material, want.material, "{at}: the retained material, byte for byte");
+                let verdict = b.execute_for_verdict(&job, &prompt).unwrap_or_else(|e| panic!("{at}: {e}"));
+                assert_eq!(
+                    (verdict.execution_root, verdict.trace_root, verdict.work_leaves, verdict.output_root),
+                    (want_verdict.execution_root, want_verdict.trace_root, want_verdict.work_leaves, want_verdict.output_root),
+                    "{at}: the verdict replay"
+                );
+                let run = b.execute_free_prompt(&fp, &fp_prompt).unwrap_or_else(|e| panic!("{at}: {e}"));
+                assert_eq!(run.outcome.execution_root, want_fp.outcome.execution_root, "{at}: the free prompt's execution root");
+                assert_eq!(run.outcome.output_root, want_fp.outcome.output_root, "{at}: the free prompt's output root");
+                assert_eq!(run.outcome.material, want_fp.outcome.material, "{at}: the free prompt's material");
+                assert_eq!(run.facts, want_fp.facts, "{at}: the free prompt's facts");
+                assert_eq!(run.output_token_ids, want_fp.output_token_ids, "{at}: the answer");
+                for segment in 0..palw_segment_count_v2(seats) {
+                    let resumed = b
+                        .replay_accused_segment_v1(&want.material, seats, segment, &job, &prompt)
+                        .unwrap_or_else(|e| panic!("{at} segment {segment}: {e}"));
+                    let by_default = reference
+                        .replay_accused_segment_v1(&want.material, seats, segment, &job, &prompt)
+                        .expect("the default width resumes it");
+                    assert!(resumed.matches, "{at} segment {segment}: the producer's capture, resumed");
+                    assert_eq!(resumed.leaf_hashes, by_default.leaf_hashes, "{at} segment {segment}: the same leaf hashes");
+                }
+                let priced = b.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).expect("a profile");
+                assert_eq!(
+                    priced.trace_scratch_bytes * u64::from(A16_PREFILL_RUN_POSITIONS as u32),
+                    want_profile.trace_scratch_bytes * u64::from(width),
+                    "{at}: the trace scratch is the width's"
+                );
+                assert_eq!(
+                    priced.working_set_bytes() - priced.trace_scratch_bytes,
+                    want_profile.working_set_bytes() - want_profile.trace_scratch_bytes,
+                    "{at}: and nothing else moves with it"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 3 * widths.len(), "every graph at every width");
+    }
+
+    /// **A seat's replay of the real 8k row, timed at the widths a node narrows to** (int-10.2 A2). Off unless
+    /// `MISAKA_PALW_8K_ARTIFACT` names the converted `qwen25-1.5b-a16-8k.palwart` — 1.7 GiB of weights are not a
+    /// unit test's input. The artifact is mapped the way the dense lineage maps it, the class is testnet-12's
+    /// `graph-v7@8192` row at its canonical (1023, 2), and the anchor's job is replayed for a verdict
+    /// (`execute_for_verdict`, the SEAT-R full seat's call) at each width in `MISAKA_PALW_8K_WIDTHS` (default
+    /// `64,32,16,8`) — every one must commit the same roots — with the time and the width's derived need printed:
+    ///
+    /// ```text
+    /// MISAKA_PALW_8K_ARTIFACT=/path/qwen25-1.5b-a16-8k.palwart RAYON_NUM_THREADS=4 \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- a_real_8k_replay_at_every_width --nocapture
+    /// ```
+    #[test]
+    fn a_real_8k_replay_at_every_width_commits_one_set_of_roots() {
+        use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
+        let Ok(path) = std::env::var("MISAKA_PALW_8K_ARTIFACT") else {
+            eprintln!("8k replay: skipped — set MISAKA_PALW_8K_ARTIFACT to the 8k .palwart to time it");
+            return;
+        };
+        let widths: Vec<u32> = std::env::var("MISAKA_PALW_8K_WIDTHS")
+            .ok()
+            .map(|v| v.split(',').filter_map(|w| w.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![64, 32, 16, 8]);
+        let map =
+            std::sync::Arc::new(crate::mmap::ReadOnlyMap::open(std::path::Path::new(&path)).unwrap_or_else(|e| panic!("{path}: {e}")));
+        let started = std::time::Instant::now();
+        let artifact =
+            std::sync::Arc::new(crate::artifact::decode_artifact_file_mapped_v1(map).unwrap_or_else(|e| panic!("{path}: {e:?}")));
+        eprintln!("8k replay: mapped and decoded in {:.1?} (the digest pass)", started.elapsed());
+        let row = crate::classes::a16_graph_v7_row_v1(8_192, crate::classes::A16_GRAPH_V7_8K_MODEL_ID).expect("the 8k row");
+        let mut backend = Qwen25A16Backend::new(artifact, b"misaka-palw-rc".to_vec(), row.profile.clone(), row.canonical_job)
+            .expect("the real artifact is the row's");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x8000_1001)).expect("the anchor's job");
+        let mut first: Option<kaspa_consensus_core::palw_backend::PalwReplayRootsV1> = None;
+        for width in widths {
+            backend.set_prefill_run_positions_v1(width);
+            let need = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).expect("a profile");
+            let started = std::time::Instant::now();
+            let roots = backend.execute_for_verdict(&job, &prompt).expect("the replay runs");
+            let took = started.elapsed();
+            eprintln!(
+                "8k replay at a prefill run of {width:>2}: {:.1?} for {} prefill positions ({:.1} ms a position), working set {:.3} GiB \
+                 (trace scratch {:.3} GiB), {} rayon threads",
+                took,
+                job.declared_prefill_tokens,
+                took.as_secs_f64() * 1e3 / f64::from(job.declared_prefill_tokens.max(1)),
+                need.working_set_bytes() as f64 / (1u64 << 30) as f64,
+                need.trace_scratch_bytes as f64 / (1u64 << 30) as f64,
+                rayon::current_num_threads()
+            );
+            match &first {
+                None => first = Some(roots),
+                Some(want) => assert_eq!(
+                    (roots.execution_root, roots.trace_root, roots.work_leaves, roots.output_root),
+                    (want.execution_root, want.trace_root, want.work_leaves, want.output_root),
+                    "width {width}: the roots of the first width"
+                ),
+            }
         }
     }
 
@@ -4769,7 +5054,13 @@ mod free_prompt_tests {
                 index,
                 &ids,
                 interval,
-                &A16IntervalKernels { artifact: &artifact, plan: None, fault: None, storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1 },
+                &A16IntervalKernels {
+                    artifact: &artifact,
+                    plan: None,
+                    fault: None,
+                    storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+                    run_positions: A16_PREFILL_RUN_POSITIONS,
+                },
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("interval {index} opens from the fold: {e}"));

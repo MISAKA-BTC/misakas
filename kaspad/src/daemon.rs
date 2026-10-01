@@ -500,6 +500,9 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         args.palw_artifact_pin_max_bytes,
         SystemInfo::default().total_memory,
     );
+    // int-10.2 A2: the widest prefill run a replay or an attempt walks — every backend the node resolves
+    // starts there and a reservation narrows its own instance from it when the ledger calls for it.
+    crate::palw_prefill_run::arm_prefill_run_cap_v1(args.palw_prefill_run_max);
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));

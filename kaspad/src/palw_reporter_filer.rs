@@ -1528,17 +1528,16 @@ impl PalwPanelService {
             return;
         }
         let Some(probe) = filer.take_probe(duty.claim_id, bytes, current_daa) else { return };
-        let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
-        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-            backend.as_ref(),
-            duty.class_id,
-            duty.artifact_root,
-            None,
-            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-            |id| self.chain_carriage_v1(session, id),
-        );
-        let reserved = match self.reserve_replay_v1("j1-probe", &need, duty.class_id, duty.claim_id) {
-            Ok(reserved) => reserved,
+        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
+        // At the widest prefill run the ledger grants, on this duty's own instance — the one the probe
+        // below runs on (int-10.2 A2).
+        let backends = self.backends();
+        let reserved = match self.reserve_replay_at_widest_run_v1("j1-probe", backend.as_mut(), duty.class_id, duty.claim_id, |b| {
+            backends.role_memory_need_for_backend_or_chain_v1(b, duty.class_id, duty.artifact_root, None, super::FULL_SEAT_V1, |id| {
+                self.chain_carriage_v1(session, id)
+            })
+        }) {
+            Ok((reserved, _)) => reserved,
             Err(why) => {
                 crate::palw_backends::note_throttled_v1("panel-j1-probe-ledger", || {
                     format!("[{PALW_PANEL}] claim {}: J1 auto's probe deferred: {why}", duty.claim_id)

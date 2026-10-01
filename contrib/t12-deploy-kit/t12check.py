@@ -287,6 +287,13 @@ def main():
                 if (num("pinned_files") or 0) == 0:
                     print("  NOTE: no class artifact is pinned -- expected on a node that holds the 8k or IR artifact; its journal says why "
                           "(`is not pinned:` -- RLIMIT_MEMLOCK, the cap, or the host's room), and its replays reserve the file as before")
+            # 10-01 int-10.2 A2: the prefill run width replays run at -- the cap, the last one taken, how many reservations the
+            # ledger had to narrow, and the classes this host can meet only below 16 (their receipts are the class's slow tail).
+            if num("run_cap") is not None:
+                print(f"  prefill run: cap {num('run_cap')}, last {num('run_last')}, narrowed {num('run_narrowed')} reservation(s) since start")
+                if (num("capacity_narrow_classes") or 0) > 0:
+                    print(f"  WARNING: this host can replay {num('capacity_narrow_classes')} class(es) only below a prefill run of 16 "
+                          f"(narrowest {num('capacity_run_min')}): its replays of them run slowly -- the journal names the class")
         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
         # inbox was free).

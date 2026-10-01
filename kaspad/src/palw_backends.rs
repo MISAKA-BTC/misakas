@@ -98,6 +98,16 @@ impl PalwBackendRegistry {
         registry
             .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(params))
             .with_held_answerability_v1(params.palw_held_answerability_v1())
+            .with_prefill_run_cap_v1(crate::palw_prefill_run::armed_prefill_run_cap_v1())
+    }
+
+    /// **Every backend this registry resolves starts at a prefill run width of `cap`** (int-10.2 A2):
+    /// the node's `--palw-prefill-run-max` — the width a duty's own instance is narrowed FROM when the
+    /// memory it can reserve calls for it (`palw_prefill_run::reserve_at_widest_run_v1`), and the width
+    /// an instance nobody narrows runs at and is priced at.
+    pub fn with_prefill_run_cap_v1(mut self, cap: u32) -> Self {
+        self.sdk = self.sdk.with_prefill_run_cap_v1(Some(cap));
+        self
     }
 
     /// The SDK this registry dispatches through — the panel's registration builder asks it for
@@ -201,7 +211,20 @@ impl PalwBackendRegistry {
     /// A partial seat's figure is a function of the claim as well and is not memoized here — the
     /// caller that holds the claim asks [`Self::role_memory_need_for_backend_v1`].
     pub fn role_memory_need_v1(&self, class_id: Hash64, artifact_root: Hash64, role: PalwResourceRoleV1) -> Option<PalwRoleMemoryNeedV1> {
-        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, false);
+        self.role_memory_need_at_run_v1(class_id, artifact_root, role, None)
+    }
+
+    /// [`Self::role_memory_need_v1`] at a stated prefill run width (int-10.2 A2; `None`: the width the
+    /// registry's backends start at) — the narrowest a duty could start with is what the per-duty
+    /// pre-check and the readiness proof's capacity ask about. Memoized per width.
+    pub fn role_memory_need_at_run_v1(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        role: PalwResourceRoleV1,
+        run: Option<u32>,
+    ) -> Option<PalwRoleMemoryNeedV1> {
+        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, false, run);
         let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
         if memoized
             && let Ok(memo) = replay_bytes_memo_v1().lock()
@@ -209,13 +232,19 @@ impl PalwBackendRegistry {
         {
             return hit.clone();
         }
+        let at_run = |mut backend: Box<dyn PalwExecutionBackendV1>| {
+            if let Some(run) = run {
+                backend.set_prefill_run_positions_v1(run);
+            }
+            backend
+        };
         // A derived class (the floor) first: it resolves with no holding, so none of theirs is
         // its bytes ([`Self::serves_without_a_holding_v1`]).
         let figure = match self.sdk.resolve(class_id, artifact_root, &[]) {
-            Ok(backend) => Some(Self::compose_need_v1(backend.as_ref(), (0, 0), None, role)),
+            Ok(backend) => Some(Self::compose_need_v1(at_run(backend).as_ref(), (0, 0), None, role)),
             Err(_) => self.holdings.iter().find_map(|holding| {
                 let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
-                Some(Self::compose_need_v1(backend.as_ref(), holding_terms_v1(holding)?, None, role))
+                Some(Self::compose_need_v1(at_run(backend).as_ref(), holding_terms_v1(holding)?, None, role))
             }),
         };
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
@@ -306,10 +335,29 @@ impl PalwBackendRegistry {
         )
             -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
     {
-        if let Some(need) = self.role_memory_need_v1(class_id, artifact_root, role) {
+        self.role_memory_need_at_run_or_chain_v1(class_id, artifact_root, role, None, fetch)
+    }
+
+    /// [`Self::role_memory_need_or_chain_v1`] at a stated prefill run width (int-10.2 A2; `None`: the
+    /// width the registry's backends start at). Memoized per width.
+    pub fn role_memory_need_at_run_or_chain_v1<F>(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        role: PalwResourceRoleV1,
+        run: Option<u32>,
+        fetch: F,
+    ) -> Option<PalwRoleMemoryNeedV1>
+    where
+        F: FnOnce(
+            Hash64,
+        )
+            -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        if let Some(need) = self.role_memory_need_at_run_v1(class_id, artifact_root, role, run) {
             return Some(need);
         }
-        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, true);
+        let key = (self.memo_holdings_v1(), class_id, artifact_root, role, true, run);
         let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
         if memoized
             && let Ok(memo) = replay_bytes_memo_v1().lock()
@@ -317,7 +365,10 @@ impl PalwBackendRegistry {
         {
             return Some(hit.clone());
         }
-        let (holding, backend) = self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)?;
+        let (holding, mut backend) = self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)?;
+        if let Some(run) = run {
+            backend.set_prefill_run_positions_v1(run);
+        }
         let need = Self::compose_need_v1(backend.as_ref(), holding_terms_v1(holding)?, None, role);
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
             memo.insert(key, Some(need.clone()));
@@ -418,6 +469,7 @@ impl PalwBackendRegistry {
             role,
             holding_bytes,
             pinned_bytes,
+            prefill_run_positions: backend.prefill_run_positions_v1(),
             derived_bytes: backend.artifact_derived_resident_bytes_v1(),
             runtime: backend.runtime_profile_v1(),
             profile: backend.resource_profile_v1(job, role),
@@ -827,6 +879,9 @@ pub struct PalwRoleMemoryNeedV1 {
     /// **The holding's pinned file, resident already** (int-10.2 A1, `palw_artifact_pin`): reported
     /// beside the need and never reserved — it is the host's one locked copy, not this role's.
     pub pinned_bytes: u64,
+    /// **The prefill run width the profile was derived at** (int-10.2 A2): the instance's own, which is
+    /// the width its run walks at; `None` for a family whose memory does not move with it.
+    pub prefill_run_positions: Option<u32>,
     /// Tables the backend derived at load and holds for the artifact's life (the dense tier's
     /// rotary table: 1.07 GiB at 2M). Resident already, so reported and not reserved.
     pub derived_bytes: u64,
@@ -859,7 +914,7 @@ impl PalwRoleMemoryNeedV1 {
     pub fn describe(&self) -> String {
         match self.profile {
             Some(p) => format!(
-                "{:.2} GiB as {} (artifact {:.2} GiB{} + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB \
+                "{:.2} GiB as {} (artifact {:.2} GiB{} + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB{} \
                  + capture {:.2} GiB ({:?}) + checkpoint leg {:.2} GiB{}) under {}",
                 gib(self.total_bytes()),
                 self.role.name(),
@@ -870,6 +925,7 @@ impl PalwRoleMemoryNeedV1 {
                 if p.opening_bytes > 0 { format!(" + opening {:.2} GiB", gib(p.opening_bytes)) } else { String::new() },
                 gib(p.attention_scratch_bytes),
                 gib(p.trace_scratch_bytes),
+                self.prefill_run_positions.map(|w| format!(" at a prefill run of {w}")).unwrap_or_default(),
                 gib(p.capture_retained_bytes),
                 p.capture,
                 gib(p.checkpoint_leg_bytes),
@@ -999,7 +1055,10 @@ pub fn palw_partial_seat_streamed_need_v1(mut need: PalwRoleMemoryNeedV1) -> Pal
 ///
 /// Each holding enters the key with the bytes this process has pinned of it (int-10.2 A1): a figure
 /// computed before a pin carried the file as the holding's bytes, and must not answer after it.
-type NeedMemoKey = (Vec<(PathBuf, u64)>, Hash64, Hash64, PalwResourceRoleV1, bool);
+///
+/// And each figure with the prefill run width it was derived at (int-10.2 A2; `None`: the registry's
+/// starting width), since the trace scratch is the width's.
+type NeedMemoKey = (Vec<(PathBuf, u64)>, Hash64, Hash64, PalwResourceRoleV1, bool, Option<u32>);
 fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>> {
     static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>>> =
         std::sync::OnceLock::new();
@@ -1388,10 +1447,11 @@ pub fn palw_producer_attempt_reserve_v1(court: &PalwCourtParamsV2, producer_clas
         PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(profile) }
     };
     // The same run-length rule each backend's own derivation applies: the dense engine walks the
-    // prefill `A16_PREFILL_RUN_POSITIONS` at a time; the hybrid engine walks a per-position class one
+    // prefill at the node's cap (`--palw-prefill-run-max`, the width it starts at; int-10.2 A2) — the
+    // widest it may run, so the carve is never short of an attempt; the hybrid engine walks a per-position class one
     // position at a time and a per-call class in one pass over the prefill.
     let run_positions = if !hybrid {
-        misaka_palw_base0::qwen25_a16_backend::A16_PREFILL_RUN_POSITIONS as u32
+        crate::palw_prefill_run::armed_prefill_run_cap_v1()
     } else if kaspa_consensus_core::palw_state_chunk_map::palw_map_addresses_history_tiles_v1(profile) {
         1
     } else {
@@ -1807,7 +1867,7 @@ fn host_headroom_of_v1(available: u64) -> u64 {
 pub fn host_memory_status_v1() -> String {
     // The pin half (int-10.2 A1) on every platform that pins: what this process locked, which a host's
     // arithmetic counts once per distinct file however many seats report it.
-    let pinned = crate::palw_artifact_pin::pinned_status_v1();
+    let pinned = format!("{} {}", crate::palw_artifact_pin::pinned_status_v1(), crate::palw_prefill_run::prefill_run_status_v1());
     #[cfg(target_os = "linux")]
     {
         let mib = |bytes: u64| bytes >> 20;
@@ -3173,6 +3233,7 @@ mod tests {
             role: PalwResourceRoleV1::FullSeat,
             holding_bytes: 0,
             pinned_bytes: 0,
+            prefill_run_positions: None,
             derived_bytes: 0,
             runtime: Some(PalwRuntimeProfileV1::A16KvI32),
             profile: palw_resource_profile_v1(
@@ -3215,6 +3276,7 @@ mod tests {
             role: PalwResourceRoleV1::FullSeat,
             holding_bytes: 0,
             pinned_bytes: 0,
+            prefill_run_positions: None,
             derived_bytes: 0,
             runtime: None,
             profile: None,

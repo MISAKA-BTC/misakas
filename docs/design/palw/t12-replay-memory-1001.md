@@ -111,6 +111,69 @@ many seats report it (`t12check.py` says so).
 4. Eviction (`evict_held_artifacts_v1`) releases the pin with the holding.
 5. Pinning is node policy: an unarmed process (a tool, a test) pins nothing; nothing here is read by consensus.
 
+## 4. A2 — the prefill run width chosen from the budget
+
+**Decision.** The dense engine's prefill run width (`A16_PREFILL_RUN_POSITIONS` = 64, the fastest measured: stepped 36.3 ms a
+position, runs of 32 16.3 ms, of 64 14.7 ms) is a node-local runtime choice. When a duty reserves memory for a replay or an attempt,
+the node takes the WIDEST width in `{cap, 32, 16, 8, 4, 2, 1}` — `cap` = `--palw-prefill-run-max` (1–64, default 64) — whose derived
+need the ledger grants now (`kaspad/src/palw_prefill_run.rs`, `reserve_at_widest_run_v1`), and the replay runs at exactly that width.
+Narrower widths are tried only while they lower the need, so a family whose memory does not move with the width (the floor, the
+hybrid, an IR class) is priced once and reserved once, as before.
+
+**One value, from the reservation to the run.** The width is a field of the backend INSTANCE (`Qwen25A16Backend::prefill_run_positions`):
+the resource profile reads it (`runtime_limits_v1(&self)` → `PalwRuntimeLimitsV1::prefill_run_positions`, the term consensus core's
+profile already took as a node-local input — no derivation moved), and so do the capture loop (`a16_execute_in_storage_at_run_v1`),
+the interval/segment replay engine (`A16ReplayEngineV1::run_positions`) and every other execution of the instance. The node sets it
+through two defaulted trait methods (`PalwExecutionBackendV1::{prefill_run_positions_v1, set_prefill_run_positions_v1}`, the
+`set_attempt_rules_v1` pattern — the only consensus-core edit), derives the need FROM the instance, reserves, and runs that same
+instance. The SDK starts every backend it resolves at the node's cap (`PalwClassSdk::with_prefill_run_cap_v1`, set by
+`PalwBackendRegistry::for_node_v1`).
+
+*Race check (the coordinator's condition 4).* Every duty that reserves resolves an instance of its own — `resolve_backend` (seat
+replays, the court, the interval seat, the S3 sampler, the capture sampler, SEAT-S4), the producer's, the audit's, the operator DA's,
+the J1 probe's: a fresh `Box<dyn PalwExecutionBackendV1>` each, moved into its blocking task. The narrowing helper takes `&mut`, which
+the one shared instance — the executor's kept backend (`executor_backend_v1`, an `Arc`) — cannot give: the DA answer, the V2 partial
+resume on a borrowed backend, the replay filer and the held court keep reserving at the instance's own width (the cap) and run at it.
+So the reservation and the run can never disagree.
+
+**Where the width is chosen.** SEAT-R full seat (attempt, free prompt, the legacy path), SEAT-S4 partial seat, the court's close, the
+interval seat, the S3 sampler, the whole-capture sampler, the ADR-0160 audit and operator DA, the J1 probe, and the producer. **The
+producer** takes the same rule: 64 whenever its need fits (the attempt is a race and the widest width is the fastest), narrower only
+where the attempt would otherwise HOLD — an attempt that holds produces nothing, one at 16 positions takes ~1.2× the time.
+
+**The pre-check and the readiness proof.** The per-duty pre-check (`replay_memory_budget_v1`) asks the NARROWEST width's need (one
+position at a time): the replay's own reservation takes the widest the ledger grants when it starts, so a duty is deferred only when
+not even that fits. The readiness proof's capacity (`replay_memory_capacity_v1`) asks each width from the cap down; a seat that can
+meet a class only below 16 still proves it, and is logged and counted (`capacity_run_min`, `capacity_narrow_classes`) — its receipts
+are the class's slow tail. The status's `full_capable` reads the narrowest width; its `working_set_bytes` stays the cap's.
+
+**The 8k class's need per seat** (`the_8k_full_seat_need_falls_from_3_37_gib_with_the_pin_and_the_width`, derived from the t12 row):
+
+| width | unpinned (artifact 1.68 GiB reserved) | pinned (A1) |
+| --- | --- | --- |
+| 64 | **3.374 GiB** (the 10-01 line) | 1.699 GiB |
+| 32 | 2.541 GiB | **0.865 GiB** |
+| 16 | 2.124 GiB | **0.449 GiB** |
+| 8 | 1.916 GiB | 0.240 GiB |
+| 4 | 1.812 GiB | 0.136 GiB |
+| 2 | 1.760 GiB | 0.084 GiB |
+| 1 | 1.734 GiB | 0.058 GiB |
+
+**Reported.** A reservation the ledger narrowed is logged (once a minute per role: the need at the width taken and what the cap's
+would have needed); SEAT-R's start lines print the need reserved (`… trace scratch 0.42 GiB at a prefill run of 16 …`);
+`getPalwNodeStatus.verification` carries `run_cap`, `run_last`, `run_narrowed`, `capacity_run_min`, `capacity_narrow_classes`.
+
+**Identity.** Every width commits the same bits: `the_one_pass_prefill_is_the_position_by_position_one` now walks every width a node
+may choose (and the odd ones between) on v2/v5/v7, both engines; `the_backend_commits_the_same_roots_at_every_prefill_run_width`
+runs the producer's attempt (roots and material byte for byte), the verdict replay, a free prompt, and every segment of the
+producer's capture resumed by a seat, at 64…1; `the_instance_reserved_at_a_width_runs_at_it_and_commits_the_caps_roots` takes the
+reservation through the ledger and runs the instance it left.
+
+**Invariants.**
+1. The need a duty reserves is derived from the instance that runs, at the width it runs.
+2. Only an owned instance (`&mut`) is narrowed; a shared one runs and is priced at the cap.
+3. No consensus figure reads the width (`the_economic_derivations_do_not_read_the_resource_profile`); every width commits the same rows and roots.
+
 ## 6. Kit, and the host's arithmetic
 
 * Units: `LimitMEMLOCK=infinity` (`lib.sh unit_body_service`). The kit's units run as root (`CAP_IPC_LOCK`), so the pin works on the

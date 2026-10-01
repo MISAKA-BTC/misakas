@@ -327,6 +327,10 @@ ONE process …`). It prints it as a warning on a `--palw-register-class` run.
      replay needs ≈ 3.37 GiB (artifact 1.68 + trace scratch 1.67 GiB). A seat with a 3.0 GiB share
      logs `readiness … no proof — a replay needs 3.37 GiB as full-seat …` and never becomes ready.
      Nothing else tells you, and a class that cannot reach 7 ready seats never leaves `Prefetching`.
+     *From int-10.2* the artifact is pinned (below) and the replay's prefill run narrows to what the
+     share can grant (`--palw-prefill-run-max`, default 64): the same replay needs 1.70 GiB at 64,
+     0.87 at 32 and 0.45 at 16, slower as it narrows (at one position a time ~2.5× the 64's time).
+     A seat that can meet a class only below 16 still proves it and says so in its log.
    * An 8k producer peaked at 3.67 GiB RSS in the drill, which ran it with a 5 GiB share
      (`5368709120`).
    * `misaka mining start` does not pass this flag. Put it in `[advanced] extra_kaspad_args` in
