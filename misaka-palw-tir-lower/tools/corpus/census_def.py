@@ -67,6 +67,22 @@ OVERRIDES = {
     "zamba": dict(layers_block_type=["mamba", "hybrid"]),
 }
 
+# Hand-made tiny configs (lane G's, `tests/configs/tiny/*.json`) for families whose defaults cannot be shrunk automatically. The census
+# entry is then `options.raw` (the config is passed to transformers as is, minus the keys a config does not take).
+RAW_CONFIGS = {
+    "qwen4_exp_text": "../../tests/configs/tiny/qwen4_exp.json",
+    "ministral": "../../tests/configs/tiny/ministral.json",
+}
+RAW_DROP = ("architectures", "dtype", "transformers_version")
+
+
+def raw_config(mt):
+    path = os.path.join(HERE, RAW_CONFIGS[mt])
+    with open(path) as f:
+        cfg = json.load(f)
+    return {k: v for k, v in cfg.items() if k not in RAW_DROP}
+
+
 # Variants: a second tiny config of a family where the first one cannot exercise a feature the real checkpoints use (a shared expert
 # of width 0 is no shared expert). id -> (model_type, overrides, why). They are census entries of their own and need their own adapter file.
 VARIANTS = {
@@ -191,6 +207,13 @@ def manifest():
             continue
         entries.append(C.entry(r["model_type"].replace("-", "_"), "census/text", "decoder", r["class"], r["model_type"], "causal", OVERRIDES.get(r["model_type"], {}),
                                usage="l", why="a transformers 5.17 causal-LM family at its tiny default (census)", options={}))
+    for mt in RAW_CONFIGS:
+        row = next((r for r in recs if r["model_type"] == mt), None)
+        if row is None or row["ok"]:
+            continue
+        entries.append(C.entry(mt, "census/text", "decoder", row.get("class", ""), mt, "causal", raw_config(mt), usage="l",
+                               why="a transformers 5.17 causal-LM family at lane G's hand-made tiny config (census)", options={"raw": True}))
+        recs = [r for r in recs if r is not row]
     for vid, (mt, ov, why) in VARIANTS.items():
         base = next((r for r in recs if r["model_type"] == mt and r["ok"]), None)
         if base is None:
