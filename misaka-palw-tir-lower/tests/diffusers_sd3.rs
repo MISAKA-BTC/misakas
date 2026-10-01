@@ -232,7 +232,7 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
 
     // ---- fidelity on the evaluation cases ----
     let mut worst_lat = 0f64;
-    for (prompt, seed, steps) in evaluation_cases().cases {
+    for (k, (prompt, seed, steps)) in evaluation_cases().cases.into_iter().enumerate() {
         let si = COUNTS.iter().position(|c| *c == steps).unwrap();
         let words = noise_words(seed, len);
         let noise_f: Vec<f64> = words.iter().map(|w| *w as f64 / (1u64 << 24) as f64).collect();
@@ -263,6 +263,31 @@ fn the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline() {
             .collect();
         let max_err = run.output.data.iter().zip(&want).fold(0f64, |m, (g, w)| m.max((*g as f64 - w).abs()));
         eprintln!("case seed {seed} steps {steps}: image PSNR {:.2} dB, max error {max_err} of 255", psnr(&run.output.data, &want));
+
+        // Against diffusers itself, when its reference for this case exists.
+        let refp = dir.join(format!("reference/case_{k}.json"));
+        if let Ok(bytes) = std::fs::read(&refp) {
+            let r: serde_json::Value = serde_json::from_slice(&bytes).expect("reference json");
+            let detail = r["steps_detail"].as_array().expect("steps_detail");
+            for (i, d) in detail.iter().enumerate() {
+                let f = |key: &str| -> Vec<f64> { d[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+                let (v_ref, l_ref) = (f("velocity"), f("latent"));
+                let amax_v = v_ref.iter().fold(0f64, |m, v| m.max(v.abs()));
+                let dv = _vels_f[i].iter().zip(&v_ref).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
+                let got: Vec<f64> = denoise.steps[i].output.data.iter().map(|v| *v as f64 * stage.scales.latent).collect();
+                let amax_l = l_ref.iter().fold(0f64, |m, v| m.max(v.abs()));
+                let dl = got.iter().zip(&l_ref).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
+                eprintln!(
+                    "  diffusers step {i}: Rust float velocity worst {dv:.2e} ({:.2e} of amax); integer latent worst {dl:.4} ({:.2}% of amax)",
+                    dv / amax_v,
+                    100.0 * dl / amax_l
+                );
+                assert!(dv / amax_v < 1e-3, "the Rust float denoiser is diffusers' (case {k} step {i}): relative {}", dv / amax_v);
+            }
+            let img_ref: Vec<f64> = r["image_hwc_u8"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+            let worst = run.output.data.iter().zip(&img_ref).fold(0f64, |m, (g, w)| m.max((*g as f64 - w).abs()));
+            eprintln!("  diffusers image: integer PSNR {:.2} dB, max error {worst} of 255", psnr(&run.output.data, &img_ref));
+        }
     }
     // A bring-up bound only: the fidelity thresholds are measured and frozen by the record.
     assert!(worst_lat < 0.35, "the integer latent trajectory tracks the float one (bring-up), worst {worst_lat}");
