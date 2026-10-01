@@ -32,6 +32,9 @@ check on this class. Also held: every non-dissected commit leaf of the golden to
   where a close can only ride one carrier (`the_sd3_class_registers_where_a_close_can_only_ride_one_carrier`).
 * **dissected** (the CLIP fused-attention outputs): root claim measured 15,863 B, priced 15,883 B; bottom measured 17,459 B
   (`text_rows`) and 13,615 B (`text_pool`), priced 24,497 B.
+* **another job** (2 steps, a one-id prompt; the strided sample alone, `SD3_STEPS=2 SD3_PROMPT=11`): 346 closes over 124 commit points,
+  priced ≥ measured at every one, ratio [1.001, 1.570], smallest margin 68 B; root claim measured 15,855 B / 15,599 B against 15,883 B
+  priced — the price is the class's and bounds every job.
 * **checkpoint leaves**: none in this class (no `Fixed` state outside `post`); the toy VLM's seven are priced per state (7,245 B) against
   a measured largest of 4,327 B.
 * **sizing work**: 66,871,506 steps for the class (denoiser 14.9 M, the ten VAE stages 51.7 M, the text stages 0.2 M), 4 s on an
@@ -58,7 +61,9 @@ size (the tables are gone: 2,301,248 B → 1,141,016 B).
 The latent is written in `post` (NF-29), so the court reads it at `p` as the committed write at `p − 1`. The price counts that leaf for
 every element a cone reads (`the_price_counts_the_committed_write_of_the_previous_position_for_every_element_a_cone_reads`): for each
 sampled denoiser leaf at positions ≥ 1 whose measured close carries such a leaf, every one of them is in the twin's read set of the same
-cone (by coordinate) and the point's price is at least the measured close.
+cone (by coordinate) and the point's price is at least the measured close. Measured: 258 cone closes of the blocks that read the latent
+(`pre`, `post`) at positions 1–3; 84 of them carry the committed write of the previous position, 282 such leaves in all, each in the
+twin's read set; priced ≥ measured at all 258 (smallest margin 68 B).
 
 ## The table
 
