@@ -215,7 +215,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("HEAD_TRANSFORM_V1", Head, "a prediction head before the vocabulary projection: dense, activation, norm", Implemented, [], NoReq, ["head_transform::a_head_transform_is_dense_act_norm_before_the_head"], "BERT's cls.predictions.transform, ModernBERT-decoder's and RoBERTa's lm_head: h -> norm(act(dense(h))), then the (tied) vocabulary projection and its bias. Roles head.transform.dense and head.transform.norm; no new node kinds."),
     feature!("OUTPUT_LOGITS_V1", Head, "logits output", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Next-token logits."),
     feature!("OUTPUT_EMBEDDING_V1", Head, "embedding output (pooled hidden row)", Implemented, [], NoReq, ["encoders::clip_text_encoder_matches_its_hf_fixture"], "RFC-0003 Embedding profile."),
-    feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Learned positions, post-LN, plain multi-head attention with biases, a plain MLP; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
+    feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Per layer kind: learned positions or a rotate_half rope table per position (ROPE_DEFAULT_V1 and friends), post-LN or pre-norm placement (a norm absent where the checkpoint has none), optional q/k/v/o and MLP biases, a plain or gated MLP, an optional final norm, optional band window; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
+    feature!("ENC_BAND_WINDOW_V1", Attention, "a bidirectional sliding window: a key is visible iff |i - j| < w", Implemented, [], NoReq, ["encoders::modernbert_matches_its_hf_fixture"], "ModernBERT's local layers (local_attention = 2w - 2 of the checkpoint's own value is the adapter's arithmetic): two Iota/Compare/Select bands over the [L, L] scores, no table; the mask is part of the program, not a parameter."),
     feature!("HEAD_POOL_CLS_V1", Head, "pooling: row 0 of the encoder (the class-start token)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture"], "An option of the Embedding class (RFC-0003 section II.3), chosen by the operator or the sentence-transformers stack, not read from the model's config."),
     feature!("HEAD_POOL_MEAN_V1", Head, "pooling: the mean over the count real rows", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "As HEAD_POOL_CLS_V1; the mean is over the unpadded rows only."),
     feature!("HEAD_NORMALIZE_L2_V1", Head, "L2-normalised embedding row (Q30)", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "sentence-transformers' Normalize: the pooled row divided by its norm, the output unit exactly 2^-30."),
@@ -564,8 +565,13 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             u.add("OUTPUT_EMBEDDING_V1", None, "");
             // The BERT lineage: post-LN layers under an embedding output (a causal embedder — CLIP's text tower,
             // Qwen3-Embedding — is pre-norm and takes the decoder's route).
-            if !s.layers.is_empty() && s.layers.iter().all(|l| matches!(l.residual, Residual::PostNorm { .. })) {
+            // A pre-norm encoder (ModernBERT, EuroBERT) says so with the encoder family its adapter names.
+            let encoder_family = s.families.iter().any(|f| f == "E2");
+            if !s.layers.is_empty() && (encoder_family || s.layers.iter().all(|l| matches!(l.residual, Residual::PostNorm { .. }))) {
                 u.add("ENC_BIDIR_V1", None, "");
+                if s.layers.iter().any(|l| matches!(&l.mixer, Mixer::Attention(a) if a.window.is_some())) {
+                    u.add("ENC_BAND_WINDOW_V1", None, "");
+                }
             }
         }
     }

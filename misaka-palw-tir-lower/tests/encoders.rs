@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn fixture_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf-enc").join(name)
+    let hf = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf-enc").join(name);
+    if hf.exists() { hf } else { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fr17").join(name) }
 }
 
 struct Seq {
@@ -157,7 +158,8 @@ fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir
     let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
     let lmax = 12u32;
     let cfg = BidirCfg { lmax, pooling, normalize };
-    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).unwrap()).unwrap();
+    let outs = if dir.join("outputs.json").exists() { "outputs.json" } else { "reference.json" };
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join(outs)).unwrap()).unwrap();
     let seqs: Vec<(Padded, Vec<f64>)> = v["sequences"]
         .as_array()
         .unwrap()
@@ -216,6 +218,21 @@ fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir
     let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
         .expect("tir_admit_pipeline_v1");
     eprintln!("{name} admitted: job {:?}, {} step leaves, cone work {}", pa.job_cost, pa.job_step_leaves, pa.cone_work);
+}
+
+/// FR-17: a rotary, gated-MLP, post-LN encoder (nomic-bert) from data only.
+#[test]
+fn nomic_bert_rotary_gated_post_ln_matches_its_hf_fixture() {
+    bidir_case("nomic_bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+    bidir_case("nomic_bert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
+}
+
+/// FR-17: a pre-norm encoder with rotary per layer type, a band window on the local layers, a fused GeGLU and a final
+/// norm (ModernBERT) from data only.
+#[test]
+fn modernbert_matches_its_hf_fixture() {
+    bidir_case("modernbert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Mean, true, "mean_normalized");
+    bidir_case("modernbert", 0, misaka_palw_tir_lower::lower::bidir::Pooling::Cls, false, "cls");
 }
 
 #[test]
@@ -359,14 +376,14 @@ fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
     }
 }
 
-/// **FR-26, the strict allow-list**: the bidirectional lowering reads learned positions, post-LN, plain multi-head
-/// attention with biases and the plain BERT embedding. A spec that sets a field it never reads — a RoPE encoder
-/// (ModernBERT, nomic-BERT, jina-v3, EuroBERT), a final norm, a factorised embedding (ALBERT) — used to lower to a
-/// WRONG program with no error; it is refused, naming the field.
+/// **FR-26, the strict allow-list**: the bidirectional lowering reads learned or rotary positions, post-LN or pre-norm,
+/// plain multi-head attention, a plain or gated MLP and the plain BERT embedding. A spec that sets a field it never
+/// reads — a partial or interleaved rope, learned positions together with rope, a factorised embedding (ALBERT) — used
+/// to lower to a WRONG program with no error; it is refused, naming the field.
 #[test]
 fn the_bidirectional_lowering_refuses_a_spec_field_it_does_not_read() {
     use misaka_palw_tir_lower::lower::bidir::{BidirCfg, Pooling, lower_bidir};
-    use misaka_palw_tir_lower::spec::{Mixer, ModelSpec, NormSpec, Position};
+    use misaka_palw_tir_lower::spec::{Mixer, ModelSpec, Position};
     let cfg = std::fs::read_to_string(fixture_dir("bert").join("config.json")).expect("config");
     let base = misaka_palw_tir_lower::parse_config_str(&cfg).expect("the BERT adapter reads its fixture");
     let hl = misaka_palw_tir_lower::hl::build_program(&base).expect("hl");
@@ -397,12 +414,43 @@ fn the_bidirectional_lowering_refuses_a_spec_field_it_does_not_read() {
                 })
             })
         },
-        "positional term",
+        "learned positions together with a rotary position",
+    );
+    refused(
+        "a partial rope",
+        &|s| {
+            s.embedding.positions = None;
+            attn(s, &|a| {
+                a.position = Position::Rope(misaka_palw_tir_lower::rope::RopeSpec {
+                    rotary_dim: a.head_dim / 2,
+                    offset: 0,
+                    style: misaka_palw_tir_lower::rope::RopeStyle::Half,
+                    freqs: misaka_palw_tir_lower::rope::RopeFreqs::plain(10000.0, a.head_dim / 2),
+                })
+            })
+        },
+        "rotate_half over the whole head",
+    );
+    refused(
+        "an interleaved rope",
+        &|s| {
+            s.embedding.positions = None;
+            attn(s, &|a| {
+                a.position = Position::Rope(misaka_palw_tir_lower::rope::RopeSpec {
+                    rotary_dim: a.head_dim,
+                    offset: 0,
+                    style: misaka_palw_tir_lower::rope::RopeStyle::Interleaved,
+                    freqs: misaka_palw_tir_lower::rope::RopeFreqs::plain(10000.0, a.head_dim),
+                })
+            })
+        },
+        "rotate_half over the whole head",
     );
     refused("soft-cap", &|s| attn(s, &|a| a.softcap = Some(30.0)), "attention feature");
     refused("clip_qkv", &|s| attn(s, &|a| a.clip_qkv = Some(8.0)), "attention feature");
     refused("a gate", &|s| attn(s, &|a| a.output_gate = true), "attention feature");
-    refused("a final norm", &|s| s.final_norm = Some(NormSpec::layer_nobias(1e-5)), "final norm");
+    refused("no positions", &|s| s.embedding.positions = None, "no positions");
+
     refused("an embedding scale", &|s| s.embedding.scale = 2.0, "embedding");
     refused("a factorised embedding", &|s| s.embedding.dim = s.hidden_size / 2, "embedding");
     refused("a projection after the lookup", &|s| s.embedding.proj_in = true, "embedding");

@@ -29,6 +29,8 @@ pack!(
     "mixin-qwen-sliding",
     "mixin-vlm",
     "mixin-bert-encoder",
+    "nomic-bert",
+    "modernbert",
     "bert",
     "bloom",
     "clip-text",
