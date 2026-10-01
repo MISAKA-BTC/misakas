@@ -85,8 +85,13 @@ impl Serialize for Described {
 impl Described {
     /// Bind `params` to a `tensors` descriptor (the descriptor's layout must evaluate under them).
     pub fn new(format: Arc<QuantFormat>, params: BTreeMap<String, i64>) -> Result<Described> {
-        let t = format.as_tensors().ok_or_else(|| LowerError::bad(format!("quant format `{}` is not a tensors format", format.name())))?;
-        t.layout(&params).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", format.name())))?;
+        match (format.as_tensors(), format.as_virtual()) {
+            (Some(t), _) => {
+                t.layout(&params).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", format.name())))?;
+            }
+            (None, Some(_)) => {}
+            (None, None) => return Err(LowerError::bad(format!("quant format `{}` is neither a tensors nor a virtual format", format.name()))),
+        }
         Ok(Described { format, params })
     }
 }
@@ -114,6 +119,13 @@ impl QFormat {
     /// descriptors are per tensor type).
     pub fn binding(&self) -> Option<(Arc<QuantFormat>, BTreeMap<String, i64>)> {
         builtin_binding(self)
+    }
+
+    /// Whether the format serves packed tensors as float tensors under another name (MXFP4 experts): the
+    /// source presents them, no module is bound to the format, and the lowering sees an ordinary float
+    /// checkpoint ([`crate::quantfmt::virt`]).
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, QFormat::Described(d) if d.format.as_virtual().is_some())
     }
 
     /// Whether the decode yields stored integers (the exact lowering reads them) rather than floats
@@ -154,6 +166,8 @@ impl QFormat {
     pub fn layout(&self) -> QLayout {
         match self {
             QFormat::Gguf { layout } => *layout,
+            // A virtual format binds no module: there is no program structure to describe.
+            other if other.is_virtual() => QLayout { group: 0, order: false, offset_term: false },
             other => {
                 let (f, params) = builtin_binding(other).expect("a tensors format");
                 let l = f
@@ -424,8 +438,10 @@ fn described_config(q: &Value, method: &str, arch: &str, reg: &QuantRegistry) ->
         let n = NeedsDescriptor { scheme: "config".into(), id: None, name: Some(name), tensors: Vec::new() };
         return Err(nl(format!("{arch}: pre-quantized checkpoint: {}", n.message(&reg.config_methods()))));
     };
-    let t = f.as_tensors().ok_or_else(|| LowerError::bad(format!("quant format `{}` is a blocks format: a quant_method names a tensors format", f.name())))?;
-    let r = t.read_config(q).map_err(|e| nl(format!("{arch}: {e}")))?;
+    let r = f.read_config(q).map_err(|e| match e {
+        LowerError::NotLowerable(m) => nl(format!("{arch}: {m}")),
+        other => other,
+    })?;
     for e in &r.skip {
         check_skip_pattern(e)?;
     }

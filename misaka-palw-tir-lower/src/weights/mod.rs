@@ -19,6 +19,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod described;
 mod remote;
 pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 #[cfg(feature = "remote")]

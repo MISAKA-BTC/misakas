@@ -283,8 +283,15 @@ fn deepseek_mla_and_routing() {
 }
 
 #[test]
-fn gpt_oss_quantised_is_refused_and_bf16_export_lowers() {
-    refused("gpt-oss-20b-mxfp4", "quant_method=mxfp4");
+fn gpt_oss_mxfp4_and_bf16_export_both_lower() {
+    // OCP MXFP4 as Hugging Face stores it is a built-in descriptor (`MXFP4_HF`, a virtual format): the packed experts are
+    // served as the float export's tensors, so the configuration lowers exactly like the bf16 export's.
+    let (q, qp) = ok("gpt-oss-20b-mxfp4");
+    assert!(q.hf.quant.as_ref().is_some_and(|c| c.fmt.is_virtual() && c.fmt.label().starts_with("MXFP4_HF")));
+    let (b, bp) = ok("gpt-oss-20b-bf16");
+    assert_eq!(kinds(&qp), kinds(&bp));
+    assert_eq!(qp.params.len(), bp.params.len(), "the same program as the float export");
+    assert_eq!(q.hf.experts, b.hf.experts);
     let (s, p) = ok("gpt-oss-20b-bf16");
     let a = attn(&s, 0);
     assert!(a.sinks && a.window == Some(128) && attn(&s, 1).window.is_none());

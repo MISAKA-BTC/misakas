@@ -148,7 +148,16 @@ pub fn open_model_full(
             let spec_digest = crate::model::spec_digest(&r.spec);
             let prepared = prepare_spec(r.spec.clone(), opts)?;
             let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
-            Ok(Opened { prepared, source: Box::new(crate::weights::Checkpoint::open(path)?), frontend, gguf: false })
+            let ck = crate::weights::Checkpoint::open(path)?;
+            // A format that serves packed tensors as float ones (MXFP4 experts): the model reads the float export's names.
+            let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
+                Some(q) => {
+                    let (f, params) = q.fmt.binding().expect("a described format");
+                    Box::new(crate::weights::described::DescribedSource::new(Box::new(ck), f, params)?)
+                }
+                None => Box::new(ck),
+            };
+            Ok(Opened { prepared, source, frontend, gguf: false })
         }
     }
 }

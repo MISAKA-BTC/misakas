@@ -307,6 +307,25 @@ F["ct_int8"] = {
                "code": {"min": -128, "max": 127}},
 }
 
+F["mxfp4_hf"] = {
+    "schema": SCHEMA, "name": "MXFP4_HF",
+    "doc": "OCP MXFP4 as Hugging Face stores it (gpt-oss): a weight tensor [E, out, in] kept as `<name>_blocks` (uint8 [E, out, in/32, 16]: two 4-bit codes a byte, the low nibble first) and `<name>_scales` (uint8 [E, out, in/32]: the E8M0 exponent of the block's scale, bias 127). The tensor the model uses is `<name>` [E, in, out] — the export's float tensor, transposed — served as floats: every binding that reads the float export reads this one unchanged. A leading expert axis and per-block scales over a 3-D tensor are the first lane `e` and a read `scales[e, o, i / 32]`: nothing here is specific to a model.",
+    "ids": [{"scheme": "config", "method": "mxfp4"}],
+    "config": {"skip": "modules_to_not_convert", "skip_match": "regex", "lm_head": "never"},
+    "params": {},
+    # value x 2 of the sixteen FP4 (E2M1) codes: 0, .5, 1, 1.5, 2, 3, 4, 6, -0, -.5, -1, -1.5, -2, -3, -4, -6
+    "tables": {"fp4x2": {"bits": 8, "signed": True, "hex": bytes([0, 1, 2, 3, 4, 6, 8, 12, 0, 255, 254, 253, 252, 250, 248, 244]).hex()}},
+    "layout": {"kind": "virtual",
+               "roles": [role("blocks", "_blocks", ["U8"], 4), role("scales", "_scales", ["U8"], 3)],
+               "axes": ["e", "i", "o"],
+               "shape": ["dim_blocks[0]", "dim_blocks[2] * 32", "dim_blocks[1]"],
+               "checks": [
+                   {"expr": "dim_blocks[3] == 16", "message": "a block is not 16 bytes (32 four-bit codes)"},
+                   {"expr": "dim_scales[0] == dim_blocks[0] && dim_scales[1] == dim_blocks[1] && dim_scales[2] == dim_blocks[2]", "message": "the scales are not one per block"}]},
+    "decode": {"target": "tensor",
+               "value": "fp4x2[(blocks[e, o, i / 32, (i % 32) / 2] >> (4 * (i % 2))) & 15] * 0.5 * e8m0(scales[e, o, i / 32])"},
+}
+
 # ───────────────────────────── test vectors ─────────────────────────────
 rng = np.random.default_rng(0x4D495341)
 
@@ -526,6 +545,16 @@ def tensor_vectors(d):
             sc = f16_scales((o, 1), 0.001, 0.2)
             ref = (torch.from_numpy(w.astype(np.int32)).to(torch.float32) * torch.from_numpy(sc.astype(np.float32))).numpy()
             case(ct_config(8, None, True, "channel", None, "int-quantized", "int"), {"weight": role_json(w, "I8"), "scale": role_json(sc, "F16")}, ref)
+    elif name == "MXFP4_HF":
+        # The library's own function: transformers.integrations.mxfp4.convert_moe_packed_tensors (the served tensor is its [E, in, out]).
+        from transformers.integrations.mxfp4 import convert_moe_packed_tensors
+        for E, O, G in [(2, 4, 2), (3, 2, 3), (1, 3, 1), (2, 5, 4)]:
+            blocks = trng.integers(0, 256, size=(E, O, G, 16), dtype=np.uint8)
+            scales = (127 + trng.integers(-7, 6, size=(E, O, G))).astype(np.uint8)
+            ref = convert_moe_packed_tensors(torch.from_numpy(blocks), torch.from_numpy(scales), dtype=torch.bfloat16).to(torch.float32).numpy()
+            assert ref.shape == (E, G * 32, O)
+            case({"quant_method": "mxfp4", "modules_to_not_convert": ["model.layers.*.self_attn", "lm_head"]},
+                 {"blocks": role_json(blocks, "U8"), "scales": role_json(scales, "U8")}, ref)
     return out
 
 def vectors(d, kinds=("random", "random", "random", "random", "extreme", "extreme")):

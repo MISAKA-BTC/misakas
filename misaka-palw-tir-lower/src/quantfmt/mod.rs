@@ -13,6 +13,9 @@
 //!   AWQ, FP8 with block scales, compressed-tensors): the descriptor says which tensors (`roles`),
 //!   how a `quantization_config` is read (`config`: the keys it knows, the conditions under which the
 //!   tensors mean what the descriptor says, the modules left in float), and how each weight decodes.
+//! * [`virt`] — the interpreter for tensors a checkpoint stores packed that a model reads as float tensors
+//!   under another name (any rank: a leading expert axis is the first lane): OCP MXFP4 as Hugging Face
+//!   stores it. [`crate::weights::described`] serves them.
 //! * [`QuantRegistry`] — the built-in descriptors (`quant-formats/*.json`, embedded) plus any a
 //!   caller supplies; a GGUF tensor type or a `quantization_config` is looked up in it, and a type
 //!   it does not hold is a named refusal that says what to supply ([`NeedsDescriptor`]).
@@ -26,11 +29,13 @@ pub mod blocks;
 pub mod desc;
 pub mod expr;
 pub mod tensors;
+pub mod virt;
 
 use crate::error::{LowerError, Result};
 use blocks::BlocksFormat;
 use desc::{FormatId, LayoutDesc, QuantFormatDesc, unhex};
 use tensors::{RoleTensor, TensorsFormat};
+use virt::VirtualFormat;
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -41,6 +46,7 @@ pub struct QuantFormat {
     digest: [u8; 32],
     blocks: Option<BlocksFormat>,
     tensors: Option<TensorsFormat>,
+    virt: Option<VirtualFormat>,
 }
 
 impl QuantFormat {
@@ -48,15 +54,13 @@ impl QuantFormat {
     pub fn from_json(text: &str) -> Result<QuantFormat> {
         let bad = |e: expr::DslError| LowerError::bad(format!("quant-format descriptor: {e}"));
         let desc = QuantFormatDesc::from_json(text).map_err(bad)?;
-        let (blocks, tensors) = match &desc.layout {
-            LayoutDesc::Blocks { .. } => {
-                (Some(BlocksFormat::compile(&desc).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", desc.name)))?), None)
-            }
-            LayoutDesc::Tensors { .. } => {
-                (None, Some(TensorsFormat::compile(&desc).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", desc.name)))?))
-            }
+        let bad = |e: expr::DslError| LowerError::bad(format!("quant format `{}`: {e}", desc.name));
+        let (blocks, tensors, virt) = match &desc.layout {
+            LayoutDesc::Blocks { .. } => (Some(BlocksFormat::compile(&desc).map_err(bad)?), None, None),
+            LayoutDesc::Tensors { .. } => (None, Some(TensorsFormat::compile(&desc).map_err(bad)?), None),
+            LayoutDesc::Virtual { .. } => (None, None, Some(VirtualFormat::compile(&desc).map_err(bad)?)),
         };
-        let f = QuantFormat { digest: desc.digest(), desc, blocks, tensors };
+        let f = QuantFormat { digest: desc.digest(), desc, blocks, tensors, virt };
         f.run_tests()?;
         Ok(f)
     }
@@ -83,11 +87,26 @@ impl QuantFormat {
     pub fn as_tensors(&self) -> Option<&TensorsFormat> {
         self.tensors.as_ref()
     }
+    /// A format that serves packed tensors as float tensors under another name ([`virt`]).
+    pub fn as_virtual(&self) -> Option<&VirtualFormat> {
+        self.virt.as_ref()
+    }
+    /// Read a `quantization_config` this format announces itself by (a `tensors` or `virtual` format).
+    pub fn read_config(&self, q: &serde_json::Value) -> Result<tensors::ConfigRead> {
+        match (&self.tensors, &self.virt) {
+            (Some(t), _) => t.read_config(q).map_err(|e| LowerError::not_lowerable(e.to_string())),
+            (_, Some(v)) => v.read_config(q).map_err(|e| LowerError::not_lowerable(e.to_string())),
+            _ => Err(LowerError::bad(format!("quant format `{}` is a blocks format: a quant_method names a tensors or virtual format", self.name()))),
+        }
+    }
 
     /// The descriptor's own vectors: each block's bytes must decode to its `f32` values, bit for bit.
     fn run_tests(&self) -> Result<()> {
         if let Some(t) = &self.tensors {
             return self.run_tensor_tests(t);
+        }
+        if let Some(v) = &self.virt {
+            return self.run_virtual_tests(v);
         }
         let Some(b) = &self.blocks else { return Ok(()) };
         for (n, t) in self.desc.tests.iter().enumerate() {
@@ -149,6 +168,44 @@ impl QuantFormat {
                 let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
                 if g.to_bits() != w.to_bits() && !(*g == 0.0 && w == 0.0) {
                     return Err(bad(format!("fails at element {i} (row {}, column {}): decodes to {g:e}, the vector says {w:e}", i / inp, i % inp)));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl QuantFormat {
+    /// A `virtual` format's vectors: the role tensors of one module and the configuration, the served
+    /// tensor they must decode to (float32, bit for bit; zero of either sign is one value).
+    fn run_virtual_tests(&self, v: &VirtualFormat) -> Result<()> {
+        let roles: Vec<(String, bool)> = v.roles().map(|(n, _, req)| (n.to_string(), req)).collect();
+        for (n, t) in self.desc.tests.iter().enumerate() {
+            let bad = |m: String| LowerError::bad(format!("quant format `{}` test {n}: {m}", self.name()));
+            if let Some(k) = t.roles.keys().find(|k| !roles.iter().any(|(r, _)| r == *k)) {
+                return Err(bad(format!("a tensor for role `{k}`, which the format does not declare")));
+            }
+            let mut tensors: Vec<Option<RoleTensor>> = Vec::with_capacity(roles.len());
+            for (r, required) in &roles {
+                match t.roles.get(r) {
+                    Some(tr) => tensors.push(Some(RoleTensor { shape: tr.shape.clone(), dtype: tr.dtype.clone(), data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))? })),
+                    None if *required => return Err(bad(format!("no tensor for the required role `{r}`"))),
+                    None => tensors.push(None),
+                }
+            }
+            let cfg = t.config.clone().unwrap_or_else(|| serde_json::json!({}));
+            let params = if self.desc.config.is_some() { v.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params } else { v.resolve_params(&cfg).map_err(|e| bad(e.to_string()))? };
+            let shape = v.shape(&tensors, &params).map_err(|e| bad(e.to_string()))?;
+            let total: usize = shape.iter().product();
+            let got = v.decode_range(&tensors, &params, 0..total).map_err(|e| bad(e.to_string()))?;
+            let want = unhex(&t.values_f32_hex).map_err(|e| bad(e.to_string()))?;
+            if want.len() != got.len() * 4 {
+                return Err(bad(format!("{} values expected, {} decoded (shape {shape:?})", want.len() / 4, got.len())));
+            }
+            for (i, (g, w)) in got.iter().zip(want.chunks_exact(4)).enumerate() {
+                let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+                if g.to_bits() != w.to_bits() && !(*g == 0.0 && w == 0.0) {
+                    return Err(bad(format!("fails at element {i}: decodes to {g:e}, the vector says {w:e}")));
                 }
             }
         }
@@ -254,7 +311,7 @@ macro_rules! builtin {
 const BUILTIN: &[&str] = builtin!(
     "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
     "tq1_0", "tq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block", "ct_pack", "ct_fp8", "ct_int8",
+    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf",
 );
 
 impl QuantRegistry {

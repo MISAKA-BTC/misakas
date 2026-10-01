@@ -72,6 +72,11 @@ impl M<'_> {
             "mamba.in", "mamba.x", "mamba.dt", "mamba.out", "mamba2.in", "mamba2.out",
         ];
         let Some(q) = &self.st.quant else { return Ok(None) };
+        // A virtual format's tensors are served as the float tensors the export would have: no module is
+        // bound to the format.
+        if q.fmt.is_virtual() {
+            return Ok(None);
+        }
         // GGUF: every tensor has its own type; the modules stored block-quantised are listed.
         if let crate::prequant::QFormat::Gguf { .. } = q.fmt {
             return Ok(match self.st.name(role) {

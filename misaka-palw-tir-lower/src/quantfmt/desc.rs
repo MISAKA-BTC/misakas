@@ -87,6 +87,20 @@ pub enum LayoutDesc {
         bytes: usize,
         fields: Vec<FieldDesc>,
     },
+    /// Tensors the checkpoint stores packed are served as another, float tensor under another name:
+    /// the descriptor names the roles (`<module><suffix>` each), the lanes and shape of the served
+    /// tensor (any rank up to 4, so a leading expert axis is just the first lane), and as one expression
+    /// the value of each element. The served tensor is called `<module>`.
+    #[serde(rename = "virtual")]
+    Virtual {
+        roles: Vec<RoleDesc>,
+        /// The lane names of the served tensor, outermost axis first.
+        axes: Vec<String>,
+        /// The served tensor's shape, one expression per axis (over the roles' shapes and the parameters).
+        shape: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checks: Vec<CheckDesc>,
+    },
     #[serde(rename = "tensors")]
     Tensors {
         roles: Vec<RoleDesc>,
@@ -161,7 +175,8 @@ pub struct ConfigDesc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip: Option<String>,
     /// How a `skip` entry names a module: `exact` (the full module name; an entry `re:<pattern>` is a
-    /// regular expression of the subset `^ $ . .* \x` and literals) or `contains` (a substring of it).
+    /// regular expression of the subset `^ $ . .* \x` and literals), `contains` (a substring of it) or
+    /// `regex` (every entry is such a pattern, as Hugging Face's `re.match` reads them).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_match: Option<String>,
     /// `never`: the language-model head is not stored in this format; `unless_skipped`: it is, unless

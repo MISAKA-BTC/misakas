@@ -382,3 +382,98 @@ fn an_fp8_module_decodes_and_a_module_the_quantiser_left_in_bf16_is_read_as_it_i
     assert!(e.contains("missing tensor"), "{e}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// An independent decode of one MXFP4 element, for the test: the OCP FP4 (E2M1) value of a code times
+/// two to the E8M0 exponent of its block.
+fn mxfp4_element(blocks: &[u8], scales: &[u8], (e_n, o_n, g_n): (usize, usize, usize), (e, i, o): (usize, usize, usize)) -> f32 {
+    let _ = e_n;
+    let (ib, t) = (i / 32, i % 32);
+    let byte = blocks[((e * o_n + o) * g_n + ib) * 16 + t / 2];
+    let code = (byte >> (4 * (t % 2))) & 15;
+    let mag = [0.0f32, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0][(code & 7) as usize];
+    let v = if code & 8 != 0 { -mag } else { mag };
+    v * 2f32.powi(scales[(e * o_n + o) * g_n + ib] as i32 - 127)
+}
+
+/// A format that serves packed tensors as float tensors — a leading expert axis, per-block scales over a
+/// 3-D tensor — lists the served names in place of the packed ones, serves any row range without decoding
+/// the rest, and hides the packed tensors. Nothing in it is specific to a model.
+#[test]
+fn a_virtual_format_serves_packed_tensors_as_the_float_export_and_by_row_ranges() {
+    use misaka_palw_tir_lower::weights::described::{DescribedSource, served_names};
+    use misaka_palw_tir_lower::weights::{Checkpoint, TensorSource};
+    let reg = QuantRegistry::builtin();
+    let f = reg.named("MXFP4_HF").expect("the built-in descriptor").clone();
+    let dir = std::env::temp_dir().join(format!("quant-tensors-mxfp4-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let (e_n, o_n, g_n) = (3usize, 5usize, 2usize);
+    let mut rng = Rng(0x6d78_6670);
+    let blocks: Vec<u8> = (0..e_n * o_n * g_n * 16).map(|_| rng.below(256) as u8).collect();
+    let scales: Vec<u8> = (0..e_n * o_n * g_n).map(|_| (120 + rng.below(12)) as u8).collect();
+    write_safetensors(
+        &dir.join("model.safetensors"),
+        &[
+            ("m.mlp.experts.gate_up_proj_blocks", "U8", vec![e_n, o_n, g_n, 16], blocks.clone()),
+            ("m.mlp.experts.gate_up_proj_scales", "U8", vec![e_n, o_n, g_n], scales.clone()),
+            ("m.mlp.experts.gate_up_proj_bias", "F32", vec![e_n, o_n], vec![0u8; e_n * o_n * 4]),
+            ("m.self_attn.q_proj.weight", "F32", vec![2, 2], vec![0u8; 16]),
+        ],
+    );
+    let src = DescribedSource::new(Box::new(Checkpoint::open(&dir).expect("opens")), f.clone(), Default::default()).expect("serves");
+    let name = "m.mlp.experts.gate_up_proj";
+    let names = src.names();
+    assert!(names.contains(&name.to_string()) && !names.iter().any(|n| n.ends_with("_blocks") || n.ends_with("_scales")), "{names:?}");
+    assert!(names.contains(&"m.mlp.experts.gate_up_proj_bias".to_string()) && names.contains(&"m.self_attn.q_proj.weight".to_string()), "the other tensors pass through");
+    // [E, in, out]: the packed [E, out, in] transposed, exactly as the float export has it.
+    assert_eq!(src.shape(name), Some(vec![e_n, g_n * 32, o_n]));
+    assert!(src.shape("m.mlp.experts.gate_up_proj_blocks").is_none(), "the packed tensor is hidden");
+    assert!(src.load("m.mlp.experts.gate_up_proj_scales").is_err());
+    let whole = src.load(name).expect("decodes");
+    for e in 0..e_n {
+        for i in 0..g_n * 32 {
+            for o in 0..o_n {
+                let want = mxfp4_element(&blocks, &scales, (e_n, o_n, g_n), (e, i, o));
+                let got = whole.data[(e * g_n * 32 + i) * o_n + o];
+                assert!(got == want || (got == 0.0 && want == 0.0), "[{e}, {i}, {o}]: {got} vs {want}");
+            }
+        }
+    }
+    // A row range (every axis but the last flattened) is the same rows of the whole.
+    let rows = src.load_rows(name, 17..40).expect("rows");
+    assert_eq!(rows.shape, vec![23, o_n]);
+    assert_eq!(rows.data, whole.data[17 * o_n..40 * o_n]);
+    let meta = src.metadata(name).expect("a header");
+    assert_eq!((meta.dtype.as_str(), meta.bytes), ("F32", (e_n * g_n * 32 * o_n * 4) as u64));
+    let bytes = src.read_slice(name, 8..24).expect("bytes");
+    assert_eq!(bytes, whole.data[2..6].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+    // A names-only listing (no tensors) is rewritten the same way.
+    let listing: std::collections::BTreeSet<String> = Checkpoint::open(&dir).expect("opens").names().into_iter().collect();
+    let served = served_names(&listing, &f);
+    assert!(served.contains(name) && !served.contains("m.mlp.experts.gate_up_proj_blocks") && served.contains("m.self_attn.q_proj.weight"));
+    // A module whose scales are not one per block breaks the descriptor's own rule, by name.
+    write_safetensors(
+        &dir.join("model.safetensors"),
+        &[
+            ("bad.experts.down_proj_blocks", "U8", vec![e_n, o_n, g_n, 16], blocks),
+            ("bad.experts.down_proj_scales", "U8", vec![e_n, o_n, g_n + 1], vec![127u8; e_n * o_n * (g_n + 1)]),
+        ],
+    );
+    let e = DescribedSource::new(Box::new(Checkpoint::open(&dir).expect("opens")), f, Default::default()).err().expect("refused").to_string();
+    assert!(e.contains("bad.experts.down_proj") && e.contains("one per block"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// gpt-oss's `quantization_config` is read by the descriptor: its keys are known, a key nobody declared is
+/// refused, and `modules_to_not_convert` is a list of the regular expressions Hugging Face matches with.
+#[test]
+fn an_mxfp4_configuration_is_read_by_its_descriptor() {
+    let cfg = json!({"quant_method": "mxfp4", "modules_to_not_convert": ["model.layers.*.self_attn", "model.layers.*.mlp.router", "model.embed_tokens", "lm_head"]});
+    let c = parse_quant_config(&cfg, "GptOssForCausalLM", "gpt_oss").expect("parses");
+    assert!(c.fmt.is_virtual() && !c.fmt.is_integers() && !c.lm_head);
+    assert!(!c.converts("model.layers.7.self_attn.q_proj") && !c.converts("model.layers.7.mlp.router") && !c.converts("lm_head"));
+    assert!(c.converts("model.layers.7.mlp.experts"), "the experts are what the format is for");
+    let mut v = cfg.clone();
+    v["mystery"] = json!(1);
+    let e = refusal(parse_quant_config(&v, "GptOssForCausalLM", "gpt_oss"));
+    assert!(e.contains("does not read") && e.contains("mystery"), "{e}");
+}

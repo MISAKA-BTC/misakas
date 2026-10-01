@@ -114,6 +114,7 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
     // A format that decodes to floats (FP8) hands the lowerer an ordinary float weight, whatever the
     // layer is; the integers-lowering below is for the layers `crate::lower::qlinear` knows.
     let integers = q.fmt.is_integers();
+    let virtual_format = q.fmt.is_virtual();
     for (l, ls) in spec.layers.iter().enumerate() {
         if integers && (!matches!(ls.mixer, Mixer::Attention(_) | Mixer::GatedDeltaNet(_)) || !matches!(ls.ffn, Ffn::Mlp(_) | Ffn::Moe(_))) {
             return Err(LowerError::not_lowerable(format!(
@@ -122,12 +123,15 @@ pub(crate) fn attach_quant(spec: &mut ArchSpec, q: crate::prequant::QuantConfig)
         }
         if let Ffn::Moe(m) = &ls.ffn
             && spec.hf.experts != crate::spec::MlpLayout::Separate
+            && !q.fmt.is_virtual()
         {
             let _ = m;
             return Err(LowerError::not_lowerable(format!("{arch}: pre-quantised experts in a fused layout")));
         }
     }
-    spec.notes.push(if integers {
+    spec.notes.push(if virtual_format {
+        format!("pre-quantised checkpoint ({}): the packed tensors are served as the float tensors the export has, and lowered on the ordinary W8 path", q.fmt.label())
+    } else if integers {
         format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label())
     } else {
         format!("pre-quantised checkpoint ({}): projections decoded to float32 and lowered on the ordinary W8 path", q.fmt.label())

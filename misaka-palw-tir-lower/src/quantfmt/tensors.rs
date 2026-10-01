@@ -44,7 +44,7 @@ impl RoleTensor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Rd {
+pub(super) enum Rd {
     I8,
     U8,
     I16,
@@ -61,7 +61,7 @@ enum Rd {
 }
 
 impl Rd {
-    fn parse(s: &str) -> Option<Rd> {
+    pub(super) fn parse(s: &str) -> Option<Rd> {
         Some(match s {
             "I8" => Rd::I8,
             "U8" => Rd::U8,
@@ -79,7 +79,7 @@ impl Rd {
             _ => return None,
         })
     }
-    fn size(self) -> usize {
+    pub(super) fn size(self) -> usize {
         match self {
             Rd::I8 | Rd::U8 | Rd::Fp8E4m3 | Rd::Fp8E5m2 => 1,
             Rd::I16 | Rd::U16 | Rd::F16 | Rd::Bf16 => 2,
@@ -93,12 +93,12 @@ impl Rd {
 }
 
 #[derive(Clone, Debug)]
-struct Role {
-    name: String,
-    suffix: String,
-    dtypes: Vec<Rd>,
-    required: bool,
-    rank: usize,
+pub(super) struct Role {
+    pub(super) name: String,
+    pub(super) suffix: String,
+    pub(super) dtypes: Vec<Rd>,
+    pub(super) required: bool,
+    pub(super) rank: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -107,12 +107,123 @@ enum Target {
     Floats { value: Node },
 }
 
+/// How a format reads its `quantization_config`; shared by every layout a `quant_method` can announce.
+#[derive(Clone, Debug)]
+pub(crate) struct ConfigReader {
+    pub name: String,
+    pub params: BTreeMap<String, ParamDesc>,
+    pub config: Option<ConfigDesc>,
+}
+
+impl ConfigReader {
+    /// The `quantization_config` keys this format reads or declares: every top-level key of a
+    /// configuration must be among them.
+    pub fn config_keys(&self) -> Vec<String> {
+        let top = |p: &str| p.split(['.', '[']).next().unwrap_or(p).to_string();
+        let mut keys: Vec<String> = vec!["quant_method".into()];
+        keys.extend(self.params.values().filter_map(|p| p.config.as_deref().map(top)));
+        if let Some(c) = &self.config {
+            keys.extend(c.inert.iter().cloned());
+            keys.extend(c.skip.iter().cloned());
+            keys.extend(c.checks.iter().map(|k| top(&k.path)));
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// Read a `quantization_config` for this format: every key is read, declared inert, named by a
+    /// check or refused; the checks hold; the parameters resolve.
+    pub fn read_config(&self, q: &serde_json::Value) -> R<ConfigRead> {
+        let obj = q.as_object().ok_or_else(|| DslError("quantization_config is not an object".into()))?;
+        let known = self.config_keys();
+        let unknown: Vec<&String> = obj.keys().filter(|k| !known.contains(k)).collect();
+        if !unknown.is_empty() {
+            return Err(DslError(format!(
+                "quantization_config has keys the `{}` descriptor does not read: {unknown:?} (a key that does not change what the stored tensors mean belongs in the descriptor's config.inert; one that does is a parameter or a check)",
+                self.name
+            )));
+        }
+        let cfg = self.config.clone().unwrap_or_default();
+        for c in &cfg.checks {
+            let v = json_path(q, &c.path);
+            if !c.one_of.contains(&v) {
+                return Err(DslError(format!("{}: {} (quantization_config.{} is {})", self.name, c.message, c.path, v)));
+            }
+        }
+        let params = self.resolve_params(q)?;
+        let mode = match cfg.skip_match.as_deref() {
+            None | Some("exact") => "exact",
+            Some("contains") => "contains",
+            Some("regex") => "regex",
+            Some(o) => return Err(DslError(format!("{}: config.skip_match `{o}` (exact, contains or regex)", self.name))),
+        };
+        let skip: Vec<String> = match &cfg.skip {
+            None => Vec::new(),
+            Some(k) => match obj.get(k) {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::Array(a)) => a
+                    .iter()
+                    .map(|m| {
+                        let s = m.as_str().ok_or_else(|| DslError(format!("quantization_config.{k} entry is not a string")))?;
+                        Ok(if s.starts_with("re:") {
+                            s.to_string()
+                        } else if mode == "regex" {
+                            format!("re:{s}")
+                        } else {
+                            format!("{mode}:{s}")
+                        })
+                    })
+                    .collect::<R<_>>()?,
+                Some(_) => return Err(DslError(format!("quantization_config.{k} is not a list"))),
+            },
+        };
+        let lm_head = match cfg.lm_head.as_deref() {
+            None | Some("never") => false,
+            Some("unless_skipped") => !crate::prequant::skip_matches(&skip, "lm_head"),
+            Some(o) => return Err(DslError(format!("{}: config.lm_head `{o}` (never or unless_skipped)", self.name))),
+        };
+        Ok(ConfigRead { params, skip, lm_head })
+    }
+
+    /// Resolve the parameters from a `quantization_config` (`ParamDesc::config` is a key, optionally
+    /// indexed `weight_block_size[1]`), applying defaults and the allowed values.
+    pub fn resolve_params(&self, config: &serde_json::Value) -> R<BTreeMap<String, i64>> {
+        use serde_json::Value;
+        let mut out = BTreeMap::new();
+        for (name, p) in &self.params {
+            let raw = p.config.as_ref().map(|path| json_path(config, path));
+            let from_cfg: Option<i64> = match &raw {
+                None | Some(Value::Null) => None,
+                // A string-valued key reads through the parameter's table; a string it does not list is refused, not defaulted.
+                Some(Value::String(s)) if !p.map.is_empty() => Some(*p.map.get(&s.to_ascii_lowercase()).ok_or_else(|| {
+                    DslError(format!("{}: {name} = `{s}` (defined for {:?})", self.name, p.map.keys().collect::<Vec<_>>()))
+                })?),
+                Some(v) => Some(v.as_i64().or_else(|| v.as_bool().map(|b| b as i64)).ok_or_else(|| {
+                    DslError(format!("{}: quantization_config.{} is {v}, not an integer or a bool", self.name, p.config.as_deref().unwrap_or(name)))
+                })?),
+            };
+            let v = match (from_cfg, p.default) {
+                (Some(v), _) => v,
+                (None, Some(d)) => d,
+                (None, None) => return Err(DslError(format!("{}: parameter `{name}` is not in the configuration and has no default", self.name))),
+            };
+            if !p.allowed.is_empty() && !p.allowed.contains(&v) {
+                return Err(DslError(format!("{}: {name} = {v} (defined for {:?})", self.name, p.allowed)));
+            }
+            out.insert(name.clone(), v);
+        }
+        Ok(out)
+    }
+
+}
+
 /// A compiled `tensors` format.
 #[derive(Clone, Debug)]
 pub struct TensorsFormat {
     pub name: String,
     roles: Vec<Role>,
-    params: BTreeMap<String, ParamDesc>,
+    reader: ConfigReader,
     tables: Vec<Table>,
     out: Node,
     inp: Node,
@@ -122,7 +233,6 @@ pub struct TensorsFormat {
     target: Target,
     offset_term: Option<Node>,
     order: Option<Node>,
-    config: Option<ConfigDesc>,
     /// Names of the constant variables, in slot order after the lanes.
     consts: Vec<String>,
 }
@@ -149,19 +259,20 @@ pub struct ConfigRead {
     pub lm_head: bool,
 }
 
-struct TScope<'a> {
-    consts: &'a [String],
-    roles: &'a [Role],
-    tables: &'a [Table],
+pub(super) struct TScope<'a> {
+    pub(super) lanes: &'a [&'a str],
+    pub(super) consts: &'a [String],
+    pub(super) roles: &'a [Role],
+    pub(super) tables: &'a [Table],
 }
 
 impl Scope for TScope<'_> {
     fn resolve(&self, name: &str) -> Option<Name> {
-        if let Some(i) = LANES.iter().position(|v| *v == name) {
+        if let Some(i) = self.lanes.iter().position(|v| *v == name) {
             return Some(Name::Var(i));
         }
         if let Some(i) = self.consts.iter().position(|v| v == name) {
-            return Some(Name::Var(LANES.len() + i));
+            return Some(Name::Var(self.lanes.len() + i));
         }
         if let Some(i) = self.roles.iter().position(|r| r.name == name) {
             return Some(Name::Read { slot: i, arity: self.roles[i].rank });
@@ -175,9 +286,46 @@ impl Scope for TScope<'_> {
     }
 }
 
-fn table(name: &str, t: &TableDesc) -> R<Table> {
+pub(super) fn table(name: &str, t: &TableDesc) -> R<Table> {
     // The same table syntax as blocks formats.
     super::blocks::table_of(name, t)
+}
+
+/// The role declarations of a descriptor, checked: known dtypes, rank 1–4, no name a lane or another role has.
+pub(super) fn compile_roles(roles: &[RoleDesc], lanes: &[&str]) -> R<Vec<Role>> {
+    let mut rs: Vec<Role> = Vec::new();
+    for RoleDesc { name, suffix, dtypes, required, rank } in roles {
+        let dts = dtypes.iter().map(|t| Rd::parse(t).ok_or_else(|| DslError(format!("role `{name}`: dtype `{t}`")))).collect::<R<Vec<_>>>()?;
+        if dts.is_empty() || *rank > 4 || lanes.contains(&name.as_str()) || rs.iter().any(|r: &Role| r.name == *name) {
+            return Err(DslError(format!("role `{name}` is malformed or named like another")));
+        }
+        rs.push(Role { name: name.clone(), suffix: suffix.clone(), dtypes: dts, required: *required, rank: *rank });
+    }
+    Ok(rs)
+}
+
+/// The tensors a module holds against the declarations: every required role present, in an accepted dtype,
+/// with the declared rank and (when its data is loaded) the bytes its shape says.
+pub(super) fn check_roles(name: &str, defs: &[Role], roles: &[Option<RoleTensor>]) -> R<()> {
+    for (r, t) in defs.iter().zip(roles) {
+        match t {
+            None if r.required => return Err(DslError(format!("{name}: the tensor for role `{}` ({}) is missing", r.name, r.suffix))),
+            Some(t) => {
+                if t.shape.len() != r.rank {
+                    return Err(DslError(format!("{name}: role `{}` has {} axes, the format says {}", r.name, t.shape.len(), r.rank)));
+                }
+                let rd = Rd::parse(&t.dtype).ok_or_else(|| DslError(format!("{name}: role `{}` is stored as {}", r.name, t.dtype)))?;
+                if !r.dtypes.contains(&rd) {
+                    return Err(DslError(format!("{name}: role `{}` is stored as {}, the format reads {:?}", r.name, t.dtype, r.dtypes)));
+                }
+                if !t.data.is_empty() && t.data.len() != t.shape.iter().product::<usize>() * rd.size() {
+                    return Err(DslError(format!("{name}: role `{}` holds {} bytes for shape {:?} of {}", r.name, t.data.len(), t.shape, t.dtype)));
+                }
+            }
+            None => {}
+        }
+    }
+    Ok(())
 }
 
 impl TensorsFormat {
@@ -185,14 +333,7 @@ impl TensorsFormat {
         let LayoutDesc::Tensors { roles, dims, checks } = &d.layout else {
             return Err(DslError("not a tensors layout".into()));
         };
-        let mut rs = Vec::new();
-        for RoleDesc { name, suffix, dtypes, required, rank } in roles {
-            let dts = dtypes.iter().map(|t| Rd::parse(t).ok_or_else(|| DslError(format!("role `{name}`: dtype `{t}`")))).collect::<R<Vec<_>>>()?;
-            if dts.is_empty() || *rank == 0 || *rank > 4 || LANES.contains(&name.as_str()) || rs.iter().any(|r: &Role| r.name == *name) {
-                return Err(DslError(format!("role `{name}` is malformed or named like another")));
-            }
-            rs.push(Role { name: name.clone(), suffix: suffix.clone(), dtypes: dts, required: *required, rank: *rank });
-        }
+        let rs = compile_roles(roles, LANES)?;
         let mut tables = Vec::new();
         for (name, t) in &d.tables {
             tables.push(table(name, t)?);
@@ -206,7 +347,7 @@ impl TensorsFormat {
                 return Err(DslError(format!("the name `{c}` is taken")));
             }
         }
-        let scope = TScope { consts: &consts, roles: &rs, tables: &tables };
+        let scope = TScope { lanes: LANES, consts: &consts, roles: &rs, tables: &tables };
         let comp = |what: &str, s: &Option<String>| -> R<Option<Node>> {
             s.as_ref().map(|s| compile(s, &scope).map_err(|e| DslError(format!("{what}: {e}")))).transpose()
         };
@@ -255,7 +396,7 @@ impl TensorsFormat {
         Ok(TensorsFormat {
             name: d.name.clone(),
             roles: rs,
-            params: d.params.clone(),
+            reader: ConfigReader { name: d.name.clone(), params: d.params.clone(), config: d.config.clone() },
             tables,
             out: out_n,
             inp: inp_n,
@@ -265,7 +406,6 @@ impl TensorsFormat {
             target,
             offset_term,
             order,
-            config: d.config.clone(),
             consts,
         })
     }
@@ -341,94 +481,19 @@ impl TensorsFormat {
     /// The `quantization_config` keys this format reads or declares: every top-level key of a
     /// configuration must be among them.
     pub fn config_keys(&self) -> Vec<String> {
-        let top = |p: &str| p.split(['.', '[']).next().unwrap_or(p).to_string();
-        let mut keys: Vec<String> = vec!["quant_method".into()];
-        keys.extend(self.params.values().filter_map(|p| p.config.as_deref().map(top)));
-        if let Some(c) = &self.config {
-            keys.extend(c.inert.iter().cloned());
-            keys.extend(c.skip.iter().cloned());
-            keys.extend(c.checks.iter().map(|k| top(&k.path)));
-        }
-        keys.sort();
-        keys.dedup();
-        keys
+        self.reader.config_keys()
     }
 
     /// Read a `quantization_config` for this format: every key is read, declared inert, named by a
     /// check or refused; the checks hold; the parameters resolve.
     pub fn read_config(&self, q: &serde_json::Value) -> R<ConfigRead> {
-        let obj = q.as_object().ok_or_else(|| DslError("quantization_config is not an object".into()))?;
-        let known = self.config_keys();
-        let unknown: Vec<&String> = obj.keys().filter(|k| !known.contains(k)).collect();
-        if !unknown.is_empty() {
-            return Err(DslError(format!(
-                "quantization_config has keys the `{}` descriptor does not read: {unknown:?} (a key that does not change what the stored tensors mean belongs in the descriptor's config.inert; one that does is a parameter or a check)",
-                self.name
-            )));
-        }
-        let cfg = self.config.clone().unwrap_or_default();
-        for c in &cfg.checks {
-            let v = json_path(q, &c.path);
-            if !c.one_of.contains(&v) {
-                return Err(DslError(format!("{}: {} (quantization_config.{} is {})", self.name, c.message, c.path, v)));
-            }
-        }
-        let params = self.resolve_params(q)?;
-        let mode = match cfg.skip_match.as_deref() {
-            None | Some("exact") => "exact",
-            Some("contains") => "contains",
-            Some(o) => return Err(DslError(format!("{}: config.skip_match `{o}` (exact or contains)", self.name))),
-        };
-        let skip: Vec<String> = match &cfg.skip {
-            None => Vec::new(),
-            Some(k) => match obj.get(k) {
-                None | Some(serde_json::Value::Null) => Vec::new(),
-                Some(serde_json::Value::Array(a)) => a
-                    .iter()
-                    .map(|m| {
-                        let s = m.as_str().ok_or_else(|| DslError(format!("quantization_config.{k} entry is not a string")))?;
-                        Ok(if s.starts_with("re:") { s.to_string() } else { format!("{mode}:{s}") })
-                    })
-                    .collect::<R<_>>()?,
-                Some(_) => return Err(DslError(format!("quantization_config.{k} is not a list"))),
-            },
-        };
-        let lm_head = match cfg.lm_head.as_deref() {
-            None | Some("never") => false,
-            Some("unless_skipped") => !crate::prequant::skip_matches(&skip, "lm_head"),
-            Some(o) => return Err(DslError(format!("{}: config.lm_head `{o}` (never or unless_skipped)", self.name))),
-        };
-        Ok(ConfigRead { params, skip, lm_head })
+        self.reader.read_config(q)
     }
 
-    /// Resolve the parameters from a `quantization_config` (`ParamDesc::config` is a key, optionally
-    /// indexed `weight_block_size[1]`), applying defaults and the allowed values.
+    /// Resolve the parameters from a `quantization_config` (`ParamDesc::config` is a dotted path,
+    /// optionally indexed), applying defaults, the allowed values and string tables.
     pub fn resolve_params(&self, config: &serde_json::Value) -> R<BTreeMap<String, i64>> {
-        use serde_json::Value;
-        let mut out = BTreeMap::new();
-        for (name, p) in &self.params {
-            let raw = p.config.as_ref().map(|path| json_path(config, path));
-            let from_cfg: Option<i64> = match &raw {
-                None | Some(Value::Null) => None,
-                // A string-valued key reads through the parameter's table; a string it does not list is refused, not defaulted.
-                Some(Value::String(s)) if !p.map.is_empty() => Some(*p.map.get(&s.to_ascii_lowercase()).ok_or_else(|| {
-                    DslError(format!("{}: {name} = `{s}` (defined for {:?})", self.name, p.map.keys().collect::<Vec<_>>()))
-                })?),
-                Some(v) => Some(v.as_i64().or_else(|| v.as_bool().map(|b| b as i64)).ok_or_else(|| {
-                    DslError(format!("{}: quantization_config.{} is {v}, not an integer or a bool", self.name, p.config.as_deref().unwrap_or(name)))
-                })?),
-            };
-            let v = match (from_cfg, p.default) {
-                (Some(v), _) => v,
-                (None, Some(d)) => d,
-                (None, None) => return Err(DslError(format!("{}: parameter `{name}` is not in the configuration and has no default", self.name))),
-            };
-            if !p.allowed.is_empty() && !p.allowed.contains(&v) {
-                return Err(DslError(format!("{}: {name} = {v} (defined for {:?})", self.name, p.allowed)));
-            }
-            out.insert(name.clone(), v);
-        }
-        Ok(out)
+        self.reader.resolve_params(config)
     }
 
     /// `(out, inp)` of the weight the roles hold.
@@ -462,7 +527,7 @@ impl TensorsFormat {
             };
             vars.push(Col::CI(v));
         }
-        Ok(TEnv { fmt: self, roles, vars, n: 1 })
+        Ok(TEnv { defs: Defs { roles: &self.roles, tables: &self.tables }, roles, vars, n: 1 })
     }
 
     /// A module's tensors → its stored integers.
@@ -638,16 +703,23 @@ pub fn json_path(config: &serde_json::Value, path: &str) -> serde_json::Value {
     v.clone()
 }
 
-struct TEnv<'a> {
-    fmt: &'a TensorsFormat,
-    roles: &'a [Option<RoleTensor>],
-    vars: Vec<Col>,
-    n: usize,
+/// What an expression reads: the role declarations and the tables of a format.
+#[derive(Clone, Copy)]
+pub(super) struct Defs<'a> {
+    pub(super) roles: &'a [Role],
+    pub(super) tables: &'a [Table],
+}
+
+pub(super) struct TEnv<'a> {
+    pub(super) defs: Defs<'a>,
+    pub(super) roles: &'a [Option<RoleTensor>],
+    pub(super) vars: Vec<Col>,
+    pub(super) n: usize,
 }
 
 impl<'a> TEnv<'a> {
-    fn with_lanes(&self, n: usize) -> TEnv<'a> {
-        TEnv { fmt: self.fmt, roles: self.roles, vars: self.vars.clone(), n }
+    pub(super) fn with_lanes(&self, n: usize) -> TEnv<'a> {
+        TEnv { defs: self.defs, roles: self.roles, vars: self.vars.clone(), n }
     }
 }
 
@@ -659,18 +731,18 @@ impl Env for TEnv<'_> {
         &self.vars[slot]
     }
     fn table(&self, t: usize) -> &Table {
-        &self.fmt.tables[t]
+        &self.defs.tables[t]
     }
     fn read(&self, slot: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
-        let nr = self.fmt.roles.len();
+        let nr = self.defs.roles.len();
         // A role's shape.
         if slot >= nr {
             let r = slot - nr;
-            let t = self.roles[r].as_ref().ok_or_else(|| DslError(format!("`dim_{}`: the role is absent", self.fmt.roles[r].name)))?;
+            let t = self.roles[r].as_ref().ok_or_else(|| DslError(format!("`dim_{}`: the role is absent", self.defs.roles[r].name)))?;
             let axis = index[0].int_at(0)?;
-            return Ok(Col::CI(*usize::try_from(axis).ok().and_then(|a| t.shape.get(a)).ok_or_else(|| DslError(format!("`dim_{}[{axis}]`", self.fmt.roles[r].name)))? as i64));
+            return Ok(Col::CI(*usize::try_from(axis).ok().and_then(|a| t.shape.get(a)).ok_or_else(|| DslError(format!("`dim_{}[{axis}]`", self.defs.roles[r].name)))? as i64));
         }
-        let role = &self.fmt.roles[slot];
+        let role = &self.defs.roles[slot];
         let t = self.roles[slot].as_ref().ok_or_else(|| DslError(format!("the tensor of role `{}` is absent", role.name)))?;
         let rd = Rd::parse(&t.dtype).expect("checked in geometry");
         let size = rd.size();

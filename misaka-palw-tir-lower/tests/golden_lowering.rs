@@ -34,6 +34,8 @@ const INTENDED: &[(&str, &str)] = &[
     ("hf/ministral3", "libm-v1: the query-temperature table's binary32 ln_1p (537ca553f)"),
     // 1db3c430f: FP8 with block scales is a built-in quant-format descriptor, so a config that was refused for being quantised lowers.
     ("real/deepseek-v3-fp8.json", "FP8_BLOCK descriptor: refused before, lowers now (1db3c430f)"),
+    // MXFP4_HF: a virtual descriptor serves the packed experts as the float export's tensors, so gpt-oss's MXFP4 config lowers.
+    ("real/gpt-oss-20b-mxfp4.json", "MXFP4_HF descriptor: refused before, lowers now"),
 ];
 
 fn golden_path() -> PathBuf {
