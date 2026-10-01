@@ -215,6 +215,7 @@ pub(crate) fn palw_improve_status_json_v1(
                 "open_epoch": l.line.open_epoch,
                 "next_epoch": l.line.next_epoch,
                 "next_due_daa": l.line.next_due_daa,
+                "next_check_daa": l.line.next_check_daa,
                 "policy_sequence": l.line.policy_sequence,
                 "governed_from_daa": l.line.governed_from_daa,
                 "barred": l.line.barred.iter().map(|(b, until)| json!({"bond": bond_text(b), "until": until})).collect::<Vec<_>>(),

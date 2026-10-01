@@ -1039,6 +1039,7 @@ mod tests {
                 next_epoch: 4,
                 open_epoch: Some(3),
                 next_due_daa: 280,
+                next_check_daa: 280,
                 barred: vec![],
                 last_promotion: None,
                 regression_epoch: None,

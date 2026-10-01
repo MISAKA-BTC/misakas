@@ -929,6 +929,7 @@ pub(super) fn apply_improvement_policy_set_v1(
                 next_epoch,
                 open_epoch: None,
                 next_due_daa: palw_improve_next_boundary_v1(daa, policy.windows.grid),
+                next_check_daa: palw_improve_next_boundary_v1(daa, policy.windows.grid),
                 barred: row.map(|r| r.barred).unwrap_or_default(),
                 last_promotion: None,
                 regression_epoch: None,
@@ -967,6 +968,7 @@ pub(super) fn apply_improvement_policy_set_v1(
             builder.write_improvement_policy(line_id, Some(record));
             if idle {
                 // [E28] The next check lands on the new grid (or an earlier vesting step, §17.5.2).
+                line.next_check_daa = palw_improve_next_boundary_v1(daa, policy.windows.grid);
                 line.next_due_daa = next_due_v1(builder, &line, daa)?;
             }
             builder.write_improvement_line(line_id, Some(line));
@@ -1268,7 +1270,10 @@ fn advance_improvement_line_v1(
 /// When the line is next due (spec 17 §17.5.2).
 fn next_due_v1(builder: &TransitionBuilder<'_>, line: &PalwImprovementLineV1, daa: u64) -> Result<u64, PalwStateV2Error> {
     let policy = builder.improvement_policy_of_v1(&line.line_id)?;
-    let boundary = palw_improve_next_boundary_v1(daa, policy.windows.grid);
+    // [D16] The stored check while it lies ahead; a line that is not examined (an opting-out one) keeps the boundary
+    // strictly after this DAA, as it always had.
+    let boundary =
+        if line.next_check_daa > daa { line.next_check_daa } else { palw_improve_next_boundary_v1(daa, policy.windows.grid) };
     let mut due = match line.open_epoch {
         None => boundary,
         Some(epoch) => {
@@ -1303,10 +1308,15 @@ fn step_idle_v1(
     line: &mut PalwImprovementLineV1,
 ) -> Result<bool, PalwStateV2Error> {
     let daa = ctx.daa_score;
-    if line.status != PalwImprovementLineStatusV1::Governed || daa < line.next_due_daa {
+    // [D16] Only a grid boundary examines the trigger: a line woken for a vesting step (due before its next check)
+    // opens nothing and leaves its check where it was.
+    if line.status != PalwImprovementLineStatusV1::Governed || daa < line.next_check_daa {
         return Ok(false);
     }
     let policy = builder.improvement_policy_of_v1(&line.line_id)?;
+    // The check is made: the next is the boundary after this block, whatever comes of it (an epoch resets it at its
+    // decision).
+    line.next_check_daa = palw_improve_next_boundary_v1(daa, policy.windows.grid);
     let g = palw_improve_grid_floor_v1(daa, policy.windows.grid);
     let usage = builder.state.improvement_usage.get(&line.line_id).copied().unwrap_or_default();
     let ceilings = builder.improvement_ceilings_v1()?;
@@ -1748,7 +1758,10 @@ fn decide_epoch_v1(
     if let PalwImprovementLineStatusV1::OptingOut { effective_daa: None } = line.status {
         line.status = PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(daa.saturating_add(policy.windows.grid)) };
     }
-    line.next_due_daa = palw_improve_next_boundary_v1(daa, builder.improvement_policy_of_v1(&line_id)?.windows.grid);
+    // [D16] The line's next examination is the next boundary after the decision; a vesting step before it wakes the line
+    // (`next_due_daa` is the smaller) and examines nothing.
+    line.next_check_daa = palw_improve_next_boundary_v1(daa, builder.improvement_policy_of_v1(&line_id)?.windows.grid);
+    line.next_due_daa = line.next_check_daa;
     Ok(())
 }
 
@@ -2399,6 +2412,73 @@ mod tests {
         for (_, grant) in s.improvement_grants(&h(LINE), 1) {
             assert!(grant.forfeited && grant.vested == grant.amount / 4, "[D12] the vested quarter is kept: {grant:?}");
         }
+        conserved(&s, &h(LINE));
+    }
+
+    /// **[D16] A vesting step is a wake-up, not a check** (found by lane E's differential, `rfc4/ref2`): §17.5.3 step 1
+    /// opens an epoch at a grid boundary, but a vesting step (D12) makes an idle line due BETWEEN boundaries, and the idle
+    /// step opened an epoch there — `t_open` the past boundary, ended `NoCandidate` at once, the usage restarted and an
+    /// epoch number spent — so the real boundary found no usage. Promoted at 1,950 with the first quarter vesting at
+    /// 2,900: the boundary at 2,000 finds no usage, usage then accrues, the vesting step at 2,900 opens nothing and leaves
+    /// the check at 3,000, and the boundary at 3,000 opens epoch 2 with `t_open = 3,000`.
+    #[test]
+    fn a_vesting_step_between_boundaries_opens_no_epoch_and_the_boundary_after_it_still_does() {
+        fn cases(b: &mut TransitionBuilder<'_>, base: u8, daa: u64) {
+            for i in 0..8u8 {
+                b.note_improvement_material_v1(&h(LINE), PalwMaterialKindV1::HardCase, &h(base + i), &bond(CAROL), daa).unwrap();
+            }
+        }
+        fn enter(b: &mut TransitionBuilder<'_>, epoch: u64, class: u8, who: u8, daa: u64) {
+            b.admit_improvement_candidate_v1(
+                &h(LINE),
+                epoch,
+                &h(class),
+                &bond(who),
+                crate::palw_improve_artifact_v1::PalwTirArtifactRefV1::Single { root: h(class) },
+                h(0x50),
+                Vec::new(),
+                daa,
+            )
+            .unwrap();
+        }
+        let p = params();
+        let mut s = opted_in(500);
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+        let s = at(&s, &p, 1_000, |_| {});
+        let s = at(&s, &p, 1_200, |b| enter(b, 1, CAND_A, ALICE, 1_200));
+        let s = at(&s, &p, 1_400, |b| cases(b, 0x60, 1_400));
+        let s = at(&s, &p, 1_510, |b| {
+            for item in 0..8u32 {
+                for (subject, value) in [(PalwEvalSubjectV1::Parent, 0), (PalwEvalSubjectV1::Candidate(h(CAND_A)), 1)] {
+                    let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
+                    b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
+                }
+            }
+        });
+        let s = at(&s, &p, 1_950, |_| {});
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().head, h(CAND_A));
+        let line = s.improvement_line(&h(LINE)).unwrap();
+        assert_eq!((line.next_check_daa, line.next_due_daa), (2_000, 2_000), "the next boundary after the decision");
+        // The boundary at 2,000 examines the trigger (the promotion restarted the usage) and finds none.
+        let s = at(&s, &p, 2_000, |_| {});
+        let line = s.improvement_line(&h(LINE)).unwrap();
+        assert!(line.open_epoch.is_none() && line.next_epoch == 2, "no epoch at 2,000");
+        assert_eq!((line.next_check_daa, line.next_due_daa), (3_000, 2_900), "the check is the next boundary; the line wakes earlier");
+        // Usage accrues after that check; the vesting step at 2,900 vests and opens nothing.
+        let mut s = s;
+        s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 2_000 });
+        let s = at(&s, &p, 2_900, |_| {});
+        assert!(s.improvement_grants(&h(LINE), 1).iter().all(|(_, g)| g.vested == g.amount / 4), "the first quarter vested");
+        let line = s.improvement_line(&h(LINE)).unwrap();
+        assert!(line.open_epoch.is_none() && line.next_epoch == 2, "a vesting step is not a check");
+        assert!(s.improvement_epoch(&h(LINE), 2).is_none(), "no stray epoch with a past t_open");
+        assert_eq!(s.improvement_usage(&h(LINE)).unwrap().usage, 5, "the usage counter is untouched");
+        assert_eq!(line.next_check_daa, 3_000, "and the check stays where it was");
+        // The boundary after it opens the epoch.
+        let s = at(&s, &p, 3_000, |_| {});
+        let epoch = s.improvement_epoch(&h(LINE), 2).expect("the boundary opens epoch 2");
+        assert_eq!(epoch.times.t_open, 3_000, "at its own boundary, not a past one");
+        assert_eq!(s.improvement_usage(&h(LINE)).unwrap().usage, 0, "the usage restarts at the real opening");
         conserved(&s, &h(LINE));
     }
 

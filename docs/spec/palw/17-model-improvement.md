@@ -284,6 +284,7 @@ The integration (lane A) adds it with `palw_fp_decode_rules`'s own flag-day and 
 | `head`, `head_seq` | the head class, and how many head entries were ever appended |
 | `next_epoch`, `open_epoch` | the next epoch number (from 1), and the epoch in progress, if any |
 | `next_due_daa` | when the fold next advances the line (§17.5.2) |
+| `next_check_daa` | the next grid boundary at which an idle line's trigger is examined: the first multiple of `grid` strictly after the line's last check (its creation, the decision that made it idle, a policy coming into force on an idle line, or the last examination) [D16] |
 | `barred` | at most 16 submitters barred after a rollback, each with the DAA its bar ends. An expired bar is pruned when the line is advanced. A new bar for a submitter already barred replaces it (removed, then appended). A 17th bar sorts the list by end, latest first (a stable sort), and keeps the first 16: the bar that ends soonest is dropped [D8/E19] |
 | `last_promotion` | `PalwLastPromotionV1 { epoch: u64, owner_until_daa: u64, ban_daa: u64 }`: the latest promotion's epoch and its rollback terms, pinned at the promotion (§17.10.1) [E22]; kept while a rollback can name it |
 | `regression_epoch`, `regression_check` | the epoch that ran the latest promotion's regression check (kept for its proof), and the predecessor still owed a check (§17.10.2) [E20] |
@@ -354,8 +355,8 @@ and refuses by name (`ImprovementPolicyRefused`):
   - fewer than `ceilings.max_governed_lines` lines are governed;
   - the policy passes §17.4.3.
   The row is created: `head = class_id`, a history entry `OptIn`, `usage = 0`,
-  `usage_since_daa = governed_from_daa =` this DAA, `next_epoch = 1`, and `next_due_daa` = the first
-  grid boundary strictly after this DAA [E1].
+  `usage_since_daa = governed_from_daa =` this DAA, `next_epoch = 1`, and `next_check_daa = next_due_daa` = the
+  first grid boundary strictly after this DAA [E1].
 - **Change** (row, `policy = Some`):
   - the line MUST still be governed at this DAA: past an opt-out's `effective_daa` a policy is
     refused until the line has dissolved, when it opts in afresh [D14];
@@ -577,6 +578,14 @@ becomes due:
   for the smallest `k` that lands after this DAA [D12] — so a grant vests on its step even on a line
   with nothing else to do, and a rollback can never reach an amount that should already have vested.
 
+**A wake-up is not a check** [D16]. An idle line also carries `next_check_daa`, the next grid boundary at which its
+trigger is examined, and `next_due_daa` is the smaller of that and its other due times. Only a block with
+`DAA ≥ next_check_daa` examines the trigger (§17.5.3 step 1), after which `next_check_daa` is the next boundary strictly
+after this DAA; a block that wakes the line for a vesting step, or an opt-out, examines nothing and leaves it. So a
+vesting step falling between two boundaries never opens an epoch (with the usage restarted and an epoch number spent)
+nor skips the boundary after it, and a jump past several boundaries still examines the trigger once, at the first block
+past them.
+
 The same computation runs after a rollback and after a policy that is in force at once [E28].
 
 A block whose DAA jumps past several times therefore applies all of them, in order, in that block.
@@ -593,8 +602,9 @@ Let `W` be the policy's windows. All times are fixed when the epoch opens.
    - `parent = head`, `previous = None` (the regression check joins at the draw, §17.10.2 [E20]);
    - `material` = the line's `pending_material`, which is reset;
    - `usage = 0`, `usage_since_daa = DAA`, `open_epoch = e`, `next_epoch = e + 1`.
-   The S1 budget for the period is set (§17.11.3). A line opting out does not open. Otherwise the
-   line's next check is the next boundary.
+   The S1 budget for the period is set (§17.11.3). A line opting out does not open. Whether or not it opens, the
+   line's next check is the next boundary strictly after this DAA [D16]; only a block at or past `next_check_daa`
+   makes the check.
 2. **`Open → Submission` at `t_fix`.** `dataset_root` is fixed over `material` (§17.6.1) and never
    changes [PALW-MIP-7].
 3. **`Submission → HoldOut` at `t_close`.** The candidate set freezes; `K = |candidates|` from here on

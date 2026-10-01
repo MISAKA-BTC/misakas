@@ -411,6 +411,12 @@ pub struct PalwImprovementLineV1 {
     pub open_epoch: Option<u64>,
     /// When the fold next advances the line (§17.5.2).
     pub next_due_daa: u64,
+    /// **The next grid boundary at which an idle line's trigger is examined** (§17.5.2) [D16]: the first multiple of
+    /// `grid` strictly after the line's last check — its creation, the decision that made it idle, a policy coming
+    /// into force on an idle line, or the last examination. `next_due_daa` is the smaller of this and the line's other
+    /// due times (a vesting step, an opt-out's effective DAA), so a line woken for a vesting step opens nothing: only
+    /// a boundary opens an epoch.
+    pub next_check_daa: u64,
     /// Submitters barred after a rollback, each with the DAA its bar ends (§17.10.3), at most
     /// [`PALW_IMPROVE_BARRED_MAX_V1`]; an expired bar is pruned when the line is advanced.
     pub barred: Vec<(PalwBondKeyV2, u64)>,
@@ -850,6 +856,7 @@ pub(crate) mod test_rows {
             next_epoch: 2,
             open_epoch: Some(1),
             next_due_daa: 6_400,
+            next_check_daa: 6_400,
             barred: vec![(bond(seed), 9_000)],
             last_promotion: None,
             regression_epoch: None,

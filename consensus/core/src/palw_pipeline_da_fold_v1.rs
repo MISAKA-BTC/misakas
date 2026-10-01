@@ -551,7 +551,28 @@ mod tests {
         let unit = PalwDaUnitV1::PipelineStepLeaf { stage: 1, index: 500 };
         let refused = run.try_at(FENCE, &[demand(claim_id, unit, OTHER)], None);
         assert!(matches!(refused, Err(PalwStateV2Error::DaAnswerMalformed { .. })), "no job recorded: {refused:?}");
-        run.s.improvement_eval_claims.insert(claim_id, (h64(10), 1, 0, PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0));
+        // The index is derived from the job table (`improvement_eval_jobs`), so the test records the job row that holds the
+        // claim and rebuilds the index, as every load and delta path does.
+        let job = crate::palw_improve_eval_v1::PalwEvalJobV1 {
+            line_id: h64(10),
+            epoch: 1,
+            item: 0,
+            subject: PalwEvalSubjectV1::Parent,
+            kind: PalwScoringKindV1::ExactMatch,
+            part: 0,
+            mode: crate::palw_improve_eval_v1::PalwEvalModeV1::Generate { seed: h64(0), max_new: 4, stop_ids: vec![] },
+        };
+        let claim = crate::palw_improve_eval_v1::PalwEvalClaimRefV1 {
+            claim_id,
+            executor: bond_key(PRODUCER),
+            accepted_daa: 2,
+            output_root: h64(32),
+            answer: None,
+            final_daa: None,
+            score: None,
+        };
+        run.s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: Some(claim) });
+        run.s.improvement_eval_claims = super::palw_improve_eval_fold_v1::palw_improve_eval_claims_index_v1(&run.s.improvement_eval_jobs);
         run.at(FENCE, &[demand(claim_id, unit, OTHER)], None);
         assert_eq!(run.session_units(&claim_id, OTHER), Some(vec![unit]));
         let (generative, gen_leaves) = gen_binding([9, 1030, 2]);
