@@ -155,7 +155,12 @@ impl Drop for Guard {
 }
 
 fn held(c: &Sd3Class) -> (GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2>, Guard) {
-    let path = std::env::temp_dir().join(format!("misaka-gen-sd3-{}.palwtir2", std::process::id()));
+    // A path of its own per call: the container is read from disk for as long as the class is held, and two tests of this file
+    // run at once (and the one that ends first deletes its file) — a shared name made the longer one read a vanished container
+    // ("no tensor supplied").
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = std::env::temp_dir()
+        .join(format!("misaka-gen-sd3-{}-{}.palwtir2", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let guard = Guard(path.clone());
     gen_write_declared_container_v1(&path, &c.declared, &c.weights, "{\"model_id\":\"palw-fixture/sd3-tiny\"}".to_string())
         .expect("the container");
