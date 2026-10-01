@@ -31,7 +31,8 @@
 //!   `docs/design/palw/tir/runtime-residency.md`): the program's dataflow tells the params every
 //!   forward reads whole (pinned) from those a route selects rows of (routed) and those an input
 //!   selects rows of (gathered); a residency serves the last two as the rows a `Gather` names, read
-//!   through the file descriptor, and computes the same bytes.
+//!   through the file descriptor, and computes the same bytes. [`lockstep`] steps several executors
+//!   of one parent's candidates a layer at a time over one such store.
 //!
 //! Node software only: `kaspa-consensus-core` never depends on this crate. The court runs the
 //! reference; the tests hold the two equal (golden vectors, whole programs, random programs,
@@ -43,6 +44,7 @@ pub mod exec;
 pub mod fused;
 pub mod kernels;
 pub mod layout;
+pub mod lockstep;
 #[cfg(feature = "node")]
 pub mod node;
 pub mod params;
@@ -55,6 +57,7 @@ pub mod tiers;
 pub use cone::eval_cone;
 pub use elem::{Buf, Elem, Slice};
 pub use exec::{NoSink, NodeValue, StepSink, TirExecutor};
+pub use lockstep::{TirLockstepV1, tir_lockstep_batch_v1};
 pub use params::{ParamData, TirParams};
 pub use plan::TirPlan;
 pub use rows::{TirRowCountsV1, TirRowSourceV1, TirRowsInMemoryV1};

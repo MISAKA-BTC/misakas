@@ -363,3 +363,113 @@ fn the_residency_policy_arithmetic() {
     assert_eq!(TirResidencyPolicyV1::PageCache.budget_for(100), None, "0 is the page cache");
     assert!(TirResidencyPolicyV1::Bytes(1).is_stated() && !TirResidencyPolicyV1::FifthWithin(1).is_stated());
 }
+
+/// Every committed value a step delivers, with its slot, and the step's logits.
+#[derive(Default)]
+struct Steps {
+    commits: Vec<(u32, Vec<i128>)>,
+}
+
+impl misaka_palw_tir_exec::StepSink for Steps {
+    fn node(&mut self, v: &misaka_palw_tir_exec::NodeValue<'_>) {
+        self.commits.push((v.slot, v.data.to_i128s()));
+    }
+}
+
+/// **RFC-0004's candidates, stepped in lockstep** (`TirLockstepV1`, runtime-residency.md §8): three
+/// composite candidates of one parent — the same program, three adapters — over the parent's store at
+/// its floor, on the same tokens. Each member's commits, logits and run state are what it computes
+/// stepped alone; and where the members run one after another the store reads every token's experts
+/// once per candidate, the batch reads them once: the first member's admission of a layer is the
+/// others' hits.
+#[test]
+fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_parents_rows_once() {
+    use misaka_palw_tir_exec::{TirExecutor, TirLockstepV1, tir_lockstep_batch_v1};
+    let dir = Scratch::new("lockstep");
+    let (parent, gens) = many_expert_moe(64, 2, 4);
+    let parent = node_common::flat(parent);
+    let (candidate, cgens) = many_expert_moe_candidate(64, 2, 4);
+    let candidate = node_common::flat(candidate);
+    let p = parent.params.len() as u32;
+    let pparams = tircommon::models::materialize(&parent, &gens, 51);
+    let ppath = write(&dir.0, "parent", &parent, &pparams);
+    let a = TirTiersV1::of(&parent, ALL_ROWS).arithmetic();
+    let resident = TirArtifactV1::open_with_rules(&ppath, TirResidencyPolicyV1::Bytes(a.floor_bytes), ALL_ROWS).unwrap();
+    let (parent_root, _) = resident.inventory_root().unwrap();
+    let parent_class = resident.class().unwrap().class_id(&parent_root);
+    let store = resident.weight_store().unwrap().clone();
+    // Three adapters: the candidate's program with three seeds' logit biases.
+    let mut candidates = Vec::new();
+    for seed in [61u64, 62, 63] {
+        let mut cparams = tircommon::models::materialize(&candidate, &cgens, seed);
+        for (key, t) in &pparams.tensors {
+            cparams.tensors.insert(*key, t.clone());
+        }
+        let plan = misaka_palw_tir_exec::TirPlan::compile(&candidate).unwrap();
+        let held = misaka_palw_tir_exec::TirParams::from_map(&plan, &cparams).unwrap();
+        let r = palw_tir_composite_ref_v1(parent_class, &candidate, p, &misaka_palw_tir_exec::node::TirParamsSourceV1(&held)).unwrap();
+        let spath = dir.0.join(format!("candidate-{seed}.palwtirs"));
+        let lay = layout(&candidate, 5, 2, 2, 64);
+        misaka_palw_tir_artifact::write_section_v1(
+            &spath,
+            &candidate,
+            p,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            "c".into(),
+            &mut |j, l| cparams.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}")),
+        )
+        .unwrap();
+        candidates.push(TirArtifactV1::open_composite_over(&resident, &spath, &r).unwrap());
+    }
+    assert!(candidates.iter().all(|c| Arc::ptr_eq(c.weight_store().unwrap(), &store)), "one store for the batch");
+    assert!(
+        candidates.iter().all(|c| c.own_pinned_bytes() == 48 * 16 + 48 * 4),
+        "each candidate pins its adapter and the embedding its tied head reads whole — the experts are the store's"
+    );
+    let tokens: Vec<u32> = (0..10).map(|i| (i * 11 + 5) % 48).collect();
+    // Each candidate alone, one after another.
+    let before_alone = store.stats();
+    let mut alone: Vec<Vec<(Vec<(u32, Vec<i128>)>, Vec<i128>)>> = Vec::new();
+    for c in &candidates {
+        let mut exec = TirExecutor::new(c.plan(), c.params()).unwrap();
+        let mut steps = Vec::new();
+        for t in &tokens {
+            let mut sink = Steps::default();
+            exec.step(*t, &mut sink).unwrap();
+            steps.push((sink.commits, exec.logits().1.to_i128s()));
+        }
+        alone.push(steps);
+    }
+    let after_alone = store.stats();
+    // The same candidates in lockstep.
+    let execs: Vec<TirExecutor<'_>> = candidates.iter().map(|c| TirExecutor::new(c.plan(), c.params()).unwrap()).collect();
+    let mut batch = TirLockstepV1::new(execs).unwrap();
+    for (k, t) in tokens.iter().enumerate() {
+        let mut sinks: Vec<Steps> = (0..candidates.len()).map(|_| Steps::default()).collect();
+        let mut refs: Vec<&mut dyn misaka_palw_tir_exec::StepSink> =
+            sinks.iter_mut().map(|s| s as &mut dyn misaka_palw_tir_exec::StepSink).collect();
+        let results = batch.step(&vec![*t; candidates.len()], &mut refs);
+        assert!(results.iter().all(|r| r.is_ok()), "{results:?}");
+        for (i, (sink, member)) in sinks.into_iter().zip(batch.members()).enumerate() {
+            assert_eq!(sink.commits, alone[i][k].0, "candidate {i} position {k}: the commits it computes alone");
+            assert_eq!(member.logits().1.to_i128s(), alone[i][k].1, "candidate {i} position {k}: its logits");
+        }
+    }
+    let after_batch = store.stats();
+    let (sequential, lockstep) = (
+        after_alone.routed_bytes_read - before_alone.routed_bytes_read,
+        after_batch.routed_bytes_read - after_alone.routed_bytes_read,
+    );
+    eprintln!("routed rows read: {sequential} bytes one candidate after another, {lockstep} in lockstep");
+    assert!(lockstep * 2 < sequential, "the batch reads a layer's rows once: {lockstep} vs {sequential}");
+    assert_eq!(after_batch.whole_reads, 0);
+    // The bound: a layer's admission of every member held at once.
+    assert_eq!(
+        tir_lockstep_batch_v1(after_batch.routed_capacity_bytes, after_batch.in_flight_bytes, 0, 0),
+        4,
+        "the floor holds 4 layers' worth"
+    );
+    assert_eq!(tir_lockstep_batch_v1(1 << 20, 0, 1 << 10, 1 << 12), 4, "memory alone bounds a batch with no routed rows");
+    assert_eq!(tir_lockstep_batch_v1(0, 1, 1, 0), 1, "at least one");
+}

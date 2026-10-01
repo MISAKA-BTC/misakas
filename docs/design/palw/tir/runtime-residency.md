@@ -80,7 +80,7 @@ for every node's value) with the whole instance, read once and counted (`TirRowC
 — so no committed byte depends on the classification being right. The tests assert the count stays
 zero on every path the typed executor and the court take. (RFC-0004's evaluation executor runs the
 reference interpreter, whose `ParamSource` asks for whole tensors: under a residency those are whole
-reads, counted, of the instances the store serves by rows — the evaluation path is §8's last item.)
+reads, counted, of the instances the store serves by rows — §8.)
 
 ## 3. The budget and the floor
 
@@ -186,10 +186,45 @@ routed rows touch at the cold expected union — 116 GiB at 845 MB/s is ~2.5 min
 against ~3 h at the fault rate (11 MB/s). The registration preflight (`tir/residency-preflight`)
 prints these terms for any program before conversion.
 
-## 8. Not done here
+## 8. Candidates of one parent, weight-stationary (`misaka-palw-tir-exec/src/lockstep.rs`)
+
+**The API.** `TirLockstepV1` steps several executors — a parent's composite candidates, over the one
+store they share — a position at a time and an OCCURRENCE at a time: every member's layer `L`
+before any member's layer `L + 1`. A layer's parent weights then serve the whole batch while they
+are at hand: its pinned weights pass through the CPU's caches once instead of once per candidate, and
+its routed rows are admitted once — the first member's admission reads them, the rest find them
+held. Activations, states and adapters stay each member's own. The executor's step is cut at
+occurrence boundaries (`begin_step`, `run_occurrences`, `end_step`: `step_opt` is exactly the three in
+sequence), so each member computes what it computes stepped alone; `tir_lockstep_batch_v1` bounds a
+batch by the routed capacity over one admission (every member's admission of a layer held at once)
+and by each member's working memory within what the host spares.
+
+**Measured** (debug, `residency_node.rs`): three candidates of the 64-expert test mixture over the
+parent's store at its floor, ten positions on the same tokens — every member's commits and logits
+equal to the member run alone; **102,144 bytes of routed rows read one candidate after another,
+34,048 in lockstep**: a third, the batch size (one after another re-reads every token's experts once
+per candidate; the batch reads them once). The candidates share the store's rows because a
+candidate's tiers are read under its parent store's rules; each pins only its adapter and the
+embedding its tied head reads whole.
+
+**Why the RFC-0004 duty does not call it yet** (measured against the code, not guessed):
+
+* the evaluation executor runs the **reference interpreter** (`palw_eval_run_v1` →
+  `palw_gen_execute_v1` → `InterpreterV2`, params through `ParamSource` as whole `i128` tensors), whose
+  cost is the interpreter's arithmetic, not the weights' reads — batching it would not move it;
+* evaluation duties do not co-occur **in time**: the loop runs one job at a time
+  (`PALW_IMPROVE_MAX_RUNNING_V1 = 1`); they do co-occur in the **plan** — `palw_improve_duties_v1`
+  orders an epoch's tasks item first, subject second, so one item's jobs over every held candidate of
+  a parent are adjacent and share their inputs. When the evaluation executor moves to the typed
+  executor (byte-identical to the reference, held by the differential gates), those adjacent tasks
+  are a lockstep batch as they stand: same parent store, same prompt, one step per position.
+
+So the executor API and its identity tests ship; the duty keeps its executor.
+
+## 9. Not done here
 
 * **Reading and computing a layer overlapped** (ADR-0112 §8's last bullet): an admission reads a
   group, then the gathers compute it.
 * **Promotion**: a row hot enough to be worth pinning is still an LRU entry.
-* **Candidate-batched evaluation** (RFC-0004 eval duties, weight-stationary over one parent's store):
-  lane M2's next item.
+* **The evaluation executor on the typed backend**, which would make RFC-0004's adjacent same-item
+  tasks a lockstep batch (§8).
