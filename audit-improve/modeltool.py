@@ -22,6 +22,11 @@ head's composite. This script is that somebody for the drills. It needs torch an
           lose  greedy decode differs from the key at every item (the candidate fails every item)
           noop  B = 0: the parent's own behaviour (a candidate that changes nothing)
         Prints one JSON line: the float model's pass count and the smallest margin.
+  modeltool.py merge   --fixture <hf dir> --adapter <adapter dir> --out <merged hf dir>
+        the adapter merged into the weights (W + s·B·A, F32): a FULL-WEIGHT candidate's checkpoint, which
+        palw-tir-fidelity lowers as a model of its own (RFC-0004 §6.4: a candidate that cannot reuse its
+        parent's scales is full weights). The drills use it while a composite class cannot yet prove
+        readiness (see audit-improve/README in dm.sh plan).
 """
 import argparse
 import json
@@ -29,6 +34,10 @@ import math
 import os
 import random
 import sys
+
+# The Mac is shared with other lanes: torch gets two threads, never every core.
+for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_var, "2")
 
 FREE_LO = 3  # ids 0 (pad), 1 (BOS) and 2 (EOS) are never part of a pool's prompts or keys
 
@@ -92,6 +101,7 @@ def cmd_train(a):
     import torch
     from safetensors.torch import save_file
 
+    torch.set_num_threads(2)
     torch.manual_seed(a.seed)
     model = load_model(a.fixture)
     spec = json.load(open(a.items))
@@ -179,6 +189,48 @@ def cmd_train(a):
     print(json.dumps(result))
 
 
+def cmd_merge(a):
+    import shutil
+
+    import torch
+
+    torch.set_num_threads(2)
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    cfg = json.load(open(os.path.join(a.adapter, "adapter_config.json")))
+    s = cfg["lora_alpha"] / cfg["r"]
+    ad = {}
+    with safe_open(os.path.join(a.adapter, "adapter_model.safetensors"), "pt") as f:
+        for k in f.keys():
+            ad[k] = f.get_tensor(k).to(torch.float32)
+    tensors = {}
+    src = os.path.join(a.fixture, "model.safetensors")
+    merged = 0
+    with safe_open(src, "pt") as f:
+        for k in f.keys():
+            w = f.get_tensor(k).to(torch.float32)
+            stem = k[: -len(".weight")] if k.endswith(".weight") else None
+            if stem is not None:
+                ka, kb = f"base_model.model.{stem}.lora_A.weight", f"base_model.model.{stem}.lora_B.weight"
+                if ka in ad and kb in ad:
+                    w = w + s * (ad[kb] @ ad[ka])
+                    merged += 1
+            tensors[k] = w.contiguous()
+    if merged * 2 != len(ad):
+        sys.exit(f"merged {merged} modules but the adapter has {len(ad)} tensors: a tensor was not read")
+    os.makedirs(a.out, exist_ok=True)
+    save_file(tensors, os.path.join(a.out, "model.safetensors"), metadata={"format": "pt"})
+    c = json.load(open(os.path.join(a.fixture, "config.json")))
+    c["dtype"] = "float32"
+    c["torch_dtype"] = "float32"
+    json.dump(c, open(os.path.join(a.out, "config.json"), "w"), indent=2)
+    for extra in ("generation_config.json", "tokenizer.json", "tokenizer_config.json"):
+        if os.path.exists(os.path.join(a.fixture, extra)):
+            shutil.copy(os.path.join(a.fixture, extra), os.path.join(a.out, extra))
+    print(json.dumps({"merged_modules": merged, "tensors": len(tensors), "out": a.out}))
+
+
 def main():
     if os.environ.get("HF_HUB_OFFLINE") != "1":
         sys.exit("refusing to run without HF_HUB_OFFLINE=1 (the drills never download)")
@@ -209,6 +261,11 @@ def main():
     p.add_argument("--margin", type=float, default=3.0)
     p.add_argument("--seed", type=int, default=7)
     p.set_defaults(fn=cmd_train)
+    p = sub.add_parser("merge")
+    p.add_argument("--fixture", required=True)
+    p.add_argument("--adapter", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_merge)
     a = ap.parse_args()
     a.fn(a)
 

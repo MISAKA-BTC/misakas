@@ -966,7 +966,14 @@ mod tests {
     fn params() -> PalwStateParamsV2 {
         let p = crate::config::params::palw_t12_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
-        bundle.state.clone().with_improve_from_daa(Some(ACTIVE)).with_improve_ceilings(Some(PALW_DRILL_IMPROVE_CEILINGS_V1))
+        // The evaluation court's moves ride the IR court's tag 62: `palw_tir_v1` is in force from ACTIVE as well (the shipped schedule arms it at the
+        // RFC-0002 flag day, above these tests' DAA).
+        bundle
+            .state
+            .clone()
+            .with_tir_from_daa(Some(ACTIVE))
+            .with_improve_from_daa(Some(ACTIVE))
+            .with_improve_ceilings(Some(PALW_DRILL_IMPROVE_CEILINGS_V1))
     }
 
     /// One ExactMatch stage, eight items, a four-id budget and no stops.
@@ -2902,8 +2909,8 @@ mod tests {
         assert!(before.reserved > 0 && matches!(before.phase, PalwClaimPhaseV2::Provisional));
 
         // The close of the lie's leaf convicts; the close of an earlier leaf of the same claim acquits.
-        let claim = s1.claims[&id].clone();
-        let evidence = evidence_of(&s1, &lying, &claim);
+        let accused_claim = s1.claims[&id].clone();
+        let evidence = evidence_of(&s1, &lying, &accused_claim);
         let (guilty, verdict) = accusation_of(&s1, id, BOB, cone_proof(&evidence, last as u64));
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "the lie's own leaf");
         let (defeated, verdict) = accusation_of(&s1, id, BOB, cone_proof(&evidence, 0));

@@ -133,6 +133,20 @@ pub(crate) fn palw_improve_log_tick_v1(tick: &PalwImproveTickV1) {
 }
 
 /// A bond key as `txid:index`.
+/// A candidate's (or the regression check's) promotion counts as JSON: wins, losses and ties per kind and
+/// whether the candidate is eligible.
+fn counts_json(k: kaspa_consensus_core::palw_improve_state_v1::PalwPromotionCountsV1) -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "primary": {"wins": k.primary.wins, "losses": k.primary.losses, "ties": k.primary.ties},
+        "regression": {"wins": k.regression.wins, "losses": k.regression.losses, "ties": k.regression.ties},
+        "safety": {"wins": k.safety.wins, "losses": k.safety.losses, "ties": k.safety.ties},
+        "judge": {"wins": k.judge.wins, "losses": k.judge.losses, "ties": k.judge.ties},
+        "pairwise": {"wins": k.pairwise.wins, "losses": k.pairwise.losses, "ties": k.pairwise.ties},
+        "eligible": k.eligible,
+    })
+}
+
 fn bond_text(bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> String {
     format!("{}:{}", bond.0.transaction_id, bond.0.index)
 }
@@ -175,6 +189,7 @@ pub(crate) fn palw_improve_status_json_v1(
                         },
                         "outcome": h.outcome.map(|o| format!("{o:?}")),
                         "decided_daa": h.decided_daa,
+                        "previous_counts": h.previous_counts.map(counts_json),
                         "retire": format!("{:?}", h.retire),
                         "escrow": {
                             "parent": h.escrow.parent, "parent_spent": h.escrow.parent_spent,
@@ -189,14 +204,7 @@ pub(crate) fn palw_improve_status_json_v1(
                             },
                             "fee_paid": c.fee_paid, "bond": c.bond, "escrow": c.escrow, "escrow_spent": c.escrow_spent,
                             "submitted_daa": c.submitted_daa,
-                            "counts": c.counts.map(|k| json!({
-                                "primary": {"wins": k.primary.wins, "losses": k.primary.losses, "ties": k.primary.ties},
-                                "regression": {"wins": k.regression.wins, "losses": k.regression.losses, "ties": k.regression.ties},
-                                "safety": {"wins": k.safety.wins, "losses": k.safety.losses, "ties": k.safety.ties},
-                                "judge": {"wins": k.judge.wins, "losses": k.judge.losses, "ties": k.judge.ties},
-                                "pairwise": {"wins": k.pairwise.wins, "losses": k.pairwise.losses, "ties": k.pairwise.ties},
-                                "eligible": k.eligible,
-                            })),
+                            "counts": c.counts.map(counts_json),
                         })).collect::<Vec<_>>(),
                         "grants": e.grants.iter().map(|g| json!({
                             "recipient": bond_text(&g.recipient), "stage": format!("{:?}", g.stage), "amount": g.amount,
@@ -218,6 +226,9 @@ pub(crate) fn palw_improve_status_json_v1(
                 "next_check_daa": l.line.next_check_daa,
                 "policy_sequence": l.line.policy_sequence,
                 "governed_from_daa": l.line.governed_from_daa,
+                "last_promotion": l.line.last_promotion.map(|p| json!({"epoch": p.epoch, "owner_until_daa": p.owner_until_daa, "ban_daa": p.ban_daa})),
+                "regression_epoch": l.line.regression_epoch,
+                "regression_check": l.line.regression_check.map(|c| c.to_string()),
                 "barred": l.line.barred.iter().map(|(b, until)| json!({"bond": bond_text(b), "until": until})).collect::<Vec<_>>(),
                 "usage": l.usage.map(|u| json!({"usage": u.usage.to_string(), "since_daa": u.since_daa})),
                 "pool": l.pool.map(|p| json!({
@@ -262,6 +273,7 @@ pub(crate) fn palw_improve_status_json_v1(
                         "subject": subject,
                         "subject_class": class.map(|c| c.to_string()),
                         "kind": format!("{:?}", j.job.kind),
+                        "part": j.job.part,
                         "claim": j.claim.as_ref().map(|c| json!({
                             "id": c.claim_id.to_string(),
                             "bond": bond_text(&c.bond),
@@ -276,7 +288,138 @@ pub(crate) fn palw_improve_status_json_v1(
             })
         })
         .collect();
-    json!({ "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines, "evaluation": evaluation })
+    // The composite candidate classes the chain recorded: what a seat's possession proof of one opens (the adapter
+    // section's root), kept for as long as the class lives.
+    let composite_classes: Vec<serde_json::Value> = status
+        .composite_classes
+        .iter()
+        .map(|(class, r)| {
+            json!({
+                "class": class.to_string(), "parent_class": r.parent_class.to_string(), "parent_root": r.parent_root.to_string(),
+                "adapter_root": r.adapter_root.to_string(), "p": r.p,
+            })
+        })
+        .collect();
+    json!({
+        "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines, "evaluation": evaluation,
+        "composite_classes": composite_classes,
+    })
+}
+
+/// Which of a line's evaluations a drill's lie may spoil: those of the parent (the line's head), or those of a candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwImproveTamperSubjectV1 {
+    Parent,
+    Candidate,
+}
+
+/// **A drill's tamper** (`--palw-drill-tamper-eval=<fault>[@<line>][/<parent|candidate>]`): the fault this node's executor
+/// commits ([`PalwEvalFaultV1`]: `leaf:<index>`, `output` or `score`), the line whose evaluation it spoils — a hex prefix of
+/// the line id, empty for any — and which subject's evaluations (a parent's, a candidate's, or either). One lie per node: it
+/// lies on a matching evaluation until a lie lands on the chain ([`PalwImproveLieV1`]), then is honest (a convicted bond is slashed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PalwImproveTamperV1 {
+    pub fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1,
+    pub line_prefix: String,
+    pub subject: Option<PalwImproveTamperSubjectV1>,
+}
+
+impl PalwImproveTamperV1 {
+    /// Does the tamper spoil an evaluation of this line, for this subject?
+    pub(crate) fn applies_to(&self, line: &Hash64, subject: &kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1) -> bool {
+        use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1 as S;
+        line.to_string().starts_with(&self.line_prefix)
+            && match (self.subject, subject) {
+                (None, _) => true,
+                (Some(PalwImproveTamperSubjectV1::Parent), S::Parent) => true,
+                (Some(PalwImproveTamperSubjectV1::Candidate), S::Candidate(_)) => true,
+                _ => false,
+            }
+    }
+}
+
+/// Parse `--palw-drill-tamper-eval`'s value: `<fault>`, optionally `@<line hex prefix>` and `/<parent|candidate>`.
+pub(crate) fn palw_improve_tamper_spec_v1(spec: &str) -> Result<PalwImproveTamperV1, String> {
+    let (rest, subject) = match spec.rsplit_once('/') {
+        Some((rest, "parent")) => (rest, Some(PalwImproveTamperSubjectV1::Parent)),
+        Some((rest, "candidate")) => (rest, Some(PalwImproveTamperSubjectV1::Candidate)),
+        Some((_, other)) => return Err(format!("`{other}` is not a subject: parent or candidate")),
+        None => (spec, None),
+    };
+    let (fault, line) = match rest.split_once('@') {
+        Some((fault, line)) => (fault, line.trim().to_ascii_lowercase()),
+        None => (rest, String::new()),
+    };
+    if !line.chars().all(|c| c.is_ascii_hexdigit()) || line.len() > 128 {
+        return Err(format!("`{line}` is not a hex prefix of a line id"));
+    }
+    Ok(PalwImproveTamperV1 { fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1::parse(fault)?, line_prefix: line, subject })
+}
+
+/// A carried lie waits this many DAA for the chain to show it before it is given up as lost (the carrier never mined).
+pub(crate) const PALW_IMPROVE_LIE_PATIENCE_DAA_V1: u64 = 36;
+
+/// **Where a drill liar's lie stands** — one lie per node, told until it lands. Two executors race for every evaluation job
+/// (the first valid claim takes it), so a lie that loses the race is no lie told: the liar keeps lying on matching jobs, one at a
+/// time, until the chain holds a lying claim of its own; then it is honest, and a bond is slashed once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PalwImproveLieV1 {
+    /// No lie in flight: the next matching evaluation is run with the fault.
+    #[default]
+    Idle,
+    /// The faulted run of this job is running or waits for a carrier.
+    Pending { job: Hash64 },
+    /// The lying claim was carried at `daa` and the chain's view does not show it yet.
+    Carried { job: Hash64, claim: Hash64, daa: u64 },
+    /// The chain holds the lying claim: the lie is told.
+    Spent,
+}
+
+/// **A carried lie against the chain's view of its job** (`claim_of_job`: the claim the view holds for it, if any): landed when the
+/// view's claim is the lie's; lost (told again on the next job) when another claim took the job, or when nothing shows after the
+/// patience.
+pub(crate) fn palw_improve_lie_carried_step_v1(
+    job: Hash64,
+    claim: Hash64,
+    carried_daa: u64,
+    claim_of_job: Option<Hash64>,
+    daa: u64,
+) -> PalwImproveLieV1 {
+    match claim_of_job {
+        Some(c) if c == claim => PalwImproveLieV1::Spent,
+        Some(_) => PalwImproveLieV1::Idle,
+        None if daa > carried_daa.saturating_add(PALW_IMPROVE_LIE_PATIENCE_DAA_V1) => PalwImproveLieV1::Idle,
+        None => PalwImproveLieV1::Carried { job, claim, daa: carried_daa },
+    }
+}
+
+/// **A dispute this node found**: an evaluation claim whose replay on this node's weights differs, with where it
+/// parts from the honest run when the accused's capture was at hand, and how the dispute stands (what was filed, or
+/// why nothing was).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PalwImproveDisputeV1 {
+    pub claim_id: Hash64,
+    pub job_id: Hash64,
+    /// `leaf`, `output` or `score` (located from the capture), or `unlocated`: the replay differs and nothing says where.
+    pub kind: &'static str,
+    pub detail: String,
+    pub found_daa: u64,
+    pub filing: String,
+}
+
+/// The disputes as the status file lists them.
+pub(crate) fn palw_improve_disputes_json_v1(disputes: &[PalwImproveDisputeV1]) -> serde_json::Value {
+    serde_json::Value::Array(
+        disputes
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "claim": d.claim_id.to_string(), "job": d.job_id.to_string(), "kind": d.kind, "detail": d.detail,
+                    "found_daa": d.found_daa, "filing": d.filing,
+                })
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -352,7 +495,11 @@ mod tests {
         };
         assert_eq!(palw_improve_admitting_classes_v1(None), None, "no registry read: every class is planned");
         assert_eq!(palw_improve_admitting_classes_v1(Some(&read(false, 500, None))), None, "an inactive registry governs nothing");
-        assert_eq!(palw_improve_admitting_classes_v1(Some(&read(true, 50, None))), None, "inside the grace nothing is judged by evidence");
+        assert_eq!(
+            palw_improve_admitting_classes_v1(Some(&read(true, 50, None))),
+            None,
+            "inside the grace nothing is judged by evidence"
+        );
         assert_eq!(
             palw_improve_admitting_classes_v1(Some(&read(true, 500, None))),
             Some([h(1), h(4), h(5), h(6), h(8)].into()),
@@ -370,7 +517,8 @@ mod tests {
         let mut chain: PalwImproveMemChainV1 = misaka_palw_sdk::improve::testing::chain(PalwEpochStateV1::Submission, false);
         let line = h(misaka_palw_sdk::improve::testing::LINE);
         let head = h(misaka_palw_sdk::improve::testing::HEAD);
-        let mut node = PalwImproveNodeV1 { holds: [head].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
+        let mut node =
+            PalwImproveNodeV1 { holds: [head].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
         let mut watch = PalwImproveWatchV1::default();
         let tick = watch.tick(&chain, &node, 160);
         assert_eq!(tick.moved, vec![(line, 3, PalwEpochStateV1::Submission)]);
@@ -420,6 +568,81 @@ mod tests {
         assert_eq!(json["daa"], 123);
         assert_eq!(json["lines"], serde_json::json!([]));
         assert_eq!(json["evaluation"], serde_json::json!([]));
+        assert_eq!(json["composite_classes"], serde_json::json!([]));
+    }
+
+    /// **The status lists the chain's composite classes** (what a seat's possession proof of one opens), and the
+    /// drill's tamper spec and dispute records have their one reader each.
+    #[test]
+    fn the_status_lists_composite_classes_and_the_drill_specs_parse() {
+        use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
+        use misaka_palw_sdk::improve_eval::PalwEvalFaultV1;
+        let status = kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1 {
+            lines: vec![],
+            composite_classes: vec![(
+                h(0xC1),
+                PalwTirCompositeRefV1 { parent_class: h(0xA0), parent_root: h(0xA1), adapter_root: h(0xA2), p: 17 },
+            )],
+        };
+        let json = palw_improve_status_json_v1(&status, &[], 5);
+        let c = &json["composite_classes"][0];
+        assert_eq!(c["class"], h(0xC1).to_string());
+        assert_eq!(
+            (c["parent_class"].as_str(), c["adapter_root"].as_str(), c["p"].as_u64()),
+            (Some(h(0xA0).to_string().as_str()), Some(h(0xA2).to_string().as_str()), Some(17))
+        );
+        // The tamper spec.
+        use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1 as Subject;
+        let any = palw_improve_tamper_spec_v1("leaf:7").expect("a spec");
+        assert_eq!((any.fault, any.line_prefix.as_str(), any.subject), (PalwEvalFaultV1::Leaf(7), "", None));
+        assert!(any.applies_to(&h(1), &Subject::Parent) && any.applies_to(&h(2), &Subject::Candidate(h(9))));
+        let line = h(0x11E).to_string();
+        let one = palw_improve_tamper_spec_v1(&format!("output@{line}")).expect("a spec with a line");
+        assert_eq!(one.fault, PalwEvalFaultV1::Output);
+        assert!(one.applies_to(&h(0x11E), &Subject::Parent) && !one.applies_to(&h(0x11F), &Subject::Parent), "only the named line");
+        assert_eq!(palw_improve_tamper_spec_v1("score@AB").expect("case-insensitive").line_prefix, "ab");
+        for bad in ["", "leaf", "leaf:x", "tree", "leaf:1@zz", "leaf:1@ab/grandparent", "output/"] {
+            assert!(palw_improve_tamper_spec_v1(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(palw_improve_tamper_spec_v1("output@").expect("an empty line is any").line_prefix, "");
+        // A subject pin: a parent's evaluations, or a candidate's (a composite's among them), never both.
+        let cand = palw_improve_tamper_spec_v1(&format!("leaf:1@{line}/candidate")).expect("a pinned spec");
+        assert_eq!((cand.fault, cand.subject), (PalwEvalFaultV1::Leaf(1), Some(PalwImproveTamperSubjectV1::Candidate)));
+        assert!(cand.applies_to(&h(0x11E), &Subject::Candidate(h(7))) && !cand.applies_to(&h(0x11E), &Subject::Parent));
+        assert!(!cand.applies_to(&h(0x11E), &Subject::Previous(h(7))), "the regression check's incumbent is neither");
+        let parent = palw_improve_tamper_spec_v1("output@/parent").expect("a subject without a line");
+        assert_eq!((parent.line_prefix.as_str(), parent.subject), ("", Some(PalwImproveTamperSubjectV1::Parent)));
+        assert!(parent.applies_to(&h(5), &Subject::Parent) && !parent.applies_to(&h(5), &Subject::Candidate(h(7))));
+        // The dispute records.
+        let json = palw_improve_disputes_json_v1(&[PalwImproveDisputeV1 {
+            claim_id: h(1),
+            job_id: h(2),
+            kind: "leaf",
+            detail: "leaf 9".to_string(),
+            found_daa: 77,
+            filing: "not filed".to_string(),
+        }]);
+        assert_eq!(
+            (json[0]["kind"].as_str(), json[0]["found_daa"].as_u64(), json[0]["claim"].as_str()),
+            (Some("leaf"), Some(77), Some(h(1).to_string().as_str()))
+        );
+        assert_eq!(palw_improve_disputes_json_v1(&[]), serde_json::json!([]));
+    }
+
+    /// **A drill liar's lie is told until it lands** (two executors race for every job): a carried lie is spent when the chain's view
+    /// holds its claim, lost — to tell again — when another claim took its job or nothing shows within the patience.
+    #[test]
+    fn a_carried_lie_is_spent_when_it_lands_and_told_again_when_it_is_lost() {
+        let (job, lie, other) = (h(0x70B), h(0x11E), h(0x07E));
+        let carried = PalwImproveLieV1::Carried { job, claim: lie, daa: 100 };
+        let step = |claim_of_job, daa| palw_improve_lie_carried_step_v1(job, lie, 100, claim_of_job, daa);
+        assert_eq!(step(Some(lie), 103), PalwImproveLieV1::Spent, "the chain holds the lying claim");
+        assert_eq!(step(Some(lie), 400), PalwImproveLieV1::Spent, "however late the view shows it");
+        assert_eq!(step(Some(other), 103), PalwImproveLieV1::Idle, "another claim took the job: the lie lost the race");
+        assert_eq!(step(None, 105), carried, "nothing yet, within the patience: wait");
+        assert_eq!(step(None, 100 + PALW_IMPROVE_LIE_PATIENCE_DAA_V1), carried, "the patience is not past");
+        assert_eq!(step(None, 101 + PALW_IMPROVE_LIE_PATIENCE_DAA_V1), PalwImproveLieV1::Idle, "never mined: tell it again");
+        assert_eq!(PalwImproveLieV1::default(), PalwImproveLieV1::Idle);
     }
 
     /// **The status file carries the evaluation view** — the drill's watcher counts the claims, their
@@ -441,6 +664,7 @@ mod tests {
             item: 1,
             subject: PalwEvalSubjectV1::Candidate(h(0xC1)),
             kind: PalwScoringKindV1::ExactMatch,
+            part: 0,
             mode: PalwEvalModeV1::Generate { seed: h(5), max_new: 3, stop_ids: vec![] },
         };
         let view = PalwImprovementEvalViewV1 {
@@ -465,7 +689,7 @@ mod tests {
                 },
             ],
             jobs: vec![PalwImprovementEvalJobViewV1 {
-                key: (line, 3, 1, job.subject, job.kind),
+                key: (line, 3, 1, job.subject, job.kind, job.part),
                 job,
                 claim: Some(PalwImprovementEvalClaimViewV1 {
                     claim_id: h(0xC1A),
@@ -483,14 +707,20 @@ mod tests {
         };
         let json = palw_improve_status_json_v1(&Default::default(), &[view], 400);
         let e = &json["evaluation"][0];
-        assert_eq!((e["epoch"].as_u64(), e["items"].as_array().map(Vec::len), e["jobs"].as_array().map(Vec::len)), (Some(3), Some(2), Some(1)));
+        assert_eq!(
+            (e["epoch"].as_u64(), e["items"].as_array().map(Vec::len), e["jobs"].as_array().map(Vec::len)),
+            (Some(3), Some(2), Some(1))
+        );
         assert_eq!((e["items"][0]["prompt_disclosed"].as_bool(), e["items"][0]["prompt_len"].as_u64()), (Some(true), Some(4)));
         assert_eq!((e["items"][1]["prompt_disclosed"].as_bool(), e["items"][1]["dropped"].as_bool()), (Some(false), Some(true)));
         assert_eq!(e["items"][0]["reference"], "ExactKey");
         let j = &e["jobs"][0];
         assert_eq!((j["subject"].as_str(), j["kind"].as_str(), j["item"].as_u64()), (Some("Candidate"), Some("ExactMatch"), Some(1)));
         assert_eq!(j["subject_class"].as_str(), Some(h(0xC1).to_string().as_str()));
-        assert_eq!((j["claim"]["accepted_daa"].as_u64(), j["claim"]["final_daa"].as_u64(), j["claim"]["voided"].as_bool()), (Some(351), Some(502), Some(false)));
+        assert_eq!(
+            (j["claim"]["accepted_daa"].as_u64(), j["claim"]["final_daa"].as_u64(), j["claim"]["voided"].as_bool()),
+            (Some(351), Some(502), Some(false))
+        );
         assert_eq!(j["claim"]["bond"], format!("{}:2", TransactionId::from_u64_word(9)));
     }
 }

@@ -138,7 +138,7 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
     let seed = palw_improve_eval_seed_v1(&epoch_seed, 7);
     let mode = PalwEvalModeV1::Generate { seed, max_new: 4, stop_ids: vec![] };
     let subject = PalwEvalSubjectV1::Candidate(held.class_id);
-    let job = PalwEvalJobV1 { line_id: Hash64::from_bytes([0x11; 64]), epoch: 3, item: 7, subject, kind: PalwScoringKindV1::ExactMatch, mode: mode.clone() };
+    let job = PalwEvalJobV1 { line_id: Hash64::from_bytes([0x11; 64]), epoch: 3, item: 7, subject, kind: PalwScoringKindV1::ExactMatch, part: 0, mode: mode.clone() };
     let task = PalwImproveEvalTaskV1 {
         line_id: job.line_id,
         epoch: 3,

@@ -710,9 +710,26 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
                     Some(f) => f.ceilings,
                     None => kaspa_consensus_core::palw_improve_v1::PALW_DRILL_IMPROVE_CEILINGS_V1,
                 };
-                kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_check_v1(p, &ceilings)
+                // Λ, the ruleset's fast honest claim path (spec 17 §17.4.3 rows 19-20): the anchor slot, the licence allowance and the
+                // challenge window in force where the policy is applied (here: at the improvement fence's height, else DAA 0) — the
+                // bound the epoch's windows are held to.
+                let lifecycle = match &params.palw_consensus_mode {
+                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                        let at = params.palw_improvement_v1.map_or(0, |f| f.activation.daa_score());
+                        Some(kaspa_consensus_core::palw_improve_v1::palw_improvement_claim_lifecycle_v1(
+                            kaspa_consensus_core::palw_improve_v1::palw_improvement_claim_lifecycle_base_v1(bundle),
+                            bundle.state.window_challenge_at(at),
+                        ))
+                    }
+                    _ => None,
+                };
+                kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_check_v1(p, &ceilings, lifecycle)
                     .map_err(|why| format!("the policy would be refused: {why}"))?;
                 println!("policy check      ok under {} ceilings", if params.palw_improvement_v1.is_some() { "the network's" } else { "the drill's" });
+                match lifecycle {
+                    Some(l) => println!("claim lifecycle   {l} DAA (court_margin must be at least this)"),
+                    None => println!("claim lifecycle   not asked (this network has no V2 bundle)"),
+                }
                 println!("policy digest     {}", kaspa_consensus_core::palw_improve_state_v1::palw_improvement_policy_digest_v1(p));
                 println!("epoch length L_e  {} DAA", kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_epoch_length_v1(&p.windows));
             }

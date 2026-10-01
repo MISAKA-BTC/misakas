@@ -1,0 +1,399 @@
+{
+  "_comment": "The D-M drills' plan (RFC-0004 A13), the int-11 combined chain's D-M part. Read by dmdrive.py and printed by `dm.sh plan`. Heights are DAA of the drill chain; at the observed ~133 s per DAA (27.7 DAA/h) 300 DAA is ~10.8 h. No window flag exists on a drill chain (the shipping rules stand), so the windows are POLICY values bounded below by the ruleset: court_margin 175 holds Λ = anchor 20 + licence allowance 30 + challenge 120 = 170; E18: grid > L_e. Full-weight lines: collect 3, submit 10, holdout 5, eval 60, court_margin 175: L_e = 253, grid 255 — the first boundary after the head's first Final claim (~252: probation ~92 + licence + the 120-DAA challenge window). W1 and T hold composite candidates (parent + adapter section) and take the long Submission window (`policy_composite`: w_submit 120, L_e 363, grid 370): a composite's possession proofs wait for its record, so its admission jury (up to one 100-DAA audit period away) must fit inside Submission. L's hold-out is 14 (D-M6's flood is 40 carriers, one per 25 s: ~7.5 DAA; L_e 262, grid 270). R carries D-M4 by proof: epoch 1 decides ~500, the promoted head's first Final claim lands ~690, epoch 2 opens at the 765 boundary and is decided ~1,010 (36.6 h), the run's end. A setter set holds at most n items (spec 17 §17.6.2), so every pool is cut into sets of eight. CAND_FORM=full makes every line full-weight (and short).",
+  "policy": {
+    "usage": {
+      "measure": "claims",
+      "value": 1
+    },
+    "windows": {
+      "grid": 255,
+      "w_collect": 3,
+      "w_submit": 10,
+      "w_holdout": 5,
+      "w_eval": 60,
+      "beacon_delay": 4,
+      "court_margin": 175
+    },
+    "eval": {
+      "stages": [
+        {
+          "kind": "exact_match",
+          "open": -1,
+          "close": -1,
+          "key_cap": 3
+        }
+      ],
+      "regression_items": 0,
+      "safety_items": 0,
+      "n": 8,
+      "n_min": 6,
+      "delta_permille": 50,
+      "epsilon_permille": 50,
+      "epsilon_safety_permille": 0,
+      "alpha_permille": 50,
+      "max_new_tokens": 3,
+      "stop_ids": [],
+      "setter_cap_permille": 1000,
+      "max_eval_positions": 4096
+    },
+    "k_max": 3,
+    "fees": {
+      "registration_fee": 100000000,
+      "candidate_bond": 100000000,
+      "eval_fee_per_job": 100000,
+      "hard_case_fee": 1000000,
+      "artifact_bond": 10000000,
+      "setter_bond": 10000000,
+      "dataset_bond": 10000000,
+      "s1_bounty": 1000000,
+      "s1_setter_reward": 1000000
+    },
+    "promotion_share_permille": 500,
+    "s2_trainer_permille": 500,
+    "s2_dataset_cap_permille": 500,
+    "s2_contributor_cap_permille": 500,
+    "provenance": {
+      "teacher_classes": 37,
+      "full_weight_candidates": true
+    },
+    "rollback_epochs": 2,
+    "vest_epochs": 1,
+    "ban_epochs": 2
+  },
+  "_extra_bonds": "Post-genesis bonds (keyring bonds 8..15, registered by the driver one at a time from DAA `from_daa`, each funded from the main wallet with the collateral a genesis seat holds + `float_msk` MSK, then `kaspad --palw-register-bond` on the registrar node `reg` — which prints the bond and keeps running, so the driver stops it). 8 and 9 are the SACRIFICIAL liars' (new7, new8), 10..13 are lane D's (DG-4 cone/output liars 10 and 11, DG-6 held-leaf liar 12, DG-7b lapse bond 13). Lane D's come first: DG-4 starts ~DAA 150. Each record is $WORK_DIR/liars/bond-<n>.json.",
+  "extra_bonds": {
+    "from_daa": 44,
+    "order": [
+      10,
+      11,
+      12,
+      13,
+      8,
+      9
+    ],
+    "float_msk": 150,
+    "registrar_wait_daa": 12
+  },
+  "_liars": "D-M3's liars are SACRIFICIAL: the capacity package arms F-L (aggregate liability) from the rho-10 flag day (--palw-drill-fence3-at 14), so one CourtFraud conviction voids ALL the convicted bond's live claims (AggregateForfeit), forfeits its whole collateral and freezes it for good (the Final claims stay). So each liar has its own post-genesis bond, its node is started just-in-time at `start_daa` (it syncs the ~440 DAA from the other nodes, lies on T's evaluation, is convicted) and stopped once its lie is convicted and no claim of its bond is live (or `deadline_daa` after the start, the verdict then saying whether it lied). Steady state is seven nodes; the liars make it nine for that window.",
+  "liars": {
+    "start_daa": 440,
+    "deadline_daa": 300
+  },
+  "_capacity": "The capacity load line: rho=25 (--palw-drill-capacity-step2-at, 560) and rho=100 (--palw-drill-capacity-step3-at, 655) on the same chain. Each window opens `settle_daa` after its fence and lasts `window_daa`: 570..650 and 665..745. Sampled each driver tick over every seat bond: accepted/DAA, licensed/DAA, licence latency p50/p95 (accepted -> first sight licensed, exact to a sampler tick ~0.2 DAA), backlog (accepted, not yet licensed) and its trend, seat occupancy (open claims a seat bond sits on) and the head producer's exposure reserved/ceiling. The gate is the coordinator's: the queue does not diverge (here: second-half backlog slope not above 0.05 claims/DAA together with the last quarter's mean above 1.5x the second quarter's + 2). If rho=100 diverges, rho=25's numbers are the measurement.",
+  "capacity": {
+    "settle_daa": 10,
+    "window_daa": 80
+  },
+  "_memory": "The Mac is shared (the release drill, other lanes' builds): the driver samples every node's RSS and the Mac's free-memory percentage each tick into $WORK/memory.tsv, keeps the first hour's steady figure and the peak in its state (`dm.sh status` prints them), and its tripwire protects the seats: free memory under trip_free_pct for two ticks running stops the sacrificial nodes (the registrar, then the liars), under trip2_free_pct the old relay as well once D-M5 is done. It never stops a seat or a clock; nodes.sh refuses to START a node while free memory is under 40%.",
+  "memory": {
+    "trip_free_pct": 12,
+    "trip2_free_pct": 8
+  },
+  "_lines": "W1 is H's founding line (owner: H's registrant, seat 4); W2 and L are lines seat 7 founds on H. Seat 7 has no node: it is the drills' own bond (setter, material, candidates, registrant, line owner), so its carriers never touch a panel's fee float. Seat 3 is a second supplier (a second setter, a dataset contributor).",
+  "lines": {
+    "W1": {
+      "_for": "D-M1 the whole epoch (usage trigger, material, candidate, evaluation, promotion) on the composite form; D-M4's rollback by proof moved to line R (a composite epoch is 363 DAA, two of them do not fit the run)",
+      "founding": true,
+      "form": "composite",
+      "policy_composite": {
+        "windows": {
+          "grid": 370,
+          "w_submit": 120
+        }
+      },
+      "owner_seat": 4,
+      "material": {
+        "dataset": {
+          "seat": 3,
+          "items": 100,
+          "teacher_classes": 32
+        },
+        "hard_case": {
+          "seat": 3,
+          "prompt_pool": "a",
+          "item": 0
+        }
+      },
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "win",
+              "seat": 7,
+              "datasets": [
+                [
+                  "ds1",
+                  1000
+                ]
+              ],
+              "teacher_classes": 32
+            }
+          ],
+          "sets": [
+            {
+              "name": "S1a",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            },
+            {
+              "name": "S1b",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                8,
+                16
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "W2": {
+      "_for": "D-M4's rollback by the owner (the promotion of epoch 1 is rolled back at once); and D-M6's withholding setter: Sw (seat 3, two items) is committed and never revealed — its items drop out of the draw for every subject and its bond is forfeited, while the epoch still has the n_min items the honest set gives",
+      "founding": false,
+      "form": "full",
+      "name": "W2",
+      "owner_seat": 7,
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "win",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "S1a",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            },
+            {
+              "name": "S1b",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                8,
+                16
+              ]
+            },
+            {
+              "name": "Sw",
+              "seat": 3,
+              "pool": "b",
+              "items": [
+                8,
+                10
+              ],
+              "withhold": true
+            }
+          ]
+        }
+      }
+    },
+    "T": {
+      "_for": "D-M3, the court battery on evaluation claims: two SACRIFICIAL executors (the just-in-time nodes new7 and new8, each with its own post-genesis bond) each commit ONE self-consistent lie on this line (new7 a moved step leaf on a candidate's evaluation, new8 a moved first id on the parent's: --palw-drill-tamper-eval=<fault>@<T's id prefix>, the id is derived before the chain exists) and a challenger (new1, --palw-challenge) replays every claim it can, finds where each lie is from the accused's capture (the shared --palw-improve-capture-dir) and files the court proof. The lies are convicted (court_fraud) and, under the capacity package's aggregate liability (AG-2), the convicted bond's other live claims void as aggregate_forfeit and the bond is frozen (its Final claims stay); the freed jobs are claimed again by honest evaluators; every other bond's claims, on this line and on every other, stay unvoided. T holds composite candidates, so that the court's moves over a composite subject (parameter openings under the two sub-roots) are exercised as well as a single artifact's.",
+      "founding": false,
+      "form": "composite",
+      "policy_composite": {
+        "windows": {
+          "grid": 370,
+          "w_submit": 120
+        }
+      },
+      "name": "T",
+      "owner_seat": 7,
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "win",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "St",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "L": {
+      "_for": "D-M2 (a candidate that regresses what the parent passes must not win) and the single-setter leakage bound of D-M6: two setters, the cap keeps each to half of the draw; the winner W is trained on S_b's prompts only, so it can win four items at most and the sign test cannot reject. L is an extra line: full-weight candidates, short windows",
+      "founding": false,
+      "form": "full",
+      "name": "L",
+      "owner_seat": 7,
+      "policy": {
+        "eval": {
+          "setter_cap_permille": 500
+        },
+        "windows": {
+          "w_holdout": 14,
+          "grid": 270
+        }
+      },
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "lose",
+              "seat": 7
+            },
+            {
+              "class": "win",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "Sa",
+              "seat": 7,
+              "pool": "b",
+              "items": [
+                0,
+                8
+              ]
+            },
+            {
+              "name": "Sb",
+              "seat": 3,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            }
+          ]
+        },
+        "2": {
+          "candidates": [
+            {
+              "class": "lose",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "S2",
+              "seat": 3,
+              "pool": "a",
+              "items": [
+                8,
+                16
+              ]
+            }
+          ],
+          "_for": "D-M6's hold-out flood: in HoldOut seat 3 submits 40 hold-out hard cases (the pool takes 4n = 32): a hold-out case whose key is never revealed (tag 86 is not wired in v1) is dropped from the draw, so the flood leaves too few drawn items and the epoch ends NoChange(TooFewItems) for the price of 32 hard_case_fees"
+        }
+      }
+    },
+    "R": {
+      "_for": "D-M4 by proof (and the vesting D-M1 reads): a full-weight line with the short windows, vest_epochs 3. Epoch 1 promotes `win`; the head W's own claims (new6 produces them) are Final by DAA ~690, epoch 2 opens at the next grid boundary (765) with `lose` as the candidate and the regression check (`Previous` = H) over the `reg` pool's items, where W regresses: the rollback by proof lands at epoch 2's decision (~1,010, 36.6 h). vest_epochs 3 keeps an unvested remainder to forfeit when it does.",
+      "founding": false,
+      "form": "full",
+      "name": "R",
+      "owner_seat": 7,
+      "policy": {
+        "vest_epochs": 3
+      },
+      "epochs": {
+        "1": {
+          "candidates": [
+            {
+              "class": "win",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "S1a",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                0,
+                8
+              ]
+            },
+            {
+              "name": "S1b",
+              "seat": 7,
+              "pool": "a",
+              "items": [
+                8,
+                16
+              ]
+            }
+          ]
+        },
+        "2": {
+          "candidates": [
+            {
+              "class": "lose",
+              "seat": 7
+            }
+          ],
+          "sets": [
+            {
+              "name": "S2a",
+              "seat": 7,
+              "pool": "reg",
+              "items": [
+                0,
+                8
+              ]
+            },
+            {
+              "name": "S2b",
+              "seat": 7,
+              "pool": "reg",
+              "items": [
+                8,
+                16
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "_expect": "what each drill's verdict reads",
+  "expect": {
+    "W1": {
+      "epoch1": "Promoted:win",
+      "wins_at_least": 7,
+      "losses": 0
+    },
+    "W2": {
+      "epoch1": "Promoted:win",
+      "rolled_back_by": "owner"
+    },
+    "L": {
+      "epoch1": "NoChange"
+    },
+    "T": {
+      "lies_convicted": true,
+      "honest_claims_unvoided": true
+    },
+    "R": {
+      "epoch1": "Promoted:win",
+      "rolled_back_by": "proof",
+      "vest_epochs": 3
+    }
+  }
+}

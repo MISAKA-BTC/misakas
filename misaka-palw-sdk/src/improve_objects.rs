@@ -275,8 +275,9 @@ pub fn improve_artifact_reveal_object_v1(artifact: PalwTeachingArtifactV1) -> Pa
 pub mod spec {
     use super::*;
     use kaspa_consensus_core::palw_improve_state_v1::{
-        PalwEvalSpecV1, PalwImprovementFeesV1, PalwProvenancePolicyV1, PalwRollbackCauseV1, PalwScoringKindV1, PalwScoringParamsV1,
-        PalwScoringStageV1, PalwTeacherClassV1, PalwTeachingArtifactKindV1, PalwUsageMeasureV1, PalwVerificationTypeV1,
+        PalwEvalSpecV1, PalwImprovementFeesV1, PalwJudgeSpecV1, PalwProvenancePolicyV1, PalwRollbackCauseV1, PalwScoringKindV1,
+        PalwScoringParamsV1, PalwScoringStageV1, PalwTeacherClassV1, PalwTeachingArtifactKindV1, PalwUsageMeasureV1,
+        PalwVerificationTypeV1,
     };
     use serde_json::Value;
 
@@ -528,8 +529,9 @@ pub mod spec {
     /// w_holdout, w_eval, beacon_delay, court_margin}`, `eval {stages: [{kind: "exact_match", open, close,
     /// key_cap} | {kind: "ref_loglik", logit_scale_q24} | {kind: "judge", lo, hi} | {kind: "pairwise", margin}],
     /// n, n_min, delta_permille, epsilon_permille, epsilon_safety_permille, alpha_permille, max_new_tokens,
-    /// stop_ids, setter_cap_permille, max_eval_positions, regression_items, regression_suite_root, safety_items,
-    /// safety_suite_root, judge_set, anchor_floor_permille}`, `k_max`, `fees {…}`, the permille shares,
+    /// stop_ids, setter_cap_permille, max_eval_positions, regression_items, regression_dataset, safety_items,
+    /// safety_dataset, judge_set, judge {template_dataset, verdict_a, verdict_b, logit_scale_q24} (null: none),
+    /// pairwise {…} (likewise), seat_pool_permille, anchor_floor_permille}`, `k_max`, `fees {…}`, the permille shares,
     /// `provenance {teacher_classes, licence_classes, full_weight_candidates, base_licence_class}`,
     /// `rollback_epochs`, `vest_epochs`, `ban_epochs`. The chain's own check
     /// (`palw_improvement_policy_check_v1`) says whether the result is admissible.
@@ -621,21 +623,41 @@ pub mod spec {
             if let Some(ids) = e.get("stop_ids") {
                 s.stop_ids = ids_of(ids)?;
             }
-            // A suite with no items has no root (the chain's check): naming zero items clears the example's root.
-            if e.get("regression_suite_root").is_some() {
-                s.regression_suite_root = hash_of(e, "regression_suite_root")?;
+            // A suite with no items names no dataset (the chain's check): naming zero items clears the example's dataset.
+            if e.get("regression_dataset").is_some() {
+                s.regression_dataset = hash_of(e, "regression_dataset")?;
             } else if s.regression_items == 0 {
-                s.regression_suite_root = Hash64::default();
+                s.regression_dataset = Hash64::default();
             }
-            if e.get("safety_suite_root").is_some() {
-                s.safety_suite_root = hash_of(e, "safety_suite_root")?;
+            if e.get("safety_dataset").is_some() {
+                s.safety_dataset = hash_of(e, "safety_dataset")?;
             } else if s.safety_items == 0 {
-                s.safety_suite_root = Hash64::default();
+                s.safety_dataset = Hash64::default();
             }
             if let Some(j) = e.get("judge_set") {
                 s.judge_set =
                     j.as_array().ok_or("`eval.judge_set` is not an array")?.iter().map(|h| hash(h.as_str().ok_or("a judge is not a string")?)).collect::<Result<_, _>>()?;
             }
+            // A judged stage's specification (spec 17 §17.8.5): `null` (or no key) leaves the example's, which has none.
+            for (key, slot) in [("judge", &mut s.judge), ("pairwise", &mut s.pairwise)] {
+                match e.get(key) {
+                    None => {}
+                    Some(Value::Null) => *slot = None,
+                    Some(j) => {
+                        *slot = Some(PalwJudgeSpecV1 {
+                            template_dataset: hash_of(j, "template_dataset").map_err(|e| format!("`eval.{key}`: {e}"))?,
+                            verdict_a: ids_at(j, "verdict_a").map_err(|e| format!("`eval.{key}`: {e}"))?,
+                            verdict_b: ids_at(j, "verdict_b").map_err(|e| format!("`eval.{key}`: {e}"))?,
+                            logit_scale_q24: field(j, "logit_scale_q24")
+                                .map_err(|e| format!("`eval.{key}`: {e}"))?
+                                .as_i64()
+                                .and_then(|x| i32::try_from(x).ok())
+                                .ok_or_else(|| format!("`eval.{key}.logit_scale_q24` is not an i32"))?,
+                        });
+                    }
+                }
+            }
+            set_u16(&mut s.seat_pool_permille, e, "seat_pool_permille")?;
         }
         if let Some(k) = v.get("k_max") {
             p.k_max = k.as_u64().and_then(|k| u8::try_from(k).ok()).ok_or("`k_max` is not a u8")?;
@@ -741,7 +763,7 @@ mod tests {
         let message = palw_improvement_policy_message_v1(domain, &line, 1, payload.policy.as_ref());
         assert!(verifies(&public, message, &signature, PALW_IMPROVE_POLICY_MLDSA87_CONTEXT));
         assert!(!verifies(&public, message, &signature, PALW_IMPROVE_ROLLBACK_MLDSA87_CONTEXT), "not under another context");
-        assert_eq!(palw_improvement_policy_check_v1(payload.policy.as_ref().unwrap(), &PALW_DRILL_IMPROVE_CEILINGS_V1), Ok(()));
+        assert_eq!(palw_improvement_policy_check_v1(payload.policy.as_ref().unwrap(), &PALW_DRILL_IMPROVE_CEILINGS_V1, None), Ok(()));
 
         // Tag 71: the case id is derived and the form checks.
         let salt = Hash64::from_bytes([0x77; 64]);
@@ -854,7 +876,7 @@ mod tests {
         assert_eq!(policy.eval.n, 8);
         assert_eq!(policy.fees.eval_fee_per_job, 10);
         assert_eq!(policy.fees.registration_fee, 100_000_000, "the example's value stands where the spec says nothing");
-        assert_eq!(palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1), Ok(()), "the drill's ceilings admit it");
+        assert_eq!(palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1, None), Ok(()), "the drill's ceilings admit it");
         assert!(spec::policy(&serde_json::json!({ "windows": { "grid": "wide" } })).is_err());
         assert!(spec::policy(&serde_json::json!({ "eval": { "stages": [{ "kind": "nonsense" }] } })).is_err());
 

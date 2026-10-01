@@ -210,6 +210,23 @@ impl TirArtifactV1 {
     pub fn inventory_tree(&self) -> Result<&TirInventoryTreeV1, String> {
         self.tree.get_or_init(|| TirInventoryTreeV1::build(&self.plan.program, self)).as_ref().map_err(|e| e.clone())
     }
+
+    /// **The tree a possession proof of this artifact opens** (RFC-0004 §6.3/§6.7, spec 17 §17.7.1): `None`
+    /// for a single artifact, whose class's registered root is its inventory's; for a composite candidate its
+    /// ADAPTER section — where the section starts in the candidate's inventory, the section's own root (the
+    /// chain's `adapter_root`, which `open_composite` checked the section's leaves to) and the section's leaf
+    /// hashes in inventory order. The composite's registered root commits two trees and opens neither: a seat
+    /// proves it holds the section, and holds the parent through the parent class's own proof.
+    pub fn possession_section(&self) -> Result<Option<(u32, Hash64, &[Hash64])>, String> {
+        let Some(c) = &self.composite else { return Ok(None) };
+        let section = self
+            .inventory_tree()?
+            .leaves()
+            .get(c.split as usize..)
+            .filter(|leaves| !leaves.is_empty())
+            .ok_or("the composite's adapter section holds no leaf")?;
+        Ok(Some((c.split, c.r.adapter_root, section)))
+    }
 }
 
 /// A container and its mapping as an inventory source (the parent's root, streamed).

@@ -220,24 +220,24 @@ fn the_root_claim_is_admitted_at_the_named_leaf_and_the_fold_derives_the_same_si
 
     // The claim is exactly the closure: a value the dissection never reads is refused, and so is a claim missing one.
     let r = root.elements.iter().position(|l| !l.is_empty()).unwrap();
-    // A reduction whose tile leaves some element unread (the small decoder's may read them all).
-    let unread_in = (0..root.elements.len()).find_map(|k| {
-        (!root.elements[k].is_empty())
-            .then(|| (0..site.counts[k] as u32).find(|e| !root.elements[k].contains(e)).map(|e| (k, e)))
-            .flatten()
-    });
-    if let Some((k, unread)) = unread_in {
-        let mut more = root.clone();
-        let at = more.elements[k].partition_point(|e| *e < unread);
-        more.elements[k].insert(at, unread);
-        more.totals.partials[k].insert(at, root.totals.partials[k][0]);
-        let extra = check_eval_root_claim_v1(&more, &facts, c.leaf, &LIMITS);
-        assert!(matches!(&extra, Err(why) if why.contains("never reads")), "{extra:?}");
-        assert_ne!(
-            palw_eval_root_claim_message_v1(&Hash64::from_bytes([5; 64]), &root),
-            palw_eval_root_claim_message_v1(&Hash64::from_bytes([5; 64]), &more),
-            "the claim"
-        );
+    // A reduction some element of which the tile does not read: where this leaf's tile reads every element of every reduction (the toy decoder's: counts
+    // 4, 4 and 16, all claimed), a value the dissection never reads cannot be named, and only the missing-value half below applies.
+    let unread = root
+        .elements
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.is_empty())
+        .find_map(|(r, _)| (0..site.counts[r] as u32).find(|e| !root.elements[r].contains(e)).map(|e| (r, e)));
+    match unread {
+        Some((ur, unread)) => {
+            let mut more = root.clone();
+            let at = more.elements[ur].partition_point(|e| *e < unread);
+            more.elements[ur].insert(at, unread);
+            more.totals.partials[ur].insert(at, root.totals.partials[ur][0]);
+            let extra = check_eval_root_claim_v1(&more, &facts, c.leaf, &LIMITS);
+            assert!(matches!(&extra, Err(why) if why.contains("never reads")), "{extra:?}");
+        }
+        None => eprintln!("note: leaf {}'s tile reads every element of its reductions {:?}: no value to name that it never reads", c.leaf, site.counts),
     }
     let mut fewer = root.clone();
     fewer.elements[r].remove(0);
@@ -287,6 +287,7 @@ fn the_root_claim_is_admitted_at_the_named_leaf_and_the_fold_derives_the_same_si
     );
     let message = palw_eval_root_claim_message_v1(&session, &root);
     assert_ne!(message, palw_eval_root_claim_message_v1(&Hash64::from_bytes([6; 64]), &root), "the session");
+    assert_ne!(message, palw_eval_root_claim_message_v1(&session, &fewer), "the claim");
 }
 
 #[test]

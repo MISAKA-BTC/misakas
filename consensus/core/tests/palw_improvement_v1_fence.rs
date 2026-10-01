@@ -326,10 +326,11 @@ fn validate_refuses_every_value_this_build_cannot_run() {
     let mut same_height = ok.clone();
     same_height.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(GEN_AT)));
     same_height.sync_palw_improvement_v1();
-    // …with the decode rules in force at or below that height too: they are a prerequisite as well.
+    // (the decode rules, a prerequisite since ADR-0082 D10/D11, must be in force at or below it too)
     same_height.palw_fp_decode_rules = Some(ForkActivation::new(GEN_AT));
     same_height.sync_palw_fp_decode_rules();
-    assert!(same_height.validate_palw_improvement_v1().is_ok(), "at the generative fence's own height");
+    let at_gen = same_height.validate_palw_improvement_v1();
+    assert!(at_gen.is_ok(), "at the generative fence's own height: {at_gen:?}");
     // The second IR fence (every evaluation pipeline sized under H7; no verdict flips mid-epoch).
     let mut no_fence2 = ok.clone();
     no_fence2.palw_tir_fence2 = None;

@@ -841,15 +841,6 @@ impl TirBackendV1 {
         }
     }
 
-    /// Readiness proves possession of ONE tree's leaves against the class's root; a composite
-    /// candidate's root is no tree's, so it proves nothing that way (its parent's class does).
-    fn not_composite(&self) -> Result<(), String> {
-        match self.artifact.composite_ref() {
-            Some(_) => Err("a composite candidate's root commits two trees: readiness is its parent class's".into()),
-            None => Ok(()),
-        }
-    }
-
     /// **The step leaf of the logits node at decode row `row` whose tile holds lane `lane`** — the
     /// leaf a decode-token door's pin rides with (`lane` the seat's own token), or the one a logits
     /// door accuses (`lane` the first lane a disclosed trace tile parts at). `None` for a row before
@@ -922,12 +913,22 @@ impl TirBackendV1 {
         Ok(PalwCourtVerdictProofV2::TirLogits { accusation: Box::new(accusation) })
     }
 
-    /// The operands of the drawn inventory leaves, in the draw's order.
-    fn drawn_operands(&self, draw: &[u32]) -> Result<Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>, String> {
+    /// The operands of the drawn leaves, in the draw's order. `base` is where the drawn tree starts in the
+    /// artifact's inventory: 0 for a single artifact, the split for a composite's adapter section — the draw
+    /// is over the section's own leaves (RFC-0004 §6.7), each returned under the index it was drawn at.
+    fn drawn_operands(
+        &self,
+        draw: &[u32],
+        base: u32,
+    ) -> Result<Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>, String> {
         use super::inventory::TirParamOpenerV1;
         draw.iter()
             .map(|i| {
-                self.artifact.param_opening(*i).map(|o| (*i, o.operand)).ok_or_else(|| format!("inventory leaf {i} does not open"))
+                let leaf = base.checked_add(*i).ok_or_else(|| format!("inventory leaf {i} is past the inventory"))?;
+                self.artifact
+                    .param_opening(leaf)
+                    .map(|o| (*i, o.operand))
+                    .ok_or_else(|| format!("inventory leaf {leaf} does not open"))
             })
             .collect()
     }
@@ -1085,16 +1086,31 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         Ok((tree.root(), tree.leaf_count()))
     }
 
+    /// **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite candidate's possession tree is its adapter
+    /// section** — the section's own root and leaf count. `None` for every single artifact.
+    fn artifact_possession_tree_v1(&self) -> Option<Result<(Hash64, u32), String>> {
+        match self.artifact.possession_section() {
+            Ok(None) => None,
+            Ok(Some((_, root, leaves))) => {
+                Some(u32::try_from(leaves.len()).map(|n| (root, n)).map_err(|_| "the adapter section has too many leaves".to_string()))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+
     /// The readiness material from the held inventory tree: its root, every leaf hash, and the drawn
     /// leaves' operands in the draw's order. (The IR inventory is in declaration order, not the
-    /// legacy digest's name order, so it is served from the tree, never through a digest.)
+    /// legacy digest's name order, so it is served from the tree, never through a digest.) A composite
+    /// candidate serves its adapter section instead (the section's root and leaves, the draw rebased).
     fn artifact_readiness_material(
         &self,
         draw: &[u32],
     ) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String> {
-        self.not_composite()?;
+        if let Some((split, root, leaves)) = self.artifact.possession_section()? {
+            return Ok((root, leaves.to_vec(), self.drawn_operands(draw, split)?));
+        }
         let tree = self.artifact.inventory_tree()?;
-        Ok((tree.root(), tree.leaves().to_vec(), self.drawn_operands(draw)?))
+        Ok((tree.root(), tree.leaves().to_vec(), self.drawn_operands(draw, 0)?))
     }
 
     fn artifact_readiness_material_streamed_v1(
@@ -1103,12 +1119,18 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         on_leaf: &mut dyn FnMut(Hash64),
     ) -> Option<Result<(Hash64, u32, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String>> {
         Some((|| {
-            self.not_composite()?;
+            if let Some((split, root, leaves)) = self.artifact.possession_section()? {
+                for leaf in leaves {
+                    on_leaf(*leaf);
+                }
+                let count = u32::try_from(leaves.len()).map_err(|_| "the adapter section has too many leaves".to_string())?;
+                return Ok((root, count, self.drawn_operands(draw, split)?));
+            }
             let tree = self.artifact.inventory_tree()?;
             for leaf in tree.leaves() {
                 on_leaf(*leaf);
             }
-            Ok((tree.root(), tree.leaf_count(), self.drawn_operands(draw)?))
+            Ok((tree.root(), tree.leaf_count(), self.drawn_operands(draw, 0)?))
         })())
     }
 
