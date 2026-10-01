@@ -1275,10 +1275,11 @@ pub fn load_class_holdings_v1(
                 // default. Said, not warned.
                 info!(
                     "[{role}] residency for IR class {name}: the page cache — it routes nothing, so its floor ({:.2} GiB of \
-                     {:.2} GiB) is out of a default fifth's reach; state --palw-class-resident-bytes (at least the floor) to read \
-                     it through the file descriptor instead",
+                     {:.2} GiB) is out of a default fifth's reach; state --palw-class-resident-bytes {} (the floor) or more to \
+                     read it through the file descriptor instead",
                     gib(declined.floor_bytes),
-                    gib(declined.weight_bytes)
+                    gib(declined.weight_bytes),
+                    declined.floor_bytes
                 );
                 continue;
             }
@@ -1286,11 +1287,12 @@ pub fn load_class_holdings_v1(
                 "[{role}] residency for IR class {name}: the page cache — the default came to {:.2} GiB, under the class's floor \
                  of {:.2} GiB (its pinned set, one token's routed rows and one admission in flight; a fifth would be {:.2} GiB); \
                  its {:.2} GiB of routed rows will be read through page faults. Free the host, or state \
-                 --palw-class-resident-bytes (at least the floor) to hold it anyway",
+                 --palw-class-resident-bytes {} (the floor) or more to hold it anyway",
                 gib(declined.budget_bytes),
                 gib(declined.floor_bytes),
                 gib(declined.fifth_bytes),
-                gib(declined.routed_bytes)
+                gib(declined.routed_bytes),
+                declined.floor_bytes
             );
             continue;
         }
