@@ -93,6 +93,8 @@ fn model(name: &str, context: u32) -> Result<TirProgramV1, String> {
         "qwen3-8b" => lowered(&real("qwen3-8b.json"), context),
         // Any real config the lowering's tests carry: `cfg:<file stem>`.
         other if other.starts_with("cfg:") => lowered(&real(&format!("{}.json", &other[4..])), context),
+        // A config at a path: `path:<file>`.
+        other if other.starts_with("path:") => lowered(&other[5..], context),
         other => Err(format!("no model {other}")),
     }
 }
@@ -352,6 +354,24 @@ fn the_range_twin_on_real_size_classes() {
                 layout.h_tile
             );
             let class = class_of(&program, &layout);
+            {
+                // The deepest job's step tree (prefill 1, every position decoded): what a seat's DA
+                // descent must reach — ⌈height / 10⌉ node sessions and a leaf session.
+                let space = PalwTirStepSpaceV1::new(&class).expect("a step space");
+                let deepest = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(
+                    &class,
+                    class.class_id(&ROOT),
+                    (1, class.layout.max_context),
+                )
+                .expect("the deepest job");
+                let leaves = space.leaf_count_capped(&deepest, u64::MAX).expect("a count");
+                let height = 64 - leaves.saturating_sub(1).leading_zeros();
+                let depth = u32::from(kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1);
+                eprintln!(
+                    "{name} @ {context}: the deepest job commits {leaves} step leaves (height {height}): a descent is {} node sessions and a leaf session at {depth} levels a session",
+                    height.div_ceil(depth)
+                );
+            }
             let verdict_release = tir_class_admission_offline_v1(&release, &release_bundle, &class, ROOT);
             let (range, rw, rs) = size(&class, true, u64::MAX);
             let (element, ew, es) = size(&class, false, if uncapped { u64::MAX } else { PALW_TIR_CLOSE_SIZING_WORK_CAP_V1 });

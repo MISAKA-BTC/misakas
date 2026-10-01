@@ -17,12 +17,20 @@
 //! * **the IR data-availability units `TirStepLeaf { index }` and `TirStepNode { level, index }`**
 //!   (`crate::palw_da_rcore_v1`): a demand keyed by the claim alone (`DefaultAccusedTirStep`, no
 //!   binding, no draws) names one committed step leaf — answered by its preimage and its opening under
-//!   the step root — or one interior node of the step tree — answered by its frontier eight levels
+//!   the step root — or one interior node of the step tree — answered by its frontier ten levels
 //!   down and its opening (`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`) — or, past the
 //!   claim's execution, by the claim's binding proving so (`TirStepOutOfRange`); the accused defaults
-//!   if it answers none inside `W_disclose`. A seat descends eight levels a session, so a 2^22-leaf
+//!   if it answers none inside `W_disclose`. A seat descends ten levels a session, so a 2^30-leaf
 //!   execution's first disputed leaf is three node sessions and one leaf session away: inside one
-//!   seat's four.
+//!   seat's four;
+//! * **an IR claim's data availability at its class's ladder**: every IR answer's binding (the
+//!   release's `TirEvent` among them) and every step demand's unit is checked at the claim's class's
+//!   ladder — the court's step ladder admission held the class's jobs to — where the release checked
+//!   them at 2^22 leaves: an execution past 2^22 (every real-size class's) could answer no demand and
+//!   defaulted (`TransitionBuilder::tir_da_ladder_v1`);
+//! * **admission's DA seat reach**: a class whose canonical job commits more step leaves than one
+//!   seat's four sessions descend (2^30, `crate::palw_tir_court_v1::PALW_TIR_DA_SEAT_REACH_LEAVES_V1`)
+//!   is refused;
 //!
 //! Below the height every rule is the DAA-2,000 release's, byte for byte, and an object only this
 //! fence makes legal is one an older build cannot decode (A-2): the acceptance layer drops it by name,
@@ -56,6 +64,13 @@ pub fn palw_tir_close_twin_v1(demand: PalwTirDemandRulesV1) -> crate::palw_tir_c
         PalwTirDemandRulesV1::Release2000 => crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element,
         PalwTirDemandRulesV1::H7 => crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range,
     }
+}
+
+/// **Is the second IR fence in force under `demand`'s rules?** Admission v10 reads the fence through
+/// the box-demand rules it is handed (the processor's and the preflight's `PalwTirAdmissionRulesV1`),
+/// which are this fence's exactly when it is in force.
+pub fn palw_tir_fence2_in_force_v1(demand: PalwTirDemandRulesV1) -> bool {
+    demand == PalwTirDemandRulesV1::H7
 }
 
 /// The box-demand rules in force at `daa_score` on the fold's copy of the fence.

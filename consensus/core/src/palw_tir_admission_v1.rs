@@ -26,7 +26,9 @@
 //! 6. the canonical job: exactly the attempt formula's yardstick context
 //!    ([`crate::palw_tir_attempt_v1::palw_tir_job_context_v1`] at `(f − 1, 2)`), its prompt within
 //!    J5b's inline bound (4,096 ids — the only prompt check an IR claim has); the deepest legal job
-//!    within the ladder; `pwu_per_inference` the canonical count;
+//!    within the ladder; `pwu_per_inference` the canonical count; past `palw_tir_fence2`, the canonical
+//!    job within one seat's DA reach ([`crate::palw_tir_court_v1::PALW_TIR_DA_SEAT_REACH_LEAVES_V1`],
+//!    2^30 leaves);
 //! 7. the class id is `tir_class_id_v1(class, artifact_root)`;
 //! 8. weight: a nonzero share needs a certified family covering the program's primitives
 //!    (`family_certified_for_weight_v2` over the `palw-tir/v1/prim=<Name>` ids) — registration at
@@ -633,6 +635,18 @@ pub fn verify_class_admission_v10(
     let counted = space.leaf_count_capped(canonical, ladder).map_err(|e| PalwClassAdmissionError::TirLayout(e.to_string()))?;
     if counted > worst {
         return Err(PalwClassAdmissionError::CanonicalDeeperThanWorstCase { canonical: counted, worst });
+    }
+    // **Past the second IR fence: one seat reaches every leaf of every attempt.** A seat's four
+    // data-availability sessions descend ten levels each and then open the leaf; an attempt committing
+    // more leaves than that could withhold one no single seat can demand.
+    let reach = crate::palw_tir_court_v1::PALW_TIR_DA_SEAT_REACH_LEAVES_V1;
+    if crate::palw_tir_fence2_v1::palw_tir_fence2_in_force_v1(rules.demand) && counted > reach {
+        return Err(PalwClassAdmissionError::TirExceeds {
+            limit: "IR DA seat reach",
+            at: "the canonical job".into(),
+            value: counted,
+            cap: reach,
+        });
     }
     match pwu_rule {
         PalwPwuRuleV2::MaxPerAttempt(_) => return Err(PalwClassAdmissionError::ClassIsNotDerived),

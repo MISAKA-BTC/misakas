@@ -7,7 +7,7 @@
 //! no binding, no draws — and the fold opens an R-core+ session naming exactly that unit:
 //!
 //! * **a step leaf** is answered by the leaf (`PalwTirStepLeafDisclosureV1`), **an interior step
-//!   node** by its frontier eight levels down and its opening (`PalwTirStepNodeDisclosureV1`), and a
+//!   node** by its frontier ten levels down and its opening (`PalwTirStepNodeDisclosureV1`), and a
 //!   unit **past the claim's execution** by the claim's binding proving so (`TirStepOutOfRange`): the
 //!   session is refuted and closes, the claim stands;
 //! * **a withholding liar that answers every demand is convicted by ONE seat inside its four
@@ -54,11 +54,11 @@ use kaspa_consensus_core::palw_step_leg::{
 use kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1;
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1, PalwTirStepNodeDisclosureV1,
-    PalwTirTraceEventDisclosureV1, PalwTirTraceLanesV1, build_tir_cone_refutation_v1, build_tir_row_node_disclosure_v1,
-    build_tir_step_leaf_disclosure_v1, build_tir_step_node_disclosure_v1, check_tir_cone_refutation_v1,
-    check_tir_logits_consistency_v1, palw_tir_step_node_frontier_v1, palw_tir_step_node_parts_v1, palw_tir_step_tree_height_v1,
-    palw_tir_step_tree_width_v1, tir_logits_event_disclosure_v1,
+    PALW_TIR_STEP_NODE_DEPTH_V1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1,
+    PalwTirStepNodeDisclosureV1, PalwTirTraceEventDisclosureV1, PalwTirTraceLanesV1, build_tir_cone_refutation_v1,
+    build_tir_row_node_disclosure_v1, build_tir_step_leaf_disclosure_v1, build_tir_step_node_disclosure_v1,
+    check_tir_cone_refutation_v1, check_tir_logits_consistency_v1, palw_tir_step_node_frontier_v1, palw_tir_step_node_parts_v1,
+    palw_tir_step_tree_height_v1, palw_tir_step_tree_width_v1, tir_logits_event_disclosure_v1,
 };
 use kaspa_consensus_core::palw_tir_one_move_v1::{
     palw_tir_one_move_accusation_v1, palw_tir_one_move_shape_v1, palw_tir_one_move_verdict_v1,
@@ -178,11 +178,11 @@ fn bond(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
 }
 
 /// The dense GQA corpus model as an IR class, run as a job long enough that its step tree is more
-/// than eight levels tall (a descent of two node sessions and a leaf session).
+/// than ten levels tall (a descent of two node sessions and a leaf session).
 fn fixture() -> Fixture {
     let (name, program, params, tokens) =
         programs().into_iter().find(|(n, ..)| n == "dense-gqa-2layer").expect("the dense GQA corpus model");
-    fixture_with(name, program, params, tokens, 16, 9)
+    fixture_with(name, program, params, tokens, 36, 12)
 }
 
 /// A leaf the fixture's store answers (a logits tile at a decode row needs its row's pin, which that
@@ -594,7 +594,7 @@ fn a_withholding_liar_that_answers_every_demand_is_convicted_by_one_seat_within_
     let mine = Tree::of(&honest.hashes);
     let count = mine.count();
     assert_eq!(mine.height(), palw_tir_step_tree_height_v1(count));
-    assert!(mine.height() > 8, "{count} leaves: a tree of {} levels needs two node sessions", mine.height());
+    assert!(mine.height() > PALW_TIR_STEP_NODE_DEPTH_V1, "{count} leaves: a tree of {} levels needs two node sessions", mine.height());
     let (lie, lane, accused) = liar(&f);
     assert_ne!(accused.binding.step_merkle_root, honest.binding.step_merkle_root);
     let (mut run, claim_id) = claimed(&f, &accused);
@@ -604,7 +604,7 @@ fn a_withholding_liar_that_answers_every_demand_is_convicted_by_one_seat_within_
     // The descent: one seat, one session per unit, each answered by the liar.
     let (leaf, disclosed, sessions) = descend(&mut run, &f, &accused, claim_id, &mine);
     assert_eq!(leaf, lie, "the descent ends at the forged leaf, the first the seat's own tree disputes");
-    let node_sessions = u32::from(mine.height()).div_ceil(8);
+    let node_sessions = u32::from(mine.height()).div_ceil(u32::from(PALW_TIR_STEP_NODE_DEPTH_V1));
     assert_eq!(sessions, node_sessions + 1, "{} levels: {node_sessions} node sessions and the leaf", mine.height());
     assert!(sessions <= 4, "inside one seat's four sessions");
     eprintln!("{count} leaves, {} levels: the seat reached forged leaf {leaf} in {sessions} sessions", mine.height());
@@ -680,7 +680,7 @@ fn an_inconsistent_node_answer_is_refused_and_the_liar_defaults() {
     let (mut run, claim_id) = claimed(&f, &accused);
     run.at(FENCE2, &[], None);
     let top = mine.height();
-    assert!(top > 8, "the root's frontier is interior nodes");
+    assert!(top > PALW_TIR_STEP_NODE_DEPTH_V1, "the root's frontier is interior nodes");
     // The root is answered; the node under it the seat disputes is demanded next.
     run.step(&[demand(claim_id, PalwDaUnitV1::TirStepNode { level: top, index: 0 }, SEAT)]);
     run.step(&[node_answer(&f, &accused, claim_id, top, 0)]);
@@ -1229,4 +1229,117 @@ fn an_inconsistent_rows_answer_is_refused_and_a_row_past_the_trace_is_proven_so(
         run.step(&[out_of_range(&accused, claim_id, unit)]);
         assert!(run.session_units(&claim_id, OTHER).is_none(), "{unit:?}: proven past the trace");
     }
+}
+
+// =================================================================================================
+// A real-size execution: its data availability at its class's ladder
+// =================================================================================================
+
+/// The corpus class at a real-size job: 4-lane tiles over 131,072 positions, its canonical-shaped
+/// binding committing past 2^22 step leaves — what every real-size class's job does (Llama-3.1-70B at
+/// 512 positions and 64-lane tiles: 112 M). Nothing is executed: a binding verifies by its counts and
+/// its roots, which is what an out-of-range proof carries.
+fn real_size_binding(f: &Fixture) -> PalwTirStepBindingV1 {
+    use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirStepSpaceV1};
+    let positions = 1u32 << 17;
+    let mut class = f.class.clone();
+    let logits = class.layout.commit_tiles.iter().position(|t| *t == 4096);
+    class.layout.max_context = positions;
+    for (k, tile) in class.layout.commit_tiles.iter_mut().enumerate() {
+        if Some(k) != logits {
+            *tile = 4;
+        }
+    }
+    let class_id = class.class_id(&f.artifact_root);
+    let mut job_context = f.ctx.clone();
+    job_context.shape_profile_id = class_id;
+    job_context.declared_prefill_tokens = 1;
+    job_context.exact_decode_tokens = positions;
+    job_context.max_context_tokens = positions + 1;
+    let space = PalwTirStepSpaceV1::new(&class).expect("the layout fits");
+    let count = space.leaf_count_capped(&job_context, u64::MAX).expect("a count");
+    assert!(count > MAX, "a real-size execution commits past 2^22 leaves: {count}");
+    let (trace, step_root) = (h64(0x7E_7E), h64(0x5E_5E));
+    PalwTirStepBindingV1 {
+        version: PALW_TIR_STEP_BINDING_VERSION_V1,
+        committed_execution_root: palw_tir_execution_root_v1(&job_context.context_hash(), &trace, &class_id, count, &step_root),
+        job_context,
+        class,
+        artifact_root: f.artifact_root,
+        full_logits_trace_root: trace,
+        step_leaf_count: count,
+        step_merkle_root: step_root,
+    }
+}
+
+/// **An execution past 2^22 step leaves answers its data-availability demands past the second IR
+/// fence** — its binding verified at its class's ladder (the court's step ladder the held regime
+/// rides, 2^40 on testnet-12), not at the release's 2^22, where every answer its producer could give
+/// was refused and a demand defaulted an honest producer:
+///
+/// * at the class's ladder a step leaf past the execution is demanded and the claim's binding proves
+///   it out of range: the session is refuted, the claim stands;
+/// * at the release's 2^22 the same demand is refused at the door, and a demand inside the execution
+///   admits no answer the binding can give: the out-of-range proof does not verify.
+#[test]
+fn an_execution_past_two_to_the_twenty_two_leaves_answers_at_its_class_s_ladder() {
+    use kaspa_consensus_core::palw_tir_court_v1::check_tir_step_out_of_range_v1;
+    let f = fixture();
+    let binding = real_size_binding(&f);
+    let count = binding.step_leaf_count;
+    let (trace, exec) = (binding.full_logits_trace_root, binding.committed_execution_root);
+    let past = PalwDaUnitV1::TirStepLeaf { index: count };
+    assert!(check_tir_step_out_of_range_v1(trace, exec, &past, &binding, MAX).is_err(), "at 2^22 the binding does not verify");
+    check_tir_step_out_of_range_v1(trace, exec, &past, &binding, 1 << 40)
+        .expect("at the class's ladder it proves the leaf out of range");
+    assert!(check_tir_step_out_of_range_v1(trace, exec, &PalwDaUnitV1::TirStepLeaf { index: count - 1 }, &binding, 1 << 40).is_err());
+
+    // The claim: the real-size execution's roots, under the corpus class (its program the record's).
+    let x = Execution { preimages: Vec::new(), hashes: Vec::new(), rows: Vec::new(), generated: Vec::new(), binding };
+    let (mut run, claim_id) = claimed(&f, &x);
+    run.extras.held_context_ladder = Some(1 << 40);
+    run.at(FENCE2, &[], None);
+    run.step(&[demand(claim_id, past, OTHER)]);
+    assert_eq!(run.session_units(&claim_id, OTHER), Some(vec![past]), "a leaf past 2^22 is demanded at the class's ladder");
+    run.step(&[out_of_range(&x, claim_id, past)]);
+    assert!(run.session_units(&claim_id, OTHER).is_none(), "the binding proves it out of range: refuted");
+    assert!(matches!(run.s.claim(&claim_id).expect("live").phase, PalwClaimPhaseV2::PanelBound { .. }), "the claim stands");
+
+    // The release's 2^22: the demand past it refused at the door, one inside it unanswerable.
+    let (mut run, claim_id) = claimed(&f, &x);
+    run.at(FENCE2, &[], None);
+    assert!(matches!(run.refused(&[demand(claim_id, past, OTHER)]), PalwStateV2Error::TirFence2Refused(_)));
+    let inside = PalwDaUnitV1::TirStepLeaf { index: MAX - 1 };
+    run.step(&[demand(claim_id, inside, OTHER)]);
+    assert!(
+        matches!(run.refused(&[out_of_range(&x, claim_id, inside)]), PalwStateV2Error::DaOpeningRefused { .. }),
+        "no answer verifies at 2^22"
+    );
+}
+
+/// **The widest step-node answer rides one carrier**: a frontier ten levels down (1,024 hashes), the
+/// opening of a node at level ten under a 2^40-leaf root (thirty siblings), a binding with a real-size
+/// class's layout and the widest network id, and an ML-DSA-87 signature — the lifecycle carrier's
+/// payload inside one 100,000-byte object chunk.
+#[test]
+fn the_widest_step_node_answer_rides_one_carrier() {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    use kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES;
+    let f = fixture();
+    let mut binding = stripped(&real_size_binding(&f));
+    binding.class.layout.commit_tiles = vec![4_096; 256];
+    binding.class.layout.state_tiles = vec![4_096; 64];
+    binding.job_context.network_id = vec![0x7F; kaspa_consensus_core::palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES];
+    let frontier = vec![h64(1); 1 << PALW_TIR_STEP_NODE_DEPTH_V1];
+    let d = PalwTirStepNodeDisclosureV1 { binding, frontier, siblings: vec![h64(2); 30] };
+    let object = PalwConsensusObjectV2::MaterialDisclosedV2 {
+        claim: h64(3),
+        unit: PalwDaUnitV1::TirStepNode { level: 40, index: 0 },
+        answer: PalwDaAnswerV1::TirStepNode(Box::new(d)),
+        discloser: bond_key(SEAT),
+        signature: vec![0; 4_627],
+    };
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
+    eprintln!("the widest step-node answer's carrier payload: {} bytes of {PALW_OBJECT_CHUNK_MAX_BYTES}", payload.len());
+    assert!(payload.len() <= PALW_OBJECT_CHUNK_MAX_BYTES, "{} bytes", payload.len());
 }
