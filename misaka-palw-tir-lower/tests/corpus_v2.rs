@@ -224,11 +224,16 @@ fn all_supported(read: &ModelRead) -> (bool, Vec<String>) {
 
 // ───────────────────────────────────────── the read stage ─────────────────────────────────────────
 
-struct Reads {
-    /// The route chosen for lowering and the level it earns.
+/// One way to read the model, in order of preference: the standard template alone (A), a built-in
+/// adapter (B), a third-party adapter file (B). The first whose whole pipeline holds is the level.
+struct Candidate {
     level: &'static str,
     via: String,
-    chosen: Option<ModelRead>,
+    read: ModelRead,
+}
+
+struct Reads {
+    candidates: Vec<Candidate>,
     json: Value,
 }
 
@@ -284,35 +289,47 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     let auto_ok = matches!(&auto, Ok(m) if all_supported(m).0);
     let user_ok = matches!(&user, Some(Ok(m)) if all_supported(m).0);
 
-    let (level, via, chosen) = if none_ok && a_same == Some(true) {
-        ("A", "standard template (no adapter)".to_string(), none.ok())
-    } else if auto_ok {
+    // Every route that reads with nothing missing, best first; routes that give the same spec once.
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut seen: Vec<Value> = Vec::new();
+    let mut push = |level: &'static str, via: String, m: ModelRead| {
+        let key = comparable(m.spec.clone());
+        if !seen.contains(&key) {
+            seen.push(key);
+            candidates.push(Candidate { level, via, read: m });
+        }
+    };
+    if none_ok && a_same == Some(true) {
+        push("A", "standard template (no adapter)".to_string(), none.ok().expect("none"));
+    }
+    if auto_ok {
         let m = auto.ok().expect("auto");
-        let via = match &m.adapter {
-            misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } => format!("built-in adapter `{id}`"),
-            _ => "standard template (no adapter)".to_string(),
+        let (level, via) = match &m.adapter {
+            misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } => ("B", format!("built-in adapter `{id}`")),
+            _ => ("A", "standard template (no adapter)".to_string()),
         };
-        (if matches!(m.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::None) { "A" } else { "B" }, via, Some(m))
-    } else if user_ok {
+        push(level, via, m);
+    }
+    if user_ok {
         let m = user.expect("user").ok().expect("user read");
         let id = match &m.adapter {
             misaka_palw_tir_lower::hf_schema::AdapterSource::UserFile { id, .. } => id.clone(),
             _ => "?".into(),
         };
-        ("B", format!("third-party adapter `{id}` (tools/corpus/adapters)"), Some(m))
-    } else {
-        ("C", "-".to_string(), None)
-    };
+        push("B", format!("third-party adapter `{id}` (tools/corpus/adapters)"), m);
+    }
 
     // The report for the best route: its features and MISSING items (Level C names them).
-    let opts = if level == "B" && via.starts_with("third-party") {
+    let best_user = candidates.first().is_some_and(|c| c.via.starts_with("third-party"));
+    let opts = if best_user {
         ReadOptions { adapter: AdapterChoice::Text(user_text.clone().unwrap_or_default()) }
     } else {
         ReadOptions { adapter: AdapterChoice::Auto }
     };
     let rep = analyze(cfg, tensors, &opts);
     j.insert("report".into(), report_json(&rep));
-    Reads { level, via, chosen, json: Value::Object(j) }
+    j.insert("claimed_level".into(), json!(candidates.first().map(|c| c.level).unwrap_or("C")));
+    Reads { candidates, json: Value::Object(j) }
 }
 
 // ───────────────────────────────────────── the pipeline ─────────────────────────────────────────
@@ -983,49 +1000,63 @@ fn run_entry(e: &Entry, full: bool) -> Value {
 
     let reads = read_stage(e, &cfg, tensors.as_ref());
     out.insert("read".into(), reads.json.clone());
-    out.insert("level".into(), json!(reads.level));
-    out.insert("via".into(), json!(reads.via));
+    let claimed = reads.json["claimed_level"].as_str().unwrap_or("C").to_string();
+    out.insert("claimed_level".into(), json!(claimed));
     let mut stages = serde_json::Map::new();
-    let mut failed: Option<&str> = None;
+    let mut failed: Option<String> = None;
+    let mut level = "C".to_string();
+    let mut via = "-".to_string();
     if matches!(e.route.as_str(), "encdec" | "vision") {
         let cfg_text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
         out.insert("core".into(), probe_core_route(e, &misaka_palw_tir_lower::hf_config::sanitize_json(&cfg_text), tensors.as_ref()));
     }
-    if let Some(read) = &reads.chosen {
-        if e.route == "encoder-bidir" {
-            match catch_unwind(AssertUnwindSafe(|| run_bidir(read, heavy.as_deref().unwrap_or(Path::new("/nonexistent")), full))) {
-                Ok((st, f)) => {
-                    for (k, s) in &st {
-                        stages.insert((*k).to_string(), stage_json(s));
-                    }
-                    failed = f;
-                }
-                Err(p) => {
-                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
-                    stages.insert("panic".into(), json!({"ok": false, "error": short(&msg, 500)}));
-                    failed = Some("panic");
-                }
-            }
-        } else if matches!(e.route.as_str(), "decoder" | "vlm") {
-            match catch_unwind(AssertUnwindSafe(|| run_decoder(e, read, heavy.as_deref().unwrap_or(Path::new("/nonexistent")), full))) {
-                Ok((st, f)) => {
-                    for (k, s) in &st {
-                        stages.insert((*k).to_string(), stage_json(s));
-                    }
-                    failed = f;
-                }
-                Err(p) => {
-                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
-                    stages.insert("panic".into(), json!({"ok": false, "error": short(&msg, 500)}));
-                    failed = Some("panic");
-                }
-            }
-        } else {
-            stages.insert("route".into(), json!({"ok": true, "note": format!("route `{}` has no pipeline stage in this harness yet (read stage only)", e.route)}));
-        }
-    } else {
-        failed = Some("read");
+    let dir = heavy.as_deref().unwrap_or(Path::new("/nonexistent"));
+    let pipeline = matches!(e.route.as_str(), "decoder" | "vlm" | "encoder-bidir");
+    let mut refuted: Vec<Value> = Vec::new();
+    if reads.candidates.is_empty() {
+        failed = Some("read".into());
+    } else if !pipeline {
+        stages.insert("route".into(), json!({"ok": true, "note": format!("route `{}` has no pipeline stage in this harness yet (read stage only)", e.route)}));
+        level = reads.candidates[0].level.to_string();
+        via = reads.candidates[0].via.clone();
     }
+    if pipeline {
+        for (ci, c) in reads.candidates.iter().enumerate() {
+            let run = catch_unwind(AssertUnwindSafe(|| {
+                if e.route == "encoder-bidir" { run_bidir(&c.read, dir, full) } else { run_decoder(e, &c.read, dir, full) }
+            }));
+            let (st, f) = match run {
+                Ok(x) => x,
+                Err(p) => {
+                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    let mut m = BTreeMap::new();
+                    m.insert("panic", Stage { ok: false, ms: 0, data: json!({"error": short(&msg, 500)}) });
+                    (m, Some("panic"))
+                }
+            };
+            let this: serde_json::Map<String, Value> = st.iter().map(|(k, s)| ((*k).to_string(), stage_json(s))).collect();
+            let last = ci + 1 == reads.candidates.len();
+            if f.is_none() {
+                stages = this;
+                level = c.level.to_string();
+                via = c.via.clone();
+                failed = None;
+                break;
+            }
+            let why = f.map(|n| this.get(n).and_then(|v| v["error"].as_str()).unwrap_or("").to_string()).unwrap_or_default();
+            refuted.push(json!({"level": c.level, "via": c.via, "failed_stage": f, "error": short(&why, 400)}));
+            if last {
+                // no route reproduces the model: it is not supported (Level C), whatever the reader claimed
+                stages = this;
+                level = "C".to_string();
+                via = format!("{} (refuted: {})", c.via, f.unwrap_or("?"));
+                failed = f.map(str::to_string);
+            }
+        }
+    }
+    out.insert("level".into(), json!(level));
+    out.insert("via".into(), json!(via));
+    out.insert("refuted_routes".into(), json!(refuted));
     out.insert("stages".into(), Value::Object(stages));
     out.insert("failed_stage".into(), json!(failed));
     out.insert("ms".into(), json!(t0.elapsed().as_millis() as u64));
@@ -1110,7 +1141,7 @@ fn every_entry_reads_to_a_level_from_its_light_spec() {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for x in entries {
         *counts.entry(x["level"].as_str().unwrap_or("?").to_string()).or_default() += 1;
-        if x["level"] == "C" && x["route"] == "decoder" {
+        if x["claimed_level"] == "C" && x["route"] == "decoder" {
             // a refusal is never silent: it names a missing item or an unmapped key or gives an error
             let rep = &x["read"]["report"];
             let named = !rep["missing"].as_array().map(Vec::is_empty).unwrap_or(true)

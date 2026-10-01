@@ -159,7 +159,7 @@ add("ernie4_5", "text/dense", "decoder", "Ernie4_5ForCausalLM", "ernie4_5", "cau
 add("bitnet", "text/dense", "decoder", "BitNetForCausalLM", "bitnet", "causal",
     dict(num_key_value_heads=2, head_dim=8), usage="l", why="ternary weights with per-token int8 activation quantisation and sub-layer norms (BitNet b1.58)", examples=["microsoft/bitnet-b1.58-2B-4T"])
 add("persimmon", "text/dense", "decoder", "PersimmonForCausalLM", "persimmon", "causal",
-    dict(num_key_value_heads=None), usage="l", why="LayerNorm, QK layer-norm, ReLU², partial rotary, per-head fused qkv (Adept)", examples=["adept/persimmon-8b-base"])
+    dict(), usage="l", why="LayerNorm, QK layer-norm, ReLU², partial rotary, per-head fused qkv (Adept)", examples=["adept/persimmon-8b-base"])
 add("diffllama", "text/dense", "decoder", "DiffLlamaForCausalLM", "diffllama", "causal",
     dict(num_key_value_heads=2, head_dim=8), usage="l", why="differential attention: the difference of two softmax maps", examples=["kajuma/DiffLlama-0.3B-handson"])
 add("cwm", "text/dense", "decoder", "CwmForCausalLM", "cwm", "causal",

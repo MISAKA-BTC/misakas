@@ -653,9 +653,7 @@
    "hf_arch": "PersimmonForCausalLM",
    "model_type": "persimmon",
    "builder": "causal",
-   "cfg": {
-    "num_key_value_heads": null
-   },
+   "cfg": {},
    "usage": "l",
    "share": null,
    "why": "LayerNorm, QK layer-norm, ReLU\u00b2, partial rotary, per-head fused qkv (Adept)",
