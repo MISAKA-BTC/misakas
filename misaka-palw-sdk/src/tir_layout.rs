@@ -373,6 +373,40 @@ pub struct TirDeclaredLayoutV1 {
     pub file_digest: [u8; 64],
 }
 
+/// **The step leaves an IR claim's data-availability answer may commit, under the rules the offline
+/// gate asks** ([`TirOfflineGateV1`]): below `palw_tir_fence2` the chain verifies every IR answer's
+/// binding at `PALW_STEP_LEG_MAX_LEAVES` (2^22), so an attempt whose canonical job commits more could
+/// answer no demand — its producer would default whatever it did; past the fence at the class's
+/// ladder, where admission itself bounds the canonical job (one seat's reach), so `None` here.
+pub fn tir_da_answer_leaf_cap_v1(params: &Params) -> Option<u64> {
+    let gate = TirOfflineGateV1::of(params);
+    (!gate.params.palw_tir_fence2_active_at(gate.daa)).then_some(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// **Could an attempt of `class` answer a data-availability demand?** Its canonical job's step leaves
+/// within [`tir_da_answer_leaf_cap_v1`] — refused by name otherwise: declare-layout never writes a
+/// class whose producers could only default (a larger `--tile-len` or a shorter `--max-context`
+/// commits fewer leaves).
+pub fn tir_canonical_job_answerable_v1(params: &Params, class: &PalwTirClassV1) -> Result<(), String> {
+    let Some(cap) = tir_da_answer_leaf_cap_v1(params) else { return Ok(()) };
+    let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
+        .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
+    let class_id = class.class_id(&Hash64::from_bytes([0; 64]));
+    let program = class.decode_program().map_err(|e| format!("the program does not decode: {e}"))?;
+    let facts = kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1::of(class, &program, class_id);
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&facts, canonical);
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(class).map_err(|e| e.to_string())?;
+    let leaves = space.leaf_count_capped(&job, u64::MAX).map_err(|e| e.to_string())?;
+    if leaves > cap {
+        return Err(format!(
+            "TIR_DA_UNANSWERABLE (the canonical job commits {leaves} step leaves and the chain verifies an IR data-availability \
+             answer at {cap} until palw_tir_fence2: every producer of this class would default on a demand — declare a larger \
+             --tile-len or a shorter --max-context)"
+        ));
+    }
+    Ok(())
+}
+
 /// **The ruleset an offline admission is asked under**: the network's own where `palw_tir_v1` is
 /// armed on it (at the fence's height), else — on testnet-12, whose IR fence is a post-launch flag
 /// day not yet scheduled — the same ruleset with the fence armed at DAA 1, so a layout is judged by
@@ -542,7 +576,10 @@ pub fn tir_declare_layout_v1(
     let (layout, admission) = tir_declare_search_v1(
         &mut |logits_tile, h_chunk| tir_layout_tiles_v1(params, program, &TirLayoutChoiceV1 { logits_tile, h_chunk, ..*choice }),
         &mut |layout| tir_court_checkpoint_interval_v1(params, bundle, program, layout),
-        &mut |layout| tir_class_admission_offline_v1(params, bundle, &class_of(layout), artifact_root),
+        &mut |layout| {
+            tir_class_admission_offline_v1(params, bundle, &class_of(layout), artifact_root)?;
+            tir_canonical_job_answerable_v1(params, &class_of(layout))
+        },
         &logits_tiles,
         choice.h_chunk,
         recurrent,
@@ -582,6 +619,53 @@ mod tests {
     use std::sync::Arc;
 
     const CONTEXT: u32 = 32;
+
+    /// **A canonical job past 2^22 step leaves is refused under the live rules** — the chain verifies
+    /// an IR data-availability answer at 2^22 until `palw_tir_fence2`, so every producer of such a class
+    /// would default on a demand — and passes where the fence is in force (admission bounds it there).
+    /// The Qwen2.5-1.5B A16 program at 64-lane tiles: its canonical job at 512 positions (64 of them)
+    /// answers; at 8,192 (1,024) it commits past 2^22.
+    #[test]
+    fn a_canonical_job_no_producer_could_answer_is_refused_until_the_second_fence() {
+        let g = kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B;
+        let shape = misaka_palw_base0::artifact::Base0ShapeV1 {
+            n_layers: g.layer_count as usize,
+            n_heads: g.attn_heads as usize,
+            n_kv_heads: g.attn_kv_heads as usize,
+            d_head: g.attn_head_dim as usize,
+            d_ff: g.ffn_dim as usize,
+            vocab: g.vocab_size as usize,
+            max_position: g.n_ctx as usize,
+            ln_theta_gen_q: 0,
+            eps_q: g.rms_eps_q,
+        };
+        let program = misaka_palw_base0::tir_a16::a16_mirror_program(&shape, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL)
+            .expect("the A16 program");
+        let program = tir_program_with_scheme_v1(&program, None).unwrap();
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let class_at = |max_context: u32| {
+            let choice = TirLayoutChoiceV1 { max_context: Some(max_context), logits_tile: Some(1024), ..Default::default() };
+            PalwTirClassV1 {
+                version: PALW_TIR_CLASS_VERSION_V1,
+                program: program.encode(),
+                layout: tir_layout_tiles_v1(&params, &program, &choice).unwrap(),
+                tokenizer_id: Hash64::from_bytes([0; 64]),
+            }
+        };
+        assert_eq!(tir_da_answer_leaf_cap_v1(&params), Some(1 << 22), "testnet-12 today: palw_tir_fence2 dormant");
+        tir_canonical_job_answerable_v1(&params, &class_at(512)).expect("64 positions answer");
+        let refused = tir_canonical_job_answerable_v1(&params, &class_at(8_192)).expect_err("1,024 positions commit past 2^22");
+        assert!(refused.contains("TIR_DA_UNANSWERABLE"), "{refused}");
+        let mut armed = params.clone();
+        (kaspa_consensus_core::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY.set)(
+            &mut armed,
+            Some(kaspa_consensus_core::config::params::ForkActivation::new(
+                params.palw_tir_v1_fence().map_or(1, |f| f.activation.daa_score()),
+            )),
+        );
+        assert_eq!(tir_da_answer_leaf_cap_v1(&armed), None, "past the second fence admission bounds the job");
+        tir_canonical_job_answerable_v1(&armed, &class_at(8_192)).expect("the class's ladder, past the fence");
+    }
 
     /// A layout of one commit tile and the logits tile, at `h_tile`, the interval left for the search.
     fn stub_layout(logits_tile: Option<u32>, h_tile: u32) -> Result<PalwTirLayoutV1, String> {
