@@ -300,25 +300,200 @@ fn breakdown_of_the_close_at_a_kind() {
     }
 }
 
-/// **The court battery**: a lie planted at the FIRST leaf of every commit-point kind is convicted by the cone close at that
-/// leaf, an honest claim is acquitted there, the close rides the one-move accusation; plus the output lie. Slow in debug (a
-/// lying execution's evidence per kind): `cargo test -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture`.
+/// **PALW-GEN-20**: the PALW-TIR-38 twin (`palw_tir_worst_closes_v1`) over every stage's version-1 view — an ANALYTIC bound of
+/// each commit point's worst terminal close over every job of the class, without enumerating a position — beside the worker's
+/// MEASURED close at the first leaf of every commit POINT (stage, block, node). The twin is a sound bound only where it is at least
+/// the measured close; this prints both per point, the ratio, and the points where it is not.
 #[test]
-#[ignore = "slow in debug: one lying execution's evidence per commit-point kind"]
+#[ignore = "slow: a worker cone close per commit point; prints the twin beside the measurement"]
+fn the_close_twin_bounds_the_measured_closes_per_commit_point() {
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_v1};
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
+    use kaspa_consensus_core::palw_v2::PalwJobContextV2;
+    let Some(c) = sd3_class() else { return };
+    let (held, _file) = held(&c);
+    let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
+    let ev = honest.evidence(&held);
+    // The first leaf of every (stage, block, node).
+    let mut first: BTreeMap<(u8, u8, u16), u64> = BTreeMap::new();
+    for l in honest.leaf_listing() {
+        if l.lanes == 0 {
+            continue;
+        }
+        if let Some(("commit", rest)) = l.kind.split_once(' ') {
+            let (occ, node) = rest.split_once('.').expect("occurrence.node");
+            let (occ, node): (usize, u16) = (occ.parse().unwrap(), node.parse().unwrap());
+            let st = &c.spec.pipeline.stages[l.stage as usize];
+            let (block, _layer) = c.spec.programs[st.program as usize].occurrences()[occ];
+            first.entry((l.stage, block, node)).or_insert(l.global);
+        }
+    }
+    let mut unsound = Vec::new();
+    let mut worst_twin = 0u64;
+    eprintln!("  {:<14} {:>5} {:>5} {:>10} {:>10} {:>7}", "stage", "block", "node", "measured B", "twin B", "ratio");
+    for (s, st) in c.spec.pipeline.stages.iter().enumerate() {
+        let view = c.spec.programs[st.program as usize].v1_view();
+        let info = misaka_palw_tir::validate::validate(&view).expect("the view validates");
+        let space = PalwTirStepSpaceV1::from_program(view.clone(), info, c.declared.class.layouts[s].clone()).expect("the step space");
+        let inventory = PalwTirInventoryIndexV1::new(&view).expect("an inventory");
+        let ctx = PalwJobContextV2 {
+            version: 2,
+            network_id: vec![0; 8],
+            job_id: Hash64::default(),
+            job_nullifier: Hash64::default(),
+            assignment_id: Hash64::default(),
+            execution_seed: [0; 32],
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: Hash64::default(),
+            trace_scheme_id: Hash64::default(),
+            cu_ruleset_id: Hash64::default(),
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::default(),
+            declared_prefill_tokens: st.max_trip,
+            exact_decode_tokens: 1,
+            max_context_tokens: st.max_trip,
+        };
+        // The k-ary court is armed on testnet-12: a history-reducing cone is dissected and priced by its bottom.
+        let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::Multiproof, court: true, cap: 1 << 40, stop_above: None };
+        let bounds =
+            palw_tir_worst_closes_v1(&space, &inventory, &ctx, &sizing).unwrap_or_else(|e| panic!("stage {s}: the twin refuses: {e}"));
+        for b in &bounds {
+            worst_twin = worst_twin.max(b.close_bytes);
+            let Some(leaf) = first.get(&(s as u8, b.block, b.node)) else { continue };
+            if is_dissected(&held, &honest, *leaf) {
+                eprintln!("  {:<14} {:>5} {:>5} {:>10} {:>10} {:>7}", st.name, b.block, b.node, "dissected", b.close_bytes, "-");
+                continue;
+            }
+            let close = ev.cone_close(*leaf, &LIMITS).unwrap_or_else(|e| panic!("stage {s} block {} node {}: {e}", b.block, b.node));
+            let measured = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close) }).unwrap().len() as u64;
+            let ratio = b.close_bytes as f64 / measured as f64;
+            eprintln!(
+                "  {:<14} {:>5} {:>5} {:>10} {:>10} {:>7.2}{}",
+                st.name,
+                b.block,
+                b.node,
+                measured,
+                b.close_bytes,
+                ratio,
+                if ratio < 1.0 { "  <-- UNDER" } else { "" }
+            );
+            if b.close_bytes < measured {
+                unsound.push((st.name.clone(), b.block, b.node, measured, b.close_bytes));
+            }
+        }
+    }
+    eprintln!(
+        "the twin's largest bound over every stage: {worst_twin} B; {} commit points where it is below the measurement: {unsound:?}",
+        unsound.len()
+    );
+}
+
+/// **PALW-GEN-20, the analytic twin of the generative close**: the PALW-TIR-38 twin over every stage's version-1 view with the
+/// param openings priced as the generative close carries them (`PerLeaf`: one opening, one full path per axis-0 row, the
+/// path at the CLASS's inventory depth, not the stage's), against measured closes read from `SD3_MEASURED=<json>` (a list of
+/// `[stage name, block, node, bytes]` written from `the_close_twin_bounds_the_measured_closes_per_commit_point`'s output).
+/// The twin must be at least the measurement at every commit point.
+#[test]
+#[ignore = "needs SD3_MEASURED=<json>"]
+fn the_per_leaf_close_twin_is_at_least_every_measured_close() {
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseSizingV1, PalwTirParamFormV1, palw_tir_worst_closes_v1};
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1;
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1;
+    let Some(c) = sd3_class() else { return };
+    let path = std::env::var("SD3_MEASURED").expect("SD3_MEASURED=<json>");
+    let measured: Vec<(String, u8, u16, u64)> = serde_json::from_slice::<Vec<serde_json::Value>>(&std::fs::read(path).unwrap())
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (v[0].as_str().unwrap().to_string(), v[1].as_u64().unwrap() as u8, v[2].as_u64().unwrap() as u16, v[3].as_u64().unwrap())
+        })
+        .collect();
+    let mut under = Vec::new();
+    let mut worst_ratio = f64::MAX;
+    for (s, st) in c.spec.pipeline.stages.iter().enumerate() {
+        let view = c.spec.programs[st.program as usize].v1_view();
+        let info = misaka_palw_tir::validate::validate(&view).expect("the view validates");
+        let space = PalwTirStepSpaceV1::from_program(view.clone(), info, c.declared.class.layouts[s].clone()).expect("the step space");
+        let inventory = PalwTirInventoryIndexV1::new(&view).expect("an inventory");
+        let ctx = twin_ctx(st.max_trip);
+        let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court: true, cap: 1 << 40, stop_above: None };
+        let bounds = palw_tir_worst_closes_v1(&space, &inventory, &ctx, &sizing).unwrap_or_else(|e| panic!("stage {s}: {e}"));
+        for b in &bounds {
+            if let Some((_, _, _, m)) = measured.iter().find(|(n, bl, no, _)| *n == st.name && *bl == b.block && *no == b.node) {
+                let ratio = b.close_bytes as f64 / *m as f64;
+                worst_ratio = worst_ratio.min(ratio);
+                if ratio < 1.0 {
+                    under.push((st.name.clone(), b.block, b.node, *m, b.close_bytes));
+                }
+            }
+        }
+    }
+    eprintln!("PerLeaf twin / measured: smallest ratio {worst_ratio:.3}; below the measurement at {} points: {under:?}", under.len());
+}
+
+fn twin_ctx(positions: u32) -> kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+    kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+        version: 2,
+        network_id: vec![0; 8],
+        job_id: Hash64::default(),
+        job_nullifier: Hash64::default(),
+        assignment_id: Hash64::default(),
+        execution_seed: [0; 32],
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: Hash64::default(),
+        trace_scheme_id: Hash64::default(),
+        cu_ruleset_id: Hash64::default(),
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: Hash64::default(),
+        declared_prefill_tokens: positions,
+        exact_decode_tokens: 1,
+        max_context_tokens: positions,
+    }
+}
+
+/// **The court battery**: a lie planted at the FIRST leaf of every commit-point kind is convicted by the cone close at that
+/// leaf and an honest claim is acquitted there, the close riding the one-move accusation.
+///
+/// Two runs. (a) ONE lying execution carries a lie at the first leaf of every kind (the leaf values are lied about, not
+/// recomputed downstream), one evidence of it and one of the honest run serve every kind. (b) Independent single lies at one
+/// kind per stage block — so the conviction at a leaf is the lie's own, not a lie upstream propagating into the cone. Plus the
+/// forged output digest. Slow in debug; fast optimised:
+/// `cargo test --config profile.dev.opt-level=2 -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture every_commit_point`.
+#[test]
+#[ignore = "slow in debug: a cone close per kind and per run"]
 fn every_commit_point_kind_convicts_a_planted_lie() {
     let Some(c) = sd3_class() else { return };
     let (held, _file) = held(&c);
     let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).unwrap_or_else(|e| panic!("the worker refuses the job: {e}"));
     let one_move_max = palw_gen_one_move_max_proof_bytes_v1() as usize;
-    let table = kinds(&c, &honest);
-    let mut convicted = 0;
-    for (kind, (leaf, _)) in &table {
-        if is_dissected(&held, &honest, *leaf) {
-            continue;
-        }
-        let lying = honest.planted(&GenPlantV1::StepLane { leaf: *leaf, lane: 0, delta: 3 }).expect("the lie plants");
-        assert_ne!(lying.execution_root(), honest.execution_root());
-        let (proof, bytes) = cone_close(&held, &lying, *leaf).unwrap_or_else(|e| panic!("{kind} (leaf {leaf}): {e}"));
+    let sites: Vec<(String, u64)> = kinds(&c, &honest)
+        .into_iter()
+        .filter(|(_, (leaf, _))| !is_dissected(&held, &honest, *leaf))
+        .map(|(kind, (leaf, _))| (kind, leaf))
+        .collect();
+    let close_at = |ev: &kaspa_consensus_core::palw_gen_close_v1::PalwGenEvidenceV1<'_>, leaf: u64| {
+        let close = ev.cone_close(leaf, &LIMITS).unwrap_or_else(|e| panic!("leaf {leaf}: {e}"));
+        let proof = PalwCourtVerdictProofV2::GenCone { close: Box::new(close) };
+        let bytes = borsh::to_vec(&proof).unwrap().len();
+        (proof, bytes)
+    };
+
+    // (a) one lying execution, a lie at every kind's first leaf.
+    // Each lie has its own size: two lies of one size on a pass-through chain (a carry copied from the leaf before it) would
+    // agree with each other and convict nobody.
+    let mut lying = honest.planted(&GenPlantV1::StepLane { leaf: sites[0].1, lane: 0, delta: 3 }).expect("the first lie plants");
+    for (k, (_, leaf)) in sites.iter().enumerate().skip(1) {
+        lying = lying.planted(&GenPlantV1::StepLane { leaf: *leaf, lane: 0, delta: 3 + k as i64 }).expect("the lie plants");
+    }
+    assert_ne!(lying.execution_root(), honest.execution_root());
+    let (ev_lie, ev_honest) = (lying.evidence(&held), honest.evidence(&held));
+    for (kind, leaf) in &sites {
+        let (proof, bytes) = close_at(&ev_lie, *leaf);
         assert_eq!(
             verdict(&c, &lying, &proof, *leaf),
             Ok(PalwCourtVerdictV2::ExecutorGuilty),
@@ -328,16 +503,35 @@ fn every_commit_point_kind_convicts_a_planted_lie() {
             bytes <= one_move_max && palw_gen_one_move_proof_is_admissible_v1(&proof),
             "{kind}: the close rides the one-move accusation"
         );
-        let (hp, _) = cone_close(&held, &honest, *leaf).unwrap();
+        let (hp, _) = close_at(&ev_honest, *leaf);
         assert_eq!(
             verdict(&c, &honest, &hp, *leaf),
             Ok(PalwCourtVerdictV2::ChallengerDefeated),
             "{kind}: an honest claim is acquitted"
         );
-        convicted += 1;
-        eprintln!("  convicted at {kind} (leaf {leaf}), close {bytes} B");
+        eprintln!("  (a) convicted at {kind} (leaf {leaf}), close {bytes} B");
     }
-    eprintln!("{convicted} commit-point kinds convicted");
+
+    // (b) independent single lies: one kind per stage block.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut single = 0;
+    for (kind, leaf) in &sites {
+        let block = kind.rsplit_once(" / ").map(|(b, _)| b.to_string()).unwrap_or_else(|| kind.clone());
+        if !seen.insert(block) {
+            continue;
+        }
+        let one = honest.planted(&GenPlantV1::StepLane { leaf: *leaf, lane: 0, delta: 3 }).expect("the lie plants");
+        let (proof, bytes) = close_at(&one.evidence(&held), *leaf);
+        assert_eq!(
+            verdict(&c, &one, &proof, *leaf),
+            Ok(PalwCourtVerdictV2::ExecutorGuilty),
+            "{kind}: a single lie is convicted at its own leaf"
+        );
+        single += 1;
+        eprintln!("  (b) single lie convicted at {kind} (leaf {leaf}), close {bytes} B");
+    }
+    eprintln!("{} kinds convicted in one lying run, {single} independent single lies convicted", sites.len());
+
     // The forged output digest: the step tree honest, the claimed canonical output not its own.
     let lying_output = honest.planted(&GenPlantV1::OutputLane { lane: 0, delta: 1 }).expect("the output lie plants");
     assert_ne!(lying_output.execution_root(), honest.execution_root());
