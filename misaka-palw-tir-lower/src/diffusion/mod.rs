@@ -10,11 +10,12 @@
 //!   timestep sinusoid, the sampler's sigma table;
 //! * [`sink`] — the integer params a lowering produces, keyed by name and bound to a program's param indices;
 //! * [`act`] — `ACT_TABLE_V1`, SiLU and GELU-tanh as `i16` tables on the code grid;
+//! * [`ada`] — `MOD_ADALN_V1`, the modulated LayerNorm and the gated residual;
 //! * [`attn`] — `ATTN_JOINT_STREAMS_V1`, MMDiT's joint attention over both streams with committed row statistics;
 //! * [`linear`] — a quantised linear map: `i8` weights per output channel, one narrowing per channel;
 //! * [`conv`] — `CONV_DENSE_V1`, a dense 2-D convolution as im2col by a pinned index table and that linear map;
 //! * [`norm`] — `NORM_GROUP_SPATIAL_V1`, GroupNorm with committed row partials (no cone reads a whole tensor);
-//! * the rest of the vocabulary (`MOD_ADALN_V1`, `PATCH_EMBED_V1`, `EMBED_TIMESTEP_TABLE_V1`, `GEN_SAMPLER_AFFINE_V1`,
+//! * the rest of the vocabulary (`PATCH_EMBED_V1`, `EMBED_TIMESTEP_TABLE_V1`, `GEN_SAMPLER_AFFINE_V1`,
 //!   `GEN_STAGE_VAE_V1`) follows, one file each.
 //!
 //! **Conventions** (the library's, spec 04b §11): activations are `i16` codes at a calibrated per-site scale
@@ -23,6 +24,7 @@
 //! lossy site is named; the float is only ever read at registration, and no float is left in a program.
 
 pub mod act;
+pub mod ada;
 pub mod attn;
 pub mod conv;
 pub mod linear;
