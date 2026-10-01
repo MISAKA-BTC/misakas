@@ -342,17 +342,34 @@ impl PalwGenStepSpaceV1 {
         consumed_from: Option<u32>,
         prompt_len: u32,
     ) -> Result<u128, PalwGenStepErrorV1> {
+        Ok(Self::stage_leaf_counts_v1(pipeline, programs, layouts, trips, consumed_from, prompt_len)?
+            .into_iter()
+            .fold(0u128, |total, count| total.saturating_add(count)))
+    }
+
+    /// **Every stage's leaf count, in closed form** (what [`Self::leaf_count_v1`] sums): a stage's tree is as deep as its own count —
+    /// every leaf is opened under its stage's root (RFC-0003 PALW-GEN-20 prices a path by it).
+    pub fn stage_leaf_counts_v1(
+        pipeline: &TirPipelineV1,
+        programs: &[TirProgramV2],
+        layouts: &[PalwTirLayoutV1],
+        trips: &[u32],
+        consumed_from: Option<u32>,
+        prompt_len: u32,
+    ) -> Result<Vec<u128>, PalwGenStepErrorV1> {
         if layouts.len() != pipeline.stages.len() || trips.len() != pipeline.stages.len() {
             return Err(PalwGenStepErrorV1::Class("one layout and one trip count per stage".into()));
         }
-        let mut total = 0u128;
-        for (s, st) in pipeline.stages.iter().enumerate() {
-            let text = misaka_palw_tir::pipeline::is_stream(st.trip);
-            let consumed = text.then(|| consumed_from.unwrap_or(prompt_len.saturating_sub(1)));
-            let count = stage_leaf_count(s as u8, &programs[st.program as usize], &layouts[s], trips[s], consumed)?;
-            total = total.saturating_add(count);
-        }
-        Ok(total)
+        pipeline
+            .stages
+            .iter()
+            .enumerate()
+            .map(|(s, st)| {
+                let text = misaka_palw_tir::pipeline::is_stream(st.trip);
+                let consumed = text.then(|| consumed_from.unwrap_or(prompt_len.saturating_sub(1)));
+                stage_leaf_count(s as u8, &programs[st.program as usize], &layouts[s], trips[s], consumed)
+            })
+            .collect()
     }
 }
 
