@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "glm",
   "doc": "GLM (glm-4-9b-chat-hf, GLM-Edge): Llama math with a fused gate_up_proj, q/k/v biases (attention_bias, default true; o_proj never), partial interleaved rotary (default 0.5).",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GlmForCausalLM"], "model_types": ["glm"]},
   "config": {"defaults": {"vocab_size": 151552, "intermediate_size": 13696, "num_hidden_layers": 40, "num_key_value_heads": 2, "head_dim": 128, "max_position_embeddings": 131072, "rms_norm_eps": 1.5625e-07, "attention_bias": true}},
   "vars": [

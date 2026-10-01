@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "granite",
   "doc": "Granite: the standard decoder with four multipliers — on the embedding, on each branch of the residual, on the attention scores (replacing 1/sqrt(d)), and 1/logits_scaling on the logits.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GraniteForCausalLM"], "model_types": ["granite"]},
   "config": {
     "defaults": {"embedding_multiplier": 1.0, "residual_multiplier": 1.0, "attention_multiplier": 1.0, "logits_scaling": 1.0}

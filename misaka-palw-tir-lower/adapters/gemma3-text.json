@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "gemma3-text",
   "doc": "Gemma-3's text decoder: Gemma-2's sandwich norms with a per-head shared (1+w) QK-norm, 5:1 sliding/global, local and global rope (theta rope_local_base_freq / rope_parameters per layer type) and optional soft-caps.",
-  "extends": ["standard-decoder", "mixin-gemma"],
+  "extends": ["decoder-core", "mixin-gemma"],
   "match": {"architectures": ["Gemma3ForCausalLM"], "model_types": ["gemma3_text"]},
   "config": {"defaults": {"vocab_size": 262208, "hidden_size": 2304, "intermediate_size": 9216, "num_hidden_layers": 26, "num_attention_heads": 8, "num_key_value_heads": 4, "max_position_embeddings": 131072, "hidden_activation": "gelu_pytorch_tanh", "query_pre_attn_scalar": 256.0, "sliding_window": 4096, "rope_local_base_freq": 10000.0}, "inert": ["cache_implementation"]},
   "vars": [

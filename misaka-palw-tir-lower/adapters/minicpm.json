@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "minicpm",
   "doc": "MiniCPM (remote code modeling_minicpm): muP scalings — embedding scale_emb, branch scale_depth/sqrt(layers), head input scaled by dim_model_base/hidden — tied by default.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["MiniCPMForCausalLM"], "model_types": ["minicpm"]},
   "remote_code": ["modeling_minicpm.MiniCPMForCausalLM"],
   "remote_code_required": true,

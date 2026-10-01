@@ -1,0 +1,7 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm",
+  "doc": "Vision-language wrappers read as their text decoder: the decoder's own model_type picks the decoder adapter; the vision side is inert.",
+  "match": {"architectures": ["Gemma3ForConditionalGeneration", "LlavaForConditionalGeneration", "Mistral3ForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]},
+  "dispatch": {"key": "text_config.model_type", "default": {"Gemma3ForConditionalGeneration": "gemma3_text", "Mistral3ForConditionalGeneration": "mistral", "Qwen3_5ForConditionalGeneration": "qwen3_5_text", "Qwen3_5MoeForConditionalGeneration": "qwen3_5_moe_text", "*": "llama"}, "to": {"gemma3_text": "vlm-gemma3", "llama": "vlm-llama", "mistral": "vlm-mistral", "ministral3": "vlm-mistral", "qwen2": "vlm-qwen2", "qwen2_vl_text": "vlm-qwen2-vl", "qwen2_5_vl_text": "vlm-qwen2-vl", "qwen3_5_text": "vlm-qwen3-5", "qwen3_5_moe_text": "vlm-qwen3-5-moe"}}
+}

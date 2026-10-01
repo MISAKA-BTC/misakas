@@ -1,0 +1,33 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-gdn-hybrid",
+  "doc": "A mixin: a hybrid of gated-delta-net layers and gated-attention layers (layer_types, or every full_attention_interval-th layer full) with zero-centred (1+w) RMS norms; the delta net's key/value head counts are any integer ratio (linear_num_key_heads : linear_num_value_heads).",
+  "config": {"defaults": {"max_position_embeddings": 32768, "rms_norm_eps": 1e-06, "tie_word_embeddings": false, "attention_bias": false, "head_dim": 256, "num_attention_heads": 16, "linear_num_key_heads": 16, "linear_num_value_heads": 32, "linear_key_head_dim": 128, "linear_value_head_dim": 128, "linear_conv_kernel_dim": 4}, "inert": ["mtp_num_hidden_layers", "mtp_use_dedicated_embeddings", "num_nextn_predict_layers"]},
+  "vars": [
+    {"name": "norm", "value": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "OnePlusW", "bias": false}},
+    {"name": "partial", "value": {"$partial_rotary": {"legacy": ["partial_rotary_factor"], "default": 0.25}}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "interval", "value": {"$let": ["v", {"$cfg?": "full_attention_interval"}, {"$if": [{"$ne": [{"$var": "v"}, null]}, {"$var": "v"}, 4]}]}},
+    {"name": "raw_types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "linear_attention", "attention", "mamba"], "each": {"$if": [{"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "interval"}]}, 0]}, "linear_attention", "full_attention"]}}}},
+    {"name": "types", "value": {"$map": [{"$var": "raw_types"}, "t", {"$switch": [{"$var": "t"}, {"attention": "full_attention", "mamba": "linear_attention"}, {"$var": "t"}]}]}},
+    {"name": "lk", "value": {"$cfg": "linear_num_key_heads"}},
+    {"name": "lv", "value": {"$cfg": "linear_num_value_heads"}},
+    {"name": "lkd", "value": {"$cfg": "linear_key_head_dim"}},
+    {"name": "lvd", "value": {"$cfg": "linear_value_head_dim"}},
+    {"name": "lconv", "value": {"$cfg": "linear_conv_kernel_dim"}},
+    {"name": "gdn_ok", "value": {"$bad": [{"$and": [{"$ne": [{"$var": "lk"}, 0]}, {"$eq": [{"$mod": [{"$var": "lv"}, {"$var": "lk"}]}, 0]}]}, {"$cat": [{"$var": "lv"}, " value heads over ", {"$var": "lk"}, " key heads"]}]}},
+    {"name": "ignored_prefixes", "value": ["mtp."]},
+    {"name": "has_moe", "value": false},
+    {"name": "gdn_layout", "value": "FusedPerKeyHead"},
+    {"name": "gdn", "value": {"k_heads": {"$var": "lk"}, "v_heads": {"$var": "lv"}, "k_dim": {"$var": "lkd"}, "v_dim": {"$var": "lvd"}, "conv_kernel": {"$var": "lconv"}, "head_map": "Group", "norm_eps": {"$var": "eps"}, "l2_eps": 1e-06, "gate_act": "Silu"}},
+    {"name": "qk_norm", "value": {"norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "OnePlusW", "bias": false}, "scope": "PerHeadShared"}},
+    {"name": "attn_extra", "value": {"output_gate": true}},
+    {"name": "l_mixer", "value": {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "full_attention"]}, {"Attention": {"heads": {"$var": "heads"}, "kv_heads": {"$var": "kv"}, "head_dim": {"$var": "hd"}, "v_head_dim": {"$var": "hd"}, "q_bias": {"$var": "abias"}, "k_bias": {"$var": "abias"}, "v_bias": {"$var": "abias"}, "o_bias": {"$var": "abias"}, "qk_norm": {"$var": "qk_norm"}, "position": {"Rope": {"$var": "rope"}}, "scale": {"$var": "attn_scale"}, "output_gate": true}}, {"GatedDeltaNet": {"$var": "gdn"}}]}, "layer": true},
+    {"name": "qkv_bias", "value": {"$var": "abias"}},
+    {"name": "o_bias", "value": {"$var": "abias"}},
+    {"name": "final_norm", "value": {"$var": "norm"}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"$let": ["la", "{p}layers.{L}.linear_attn.", {"$merge": [{"$if": [{"$eq": [{"$var": "gdn_layout"}, "FusedPerKeyHead"]}, {"gdn.qkvz": {"$cat": [{"$var": "la"}, "in_proj_qkvz"]}, "gdn.ba": {"$cat": [{"$var": "la"}, "in_proj_ba"]}}, {"gdn.qkv": {"$cat": [{"$var": "la"}, "in_proj_qkv"]}, "gdn.z": {"$cat": [{"$var": "la"}, "in_proj_z"]}, "gdn.b": {"$cat": [{"$var": "la"}, "in_proj_b"]}, "gdn.a": {"$cat": [{"$var": "la"}, "in_proj_a"]}}]}, {"gdn.conv": {"$cat": [{"$var": "la"}, "conv1d"]}, "gdn.dt_bias": {"$cat": [{"$var": "la"}, "dt_bias"]}, "gdn.A_log": {"$cat": [{"$var": "la"}, "A_log"]}, "gdn.norm": {"$cat": [{"$var": "la"}, "norm"]}, "gdn.out": {"$cat": [{"$var": "la"}, "out_proj"]}}, {"$if": [{"$var": "has_moe"}, {"moe.router": "{p}layers.{L}.mlp.gate", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj", "moe.shared.gate": "{p}layers.{L}.mlp.shared_expert.gate_proj", "moe.shared.up": "{p}layers.{L}.mlp.shared_expert.up_proj", "moe.shared.down": "{p}layers.{L}.mlp.shared_expert.down_proj", "moe.shared_gate": "{p}layers.{L}.mlp.shared_expert_gate"}, {}]}]}]}]}}
+  ],
+  "spec": {"hf": {"gdn": {"$var": "gdn_layout"}}}
+}

@@ -2,6 +2,6 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "llama",
   "doc": "LlamaForCausalLM (Llama 1-3.x, TinyLlama, Vicuna, Yi, SmolLM 1/2, CodeLlama, ...): the standard decoder as it stands. Written down so a Llama configuration is a Level B read with a named adapter; the same configuration is read identically with no adapter (Level A).",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["LlamaForCausalLM"], "model_types": ["llama"]}
 }

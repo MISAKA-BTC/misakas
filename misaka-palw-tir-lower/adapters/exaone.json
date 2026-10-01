@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "exaone",
   "doc": "EXAONE 3.x (remote code): Llama math under GPT-2-style names; RMS norm with layer_norm_epsilon; num_layers.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["ExaoneForCausalLM"], "model_types": ["exaone"]},
   "remote_code": ["modeling_exaone.ExaoneForCausalLM"],
   "remote_code_required": true,

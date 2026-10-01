@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "gpt-bigcode",
   "doc": "GPTBigCode (StarCoder-1, SantaCoder): GPT-2 wiring with nn.Linear and multi-query attention (multi_query), learned positions.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GPTBigCodeForCausalLM"], "model_types": ["gpt_bigcode"]},
   "config": {"defaults": {"vocab_size": 50257, "activation_function": "gelu_pytorch_tanh", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true, "scale_attn_weights": true, "multi_query": true}, "inert": ["attention_softmax_in_fp32", "scale_attention_softmax_in_fp32", "inference_runner", "validate_runner_input", "pre_allocate_kv_cache", "pad_key_length", "max_batch_size", "max_sequence_length"]},
   "vars": [

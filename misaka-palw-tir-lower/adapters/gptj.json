@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "gptj",
   "doc": "GPT-J: interleaved rotary on the first rotary_dim dims (plain, theta 10000), one LayerNorm feeding a parallel attention+MLP, biased LM head.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GPTJForCausalLM"], "model_types": ["gptj"]},
   "config": {"defaults": {"vocab_size": 50400, "activation_function": "gelu_new", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": false, "rotary_dim": 64}},
   "vars": [

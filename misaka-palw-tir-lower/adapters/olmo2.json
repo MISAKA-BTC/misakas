@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "olmo2",
   "doc": "OLMo-2: post-norms only and an RMS q/k norm over the WHOLE projection (not per head).",
-  "extends": ["standard-decoder", "mixin-post-norm"],
+  "extends": ["decoder-core", "mixin-post-norm"],
   "match": {"architectures": ["Olmo2ForCausalLM"], "model_types": ["olmo2"]},
   "config": {"defaults": {"vocab_size": 50304, "rms_norm_eps": 1e-05}},
   "vars": [

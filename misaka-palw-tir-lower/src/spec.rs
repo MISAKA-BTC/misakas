@@ -19,6 +19,14 @@ fn silu() -> Act {
     Act::Silu
 }
 
+fn infinity() -> f64 {
+    f64::INFINITY
+}
+
+fn f64_or_infinity<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(d)?.unwrap_or(f64::INFINITY))
+}
+
 /// Where the reference semantics come from. A checkpoint that needs `trust_remote_code` is
 /// modelled only for remote-code modules this lowerer names; everything else is refused.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -381,6 +389,8 @@ pub struct Mamba2Spec {
     /// Groups of the gated RMSNorm (1 = over the full inner width).
     pub norm_groups: usize,
     pub dt_min: f64,
+    /// `+∞` when unbounded: JSON has no infinity, so `null` (what serialisation writes for it) is read back as `+∞`.
+    #[serde(default = "infinity", deserialize_with = "f64_or_infinity")]
     pub dt_max: f64,
     /// Leading `2·d_mlp` rows of `in_proj` that HF discards.
     pub d_mlp: usize,

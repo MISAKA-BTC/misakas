@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "nemotron",
   "doc": "Nemotron (Minitron): LayerNorm1P `(1+w)·x̂ + b`, squared-ReLU ungated MLP, partial rotary (default 0.5).",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["NemotronForCausalLM"], "model_types": ["nemotron"]},
   "config": {"defaults": {"vocab_size": 256000, "hidden_size": 6144, "intermediate_size": 24576, "num_attention_heads": 48, "hidden_act": "relu2", "max_position_embeddings": 4096, "norm_eps": 1e-05, "partial_rotary_factor": 0.5}},
   "vars": [

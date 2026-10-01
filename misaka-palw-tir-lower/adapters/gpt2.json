@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "gpt2",
   "doc": "GPT-2: learned positions, Conv1D weights stored [in, out], fused c_attn, no rotary; scale_attn_weights and scale_attn_by_inverse_layer_idx change the score scale.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GPT2LMHeadModel"], "model_types": ["gpt2"]},
   "config": {"defaults": {"vocab_size": 50257, "activation_function": "gelu_new", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true, "scale_attn_weights": true, "scale_attn_by_inverse_layer_idx": false}, "inert": ["reorder_and_upcast_attn", "n_ctx"]},
   "vars": [

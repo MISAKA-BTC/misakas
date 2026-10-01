@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "opt",
   "doc": "OPT: learned positions at pos + 2, pre-LN (post-LN for OPT-350m), project_in/out when the embedding width differs, ReLU MLP.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["OPTForCausalLM"], "model_types": ["opt"]},
   "config": {"defaults": {"vocab_size": 50272, "hidden_size": 768, "num_hidden_layers": 12, "ffn_dim": 3072, "num_attention_heads": 12, "max_position_embeddings": 2048, "do_layer_norm_before": true, "_remove_final_layer_norm": false, "activation_function": "relu", "enable_bias": true, "layer_norm_elementwise_affine": true, "tie_word_embeddings": true}},
   "vars": [

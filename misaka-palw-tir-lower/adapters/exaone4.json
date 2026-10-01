@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "exaone4",
   "doc": "EXAONE 4.0: post-norms (OLMo-2 style), per-head QK-norm, 3:1 sliding/global with NoPE globals when sliding_window is set.",
-  "extends": ["standard-decoder", "mixin-post-norm"],
+  "extends": ["decoder-core", "mixin-post-norm"],
   "match": {"architectures": ["Exaone4ForCausalLM"], "model_types": ["exaone4"]},
   "config": {"defaults": {"vocab_size": 102400, "intermediate_size": 16384, "num_key_value_heads": 32, "rms_norm_eps": 1e-05}},
   "vars": [

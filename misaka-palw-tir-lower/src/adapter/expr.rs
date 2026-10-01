@@ -15,11 +15,11 @@
 //! | group | operators |
 //! | --- | --- |
 //! | configuration | `$cfg` (`"key"` or `["key", default]`), `$cfg?` (null if absent), `$cfgn` (`["key", default]`: absent → default, explicit null → null), `$alias` (`[["k1","k2"], default?]`), `$has`, `$root` (the wrapper config of a VLM), `$forbid` (`["key", why]`), `$require_eq` (`["key", value, why]`), `$get` (`[object, "key", default?]`) |
-//! | tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`) |
+//! | tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`) |
 //! | variables | `$var`, `$let` (`["name", value, body]`) |
 //! | arithmetic | `$add $sub $mul $div $idiv $mod $neg $abs $min $max $pow $sqrt $ln $exp $floor $ceil $round $int $float` |
 //! | logic | `$eq $ne $lt $le $gt $ge $and $or $not $if` (`[c, a, b]`) `$switch` (`[value, {case: result}, default]`) |
-//! | lists, objects and strings | `$list $range $len $index $contains $concat $flatten $repeat $map` (`[list, "name", body]`) `$sum $cat $starts_with $ends_with $merge $omit $set` |
+//! | lists, objects and strings | `$list $range $len $index $contains $concat $flatten $repeat $map $is_num` (`[list, "name", body]`) `$sum $cat $starts_with $ends_with $merge $omit $set` |
 //! | checks | `$check` (`[cond, message]`: NOT_LOWERABLE if false), `$bad` (`[cond, message]`: bad config) |
 //! | generic features | `$act` (an HF activation name → `Act`), `$rope` / `$rope_temp` (a rope spec / query temperature from the config's rope fields), `$rope_plain` (the default frequencies at a given base), `$alibi` (ALiBi slopes), `$scope` (`{key, inert, body}`: evaluate with the configuration narrowed to a nested object), `$partial_rotary` (the effective partial-rotary factor), `$layers` (`{count, each}`), `$layer_types` (`{n, allowed, each}`: the config's `layer_types`, validated, or the class's own rule) |
 
@@ -460,6 +460,22 @@ impl<'a> Env<'a> {
                     None => Value::Null,
                 })
             }
+            "$tensor_flag" => {
+                // Whether the checkpoint has a tensor: from the tensor index when there is one;
+                // else the stated default, recorded as an assumption (a configuration alone cannot
+                // say whether a projection carries a bias or a norm exists).
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let name = as_str(&a[0], op)?;
+                let default = as_bool(&a[1], op)?;
+                Ok(Value::Bool(match self.tensors {
+                    Some(t) => t.has(name),
+                    None => {
+                        self.assumed.borrow_mut().insert(format!("tensor `{name}` assumed {}", if default { "present" } else { "absent" }));
+                        default
+                    }
+                }))
+            }
             "$tensor_shape" => {
                 let name = as_str(&self.ev(arg, d)?, op)?.to_string();
                 Ok(match self.tensors.and_then(|t| t.shape(&name)) {
@@ -689,6 +705,7 @@ impl<'a> Env<'a> {
                     other => Err(bad(format!("`$contains` on {other}"))),
                 }
             }
+            "$is_num" => Ok(Value::Bool(num(&self.ev(arg, d)?).is_some())),
             "$flatten" => {
                 let v = self.ev(arg, d)?;
                 let mut out = Vec::new();

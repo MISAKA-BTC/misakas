@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "internlm2",
   "doc": "InternLM2 (remote code modeling_internlm2): Llama math, fused per-kv-group wqkv, `bias` on the attention projections.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["InternLM2ForCausalLM"], "model_types": ["internlm2"]},
   "remote_code": ["modeling_internlm2.InternLM2ForCausalLM"],
   "remote_code_required": true,

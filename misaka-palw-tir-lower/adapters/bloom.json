@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "bloom",
   "doc": "BLOOM: embedding LayerNorm, per-head interleaved fused qkv, ALiBi (unscaled, added after the 1/sqrt(d) product), GeLU-tanh, 4x MLP.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["BloomForCausalLM"], "model_types": ["bloom"]},
   "config": {"defaults": {"vocab_size": 250880, "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true}, "inert": ["slow_but_exact", "attention_softmax_in_fp32", "bias_dropout_fusion", "masked_softmax_fusion", "offset_alibi", "skip_bias_add", "skip_bias_add_qkv", "seq_length"]},
   "vars": [

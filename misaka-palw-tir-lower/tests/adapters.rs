@@ -47,8 +47,12 @@ fn first_diff(a: &Value, b: &Value, path: &str) -> Option<String> {
     }
 }
 
+/// The spec without what is informational: notes, confidence, the reference label, the family label
+/// (`model_type`) and the corpus tags.
 fn comparable(mut s: ModelSpec) -> Value {
     s.notes.clear();
+    s.model_type.clear();
+    s.families.clear();
     s.confidence = Confidence::Known;
     s.reference = Reference::Native;
     serde_json::to_value(&s).expect("json")
@@ -138,4 +142,66 @@ fn canonical_json_is_key_order_and_float_spelling_independent() {
     assert_eq!(adapter::canonical_json(&a), adapter::canonical_json(&b));
     assert_eq!(adapter::hash_value(&a), adapter::hash_value(&b));
     assert_eq!(adapter::canonical_json(&a), r#"{"a":[1,{"x":3,"y":2}],"b":1,"c":0.5}"#);
+}
+
+/// **Level A coverage**: how many of today's families a configuration reads into the same spec with
+/// NO adapter at all (the Level A template, `standard-decoder`, alone), judged on the fixtures (read
+/// with their tensor names, as `palw-class check-architecture <hf dir>` does) and on the real
+/// configs (config alone). A family needs an adapter exactly when its class departs from the
+/// standard keys' reading; this prints, per family, whether it does.
+#[test]
+fn level_a_coverage_of_the_families_with_an_adapter() {
+    use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, TensorIndex, read_model};
+    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let pairs = pairs();
+    // (configs, identical, identical with tensor names) per family.
+    let mut by_family: std::collections::BTreeMap<String, (usize, usize, usize, Vec<String>)> = std::collections::BTreeMap::new();
+    for (id, name, cfg) in &pairs {
+        let with = read_model(cfg, None, &ReadOptions { adapter: AdapterChoice::BuiltIn(id.clone()) });
+        let tensors = name.strip_prefix("hf/").and_then(|n| TensorIndex::from_checkpoint_path(&tests.join("fixtures/hf").join(n)).ok());
+        let e = by_family.entry(id.clone()).or_default();
+        e.0 += 1;
+        let Ok(w) = with else { continue };
+        let want = comparable(w.spec);
+        for (slot, t) in [(1usize, None), (2usize, tensors.as_ref())] {
+            if slot == 2 && t.is_none() {
+                continue;
+            }
+            match read_model(cfg, t, &ReadOptions { adapter: AdapterChoice::None }) {
+                Ok(n) => match first_diff(&want, &comparable(n.spec), "") {
+                    None => {
+                        if slot == 1 {
+                            e.1 += 1
+                        } else {
+                            e.2 += 1
+                        }
+                    }
+                    Some(d) if slot == 2 => e.3.push(format!("{name}: differs at {d}")),
+                    Some(_) => {}
+                },
+                Err(f) if slot == 2 => e.3.push(format!("{name}: {}", f.error.to_string().chars().take(100).collect::<String>())),
+                Err(_) => {}
+            }
+        }
+    }
+    let (mut automatic, mut automatic_t) = (0, 0);
+    for (id, (total, same, same_t, why)) in &by_family {
+        let with_t = pairs.iter().filter(|(i, n, _)| i == id && n.starts_with("hf/")).count();
+        let all_t = *same_t == with_t && with_t > 0;
+        eprintln!(
+            "{id:>14}: {same}/{total} identical from the config alone, {same_t}/{with_t} with tensor names{}{}",
+            if all_t { "  ← Level A with tensors" } else { "" },
+            if why.is_empty() { String::new() } else { format!("  e.g. {}", why[0]) }
+        );
+        if *same == *total {
+            automatic += 1;
+        }
+        if all_t {
+            automatic_t += 1;
+        }
+    }
+    eprintln!(
+        "{automatic} of {} families read identically from the config alone; {automatic_t} with the checkpoint's tensor names",
+        by_family.len()
+    );
 }

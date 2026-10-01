@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "mistral",
   "doc": "Mistral, Ministral and Ministral-3: the standard decoder with no biases and a sliding window on every layer unless layer_types says otherwise; Ministral-3 adds Llama-4's query scaling over the original context length (llama_4_scaling_beta among the rope parameters).",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["MistralForCausalLM", "MinistralForCausalLM", "Ministral3ForCausalLM"], "model_types": ["mistral", "ministral", "ministral3"]},
   "config": {
     "defaults": {"intermediate_size": 14336, "num_key_value_heads": 8, "max_position_embeddings": 131072}

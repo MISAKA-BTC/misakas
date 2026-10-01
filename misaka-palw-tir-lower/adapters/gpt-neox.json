@@ -2,7 +2,7 @@
   "format": "misaka.palw.model-adapter.v1",
   "id": "gpt-neox",
   "doc": "GPT-NeoX / Pythia: per-head interleaved query_key_value, partial rotary (rotary_pct), parallel residual with TWO LayerNorms (or sequential), biased MLP.",
-  "extends": ["standard-decoder"],
+  "extends": ["decoder-core"],
   "match": {"architectures": ["GPTNeoXForCausalLM"], "model_types": ["gpt_neox"]},
   "config": {"defaults": {"vocab_size": 50432, "hidden_size": 6144, "intermediate_size": 24576, "num_hidden_layers": 44, "num_attention_heads": 64, "hidden_act": "gelu", "max_position_embeddings": 2048, "layer_norm_eps": 1e-05, "use_parallel_residual": true, "attention_bias": true}},
   "vars": [

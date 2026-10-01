@@ -13,20 +13,27 @@ macro_rules! pack {
 
 pack!(
     "refusals",
+    "spec-frame",
+    "decoder-core",
     "standard-decoder",
+    "mixin-gdn-hybrid",
     "mixin-gemma",
     "mixin-post-norm",
     "mixin-qwen-sliding",
+    "mixin-vlm",
     "bloom",
     "cohere",
     "cohere2",
     "exaone",
     "exaone4",
+    "falcon",
+    "falcon-mamba",
     "gemma",
     "gemma2",
     "gemma3-text",
     "glm",
     "glm4",
+    "glm4-moe",
     "gpt-bigcode",
     "gpt-neo",
     "gpt-neox",
@@ -35,10 +42,14 @@ pack!(
     "granite",
     "granitemoe",
     "internlm2",
+    "jamba",
     "llama",
+    "mamba",
+    "mamba2",
     "minicpm",
     "mistral",
     "mixtral",
+    "mpt",
     "nemotron",
     "olmo",
     "olmo2",
@@ -50,10 +61,22 @@ pack!(
     "qwen2",
     "qwen2-moe",
     "qwen3",
+    "qwen3-5",
+    "qwen3-5-moe",
     "qwen3-moe",
+    "qwen3-next",
+    "rwkv4",
     "smollm3",
     "stablelm",
     "starcoder2",
+    "vlm",
+    "vlm-gemma3",
+    "vlm-llama",
+    "vlm-mistral",
+    "vlm-qwen2",
+    "vlm-qwen2-vl",
+    "vlm-qwen3-5",
+    "vlm-qwen3-5-moe",
 );
 
 /// The text of a built-in adapter, by id.
@@ -74,7 +97,7 @@ pub fn by_id(id: &str) -> Option<&'static Adapter> {
 
 /// The built-in adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
 pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
-    let real = || all().iter().filter(|a| a.value.get("spec").is_some());
+    let real = || all().iter().filter(|a| a.value.get("spec").is_some() || a.value.get("dispatch").is_some());
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 

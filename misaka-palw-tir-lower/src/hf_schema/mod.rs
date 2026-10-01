@@ -219,6 +219,40 @@ pub fn read_model(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpti
             None => Route::Generic,
         },
     };
+    // An adapter that only dispatches (a VLM wrapper: the text decoder's own `model_type` picks the
+    // decoder adapter) is replaced by its target, chained up to four times.
+    let route = match route {
+        Route::Adapter(mut a) => {
+            for _ in 0..4 {
+                let Some(d) = a.value.get("dispatch").and_then(Value::as_object) else { break };
+                let key = d.get("key").and_then(Value::as_str).unwrap_or("");
+                let mut at: Option<&Value> = Some(config);
+                for part in key.split('.') {
+                    at = at.and_then(|v| v.get(part)).filter(|v| !v.is_null());
+                }
+                // The text decoder's `model_type`, else the adapter's default (a string, or an object
+                // by wrapper architecture with `*` for the rest).
+                let default = match d.get("default") {
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(Value::Object(m)) => m.get(&arch).or_else(|| m.get("*")).and_then(Value::as_str),
+                    _ => None,
+                };
+                let want = at.and_then(Value::as_str).or(default).unwrap_or("").to_string();
+                let target = d.get("to").and_then(Value::as_object).and_then(|m| m.get(&want)).and_then(Value::as_str);
+                match target.and_then(builtin::by_id) {
+                    Some(t) => a = t.clone(),
+                    None => {
+                        return Err(fail(
+                            LowerError::not_lowerable(format!("{arch}: text decoder model_type `{want}` is not modelled")),
+                            source_of(&a),
+                        ));
+                    }
+                }
+            }
+            Route::Adapter(a)
+        }
+        other => other,
+    };
     match route {
         Route::Legacy => match crate::hf_config::parse_legacy(config) {
             Ok(spec) => Ok(ModelRead { spec, adapter: AdapterSource::LegacyRust { parser: arch }, assumed_defaults: Vec::new() }),
