@@ -11220,12 +11220,19 @@ impl VirtualStateProcessor {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
-                    kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&accusation.unit)
-                        .map_err(|why| format!("claim {claim}: an IR step demand for {:?} is refused: {why}", accusation.unit))?;
                     let court = self
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "an IR step demand on a network with no V2 court parameters".to_string())?;
+                    // The widest execution at the court's step ladder where the held regime rides it,
+                    // the release's 2^22 otherwise; the fold holds the unit to the claim's class's.
+                    let ladder = if self.palw_held_context_at(point.daa_score) {
+                        self.palw_court_step_ladder_at(point.daa_score, court).max(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+                    } else {
+                        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES
+                    };
+                    kaspa_consensus_core::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&accusation.unit, ladder)
+                        .map_err(|why| format!("claim {claim}: an IR step demand for {:?} is refused: {why}", accusation.unit))?;
                     let bytes = borsh::to_vec(accusation.as_ref()).map(|b| b.len() as u64).unwrap_or(u64::MAX);
                     if bytes > court.max_close_bytes() {
                         return Err(format!(

@@ -1,7 +1,7 @@
 //! **The second IR fence's descent unit, by hash arithmetic alone: `TirStepNode { level, index }`**
 //! (`Params::palw_tir_fence2`; evidence transport C).
 //!
-//! A node's answer is its frontier — the nodes eight levels below it, or the leaf nodes when nearer —
+//! A node's answer is its frontier — the nodes ten levels below it, or the leaf nodes when nearer —
 //! and its opening; the chain folds the frontier by the step tree's own rule (pairs, an odd last node
 //! promoted) and walks the node to the committed step root. Here, over synthetic trees:
 //!
@@ -10,10 +10,14 @@
 //!   nothing past the tree is;
 //! * **a tampered answer never reaches the root**: any frontier node or sibling flipped, dropped or
 //!   added, another node's answer, another level's;
-//! * **one seat finds the first leaf it disputes in a D-F1-sized tree** — 2^22 leaves, the most a
-//!   binding commits, twenty-two levels — **in three node sessions and one leaf session**, inside its
-//!   four, against a liar that answers every demand and garbles the leaves after its lie too; and in
-//!   a ragged 2^16 + 3 tree, whose promotions the descent crosses.
+//! * **one seat finds the first leaf it disputes in a D-F1-sized tree** — 2^22 leaves, twenty-two
+//!   levels — **in three node sessions and one leaf session**, inside its four, against a liar that
+//!   answers every demand and garbles the leaves after its lie too; and in a ragged 2^16 + 3 tree,
+//!   whose promotions the descent crosses, in two;
+//! * **one seat's reach is 2^30 leaves** (`PALW_TIR_DA_SEAT_REACH_LEAVES_V1`): the frontiers of a
+//!   thirty-level descent, three node sessions and the leaf's; a thirty-first level is a fifth
+//!   session; and the widest answer, a 1,024-hash frontier with its opening, binding and signature,
+//!   rides one carrier (`palw_tir_da_step_fold`).
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_step_node`
 
@@ -144,19 +148,20 @@ fn the_tree_shape_is_the_step_trees() {
     assert_eq!(palw_tir_step_tree_width_v1(5, 1), Some(3));
     assert_eq!(palw_tir_step_tree_width_v1(5, 3), Some(1));
     assert_eq!(palw_tir_step_tree_width_v1(5, 4), None);
-    // The frontiers of a D-F1 descent: 22 → 14 → 6 → the leaf nodes.
-    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 22, 0), Some((14, 0, 256)));
-    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 14, 3), Some((6, 768, 1024)));
-    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 6, 5), Some((0, 320, 384)));
+    // The frontiers of a D-F1 descent: 22 → 12 → 2 → the leaf nodes.
+    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 22, 0), Some((12, 0, 1024)));
+    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 12, 3), Some((2, 3072, 4096)));
+    assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 2, 5), Some((0, 20, 24)));
     assert_eq!(palw_tir_step_node_frontier_v1(PALW_STEP_LEG_MAX_LEAVES, 0, 5), None, "a leaf has no frontier");
     // A ragged tail: the last node covers what is left.
-    assert_eq!(palw_tir_step_node_frontier_v1(1000, 9, 1), Some((1, 256, 500)));
-    assert_eq!(PALW_TIR_STEP_NODE_DEPTH_V1, 8);
+    assert_eq!(palw_tir_step_node_frontier_v1(1000, 9, 1), Some((0, 512, 1000)));
+    assert_eq!(palw_tir_step_node_frontier_v1(3000, 11, 1), Some((1, 1024, 1500)));
+    assert_eq!(PALW_TIR_STEP_NODE_DEPTH_V1, 10);
 }
 
 #[test]
 fn every_node_of_every_small_tree_is_answered_and_reaches_its_root() {
-    let counts: Vec<u64> = (1..=70).chain([127, 128, 129, 255, 256, 257, 511, 513, 1000, 1001]).collect();
+    let counts: Vec<u64> = (1..=70).chain([127, 128, 129, 255, 256, 257, 511, 513, 1000, 1001, 1023, 1025, 3000]).collect();
     for count in counts {
         let hashes: Vec<Hash64> = (0..count).map(leaf_hash).collect();
         let tree = Tree::of(&hashes);
@@ -171,7 +176,7 @@ fn every_node_of_every_small_tree_is_answered_and_reaches_its_root() {
             for index in indices {
                 let (frontier, siblings) = palw_tir_step_node_parts_v1(&hashes, level, index).expect("in the tree");
                 let (below, first, end) = palw_tir_step_node_frontier_v1(count, level, index).unwrap();
-                assert_eq!(below, level.saturating_sub(8));
+                assert_eq!(below, level.saturating_sub(PALW_TIR_STEP_NODE_DEPTH_V1));
                 assert_eq!(
                     frontier,
                     tree.levels[below as usize][first as usize..end as usize],
@@ -313,9 +318,40 @@ fn one_seat_crosses_the_promotions_of_a_ragged_tree() {
         assert_eq!(liar.opening(lie), step_opening_v1(&hashes, lie).unwrap());
         let (found, sessions) = descend(&mine, &liar);
         assert_eq!(found, lie);
-        assert_eq!(sessions, 4, "17 levels: three node sessions and the leaf session");
+        assert_eq!(sessions, 3, "17 levels: two node sessions and the leaf session");
     }
-    // A tree of at most 2^16 leaves is two node sessions and the leaf.
-    let mine = honest_tree(1 << 16);
-    assert_eq!(descend(&mine, &Liar::new(&mine, &lies(1 << 16, 40_000))), (40_000, 3));
+    // A tree of at most 2^10 leaves is one node session and the leaf.
+    let mine = honest_tree(1 << 10);
+    assert_eq!(descend(&mine, &Liar::new(&mine, &lies(1 << 10, 700))), (700, 2));
+}
+
+/// **One seat's reach: 2^30 leaves in its four sessions** (`PALW_TIR_DA_SEAT_REACH_LEAVES_V1`). A
+/// thirty-level tree's descent is 30 → 20 → 10 → the leaf nodes: three node sessions, each frontier at
+/// most 2^10 nodes, and the leaf's; a thirty-first level takes a fourth node session and a fifth in
+/// all — past one seat, which admission refuses past `palw_tir_fence2`.
+#[test]
+fn one_seat_reaches_every_leaf_of_a_two_to_the_thirty_leaf_execution() {
+    use kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1;
+    use kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_DA_SEAT_REACH_LEAVES_V1;
+    assert_eq!(PALW_TIR_DA_SEAT_REACH_LEAVES_V1, 1 << 30);
+    // The sessions a descent of `count` leaves takes, and its widest frontier, by the frontier rule
+    // alone (no tree is built): always the last node of each frontier, whose span is the rightmost.
+    let walk = |count: u64| -> (u32, u64) {
+        let (mut level, mut index) = (palw_tir_step_tree_height_v1(count), 0u64);
+        let (mut sessions, mut widest) = (0u32, 0u64);
+        while level > 0 {
+            let (below, first, end) = palw_tir_step_node_frontier_v1(count, level, index).expect("a node");
+            sessions += 1;
+            widest = widest.max(end - first);
+            (level, index) = (below, end - 1);
+        }
+        (sessions + 1, widest)
+    };
+    for count in [PALW_TIR_DA_SEAT_REACH_LEAVES_V1, PALW_TIR_DA_SEAT_REACH_LEAVES_V1 - 1, (1 << 29) + 17, 450_000_000, 112_495_104] {
+        let (sessions, widest) = walk(count);
+        assert!(sessions <= u32::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1), "{count} leaves: {sessions} sessions");
+        assert!(widest <= 1 << PALW_TIR_STEP_NODE_DEPTH_V1, "{count} leaves: a frontier of {widest}");
+    }
+    assert_eq!(walk(PALW_TIR_DA_SEAT_REACH_LEAVES_V1), (4, 1 << 10), "thirty levels: three node sessions and the leaf");
+    assert_eq!(walk(PALW_TIR_DA_SEAT_REACH_LEAVES_V1 + 1).0, 5, "a thirty-first level is a fifth session");
 }

@@ -107,11 +107,11 @@ pub enum PalwDaUnitV1 {
     /// level `level ≥ 1` above the leaf nodes, `index` from the left. Answered by its frontier —
     /// the nodes [`crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it — and its
     /// opening ([`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`]), or, past the tree, by the
-    /// binding proving so. A seat descends eight levels a session to the first leaf its replay
+    /// binding proving so. A seat descends ten levels a session to the first leaf its replay
     /// disputes.
     TirStepNode { level: u8, index: u64 },
     /// **One node of an IR claim's tiled logits trace's rows tree** (past `Params::palw_tir_fence2`;
-    /// appended): at `level ≥ 1` answered by its frontier eight levels down and its opening, at level 0
+    /// appended): at `level ≥ 1` answered by its frontier ten levels down and its opening, at level 0
     /// (a row) by the row's tile leaves and its opening — both with the ids that tie the rows root to
     /// the trace root ([`crate::palw_tir_court_v1::PalwTirRowNodeDisclosureV1`]) — or, past the trace
     /// or on a flat one, by the binding proving so. A seat whose replay disputes the claim's trace but
@@ -213,7 +213,7 @@ pub enum PalwDaAnswerV1 {
     /// `TirStepLeaf { index }` unit. Dropped by name below `palw_tir_fence2`.
     TirStepLeaf(Box<crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1>),
     /// **The second IR fence: one interior node of an IR claim's step tree** (appended), answering a
-    /// `TirStepNode { level, index }` unit: its frontier eight levels down and its opening.
+    /// `TirStepNode { level, index }` unit: its frontier ten levels down and its opening.
     TirStepNode(Box<crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1>),
     /// **The second IR fence: the claim's binding, proving an IR step unit is not in its execution**
     /// (appended) — a leaf at or past its leaf count, a node past its tree. The demand is keyed by the
@@ -946,14 +946,15 @@ pub const PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/tir
 /// The accusation message's own domain.
 pub const PALW_TIR_STEP_ACCUSATION_DOMAIN_V1: &[u8] = b"misaka-palw/tir/da-step-accusation/message/v1";
 
-/// **Could `unit` be in SOME IR execution?** A step leaf below `PALW_STEP_LEG_MAX_LEAVES`, an
-/// interior node (`level ≥ 1`) of the widest tree a binding may commit (22 levels), or a node of the
-/// widest rows tree (a row, at level 0). What the fold
-/// checks when it opens a binding-less demand — a unit past every execution is refused at the door
+/// **Could `unit` be in SOME IR execution of a class whose ladder is `ladder`?** A step leaf below
+/// `ladder`, an interior node (`level ≥ 1`) of the widest tree a binding at that ladder may commit,
+/// or a node of the widest rows tree (a row, at level 0). What the fold checks when it opens a
+/// binding-less demand, at the claim's class's ladder (`TransitionBuilder::tir_da_ladder_v1`: the
+/// court's step ladder past `palw_tir_fence2`) — a unit past every execution is refused at the door
 /// rather than opening a session only an out-of-range proof ends; the claim's own bound is the
 /// accused's to prove (`TirStepOutOfRange`).
-pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1) -> Result<(), &'static str> {
-    let widest = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1, ladder: u64) -> Result<(), &'static str> {
+    let widest = ladder.max(1);
     match *unit {
         PalwDaUnitV1::TirStepLeaf { index } if index < widest => Ok(()),
         PalwDaUnitV1::TirStepLeaf { .. } => Err("a step leaf past every execution's leaves"),
@@ -975,7 +976,7 @@ pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1) -> Result<(), &'
 /// fence's `DefaultAccusedTirStep`), keyed by the claim alone: a step leaf, an interior node the seat's
 /// descent reached, or a node of the tiled trace's rows tree. It carries NO binding — a seat facing a producer that served nothing holds none,
 /// and the claim's own roots are what every answer is checked against — so the fold bounds the unit
-/// only by the widest execution ([`palw_tir_step_unit_is_admissible_v1`]) and the accused answers a
+/// only by the widest execution at its class's ladder ([`palw_tir_step_unit_is_admissible_v1`]) and the accused answers a
 /// unit past its own execution with `TirStepOutOfRange`. Named only: no draws. Signed by the
 /// accuser's bond over [`palw_tir_step_accusation_message_v1`].
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1004,16 +1005,21 @@ pub fn palw_tir_step_accusation_message_v1(
 
 /// **The ONE builder of a `DefaultAccusedTirStep`** — what a seat files when its replay disputes the
 /// claim below `unit` and the producer has not served it: the unit held to
-/// [`palw_tir_step_unit_is_admissible_v1`], signed by `sign(message, context)` with the accuser's key,
-/// held to the ride rule.
+/// [`palw_tir_step_unit_is_admissible_v1`] at `ladder`, the step ladder of the network the node runs
+/// (the court's `max_step_leaf_count` where the held regime rides it, the release's
+/// [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`] otherwise — what the acceptance gate holds the unit
+/// to; the fold holds it to the claim's class's), signed by `sign(message, context)` with the accuser's
+/// key, held to the ride rule. A builder that took the widest ladder any network runs would file demands
+/// the gate refuses on a network that runs a narrower one.
 pub fn palw_tir_step_accusation_object_v1(
     network_domain: &Hash64,
     claim: Hash64,
     unit: PalwDaUnitV1,
     accuser: PalwBondKeyV2,
+    ladder: u64,
     sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAccusationBuildErrorV1> {
-    palw_tir_step_unit_is_admissible_v1(&unit).map_err(|why| PalwDaAccusationBuildErrorV1::NotATirStepUnit(unit, why))?;
+    palw_tir_step_unit_is_admissible_v1(&unit, ladder).map_err(|why| PalwDaAccusationBuildErrorV1::NotATirStepUnit(unit, why))?;
     let message = palw_tir_step_accusation_message_v1(*network_domain, &claim, &unit, &accuser);
     let signature = sign(message.as_byte_slice(), PALW_TIR_STEP_ACCUSATION_MLDSA87_CONTEXT_V1)
         .filter(|signature| !signature.is_empty())

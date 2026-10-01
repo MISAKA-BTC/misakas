@@ -21054,6 +21054,7 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
         claim_id: &Hash64,
         binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+        ladder: u64,
     ) -> Option<String> {
         if !self.extras.offence_attribution_active {
             return None;
@@ -21064,11 +21065,25 @@ impl<'a> TransitionBuilder<'a> {
             binding,
             self.identity_rules_v1(now_daa),
             false,
-            crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            ladder,
         ) {
             Ok(Some(fault)) => Some(format!("the IR binding answers another job or class ({})", fault.code())),
             Ok(None) | Err(_) => None,
         }
+    }
+
+    /// **The ladder an IR claim's data availability is checked at** (RFC-0002 Phase F): below
+    /// `palw_tir_fence2` the release's `PALW_STEP_LEG_MAX_LEAVES` (2^22), byte for byte; past it the
+    /// claim's class's own ladder (`class_step_ladder_v1` over the court's step ladder the held regime
+    /// rides — the ladder admission held the class's every job to), never below the release's. A
+    /// binding of an execution past 2^22 leaves — every real-size class's job — then verifies, where
+    /// below the fence every answer its producer could give was refused and it defaulted.
+    fn tir_da_ladder_v1(&self, class_id: &Hash64, daa: u64) -> u64 {
+        let release = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+        if !self.params.tir_fence2_active_at(daa) {
+            return release;
+        }
+        self.extras.held_context_ladder.map_or(release, |network| self.state.class_step_ladder_v1(class_id, network).max(release))
     }
 
     /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
@@ -27711,7 +27726,8 @@ fn open_da_session_tir_step_v1(
     if !builder.state.tir_classes.contains_key(&claim.class_id) {
         return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" });
     }
-    crate::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&accusation.unit).map_err(PalwStateV2Error::TirFence2Refused)?;
+    let ladder = builder.tir_da_ladder_v1(&claim.class_id, ctx.daa_score);
+    crate::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&accusation.unit, ladder).map_err(PalwStateV2Error::TirFence2Refused)?;
     open_da_session_rcore_v1(builder, ctx, claim_id, accusation.accuser, accusation.unit, None)
 }
 
@@ -27757,6 +27773,9 @@ fn apply_da_answer_v1(
         return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
     }
     let malformed = |why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
+    // An IR answer's binding is verified at the claim's class's ladder past the second IR fence (the
+    // release's 2^22 below it).
+    let tir_ladder = builder.tir_da_ladder_v1(&claim.class_id, ctx.daa_score);
     // The answer's form, by the rule node policy builds with (`palw_da_answer_form_v1`; P2-7): the
     // unit's own kind, and a held carriage of version 1 naming this claim and unit, unsigned.
     crate::palw_da_rcore_v1::palw_da_answer_form_v1(&claim_id, &unit, answer).map_err(malformed)?;
@@ -27798,10 +27817,10 @@ fn apply_da_answer_v1(
                 *row,
                 *tile,
                 &disclosure,
-                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                tir_ladder,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, disclosure.binding()) {
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, disclosure.binding(), tir_ladder) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             disclosure.is_flat()
@@ -27824,10 +27843,10 @@ fn apply_da_answer_v1(
                 claim.execution_root,
                 *index,
                 &disclosure,
-                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                tir_ladder,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding, tir_ladder) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             false
@@ -27851,10 +27870,10 @@ fn apply_da_answer_v1(
                 *level,
                 *index,
                 &disclosure,
-                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                tir_ladder,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding, tir_ladder) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             false
@@ -27881,10 +27900,10 @@ fn apply_da_answer_v1(
                 *level,
                 *index,
                 &disclosure,
-                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                tir_ladder,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding, tir_ladder) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             false
@@ -27907,10 +27926,10 @@ fn apply_da_answer_v1(
                 claim.execution_root,
                 &unit,
                 &binding,
-                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                tir_ladder,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &binding) {
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &binding, tir_ladder) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             false
