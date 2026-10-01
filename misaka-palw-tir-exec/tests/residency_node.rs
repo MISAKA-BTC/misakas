@@ -376,16 +376,19 @@ impl misaka_palw_tir_exec::StepSink for Steps {
     }
 }
 
-/// **RFC-0004's candidates, stepped in lockstep** (`TirLockstepV1`, runtime-residency.md §8): three
-/// composite candidates of one parent — the same program, three adapters — over the parent's store at
-/// its floor, on the same tokens. Each member's commits, logits and run state are what it computes
-/// stepped alone; and where the members run one after another the store reads every token's experts
-/// once per candidate, the batch reads them once: the first member's admission of a layer is the
-/// others' hits.
-#[test]
-fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_parents_rows_once() {
-    use misaka_palw_tir_exec::{TirExecutor, TirLockstepV1, tir_lockstep_batch_v1};
-    let dir = Scratch::new("lockstep");
+/// **The 64-expert mixture held at its floor and three composite candidates of it** (RFC-0004 §6.3) —
+/// the same program, three adapters (three seeds' logit biases) — opened over the parent's store, each
+/// with its whole weights as a map (what the reference reads).
+struct MoeBatch {
+    _dir: Scratch,
+    _parent: TirArtifactV1,
+    store: Arc<misaka_palw_tir_exec::node::TirWeightStoreV1>,
+    candidate: TirProgramV1,
+    members: Vec<(TirArtifactV1, MapParams)>,
+}
+
+fn moe_batch(name: &str) -> MoeBatch {
+    let dir = Scratch::new(name);
     let (parent, gens) = many_expert_moe(64, 2, 4);
     let parent = node_common::flat(parent);
     let (candidate, cgens) = many_expert_moe_candidate(64, 2, 4);
@@ -398,8 +401,7 @@ fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_
     let (parent_root, _) = resident.inventory_root().unwrap();
     let parent_class = resident.class().unwrap().class_id(&parent_root);
     let store = resident.weight_store().unwrap().clone();
-    // Three adapters: the candidate's program with three seeds' logit biases.
-    let mut candidates = Vec::new();
+    let mut members = Vec::new();
     for seed in [61u64, 62, 63] {
         let mut cparams = tircommon::models::materialize(&candidate, &cgens, seed);
         for (key, t) in &pparams.tensors {
@@ -420,13 +422,28 @@ fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_
             &mut |j, l| cparams.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}")),
         )
         .unwrap();
-        candidates.push(TirArtifactV1::open_composite_over(&resident, &spath, &r).unwrap());
+        members.push((TirArtifactV1::open_composite_over(&resident, &spath, &r).unwrap(), cparams));
     }
-    assert!(candidates.iter().all(|c| Arc::ptr_eq(c.weight_store().unwrap(), &store)), "one store for the batch");
+    assert!(members.iter().all(|(c, _)| Arc::ptr_eq(c.weight_store().unwrap(), &store)), "one store for the batch");
     assert!(
-        candidates.iter().all(|c| c.own_pinned_bytes() == 48 * 16 + 48 * 4),
+        members.iter().all(|(c, _)| c.own_pinned_bytes() == 48 * 16 + 48 * 4),
         "each candidate pins its adapter and the embedding its tied head reads whole — the experts are the store's"
     );
+    MoeBatch { _dir: dir, _parent: resident, store, candidate, members }
+}
+
+/// **RFC-0004's candidates, stepped in lockstep** (`TirLockstepV1`, runtime-residency.md §8): three
+/// composite candidates of one parent — the same program, three adapters — over the parent's store at
+/// its floor, on the same tokens. Each member's commits, logits and run state are what it computes
+/// stepped alone; and where the members run one after another the store reads every token's experts
+/// once per candidate, the batch reads them once: the first member's admission of a layer is the
+/// others' hits.
+#[test]
+fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_parents_rows_once() {
+    use misaka_palw_tir_exec::{TirExecutor, TirLockstepV1, tir_lockstep_batch_v1};
+    let moe = moe_batch("lockstep");
+    let store = &moe.store;
+    let candidates: Vec<&TirArtifactV1> = moe.members.iter().map(|(c, _)| c).collect();
     let tokens: Vec<u32> = (0..10).map(|i| (i * 11 + 5) % 48).collect();
     // Each candidate alone, one after another.
     let before_alone = store.stats();
@@ -472,4 +489,134 @@ fn candidates_stepped_in_lockstep_compute_what_each_computes_alone_and_read_the_
     );
     assert_eq!(tir_lockstep_batch_v1(1 << 20, 0, 1 << 10, 1 << 12), 4, "memory alone bounds a batch with no routed rows");
     assert_eq!(tir_lockstep_batch_v1(0, 1, 1, 0), 1, "at least one");
+}
+
+/// The reference's params of one pipeline: a candidate's whole weights, no stepper.
+struct ReferenceParams<'a>(&'a MapParams);
+
+impl misaka_palw_tir::pipeline::PipelineParams for ReferenceParams<'_> {
+    fn params(&self, _: u16) -> &dyn misaka_palw_tir::ParamSource {
+        self.0
+    }
+}
+
+/// A node's params of one pipeline: the subject stage on the executor over the held artifact (a
+/// fresh stepper, or the hub's seat), the reference's map behind it for any other stage.
+struct NodeParams<'a> {
+    artifact: &'a TirArtifactV1,
+    map: &'a MapParams,
+    seat: std::cell::RefCell<Option<misaka_palw_tir_exec::TirLockstepSeatV1>>,
+}
+
+impl misaka_palw_tir::pipeline::PipelineParams for NodeParams<'_> {
+    fn params(&self, _: u16) -> &dyn misaka_palw_tir::ParamSource {
+        self.map
+    }
+    fn stepper(
+        &self,
+        _: u16,
+        decl: &misaka_palw_tir::program_v2::TirProgramV2,
+    ) -> Option<Box<dyn misaka_palw_tir::pipeline::StageStepperV1 + '_>> {
+        use misaka_palw_tir::pipeline::StageStepperV1;
+        if let Some(seat) = self.seat.borrow_mut().take() {
+            return Some(Box::new(seat) as Box<dyn StageStepperV1 + '_>);
+        }
+        misaka_palw_tir_exec::TirStageStepperV1::for_stage(self.artifact.plan(), self.artifact.params(), decl)
+            .map(|s| Box::new(s) as Box<dyn StageStepperV1 + '_>)
+    }
+}
+
+struct NoRandom;
+
+impl misaka_palw_tir::pipeline::RandomSource for NoRandom {
+    fn random(&self, _: u16, _: misaka_palw_tir::program_v2::RandomDist, _: u32, _: &[u32]) -> Option<misaka_palw_tir::Tensor> {
+        None
+    }
+}
+
+/// **Three candidates' subject stages through one hub, over the parent's store** (RFC-0004 §7.2;
+/// `misaka_palw_tir_exec::stage`): each candidate's pipeline on its own thread — the stage the reference
+/// pipeline runner runs, replaying one prompt and generating from it — computes exactly the run the
+/// reference interpreter computes over the candidate's whole weights; one after another on the executor
+/// the store reads every position's experts once per candidate, through the hub once for the batch.
+#[test]
+fn candidates_evaluated_through_one_hub_run_the_reference_and_read_the_parents_rows_once() {
+    use misaka_palw_tir::pipeline::{PipelineJob, StageDecl, TextSelectV1, TirPipelineV1, TripRule, run_pipeline, run_text_pipeline};
+    use misaka_palw_tir::program_v2::{OutputDecl, TirProgramV2};
+    use misaka_palw_tir_exec::{TirLockstepHubV1, TirStageStepperV1};
+    let moe = moe_batch("hub");
+    let c = &moe.candidate;
+    let decl =
+        TirProgramV2::from_v1_lifting_params(c, &[], OutputDecl::Logits { node: c.logits, scheme_id: c.logits_scheme_id }).unwrap();
+    let pipeline = TirPipelineV1 {
+        version: misaka_palw_tir::pipeline::TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "subject".into(),
+            program: 0,
+            trip: TripRule::TextStream,
+            max_trip: 64,
+            tokens: None,
+            bind: vec![],
+        }],
+        output_stage: 0,
+    };
+    let programs = vec![decl.clone()];
+    let job = PipelineJob { prompt: (0..10).map(|i| (i * 11 + 5) % 48).collect(), ..Default::default() };
+    let select = || {
+        let mut n = 0;
+        move |_: u32, logits: &misaka_palw_tir::Tensor| {
+            n += 1;
+            // The arg-max, as a greedy decode selects; the fourth id is the last.
+            let id = (0..logits.data.len()).max_by_key(|i| (logits.data[*i], std::cmp::Reverse(*i))).unwrap() as u32;
+            if n >= 4 { TextSelectV1::Last(id) } else { TextSelectV1::Next(id) }
+        }
+    };
+    for generate in [false, true] {
+        let run = |pp: &dyn misaka_palw_tir::pipeline::PipelineParams| {
+            if generate {
+                run_text_pipeline(&pipeline, &programs, pp, &NoRandom, &job, &mut select()).unwrap()
+            } else {
+                (run_pipeline(&pipeline, &programs, pp, &NoRandom, &job).unwrap(), Vec::new())
+            }
+        };
+        let want: Vec<_> = moe.members.iter().map(|(_, map)| run(&ReferenceParams(map))).collect();
+        // One after another on the executor.
+        let s0 = moe.store.stats();
+        for (member, want) in moe.members.iter().zip(&want) {
+            let alone = NodeParams { artifact: &member.0, map: &member.1, seat: Default::default() };
+            assert_eq!(&run(&alone), want, "a candidate alone on the executor is the reference");
+        }
+        let s1 = moe.store.stats();
+        // Through one hub.
+        let steppers = moe.members.iter().map(|(a, _)| TirStageStepperV1::for_stage(a.plan(), a.params(), &decl).unwrap()).collect();
+        let (hub, seats) = TirLockstepHubV1::new(steppers).unwrap();
+        let (runs, served) = std::thread::scope(|scope| {
+            let handles: Vec<_> = moe
+                .members
+                .iter()
+                .zip(seats)
+                .map(|(member, seat)| {
+                    let run = &run;
+                    scope.spawn(move || {
+                        let pp = NodeParams { artifact: &member.0, map: &member.1, seat: std::cell::RefCell::new(Some(seat)) };
+                        run(&pp)
+                    })
+                })
+                .collect();
+            let served = hub.serve();
+            (handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>(), served)
+        });
+        let s2 = moe.store.stats();
+        assert_eq!(runs, want, "through the hub, each candidate's run is the reference's (generating: {generate})");
+        let (sequential, together) = (s1.routed_bytes_read - s0.routed_bytes_read, s2.routed_bytes_read - s1.routed_bytes_read);
+        eprintln!(
+            "{}: routed rows read {sequential} bytes one candidate after another, {together} through the hub ({served:?})",
+            if generate { "generating" } else { "replaying" }
+        );
+        if !generate {
+            assert!(together * 2 < sequential, "the hub reads a layer's rows once for the batch: {together} vs {sequential}");
+            assert_eq!(served.member_steps, 3 * served.rounds, "{served:?}");
+        }
+        assert_eq!(s2.whole_reads, 0);
+    }
 }

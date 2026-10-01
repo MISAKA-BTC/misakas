@@ -65,35 +65,50 @@ impl<'a> TirLockstepV1<'a> {
 
     /// [`Self::step`], evaluating `post` only when `run_post` ([`TirExecutor::step_opt`]).
     pub fn step_opt(&mut self, tokens: &[u32], sinks: &mut [&mut dyn StepSink], run_post: bool) -> Vec<TirResult<()>> {
-        assert_eq!(tokens.len(), self.members.len(), "a token per member");
-        assert_eq!(sinks.len(), self.members.len(), "a sink per member");
-        let begun: Vec<TirResult<usize>> = self.members.iter_mut().zip(tokens).map(|(m, t)| m.begin_step(*t, run_post)).collect();
-        let mut status: Vec<Option<TirResult<()>>> = begun
-            .iter()
-            .map(|b| match b {
-                Ok(_) => Some(Ok(())),
-                Err(_) => None,
-            })
-            .collect();
-        let occurrences = begun.iter().filter_map(|b| b.as_ref().ok().copied()).max().unwrap_or(0);
-        for occ in 0..occurrences {
-            for (i, member) in self.members.iter_mut().enumerate() {
-                if let Some(Ok(())) = status[i] {
-                    status[i] = Some(member.run_occurrences(occ, occ + 1, &mut *sinks[i]));
-                }
+        let mut members: Vec<&mut TirExecutor<'a>> = self.members.iter_mut().collect();
+        tir_lockstep_step_v1(&mut members, tokens, sinks, run_post)
+    }
+}
+
+/// **One position for every member, in lockstep** — the body of [`TirLockstepV1::step_opt`], over
+/// executors borrowed from wherever their owner keeps them (`crate::stage::TirLockstepHubV1` steps the
+/// members still in their stage). `tokens[i]` into `members[i]`, its committed values to `sinks[i]`;
+/// each result is the one the member's own [`TirExecutor::step_opt`] would have had. The members must
+/// run one schedule (the same number of occurrences a position; [`TirLockstepV1::new`] checks it).
+pub fn tir_lockstep_step_v1(
+    members: &mut [&mut TirExecutor<'_>],
+    tokens: &[u32],
+    sinks: &mut [&mut dyn StepSink],
+    run_post: bool,
+) -> Vec<TirResult<()>> {
+    assert_eq!(tokens.len(), members.len(), "a token per member");
+    assert_eq!(sinks.len(), members.len(), "a sink per member");
+    let begun: Vec<TirResult<usize>> = members.iter_mut().zip(tokens).map(|(m, t)| m.begin_step(*t, run_post)).collect();
+    let mut status: Vec<Option<TirResult<()>>> = begun
+        .iter()
+        .map(|b| match b {
+            Ok(_) => Some(Ok(())),
+            Err(_) => None,
+        })
+        .collect();
+    let occurrences = begun.iter().filter_map(|b| b.as_ref().ok().copied()).max().unwrap_or(0);
+    for occ in 0..occurrences {
+        for (i, member) in members.iter_mut().enumerate() {
+            if let Some(Ok(())) = status[i] {
+                status[i] = Some(member.run_occurrences(occ, occ + 1, &mut *sinks[i]));
             }
         }
-        self.members
-            .iter_mut()
-            .zip(status)
-            .zip(begun)
-            .map(|((member, status), begun)| match (status, begun) {
-                (Some(r), Ok(_)) => member.end_step(r),
-                (_, Err(e)) => Err(e),
-                (None, Ok(_)) => unreachable!("a member that began has a status"),
-            })
-            .collect()
     }
+    members
+        .iter_mut()
+        .zip(status)
+        .zip(begun)
+        .map(|((member, status), begun)| match (status, begun) {
+            (Some(r), Ok(_)) => member.end_step(r),
+            (_, Err(e)) => Err(e),
+            (None, Ok(_)) => unreachable!("a member that began has a status"),
+        })
+        .collect()
 }
 
 /// **How many members a lockstep batch over one residency may hold**: every member's admission of
