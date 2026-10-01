@@ -200,7 +200,10 @@ impl borsh::BorshDeserialize for PalwModelMarketV1 {
         let virtual_sompi = if flags & PALW_MODEL_MARKET_VIRTUAL_BIT != 0 {
             let value = u64::deserialize_reader(reader)?;
             if value == 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a model market row flags a virtual reserve of zero"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "a model market row flags a virtual reserve of zero",
+                ));
             }
             value
         } else {
@@ -1397,8 +1400,10 @@ mod adr0162_virtual_reserve {
                     match rng.below(3) {
                         0 => {
                             let msk_in = rng.amount(3_000_000 * MSK);
-                            let (qv, qs) =
-                                (palw_model_buy_quote_with(&virt, msk_in, schedule), palw_model_buy_quote_with(&seeded, msk_in, schedule));
+                            let (qv, qs) = (
+                                palw_model_buy_quote_with(&virt, msk_in, schedule),
+                                palw_model_buy_quote_with(&seeded, msk_in, schedule),
+                            );
                             assert_eq!(qv.map(|q| (q.units_out, q.fees)), qs.map(|q| (q.units_out, q.fees)), "{what}: buy {msk_in}");
                             if let (Some(qv), Some(qs)) = (qv, qs) {
                                 held += qv.units_out;
@@ -1407,8 +1412,10 @@ mod adr0162_virtual_reserve {
                         }
                         1 if held > 0 => {
                             let units = 1 + rng.below(held);
-                            let (qv, qs) =
-                                (palw_model_sell_quote_with(&virt, units, schedule), palw_model_sell_quote_with(&seeded, units, schedule));
+                            let (qv, qs) = (
+                                palw_model_sell_quote_with(&virt, units, schedule),
+                                palw_model_sell_quote_with(&seeded, units, schedule),
+                            );
                             assert_eq!(qv.map(|q| q.fees), qs.map(|q| q.fees), "{what}: sell {units}");
                             if let (Some(qv), Some(qs)) = (qv, qs) {
                                 held -= units;
@@ -1715,7 +1722,11 @@ mod adr0162_virtual_reserve {
                     assert_eq!(s, rs, "{what}: sell {units}");
                     assert_eq!(r, rr, "{what}: slice {slice}");
                     let under = PalwModelMarketV1 { msk_reserve: m.seed_sompi.saturating_sub(1), ..m };
-                    assert_eq!(palw_model_sell_quote_with(&under, units, schedule), reference::sell(&under, units, schedule), "{what}");
+                    assert_eq!(
+                        palw_model_sell_quote_with(&under, units, schedule),
+                        reference::sell(&under, units, schedule),
+                        "{what}"
+                    );
                     let closed = PalwModelMarketV1 { closed_to_buys: true, ..m };
                     assert_eq!(palw_model_buy_quote_with(&closed, msk_in, schedule), None, "{what}");
                     assert_eq!(reference::buy(&closed, msk_in, schedule), None, "{what}");
@@ -1796,7 +1807,10 @@ mod adr0162_virtual_reserve {
         }
         let map: std::collections::BTreeMap<Hash64, PalwModelMarketV1> =
             [(Hash64::from_u64_word(1), virt), (Hash64::from_u64_word(2), seeded), (Hash64::from_u64_word(3), virt_closed)].into();
-        assert_eq!(borsh::from_slice::<std::collections::BTreeMap<Hash64, PalwModelMarketV1>>(&borsh::to_vec(&map).unwrap()).unwrap(), map);
+        assert_eq!(
+            borsh::from_slice::<std::collections::BTreeMap<Hash64, PalwModelMarketV1>>(&borsh::to_vec(&map).unwrap()).unwrap(),
+            map
+        );
         // One-to-one: an unknown bit, or a flag whose word is zero, is refused.
         let mut unknown = borsh::to_vec(&seeded).unwrap();
         unknown[48] = 0b100;

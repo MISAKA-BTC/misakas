@@ -41463,8 +41463,13 @@ pub(crate) mod tests {
             // Past the audit fence a sell's key is its holder's (P-B4): a real key's id holds the position.
             let seller_key = crate::config::params::PALW_T12_GENESIS_BONDS[0].bond_pubkey;
             let who = palw_model_holder_of_pubkey_v1(seller_key);
-            let buy =
-                PalwConsensusObjectV2::ModelBuy { line_id: kimi_id(), holder: who, msk_in: 1_000 * MSK, min_units_out: 0, sink_index: 1 };
+            let buy = PalwConsensusObjectV2::ModelBuy {
+                line_id: kimi_id(),
+                holder: who,
+                msk_in: 1_000 * MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            };
             let seed = PalwConsensusObjectV2::ModelSeed { line_id: kimi_id(), seeder: h64(0x5EED), msk_seed: 5 * MSK, sink_index: 1 };
 
             let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
@@ -41515,7 +41520,10 @@ pub(crate) mod tests {
             demoted.model_lifecycles.get_mut(&kimi_id()).unwrap().state = PalwModelLifecycleV1::Held;
             assert!(fold_at(&demoted, &ctx(5, 113, 5), std::slice::from_ref(&buy)).is_err(), "a held class takes no buy");
             assert!(
-                matches!(fold_at(&demoted, &ctx(5, 113, 5), std::slice::from_ref(&seed)), Err(PalwStateV2Error::ModelSeedAfterTrade(_))),
+                matches!(
+                    fold_at(&demoted, &ctx(5, 113, 5), std::slice::from_ref(&seed)),
+                    Err(PalwStateV2Error::ModelSeedAfterTrade(_))
+                ),
                 "nor a seed: it has traded"
             );
             let sell = PalwConsensusObjectV2::ModelSell {
@@ -41547,7 +41555,10 @@ pub(crate) mod tests {
             let p = params().with_worker_carve_permille(620).unwrap();
             let (_, root) = inventory();
             let e = PalwTransitionExtrasV1 { model_lines_active: true, model_virtual_v1: Some(0), ..extras(None) };
-            let go = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+            let go = |parent: &PalwChainStateV2,
+                      c: &PalwBlockContextV2,
+                      objects: &[PalwConsensusObjectV2],
+                      att: Option<&PalwAttemptEnvelopeV2>| {
                 let (state, _) = apply_palw_transition_v2_with_extras(parent, &p, c, objects, att, false, false, false, false, &e)
                     .expect("the transition applies");
                 state.assert_internal_consistency(&p).expect("internal consistency after apply");
@@ -41563,15 +41574,28 @@ pub(crate) mod tests {
                 assert!(s2.claim_root(&claim_id).is_some(), "{class}: attributed to its line");
                 let escrow = s2.claim(&claim_id).unwrap().escrowed_reward;
                 assert!(escrow > 0, "{class}: an escrow to take a slice of");
-                let s3 = go(&s2, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat] }], None);
-                let s4 = go(&s3, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+                let s3 = go(
+                    &s2,
+                    &ctx(3, 102, 3),
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat] }],
+                    None,
+                );
+                let s4 = go(
+                    &s3,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                    None,
+                );
                 let s5 = go(&s4, &ctx(5, 124, 5), &[], None);
                 assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{class}: Final");
                 let paid = s5.pending_payouts_iter().find(|(id, _)| **id == claim_id).map(|(_, row)| row.amount);
                 if class == kimi_id() {
                     let slice = palw_model_buyback_slice_v1(escrow);
-                    let want = palw_model_buyback_quote_v1(&PalwModelMarketV1::open_virtual_v2(100, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2), slice)
-                        .expect("the opening takes the slice");
+                    let want = palw_model_buyback_quote_v1(
+                        &PalwModelMarketV1::open_virtual_v2(100, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2),
+                        slice,
+                    )
+                    .expect("the opening takes the slice");
                     assert_eq!(s5.model_market(&class), Some(&want.after), "the reward's buy wrote the row, from the opening");
                     assert_eq!((want.after.msk_reserve, want.after.buyback_sompi, want.after.seed_sompi), (slice, slice, 0));
                     assert_eq!(paid, Some(escrow - slice), "the miner is named the other ninety-five percent");
@@ -64670,7 +64694,12 @@ pub(crate) mod tests {
             fold_with(parent, p, c, objects, &armed())
         }
 
-        fn fold_ok(parent: &PalwChainStateV2, p: &PalwStateParamsV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]) -> PalwChainStateV2 {
+        fn fold_ok(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+        ) -> PalwChainStateV2 {
             fold(parent, p, c, objects).expect("the transition applies").0
         }
 
@@ -64700,11 +64729,7 @@ pub(crate) mod tests {
         /// sellers' net legs (`sold_net`) or burned; the reserve never under the seed.
         fn invariants(state: &PalwChainStateV2, line: Hash64, paid_in: u64, sold_net: u64) {
             let m = state.model_market(&line).expect("a market row");
-            assert_eq!(
-                m.position_units as u128 + state.model_units_held(&line) + m.retired_units as u128,
-                SUPPLY as u128,
-                "M1"
-            );
+            assert_eq!(m.position_units as u128 + state.model_units_held(&line) + m.retired_units as u128, SUPPLY as u128, "M1");
             assert_eq!(
                 paid_in + m.seed_sompi + m.buyback_sompi,
                 m.msk_reserve + m.registrant_paid_sompi + m.contributor_paid_sompi + sold_net + m.burned_sompi,
@@ -64863,11 +64888,10 @@ pub(crate) mod tests {
             assert!(m2.is_open() && m2.virtual_sompi == 0, "an ADR-0090 pair, opened before the fence");
             assert_eq!(in_force(&s2, &p, class), m2, "past the fence it is read as it is");
             let (s3, _) = fold_with(&s2, &p, &ctx(3, 250, 3), &[], &before).unwrap();
-            let moves: [&dyn Fn(&PalwChainStateV2) -> Vec<PalwConsensusObjectV2>; 3] = [
-                &|_| vec![buy(class, holder(1), 20_000 * MSK, 0)],
-                &|_| vec![buy(class, holder(2), 777 * MSK, 0)],
-                &|s| vec![sell_from(s, class, holder(1), s.model_position(&class, &holder(1)) / 2, 0)],
-            ];
+            let moves: [&dyn Fn(&PalwChainStateV2) -> Vec<PalwConsensusObjectV2>; 3] =
+                [&|_| vec![buy(class, holder(1), 20_000 * MSK, 0)], &|_| vec![buy(class, holder(2), 777 * MSK, 0)], &|s| {
+                    vec![sell_from(s, class, holder(1), s.model_position(&class, &holder(1)) / 2, 0)]
+                }];
             let mut state = s3;
             for (n, objects) in moves.iter().enumerate() {
                 let objects = objects(&state);
@@ -64946,14 +64970,11 @@ pub(crate) mod tests {
                 "{:?}",
                 st[0]
             );
-            assert!(
-                matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::SEED_AFTER_TRADE }),
-                "{:?}",
-                st[1]
-            );
+            assert!(matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::SEED_AFTER_TRADE }), "{:?}", st[1]);
             assert_eq!(st[1].escrow_sompi, 5 * MSK, "and its escrow is refunded");
             assert_eq!(refusal::SEED_AFTER_TRADE, 14);
         }
+
     }
 
     // ---- ADR-0095 — the membership: N1–N12 at the fold ---------------------------------------
