@@ -120,7 +120,7 @@ mod tests {
                     count: 7 + i as u64,
                     pos0_absmax: a / 3.0,
                     rest_absmax: a * 0.7,
-                    chan_absmax: vec![(*a as f32), 1.0 / 7.0, f32::MIN_POSITIVE, 16777217.0],
+                    chan_absmax: vec![(a.min(1e30) as f32), 1.0 / 7.0, f32::MIN_POSITIVE, 16777217.0],
                     ragged: i % 2 == 0,
                 },
             );
