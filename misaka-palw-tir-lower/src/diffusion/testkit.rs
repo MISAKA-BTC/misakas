@@ -34,6 +34,16 @@ pub(crate) fn run_one_block<D>(
     declare: impl FnOnce(&mut ProgramBuilder, &mut ParamSink) -> D,
     build: impl FnOnce(&mut BlockBuilder<'_>, D) -> Ref,
 ) -> Tensor {
+    run_steps(declare, build, 1).remove(0)
+}
+
+/// [`run_one_block`] over `n` positions (`Input(1)` is the position; a `Fixed` state the layer writes carries to
+/// the next): the observed node's value at each.
+pub(crate) fn run_steps<D>(
+    declare: impl FnOnce(&mut ProgramBuilder, &mut ParamSink) -> D,
+    build: impl FnOnce(&mut BlockBuilder<'_>, D) -> Ref,
+    n: usize,
+) -> Vec<Tensor> {
     let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
     let mut sink = ParamSink::new();
     let declared = declare(&mut pb, &mut sink);
@@ -67,6 +77,10 @@ pub(crate) fn run_one_block<D>(
     }
     let mp = sink.bind(names.iter().map(String::as_str));
     let mut st = RunState::default();
-    let step = interp.step(&mp, &mut st, 0).unwrap_or_else(|e| panic!("step 0: {e}"));
-    step.commits.iter().find(|c| c.block == layer && c.node == node).expect("the observed node is committed").value.clone()
+    (0..n)
+        .map(|i| {
+            let step = interp.step(&mp, &mut st, 0).unwrap_or_else(|e| panic!("step {i}: {e}"));
+            step.commits.iter().find(|c| c.block == layer && c.node == node).expect("the observed node is committed").value.clone()
+        })
+        .collect()
 }

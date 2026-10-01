@@ -114,16 +114,22 @@ pub fn lower_conv(b: &mut BlockBuilder<'_>, x: Ref, c: &QConvRefs, spec: &ConvSp
 
 /// [`lower_conv`] narrowed into `[lo, hi]` of `dtype` (the patch embedding's is the residual stream's `i32`).
 pub fn lower_conv_as(b: &mut BlockBuilder<'_>, x: Ref, c: &QConvRefs, spec: &ConvSpec, lo: i64, hi: i64, dtype: DType) -> Ref {
+    let y = lower_conv_rows(b, x, c, spec, lo, hi, dtype); // [Ho·Wo, Cout]
+    let yt = b.transpose(y, &[1, 0]);
+    let (ho, wo) = spec.out_hw();
+    b.reshape_fixed(yt, &[spec.cout as u32, ho as u32, wo as u32])
+}
+
+/// The convolution as ROWS, `[Ho·Wo, Cout]` (one row per output position — the token layout of a patch embedding),
+/// narrowed into `[lo, hi]` of `dtype`.
+pub fn lower_conv_rows(b: &mut BlockBuilder<'_>, x: Ref, c: &QConvRefs, spec: &ConvSpec, lo: i64, hi: i64, dtype: DType) -> Ref {
     let n = (spec.cin * spec.h * spec.w) as u32;
     let flat = b.reshape_fixed(x, &[n]);
     let zero = b.pb.konst(DType::I16, &[1], &[0]);
     let padded = b.concat(&[flat, zero], 0);
     let idx = b.clamp(c.idx, 0, n as i64, DType::Idx);
     let cols = b.gather(padded, idx, 0, 0); // [Ho·Wo, K]
-    let y = lower_linear(b, cols, &c.lin, lo, hi, dtype); // [Ho·Wo, Cout]
-    let yt = b.transpose(y, &[1, 0]);
-    let (ho, wo) = spec.out_hw();
-    b.reshape_fixed(yt, &[spec.cout as u32, ho as u32, wo as u32])
+    lower_linear(b, cols, &c.lin, lo, hi, dtype)
 }
 
 #[cfg(test)]
