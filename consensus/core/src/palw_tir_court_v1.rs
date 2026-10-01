@@ -2232,9 +2232,9 @@ pub fn tir_logits_event_disclosure_v1(
     })
 }
 
-/// A tiny IR class and an honest (or single-lane forged) execution of it, for the court's wiring
-/// tests elsewhere in the crate: an embedding, one layer with a saturating running sum (a `Fixed`
-/// state, so checkpoints and replay occur) and a projection, and a tiled-logits head.
+// A tiny IR class and an honest (or single-lane forged) execution of it, for the court's wiring
+// tests elsewhere in the crate: an embedding, one layer with a saturating running sum (a `Fixed`
+// state, so checkpoints and replay occur) and a projection, and a tiled-logits head.
 // ---------------------------------------------------------------------------------------------
 // Data availability: one committed step leaf of an IR claim, disclosed (the second IR fence)
 // ---------------------------------------------------------------------------------------------
@@ -2356,7 +2356,7 @@ fn fold_frontier(leaf_count: u64, level: u8, index: u64, below: u8, frontier: &[
         let mut k = 0usize;
         while k < nodes.len() {
             let position = start + k as u64;
-            if position % 2 != 0 {
+            if !position.is_multiple_of(2) {
                 return None;
             }
             if position + 1 < width {

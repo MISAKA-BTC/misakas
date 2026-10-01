@@ -146,8 +146,6 @@ pub enum PalwGenesisV2Error {
 /// Returns `Ok` only if the node may start. Every failure names the disagreement rather than a
 /// position, because the operator fixing it is holding two artifacts and needs to know which one
 /// is wrong.
-
-
 pub fn verify_palw_genesis_v2(
     bundle: &PalwConsensusParamsV2,
     catalog: &PalwClassCatalogV2,
