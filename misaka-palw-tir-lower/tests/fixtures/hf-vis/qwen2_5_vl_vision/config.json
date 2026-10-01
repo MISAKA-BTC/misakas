@@ -1,0 +1,28 @@
+{
+  "architectures": [
+    "Qwen2_5_VisionTransformerPretrainedModel"
+  ],
+  "depth": 2,
+  "dtype": "bfloat16",
+  "fullatt_block_indexes": [
+    1
+  ],
+  "hidden_act": "silu",
+  "hidden_size": 32,
+  "in_channels": 3,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "model_type": "qwen2_5_vl_vision",
+  "num_heads": 4,
+  "out_hidden_size": 48,
+  "patch_size": 7,
+  "rope_parameters": {
+    "rope_theta": 10000.0,
+    "rope_type": "axial"
+  },
+  "spatial_merge_size": 2,
+  "temporal_patch_size": 2,
+  "tokens_per_second": 4,
+  "transformers_version": "5.17.0",
+  "window_size": 28
+}

@@ -1073,6 +1073,13 @@ mod tests {
     // ---------------------------------------------------------------------------------------
 
     const VOCAB: usize = 10_000;
+    /// **A temperature that is warm against `constrained_rows`.** The key is `value · 2^24 + T_q · G`
+    /// (both terms Q48, finding G1), so `T_q` is a temperature in counts of the committed logit, and the
+    /// rows' planted logits sit `10^4 … 10^5` counts apart (a few `10^-3` of a Q24 unit). `T_q = 500`
+    /// draws noise of at most `~6 · 10^3` counts: the sampled key path runs and the planted structure
+    /// (`[`, a digit, `]`, then the stop) survives. A hotter temperature is uniform over the admitted
+    /// lanes, which `a_hot_honest_constrained_run_clears_and_a_forbidden_id_convicts` takes up.
+    const WARM_T_Q: u32 = 500;
     const EOG_LOW: u32 = 9_998;
     const EOG_HIGH: u32 = 9_999;
     const UNRENDERABLE: u32 = 7_000;
@@ -1277,7 +1284,7 @@ mod tests {
     fn refutation_v3_clears_an_honest_constrained_run_and_convicts_the_altered_id() {
         let c = bracket_digit();
         let rows = constrained_rows(6);
-        for sampling in [PalwDecodeSamplingV2::GREEDY, PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 28 }] {
+        for sampling in [PalwDecodeSamplingV2::GREEDY, PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: WARM_T_Q }] {
             let ids = honest_run(&c, &rows, sampling);
             // `[`, a digit, `]`, then the stop: four positions, the last the lowest EOG id.
             assert_eq!(ids.len(), 4, "{ids:?}");
@@ -1346,6 +1353,46 @@ mod tests {
         }
     }
 
+    /// **A hot honest run.** At `T = 16` (`T_q = 2^28`) the rows' planted logits (a few `10^-3` of a unit) are
+    /// noise: the draw is uniform over the admitted lanes at every position, the planted shape is gone, and
+    /// what holds is the invariant — an honest run under the constraint clears at every position under the
+    /// one-disclosure arm, ends at the lowest EOG id, and an id the constraint forbids is convicted from the
+    /// ids alone. (Finding G1: before the key's noise was unshifted this temperature was inert and the tests
+    /// above could not tell.)
+    #[test]
+    fn a_hot_honest_constrained_run_clears_and_a_forbidden_id_convicts() {
+        let c = bracket_digit();
+        let rows = constrained_rows(6);
+        let mut shapes = std::collections::BTreeSet::new();
+        for seed in [[0x77u8; 32], [0x13u8; 32], [0xC4u8; 32], [0x5Au8; 32], [0x2Bu8; 32]] {
+            let sampling = PalwDecodeSamplingV2 { seed, temperature_q: 1 << 28 };
+            let ids = honest_run(&c, &rows, sampling);
+            assert!(ids.len() >= 2 && ids.last() == Some(&EOG_LOW), "{ids:?}");
+            shapes.insert(ids.clone());
+            let binding = constrained_binding(&rows, &ids);
+            for p in 0..ids.len() as u32 {
+                let bare = one_disclosure_pin(&binding.job_context, &rows, &ids, p);
+                assert!(
+                    matches!(
+                        check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()),
+                        Err(PalwStepRefuteError::NoFaultFound)
+                    ),
+                    "honest position {p} of {ids:?} under the one-disclosure arm"
+                );
+            }
+            // `x` is never admitted where the constraint starts: convicted from the ids alone.
+            let mut altered = ids.clone();
+            altered[0] = b'x' as u32;
+            let binding = constrained_binding(&rows, &altered);
+            let bare = one_disclosure_pin(&binding.job_context, &rows, &altered, 0);
+            assert_eq!(
+                check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()).map(|v| v.fault),
+                Ok(fault_at(0))
+            );
+        }
+        assert!(shapes.len() > 1, "five seeds at a hot temperature drew one run: the temperature is inert");
+    }
+
     /// **Invariant 3.** Under a constraint the two-disclosure arm convicts a producer that
     /// committed an admitted lane when an admitted lane with a strictly greater key existed, and
     /// refuses to convict when the beating lane is one the constraint forbids — however large its
@@ -1355,7 +1402,7 @@ mod tests {
     fn refutation_v3_does_not_convict_on_a_lane_the_constraint_forbids() {
         let c = bracket_digit();
         let rows = constrained_rows(6);
-        for sampling in [PalwDecodeSamplingV2::GREEDY, PalwDecodeSamplingV2 { seed: [0x5Au8; 32], temperature_q: 1 << 27 }] {
+        for sampling in [PalwDecodeSamplingV2::GREEDY, PalwDecodeSamplingV2 { seed: [0x5Au8; 32], temperature_q: WARM_T_Q }] {
             let honest = honest_run(&c, &rows, sampling);
             // A producer that committed the second-best ADMITTED digit at position 1.
             let state = after(&c, b"[").unwrap();
@@ -1392,8 +1439,13 @@ mod tests {
                     Err(PalwStepRefuteError::NoFaultFound)
                 ));
             }
-            // A beating lane that is admitted but does not beat: no fault.
-            let weaker = tiled_pin(&binding.job_context, &rows, &honest, 1, b'1' as u32);
+            // A beating lane that is admitted but does not beat: no fault. The lane is found by its key —
+            // under a sampler the planted order is not the draw's.
+            let honest_key = sampling.lane_key(rows[1][best], 1, best);
+            let weak_lane = (0..VOCAB)
+                .find(|j| mask[*j] && *j != best && !decode_lane_beats_v2(sampling.lane_key(rows[1][*j], 1, *j), *j, honest_key, best))
+                .expect("an admitted lane that does not beat the honest one");
+            let weaker = tiled_pin(&binding.job_context, &rows, &honest, 1, weak_lane as u32);
             let binding = constrained_binding(&rows, &honest);
             assert!(matches!(
                 check_tiled_decode_token_refutation_v3(&binding, &weaker, sampling, Some(court(&c)), cap()),

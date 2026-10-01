@@ -1,5 +1,6 @@
-//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 57 tiny-fixture
-//! architectures, the lowered program with its calibrated integer params is run on
+//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 68 tiny-fixture
+//! architectures (and the 11 pre-quantised GPTQ/AWQ fixtures), the lowered program with its
+//! calibrated integer params is run on
 //!
 //! * the reference evaluator (`misaka-palw-tir`),
 //! * the independent second implementation (`misaka-palw-tir-ref2`, written from 04b alone, fed
@@ -47,11 +48,14 @@ fn ref2_dtype(d: misaka_palw_tir::DType) -> misaka_palw_tir_ref2::DType {
 
 /// Positions run on all three for one fixture, or why it could not be prepared.
 fn run(name: &str) -> Result<usize, String> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf").join(name);
-    let cfg = std::fs::read_to_string(dir.join("config.json")).map_err(|e| e.to_string())?;
-    let prep = fidelity::prepare(&cfg, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
-    let ck = Checkpoint::open(&dir).map_err(|e| e.to_string())?;
-    let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(|e| e.to_string())?;
+    run_in("tests/fixtures/hf", name)
+}
+
+fn run_in(root: &str, name: &str) -> Result<usize, String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(root).join(name);
+    // A Hugging Face directory or a GGUF one (`model.gguf`).
+    let (prep, ck) = fidelity::open_model(&dir, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
+    let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, ck.as_ref()).map_err(|e| e.to_string())?;
     let loader = Resident(Arc::new(params));
     let max_len = prep.spec.embedding.positions.as_ref().map_or(usize::MAX, |p| p.rows - p.offset);
     let calib = fidelity::random_sequences(prep.hl.vocab, 4, 24.min(max_len), 11);
@@ -130,7 +134,7 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
     let mut names: Vec<String> =
         std::fs::read_dir(&root).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
     names.sort();
-    assert_eq!(names.len(), 57);
+    assert_eq!(names.len(), 68);
     let mut failed = Vec::new();
     let mut total = 0;
     for n in &names {
@@ -151,6 +155,33 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
         }
     }
     eprintln!("{total} positions in all");
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// The pre-quantised fixtures (`tests/quantized.rs`, `tests/gguf.rs`): the grouped integer MatMul,
+/// the per-group scale products and sums, the zero-point and minimum terms, the outlier mask and the
+/// column-order gather are the same bytes on all three implementations.
+#[test]
+fn every_prequantised_fixture_is_the_same_on_all_three_implementations() {
+    let mut names: Vec<(String, String)> = Vec::new();
+    for (root, count) in [("tests/fixtures/hf-quant", 13), ("tests/fixtures/gguf", 11)] {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(root);
+        let mut here: Vec<String> =
+            std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
+        here.sort();
+        assert_eq!(here.len(), count, "{root}");
+        names.extend(here.into_iter().map(|n| (root.to_string(), n)));
+    }
+    let mut failed = Vec::new();
+    for (root, n) in &names {
+        match run_in(root, n) {
+            Ok(k) => eprintln!("{n:>22}: {k} positions, logits and every commit equal on reference, ref2 and exec"),
+            Err(e) => {
+                eprintln!("{n:>22}: {e}");
+                failed.push(n.clone());
+            }
+        }
+    }
     assert!(failed.is_empty(), "{failed:?}");
 }
 

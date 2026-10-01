@@ -10,7 +10,7 @@ fn ln(eps: f64) -> NormSpec {
 
 /// The effective partial-rotary factor: `rope_parameters.partial_rotary_factor` (transformers 5),
 /// else the listed legacy keys, else the class default.
-fn partial_factor(p: &P, legacy: &[&str], default: f64) -> Result<f64> {
+pub(crate) fn partial_factor(p: &P, legacy: &[&str], default: f64) -> Result<f64> {
     if let Some(rp) = p.cfg.opt_obj("rope_parameters")?
         && let Some(v) = rp.get("partial_rotary_factor").and_then(Value::as_f64)
     {

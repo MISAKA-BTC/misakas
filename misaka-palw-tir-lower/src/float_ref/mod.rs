@@ -14,12 +14,14 @@
 
 use crate::error::{LowerError, Result};
 use crate::hl::*;
+use crate::prequant::QWeight;
 use crate::rope::{RopeStyle, bf16_round};
 use crate::spec::{Act, Glu, GroupScore, HeadMap, NormKind, RouterSpec, Scoring};
-use crate::weights::{Binding, Resolver, Tensor, TensorSource, eval_src, layers_of_param};
+use crate::weights::{Binding, Resolver, Src, Tensor, TensorSource, eval_qsrc, eval_src, layers_of_param};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub mod stream;
 
@@ -28,6 +30,31 @@ pub mod stream;
 pub struct ParamStore {
     global: BTreeMap<u32, Tensor>,
     layered: BTreeMap<(u32, usize), Tensor>,
+    /// A pre-quantised param's stored integers (its float tensor above is their dequantisation);
+    /// one per expert for a stack of experts.
+    quant: BTreeMap<(u32, Option<usize>), Arc<Vec<QWeight>>>,
+}
+
+/// One param instance from its source: the float tensor, and the stored integers when the param
+/// is pre-quantised (the float tensor is then their dequantisation, read once).
+pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<(Tensor, Option<Vec<QWeight>>)> {
+    let none = BTreeMap::new();
+    if src.is_quant() {
+        let q = eval_qsrc(src, r, layer, &none)?.ok_or_else(|| LowerError::eval("internal: a quantised source read no integers"))?;
+        let t = if q.len() == 1 {
+            q[0].dequant()
+        } else {
+            // A stack of experts: `[E, out, in]`.
+            let mut data = Vec::new();
+            for w in &q {
+                data.extend(w.dequant().data);
+            }
+            Tensor::new(vec![q.len(), q[0].out, q[0].inp], data)
+        };
+        Ok((t, Some(q)))
+    } else {
+        Ok((eval_src(src, r, layer, &none)?, None))
+    }
 }
 
 impl ParamStore {
@@ -39,6 +66,29 @@ impl ParamStore {
         .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))
     }
 
+    /// A pre-quantised param's stored integers (`None`: the param is float); one per expert for a
+    /// stack of experts.
+    pub fn get_q(&self, p: u32, layer: Option<usize>) -> Option<&Arc<Vec<QWeight>>> {
+        match layer {
+            Some(l) => self.quant.get(&(p, Some(l))).or_else(|| self.quant.get(&(p, None))),
+            None => self.quant.get(&(p, None)),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, p: u32, layer: Option<usize>, t: Tensor, q: Option<Vec<QWeight>>) {
+        if let Some(q) = q {
+            self.quant.insert((p, layer), Arc::new(q));
+        }
+        match layer {
+            Some(l) => {
+                self.layered.insert((p, l), t);
+            }
+            None => {
+                self.global.insert(p, t);
+            }
+        }
+    }
+
     /// Bind every param from checkpoint tensors; returns the store and the checkpoint tensors
     /// the program never read.
     pub fn from_source(prog: &HlProgram, binding: &Binding, source: &dyn TensorSource) -> Result<(ParamStore, Vec<String>)> {
@@ -47,21 +97,20 @@ impl ParamStore {
         }
         let r = Resolver::new(source, &binding.aliases).with_ignored(&binding.ignored_prefixes);
         let mut st = ParamStore::default();
-        let none = BTreeMap::new();
         for (pi, d) in prog.params.iter().enumerate() {
             let pi = pi as u32;
             if d.per_layer {
                 for l in layers_of_param(prog, pi) {
-                    let t = eval_src(&binding.srcs[pi as usize], &r, Some(l), &none)
-                        .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
+                    let (t, q) = bind_one(&binding.srcs[pi as usize], &r, Some(prog.model_layer(l)))
+                        .map_err(|e| LowerError::weights(format!("param `{}` layer {}: {e}", d.name, prog.model_layer(l))))?;
                     check_shape(&d.name, &t, &d.shape)?;
-                    st.layered.insert((pi, l), t);
+                    st.insert(pi, Some(l), t, q);
                 }
             } else {
-                let t = eval_src(&binding.srcs[pi as usize], &r, None, &none)
+                let (t, q) = bind_one(&binding.srcs[pi as usize], &r, None)
                     .map_err(|e| LowerError::weights(format!("param `{}`: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
-                st.global.insert(pi, t);
+                st.insert(pi, None, t, q);
             }
         }
         Ok((st, r.untouched()))
@@ -193,11 +242,27 @@ pub struct Session<'a> {
     pub sites: Option<BTreeMap<String, SiteStat>>,
     /// Every site's output of the current step, when tracing (cleared by each `step`).
     pub trace: Option<BTreeMap<String, Vec<f32>>>,
+    /// Rows that replace the pre block's output at their positions (an image's rows in a
+    /// multimodal LM, RFC-0003 II.4).
+    pub overrides: BTreeMap<usize, Vec<f32>>,
+    /// M-RoPE position components `(t, h, w)` by position (Qwen2-VL's `get_rope_index`); a
+    /// position absent here reads its own index in all three.
+    pub mrope_pos: BTreeMap<usize, [usize; 3]>,
 }
 
 impl<'a> Session<'a> {
     pub fn new(prog: &'a HlProgram, params: &'a ParamStore) -> Self {
-        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None, trace: None }
+        Session {
+            prog,
+            params,
+            fixed: BTreeMap::new(),
+            hist: BTreeMap::new(),
+            pos: 0,
+            sites: None,
+            trace: None,
+            overrides: BTreeMap::new(),
+            mrope_pos: BTreeMap::new(),
+        }
     }
     pub fn with_site_stats(mut self) -> Self {
         self.sites = Some(BTreeMap::new());
@@ -241,6 +306,9 @@ impl<'a> Session<'a> {
         }
         let pre = self.prog.pre;
         let mut carries = self.eval_block(pre, None, &[], token)?;
+        if let Some(row) = self.overrides.get(&self.pos) {
+            carries[0] = row.clone();
+        }
         for (l, k) in self.prog.schedule.clone().into_iter().enumerate() {
             carries = self.eval_block(k as usize, Some(l), &carries, token)?;
         }
@@ -415,8 +483,23 @@ impl<'a> Session<'a> {
             }
             Op::Rope { heads, head_dim, rotary_dim, offset, style, table } => {
                 let f = &self.prog.rope_tables[*table as usize];
-                let (c, s) = f.cos_sin(pos);
+                let (c, s) = match (f.mrope, self.mrope_pos.get(&pos)) {
+                    // M-RoPE: each frequency at its own position component.
+                    (Some(mr), Some(tri)) => {
+                        let parts: Vec<(Vec<f32>, Vec<f32>)> = tri.iter().map(|p| f.cos_sin(*p)).collect();
+                        (0..parts[0].0.len()).map(|j| (parts[mr.component(j)].0[j], parts[mr.component(j)].1[j])).unzip()
+                    }
+                    _ => f.cos_sin(pos),
+                };
                 one(rope(x(0)?, *heads, *head_dim, *rotary_dim, *offset, *style, &c, &s))
+            }
+            Op::PosScale { temp } => {
+                let t = temp.at(pos);
+                one(x(0)?.iter().map(|v| v * t).collect())
+            }
+            Op::ScaleParam => {
+                let c = self.param(ins[1], layer)?.data[0];
+                one(x(0)?.iter().map(|v| v * c).collect())
             }
             Op::HistAppend => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("HistAppend without a state")) };
@@ -424,7 +507,7 @@ impl<'a> Session<'a> {
                 self.hist.entry((s, lyr)).or_default().push(row);
                 Ok(vec![vec![]])
             }
-            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks } => {
+            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks, chunk } => {
                 let (Ref::State(ks), Ref::State(vs)) = (ins[1], ins[2]) else {
                     return Err(LowerError::eval("attention without states"));
                 };
@@ -435,8 +518,16 @@ impl<'a> Session<'a> {
                 let values: &[Vec<f32>] = self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let shape = AttnShape { heads: *heads, kv_heads: *kv_heads, head_dim: *head_dim, v_head_dim: *v_head_dim };
                 let want = self.sites.is_some();
+                // A chunk keeps the last `p mod c + 1` keys: the query's own chunk.
+                let window = match chunk {
+                    Some(c) => {
+                        let own = keys.len().saturating_sub(1) % c + 1;
+                        Some(window.map_or(own, |w| w.min(own)))
+                    }
+                    None => *window,
+                };
                 let (out, scores, probs) =
-                    attention(&q, keys, values, shape, *scale, *softcap, *window, alibi.as_ref(), sinks_v.as_deref(), want);
+                    attention(&q, keys, values, shape, *scale, *softcap, window, alibi.as_ref(), sinks_v.as_deref(), want);
                 self.sub_site(prefix, &node.site, "scores", &scores);
                 self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
@@ -539,12 +630,19 @@ impl<'a> Session<'a> {
             }
             Op::Route { router, experts, top_k } => {
                 let logits = x(0)?.to_vec();
-                let sel_bias = if ins.len() > 1 { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
-                let (idx, w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
+                let sel_bias = if router.selection_bias { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
+                let (idx, mut w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
+                // Gemma-4: a learned per-expert scale on each selected weight.
+                if router.per_expert_scale {
+                    let pes = self.param(ins[1 + usize::from(router.selection_bias)], layer)?;
+                    for (wj, e) in w.iter_mut().zip(&idx) {
+                        *wj *= pes.data[*e];
+                    }
+                }
                 self.sub_site(prefix, &node.site, "logits", &logits);
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }
-            Op::MoeExperts { top_k, act: a, glu, bias } => {
+            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled } => {
                 let xv = x(0)?.to_vec();
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
@@ -570,8 +668,10 @@ impl<'a> Session<'a> {
                     let gb = biases.map(|(a, _, _)| slice(a, e));
                     let ub = biases.map(|(_, b, _)| slice(b, e));
                     let db = biases.map(|(_, _, c)| slice(c, e));
-                    let gv = linear_raw(&xv, &gw, e_i, gb.as_deref());
-                    let uv = linear_raw(&xv, &uw, e_i, ub.as_deref());
+                    // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
+                    let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
+                    let gv = linear_raw(&xs, &gw, e_i, gb.as_deref());
+                    let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
                     let hv: Vec<f32> = match glu {
                         Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
                         Glu::ClampedSwiGlu { alpha, limit } => {
@@ -586,8 +686,9 @@ impl<'a> Session<'a> {
                         hidden_all.extend_from_slice(&hv);
                         out_all.extend_from_slice(&ov);
                     }
+                    let wj = if *input_scaled { 1.0 } else { w[j] as f64 };
                     for (yy, o) in y.iter_mut().zip(&ov) {
-                        *yy += w[j] as f64 * *o as f64;
+                        *yy += wj * *o as f64;
                     }
                 }
                 for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {
@@ -1159,6 +1260,9 @@ pub fn top_k_indices(v: &[f64], k: usize) -> Vec<usize> {
 /// bias-corrected choice scores and weight by the raw scores (DeepSeek-V3).
 pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize, k: usize) -> (Vec<usize>, Vec<f32>) {
     let l: Vec<f64> = logits.iter().map(|x| *x as f64).collect();
+    if r.scoring == Scoring::SparseMixer {
+        return sparsemixer(&l, r.jitter_eps, r.scale);
+    }
     let (scores, mut choice): (Vec<f64>, Vec<f64>) = match r.scoring {
         Scoring::Softmax => {
             let p = softmax_with_sink(&l, None);
@@ -1169,7 +1273,7 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             let c = s.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
             (s, c)
         }
-        Scoring::TopKThenSoftmax => (l.clone(), l.clone()),
+        Scoring::TopKThenSoftmax | Scoring::TopKThenSigmoid | Scoring::SparseMixer => (l.clone(), l.clone()),
     };
     if let Some(g) = &r.groups {
         let per = e / g.n_group;
@@ -1195,9 +1299,10 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     }
     let idx = top_k_indices(&choice, k);
     let mut w: Vec<f64> = match r.scoring {
-        Scoring::TopKThenSoftmax => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
+        Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
         Scoring::Softmax => idx.iter().map(|i| choice[*i]).collect(),
         Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
+        Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {
         let s: f64 = w.iter().sum::<f64>() + r.norm_eps;
@@ -1205,6 +1310,25 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     }
     w.iter_mut().for_each(|x| *x *= r.scale);
     (idx, w.into_iter().map(|x| x as f32).collect())
+}
+
+/// Phi-3.5-MoE's `sparsemixer` at inference, as transformers computes it: the argmax `i1` (the
+/// first on ties), weighted by the softmax at `i1` of the scores not past the threshold
+/// `(m − s_j) / max(|s_j|, m) > 2ε`; then the same over the scores with `i1` masked, the threshold
+/// still read from the ORIGINAL scores.
+fn sparsemixer(s: &[f64], eps: f64, scale: f64) -> (Vec<usize>, Vec<f32>) {
+    let pick = |row: &[f64]| -> (usize, f64) {
+        let i = row.iter().enumerate().fold(0, |b, (j, v)| if *v > row[b] { j } else { b });
+        let m = row[i];
+        let gated: Vec<f64> =
+            row.iter().zip(s).map(|(r, x)| if (m - x) / x.abs().max(m) > 2.0 * eps { f64::NEG_INFINITY } else { *r }).collect();
+        (i, softmax_with_sink(&gated, None)[i])
+    };
+    let (i1, w1) = pick(s);
+    let mut rest = s.to_vec();
+    rest[i1] = f64::NEG_INFINITY;
+    let (i2, w2) = pick(&rest);
+    (vec![i1, i2], vec![(w1 * scale) as f32, (w2 * scale) as f32])
 }
 
 #[cfg(test)]

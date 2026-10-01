@@ -104,30 +104,43 @@ pub fn gumbel_q24_v1(seed: &[u8; 32], position: u32, lane: usize) -> i32 {
     PALW_GUMBEL_Q24_V1[gumbel_index_v1(seed, position, lane)]
 }
 
-/// **One lane's key: `value · T_ONE + ((T_q · G_lane) >> K)`, in `i64` and in Q24.**
+/// **One lane's key: `value · T_ONE + T_q · G_lane`, in `i64`, both terms Q48.**
 ///
 /// This is the whole of Decision 11's arithmetic, and it is a pure function of ONE lane — which
 /// is the property the two-disclosure refutation rests on. `T_q = 0` short-circuits the hash:
 /// the term is zero by construction, so a greedy row costs exactly what it costs today.
 ///
-/// **Both factors of the noise term are Q24, so their product is Q48 and the shift is what puts
-/// it back beside the logit.** Without it `T_q` would be scaled by `2^24` against a logit that is
-/// not, and a "temperature of 1" would swamp every logit by six orders of magnitude — which is
-/// exactly what `a_hot_temperature_draws_and_a_cold_one_collapses_to_greedy` measured before this
-/// line said `>> K`. With it, `T_q = 1 << K` is a temperature of ONE in the class's own logit
-/// units, which is the number a user thinks they are setting. The shift is arithmetic, so a
-/// negative product floors toward `-∞`; that is a definition, not an approximation — every node
-/// computes the same integer.
+/// **Why the two terms are the same unit.** `value` is the class's logit in Q24 (RFC-0001 §A.3:
+/// "`v_j` is an `i32` in the class's fixed point Q24"), so `value · T_ONE` is Q48. `T_q` is the
+/// temperature in Q24 and `G_lane` the Gumbel variate in Q24, so `T_q · G_lane` is Q48 as well. The
+/// key is `2^48 · (v + T·g)` for the real logit `v = value / 2^24`, the real temperature
+/// `T = T_q / 2^24` and the real variate `g = G / 2^24`, and `argmax_j (v_j + T·g_j) =
+/// argmax_j (v_j / T + g_j)` is Gumbel-max: a draw from `softmax(v / T)`. `T_q = 1 << K` is a
+/// temperature of ONE in the logit's own (real) units.
+///
+/// **What this replaced (finding G1 of the independent second implementation).** The key was
+/// `value · T_ONE + ((T_q · G) >> K)`: the shift put the noise in Q24 beside a logit term that is
+/// Q48, so the noise was `2^24` times too small and the temperature was inert — 0 non-greedy
+/// draws in 3,600 at `T = 1` on fp-v4's rows, against about 65 % for this key. The shift had been
+/// added because a test's rows were small plain integers ("a temperature of 1 swamps every logit"):
+/// those rows are not Q24 logits, they are `2^-24` of a unit, and at `T = 1` such a row IS
+/// uniform. RFC-0001 §A.3 and ADR-0082 D11 always had the key without a shift; the doc and the
+/// code were the deviation, and RFC-0003 §I.1.6 repeated the code.
+///
+/// **The unit is the class's, and this function assumes Q24** — every base0 class (`K = 24`) and
+/// every IR class converted from one. A class that commits its logits at another power of two
+/// samples at `T_q / 2^u` in its own units; making that a declared, checked fact is the class
+/// layer's (RFC-0003 §I.1.6, the logit-unit note).
 ///
 /// No overflow is reachable. `|value| ≤ 2^31` and `T_ONE = 2^24` bound the first term by `2^55`;
-/// `T_q ≤ 2^32` and `|G| < 2^28` bound the product by `2^60` BEFORE the shift; `i64` holds `2^63`.
-/// `the_keyed_row_cannot_overflow_an_i64` pins both bounds against the shipped table.
+/// `T_q < 2^32` and `|G| < 2^28` bound the second by `2^60`; the sum is below `2^61`, and `i64`
+/// holds `2^63`. `the_keyed_row_cannot_overflow_an_i64` pins both bounds against the shipped table.
 pub fn decode_lane_key_v2(value: i32, seed: &[u8; 32], position: u32, lane: usize, temperature_q: u32) -> i64 {
     let base = (value as i64) * PALW_DECODE_T_ONE;
     if temperature_q == PALW_DECODE_TEMPERATURE_GREEDY {
         return base;
     }
-    base + (((temperature_q as i64) * (gumbel_q24_v1(seed, position, lane) as i64)) >> K)
+    base + (temperature_q as i64) * (gumbel_q24_v1(seed, position, lane) as i64)
 }
 
 /// **Does lane `beat` beat lane `committed`?** — the tie rule of
@@ -1308,8 +1321,9 @@ mod tests {
         for v in [i32::MIN, -1, 0, 1, i32::MAX] {
             for t in [1u32, 1 << 24, u32::MAX] {
                 let k = decode_lane_key_v2(v, &[9u8; 32], 3, 11, t);
-                let noise = (t as i64).checked_mul(gumbel_q24_v1(&[9u8; 32], 3, 11) as i64).unwrap() >> K;
-                assert_eq!(k, (v as i64).checked_mul(PALW_DECODE_T_ONE).unwrap() + noise);
+                // Both terms are Q48: the noise is added whole, never shifted (finding G1).
+                let noise = (t as i64).checked_mul(gumbel_q24_v1(&[9u8; 32], 3, 11) as i64).unwrap();
+                assert_eq!(k, (v as i64).checked_mul(PALW_DECODE_T_ONE).unwrap().checked_add(noise).unwrap());
             }
         }
     }
@@ -1330,18 +1344,57 @@ mod tests {
         assert!((0..8_192u32).map(|p| gumbel_index_v1(&a, p, 0)).all(|i| i < PALW_GUMBEL_TABLE_LEN));
     }
 
+    /// Q24 of a real number: what a base0 class commits.
+    fn q24(x: f64) -> i32 {
+        (x * (1u64 << K) as f64).round() as i32
+    }
+
+    /// `softmax(row / t)` of real logits.
+    fn softmax(real: &[f64], t: f64) -> Vec<f64> {
+        let top = real.iter().cloned().fold(f64::MIN, f64::max);
+        let w: Vec<f64> = real.iter().map(|v| ((v - top) / t).exp()).collect();
+        let sum: f64 = w.iter().sum();
+        w.iter().map(|x| x / sum).collect()
+    }
+
+    /// The empirical selection frequencies of `row` at `temperature_q` over `draws` seeds (a counter in
+    /// the seed's first bytes: every draw is a different keyed hash).
+    fn frequencies(row: &[i32], temperature_q: u32, draws: u32) -> Vec<f64> {
+        let mut counts = vec![0u32; row.len()];
+        for n in 0..draws {
+            let mut seed = [0u8; 32];
+            seed[..4].copy_from_slice(&n.to_le_bytes());
+            counts[decode_token_select_v2(row, &seed, 0, temperature_q)] += 1;
+        }
+        counts.iter().map(|c| *c as f64 / draws as f64).collect()
+    }
+
+    /// Every lane's frequency within five standard deviations of its probability, plus the table's own
+    /// resolution (the Gumbel variate is quantised to `2^-13` of probability).
+    fn assert_follows(freq: &[f64], want: &[f64], draws: u32, what: &str) {
+        for (j, (f, p)) in freq.iter().zip(want).enumerate() {
+            let sigma = (p * (1.0 - p) / draws as f64).sqrt();
+            assert!(
+                (f - p).abs() <= 5.0 * sigma + 2.0 / PALW_GUMBEL_TABLE_LEN as f64,
+                "{what}: lane {j} was drawn {f:.4} of the time, softmax says {p:.4} (σ = {sigma:.4})"
+            );
+        }
+    }
+
     /// **The sampler samples.** At a temperature comparable to the row's own spread the selected
     /// token is not always the greedy one, and over many seeds the greedy token is still the
     /// modal outcome — the two facts that separate "a real distribution" from "noise" and from
-    /// "greedy with extra steps".
+    /// "greedy with extra steps". The row is in the class's own unit: Q24 logits, a few real units
+    /// apart (a row of small plain integers is `2^-24` of a unit, and at a temperature of 1 that is
+    /// uniform).
     #[test]
     fn a_hot_temperature_draws_and_a_cold_one_collapses_to_greedy() {
-        let row: Vec<i32> = vec![100, 98, 95, 40, 5, -20];
+        let row: Vec<i32> = [10.0, 9.0, 8.0, 4.0, 0.5, -2.0].iter().map(|x| q24(*x)).collect();
         let greedy = base0_decode_token_select_v1(&row);
-        // A temperature of 1.0 in the class's own logit units — `1 << K` is Q24's own unit.
+        // A temperature of 1.0: `1 << K` is Q24's own unit.
         let hot = 1u32 << K;
         let mut seen = std::collections::BTreeMap::<usize, u32>::new();
-        for s in 0..256u32 {
+        for s in 0..512u32 {
             let mut seed = [0u8; 32];
             seed[..4].copy_from_slice(&s.to_le_bytes());
             *seen.entry(decode_token_select_v2(&row, &seed, 0, hot)).or_default() += 1;
@@ -1349,13 +1402,52 @@ mod tests {
         assert!(seen.len() > 1, "a hot temperature that always picks one lane is not a sampler");
         let modal = seen.iter().max_by_key(|(_, n)| **n).map(|(l, _)| *l).unwrap();
         assert_eq!(modal, greedy, "the highest logit must still be the most likely draw");
-        // Cold: 2^-10 of a logit unit, so the gap of 2 dominates every variate on every seed.
+        // Cold: 2^-10 of a logit unit, so the gap of one unit dominates every variate (|g| < 10) on every seed.
         let cold = 1u32 << (K - 10);
         for s in 0..64u32 {
             let mut seed = [0u8; 32];
             seed[..4].copy_from_slice(&s.to_le_bytes());
             assert_eq!(decode_token_select_v2(&row, &seed, 0, cold), greedy);
         }
+    }
+
+    /// **G1's statistical proof: the key samples `softmax(logit / T)`** — over many seeds the
+    /// empirical frequency of each lane is the softmax probability at `T ∈ {0.5, 1, 2}`. Before the
+    /// fix the same experiment drew the greedy lane every time at `T = 1`.
+    #[test]
+    fn a_base0_row_is_sampled_from_softmax_of_its_logits_over_t() {
+        let real = [2.0, 1.2, 0.5, 0.0, -0.8, 1.9];
+        let row: Vec<i32> = real.iter().map(|x| q24(*x)).collect();
+        let draws = 30_000;
+        for t in [0.5f64, 1.0, 2.0] {
+            let t_q = (t * (1u64 << K) as f64) as u32;
+            assert_follows(&frequencies(&row, t_q, draws), &softmax(&real, t), draws, &format!("T = {t}"));
+        }
+        // And the greedy lane is NOT drawn every time: the temperature is not inert.
+        let at_one = frequencies(&row, 1u32 << K, 2_000);
+        assert!(at_one.iter().filter(|f| **f > 0.01).count() >= 4, "{at_one:?}");
+    }
+
+    /// **The same experiment on an IR class's row.** A class that commits its logits at another
+    /// power of two `2^u` is sampled at `T_q / 2^u` in its own units — the key reads `T_q` in counts of
+    /// the committed logit, so a class at `u = 12` needs `T_q = T · 2^12` for the temperature `T`, and a
+    /// gateway that sends the Q24 number `T · 2^24` draws at `4096 T` (nearly uniform). This is the
+    /// reason an IR class's unit has to be declared before temperature has a meaning for it.
+    #[test]
+    fn an_ir_class_row_samples_at_the_temperature_its_own_unit_gives() {
+        let real = [2.0, 1.2, 0.5, 0.0, -0.8, 1.9];
+        let u = 12u32;
+        let row: Vec<i32> = real.iter().map(|x| (x * (1u64 << u) as f64).round() as i32).collect();
+        let draws = 30_000;
+        for t in [0.5f64, 1.0, 2.0] {
+            let t_q = (t * (1u64 << u) as f64) as u32;
+            assert_follows(&frequencies(&row, t_q, draws), &softmax(&real, t), draws, &format!("Q{u}, T = {t}"));
+        }
+        // The Q24 number for T = 1 is T_eff = 2^(24 − u) = 4096: every lane is within a few per cent of uniform.
+        let uniform = frequencies(&row, 1u32 << K, draws);
+        let want = softmax(&real, 4096.0);
+        assert_follows(&uniform, &want, draws, "Q12 at the Q24 number");
+        assert!(uniform.iter().all(|f| (f - 1.0 / 6.0).abs() < 0.02), "{uniform:?}");
     }
 
     /// **Z8's second half, at the arithmetic that the court's two disclosures feed.** Under a seed

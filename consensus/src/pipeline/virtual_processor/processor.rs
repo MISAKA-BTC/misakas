@@ -6922,6 +6922,8 @@ impl VirtualStateProcessor {
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
                 },
+                // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
+                logits_q24: state.class_commits_q24_logits_v1(class_id),
             },
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_held_context_at(block_daa),
@@ -14871,6 +14873,8 @@ impl VirtualStateProcessor {
                 } else {
                     kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
                 },
+                // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
+                logits_q24: state.class_commits_q24_logits_v1(class_id),
             },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside

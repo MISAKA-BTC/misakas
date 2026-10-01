@@ -109,6 +109,27 @@ CONFIGS = {
                           n_positions=16, multi_query=False), {}),
     "olmo": (c("olmo", "OlmoForCausalLM", L, num_hidden_layers=2, clip_qkv=1.5), {}),
     "olmo2": (c("olmo2", "Olmo2ForCausalLM", L, num_hidden_layers=2), {}),
+    # OLMo-3: OLMo-2 with 3 sliding : 1 full layers and rope parameters per layer type (yarn on the
+    # full-attention layers, a different θ on the sliding ones).
+    "olmo3": (c("olmo3", "Olmo3ForCausalLM", L, num_hidden_layers=4, sliding_window=4,
+                rope_parameters={"full_attention": {"rope_type": "yarn", "rope_theta": 500000.0, "factor": 4.0,
+                                                    "original_max_position_embeddings": 32},
+                                 "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0}},
+                max_position_embeddings=128), {}),
+    # GLM (glm-4-9b-chat-hf) and GLM-4 (GLM-4-0414): fused gate_up, q/k/v biases, partial rotary on
+    # interleaved pairs; GLM-4's post-norms.
+    "glm": (c("glm", "GlmForCausalLM", L, num_hidden_layers=2, head_dim=16, pad_token_id=0), {}),
+    "glm4": (c("glm4", "Glm4ForCausalLM", L, num_hidden_layers=2, head_dim=16, pad_token_id=0), {}),
+    # Ministral (8B-2410): Mistral with per-layer sliding windows.
+    "ministral": (c("ministral", "MinistralForCausalLM", L, num_hidden_layers=3, sliding_window=4, head_dim=16,
+                    layer_types=["sliding_attention", "full_attention", "sliding_attention"]), {}),
+    # Ministral-3: Mistral with yarn and Llama-4's query scaling over the original length (4 here,
+    # so it grows inside the 10 positions).
+    "ministral3": (c("ministral3", "Ministral3ForCausalLM", L, num_hidden_layers=2, head_dim=8, max_position_embeddings=64,
+                     rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,
+                                      "original_max_position_embeddings": 4, "max_position_embeddings": 64,
+                                      "beta_fast": 32.0, "beta_slow": 1.0, "mscale_all_dim": 1.0, "mscale": 1.0,
+                                      "llama_4_scaling_beta": 0.5}), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),
@@ -152,6 +173,48 @@ CONFIGS = {
                       n_group=4, topk_group=2, routed_scaling_factor=2.5,
                       rope_scaling={"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32,
                                     "mscale": 1.0, "mscale_all_dim": 1.0}, max_position_embeddings=128), {}),
+    # GLM-4.5 (Glm4Moe): DeepSeek-V3 routing over GQA with q/k/v biases, per-head QK norm, partial
+    # rotary on NeoX halves; one dense layer first.
+    "glm4_moe": (c("glm4_moe", "Glm4MoeForCausalLM", L, num_hidden_layers=2, head_dim=16, first_k_dense_replace=1,
+                   n_routed_experts=8, n_shared_experts=1, num_experts_per_tok=2, moe_intermediate_size=16,
+                   n_group=4, topk_group=2, routed_scaling_factor=2.5, attention_bias=True, use_qk_norm=True,
+                   partial_rotary_factor=0.5, pad_token_id=0), {}),
+    # Phi-3.5-MoE (Phimoe): sparsemixer top-2 (a jitter of 0.3 keeps several experts under each
+    # threshold, so the weights are real softmaxes), LayerNorms, biases everywhere incl. the head,
+    # LongRoPE with its short factors and an mscale (HF 5.17 never switches to the long factors).
+    "phimoe": (c("phimoe", "PhimoeForCausalLM", L, num_hidden_layers=2, num_local_experts=4, num_experts_per_tok=2,
+                 attention_bias=True, lm_head_bias=True, router_jitter_noise=0.3, max_position_embeddings=32,
+                 rope_parameters={"rope_type": "longrope", "rope_theta": 10000.0, "short_factor": [1.0, 1.25, 1.5, 2.0],
+                                  "long_factor": [2.0, 4.0, 6.0, 8.0], "short_mscale": 1.2, "long_mscale": 1.2,
+                                  "original_max_position_embeddings": 8}, sliding_window=None), {"decode": True}),
+    # Llama-4 (text): chunked attention on the rope layers (a chunk of 4 inside the 10 positions),
+    # NoPE layers every 2nd with the attention temperature (floor 3), L2 QK-norm, llama3 rope on
+    # interleaved pairs, MoE every 2nd layer with top-1 sigmoid weights scaling the expert's input
+    # and a shared expert.
+    "llama4": (c("llama4_text", "Llama4ForCausalLM", L, num_hidden_layers=4, head_dim=8, num_local_experts=4,
+                 num_experts_per_tok=1, intermediate_size=16, intermediate_size_mlp=48, interleave_moe_layer_step=2,
+                 no_rope_layer_interval=2, attention_chunk_size=4, floor_scale=3, attn_scale=0.5,
+                 rope_parameters={"rope_type": "llama3", "factor": 8.0, "low_freq_factor": 1.0,
+                                  "high_freq_factor": 4.0, "original_max_position_embeddings": 16,
+                                  "rope_theta": 500000.0}, max_position_embeddings=128), {}),
+    # Gemma-4 (text): a wider head on the full-attention layer (per_layer_config), K = V there
+    # (attention_k_eq_v) with one KV head, a weightless V norm, proportional rope, per-layer inputs,
+    # the parallel MoE block beside the MLP, final soft-cap.
+    "gemma4": (c("gemma4_text", "Gemma4ForCausalLM", L, num_hidden_layers=3, head_dim=8, global_head_dim=16,
+                 num_global_key_value_heads=1, attention_k_eq_v=True, sliding_window=4,
+                 layer_types=["sliding_attention", "sliding_attention", "full_attention"],
+                 hidden_size_per_layer_input=8, vocab_size_per_layer_input=V, enable_moe_block=True, num_experts=4,
+                 top_k_experts=2, moe_intermediate_size=16, final_logit_softcapping=5.0), {}),
+    # Gemma-4's E models: the last three layers compute no keys or values and attend over those of
+    # the last earlier layer of their type (a sliding one, and the K = V full one), with an MLP
+    # twice as wide.
+    "gemma4_kvshare": (c("gemma4_text", "Gemma4ForCausalLM", L, num_hidden_layers=6, head_dim=8, global_head_dim=16,
+                         num_global_key_value_heads=1, attention_k_eq_v=True, sliding_window=4,
+                         layer_types=["sliding_attention", "sliding_attention", "full_attention",
+                                      "sliding_attention", "sliding_attention", "full_attention"],
+                         num_kv_shared_layers=3, use_double_wide_mlp=True,
+                         hidden_size_per_layer_input=8, vocab_size_per_layer_input=V,
+                         final_logit_softcapping=5.0), {}),
     "gpt_oss": (c("gpt_oss", "GptOssForCausalLM", L, num_hidden_layers=2, head_dim=8, num_local_experts=4,
                   num_experts_per_tok=2, intermediate_size=16, sliding_window=4,
                   rope_scaling={"rope_type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,
@@ -196,6 +259,15 @@ CONFIGS = {
                        vision_config=dict(model_type="pixtral", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
                                           num_attention_heads=2, image_size=28, patch_size=14, head_dim=8),
                        image_token_index=V - 4, spatial_merge_size=2), {"vlm": True}),
+    "llama4_vlm": (c("llama4", "Llama4ForConditionalGeneration",
+                     text_config=dict(L, model_type="llama4_text", num_hidden_layers=2, head_dim=8, num_local_experts=4,
+                                      num_experts_per_tok=1, intermediate_size=16, intermediate_size_mlp=48,
+                                      interleave_moe_layer_step=2, no_rope_layer_interval=2, attention_chunk_size=4,
+                                      floor_scale=3, attn_scale=0.5, max_position_embeddings=128),
+                     vision_config=dict(hidden_size=16, num_hidden_layers=1, num_attention_heads=2, intermediate_size=32,
+                                        vision_output_dim=32, image_size=28, patch_size=14, projector_input_dim=32,
+                                        projector_output_dim=32),
+                     boi_token_index=V - 3, eoi_token_index=V - 2, image_token_index=V - 4), {"vlm": True}),
     "llava": (c("llava", "LlavaForConditionalGeneration", text_config=dict(L, model_type="llama", num_hidden_layers=2),
                 vision_config=dict(model_type="clip_vision_model", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
                                    num_attention_heads=2, image_size=28, patch_size=14, projection_dim=16),

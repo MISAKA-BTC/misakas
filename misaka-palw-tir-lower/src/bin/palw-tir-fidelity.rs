@@ -22,7 +22,8 @@ use std::time::Instant;
 #[derive(Parser, Debug)]
 #[command(name = "palw-tir-fidelity", about = "Integer PALW-TIR program vs the float reference of a Hugging Face checkpoint")]
 struct Args {
-    /// Checkpoint directory: config.json and model.safetensors (or an index).
+    /// Checkpoint directory: config.json and model.safetensors (or an index); or a GGUF file (its
+    /// path, or a directory holding model.gguf).
     model: PathBuf,
     /// Calibration sequences (JSON token file). Default: 4 random sequences of 32.
     #[arg(long)]
@@ -141,10 +142,10 @@ fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Resu
 fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
-    let cfg = std::fs::read_to_string(a.model.join("config.json")).map_err(|e| format!("config.json: {e}"))?;
     let opts = LowerOpts { max_window: a.max_window, ..LowerOpts::default() };
-    let prep = fidelity::prepare(&cfg, &opts).map_err(|e| e.to_string())?;
-    let ck = Checkpoint::open(&a.model).map_err(|e| e.to_string())?;
+    // A Hugging Face directory, or a GGUF file (`model.gguf` in the directory, or its path).
+    let (prep, ck) = fidelity::open_model(&a.model, &opts).map_err(|e| e.to_string())?;
+    let ck = ck.as_ref();
     // RFC-0004: a LoRA candidate replaces the program; the parent stays for its calibration.
     let (prep, candidate) = match &a.adapter {
         None => (prep, None),
@@ -164,11 +165,11 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     if let Some(p) = &a.tir_out {
         std::fs::write(p, prep.lowered.program.encode()).map_err(|e| e.to_string())?;
     }
-    // A candidate's weights: the adapter's tensors over the parent checkpoint.
-    let overlay = candidate.as_ref().map(|c| Overlay { base: &ck, over: &c.tensors });
+    // A candidate's weights: the adapter's tensors over the parent checkpoint (HF or GGUF).
+    let overlay = candidate.as_ref().map(|c| Overlay { base: ck, over: &c.tensors });
     let src: &(dyn TensorSource + Sync) = match &overlay {
         Some(o) => o,
-        None => &ck,
+        None => ck,
     };
     let loader = Streamed { prog: &prep.hl, binding: &prep.binding, source: src };
     let vocab = prep.hl.vocab;
@@ -241,7 +242,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                         calib.len(),
                         calib.iter().map(Vec::len).sum::<usize>()
                     ));
-                    let parent_loader = Streamed { prog: &c.parent.hl, binding: &c.parent.binding, source: &ck };
+                    let parent_loader = Streamed { prog: &c.parent.hl, binding: &c.parent.binding, source: ck };
                     fidelity::calibrate(&c.parent.hl, &parent_loader, &calib, &progress("parent calibration"))
                         .map_err(|e| e.to_string())?
                 }
