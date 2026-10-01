@@ -66,6 +66,16 @@ pub struct ConvOp {
     pub pad: usize,
     #[serde(default = "one")]
     pub dilation: usize,
+    /// The WIDTH axis when it differs from the height's (a 1-D convolution over `[1, T]` is `k: 1, kw: 3`): the kernel, stride,
+    /// padding and dilation above are the height's, and the width's unless these say otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kw: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stride_w: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_w: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dilation_w: Option<usize>,
     #[serde(default = "one")]
     pub groups: usize,
     #[serde(default)]
@@ -141,8 +151,56 @@ impl Geo {
 /// The output extent of a window of `k` (dilation `d`) at stride `s` and padding `p` over `n`.
 fn window_out(n: usize, k: usize, s: usize, p: usize, d: usize) -> Option<usize> {
     let span = d.checked_mul(k.checked_sub(1)?)?.checked_add(1)?;
-    let padded = n.checked_add(2 * p)?;
+    let padded = n.checked_add(p.checked_mul(2)?)?;
     (padded >= span && s >= 1).then(|| (padded - span) / s + 1)
+}
+
+/// A window's geometry on each axis: kernel, stride, zero padding and dilation (height, then width).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Win {
+    kh: usize,
+    kw: usize,
+    sh: usize,
+    sw: usize,
+    ph: usize,
+    pw: usize,
+    dh: usize,
+    dw: usize,
+}
+
+impl Win {
+    fn square(k: usize, stride: usize, pad: usize, dil: usize) -> Self {
+        Win { kh: k, kw: k, sh: stride, sw: stride, ph: pad, pw: pad, dh: dil, dw: dil }
+    }
+    fn taps(&self) -> usize {
+        self.kh * self.kw
+    }
+    /// The output extent over `inp`, `None` when the window does not fit.
+    fn out(&self, inp: Geo, c: usize) -> Option<Geo> {
+        Some(Geo { h: window_out(inp.h, self.kh, self.sh, self.ph, self.dh)?, w: window_out(inp.w, self.kw, self.sw, self.pw, self.dw)?, c })
+    }
+    /// The table's name: the geometry in and out and the window.
+    fn table_name(&self, inp: Geo, out: Geo) -> String {
+        format!(
+            "cnn.idx.{}x{}.{}x{}k{}x{}s{}x{}p{}x{}d{}x{}",
+            inp.h, inp.w, out.h, out.w, self.kh, self.kw, self.sh, self.sw, self.ph, self.pw, self.dh, self.dw
+        )
+    }
+}
+
+impl ConvOp {
+    fn win(&self) -> Win {
+        Win {
+            kh: self.k,
+            kw: self.kw.unwrap_or(self.k),
+            sh: self.stride,
+            sw: self.stride_w.unwrap_or(self.stride),
+            ph: self.pad,
+            pw: self.pad_w.unwrap_or(self.pad),
+            dh: self.dilation,
+            dw: self.dilation_w.unwrap_or(self.dilation),
+        }
+    }
 }
 
 /// One node of the plan: an op with its id, geometry in and out, and children for a residual unit.
@@ -199,10 +257,17 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
         }
         let (id, kind, g_out) = match op {
             CnnOp::Conv(c) => {
-                if c.k == 0 || c.stride == 0 || c.dilation == 0 || c.groups == 0 || c.cout == 0 || c.cin == 0 || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
+                let w = c.win();
+                if [w.kh, w.kw, w.sh, w.sw, w.dh, w.dw, c.groups, c.cout, c.cin].contains(&0) || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
                     return Err(LowerError::bad(format!("convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible", c.name)));
                 }
-                if c.k > MAX_KERNEL || c.stride > MAX_STRIDE || c.dilation > MAX_DILATION || c.pad > MAX_PAD || c.cin > MAX_CHANNELS || c.cout > MAX_CHANNELS {
+                if w.kh.max(w.kw) > MAX_KERNEL
+                    || w.sh.max(w.sw) > MAX_STRIDE
+                    || w.dh.max(w.dw) > MAX_DILATION
+                    || w.ph.max(w.pw) > MAX_PAD
+                    || c.cin > MAX_CHANNELS
+                    || c.cout > MAX_CHANNELS
+                {
                     return Err(LowerError::not_lowerable(format!(
                         "convolution `{}`: past the bounds (kernel {MAX_KERNEL}, stride {MAX_STRIDE}, dilation {MAX_DILATION}, padding {MAX_PAD}, {MAX_CHANNELS} channels)",
                         c.name
@@ -214,15 +279,13 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                 if c.groups != 1 && !(c.groups == c.cin && c.cin == c.cout) {
                     return Err(LowerError::not_lowerable(format!("convolution `{}`: groups = {} (only 1 and depthwise are lowered)", c.name, c.groups)));
                 }
-                let (h, w) = (window_out(geo.h, c.k, c.stride, c.pad, c.dilation), window_out(geo.w, c.k, c.stride, c.pad, c.dilation));
-                let (Some(h), Some(w)) = (h, w) else {
+                let Some(g) = w.out(geo, c.cout) else {
                     return Err(LowerError::not_lowerable(format!("convolution `{}`: a {}×{} input is smaller than its window", c.name, geo.h, geo.w)));
                 };
-                let g = Geo { h, w, c: c.cout };
-                check_extent(&format!("convolution `{}`", c.name), g, c.k * c.k)?;
+                check_extent(&format!("convolution `{}`", c.name), g, w.taps())?;
                 // The weight matrix `[k·k·C_in, C_out]` and the gathered columns' taps are TIR dimensions too.
-                if (c.k * c.k).saturating_mul(c.cin) > MAX_ELEMS {
-                    return Err(LowerError::not_lowerable(format!("convolution `{}`: {} taps over {} channels is past 2^24", c.name, c.k * c.k, c.cin)));
+                if w.taps().saturating_mul(c.cin) > MAX_ELEMS {
+                    return Err(LowerError::not_lowerable(format!("convolution `{}`: {} taps over {} channels is past 2^24", c.name, w.taps(), c.cin)));
                 }
                 (format!("c{n}"), PKind::Conv(c.clone()), g)
             }
@@ -236,9 +299,9 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                 if *pad * 2 > *k {
                     return Err(LowerError::bad("a max pool's padding must be at most half its window"));
                 }
-                let (h, w) = (window_out(geo.h, *k, *stride, *pad, 1), window_out(geo.w, *k, *stride, *pad, 1));
-                let (Some(h), Some(w)) = (h, w) else { return Err(LowerError::not_lowerable("a max pool window larger than its input")) };
-                let g = Geo { h, w, c: geo.c };
+                let Some(g) = Win::square(*k, *stride, *pad, 1).out(geo, geo.c) else {
+                    return Err(LowerError::not_lowerable("a max pool window larger than its input"));
+                };
                 check_extent("a max pool", g, k * k)?;
                 (format!("p{n}"), PKind::MaxPool { k: *k, stride: *stride, pad: *pad }, g)
             }
@@ -344,7 +407,7 @@ fn pn(id: &str, what: &str) -> String {
 fn param_table(spec: &CnnSpec, p: &Plan) -> Vec<(String, Vec<usize>, Src)> {
     let mut v = Vec::new();
     convs(&p.nodes, &mut |n, c| {
-        let taps = c.cin / c.groups * c.k * c.k;
+        let taps = c.cin / c.groups * c.win().taps();
         v.push((pn(&n.id, "w"), vec![c.cout, taps], Src::t(format!("{}.weight", c.name)).reshape(vec![c.cout, taps])));
         if c.bias {
             v.push((pn(&n.id, "b"), vec![c.cout], Src::t(format!("{}.bias", c.name))));
@@ -427,14 +490,14 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
 
 /// For every output position `(oh, ow)` and tap `(kh, kw)` the input row `ih·W + iw` it reads, `rows` (the index of the padding
 /// row) where the tap falls outside.
-fn window_index(inp: Geo, out: Geo, k: usize, stride: usize, pad: usize, dil: usize) -> Vec<u32> {
+fn window_index(inp: Geo, out: Geo, w: &Win) -> Vec<u32> {
     let pad_row = inp.rows() as u32;
-    let mut v = Vec::with_capacity(out.rows() * k * k);
+    let mut v = Vec::with_capacity(out.rows() * w.taps());
     for oh in 0..out.h {
         for ow in 0..out.w {
-            for kh in 0..k {
-                for kw in 0..k {
-                    let (ih, iw) = ((oh * stride + kh * dil) as isize - pad as isize, (ow * stride + kw * dil) as isize - pad as isize);
+            for kh in 0..w.kh {
+                for kw in 0..w.kw {
+                    let (ih, iw) = ((oh * w.sh + kh * w.dh) as isize - w.ph as isize, (ow * w.sw + kw * w.dw) as isize - w.pw as isize);
                     v.push(if ih < 0 || iw < 0 || ih >= inp.h as isize || iw >= inp.w as isize { pad_row } else { (ih as usize * inp.w + iw as usize) as u32 });
                 }
             }
@@ -448,7 +511,7 @@ fn window_index(inp: Geo, out: Geo, k: usize, stride: usize, pad: usize, dil: us
 /// A convolution's folded float weights `[cout][taps]` (`(cin/groups, kh, kw)` order) and bias `[cout]`: the batch norm folded
 /// exactly (`BN_FOLD_V1`).
 fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32], &[f32], &[f32])>) -> (Vec<f32>, Vec<f64>) {
-    let taps = c.cin / c.groups * c.k * c.k;
+    let taps = c.cin / c.groups * c.win().taps();
     let mut out = w.to_vec();
     let mut b = vec![0f64; c.cout];
     for o in 0..c.cout {
@@ -467,6 +530,105 @@ fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32
 
 fn apply_act(a: Act, x: f64) -> f64 {
     crate::float_ref::act(a, x as f32) as f64
+}
+
+/// A convolution over rows in `f64`: `x` is `[P_in][C_in]`, the weight `fw` `[C_out][C_in/groups · kh · kw]` (batch norm already
+/// folded) and the offsets `fb`, the result `[P_out][C_out]` before the activation.
+fn conv_float(x: &[Vec<f64>], inp: Geo, out: Geo, c: &ConvOp, fw: &[f32], fb: &[f64]) -> Vec<Vec<f64>> {
+    let win = c.win();
+    let kk = win.taps();
+    let taps = c.cin / c.groups * kk;
+    let idx = window_index(inp, out, &win);
+    let cin_g = c.cin / c.groups;
+    (0..out.rows())
+        .map(|po| {
+            (0..c.cout)
+                .map(|o| {
+                    let g = o / (c.cout / c.groups);
+                    let mut acc = fb[o];
+                    for t in 0..kk {
+                        let src = idx[po * kk + t] as usize;
+                        if src >= x.len() {
+                            continue;
+                        }
+                        for ci in 0..cin_g {
+                            acc += x[src][g * cin_g + ci] * fw[o * taps + ci * kk + t] as f64;
+                        }
+                    }
+                    acc
+                })
+                .collect()
+        })
+        .collect()
+}
+
+impl Default for ConvOp {
+    fn default() -> Self {
+        ConvOp {
+            name: String::new(),
+            cin: 1,
+            cout: 1,
+            k: 1,
+            stride: 1,
+            pad: 0,
+            dilation: 1,
+            kw: None,
+            stride_w: None,
+            pad_w: None,
+            dilation_w: None,
+            groups: 1,
+            bias: false,
+            bn: None,
+            act: None,
+        }
+    }
+}
+
+impl ConvOp {
+    /// A 1-D convolution over `[1, T]` (kernel `k`, stride and zero padding along the width), with a bias and no batch norm: what
+    /// an audio front end's stem is (`Conv1d`).
+    pub fn conv1d(name: &str, cin: usize, cout: usize, k: usize, stride: usize, pad: usize, bias: bool) -> Self {
+        ConvOp {
+            name: name.into(),
+            cin,
+            cout,
+            k: 1,
+            stride: 1,
+            pad: 0,
+            dilation: 1,
+            kw: Some(k),
+            stride_w: Some(stride),
+            pad_w: Some(pad),
+            dilation_w: None,
+            groups: 1,
+            bias,
+            bn: None,
+            act: None,
+        }
+    }
+}
+
+/// The length of a 1-D convolution's output over `t` rows (`None` when the window does not fit).
+pub(super) fn conv1d_out_len(t: usize, c: &ConvOp) -> Option<usize> {
+    c.win().out(Geo { h: 1, w: t, c: c.cin }, c.cout).map(|g| g.w)
+}
+
+/// A 1-D convolution of `x` (`[T][C_in]` rows) in `f64`: the checkpoint's `weight` (`[C_out, C_in, k]`, flat) and `bias`.
+pub(super) fn conv1d_float(x: &[Vec<f64>], c: &ConvOp, w: &[f32], bias: Option<&[f32]>) -> Result<Vec<Vec<f64>>> {
+    let inp = Geo { h: 1, w: x.len(), c: c.cin };
+    let out = c.win().out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {} frames are shorter than its window", c.name, x.len())))?;
+    let (fw, fb) = folded(c, w, bias, None);
+    Ok(conv_float(x, inp, out, c, &fw, &fb))
+}
+
+/// A 1-D convolution as the program: `x` is `[T, C_in]` rows of codes, the result `[T_out, C_out]` narrowed as `want` says. The
+/// HL params are `{id}.w` (`[C_out, C_in·k]`) and, with a bias, `{id}.b`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_conv1d(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, id: &str, c: &ConvOp, t: usize, want: &Want, relu: bool) -> Result<Val> {
+    let inp = Geo { h: 1, w: t, c: c.cin };
+    let out = c.win().out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {t} frames are shorter than its window", c.name)))?;
+    let n = PNode { id: id.to_string(), op: PKind::Conv(c.clone()), inp, out };
+    lower_conv(b, cx, lb, x, &n, c, want, relu)
 }
 
 /// The float network over one canonical image (`u8` HWC): the output rows, and, when `stats` is given, every site's statistics
@@ -534,34 +696,11 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                         None => None,
                     };
                     let (fw, fb) = folded(c, &w, bias.as_deref(), bn.as_ref().map(|(a, b, m, v)| (&a[..], &b[..], &m[..], &v[..])));
-                    let taps = c.cin / c.groups * c.k * c.k;
-                    let kk = c.k * c.k;
-                    let idx = window_index(n.inp, n.out, c.k, c.stride, c.pad, c.dilation);
-                    let cin_g = c.cin / c.groups;
-                    let pre: Vec<Vec<f64>> = (0..n.out.rows())
-                        .map(|po| {
-                            (0..c.cout)
-                                .map(|o| {
-                                    let g = o / (c.cout / c.groups);
-                                    let mut acc = fb[o];
-                                    for t in 0..kk {
-                                        let src = idx[po * kk + t] as usize;
-                                        if src >= x.len() {
-                                            continue;
-                                        }
-                                        for ci in 0..cin_g {
-                                            acc += x[src][g * cin_g + ci] * fw[o * taps + ci * kk + t] as f64;
-                                        }
-                                    }
-                                    acc
-                                })
-                                .collect()
-                        })
-                        .collect();
+                    let pre = conv_float(&x, n.inp, n.out, c, &fw, &fb);
                     activated(&pre, c.act, &n.id, prefix, observe)
                 }
                 PKind::MaxPool { k, stride, pad } => {
-                    let idx = window_index(n.inp, n.out, *k, *stride, *pad, 1);
+                    let idx = window_index(n.inp, n.out, &Win::square(*k, *stride, *pad, 1));
                     let kk = k * k;
                     let rows: Vec<Vec<f64>> = (0..n.out.rows())
                         .map(|po| (0..n.inp.c).map(|ch| (0..kk).filter_map(|t| x.get(idx[po * kk + t] as usize).map(|r| r[ch])).fold(f64::NEG_INFINITY, f64::max)).collect())
@@ -588,11 +727,11 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
     for (g, range) in p.groups.iter().enumerate() {
         let prefix = if g == 0 { "pre.".to_string() } else { format!("L{}.", g - 1) };
         if g > 0 {
-            observe(format!("{prefix}carry0"), &x);
+            observe(format!("{prefix}carry{g}"), &x);
         }
         x = run(&p.nodes[range.clone()], x, &prefix, &get, &mut observe)?;
         // The activation crossing the block boundary is a residual-scale value (the last group's too: the post block reads it).
-        observe(format!("{prefix}out"), &x);
+        observe(format!("{prefix}out{g}"), &x);
     }
     observe("post.carry0".into(), &x);
     let out: Vec<Vec<f64>> = match spec.out {
@@ -622,7 +761,7 @@ fn narrow_into(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, 
 }
 
 /// A convolution: rows `x` (`i16` codes, `[P_in, C_in]`) to rows `[P_out, C_out]` narrowed as `want` says (`lo` 0 under a ReLU).
-fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
+pub(super) fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
     let hl = cx.hl;
     let (inp, out) = (n.inp, n.out);
     let id = n.id.clone();
@@ -630,12 +769,13 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
     if xc.len != c.cin {
         return Err(LowerError::eval(format!("internal: `{id}` reads {} columns, its weight has {}", xc.len, c.cin)));
     }
-    let kk = c.k * c.k;
+    let win = c.win();
+    let kk = win.taps();
     let pad_row = b.pb.konst(DType::I16, &[1, c.cin as u32], &vec![0i128; c.cin]);
     let padded = b.concat(&[xc.r, pad_row], 0);
-    let ix = window_index(inp, out, c.k, c.stride, c.pad, c.dilation);
+    let ix = window_index(inp, out, &win);
     let (po, rows_in) = (out.rows(), inp.rows());
-    let iname = format!("cnn.idx.{}x{}.{}x{}k{}s{}p{}d{}", inp.h, inp.w, out.h, out.w, c.k, c.stride, c.pad, c.dilation);
+    let iname = win.table_name(inp, out);
     let idx = decl(b, cx, lb, &iname, DType::Idx, &[po, kk], false, Arc::new(move |_| Ok(IntTensor::idx(vec![po, kk], ix.clone()))))?;
     let idx = b.clamp(idx, 0, rows_in as i64, DType::Idx); // the padding row is the last (never fires: the table is data the lowering wrote)
     let cols = b.gather(padded, idx, 0, 0); // [P_out, k·k, C_in]
@@ -762,9 +902,10 @@ fn lower_maxpool(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val
     let c = xc.len;
     let floor_row = b.pb.konst(DType::I16, &[1, c as u32], &vec![-32767i128; c]);
     let padded = b.concat(&[xc.r, floor_row], 0);
-    let ix = window_index(n.inp, n.out, k, stride, pad, 1);
+    let win = Win::square(k, stride, pad, 1);
+    let ix = window_index(n.inp, n.out, &win);
     let (po, rows_in) = (n.out.rows(), n.inp.rows());
-    let iname = format!("cnn.idx.{}x{}.{}x{}k{}s{}p{}d1", n.inp.h, n.inp.w, n.out.h, n.out.w, k, stride, pad);
+    let iname = win.table_name(n.inp, n.out);
     let idx = decl(b, cx, lb, &iname, DType::Idx, &[po, kk], false, Arc::new(move |_| Ok(IntTensor::idx(vec![po, kk], ix.clone()))))?;
     let idx = b.clamp(idx, 0, rows_in as i64, DType::Idx);
     let cols = b.gather(padded, idx, 0, 0); // [P_out, k·k, C]
@@ -776,7 +917,7 @@ fn lower_maxpool(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val
 }
 
 /// The activation `a` over rows (`ReLU` is exact on codes: a clamp; every other is a table).
-fn lower_act(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, a: Act, site: &str) -> Result<Val> {
+pub(super) fn lower_act(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, a: Act, site: &str) -> Result<Val> {
     let xc = super::bidir::codes_rows(b, cx, lb, x)?;
     match a {
         Act::Identity => Ok(xc),
@@ -855,12 +996,14 @@ fn carry_elems(p: &Plan) -> usize {
     e
 }
 
-/// The activation a block reads from the carry: its first `rows·c` elements as `[rows, c]` rows at the residual scale.
-fn unpack(b: &mut BlockBuilder<'_>, g: Geo, e: usize) -> Val {
+/// The activation a block reads from the carry: its first `rows·c` elements as `[rows, c]` rows at the residual scale. `site`
+/// names the value (and its calibration statistics): it must be UNIQUE per block, because a requantisation's params are named
+/// after it and a param of one name, dtype and shape is shared by every block that declares it (`decl`).
+fn unpack(b: &mut BlockBuilder<'_>, g: Geo, e: usize, site: &str) -> Val {
     let n = g.rows() * g.c;
     let flat = if n == e { tir::Ref::CarryIn(0) } else { b.slice(tir::Ref::CarryIn(0), 0, 0, n as u32) };
     let rows = b.reshape_fixed(flat, &[g.rows() as u32, g.c as u32]);
-    rows_val(rows, DType::I32, ScaleKey::resid(), g.c, "carry0")
+    rows_val(rows, DType::I32, ScaleKey::resid(), g.c, site)
 }
 
 /// The carry a block writes: the activation flattened and padded with zeros to the carry's `e` elements.
@@ -899,7 +1042,7 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
     match role {
         BlockRole::Post => {
             let g = p.last;
-            let x = unpack(&mut b, g, e);
+            let x = unpack(&mut b, g, e, "carry0");
             let ok = out_key();
             let out = match spec.out {
                 CnnOut::Map => coerce(&mut b, cx, &mut lb, &Val { site: "out".into(), ..x }, DType::I32, &ok)?,
@@ -945,11 +1088,11 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
                     b.commit(q);
                     rows_val(q, DType::I16, key, 3, "in")
                 }
-                _ => unpack(&mut b, carry_geo.expect("a layer block has a carry"), e),
+                _ => unpack(&mut b, carry_geo.expect("a layer block has a carry"), e, &format!("carry{group}")),
             };
             x = lower_nodes(&mut b, cx, &mut lb, &p.nodes[range], x, None)?;
             // The activation crosses the block boundary as `i32` at the residual scale.
-            let out = coerce(&mut b, cx, &mut lb, &Val { site: "out".into(), ..x }, DType::I32, &resid)?;
+            let out = coerce(&mut b, cx, &mut lb, &Val { site: format!("out{group}"), ..x }, DType::I32, &resid)?;
             let out = ensure_node(&mut b, &out);
             note_resid(cx, &lb, &out);
             note_site(cx, tb, &out);
@@ -1015,7 +1158,7 @@ impl CnnSpec {
     pub fn validate(&self) -> Result<()> {
         let p = plan(self)?;
         let mut total_w = 0usize;
-        convs(&p.nodes, &mut |_, c| total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.k * c.k)));
+        convs(&p.nodes, &mut |_, c| total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.win().taps())));
         if total_w > 1 << 36 {
             return Err(LowerError::bad(format!("{}: {total_w} convolution weights", self.architecture)));
         }

@@ -35,7 +35,7 @@ fn resnet_spec(cfg: &Value, size: (u32, u32), ms: ([f64; 3], [f64; 3]), out: Cnn
     let in_bottleneck = cfg["downsample_in_bottleneck"].as_bool().unwrap_or(false);
     let bn = |name: String| Some(BnOp { name, eps: 1e-5 });
     let conv = |name: &str, cin, cout, k, stride, act: Option<Act>, bnname: &str| {
-        CnnOp::Conv(ConvOp { name: name.into(), cin, cout, k, stride, pad: k / 2, dilation: 1, groups: 1, bias: false, bn: bn(bnname.into()), act })
+        CnnOp::Conv(ConvOp { name: name.into(), cin, cout, k, stride, pad: k / 2, dilation: 1, groups: 1, bias: false, bn: bn(bnname.into()), act, ..ConvOp::default() })
     };
     let mut ops = vec![conv("embedder.embedder.convolution", 3, emb, 7, 2, Some(Act::Relu), "embedder.embedder.normalization"), CnnOp::MaxPool { k: 3, stride: 2, pad: 1 }];
     let mut in_ch = emb;
@@ -107,6 +107,24 @@ fn calib_images(spec: &CnnSpec, n: usize) -> Vec<Vec<u8>> {
     (0..n).map(|_| (0..(spec.h * spec.w * 3) as usize).map(|_| rng.gen_range(0..=255u8)).collect()).collect()
 }
 
+/// **No param is read by two blocks but a window table.** A param of one name, dtype and shape is declared once and shared by
+/// every block that asks for it (`decl`), so two blocks that name a value alike (`out.rq1`) silently used each other's
+/// multiplier; only the pinned `Idx` tables of a window (pure geometry) are meant to be shared.
+fn assert_blocks_share_no_params(name: &str, p: &tir::TirProgramV1) {
+    let mut readers: std::collections::BTreeMap<u16, std::collections::BTreeSet<usize>> = Default::default();
+    for (bi, blk) in p.blocks.iter().enumerate() {
+        for nd in &blk.nodes {
+            for r in &nd.inputs {
+                if let tir::Ref::Param(j) = r {
+                    readers.entry(*j).or_default().insert(bi);
+                }
+            }
+        }
+    }
+    let shared: Vec<String> = readers.iter().filter(|(j, b)| b.len() > 1 && !p.params[**j as usize].name.starts_with("cnn.idx.")).map(|(j, b)| format!("{} (blocks {b:?})", p.params[*j as usize].name)).collect();
+    assert!(shared.is_empty(), "{name}: params read by several blocks: {shared:?}");
+}
+
 /// The five steps on one fixture; the output rows are compared to `key` of the fixture.
 fn check(name: &str, out: CnnOut, key: &str) -> usize {
     let fx = load(name);
@@ -132,6 +150,7 @@ fn check(name: &str, out: CnnOut, key: &str) -> usize {
     }
     // 3. The integer program.
     let lw = cnn::lower_cnn(&hl, &spec).expect("lower");
+    assert_blocks_share_no_params(name, &lw.program);
     let loader = Resident(Arc::new(params_f));
     let quiet = |_: usize, _: usize| {};
     let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
@@ -265,6 +284,15 @@ fn real_resnets_lower_and_are_admitted_at_224() {
     }
 }
 
+/// **Two layer blocks**: the carry is read by one block and written by the next, and no site name is shared between blocks (a
+/// requantisation's params are named after its site and `decl` shares a param of one name, dtype and shape — blocks that named
+/// their boundary value alike used each other's multiplier, which only a network with two layer blocks shows).
+#[test]
+fn a_resnet_with_two_layer_blocks_matches_its_hf_fixture() {
+    let blocks = check("resnet_deeper", CnnOut::Map, "last_hidden_state");
+    assert!(blocks >= 4, "the network fits {blocks} blocks — it has no two layer blocks");
+}
+
 /// **A network that needs layer blocks**: the carry between them changes shape (the feature map halves each stage and the
 /// channels grow), yet a program has one carry signature — the flattened, zero-padded activation. The deep fixture's program has
 /// a layer block, and its output still matches the transformers feature map and its pooled vector.
@@ -301,9 +329,10 @@ fn write_safetensors(path: &Path, tensors: &[(String, Vec<usize>, Vec<f32>)]) {
 /// scale, batch-norm statistics near 1.
 fn random_conv_tensors(rng: &mut rand_chacha::ChaCha8Rng, c: &ConvOp) -> Vec<(String, Vec<usize>, Vec<f32>)> {
     use rand::Rng;
-    let taps = c.cin / c.groups * c.k * c.k;
+    let kw = c.kw.unwrap_or(c.k);
+    let taps = c.cin / c.groups * c.k * kw;
     let scale = 1.7 / (taps as f32).sqrt();
-    let mut v = vec![(format!("{}.weight", c.name), vec![c.cout, c.cin / c.groups, c.k, c.k], (0..c.cout * taps).map(|_| rng.gen_range(-1.0f32..1.0) * scale).collect::<Vec<_>>())];
+    let mut v = vec![(format!("{}.weight", c.name), vec![c.cout, c.cin / c.groups, c.k, kw], (0..c.cout * taps).map(|_| rng.gen_range(-1.0f32..1.0) * scale).collect::<Vec<_>>())];
     if c.bias {
         v.push((format!("{}.bias", c.name), vec![c.cout], (0..c.cout).map(|_| rng.gen_range(-0.3f32..0.3)).collect()));
     }
@@ -347,8 +376,12 @@ impl Naive<'_> {
     }
 
     fn conv(&self, x: &[Vec<f64>], (h, w): (usize, usize), c: &ConvOp) -> (Vec<Vec<f64>>, (usize, usize)) {
-        let eff = (c.k - 1) * c.dilation + 1;
-        let (ho, wo) = ((h + 2 * c.pad - eff) / c.stride + 1, (w + 2 * c.pad - eff) / c.stride + 1);
+        // Each axis has its own kernel, stride, padding and dilation (the width's default to the height's).
+        let (kh, kw) = (c.k, c.kw.unwrap_or(c.k));
+        let (sh, sw) = (c.stride, c.stride_w.unwrap_or(c.stride));
+        let (ph, pw) = (c.pad, c.pad_w.unwrap_or(c.pad));
+        let (dh, dw) = (c.dilation, c.dilation_w.unwrap_or(c.dilation));
+        let (ho, wo) = ((h + 2 * ph - ((kh - 1) * dh + 1)) / sh + 1, (w + 2 * pw - ((kw - 1) * dw + 1)) / sw + 1);
         let wt = &self.t[&format!("{}.weight", c.name)];
         let cin_g = c.cin / c.groups;
         let per = c.cout / c.groups;
@@ -359,13 +392,13 @@ impl Naive<'_> {
                     let g = co / per;
                     let mut acc = if c.bias { self.t[&format!("{}.bias", c.name)][co] as f64 } else { 0.0 };
                     for ci in 0..cin_g {
-                        for ky in 0..c.k {
-                            for kx in 0..c.k {
-                                let (iy, ix) = ((oy * c.stride + ky * c.dilation) as isize - c.pad as isize, (ox * c.stride + kx * c.dilation) as isize - c.pad as isize);
+                        for ky in 0..kh {
+                            for kx in 0..kw {
+                                let (iy, ix) = ((oy * sh + ky * dh) as isize - ph as isize, (ox * sw + kx * dw) as isize - pw as isize);
                                 if iy < 0 || ix < 0 || iy >= h as isize || ix >= w as isize {
                                     continue;
                                 }
-                                acc += x[iy as usize * w + ix as usize][g * cin_g + ci] * wt[((co * cin_g + ci) * c.k + ky) * c.k + kx] as f64;
+                                acc += x[iy as usize * w + ix as usize][g * cin_g + ci] * wt[((co * cin_g + ci) * kh + ky) * kw + kx] as f64;
                             }
                         }
                     }
@@ -412,7 +445,7 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
     let bn = |n: &str| Some(BnOp { name: format!("{n}.bn"), eps: 1e-5 });
     let conv = |name: &str, cin, cout, k, stride, pad, dilation, groups, bias, act: Option<Act>| {
         let bn = if bias { None } else { bn(name) };
-        ConvOp { name: name.into(), cin, cout, k, stride, pad, dilation, groups, bias, bn, act }
+        ConvOp { name: name.into(), cin, cout, k, stride, pad, dilation, groups, bias, bn, act, ..ConvOp::default() }
     };
     let ops = vec![
         CnnOp::Conv(conv("stem", 3, 8, 3, 2, 1, 1, 1, false, Some(Act::Relu))),
@@ -492,6 +525,83 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// **A 1-D convolution stack** (an audio front end's stem: `Conv1d` k3 s1 then k3 s2, a bias and a GELU each) is the same
+/// lowering over a `[1, T]` map with a kernel only along the width: float against the naive direct convolution to 1e-7, the
+/// integer program by cosine.
+#[test]
+fn a_one_dimensional_convolution_stack_follows_a_naive_reference() {
+    use rand::SeedableRng;
+    let mut c1 = ConvOp::conv1d("stem1", 3, 8, 3, 1, 1, true);
+    let mut c2 = ConvOp::conv1d("stem2", 8, 8, 3, 2, 1, true);
+    c1.act = Some(Act::Silu);
+    c2.act = Some(Act::Silu);
+    let spec = CnnSpec {
+        architecture: "Synthetic1d".into(),
+        h: 1,
+        w: 32,
+        mean: [0.5; 3],
+        std: [0.25; 3],
+        ops: vec![CnnOp::Conv(c1), CnnOp::Conv(c2)],
+        out: CnnOut::Map,
+        ignored: vec![],
+        aliases: vec![],
+    };
+    spec.validate().expect("valid");
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(11);
+    let mut tensors = Vec::new();
+    walk_convs(&spec.ops, &mut |c| {
+        let mut t = random_conv_tensors(&mut rng, c);
+        // The checkpoint's Conv1d weight is [cout, cin, k]: the same flat bytes as [cout, cin, 1, k].
+        t[0].1 = vec![c.cout, c.cin, c.kw.unwrap_or(c.k)];
+        tensors.extend(t);
+    });
+    let dir = std::env::temp_dir().join(format!("cnn-1d-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    write_safetensors(&dir.join("model.safetensors"), &tensors);
+    let by_name: std::collections::BTreeMap<String, Vec<f32>> = tensors.iter().map(|(n, _, d)| (n.clone(), d.clone())).collect();
+    let naive = Naive { t: &by_name };
+    let (hl, binding) = cnn::hl_program(&spec).expect("hl");
+    let ck = Checkpoint::open(&dir).expect("checkpoint");
+    let (params_f, unused) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+    assert!(unused.is_empty(), "{unused:?}");
+    let images = calib_images(&spec, 3);
+    let reference = |img: &[u8]| -> Vec<Vec<f64>> {
+        let x: Vec<Vec<f64>> = (0..32).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
+        naive.ops(&spec.ops, x, (1, 32)).0
+    };
+    for img in &images {
+        let got = cnn::float_forward(&hl, &spec, &params_f, img, None).expect("float");
+        let want = reference(img);
+        assert_eq!((got.len(), got[0].len()), (16, 8), "shape");
+        let r = rel(&got.concat(), &want.concat());
+        eprintln!("1-D stack: float reference vs the naive convolution: rel {r:.2e}");
+        assert!(r < 1e-5, "float vs naive rel {r}");
+    }
+    let mut stats = std::collections::BTreeMap::new();
+    for img in calib_images(&spec, 6).iter().rev() {
+        cnn::float_forward(&hl, &spec, &params_f, img, Some(&mut stats)).expect("calibration");
+    }
+    let lw = cnn::lower_cnn(&hl, &spec).expect("lower");
+    let quiet = |_: usize, _: usize| {};
+    let mat = materialise(&lw, &hl, &Resident(Arc::new(params_f)), &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+    let p2 = encoder::vision_v2(&lw).expect("v2");
+    let params2 = encoder::lifted_params(&lw.program, &[cnn::IMAGE_PARAM], &mat.params);
+    let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+    for img in &images {
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        let t = tir::Tensor::new(tir::DType::I16, vec![1, 32, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        inputs.constant.insert(0, t);
+        let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
+        let want = reference(img);
+        let got: Vec<Vec<f64>> = run[0].output.data.chunks(8).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
+        let min = cos.iter().cloned().fold(1.0, f64::min);
+        eprintln!("1-D stack: integer vs the naive reference: cosine min {min:.6}, rel {:.2e}", rel(&got.concat(), &want.concat()));
+        assert!(min > 0.99, "cosine min {min}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A grouping other than 1 and depthwise is refused by name, before anything is sized on it.
 #[test]
 fn a_grouped_convolution_that_is_not_depthwise_is_refused_by_name() {
@@ -502,8 +612,8 @@ fn a_grouped_convolution_that_is_not_depthwise_is_refused_by_name() {
         mean: [0.0; 3],
         std: [1.0; 3],
         ops: vec![
-            CnnOp::Conv(ConvOp { name: "stem".into(), cin: 3, cout: 4, k: 1, stride: 1, pad: 0, dilation: 1, groups: 1, bias: false, bn: None, act: None }),
-            CnnOp::Conv(ConvOp { name: "g".into(), cin: 4, cout: 8, k: 3, stride: 1, pad: 1, dilation: 1, groups: 2, bias: false, bn: None, act: None }),
+            CnnOp::Conv(ConvOp { name: "stem".into(), cin: 3, cout: 4, k: 1, stride: 1, pad: 0, dilation: 1, groups: 1, bias: false, bn: None, act: None, ..ConvOp::default() }),
+            CnnOp::Conv(ConvOp { name: "g".into(), cin: 4, cout: 8, k: 3, stride: 1, pad: 1, dilation: 1, groups: 2, bias: false, bn: None, act: None, ..ConvOp::default() }),
         ],
         out: CnnOut::Map,
         ignored: vec![],
@@ -556,7 +666,7 @@ fn the_architecture_report_names_a_resnets_features_and_checks_its_checkpoint() 
 #[test]
 fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
     let conv = |k: usize, stride: usize, pad: usize, dilation: usize, cin: usize, cout: usize| {
-        CnnOp::Conv(ConvOp { name: "c".into(), cin, cout, k, stride, pad, dilation, groups: 1, bias: false, bn: None, act: None })
+        CnnOp::Conv(ConvOp { name: "c".into(), cin, cout, k, stride, pad, dilation, groups: 1, bias: false, bn: None, act: None, ..ConvOp::default() })
     };
     let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec { architecture: "Hostile".into(), h, w, mean: [0.0; 3], std: [1.0; 3], ops, out: CnnOut::Map, ignored: vec![], aliases: vec![] };
     let e12 = 1_000_000_000_000usize;

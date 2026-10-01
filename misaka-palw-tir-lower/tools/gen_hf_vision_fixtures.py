@@ -62,6 +62,11 @@ CONFIGS = {
     "resnet_deep": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[8, 8, 16, 16], depths=[2, 2, 2, 2],
                                                   layer_type="basic", hidden_act="relu", downsample_in_first_stage=False)),
                         model="ResNetModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
+    # Deeper still: its program has TWO layer blocks, so the carry between them is read and written by blocks that share
+    # no site names — the case a network with one layer block cannot show.
+    "resnet_deeper": dict(cfg=("ResNetConfig", dict(num_channels=3, embedding_size=8, hidden_sizes=[8, 8, 8, 8], depths=[4, 4, 4, 4],
+                                                    layer_type="basic", hidden_act="relu", downsample_in_first_stage=False)),
+                          model="ResNetModel", size=(64, 64), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], layout="nchw"),
     "qwen2_vl_vision": dict(cfg=("Qwen2VLVisionConfig", dict(depth=2, embed_dim=32, hidden_size=48, hidden_act="quick_gelu",
                                                              mlp_ratio=2, num_heads=4, in_channels=3, patch_size=7,
                                                              spatial_merge_size=2, temporal_patch_size=2)),
