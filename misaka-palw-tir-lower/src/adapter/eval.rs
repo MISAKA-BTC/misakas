@@ -153,8 +153,14 @@ pub fn build_encdec_spec(adapter: &Adapter, config: &Value) -> Result<EncDecBuil
 }
 
 /// A spec value built from an adapter of a data kind (`vision`, `cnn`): the same evaluator as [`build_spec`] (variables, class
-/// defaults, inert keys — and, as everywhere, a key nobody accounts for is refused) over a flat configuration, whose `spec`
-/// template is the typed spec (not yet validated: the caller adds the class's input size and the processor's normalisation).
+/// defaults, inert keys — and, as everywhere, a key nobody accounts for is refused) over the component's configuration, whose
+/// `spec` template is the typed spec (not yet validated: the caller adds the class's input size and the processor's
+/// normalisation).
+///
+/// **`config.scope`** names the nested object that holds the component's configuration when the model is a wrapper (a VLM's
+/// `vision_config`); the template reads it with `$cfg` and the wrapper's own keys with `$root`. Every key of the nested object
+/// must be read or declared inert; the wrapper's remaining keys are not this adapter's business (the wrapper's other adapter —
+/// the text decoder's — accounts for them).
 fn build_data_spec(adapter: &Adapter, config: &Value, kind: &str) -> Result<(Value, Vec<String>)> {
     if adapter.kind() != kind {
         return Err(bad(format!("adapter `{}` is of kind `{}`, not `{kind}`", adapter.id, adapter.kind())));
@@ -162,7 +168,13 @@ fn build_data_spec(adapter: &Adapter, config: &Value, kind: &str) -> Result<(Val
     let root = config.as_object().ok_or_else(|| bad("config.json is not an object"))?;
     let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
     let acfg = adapter.value.get("config").and_then(Value::as_object).cloned().unwrap_or_default();
-    let cfg = Cfg::new(arch.clone(), root, "");
+    let scope = acfg.get("scope").and_then(Value::as_str);
+    let (map, path): (&Map<String, Value>, &str) = match scope {
+        Some(k) => (root.get(k).and_then(Value::as_object).ok_or_else(|| bad(format!("{arch}: no `{k}` in the configuration")))?, k),
+        None => (root, ""),
+    };
+    let cfg = Cfg::new(arch.clone(), map, path);
+    let root_cfg = scope.map(|_| Cfg::new(arch.clone(), root, ""));
     let strs = |k: &str| -> Vec<String> {
         acfg.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
     };
@@ -170,7 +182,7 @@ fn build_data_spec(adapter: &Adapter, config: &Value, kind: &str) -> Result<(Val
     cfg.inert(&strs("inert").iter().map(String::as_str).collect::<Vec<_>>());
     let empty = Map::new();
     let defaults = acfg.get("defaults").and_then(Value::as_object).unwrap_or(&empty);
-    let env = Env::new(&cfg, None, defaults, None, &arch);
+    let env = Env::new(&cfg, root_cfg.as_ref(), defaults, None, &arch);
     env.set_var("arch", Value::String(arch.clone()));
     if let Some(vars) = adapter.value.get("vars").and_then(Value::as_array) {
         let mut order = Vec::new();

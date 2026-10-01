@@ -208,12 +208,13 @@ pub fn vision_spec_from_value(mut v: Value, size: Option<(u32, u32)>, mean_std: 
 /// Parse a vision tower's `config.json` through the adapter (kind `vision`) that claims its architecture. `size` is
 /// the class's declared input size when the model has none (Qwen2-VL), and `mean_std` the processor's normalisation
 /// (`preprocessor_config.json`; the adapter's default when `None`). The Rust reader below is the oracle of the
-/// adapters it has data forms of (`parse_vision_rust`).
+/// adapters (`parse_vision_rust`); a tower inside a wrapper model (a VLM) is reached by `match.tower_of`.
 pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f64; 3], [f64; 3])>) -> Result<VisionSpec> {
     let root: Value = serde_json::from_str(config).map_err(|e| LowerError::bad(format!("config.json: {e}")))?;
     let arch = root["architectures"][0].as_str().unwrap_or("");
     let model_type = root.get("model_type").and_then(Value::as_str);
-    match crate::adapter::builtin::find_vision_for(arch, model_type) {
+    // A tower alone, or the tower inside a wrapper model (a VLM): either is an adapter of kind `vision`.
+    match crate::adapter::builtin::find_vision_for(arch, model_type).or_else(|| crate::adapter::builtin::find_tower_in(arch)) {
         Some(a) => {
             let built = crate::adapter::eval::build_vision_spec(a, &root)?;
             vision_spec_from_value(built.spec, size, mean_std)
@@ -222,7 +223,9 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
     }
 }
 
-/// The Rust reader of the towers that predate adapters of kind `vision` (CLIP, SigLIP, LLaVA, Qwen2-VL, Qwen2.5-VL).
+/// The Rust reader of the towers that predate adapters of kind `vision` (CLIP, SigLIP, LLaVA, Qwen2-VL, Qwen2.5-VL), kept as
+/// the ORACLE of their data forms (`adapters/{clip,siglip,qwen2-vl,qwen2-5-vl,llava}-vision*.json`): `tests/vision_adapters.rs`
+/// holds the adapters equal to it on every fixture, every real configuration and every single-key mutant. Nothing else calls it.
 pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f64; 3], [f64; 3])>) -> Result<VisionSpec> {
     let root: Value = serde_json::from_str(config).map_err(|e| LowerError::bad(format!("config.json: {e}")))?;
     let arch = root["architectures"][0].as_str().unwrap_or("").to_string();

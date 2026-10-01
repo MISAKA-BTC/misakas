@@ -14,9 +14,11 @@
 //!   "format": "misaka.palw.model-adapter.v1",
 //!   "id": "my-model",
 //!   "extends": ["standard-decoder"],       // built-in adapters merged first (later overrides earlier)
-//!   "match":  { "architectures": ["MyForCausalLM"], "model_types": ["my_model"] },
+//!   "match":  { "architectures": ["MyForCausalLM"], "model_types": ["my_model"],
+//!               "tower_of": [] },           // (kind vision) wrapper architectures whose tower this adapter reads
 //!   "config": {
 //!     "decoder": "text_config",            // the decoder's config lives in this nested object (VLMs)
+//!     "scope": "vision_config",            // (kinds vision, cnn) the component's config lives in this nested object
 //!     "defaults": { "rms_norm_eps": 1e-5 },// the HF config class's defaults
 //!     "inert": ["some_training_only_key"], // keys known not to change the forward pass
 //!     "root_inert": []                     // the same, for the wrapper's own keys
@@ -234,6 +236,12 @@ impl Adapter {
 
     pub fn model_types(&self) -> Vec<&str> {
         self.value.pointer("/match/model_types").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+    }
+
+    /// The architectures of WRAPPER models whose component this adapter reads (`match.tower_of`: a VLM's vision tower). They are
+    /// not `match.architectures`: a wrapper is still a text model for the reader, the component is reached by name.
+    pub fn tower_of(&self) -> Vec<&str> {
+        self.value.pointer("/match/tower_of").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
     }
 
     /// Remote-code modules (`auto_map` targets) this adapter models.

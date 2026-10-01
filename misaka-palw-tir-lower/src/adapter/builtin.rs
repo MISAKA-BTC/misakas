@@ -36,6 +36,11 @@ pack!(
     "clip-vision",
     "siglip-vision",
     "vit",
+    "qwen2-vl-vision",
+    "qwen2-vl-vision-in-vlm",
+    "qwen2-5-vl-vision",
+    "qwen2-5-vl-vision-in-vlm",
+    "llava-vision",
     "resnet",
     "bert",
     "bloom",
@@ -146,6 +151,13 @@ pub fn find_encdec_for(arch: &str, model_type: Option<&str>) -> Option<&'static 
 pub fn find_vision_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some());
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in VISION-TOWER adapter (kind `vision`) that reads the tower INSIDE a wrapper model (`match.tower_of`: a VLM's
+/// `Qwen2VLForConditionalGeneration`, `LlavaForConditionalGeneration`). The wrapper itself is a text model: only the
+/// component's lowering asks for this.
+pub fn find_tower_in(arch: &str) -> Option<&'static Adapter> {
+    all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some()).find(|a| a.tower_of().contains(&arch))
 }
 
 /// The built-in CONVOLUTIONAL-NETWORK adapter (kind `cnn`) claiming a configuration, by `architectures[0]`, else by `model_type`.
