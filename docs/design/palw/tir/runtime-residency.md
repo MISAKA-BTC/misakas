@@ -5,7 +5,9 @@
 > IR lineage takes the node's residency policy, and `kaspad` reports and prices IR classes the way it
 > reports and prices the Qwen3.6 mapping. **Node software throughout: no object, rule, fence,
 > parameter or fingerprint moves.** A node holds an IR class's weights differently; it computes the
-> same bytes (§6). Linked from RFC-0002 §7.
+> same bytes (§6). Linked from RFC-0002 §7. **And (branch `tir/residency-eval`, 2026-10-02) RFC-0004's
+> evaluation duty runs its subject stage on the executor, one parent's candidates in lockstep (§8)** —
+> the reference crate gains one defaulted hook (`PipelineParams::stepper`) that consensus never offers.
 
 ## 0. The sentence
 
@@ -163,6 +165,7 @@ line for one that routes nothing); a resident IR holding
 | I-5 | the policy's arithmetic: a fifth rounds up, `0` is the page cache | `the_residency_policy_arithmetic` |
 | I-6 | the seam: the lineage takes the policy; composites share one store per parent root | `a_composite_candidate_shares_its_parents_store_*`, SDK composite test |
 | I-7 | a default takes a fifth within what is spare and declines below the floor, never refused | `a_default_budget_is_a_fifth_within_what_is_spare_*` |
+| I-8 | an evaluation's subject stage on the executor — alone or stepped by a lockstep hub — is the reference's run: every stage's outputs, commit points and `Fixed` states, every leaf, the roots, the binding and the tail | `stage.rs`, `residency_node.rs::candidates_evaluated_through_one_hub_*`, SDK `improve_eval_exec.rs` |
 
 ## 7. Numbers
 
@@ -207,7 +210,7 @@ arithmetic at its size: ~116 GiB a replay is ~2.5 min at 845 MB/s, ~4.1 min at 5
 through faults. The registration preflight (`tir/residency-preflight`) prints these terms for any
 model from its headers.
 
-## 8. Candidates of one parent, weight-stationary (`misaka-palw-tir-exec/src/lockstep.rs`)
+## 8. Candidates of one parent, weight-stationary, and the evaluation duty on the executor (`lockstep.rs`, `stage.rs`)
 
 **The API.** `TirLockstepV1` steps several executors — a parent's composite candidates, over the one
 store they share — a position at a time and an OCCURRENCE at a time: every member's layer `L`
@@ -228,24 +231,85 @@ per candidate; the batch reads them once). The candidates share the store's rows
 candidate's tiers are read under its parent store's rules; each pins only its adapter and the
 embedding its tied head reads whole.
 
-**Why the RFC-0004 duty does not call it yet** (measured against the code, not guessed):
+**The evaluation duty runs on it** (branch `tir/residency-eval`). RFC-0004's evaluation pipeline is
+the subject class's program lifted unchanged with no input (`palw_improve_subject_program_v1`), then,
+for a likelihood job, the scoring library's two weightless stages. Until this lane the whole pipeline
+ran on the **reference interpreter** (`palw_eval_run_v1` → `palw_gen_execute_v1` /
+`palw_gen_replay_committed_v1` → `InterpreterV2`, every param a node reads handed over whole as `i128`
+tensors through `ParamSource`) — on a real model a blocker, not a slowdown (the table below). Now:
 
-* the evaluation executor runs the **reference interpreter** (`palw_eval_run_v1` →
-  `palw_gen_execute_v1` → `InterpreterV2`, params through `ParamSource` as whole `i128` tensors), whose
-  cost is the interpreter's arithmetic, not the weights' reads — batching it would not move it;
-* evaluation duties do not co-occur **in time**: the loop runs one job at a time
-  (`PALW_IMPROVE_MAX_RUNNING_V1 = 1`); they do co-occur in the **plan** — `palw_improve_duties_v1`
-  orders an epoch's tasks item first, subject second, so one item's jobs over every held candidate of
-  a parent are adjacent and share their inputs. When the evaluation executor moves to the typed
-  executor (byte-identical to the reference, held by the differential gates), those adjacent tasks
-  are a lockstep batch as they stand: same parent store, same prompt, one step per position.
+* **The subject stage on the executor** (`misaka_palw_tir_exec::stage::TirStageStepperV1`). The
+  reference pipeline runner (`misaka_palw_tir::pipeline`) asks the params holder, once per run of an
+  input-free stage, whether it computes the stage's positions itself (`PipelineParams::stepper`, a
+  defaulted method: every consensus caller offers none, so consensus runs exactly the reference as
+  before). The SDK's evaluation params offer the executor over the held artifact — its residency's
+  rows where it is resident — for program 0 when the stage's program is the class's own lifted
+  unchanged (`TirStageStepperV1::serves`: no input, `Logits`, its version-1 view the plan's
+  program). There the reference's `InterpreterV2::step` is the version-1 interpreter over that very
+  program, which the executor equals at every node, commit and error class; the stepper returns what
+  the reference records — the logits node's value, the commit points in slot order, and the `Fixed`
+  states after the position, exactly the instances some `StateWrite` writes (the reference's map
+  holds no other). The decode, the step tree, the roots, the binding and the scoring stages are the
+  consensus functions' own, unchanged: the stepper replaces positions, nothing else.
+* **Candidates of one parent in lockstep** (`TirLockstepHubV1`, `palw_eval_run_batch_v1`). Each
+  member's run is `palw_eval_run_v1`'s on its own thread; its subject stage's stepper is a seat that
+  hands one hub its token and waits. When every member still in its stage has asked, the hub steps
+  them all a position with `tir_lockstep_step_v1` (the body `TirLockstepV1` already had) and answers
+  each; a member whose stream ends — its stop, its budget, its failure — leaves, and the rest go on
+  without it. The hub owns the executors and steps them on the caller's thread.
+* **The node** (`kaspad/src/palw_panel/improve.rs`): the duty plan stays item-major
+  (`palw_improve_duties_v1`); before the duty loop, the first runnable task and the runnable tasks of
+  the same item whose held subjects read the same weights root (`PalwEvalHeldV1::weights_root_v1`: a
+  composite's parent root, else the class's own) go as ONE run of the loop's
+  `PALW_IMPROVE_MAX_RUNNING_V1 = 1` (unchanged), at most `palw_eval_lockstep_width_v1` wide: the
+  store's routed capacity over one admission, every member's run (`run_bytes_v1`: the run's `i128`
+  records and the executor's state) within 70 % of what the host has available, and 8. Fewer than
+  two: the task runs alone as before. Each held class's line says where its subject stage runs.
 
-So the executor API and its identity tests ship; the duty keeps its executor.
+**Identity** (every evaluation run twice, `palw_eval_run_v1` against `palw_eval_run_reference_v1`, the
+two works one: the pipeline's run with every stage's outputs, commit points and `Fixed` states, every
+leaf's values and hashes, the roots, the stop, the binding, the tail): `tests/stage.rs` (2,000 random
+programs step for step, 0 class differences; 600 through `run_pipeline` and `run_text_pipeline` with
+and without the stepper; three members of 200 random programs through one hub, generating and
+replaying, a member failing mid-stream; the corpus mixtures, dense and the two recurrent hybrids);
+`residency_node.rs` (three composite candidates of the 64-expert mixture through one hub over the
+parent's store at its floor, each the reference's run over its whole weights); the SDK's
+`improve_eval_exec.rs` (the A6 toy class under five weights, generating and teacher-forced, its claims
+judged `Valid`; lowered `qwen3_moe`, `mixtral`, `olmoe`, `llama` and the `qwen3_next` hybrid, mapped
+and at their floor; batches of the toy, of the mixture at its floor, and of a LoRA candidate served
+from its adapter section with its parent, for a rank-16 Llama and a Mistral q/v adapter). Every
+existing evaluation test now runs on the executor by default (the SDK's unit tests, `improve_door.rs`,
+`improve_composite_node.rs`; and `palw-class improve eval`); the consensus vectors and courts run the
+reference, as they must.
+
+**Rows read in a batch** (debug; the routed rows the store reads, members one after another against
+one batch): the three composite candidates through one hub, one prompt — 102,144 bytes against 34,048
+replaying, 133,056 against 44,352 generating; the lowered `qwen3_moe` at its floor, three tasks of one
+item (one prompt, two references) — 64,148 against 34,734.
+
+**What a position costs** (analytic, from the real configs lowered at real shapes —
+`residency_tiers.rs::an_evaluation_position_on_the_executor_reads_rows_where_the_reference_widens_every_weight`):
+
+| class | the reference interpreter, a position | the executor, a position |
+| --- | --- | --- |
+| Qwen3-30B-A3B | every weight read whole, 28.98 GiB (36.8 s at 845 MB/s off disk), widened to 455.9 GiB of `i128` | 1.28 GiB pinned (memory) + 1.69 GiB of its token's routed rows (the residency's, 2.1 s at 845 MB/s if every row misses) + 4 KiB gathered: 2.98 GiB, 10× less read, 153× less than the reference widens |
+| Qwen2.5-1.5B | 2.16 GiB read whole (the tied embedding twice), 26.8 GiB of `i128` | 1.71 GiB pinned, nothing routed or gathered (the tied head reads the embedding whole): 16× less than the reference widens, in native `i8` kernels — ~116 ms a position on an M1 Max for the registered 1.5B class (`freeze-v1.md` D-F1) |
+| Qwen2.5-7B | 7.73 GiB read whole, 114.0 GiB of `i128` | 6.70 GiB pinned + 7 KiB gathered: 17× less than the reference widens |
+
+A lockstep batch of `n` candidates of one parent on one item reads the routed rows of a position once
+for the members that route alike (composites share the parent's router and experts), where `n` runs
+one after another read them `n` times.
+
+**Memory, not changed here.** A run still keeps every position's logits, commit points and `Fixed`
+states as `i128` tensors (`PipelineRun`, what `commit_run` builds the step tree from) — a Qwen3-30B
+position's logits alone are 2.4 MB of them; a batch of `n` holds `n` such runs, which is why its width
+is bounded by `run_bytes_v1` against what the host has available. Streaming the records into the step
+tree as positions finish is the next step for long evaluation jobs (§9).
 
 ## 9. Not done here
 
 * **Reading and computing a layer overlapped** (ADR-0112 §8's last bullet): an admission reads a
   group, then the gathers compute it.
 * **Promotion**: a row hot enough to be worth pinning is still an LRU entry.
-* **The evaluation executor on the typed backend**, which would make RFC-0004's adjacent same-item
-  tasks a lockstep batch (§8).
+* **An evaluation run's records streamed into its step tree** (§8): today the pipeline run keeps
+  every position's values as `i128` until `commit_run` hashes them.

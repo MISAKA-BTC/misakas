@@ -150,3 +150,57 @@ fn real_checkpoints_size_their_residency_from_the_config() {
     }
     assert!(rows.len() >= 6, "{rows:?}");
 }
+
+/// **What one evaluation position costs, on the reference and on the executor** (RFC-0004 §7.2's subject
+/// stage; `docs/design/palw/tir/runtime-residency.md` §8), from real checkpoints' configs (the programs
+/// lowered at real shapes, no weight read). The reference interpreter takes every param a node reads
+/// whole, at every node that reads it, as `i128` (its `ParamSource` door: a whole tensor per request); the
+/// executor reads the pinned set where it is held, one token's routed rows (from the residency, read on a
+/// miss) and one token's gathered rows — its own dtypes, nothing widened.
+#[test]
+fn an_evaluation_position_on_the_executor_reads_rows_where_the_reference_widens_every_weight() {
+    use misaka_palw_tir::Ref;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real");
+    let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let mut seen = 0;
+    for name in ["qwen3-30b-a3b", "qwen2.5-1.5b-instruct", "qwen2.5-7b-instruct"] {
+        let Ok(text) = std::fs::read_to_string(root.join(format!("{name}.json"))) else { continue };
+        let Ok(prep) = fidelity::prepare(&text, &LowerOpts { max_window: Some(4096), ..Default::default() }) else { continue };
+        let p = &prep.lowered.program;
+        // The reference: every param use of a position, whole.
+        let (mut read, mut widened) = (0u64, 0u64);
+        for (block, _) in p.occurrences() {
+            for n in &p.blocks[block as usize].nodes {
+                for r in &n.inputs {
+                    if let Ref::Param(j) = *r {
+                        let d = &p.params[j as usize];
+                        let elems = d.shape.iter().fold(1u64, |a, x| a * *x as u64);
+                        read += elems * d.dtype.width() as u64;
+                        widened += elems * 16;
+                    }
+                }
+            }
+        }
+        let a = TirTiersV1::of(p, TirTierRulesV1::default()).arithmetic();
+        let executor = a.pinned_bytes + a.routed_token_bytes + a.gathered_token_bytes;
+        eprintln!(
+            "{name:<24} reference: {:>7.2} GiB of weights read whole, {:>8.2} GiB as i128 | executor: {:>6.3} GiB pinned + {:>6.3} GiB \
+             routed rows + {:>5.1} KiB gathered = {:>6.3} GiB ({:>4.0}x less than the reference reads, {:>5.0}x less than it widens)",
+            gib(read),
+            gib(widened),
+            gib(a.pinned_bytes),
+            gib(a.routed_token_bytes),
+            a.gathered_token_bytes as f64 / 1024.0,
+            gib(executor),
+            read as f64 / executor as f64,
+            widened as f64 / executor as f64,
+        );
+        assert!(read >= a.weight_bytes, "{name}: the reference reads every weight whole a position");
+        assert!(executor < read, "{name}");
+        if a.routed_bytes > 0 {
+            assert!(executor * 8 < read, "{name}: a mixture's position reads its token's experts, not every expert");
+        }
+        seen += 1;
+    }
+    assert!(seen >= 2, "{seen}");
+}
