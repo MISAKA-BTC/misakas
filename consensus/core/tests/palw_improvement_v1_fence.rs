@@ -194,6 +194,7 @@ fn the_value_is_fingerprinted_field_by_field() {
         ("max_policy_bytes", Box::new(|f| f.ceilings.max_policy_bytes -= 1)),
         ("max_open_epochs", Box::new(|f| f.ceilings.max_open_epochs -= 1)),
         ("max_live_results", Box::new(|f| f.ceilings.max_live_results -= 1)),
+        ("max_eval_seat_permille", Box::new(|f| f.ceilings.max_eval_seat_permille -= 1)),
     ];
     let mut seen = std::collections::BTreeSet::new();
     seen.insert(a.consensus_params_id().to_string());
@@ -240,6 +241,11 @@ fn validate_refuses_every_value_this_build_cannot_run() {
         "past 2^40 positions"
     );
     assert!(with(&|f| f.ceilings.max_eval_budget_permille = 1_001).is_err(), "past the whole capacity");
+    assert!(with(&|f| f.ceilings.max_eval_seat_permille = 1_001).is_err(), "a panel's share past the whole fee");
+    assert!(
+        with(&|f| f.ceilings.max_eval_seat_permille = 0).is_ok(),
+        "no seat share is a legal ceiling: the policy then pays its seats nothing"
+    );
     assert!(with(&|f| f.ceilings.max_governed_lines = caps.max_governed_lines + 1).is_err(), "past 2^16 lines");
     assert!(with(&|f| f.ceilings.max_policy_bytes = caps.max_policy_bytes + 1).is_err(), "past 64 KiB policies");
     assert!(with(&|f| f.ceilings = caps).is_ok(), "the format's caps themselves are legal");

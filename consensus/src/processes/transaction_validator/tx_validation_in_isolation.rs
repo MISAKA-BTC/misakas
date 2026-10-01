@@ -1509,6 +1509,7 @@ mod pq_output_class_enforcement_tests {
                 item: 0,
                 subject: PalwEvalSubjectV1::Parent,
                 kind: PalwScoringKindV1::ExactMatch,
+                part: 0,
                 mode: PalwEvalModeV1::Generate { seed: h(2), max_new: 4, stop_ids: vec![] },
             };
             let job = PalwFreePromptJobV3 {
@@ -1575,7 +1576,14 @@ mod pq_output_class_enforcement_tests {
                 commit_tiles: vec![4],
                 state_tiles: vec![],
             };
-            let tail = PalwEvalClaimTailV1 { generated: generated.clone(), score: vec![], subject_layout: layout, params };
+            let tail = PalwEvalClaimTailV1 {
+                generated: generated.clone(),
+                score: vec![],
+                subject_layout: layout,
+                params,
+                read: None,
+                opening: None,
+            };
             Transaction::new(
                 0,
                 vec![],

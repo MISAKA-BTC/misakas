@@ -159,7 +159,8 @@ pub struct PalwEpochWindowsV1 {
     pub w_eval: u64,
     /// `d`: the epoch seed is the beacon at the first block `d` DAA past `t_draw`.
     pub beacon_delay: u64,
-    /// The court window after `t_eval` within which evaluation claims must reach `Final`.
+    /// The window after `t_eval` within which an unchallenged evaluation claim must reach `Final` (a claim not `Final`
+    /// at `t_score` is a missing evaluation); held to the ruleset's claim lifecycle (spec 17 §17.4.3 row 19).
     pub court_margin: u64,
 }
 
@@ -197,16 +198,44 @@ pub struct PalwScoringStageV1 {
     pub params: PalwScoringParamsV1,
 }
 
+/// **A judge's specification** (spec 17 §17.8.5; RFC-0004 §7.3 as decided 2026-09-30): no generation and no
+/// sampling — a judge class (a registered IR text class named in `judge_set`) is run teacher-forced over a
+/// canonical prompt, the deterministic RefLogLik stage, once per verdict sequence. The score is the Q24
+/// log-likelihood margin `LL(verdict_a) − LL(verdict_b)`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwJudgeSpecV1 {
+    /// The registered dataset (`DatasetRegistered`, tag 76) that pins the canonical prompt template: one entry,
+    /// a `PalwJudgeTemplateV1` (`palw_improve_eval_v1`), whose leaf hash is the dataset's `content_root`.
+    pub template_dataset: Hash64,
+    /// The two fixed verdict token sequences (1 to 8 ids each, different): "Yes" and "No" for a Judge stage; for a
+    /// Pairwise stage the first-shown response is better, the second-shown is.
+    pub verdict_a: Vec<u32>,
+    pub verdict_b: Vec<u32>,
+    /// The judge's logits in Q24 nats per unit (the RefLogLik stage's scale).
+    pub logit_scale_q24: i32,
+}
+
 /// **The evaluation spec** (RFC-0004 §7).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwEvalSpecV1 {
     pub stages: Vec<PalwScoringStageV1>,
-    pub regression_suite_root: Hash64,
+    /// The regression suite: `regression_items` entries drawn each epoch from this registered public dataset
+    /// (`DatasetRegistered`, tag 76 — its content is a tree of `PalwSuiteEntryV1`s); the zero id exactly when
+    /// there are no items (spec 17 §17.6.3).
+    pub regression_dataset: Hash64,
     pub regression_items: u32,
-    pub safety_suite_root: Hash64,
+    /// The safety suite, likewise.
+    pub safety_dataset: Hash64,
     pub safety_items: u32,
     /// The registered judge classes a judge is drawn from.
     pub judge_set: Vec<Hash64>,
+    /// What a Judge stage needs (spec 17 §17.8.5): `Some` exactly when the stages have a Judge stage.
+    pub judge: Option<PalwJudgeSpecV1>,
+    /// What a Pairwise stage needs: `Some` exactly when the stages have a Pairwise stage.
+    pub pairwise: Option<PalwJudgeSpecV1>,
+    /// The share of an evaluation job's fee its panel's credited seats divide, in permille (spec 17 §17.8.4),
+    /// within the network's `max_eval_seat_permille`.
+    pub seat_pool_permille: u16,
     /// A judge whose anchor accuracy falls below this is excluded for the epoch.
     pub anchor_floor_permille: u16,
     pub n: u32,
@@ -956,5 +985,4 @@ mod tests {
         assert!(!PalwScoringKindV1::Judge.is_primary());
         assert!(!PalwScoringKindV1::Pairwise.is_primary());
     }
-
 }

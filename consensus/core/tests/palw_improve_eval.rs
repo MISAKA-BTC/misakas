@@ -15,7 +15,10 @@
 //!   over the stage roots, the ids and the score, and every leaf of every stage is acquitted by the
 //!   generative court; the ExactMatch job's answer, kept at acceptance, scores at the key's reveal as
 //!   the library's stage would;
-//! * judged kinds wait for the judge class kind; a job whose kind, mode and stage disagree is refused.
+//! * a judged part is the judge class's teacher-forced RefLogLik pass over the template's fill, the verdict
+//!   sequence as its reference (RFC-0004 §7.3 as decided 2026-09-30): its context is the RefLogLik one at the
+//!   judge's scale, its score the pass's, and the parts' margin is the judged score; a job whose kind, mode
+//!   and stage disagree is refused.
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_gen_artifact_v1::*;
@@ -130,6 +133,7 @@ fn job(kind: PalwScoringKindV1, mode: PalwEvalModeV1) -> PalwEvalJobV1 {
         item: 7,
         subject: PalwEvalSubjectV1::Candidate(Hash64::from_bytes([0x22; 64])),
         kind,
+        part: 0,
         mode,
     }
 }
@@ -311,22 +315,70 @@ fn a_ref_loglik_job_is_teacher_forced_over_the_reference() {
 }
 
 #[test]
-fn judged_kinds_wait_and_disagreements_are_refused() {
+fn a_judged_part_is_the_judge_s_teacher_forced_pass_over_the_filled_prompt() {
+    let program = subject_program();
+    let params_v1 = subject_params(&program);
+    let layout = layout(&program);
+    let (artifact_root, _) = palw_tir_inventory_root_v1(&program, &Src(&params_v1)).unwrap();
+    // The judge class: here the toy class itself plays it.
+    let judge = PalwEvalSubjectClassV1 { class_id: Hash64::from_bytes([0x55; 64]), artifact_root, program: &program, layout: &layout };
+    let scale: i32 = 1 << 12;
+    let (yes, no) = (vec![7u32], vec![2u32, 9]);
+    // The template and the prompt a part runs over: the item's prompt and the generation it reads.
+    let template = PalwJudgeTemplateV1 { segments: vec![vec![1], vec![2], vec![3]] };
+    let (item_prompt, generation) = (vec![5u32, 6], vec![8u32, 4, 4]);
+    let prompt = palw_improve_judge_fill_v1(&template, &item_prompt, &[&generation]).unwrap();
+    assert_eq!(prompt, vec![1, 5, 6, 2, 8, 4, 4, 3]);
+    let stage = PalwEvalStageParamsV1::Judge { lo: -(1 << 30), hi: 1 << 30, logit_scale_q24: scale };
+    let judged = PalwEvalModeV1::Judged { judge: judge.class_id };
+    let mut lls = Vec::new();
+    for (part, verdict) in [(0u8, &yes), (1u8, &no)] {
+        let j = PalwEvalJobV1 { part, ..job(PalwScoringKindV1::Judge, judged.clone()) };
+        let ctx = palw_improve_eval_context_v1(&j, &judge, stage).unwrap();
+        assert!(ctx.decode.is_none(), "a judge is run teacher-forced: nothing is selected, nothing sampled");
+        assert_eq!(ctx.pipeline.stages.len(), 3, "the RefLogLik pipeline: the judge's decode stage, the log-probs, the sum");
+        assert_eq!(ctx.scalars, vec![scale as i64], "at the judge's logit scale");
+        assert_eq!(ctx.subject_class, judge.class_id, "the executed class is the judge's");
+        assert_ne!(j.id(), PalwEvalJobV1 { part: 1 - part, ..j.clone() }.id(), "each part has its own id");
+        let params = Params(vec![params_v1.clone(), MapParams::default(), MapParams::default()]);
+        let pj =
+            PipelineJob { prompt: prompt.clone(), generated: verdict.clone(), scalars: ctx.scalars.clone(), ..PipelineJob::default() };
+        let e = palw_gen_replay_committed_v1(&ctx.pipeline, &ctx.programs, &ctx.layouts, &params, &pj, ctx.seed).unwrap();
+        let rows: Vec<Vec<i32>> =
+            e.run.stages[0].steps[prompt.len() - 1..].iter().map(|s| s.output.data.iter().map(|x| *x as i32).collect()).collect();
+        let want = ref_loglik_reference_v1(&rows, verdict, scale as i64);
+        let score: Vec<i32> = e.run.output.data.iter().map(|v| *v as i32).collect();
+        assert_eq!(ref_loglik_join_v1(score[0], score[1]), want, "the part's score is the verdict's log-likelihood");
+        let binding = PalwEvalBindingV1::of(
+            &j,
+            judge.class_id,
+            &layout,
+            &e.claim,
+            e.space.leaf_count(),
+            &prompt,
+            stage,
+            vec![generation.clone()],
+            score,
+        );
+        assert_eq!(binding.score_value(), Ok(want));
+        assert_eq!(binding.generated, *verdict, "the ids are the verdict sequence");
+        assert_eq!(palw_improve_eval_step_leaves_v1(&ctx, &prompt, verdict, &[]), Ok(e.space.leaf_count() as u128));
+        let acquitted = every_leaf_acquitted(&ctx, &params, &e, &pj);
+        assert!(acquitted > 20, "{acquitted}");
+        lls.push(want);
+    }
+    // The judged score is the margin of the parts, clamped to the stage's range.
+    assert_eq!(palw_improve_judged_score_v1(&stage, &lls), Some((lls[0] - lls[1]).clamp(-(1 << 30), 1 << 30)));
+}
+
+#[test]
+fn disagreements_are_refused() {
     let program = subject_program();
     let layout = layout(&program);
     let subject =
         PalwEvalSubjectClassV1 { class_id: Hash64::default(), artifact_root: Hash64::default(), program: &program, layout: &layout };
     let generate = PalwEvalModeV1::Generate { seed: Hash64::default(), max_new: 4, stop_ids: vec![] };
     let judged = PalwEvalModeV1::Judged { judge: Hash64::from_bytes([5; 64]) };
-    assert_eq!(
-        palw_improve_eval_context_v1(
-            &job(PalwScoringKindV1::Judge, judged.clone()),
-            &subject,
-            PalwEvalStageParamsV1::Judge { lo: -1, hi: 1 }
-        )
-        .err(),
-        Some(PalwEvalErrorV1::JudgedNotYet)
-    );
     assert_eq!(
         palw_improve_eval_context_v1(
             &job(PalwScoringKindV1::ExactMatch, generate.clone()),
@@ -338,13 +390,35 @@ fn judged_kinds_wait_and_disagreements_are_refused() {
     );
     assert_eq!(
         palw_improve_eval_context_v1(
-            &job(PalwScoringKindV1::ExactMatch, judged),
+            &job(PalwScoringKindV1::ExactMatch, judged.clone()),
             &subject,
             PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 }
         )
         .err(),
         Some(PalwEvalErrorV1::KindMismatch),
         "an exact match generates"
+    );
+    assert_eq!(
+        palw_improve_eval_context_v1(
+            &job(PalwScoringKindV1::Judge, generate),
+            &subject,
+            PalwEvalStageParamsV1::Judge { lo: -1, hi: 1, logit_scale_q24: 1 }
+        )
+        .err(),
+        Some(PalwEvalErrorV1::KindMismatch),
+        "a judge does not generate"
+    );
+    assert!(
+        matches!(
+            palw_improve_eval_context_v1(
+                &job(PalwScoringKindV1::Judge, judged),
+                &subject,
+                PalwEvalStageParamsV1::Judge { lo: -1, hi: 1, logit_scale_q24: 0 }
+            )
+            .err(),
+            Some(PalwEvalErrorV1::Scoring(_))
+        ),
+        "a judge's logit scale is positive"
     );
 }
 
