@@ -10773,12 +10773,16 @@ impl PalwPanelService {
                                     break 'verdict None;
                                 }
                             };
-                            match offload(resolved, move |b| {
+                            // ADR-0112 Decision 8, for a seat: what the replay read from storage
+                            // and what each held residency read of it — a storage line per replay.
+                            let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
+                            let replayed = offload(resolved, move |b| {
                                 let _held_for_the_replay = reserved;
                                 b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)
                             })
-                            .await
-                            {
+                            .await;
+                            crate::palw_backends::log_storage_v1(PALW_PANEL, "replay", &storage_before, &self.class_holdings);
+                            match replayed {
                                 Ok((backend, Ok(roots))) => {
                                     if replay_licenses_v1(&roots, duty.execution_root, duty.trace_root, duty.work_leaves) {
                                         self.config.telemetry.panel_replay(
