@@ -12,7 +12,7 @@ use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::cnn::{self, BnOp, CnnOp, CnnOut, CnnSpec, ConvOp};
-use misaka_palw_tir_lower::lower::materialise;
+use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::spec::Act;
 use misaka_palw_tir_lower::weights::Checkpoint;
@@ -129,7 +129,7 @@ fn assert_blocks_share_no_params(name: &str, p: &tir::TirProgramV1) {
 fn check(name: &str, out: CnnOut, key: &str) -> usize {
     let fx = load(name);
     let spec = resnet_spec(&fx.cfg, fx.size, fx.ms, out);
-    check_spec(name, &fx, spec, key, 0.995)
+    check_spec(name, &fx, spec, key, 0.995, &LowerOpts::default())
 }
 
 /// The same steps on a network a data adapter builds — there is no Rust oracle for it: transformers is the oracle, and the
@@ -144,6 +144,11 @@ fn check_adapter(name: &str, map: bool, key: &str) -> usize {
 /// lower than a ResNet's; the SAME network with its weights on the int8 grid (`*_grid` fixtures) has none of that noise and its
 /// floor is 0.9995: what is left is the activations' 16-bit codes and the requantisations, the lowering's own error.
 fn check_adapter_min(name: &str, map: bool, key: &str, min_cos: f64) -> usize {
+    check_adapter_opts(name, map, key, min_cos, &LowerOpts::default())
+}
+
+/// [`check_adapter_min`] under the registrant's lowering options (`conv_weight_bits`).
+fn check_adapter_opts(name: &str, map: bool, key: &str, min_cos: f64, opts: &LowerOpts) -> usize {
     let fx = load(name);
     let text = std::fs::read_to_string(fixture_dir(name).join("config.json")).expect("config");
     let mut spec = cnn::parse_cnn(&text, Some(fx.size), None).unwrap_or_else(|e| panic!("{name}: the adapter: {e}"));
@@ -154,10 +159,19 @@ fn check_adapter_min(name: &str, map: bool, key: &str, min_cos: f64) -> usize {
         }
         spec.out = CnnOut::Map;
     }
-    check_spec(name, &fx, spec, key, min_cos)
+    check_spec(name, &fx, spec, key, min_cos, opts)
 }
 
-fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64) -> usize {
+/// The bytes of the convolutions' weight parameters (`*.w.t`) in a program.
+fn conv_weight_bytes(p: &tir::TirProgramV1) -> usize {
+    p.params
+        .iter()
+        .filter(|q| q.name.ends_with(".w.t"))
+        .map(|q| q.shape.iter().map(|d| *d as usize).product::<usize>() * if q.dtype == tir::DType::I16 { 2 } else { 1 })
+        .sum()
+}
+
+fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64, opts: &LowerOpts) -> usize {
     let dir = fixture_dir(name);
     let (hl, binding) = cnn::hl_program(&spec).expect("hl");
     let ck = Checkpoint::open(&dir).expect("checkpoint");
@@ -178,8 +192,9 @@ fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64) 
         cnn::float_forward(&hl, &spec, &params_f, &img, Some(&mut stats)).expect("calibration");
     }
     // 3. The integer program.
-    let lw = cnn::lower_cnn(&hl, &spec).expect("lower");
+    let lw = cnn::lower_cnn_opts(&hl, &spec, opts).expect("lower");
     assert_blocks_share_no_params(name, &lw.program);
+    eprintln!("{name}: conv_weight_bits {}: {} bytes of convolution weights, program {} bytes", opts.conv_weight_bits, conv_weight_bytes(&lw.program), lw.program.encode().len());
     let loader = Resident(Arc::new(params_f));
     let quiet = |_: usize, _: usize| {};
     let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
@@ -198,7 +213,12 @@ fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64) 
         assert_eq!(got.len(), want.len(), "{name}: integer rows");
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let (mean, min) = (cos.iter().sum::<f64>() / cos.len() as f64, cos.iter().cloned().fold(1.0, f64::min));
-        eprintln!("{name} integer vs HF `{key}`: cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})", rel(&got.concat(), &want.concat()), got.len());
+        eprintln!(
+            "{name} integer vs HF `{key}` (conv weights {} bits): cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})",
+            opts.conv_weight_bits,
+            rel(&got.concat(), &want.concat()),
+            got.len()
+        );
         assert!(min > min_cos, "{name}: cosine min {min} (floor {min_cos})");
     }
     // 5. The class's one-stage pipeline: the image bound by JobImage must give the standalone program's bytes.
@@ -373,6 +393,30 @@ fn a_deep_network_with_weights_on_the_int8_grid_follows_transformers_to_activati
     check_adapter_min("mobilenet_v2_grid", false, "pooler_output", 0.9995);
     check_adapter_min("convnext_grid", true, "last_hidden_state", 0.9995);
     check_adapter_min("convnext_grid", false, "pooler_output", 0.9995);
+}
+
+/// **The registrant's choice of weight codes** (`LowerOpts::conv_weight_bits`, 8 by default): the same MobileNetV2 and ConvNeXt with
+/// `i16` codes per output row instead of `i8`. A convolution is a gather and a matmul over wider integers — the weight parameter's
+/// dtype is the whole difference, so no primitive and no court change — and the integer program goes from the weight codes'
+/// rounding through fifty convolutions (cosine 0.987 – 0.997) to the activations' alone (above 0.9995), at twice the weight bytes.
+/// The three implementations and the court run on the wide program too (`check_spec` step 6).
+#[test]
+fn a_registrant_can_choose_i16_conv_weight_codes() {
+    let wide = LowerOpts { conv_weight_bits: 16, ..LowerOpts::default() };
+    for (name, map, key) in [("mobilenet_v2", true, "last_hidden_state"), ("mobilenet_v2", false, "pooler_output"), ("convnext", false, "pooler_output")] {
+        check_adapter_opts(name, map, key, 0.9995, &wide);
+    }
+    // The bytes: the wide program's convolution weights are exactly twice the narrow one's.
+    let fx = load("mobilenet_v2");
+    let text = std::fs::read_to_string(fixture_dir("mobilenet_v2").join("config.json")).expect("config");
+    let spec = cnn::parse_cnn(&text, Some(fx.size), None).expect("spec");
+    let (hl, _) = cnn::hl_program(&spec).expect("hl");
+    let narrow = cnn::lower_cnn(&hl, &spec).expect("narrow");
+    let wide_lw = cnn::lower_cnn_opts(&hl, &spec, &wide).expect("wide");
+    assert_eq!(conv_weight_bytes(&wide_lw.program), 2 * conv_weight_bytes(&narrow.program));
+    // Any other width is refused by name.
+    let bad = cnn::lower_cnn_opts(&hl, &spec, &LowerOpts { conv_weight_bits: 12, ..LowerOpts::default() });
+    assert!(bad.is_err_and(|e| e.to_string().contains("conv_weight_bits = 12")));
 }
 
 /// **MobileNetV1 as data** (`adapters/mobilenet-v1.json`): thirteen depthwise-separable pairs, no residuals, ReLU6 everywhere.

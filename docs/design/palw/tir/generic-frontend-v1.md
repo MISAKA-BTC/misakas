@@ -465,8 +465,25 @@ are bit-identical and the court replays every commit point of both stages (33 + 
 (`tests/configs/encdec/whisper-*.json`, no weights): the decoder of every size is admitted; the encoder of tiny (2.0·10¹⁰ MACs,
 1.67 M step leaves) and base (4.8·10¹⁰, 3.30 M) is ADMITTED; small and medium are REFUSED by name (9.75 M and 25.8 M step leaves of
 4.19 M: the committed logits `[h, L, L]` of a 1,500-frame attention) and large-v3 by `max_position_macs` (1.29·10¹² of 1.10·10¹²) —
-the figures FR-23's research derived independently. The levers are the ones it named: per-commit tile lengths or a stat-only
-softmax (`ATTN_STAT_COMMIT_V1`) for small and medium, a stage split for large-v3 — admission and layout, not primitives.
+the figures FR-23's research derived independently.
+
+**Levers for the sizes the default ceilings refuse** (measured, deferred by decision: none is built into a class, none needs a
+primitive; `tests/whisper.rs::a_longer_tile_admits_whisper_small_and_the_larger_sizes_need_stages` holds the numbers). The
+step-leaf count of the encoder is its committed values divided by the admission input `tile_len` (the values one leaf holds: 64 in
+`default_inputs`, declared by the class), and the committed logits `[h, L, L]` of a 1,500-frame attention dominate it.
+
+| encoder at 1,500 rows | leaves at tile 64 | at 128 | at 256 | what bounds it |
+|---|---|---|---|---|
+| tiny / base | 1.67 M / 3.30 M | 0.84 M / 1.65 M | 0.42 M / 0.82 M | admitted at every tile up to 256 |
+| small | 9.75 M | 4.87 M | **2.44 M, admitted** | a tile of 512 is refused: `max_tile_transcendentals` 1.54 M of 1.05 M (a tile of the softmax recomputes its rows' exponentials: about `tile · L`), so the longest tile is about 340 |
+| medium | 25.8 M | 12.9 M | 6.45 M | refused at every tile the exponentials allow (4.8 M at 340): the committed values themselves must shrink |
+| large-v3 | 43 M (est.) | | 10.8 M (est.) | `max_position_macs` 1.29·10¹² of 1.10·10¹² at EVERY tile: a position is the whole encoder |
+
+So: **small** needs nothing but the class declaring `tile_len = 256`; **medium** needs the committed values reduced — a stat-only
+softmax (commit the row maximum and sum, recompute the logits inside the tile that reads them: `ATTN_STAT_COMMIT_V1`, MACs for
+leaves) or the encoder cut across two stage programs (the leaf cap and the MAC cap are per position, and a stage is a position);
+**large-v3** needs the stage split in any case (two stages bring the MACs under 2^40, three the leaves at tile 256) — the pipeline
+already runs stage programs in order, and the cut is a layout of the same blocks. None of this changes a primitive or the court.
 
 **An encoder alone** (`adapters/t5-encoder.json`, extends `t5`): `dec_layers: 0`; the final-normed rows are the program's `Final`
 output, `i32` at a calibrated power-of-two unit (`OUTPUT_ROWS_V1`). The text encoder of Flux, Stable Diffusion 3, PixArt, Wan and
@@ -537,6 +554,24 @@ nodes, 4.35·10⁹ MACs, 431 k step leaves, cone work 4,618; ConvNeXt-B at 224 i
 ConvNeXt-L at 384 is 1.00·10¹¹ MACs and 4.10 M step leaves (**98 % of the 2^22 cap**: the next size up does not fit); MobileNetV2 at 224 is 5
 blocks, 829 nodes, 2.8·10⁸ MACs (1.4 depth: 5.5·10⁸), 113 k – 161 k leaves; MobileNetV1 at 224 is 3 blocks, 375 nodes, 5.5·10⁸ MACs, 86 k
 leaves — cone work 957 – 8,692 of 65,536.
+
+**The registrant's choice of weight codes** (`LowerOpts::conv_weight_bits`, `lower_cnn_opts`; 8 by default). A convolution's weights are
+`i8` per output row unless the registrant asks for `i16` per output row: the same gather and matmul (or product and sum) over wider
+integers, the weight parameter's dtype the whole difference — no primitive, no court change (the three implementations and the court
+run on the wide programs too; the TIR range analysis and the narrowing's 128-bit product take the larger accumulators). The registrant
+chooses fidelity against size: the weight bytes double and the fifty-layer rounding goes.
+
+| tiny MobileNetV2 (fifty convolutions) | `i8` codes (default) | `i16` codes |
+|---|---|---|
+| integer cosine to transformers, last feature map | 0.987 – 0.992 (min), 0.990 – 0.995 (mean) | 0.999996 – 0.999997 (min) |
+| integer cosine, pooled vector | 0.9957, 0.9974 | 0.999999 |
+| relative error, feature map / pooled | 1.0 – 1.4·10⁻¹ / 0.7 – 0.9·10⁻¹ | 2.1 – 2.5·10⁻³ / 1.2 – 1.6·10⁻³ |
+| convolution weight bytes | 150,656 | 301,312 (exactly 2x) |
+
+(ConvNeXt, which is shallow and normalised, goes from 0.9997 – 0.9999 to 1.0000.) The option lives with the lowering options, not the
+calibration policy: the width is the program's parameter dtype, so it is part of the program a pack names (a runtime pack pins it
+next to `max_window`). Whisper's two-convolution stem and the vision towers' patch projections keep `i8`; any width but 8 or 16 is
+refused by name.
 
 **What this leaves in the family.** MobileNetV3 (squeeze-and-excite: a pooled gate multiplied back over the map), EfficientNet (the same
 gate, SiLU, dynamic padding), RegNet (grouped, non-depthwise convolutions) and ConvNeXt V2 (a global response normalisation) each add an

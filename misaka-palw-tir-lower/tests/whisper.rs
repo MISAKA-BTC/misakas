@@ -236,3 +236,43 @@ fn real_whispers_lower_and_are_admitted_or_refused_by_name() {
         assert!(tir::admit_v2::tir_admit_program_v2(&d2, &inputs).is_ok(), "{name}: the decoder is refused");
     }
 }
+
+/// **The levers for the sizes the default ceilings refuse** (measured, no model change): the admission input `tile_len` — the values a
+/// step leaf holds (64 in `default_inputs`; the class declares it) — divides the leaf count of the 1,500-frame attention's committed
+/// logits, and the encoder of whisper-small is ADMITTED at 256 (2.44 M leaves of 4.19 M). The longest useful tile is bounded by the
+/// court's per-tile exponentials (a tile of the softmax recomputes its rows: `max_tile_transcendentals`, 1.54 M at 512 against 1.05 M),
+/// about 340: whisper-medium would still have 4.8 M leaves there, so it needs the committed values themselves reduced (a stat-only
+/// softmax, `ATTN_STAT_COMMIT_V1`, or an encoder cut across stage programs); whisper-large-v3 is refused by `max_position_macs` at every
+/// tile — a position is the whole encoder, and only a stage split brings it under 2^40.
+#[test]
+fn a_longer_tile_admits_whisper_small_and_the_larger_sizes_need_stages() {
+    let encoder_at = |name: &str, tile: u32| -> Result<(u64, u64), String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encdec").join(format!("{name}.json"));
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("config")).expect("json");
+        let s = read_encdec(&cfg, &ReadOptions::default()).expect("adapter").spec;
+        let l = s.enc_pos_rows.unwrap() as u32;
+        let ((ehl, _), _) = encdec::hl_programs(&s, l as usize, &|_| false).expect("hl programs");
+        let elw = encdec::lower_encoder(&ehl, &s, l).expect("lower encoder");
+        let e2 = encoder::encdec_frames_encoder_v2(&elw).expect("encoder v2");
+        let mut inputs = misaka_palw_tir_lower::admission::default_inputs();
+        inputs.tile_len = tile;
+        tir::admit_v2::tir_admit_program_v2(&e2, &inputs).map(|a| (a.view.position.step_leaves, a.view.position.cost.macs)).map_err(|e| e.to_string())
+    };
+    // tiny and base are admitted at the default tile and at 256.
+    for name in ["whisper-tiny", "whisper-base"] {
+        assert!(encoder_at(name, 64).is_ok() && encoder_at(name, 256).is_ok(), "{name}");
+    }
+    // small: refused at 64 and 128 by the leaf cap, admitted at 256, refused at 512 by the court's exponentials per tile.
+    assert!(encoder_at("whisper-small", 64).unwrap_err().contains("max_step_leaves 9749268"));
+    assert!(encoder_at("whisper-small", 128).unwrap_err().contains("max_step_leaves 4874640"));
+    let (leaves, _) = encoder_at("whisper-small", 256).expect("whisper-small is admitted at a tile of 256");
+    assert_eq!(leaves, 2_437_332);
+    assert!(encoder_at("whisper-small", 512).unwrap_err().contains("max_tile_transcendentals 1537024"));
+    // medium: the leaf cap at every tile the exponentials allow; large-v3: the position's MACs at every tile.
+    for tile in [64, 128, 256] {
+        assert!(encoder_at("whisper-medium", tile).unwrap_err().contains("max_step_leaves"), "medium at {tile}");
+    }
+    for tile in [64, 256, 4096] {
+        assert!(encoder_at("whisper-large-v3", tile).unwrap_err().contains("max_position_macs 1294172160000"), "large-v3 at {tile}");
+    }
+}

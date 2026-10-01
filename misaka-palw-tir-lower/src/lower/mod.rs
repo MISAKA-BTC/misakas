@@ -102,6 +102,12 @@ pub struct LowerOpts {
     /// dimension). A table taller than this is cut into chunks of this many rows; a smaller value is
     /// how the tests exercise the chunked lookup on tables of a few dozen rows.
     pub table_chunk_rows: Option<u32>,
+    /// The width of a convolution's weight codes, the registrant's choice of fidelity against size: `8` (the default, `i8` per
+    /// output row) or `16` (`i16` per output row — twice the weight bytes and no rounding to speak of through a deep network:
+    /// MobileNetV2's integer cosine to transformers goes from about 0.99 to above 0.9995). A convolution is a gather and a
+    /// matmul either way, so the choice is the weight parameter's dtype: no primitive, no court change. Honoured by the
+    /// convolutional-network lowering ([`cnn::lower_cnn_opts`]); any other value is refused by name.
+    pub conv_weight_bits: u8,
 }
 
 impl Default for LowerOpts {
@@ -112,6 +118,7 @@ impl Default for LowerOpts {
             image_rows: None,
             quant: BTreeMap::new(),
             table_chunk_rows: None,
+            conv_weight_bits: 8,
         }
     }
 }
@@ -441,6 +448,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         quant: opts.quant.clone(),
         carry_keys: BTreeMap::new(),
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
+        conv_weight_bits: 8,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -593,6 +601,8 @@ struct Cx<'h> {
     carry_keys: BTreeMap<usize, ScaleKey>,
     /// [`LowerOpts::table_chunk_rows`], resolved.
     table_chunk: i64,
+    /// [`LowerOpts::conv_weight_bits`] (8 or 16).
+    conv_weight_bits: u8,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics

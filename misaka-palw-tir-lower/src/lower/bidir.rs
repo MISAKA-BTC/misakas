@@ -307,6 +307,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        conv_weight_bits: 8,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

@@ -865,6 +865,22 @@ fn narrow_into(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, 
     b.narrow(x, &tir::library::Narrowing::new(m, s, z), lo, hi, dt)
 }
 
+/// A convolution's quantised weight rows: the codes of every output row (`i8` ones widened, or `i16`) and each row's scale. Which
+/// width a program stores is [`LowerOpts::conv_weight_bits`]; the fill makes the tensor of the dtype the program declared.
+struct WeightCodes {
+    codes: Vec<i16>,
+    scales: Vec<f64>,
+    /// The width the program declared for the weight parameter: 16 bits when set, else 8.
+    wide: bool,
+}
+
+impl WeightCodes {
+    /// The matmul operand of `shape` over `t` (the rows' codes laid out for it) in the declared width.
+    fn tensor(&self, shape: Vec<usize>, t: Vec<i16>) -> IntTensor {
+        if self.wide { IntTensor::i16(shape, t) } else { IntTensor::i8(shape, t.into_iter().map(|c| c as i8).collect()) }
+    }
+}
+
 /// A convolution: rows `x` (`i16` codes, `[P_in, C_in]`) to rows `[P_out, C_out]` narrowed as `want` says (`lo` 0 under a ReLU).
 fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
     let hl = cx.hl;
@@ -895,7 +911,11 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
     // that needs them (the same function, so the same bytes).
     let lsp = if c.layer_scale.is_some() { Some(super::bidir::hl_param(hl, &pn(&id, "ls"))?) } else { None };
     let (cc, cin, cout) = (c.clone(), c.cin, c.cout);
-    let fold = Arc::new(move |fc: &FillCtx<'_>| -> Result<(crate::quant::RowCodes, Vec<f64>)> {
+    // The registrant's width for the weight codes: i8 per output row (the default) or i16 per output row. Both are the same
+    // matmul (or product and sum) over wider or narrower integers; only the weight parameter's dtype differs.
+    let wide = cx.conv_weight_bits == 16;
+    let wdt = if wide { DType::I16 } else { DType::I8 };
+    let fold = Arc::new(move |fc: &FillCtx<'_>| -> Result<(WeightCodes, Vec<f64>)> {
         let w = fc.f(wp)?.data.clone();
         let ls = match lsp {
             Some(p) => Some(fc.f(p)?.data.clone()),
@@ -910,7 +930,14 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
             None => None,
         };
         let (fw, fb) = folded(&cc, &w, bias.as_deref(), bn.as_ref().map(|v| (&v[0][..], &v[1][..], &v[2][..], &v[3][..])), ls.as_deref());
-        Ok((crate::quant::quantize_rows(&fw, cout, taps, None), fb))
+        let codes = if wide {
+            let q = crate::quant::quantize_rows16(&fw, cout, taps);
+            WeightCodes { codes: q.codes, scales: q.scales, wide: true }
+        } else {
+            let q = crate::quant::quantize_rows(&fw, cout, taps, None);
+            WeightCodes { codes: q.codes.iter().map(|c| *c as i16).collect(), scales: q.scales, wide: false }
+        };
+        Ok((codes, fb))
     });
     let f1 = fold.clone();
     let wname = format!("{id}.w.t");
@@ -921,18 +948,18 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
             cx,
             lb,
             &wname,
-            DType::I8,
+            wdt,
             &[kk, cin],
             false,
             Arc::new(move |fc| {
                 let (rc, _) = f1(fc)?;
-                let mut t = vec![0i8; kk * cin];
+                let mut t = vec![0i16; kk * cin];
                 for ch in 0..cin {
                     for tap in 0..kk {
                         t[tap * cin + ch] = rc.codes[ch * kk + tap];
                     }
                 }
-                Ok(IntTensor::i8(vec![kk, cin], t))
+                Ok(rc.tensor(vec![kk, cin], t))
             }),
         )?;
         let prod = b.mul(cols, wd, DType::I64); // [P_out, k·k, C]
@@ -946,12 +973,12 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
             cx,
             lb,
             &wname,
-            DType::I8,
+            wdt,
             &[kk * cin_g, cout],
             false,
             Arc::new(move |fc| {
                 let (rc, _) = f1(fc)?;
-                let mut t = vec![0i8; kk * cin_g * cout];
+                let mut t = vec![0i16; kk * cin_g * cout];
                 for o in 0..cout {
                     for ci in 0..cin_g {
                         for tap in 0..kk {
@@ -959,7 +986,7 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
                         }
                     }
                 }
-                Ok(IntTensor::i8(vec![kk * cin_g, cout], t))
+                Ok(rc.tensor(vec![kk * cin_g, cout], t))
             }),
         )?;
         let flat = b.reshape_fixed(cols, &[po as u32, (kk * cin_g) as u32]);
@@ -1256,6 +1283,18 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
 /// Lower a network: `pre` (normalisation and the first group), a block per further group, `post` (the output). The program's
 /// output is the last feature map as rows (`[P, C]`) or its mean (`[1, C]`) in the class's fixed point (`2^-q`).
 pub fn lower_cnn(hl: &HlProgram, spec: &CnnSpec) -> Result<Lowered> {
+    lower_cnn_opts(hl, spec, &LowerOpts::default())
+}
+
+/// [`lower_cnn`] with the registrant's options: [`LowerOpts::conv_weight_bits`] (8, the default, or 16) is the width of the
+/// convolutions' weight codes.
+pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Result<Lowered> {
+    if !matches!(opts.conv_weight_bits, 8 | 16) {
+        return Err(LowerError::not_lowerable(format!(
+            "conv_weight_bits = {}: a convolution's weight codes are 8 bits (i8 per output row, the default) or 16 (i16 per output row)",
+            opts.conv_weight_bits
+        )));
+    }
     let p = plan(spec)?;
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let mut pb = ProgramBuilder::new(1, hb);
@@ -1278,6 +1317,7 @@ pub fn lower_cnn(hl: &HlProgram, spec: &CnnSpec) -> Result<Lowered> {
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        conv_weight_bits: opts.conv_weight_bits,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

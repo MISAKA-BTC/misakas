@@ -1054,6 +1054,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         quant: BTreeMap::new(),
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        conv_weight_bits: 8,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
