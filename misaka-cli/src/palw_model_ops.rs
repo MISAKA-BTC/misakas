@@ -233,6 +233,7 @@ pub(crate) async fn tir_registration_object(
     ctx: &Ctx,
     key: &crate::keys::KeySource,
     artifact: &Path,
+    parent: Option<&Path>,
     bond: &str,
     out: &Path,
     model_id: Option<&str>,
@@ -242,7 +243,19 @@ pub(crate) async fn tir_registration_object(
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{} has no PALW classes", params.net)));
     };
-    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    // RFC-0004 (§6.3): with --parent the artifact is a composite candidate's adapter section, opened over
+    // its parent — the class is the candidate's, its artifact root the composite root the chain binds.
+    let entry = match parent {
+        None => misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?,
+        Some(parent) => {
+            use misaka_palw_sdk::PalwModelLineageV1;
+            let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
+            lineage
+                .load(parent, misaka_palw_sdk::PalwWeightResidencyV1::PageCache)
+                .map_err(|e| CliError::new(exit::MODEL, format!("--parent {}: {e}", parent.display())))?;
+            lineage.open_composite_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?
+        }
+    };
     if model_id.is_some_and(|m| m != entry.model_id) {
         return Err(CliError::new(
             exit::MODEL,

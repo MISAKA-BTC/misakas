@@ -1133,9 +1133,15 @@ enum PalwCmd {
     TirRegistration {
         #[command(flatten)]
         key: KeyArgs,
-        /// The IR class artifact (a PALWTIR1 container with a declared layout).
+        /// The IR class artifact (a PALWTIR1 container with a declared layout) — or, with --parent, a
+        /// composite candidate's adapter section (PALWTIRS, `palw-class composite --section-out`).
         #[arg(long)]
         artifact: std::path::PathBuf,
+        /// RFC-0004 (§6.3): the parent's PALWTIR1 container, when --artifact is a candidate's adapter
+        /// section. The class registered is the candidate's — its id over the COMPOSITE artifact root
+        /// (parent class, parent root, adapter root, P) — which `CandidateSubmitted` then names.
+        #[arg(long)]
+        parent: Option<std::path::PathBuf>,
         /// The registrant bond, `<txid>:<index>` (its key is the one --key-file names).
         #[arg(long)]
         bond: String,
@@ -2706,8 +2712,8 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
-        Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id }) => {
-            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id }) => {
+            palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, parent.as_deref(), &bond, &out, model_id.as_deref()).await
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
