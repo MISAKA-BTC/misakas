@@ -108,7 +108,9 @@ share is 8 GiB, and the *live* axis is zero.
    capital/carriage level — none of which sees verification throughput.
 2. **Verification supply fell ~3× at DAA ~3,000** for two reasons that are both node-side:
    (a) b6's ledger read a cgroup full of freed memory as full (`MADV_FREE`); (b) the 5.104 seats, which
-   gate 65 % of panels, replay 100× slower on a thrashing host and hold their two slots with it.
+   gate 65 % of panels, replay 10–100× slower on a thrashing host, and each 8k replay there (37–55 minutes)
+   reserves 3.37 of the seat's 3.5 GiB share, so for its whole run nothing else on that seat can start — at ~2 8k
+   claims an hour, five seats each, that is the 05:00 collapse (§2.2).
 3. **Waste where it hurts.** Every seat of a panel replayed every claim, oldest receipt deadline first. The
    fast seats put 2 receipts in the pool within seconds; the slow seats — whose slots are the scarcest
    resource on the network — then replayed claims that were already one receipt short of a licence from
