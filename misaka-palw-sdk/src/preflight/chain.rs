@@ -625,7 +625,6 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
             rules.as_ref().and_then(|r| r.court).and_then(|k| {
                 bundle
                     .court
-                    .clone()
                     .with_dissection_arity(k.dissection_arity)
                     .ok()
                     .map(|played| (played, k.window_court_daa, rules.as_ref().is_some_and(|r| r.held.armed)))
