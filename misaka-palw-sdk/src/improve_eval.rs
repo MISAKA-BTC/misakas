@@ -809,6 +809,8 @@ impl PalwEvalCaptureV1 {
             leaf_values: parts.values,
             leaf_hashes: parts.hashes,
             claim: parts.claim,
+            // An evaluation's execution has no tensor output (RFC-0003's tensor claims carry one).
+            output: None,
         };
         Ok((execution, parts.binding))
     }
