@@ -16787,3 +16787,37 @@ mod msk26a_slash_genuineness {
         assert!(g.is_ok());
     }
 }
+
+/// **RFC-0004 A6: the processor's gates for the evaluation court (spec 17 §17.8.6)** — pinned on the source for the
+/// reason the other gates are (P-B3's): deleting a gate leaves every behavioural test that drives only the core's own
+/// checks green. Below `palw_improvement_v1` an evaluation proof or a dissection move of an evaluation claim is dropped
+/// by name by the acceptance walk, first and charged nothing, refused at the close gate, at the one-move accusation's
+/// gate and at the root claim's; above it the root claim is admitted by the k-ary court's fence, the responder's
+/// signature, the ruleset's arity and the finalize at the court's limits.
+#[test]
+fn the_processor_gates_the_evaluation_courts_objects_below_palw_improvement_v1() {
+    let source = include_str!("processor.rs");
+    assert!(
+        source.contains("palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score)"),
+        "the acceptance walk drops an evaluation court object by name below the fence"
+    );
+    // The CourtClosed proof filter, the close gate and the one-move accusation's gate.
+    let gates = source.matches("proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score)").count();
+    assert_eq!(gates, 3, "the close filter, the close gate and the accusation's gate");
+    // The evaluation root claim: the fence, the k-ary court, the responder's signature, the arity and the finalize.
+    let start = source.find("Obj::CourtEvalRootClaimed {").expect("the evaluation root claim's arm");
+    let rest = &source[start..];
+    let end = rest.find("Obj::CourtTirDissected {").expect("the arm ends where F7's round begins");
+    let arm = &rest[..end];
+    for needle in [
+        "self.palw_improvement_at(point.daa_score)",
+        "palw_tir_dissection_move_is_admissible_v1(",
+        "check_court_eval_root_claim_acceptance_v1(",
+        "check_court_eval_root_claim_admits_v1(",
+        "derived.dissection_arity()",
+    ] {
+        assert!(arm.contains(needle), "the evaluation root claim's arm asks {needle}");
+    }
+    // The object has a name in the processor's own listing.
+    assert!(source.contains("O::CourtEvalRootClaimed { .. } => \"CourtEvalRootClaimed\""));
+}
