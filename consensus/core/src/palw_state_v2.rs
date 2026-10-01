@@ -1569,12 +1569,13 @@ pub struct PalwStateParamsV2 {
     /// network's open epochs by them). `None` exactly where `improve_from_daa` is.
     #[borsh(skip)]
     improve_ceilings: Option<crate::palw_improve_v1::PalwImprovementCeilingsV1>,
-    /// **RFC-0004 A6: the claim lifecycle bound a policy's windows are held to** (spec 17 §17.4.3 rows 19–20),
-    /// mirrored with the fence's height by `Params::sync_palw_improvement_v1` from this ruleset's own windows
-    /// (`palw_improvement_claim_lifecycle_v1`). `None` exactly where `improve_from_daa` is — and in a fixture
-    /// that does not set it, where the check is not asked.
+    /// **RFC-0004 A6: the DAA-independent part of the claim lifecycle bound a policy's windows are held to** (spec 17
+    /// §17.4.3 rows 19–20) — the anchor slot plus the licence allowance — mirrored with the fence's height by
+    /// `Params::sync_palw_improvement_v1` from this ruleset's own windows (`palw_improvement_claim_lifecycle_base_v1`);
+    /// [`Self::improve_lifecycle_at`] adds the challenge window in force. `None` exactly where `improve_from_daa` is — and
+    /// in a fixture that does not set it, where the check is not asked.
     #[borsh(skip)]
-    improve_lifecycle_daa: Option<u64>,
+    improve_lifecycle_base_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1786,7 +1787,7 @@ impl PalwStateParamsV2 {
             tir_fence2_from_daa: None,
             improve_from_daa: None,
             improve_ceilings: None,
-            improve_lifecycle_daa: None,
+            improve_lifecycle_base_daa: None,
         })
     }
 
@@ -2018,16 +2019,25 @@ impl PalwStateParamsV2 {
         self.improve_ceilings
     }
 
-    /// RFC-0004 A6: the claim lifecycle bound's mirror, written with the fence's height by
+    /// RFC-0004 A6: the claim lifecycle bound's DAA-independent mirror, written with the fence's height by
     /// `Params::sync_palw_improvement_v1`.
-    pub fn with_improve_lifecycle(mut self, lifecycle_daa: Option<u64>) -> Self {
-        self.improve_lifecycle_daa = lifecycle_daa;
+    pub fn with_improve_lifecycle_base(mut self, base_daa: Option<u64>) -> Self {
+        self.improve_lifecycle_base_daa = base_daa;
         self
     }
 
-    /// The claim lifecycle bound an epoch's windows are held to, if the network arms the fence (the mirror).
-    pub fn improve_lifecycle_daa(&self) -> Option<u64> {
-        self.improve_lifecycle_daa
+    /// The mirror as it is: the anchor slot and the licence allowance, if the network arms the fence.
+    pub fn improve_lifecycle_base_daa(&self) -> Option<u64> {
+        self.improve_lifecycle_base_daa
+    }
+
+    /// **`Λ` at `daa`** (spec 17 §17.4.3 rows 19–20): the mirror plus the challenge window in force for a claim licensed at
+    /// `daa` ([`Self::window_challenge_at`]), never less than the challenge floor — what an epoch's windows are held to when a
+    /// policy is applied at `daa`. A fence that only shortens the window (ADR-0132 §7.6) can only shorten `Λ`, so a policy that
+    /// held it when applied holds it ever after. `None` where the fence is not armed (or a fixture sets no mirror).
+    pub fn improve_lifecycle_at(&self, daa: u64) -> Option<u64> {
+        self.improve_lifecycle_base_daa
+            .map(|base| crate::palw_improve_v1::palw_improvement_claim_lifecycle_v1(base, self.window_challenge_at(daa)))
     }
 
     /// `Params::palw_improvement_v1`'s height, if the network arms it (the mirror).

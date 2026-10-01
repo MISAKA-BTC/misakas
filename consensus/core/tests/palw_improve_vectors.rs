@@ -82,10 +82,10 @@ fn judged(p: &mut PalwImprovementPolicyV1) {
     p.eval.judge = Some(judge_spec(0x71));
 }
 
-/// The example's windows lengthened to hold a 4,820-DAA claim lifecycle.
-fn long_windows(p: &mut PalwImprovementPolicyV1) {
-    p.windows.court_margin = 4_820;
-    p.windows.grid = 6_000;
+/// The example's windows lengthened to hold testnet-12's fast honest claim path Λ = 170 DAA (anchor 20 + licence
+/// allowance 30 + the 120-DAA short challenge window; spec 17 §17.4.3, corrected 2026-10-01).
+fn fast_windows(p: &mut PalwImprovementPolicyV1) {
+    p.windows.court_margin = 170;
 }
 
 fn policy() -> Value {
@@ -166,42 +166,41 @@ fn policy() -> Value {
                 p.eval.judge.as_mut().unwrap().template_dataset = Hash64::default();
             }),
         ),
-        ("court_margin 150 under a 4,820-DAA claim lifecycle", Some(4_820), Box::new(|_| {})),
-        ("court_margin 4,820 under a 4,820-DAA claim lifecycle", Some(4_820), Box::new(long_windows)),
+        ("court_margin 150 under a 170-DAA claim path", Some(170), Box::new(|_| {})),
+        ("court_margin 170 under a 170-DAA claim path", Some(170), Box::new(fast_windows)),
         (
-            "court_margin 4,819 under a 4,820-DAA claim lifecycle",
-            Some(4_820),
+            "court_margin 169 under a 170-DAA claim path",
+            Some(170),
             Box::new(|p| {
-                long_windows(p);
-                p.windows.court_margin = 4_819;
+                fast_windows(p);
+                p.windows.court_margin = 169;
             }),
         ),
         (
-            "a judged policy with w_eval 300 under a 4,820-DAA claim lifecycle",
-            Some(4_820),
+            "a judged policy with w_eval 200 under a 170-DAA claim path",
+            Some(170),
             Box::new(|p| {
-                long_windows(p);
+                fast_windows(p);
                 judged(p);
+                p.windows.w_eval = 200;
             }),
         ),
         (
-            "a judged policy with w_eval = beacon_delay + 4,820 + 32",
-            Some(4_820),
+            "a judged policy with w_eval = beacon_delay + 170 + 32",
+            Some(170),
             Box::new(|p| {
-                long_windows(p);
+                fast_windows(p);
                 judged(p);
-                p.windows.w_eval = p.windows.beacon_delay + 4_820 + 32;
-                p.windows.grid = 12_000;
+                p.windows.w_eval = p.windows.beacon_delay + 170 + 32;
             }),
         ),
         (
-            "a judged policy with w_eval = beacon_delay + 4,820 + 33",
-            Some(4_820),
+            "a judged policy with w_eval = beacon_delay + 170 + 33",
+            Some(170),
             Box::new(|p| {
-                long_windows(p);
+                fast_windows(p);
                 judged(p);
-                p.windows.w_eval = p.windows.beacon_delay + 4_820 + 33;
-                p.windows.grid = 12_000;
+                p.windows.w_eval = p.windows.beacon_delay + 170 + 33;
             }),
         ),
     ];

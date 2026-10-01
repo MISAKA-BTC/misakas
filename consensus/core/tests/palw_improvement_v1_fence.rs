@@ -158,6 +158,42 @@ fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity()
     assert!(!bundle.state.improve_active_at(AT - 1) && bundle.state.improve_active_at(AT));
 }
 
+/// **`Λ` is the fast honest path** (spec 17 §17.4.3 rows 19-20, corrected 2026-10-01): the anchor slot, a licence allowance of
+/// 30 DAA (capped by the receipt window) and the challenge window in force — never the receipt window (a deadline) nor the court
+/// window. On testnet-12 and its drills (the RC windows: anchor 20, receipt 600, challenge 1,200, the 120-DAA short challenge
+/// window in force from genesis) it is 170 DAA, not the 1,820 the deadlines made it; where the short window is not in force the
+/// 1,200-DAA window is, and a window that arms later shortens it from then on and never before. The challenge floor holds a
+/// shorter window (devnet's 100) to 120.
+#[test]
+fn the_claim_lifecycle_bound_is_the_fast_honest_path_and_not_the_deadlines() {
+    use kaspa_consensus_core::palw_improve_v1::{
+        PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1, palw_improvement_claim_lifecycle_base_v1, palw_improvement_claim_lifecycle_v1,
+    };
+    let armed = t12_armed(ForkActivation::new(AT));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
+    let state = &bundle.state;
+    assert_eq!((bundle.panel.anchor_delay(), state.window_receipt(), state.window_challenge()), (20, 600, 1_200), "the RC windows");
+    assert_eq!(PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1, 30);
+    assert_eq!(palw_improvement_claim_lifecycle_base_v1(bundle), 20 + 30, "the anchor slot and the licence allowance");
+    assert_eq!(state.improve_lifecycle_base_daa(), Some(50), "the mirror");
+    assert_eq!(state.window_challenge_at(0), 120, "testnet-12 runs the short challenge window from genesis");
+    assert_eq!(state.improve_lifecycle_at(AT), Some(170), "Λ = 20 + 30 + 120 on testnet-12 and its drills");
+    // Where the short window is not in force the 1,200-DAA window is.
+    let long = state.clone().with_short_challenge_window_from_daa(None);
+    assert_eq!(long.improve_lifecycle_at(AT), Some(20 + 30 + 1_200));
+    // The window in force at the DAA: a fence that arms later shortens Λ then and never before.
+    let later = state.clone().with_short_challenge_window_from_daa(Some(500));
+    assert_eq!((later.improve_lifecycle_at(499), later.improve_lifecycle_at(500)), (Some(1_250), Some(170)));
+    // The challenge floor: devnet's 100-DAA window counts as 120 (anchor 4, receipt 40 gives the allowance 30).
+    assert_eq!(palw_improvement_claim_lifecycle_v1(4 + 30, 100), 154);
+    // Not armed, not asked.
+    let dormant = t12_with_gen();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(dormant) = &dormant.palw_consensus_mode else {
+        panic!("V2")
+    };
+    assert_eq!(dormant.state.improve_lifecycle_at(AT), None);
+}
+
 #[test]
 fn never_is_absence_for_the_identity_and_genesis_is_a_rule() {
     let base = t12_with_gen();

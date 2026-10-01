@@ -158,7 +158,7 @@ one.
 | Value bytes | `scoring_set_id` (64) ‖ `sign_table_id` (64) ‖ LE u16 `court_version` ‖ u8 `max_candidates_per_epoch` ‖ LE u32 `max_items_per_epoch` ‖ LE u64 `max_eval_positions_per_epoch` ‖ LE u16 `max_eval_budget_permille` ‖ LE u32 `max_governed_lines` ‖ LE u32 `max_policy_bytes` ‖ LE u32 `max_open_epochs` ‖ LE u32 `max_live_results` ‖ LE u16 `max_eval_seat_permille` (appended last, 2026-09-30) |
 | Normaliser | `Some(never())` collapses to `None`; `for_each_fence` visits the activation only |
 | Fork id | listed in `palw_fences_v1` as `("palw_improvement_v1", activation)` |
-| Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_daa` (borsh-skipped; the last is the ruleset's claim lifecycle bound, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
+| Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_base_daa` (borsh-skipped; the last is the DAA-independent part of the ruleset's claim path `Λ`, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
 | Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`) |
 | Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**, **seat share ≤ 1,000 ‰** (zero allowed: no seat share); the others none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14, 500) |
 | Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); **and `palw_fp_decode_rules` in force at or below the activation** **[decision A6-1, the coordinator's, 2026-09-30]** — an evaluation claim is an FP Job V4's bytes under the decode rules (§17.8.4), so a ruleset that armed improvement without them would open epochs whose claims the header-context door refuses, and every such epoch would end `NoChange`. `validate_palw_v2` refuses such a ruleset, as it refuses `palw_fp_job_v5` without them; the integration adds the check and a decode-rules entry (`--palw-drill-decode-rules-at`) to the flag-day and drill lists. |
@@ -379,23 +379,44 @@ A policy is refused by name unless every check below holds. `C` is the fence's `
 | 16 | `teacher_classes ≠ 0` and within the six defined bits; `\|licence_classes\| ≤ 32`, without duplicates; `base_licence_class ≠ 0` |
 | 17 | `1 ≤ vest_epochs ≤ 64`; `rollback_epochs ≤ 16`; `ban_epochs ≤ 256` |
 | 18 | `seat_pool_permille ≤ C.max_eval_seat_permille` (§17.11.2) |
-| 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's unchallenged claim lifecycle (below) [decision, 2026-09-30, refined the same day]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
-| 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the unchallenged lifecycle |
+| 19 | **`court_margin ≥ Λ`**, where `Λ` is the ruleset's fast honest claim path (below) [decision, 2026-09-30, corrected 2026-10-01]: a claim accepted in the epoch's last DAA before `t_eval` and left unchallenged could not otherwise reach `Final` before `t_score` |
+| 20 | **a judged policy** (a Judge or Pairwise stage): `w_eval > beacon_delay + Λ + 32` — a judge reads FINAL generations, so the epoch evaluates in two rounds (generations, then judged parts), each needing the fast honest path |
 
-`Λ = anchor_delay + window_receipt + max(window_challenge, the short challenge window where scheduled)` — the
-**unchallenged finalization path** under the ruleset's own windows: the anchor slot that binds the claim's panel,
-the receipt window in which the panel licenses it, and the challenge window it finalizes after. **The court
-window is not in it** [coordinator's refinement, 2026-09-30]: bounding the epoch by a dispute's whole course (≈ 4.8k
-DAA with the 3,000-DAA court window) would make epochs days long and refuse every practical policy, and a
-claim that is not `Final` at the decision point is simply *missing* — the missing-evaluation rule (§17.9.1)
-gives its item to the incumbent. A court that convicts such a claim later still slashes it (the claim rules,
-independently of the epoch's decision); a conviction before the decision also voids the claim, which frees its
-job and keeps its score out of the sign test (§17.8.6). `Λ` is computed from the ruleset
-(`palw_improvement_claim_lifecycle_v1`) and mirrored in the state parameters (`improve_lifecycle_daa`). Rows 19
-and 20 are asked at policy registration where the mirror is set (every ruleset that arms the fence); a policy
-they refuse is unworkable on this ruleset and is refused by name. *The "submission" window the coordinator's
-decision lists is read as the window evaluation claims are submitted in, `w_eval − beacon_delay` — the one
-window of the epoch in which a claim is submitted; `w_submit` holds no claim and is not held to `Λ`.*
+```
+Λ = anchor_delay + A + max(C, 120)         A = min(window_receipt, 30)          C = the challenge window in force
+```
+
+`Λ` is the **fast honest path** of an evaluation claim from its acceptance to `Final` [the coordinator's correction,
+2026-10-01]: the anchor slot that binds the claim's panel (`anchor_delay`), a **licence allowance** `A`, and the challenge
+window it finalizes after (`window_challenge_at(licence DAA)`: the 120-DAA short window where it is in force, the long window
+before it; never less than 120). **Neither deadline is in it**: `window_receipt` is the time a panel has before an unlicensed
+claim is voided, not the time an honest claim needs, and the court window belongs to a dispute (≈ 4.8k DAA with the 3,000-DAA
+court window would make epochs days long and refuse every practical policy). On testnet-12 and its drills (anchor 20,
+receipt 600, challenge 1,200 with the short window in force from genesis) `Λ = 20 + 30 + 120 = 170` DAA, not the 1,820 the
+deadlines made it; with the long window in force `Λ = 1,250`; on the devnet windows (anchor 4, receipt 40, challenge 100)
+`Λ = 4 + 30 + 120 = 154`.
+
+*The licence allowance* is one fixed ruleset constant, `PALW_IMPROVE_LICENCE_ALLOWANCE_DAA_V1 = 30` DAA, not a policy field.
+It is the time the drawn seats need to replay a job of at most 4,096 positions and for the quorum's receipts to ride a
+block — an hour at the 120-second cadence: minutes of replay and a few blocks of assembly, above the derived verification
+floor of the registry's smallest classes (10 DAA) and a twentieth of the receipt window; a ruleset whose receipt window is
+shorter gives the window (nothing is licensed later). A constant keeps the policy format unchanged and the check a pure
+function of the ruleset; a field would let an owner shorten `Λ` below any honest claim's reach, and nothing in a policy can
+make a seat faster. A class whose registry deadline `D(c)` (ADR-0152 §4-quater) is longer than the allowance finalizes later
+than `Λ`: its late claims are missing evaluations and its line's owner sets a longer `court_margin` — **the check holds only
+the minimum**.
+
+**A short `Λ` costs only late claims, never safety.** A claim that is not `Final` at the decision point is a *missing*
+evaluation — the missing-evaluation rule (§17.9.1) gives its item to the incumbent — and a court that convicts such a claim later
+still slashes it (the claim rules, independently of the epoch's decision); a conviction before the decision also voids the
+claim, which frees its job and keeps its score out of the sign test (§17.8.6). `Λ` is asked **at the DAA the policy is
+applied** (`PalwStateParamsV2::improve_lifecycle_at`: the mirror `improve_lifecycle_base_daa` = `anchor_delay + A`, written by
+`Params::sync_palw_improvement_v1`, plus the challenge window in force): a fence that only shortens the window can only shorten
+`Λ`, so a policy that held it when applied holds it ever after. Rows 19 and 20 are asked at policy registration where the
+mirror is set (every ruleset that arms the fence); a policy they refuse is unworkable on this ruleset and is refused by name.
+*The "submission" window the coordinator's decision lists is read as the window evaluation claims are submitted in,
+`w_eval − beacon_delay` — the one window of the epoch in which a claim is submitted; `w_submit` holds no claim and is not held
+to `Λ`.*
 
 ### 17.4.4 Opting out [E6]
 
@@ -871,8 +892,10 @@ evaluate and can never make a promotion. The pieces of the lane are consistent w
 - *courts*: a court that convicts a claim slashes it by the claim rules (`claim.reserved`, §17.8.4 above, the
   swing lock) independently of the epoch's decision, whenever it rules; before the decision it also voids the claim,
   which frees the job while the epoch still takes claims and keeps the score out of the sign test (§17.8.6).
-The policy's windows hold the *unchallenged* path (§17.4.3 rows 19–20): an honest claim accepted before `t_eval`
-finalizes by `t_score`; a challenged one may not, and is then a missing evaluation by the rule above.
+The policy's windows hold the *fast honest* path `Λ` (§17.4.3 rows 19–20: the anchor slot, a 30-DAA licence allowance and the
+challenge window in force — 170 DAA on testnet-12): an honest claim that is licensed within the allowance and unchallenged,
+accepted before `t_eval`, finalizes by `t_score`; a slower or challenged one may not, and is then a missing evaluation by
+the rule above. A short `Λ` costs only late claims, never safety.
 
 ### 17.8.5 Judged scores (A6) [decision, 2026-09-30]
 
@@ -1432,7 +1455,7 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
 - **PALW-MIP-22 (abort).** A rollback while an epoch is open MUST abort it and refund every candidate in
   full (§17.10.3).
 - **PALW-MIP-23 (the policy check).** A policy MUST satisfy every check of §17.4.3. `w_eval` MUST exceed
-  `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's claim lifecycle `Λ` (rows 19–20).
+  `beacon_delay` by more than 32 DAA, and the windows MUST hold the ruleset's fast honest claim path `Λ` (rows 19–20).
 - **PALW-MIP-24 (order).** Transitions due in one block MUST be applied before that block's objects,
   lines in `(next_due_daa, line_id)` order, and each line's transitions in §17.5.3's order.
 - **PALW-MIP-25 (the evaluation court).** An evaluation claim MUST be convictable by the court the claim rules
