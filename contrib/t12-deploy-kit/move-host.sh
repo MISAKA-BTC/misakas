@@ -7,7 +7,8 @@
 #   ./move-host.sh preflight add <id>      read-only, on the TARGET: release staged, artifacts, ports, memory, disk, key
 #   ./move-host.sh retire <id>             SOURCE: stop the seat, make its unit UNSTARTABLE, disable it (CONFIRM_MOVE_SEAT=yes)
 #   ./move-host.sh add <id>                TARGET: stage + install the unit, start on the copied appdir, gate it
-#                                          (CONFIRM_SOURCE_STOPPED=yes; MOVE_READY_WANT=<n> from retire's output)
+#                                          (CONFIRM_SOURCE_STOPPED=yes; MOVE_READY_WANT=<n> from retire's output;
+#                                          MOVE_FRESH=1: only palw-panel/ was copied, the node syncs from its peers)
 #   ./move-host.sh unadd <id>              TARGET rollback: stop, remove the unit, move the appdir aside
 #   ./move-host.sh unretire <id>           SOURCE rollback: remove the marker, start the old unit (CONFIRM_TARGET_STOPPED=yes)
 #   ./move-host.sh check <id>              read-only: the node's own check
@@ -149,7 +150,12 @@ add_checks() { # <id> <hard: 1 = die on what add needs, 0 = warn (the key is cop
     if [ -f "$ART_8K" ] && [ "$(stat -c %s "$ART_8K")" = "$ART_8K_BYTES" ]; then say "  8k artifact present"; else flag "8k artifact $ART_8K missing or the wrong size (distribute-from-mac.sh artifact)"; fi
     if [ -n "${ART_PH:-}" ]; then [ -f "$ART_PH" ] && [ "$(stat -c %s "$ART_PH")" = "$ART_PH_BYTES" ] && say "  IR artifact present" || flag "IR artifact $ART_PH missing or the wrong size (distribute-from-mac.sh artifact-ph)"; fi
     if [ -f "$N_KEY" ]; then say "  key present: $(ls -l "$N_KEY" | awk '{print $1, $5"B", $9}')"; else flag "bond key $N_KEY is not here yet (move-seat.sh copies it after the data, over a pipe)"; fi
-    if [ -d "$N_APPDIR/misaka-testnet-12/datadir" ]; then say "  appdir present: $(du -sh "$N_APPDIR" | cut -f1) $N_APPDIR"
+    if [ "${MOVE_FRESH:-0}" = 1 ]; then
+        # fresh: only palw-panel/ (the rolling fee outpoint) was copied; the node syncs the chain from its peers
+        if [ -d "$N_APPDIR/misaka-testnet-12/palw-panel" ] && [ ! -e "$N_APPDIR/misaka-testnet-12/datadir" ]; then say "  fresh appdir: palw-panel/ present, no datadir (the node syncs from its peers)"
+        elif [ -e "$N_APPDIR/misaka-testnet-12/datadir" ]; then flag "MOVE_FRESH=1 but $N_APPDIR already holds a datadir — a fresh join starts without one"
+        else flag "fresh appdir $N_APPDIR/misaka-testnet-12/palw-panel is not here yet (move-seat.sh copies it)"; fi
+    elif [ -d "$N_APPDIR/misaka-testnet-12/datadir" ]; then say "  appdir present: $(du -sh "$N_APPDIR" | cut -f1) $N_APPDIR"
     elif [ -e "$N_APPDIR" ]; then flag "$N_APPDIR exists but holds no misaka-testnet-12/datadir — not a copy of the seat's appdir"
     else flag "appdir $N_APPDIR is not here yet (move-seat.sh copies it from the old host)"; fi
     [ ! -e "$N_APPDIR/misaka-testnet-12/palw-drill-genesis" ] || flag "$N_APPDIR carries a DRILL marker"

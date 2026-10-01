@@ -117,6 +117,28 @@ share is 8 GiB, and the *live* axis is zero.
    somebody else's work or already licensed. By panel composition about 60 % of the slow seats' replays were
    not needed for a quorum (a panel of 1 fast + 1 b6 + 3 slow needs 1 slow receipt, not 3).
 
+### 3.1 Who pays when a claim times out — has any honest bond been slashed?
+
+From `sweep_deadlines` / `void_and_slash_at` (consensus/core `palw_state_v2.rs`):
+
+* **First `ReceiptTimeout`** (`bound + window_receipt`, 600 DAA): the claim is **redrawn** — back to `Provisional`, a new
+  panel anchored on the sweep, the first panel's seats released. No charge to anyone.
+* **Second timeout** (a redrawn claim again not concluded within its window, ≥ 2 × (20 + 600) = 1,240 DAA after acceptance):
+  `void_and_slash(ReceiptTimeout)` slashes **the producer's bond** by the claim's reservation + escrow term (past the 2026-09-23
+  audit fence). **Seats are never charged for silence**: `slash_silent_seats` has an empty body ("the chain cannot observe
+  silence"); a seat that signed nothing locked nothing and left duty at the redraw. The source comment says it plainly: the
+  whole cost of two panels failing to conclude falls on the producer, whoever caused the silence.
+* `BindTimeout` and `NoCapablePanel` voids are never charged.
+
+On the live chain (b6's RPC, DAA 3,109, 18 bonds): **every bond's `bondSlashed` is 0 except two with 1 MSK** (`5e0d…:1` and
+`8ad9…` = P; P's 1 MSK was taken at DAA ~508, `transitions.tsv`; b1's journal since 09-29 02:00 shows no slash line).
+The floor class ledger reads voided 171 and **redrawn 0 (ever)**, all `BindTimeout` (the 12 in the tracker's window voided
+at DAA 629–749); the 8k class voided 4 (`BindTimeout`) and redrawn 6 cumulative (none open now; the open ones are 171 DAA into
+a 600-DAA window, so none belongs to this backlog). So **no honest bond has been slashed, no seat can be, and no open claim has
+reached its first timeout.** The oldest `panel_bound` claims have their first-timeout deadline at **DAA 3,518** (≈ 17 h from
+DAA 3,109; one is the 8k claim `c98d33d5…`, waiting for its third receipt): that is a redraw, not a slash. A producer can be
+slashed only after a second timeout, DAA 4,138 at the earliest (≈ 42 h out). F1/F2/F3 land inside that.
+
 Not the cause: memory growth with the backlog (hypothesis tested, refuted — §2.1); the audit door (only 17
 licensed claims are past their 121-DAA window); carriage (licence queue 429, 3 licences/carrier, 143 blocks
 to drain at ~6 blocks/DAA).
@@ -185,7 +207,7 @@ registered-bond share). On the live chain (estimates from the tracker's per-seat
 
 * `L_seat` = floor J-6 room (`⌊Σ_seats ⌊room_s / eligibility⌋ / 5⌋`, Σ room-panels = 497+514+584+578+583+580+507+578+82
   = 4,503 → **~900**) + floor claims bound and unlicensed (262) + the 8k class share (tens) ≈ **1,200**;
-* `L_carry` = 21 × 64 (F-B batch) × max(1, ā_op) = **≥ 1,344**; `L_anchor` = 100 × max(1, ā_op) × 20 = **≥ 2,000**;
+* `L_carry` = 21 × 64 (F-B batch) × max(1, ā_op) = **≥ 1,344** (3,494 at the live ā_op ≈ 2.6, `palw_network_room_v1` test); `L_anchor` = 100 × max(1, ā_op) × 20 = **≥ 2,000** (5,200 at 2.6);
 * `U` (Provisional + PanelBound, network-wide) = 429–439 (`licenceQueue 429`): **free ≈ 770, 36 % of the level**.
   No `NetworkRoomExhausted` in b1's last 12 h of journal; the 8k class's F-R room (`66,668,494,675,968 of replay
   in flight against a budget of 60,480,000,000,000 over 3 spans`) refused 3 merged attempts in 24 h.
@@ -198,16 +220,35 @@ window), but 1,200 / 1.7 = **706 DAA at the collapsed supply — past the window
 and a second timeout voids them and slashes their honest producers. F-N is safe only while `μ ≥ L_net /
 (window − anchor delay − margin) ≈ 2.4 claims/DAA`; the measured collapsed supply was 1.2–2.5.
 
-**int-11 proposal (a), dormant until its flag day — a verification term in the level**:
-`L_net = min(L_seat, L_carry, L_anchor, L_ver)` with
-`L_ver = max(L_min, ⌈μ_obs × W_safe⌉)`, `W_safe = (window_receipt − anchor_delay) / 2 = 290 DAA`,
-`μ_obs` = licences landed per DAA over a rooted 128-DAA ring (the same shape as `operator_ring`), counted
-only on DAA where `U ≥ L_min` (a quiet network measures its demand, not its capacity), and
-`L_min = 128` so the room cannot strangle to zero (an empty ring reads `L_ver = ∞` until the first window
-fills). Properties to test: work-conserving and split-neutral exactly as lane N (L_ver is a level), `U` settles
-at `μ × 290` so a claim's wait stays at 290 DAA < window at any μ, recovery is automatic (μ rises → the level
-rises), and no consensus rule calls the shadow (S-I1). Seat-side capacity declarations stay as the upper bound.
-Lane A owns the arithmetic; the measured numbers for it are in this note.
+**int-11 proposal (a) — STATIC, dormant until its flag day (user's staged rule: any consensus feedback loop is stage 6).**
+A fourth term in the level, a constant sized from the measured supply:
+
+    L_net = min(L_seat, L_carry, L_anchor, L_ver)
+    L_ver = ⌊μ_floor × W_safe⌋ = ⌊1.5 licences/DAA × 290 DAA⌋ = 435      W_safe = (window_receipt − anchor_delay) / 2 = (600 − 20) / 2
+
+* **Derivation.** Measured licences/DAA (claim table, 50-DAA buckets): healthy 5.5–5.8 (DAA 2,850–3,000); collapsed
+  1.86 over DAA 3,000–3,100 (126 and 60 per 50 DAA: 2.5 and 1.2). `μ_floor` = 1.5: under the sustained collapsed rate,
+  over the worst window by the margin `W_safe` gives. `W_safe` is half the receipt window: the other half is the redraw's
+  margin against variance and bursts.
+* **At the healthy rate it never binds**: `U` settles at `λ × (bind + wait)` ≈ 5.3 × 24 = 127 (simulated, `λ` = 5.3,
+  μ = 5.7: peak queue 106, identical to the live level).
+* **At the collapsed rate it is what protects honest producers.** The live level (`L_seat` ≈ 1,200) lets the queue climb
+  until a claim waits `1,200 / 1.86` = 645 DAA — past the 620-DAA window (20 bind + 600 receipt): the tail redraws and the
+  second timeout voids it and slashes the producer (§3.1). Pinned at 435 the wait is `435 / μ` + the bind: 234 + 20 DAA at 1.86,
+  363 at the worst window's 1.2, inside the window for every μ ≥ 0.75 (the simulation test checks 0.8 and 0.6 on either side).
+* **What it does to honest producers**: a refused attempt (`NetworkRoomExhausted`) is skipped, never charged, and registers
+  the bond's demand for the work-conserving share — admissions equal licensings, split by stake. At the collapsed 1.86/DAA
+  against 5.3/DAA issuance about two thirds of the attempts are refused (their draws wasted, nothing slashed); at the healthy
+  rate none. Today's `U` of 439 is above 435: the room would be closed until it drains.
+* **Code**: `rcore/int-11-lver` (off da6ac8bee, NOT on the int-10.1 branch): `palw_network_verify_level_v1`,
+  `palw_network_level_with_verify_v1` and the fluid-queue simulation tests in `palw_network_room_v1.rs`; nothing calls them.
+  Lane A integrates: a dormant fence entry, `network_level_v1` calling the `_with_verify_` form with `window_receipt` and
+  `capacity_network_anchor_delay()`.
+* **The adaptive form is the stage-6 design**, kept here and not built: `L_ver = max(L_min = 128, ⌈μ_obs × W_safe⌉)`,
+  `μ_obs` = licences landed per DAA over a rooted 128-DAA ring (the shape of `operator_ring`), counted only on DAA where
+  `U ≥ L_min` (a quiet network measures its demand, not its capacity). It follows a recovery up and a collapse down; the price is
+  a consensus loop that moves with what it measures.
+
 **(b)** is F3 above, node-side, shipped now.
 
 ## 6. Verification on the fleet (after int-10.1 is rolled out)
@@ -237,21 +278,78 @@ the producer's `verification` line present. F1 is Linux-only (cgroup + `smaps_ro
 canary above, and the allocator comparison (`MIMALLOC_PURGE_DECOMMITS=1` vs default on b6's twin) is a 6 h
 run on a Linux host.
 
-## 7. Recommendation: the 5.104 host
+## 7. The 5.104 host: move two seats (approved) — the exact procedure
 
-Measured: 8 cores, 24 GiB; each seat is ~3 GiB live (2.7–3.2 GiB `Private_Dirty`) + 1.7 GB of artifact shared
-across the host + a 3.4 GiB peak while an 8k replay runs; a busy seat averages ~0.6–0.75 core. Five seats
-need ~28 GiB at the peak and every core: the host swaps all night.
+**Why.** Measured: 8 cores, 24 GiB; each seat is ~3 GiB live (2.7–3.2 GiB `Private_Dirty`) + 1.7 GB of artifact
+shared across the host + a 3.4 GiB peak while an 8k replay runs; a busy seat averages ~0.6–0.75 core. Five seats need ~28 GiB
+at the peak and every core: the host swaps all night. The rule: **seats per host ≤ ⌊(RAM − 4 GiB) / (3.2 + 3.4 GiB)⌋ = 3** on
+a 24 GiB host (live set + one heavy replay each), and ≤ 1 per 2 cores. Target: 3 seats on 5.104, 3 on ibm, 2 on .113.
 
-* **Move two seats off 5.104** — one to .113 (b6's host: load 1.6 on 8 cores, 83 % idle, no swap, 18.7 GB
-  `MemAvailable` once F1 stops it hoarding) and one to ibm (load 2–3 on 8 cores, 79 % idle, 19 GB available) — leaving
-  3 seats on 5.104, 3 on ibm, 2 on .113. The rule: **seats per host ≤ ⌊(RAM − 4 GiB) / (3.2 + 3.4 GiB)⌋ = 3** on a
-  24 GiB host (live set + one heavy replay each), and ≤ 1 per 2 cores.
-* Until they move: `--palw-seat-replay-slots=1` on the five (halves the replay threads on the host; at load/CPU > 3 the
-  node does it by itself with int-10.1), `MemoryHigh=5G` per seat unit (reclaim before the global pressure, not
-  `MemorySwapMax=0`: with five seats the 8k replays would then OOM). Do not lower `--palw-host-memory-share`
-  below 3.5 GiB — an 8k full seat needs 3.37.
-* After the move each remaining 5.104 seat has ~2.5 cores and ~7 GiB: replays should return to the 3–8 s range.
+**Which.** **b7 → .113** (b6's host: load 1.6 on 8 cores, 83 % idle, no swap) and **b3 → ibm** (load 2–3, 79 % idle, 19 GB
+available). b7 is the seat the kit made as its own unit (mode `new`, nothing of the route-matrix session's under it); b3 is the
+heaviest seat on 5.104 (RES 6.4 GB). b2, b4, b5 stay (b2's borsh port 26313 is what `misaka-dnsseeder-t12` there asks).
+
+**Interim, until they move (goes into the int-10.1 node update, not tonight's flag-day rollout):** `--palw-seat-replay-slots=1`
+on the five (half the replay threads; with int-10.1 the node also does it by itself at load/CPU > 3.0). **Not** `MemoryHigh=5G`
+(which I proposed earlier): five seats × any cap that fits the host (24 GiB / 5 = 4.8 GiB) is below an 8k replay's 6.6 GiB peak
+(3.2 live + 3.4), so it would throttle the replay it is meant to protect; per-seat cgroups cannot fix a host that is over-committed
+in aggregate. Do not lower `--palw-host-memory-share` under 3.5 GiB (an 8k full seat needs 3.37).
+
+**Kit support (this branch, `contrib/t12-deploy-kit/`; none of the live kit's files change).** `move-seat.sh` (Mac),
+`move-host.sh` (host) and `move-nodes.sh` (the table: `MOVES`, each seat's target spec, the hosts' reserves). They source the live kit's
+`lib.sh` (RID, Phase H) and `fleet.env` on the hosts. Copy the three files next to the live kit on the Mac (`cp move-*.sh
+~/Downloads/MISAKA-wt-b/deploy-int10/`) and `./move-seat.sh plan` prints everything below; `DRY_RUN=1 MOVE_YES=1 ./move-seat.sh run 7` prints
+every command without running one (tested against a scratch copy of deploy-int10).
+
+**Preconditions (all read-only; `preflight` repeats them):**
+1. int-10.1 (or the release the fleet runs) is rolled out and **staged on the target hosts** (`$REL/bin/kaspad` with the release sha) —
+   a moved seat runs the fleet's release; the 8k artifact (1.8 GB) and the IR artifact (1.87 GB) are present on .113 and ibm (checked
+   2026-10-01) — `distribute-from-mac.sh artifact | artifact-ph` otherwise.
+2. The three public nodes (b6 .113:26311, b0 ibm:26311, b1 ibm:26321) take a connection; the 8k class shows **more** ready seats than it
+   requires (`ready=8/7`): a seat is away for the whole move and the class keeps a margin of one (`retire` refuses otherwise;
+   `MOVE_READY_OK=1` overrides).
+3. Memory: .113 = running shares 8,192 + b7 3,584 + reserve 4,096 = 15,872 of 24,031 MiB; ibm = 10,496 + 8,192 + b3 3,584 + reserve **1,536** =
+   23,808 of 24,031 (the kit's 2,048 would be 24,320: the non-kaspad RSS there is 0.3 GiB measured, so `move-nodes.sh` sets 1,536). Disk ≥ 12 GB
+   free (.113 53 GB, ibm 97 GB). Ports (all 127.0.0.1): b7 on .113 26351 / 26353 / 26354; b3 on ibm 26331 / 26333 / 26334 — free on both
+   (`ss -ltn`, 2026-10-01).
+4. The seats hold no round-signature record (`ls /root/.t12r-b{3,7}/misaka-testnet-12/palw-panel/` shows `palw-fee-outpoint` only, 2 KB, checked) — so
+   copying only `palw-panel/` loses nothing a signature depends on. If a record ever appears there, use `MOVE_MODE=copy`.
+5. Keys: `/etc/misaka/t12/t12-bond-{3,7}.key` (64 B, mode 0600) on 5.104. The node reads only the bond key (no flag names the `t12-operator-N.key`).
+
+**Data mode, by the link** (measured 2026-10-01, 150 MB probes): 5.104 → Mac 13 MB/s, Mac → ibm 4.7 MB/s, Mac → .113 **0.64 MB/s** (60 MB in 94 s).
+A seat's appdir is 4.5–4.9 GB (datadir 1.9, retention 2.5–2.9, panel state 2 KB, logs 80 MB): to ibm ≈ 6 min + 17 min + a 5 min checksum pass;
+to .113 ≈ 2 h. So **b3 → ibm is a copy** (the seat resumes where it stopped, retention kept) and **b7 → .113 is fresh** (only `palw-panel/` is
+copied; the node syncs the chain from its peers — the path every public joiner takes — and its old retention copies are not carried: a seat re-verifies a
+foreign claim by replaying it, and DA answers for claims it covered come from the other covering signers). `MOVE_MODE=copy|fresh` overrides.
+
+**Order: one seat at a time, b7 first.** Per seat, `./move-seat.sh run <id>` (it asks before every state-changing step; `MOVE_YES=1` does not):
+
+| # | step | what runs | gate |
+| --- | --- | --- | --- |
+| 1 | push | `move-host.sh` + `move-nodes.sh` → both hosts' `/root/t12-rel/kit` | the live `lib.sh`, `fleet.env`, `t12check.py` are there |
+| 2 | preflight | `move-host.sh preflight retire <id>` (source), `preflight add <id>` (target; the key and the appdir are expected missing: warnings) | release staged, artifacts, ports, memory, disk, public nodes up, 8k margin |
+| 3 | **retire** (source) | `CONFIRM_MOVE_SEAT=yes move-host.sh retire <id>`: SIGINT stop (≤ 180 s), marker `/root/t12-rel/state/moved-b<id>`, drop-in `zzz-moved-b<id>.conf` (`ConditionPathExists=!marker`), `systemctl disable`; prints `MOVE_READY_WANT=<n>` | no process on the host holds the bond; unit inactive. The unit **cannot be started** (by hand, by a reboot, by `upgrade`) while the marker exists |
+| 4 | verify | unit inactive, `pgrep` for the bond empty | — |
+| 5 | data | copy: rsync source → Mac → target (excluding `logs/`), then `rsync -rnc` must list nothing; fresh: `palw-panel/` only | checksum pass identical |
+| 6 | key | a pipe `ssh src cat key \| ssh dst 'umask 077; cat > key.incoming'` (never on the Mac's disk); sha256 on both ends compared (the digest only); `chmod 600; mv` | digests equal, else the incoming copy is removed and nothing starts |
+| 7 | **add** (target) | `CONFIRM_SOURCE_STOPPED=yes move-host.sh add <id>`: `write_launch` + `write_unit` for this node only (`--check`), install `misaka-t12-seat<id>.service`, enable, start | fingerprint = EXPECT_FP, genesis + the kit's chain facts, duties ON (`panelRunning`), **synced + ≥ 1 peer** (≤ 900 s copy / 3,600 s fresh), **the 8k class's ready seats back to `MOVE_READY_WANT`** (≤ 3,600 s: the seat's readiness proof is carried again) |
+| 8 | check | `move-host.sh check <id>` on the target: `t12check.py` (`verification`: `seat_receipts_1h` rising, `cgroup_credited_mib` ≥ share + 1 GiB, `load_limited=false`) | receipts flowing |
+
+Seat offline per move: b7 ≈ 30–60 min (IBD), b3 ≈ 35 min. **Do not start the second seat until the first has `ready` back at its pre-move
+count and has filed receipts for an hour.**
+
+**After a successful move (by hand, in the kit):** move the seat's spec out of `install-5104.sh` `NODES` into `install-113.sh` / `install-ibm.sh`
+(the printed spec), drop the moved seat's `127.0.0.1:…` peer entry from the remaining 5.104 specs' peer lists (the next `upgrade` of those seats then
+needs `UPGRADE_ARGS_CHANGE_OK=1` for that one-line ARGS diff), re-push the kit. Leave `/root/.t12r-b<id>` on 5.104 for a day, then `mv` it aside (never `rm`).
+
+**Rollback (any step ≥ 3):** `./move-seat.sh rollback <id>` = `move-host.sh unadd <id>` on the target (stop, disable, unit removed, appdir moved aside — never deleted)
+then `CONFIRM_TARGET_STOPPED=yes move-host.sh unretire <id>` on the source (marker and drop-in removed, unit re-enabled if it was, started on its **untouched**
+appdir, fingerprint-gated). The rule the whole thing is built on: **one bond is never in two processes** — `retire` refuses to finish while any process holds the
+bond, `add` needs the operator's word that the source is stopped, `unretire` needs the target stopped. If the target started signing and then rolls back, the old
+appdir is only behind by the time it was away: the seat re-syncs like any restarted node.
+
+**What to watch after both moves (the verification plan, §6, plus):** 5.104 `load` per CPU ≤ 1.5 and no swap-in (`vmstat 1` si = 0); replays of the three remaining seats back in the
+3–8 s range; the five moved/remaining seats' `seat_receipts_1h` ≥ 40; `panel_bound` draining.
 
 ## 8. Commands used (all read-only)
 
