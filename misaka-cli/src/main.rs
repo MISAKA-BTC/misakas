@@ -33,6 +33,7 @@ mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod model_preflight;
 mod pack_gate;
 mod palw_activation_pool;
 mod palw_capacity_shadow;
@@ -602,9 +603,15 @@ enum ModelCmd {
         #[command(flatten)]
         profile: ProfileArgs,
     },
-    /// Would the live chain's processor admit this artifact (same reason codes).
+    /// Can this be registered, and what is missing? A model (a Hugging Face directory, a config.json, a .gguf): judged
+    /// from its HEADERS before any weights are downloaded — convert, register and mine, each ok/blocked/unknown with a
+    /// code, the numbers and what exists instead (RFC-0002 Part II §II.2; needs no node). An artifact: would the live
+    /// chain's processor admit it (same reason codes).
     Preflight {
+        /// A model, or a registration artifact.
         artifact: std::path::PathBuf,
+        #[command(flatten)]
+        model: model_preflight::ModelPreflightArgs,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -2594,10 +2601,17 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => palw_model_ops::inspect(&ctx, p, artifact).await,
             Err(e) => Err(e),
         },
-        Command::Model(ModelCmd::Preflight { artifact, profile: args }) => match profile(&args) {
-            Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
-            Err(e) => Err(e),
-        },
+        Command::Model(ModelCmd::Preflight { artifact, model, profile: args }) => {
+            if model_preflight::is_model(&artifact) {
+                // A model is judged from its headers, locally: no node, no profile.
+                model_preflight::model_preflight(&ctx, &artifact, &model)
+            } else {
+                match profile(&args) {
+                    Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
+                    Err(e) => Err(e),
+                }
+            }
+        }
         Command::Model(ModelCmd::Registration { id, profile: args }) => match profile(&args) {
             Ok(p) => palw_model_ops::registration(&ctx, p, id).await,
             Err(e) => Err(e),
