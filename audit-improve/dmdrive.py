@@ -880,13 +880,14 @@ class Drive:
         if self.s.done(k) or e1["state"] != "Submission" or not self.s.done("W1:e1:candidates"):
             return
         before = e1["counts"]["candidates"]
+        expected = len(PLAN["lines"]["W1"]["epochs"]["1"]["candidates"])  # what the plan enters: the copy must add nothing
         out = f"{OBJ}/attack-copy.obj"
         rc, text = improve_object("candidate", 3, {"line": lid, "epoch": 1, "declarations": {}}, out, extra=class_container("win"))
         if rc != 0:
             self.s.mark(k, result="INCOMPLETE", why=f"cannot build: {text.strip()[-200:]}")
             return
         ok, text = submit([out])
-        self.s.mark(k, submitted_daa=self.daa, candidates_before=before, ok=ok)
+        self.s.mark(k, submitted_daa=self.daa, candidates_before=before, expected=expected, ok=ok)
         log(f"D-M6 copy: a copy of `win` by seat 3 submitted at DAA {self.daa}")
 
     def attack_late(self, lid, e1):
@@ -899,7 +900,8 @@ class Drive:
             self.s.mark(k, result="INCOMPLETE", why=f"cannot build: {text.strip()[-200:]}")
             return
         ok, text = submit([out])
-        self.s.mark(k, submitted_daa=self.daa, candidates_before=e1["counts"]["candidates"], ok=ok)
+        self.s.mark(k, submitted_daa=self.daa, candidates_before=e1["counts"]["candidates"],
+                    expected=len(PLAN["lines"]["W1"]["epochs"]["1"]["candidates"]), ok=ok)
         log(f"D-M6 late: a candidate after t_close submitted at DAA {self.daa}")
 
     def attack_early_keys(self, lid, e1):
@@ -1111,8 +1113,8 @@ def verdict_dm6(sd, st, lines):
     else:
         row = line_status(st, lines.get("W1", "")) if st else None
         e1 = epoch_row(row, 1) if row else None
-        n = e1["counts"]["candidates"] if e1 else None
-        res.append((None if n is None else n == cp["candidates_before"], f"copy refused: candidates {cp.get('candidates_before')} → {n}"))
+        n = e1["counts"]["candidates"] if e1 and e1["state"] not in ("Open", "Submission") else None  # the set freezes at t_close
+        res.append((None if n is None else n == cp["expected"], f"copy refused: the frozen set holds {n} candidate(s), the plan entered {cp.get('expected')}"))
     lt = sd["done"].get("attack:late")
     if lt is None:
         res.append((None, "late candidate not run"))
@@ -1121,8 +1123,8 @@ def verdict_dm6(sd, st, lines):
     else:
         row = line_status(st, lines.get("W1", "")) if st else None
         e1 = epoch_row(row, 1) if row else None
-        n = e1["counts"]["candidates"] if e1 else None
-        res.append((None if n is None else n == lt["candidates_before"], f"late candidate refused: {lt.get('candidates_before')} → {n}"))
+        n = e1["counts"]["candidates"] if e1 and e1["state"] not in ("Open", "Submission") else None
+        res.append((None if n is None else n == lt["expected"], f"late candidate refused: the frozen set holds {n} candidate(s), the plan entered {lt.get('expected')}"))
     sp = sd["done"].get("attack:holdout-spam")
     if sp is None:
         res.append((None, "hold-out spam not run"))
@@ -1201,12 +1203,176 @@ def selftest():
     print("selftest ok")
 
 
+def selftest_drive():
+    """The whole actor against a SCRIPTED chain (no binary, no node): every step must fire at the state it is written for,
+    with the arguments the tools take, and the verdict files must come out as the drill's own expectations say."""
+    import tempfile
+
+    g = globals()
+    tmp = tempfile.mkdtemp(prefix="dm-drive-")
+    for k, v in (("WORK", tmp), ("KR", f"{tmp}/keyring"), ("UHOME", f"{tmp}/home"), ("MODEL", f"{tmp}/model"), ("VERDICTS", f"{tmp}/verdict"),
+                 ("OBJ", f"{tmp}/objects"), ("EVID", f"{tmp}/evidence"), ("SNAP", f"{tmp}/snapshots")):
+        g[k] = v
+    for d in (KR, MODEL, f"{MODEL}/ids", UHOME):
+        os.makedirs(d, exist_ok=True)
+    json.dump({"seats": [{"bond_outpoint": f"{i:0128x}:{i}", "fee_float_outpoint": f"{i:0128x}:9"} for i in range(8)]}, open(f"{KR}/manifest.json", "w"))
+    h = lambda c: c * 128  # noqa: E731
+    ids = {"head": h("a"), "win": h("b"), "lose": h("c"), "winc": h("d")}
+    for k, v in ids.items():
+        open(f"{MODEL}/ids/{k}.class", "w").write(v)
+        open(f"{MODEL}/ids/{k}.root", "w").write(h("e"))
+    mk = lambda n: {"prompts": [[1, 3 + i, 4 + i, 5 + i] for i in range(n)], "keys": [[3 + i % 8, 4 + i % 8, 5] for i in range(n)]}  # noqa: E731
+    for name in ("a", "b", "reg"):
+        json.dump(mk(16), open(f"{MODEL}/pool-{name}.json", "w"))
+    open(f"{MODEL}/winc.palwtirs", "w").write("x")
+    g["NODES"] = {n: {"k": k, "seat": s, "role": r, "hb": False, "ir": True} for n, k, s, r in
+                  (("new0", 0, 3, "floor"), ("new3", 3, 2, "seat"), ("new4", 4, 4, "head"), ("old", 7, None, "old"))}
+    open(f"{WORK}/old-lacks.txt", "w").write("tir2@24 gen@28 decode@32 improve@40")
+    os.makedirs(f"{WORK}/new0", exist_ok=True)
+    os.makedirs(f"{WORK}/old", exist_ok=True)
+
+    clock = {"daa": 0}
+    submitted, built, sh = [], [], []
+    lid = {"W1": ids["head"], "W2": h("2"), "L": h("3")}
+    g["salt"] = lambda: "00" * 32
+    g["chain_daa"] = lambda: clock["daa"]
+    g["node_alive"] = lambda n: True
+    g["daa_of"] = lambda n: clock["daa"]
+    g["call"] = lambda port, method, params=None: {"sink": "abcdef0123456789", "virtualDaaScore": clock["daa"]}
+    g["log_after"] = lambda self, node, cursor, pattern: ("matched: " + pattern[:20]) if (node != "old" or "palw-lifecycle" in pattern) else None
+    g["time"] = type("T", (), {"sleep": staticmethod(lambda x: None), "strftime": staticmethod(time.strftime), "time": staticmethod(time.time)})
+    Drive.log_after = lambda self, node, cursor, pattern: ("matched: " + pattern[:24])
+
+    def fake_rpc(method, params=None, prefer=()):
+        if method == "getPalwModelRegistry":
+            return {"classes": [{"classId": v, "state": "Probation { probes_passed: 0 }", "readySeats": 7} for v in ids.values() if v != ids["winc"]]}
+        if method == "getPalwClaims":
+            return {"claims": [{"classId": ids["head"], "phase": "Final"}] if clock["daa"] >= 255 else []}
+        return {}
+    g["rpc"] = fake_rpc
+
+    def fake_submit(objects, node=None, tries=6):
+        submitted.append((clock["daa"], [os.path.basename(o) for o in objects]))
+        return True, ""
+    g["submit"] = fake_submit
+
+    def fake_improve(kind, seat, spec, out, extra=()):
+        built.append((clock["daa"], kind, seat, os.path.basename(out)))
+        open(out, "w").write("x")
+        if kind == "setter-set":
+            open(out + ".prompts", "w").write("x")
+            open(out + ".keys", "w").write("x")
+        text = {"policy": "policy check      ok under the drill's ceilings\n", "dataset": f"dataset id        {h('9')}\n",
+                "candidate": "candidate class   " + ids["win"] + "\n"}.get(kind, "")
+        return 0, text
+    g["improve_object"] = fake_improve
+
+    def fake_run(cmd, timeout=900, home=None):
+        sh.append((clock["daa"], " ".join(cmd[-8:])))
+        if "line-found" in cmd:
+            name = cmd[cmd.index("--name") + 1]
+            return 0, f"found line '{name}'\n  line id        {lid[name]}\n"
+        return 0, "wrote the object\n"
+    g["run"] = fake_run
+
+    W = WIN
+    t_open = W["grid"]
+    t_fix = t_open + W["w_collect"]
+    t_close = t_fix + W["w_submit"]
+    t_draw = t_close + W["w_holdout"]
+    t_eval = t_draw + W["w_eval"]
+    d = Drive()
+
+    def epoch_state(daa, t0):
+        o = t0
+        marks = [(o + W["w_collect"] + W["w_submit"] + W["w_holdout"] + W["w_eval"] + 165, "Decided"), (t_eval - t_open + o, "Closing"),
+                 (t_draw - t_open + o + W["beacon_delay"], "Evaluating"), (t_draw - t_open + o, "Drawing"), (t_close - t_open + o, "HoldOut"),
+                 (t_fix - t_open + o, "Submission"), (o, "Open")]
+        for at, name in marks:
+            if daa >= at:
+                return name
+        return None
+
+    def fake_status():
+        daa = clock["daa"]
+        done = d.s.d["done"]
+        if daa < IMPROVE_AT:
+            return None
+        lines = []
+        evals = []
+        for name, plan in PLAN["lines"].items():
+            if "policies" not in done:
+                continue
+            epochs = []
+            heads = [{"seq": 0, "epoch": 0, "class": ids["head"], "cause": "OptIn"}]
+            for e_no, t0 in ((1, t_open), (2, {"W1": 3 * t_open, "L": 2 * t_open}.get(name, 3 * t_open))):
+                if str(e_no) not in plan["epochs"] and name != "W2":
+                    continue
+                st = epoch_state(daa, t0)
+                if st is None:
+                    continue
+                key = f"{name}:e{e_no}"
+                ncand = len(plan["epochs"].get(str(e_no), {}).get("candidates", [])) if f"{key}:candidates" in done and done[f"{key}:candidates"].get("n") else 0
+                row = {"epoch": e_no, "state": st, "times": {"t_open": t0, "t_fix": t0 + 5, "t_close": t0 + 35, "t_draw": t0 + 45, "t_eval": t0 + 119, "t_score": t0 + 319},
+                       "dataset_root": h("7") if st != "Open" else None, "outcome": None, "grants": [],
+                       "counts": {"candidates": ncand, "holdout_cases": 32 if (name == "L" and e_no == 2 and "attack:holdout-spam" in done) else 0},
+                       "previous_counts": None,
+                       "candidates": [{"class": ids["win"] if c["class"] == "win" else ids[c["class"]], "counts": None} for c in plan["epochs"].get(str(e_no), {}).get("candidates", [])] if ncand else []}
+                if st == "Decided":
+                    if name in ("W1", "W2") and e_no == 1:
+                        row["outcome"] = "Promoted { class_id: " + ids["win"] + ", wins: 8, losses: 0 }"
+                        row["candidates"][0]["counts"] = {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}
+                        row["grants"] = [{"vest_from_daa": t0 + 300, "vested": 5 if daa > t0 + 300 + 315 else 0}]
+                        heads.append({"seq": 1, "epoch": 1, "class": ids["win"], "cause": "Promoted"})
+                        if name == "W2" and "rollback-owner" in done:
+                            heads.append({"seq": 2, "epoch": 1, "class": ids["head"], "cause": "RolledBackByOwner"})
+                        if name == "W1" and "rollback-proof" in done:
+                            heads.append({"seq": 2, "epoch": 1, "class": ids["head"], "cause": "RolledBackByProof"})
+                    else:
+                        row["outcome"] = "NoChange { reason: NoneEligible }"
+                        for c in row["candidates"]:
+                            c["counts"] = {"primary": {"wins": 0, "losses": 4, "ties": 4}, "eligible": False}
+                        if name == "W1" and e_no == 2:
+                            row["previous_counts"] = {"primary": {"wins": 8, "losses": 0, "ties": 0}, "eligible": True}
+                epochs.append(row)
+                if st in ("Evaluating", "Closing"):
+                    n_jobs = 16
+                    final = daa >= t0 + 200
+                    evals.append({"line_id": lid[name], "epoch": e_no, "items": [{"item": i} for i in range(8)],
+                                  "jobs": [{"item": i, "subject": "Parent", "claim": {"final_daa": daa if final else None, "voided": False}} for i in range(n_jobs)]})
+            lines.append({"line_id": lid[name], "head": heads[-1]["class"], "next_due_daa": 0, "open_epoch": None, "epochs": epochs, "heads": heads,
+                          "barred": [{"bond": "x:0", "until": 99}] if any(h_["cause"] == "RolledBackByOwner" for h_ in heads) else [],
+                          "pool": {"deposited": "0", "fees_in": "10", "phi_in": "0", "held_in": "5", "balance": "3", "held": "2", "unvested": "5",
+                                   "paid": "3", "refunded": "2", "forfeited_in": "10000000"}})
+        return {"daa": daa, "lines": lines, "evaluation": evals}, "fake"
+
+    g["read_status"] = fake_status
+    for daa in range(0, 1500, 5):
+        clock["daa"] = daa
+        d.tick()
+    verdicts = {n: read(f"{VERDICTS}/{n}.verdict", "none") for n in ("dm5", "dm1", "dm2", "dm3", "dm4", "dm6")}
+    for n, v in verdicts.items():
+        print(f"{n}: {v[:170]}")
+    kinds = [b[1] for b in built]
+    need = ["policy", "dataset", "hard-case", "setter-set", "candidate", "rollback"]
+    missing = [k for k in need if k not in kinds]
+    assert not missing, f"never built: {missing}"
+    print(f"built {len(built)} objects ({sorted(set(kinds))}), submitted {len(submitted)} carrier calls, {len(sh)} shell calls")
+    assert verdicts["dm5"].startswith("PASS"), verdicts["dm5"]
+    assert verdicts["dm1"].startswith("PASS"), verdicts["dm1"]
+    assert verdicts["dm2"].startswith("PASS"), verdicts["dm2"]
+    print("selftest-drive ok")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run", "once", "verdicts", "selftest"])
+    ap.add_argument("cmd", choices=["run", "once", "verdicts", "selftest", "selftest-drive"])
     a = ap.parse_args()
     if a.cmd == "selftest":
         selftest()
+        return 0
+    if a.cmd == "selftest-drive":
+        selftest_drive()
         return 0
     d = Drive()
     if a.cmd == "verdicts":

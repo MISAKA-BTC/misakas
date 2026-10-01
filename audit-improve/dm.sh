@@ -15,7 +15,7 @@
 #
 #   bash audit-improve/dm.sh <command> --bin-dir <release dir>       (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the release before the fence>  [WORK_DIR=~/.misaka-palw-improve-drill]
-#   commands: dry | plan | model | keys | up | status | verdicts | once | down
+#   commands: dry | plan | model | keys | up | status | verdicts | once | selftest | down
 #
 #   dry       preflight (binaries, flags, tools, model files, ports, memory, disk, another drill) and the plan with every node's
 #             argv (salt redacted, a throwaway keyring) — and every object the drill builds, built offline with a throwaway key
@@ -153,6 +153,11 @@ preflight() {
         for s in "improve eval" "improve <policy" "composite" "declare-layout"; do grep -q "palw-class $s" <<<"$U" && ok "palw-class $s" || bad "palw-class lacks $s"; done
         grep -q -- "--parent <the parent's declared" <<<"$U" && ok "palw-class declare-layout --parent (a composite's class, RFC-0004 §6.3)" || bad "palw-class declare-layout has no --parent"
     fi
+    if WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest >/dev/null 2>&1 \
+       && WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest-drive >/dev/null 2>&1; then
+        ok "the driver's self-tests pass (the verdict logic; the whole actor against a scripted chain: every step fires in its state)"
+    else bad "the driver's self-tests fail: python3 audit-improve/dmdrive.py selftest-drive"; fi
+    rm -rf "${TMPDIR:-/tmp}/dm-selftest-$$"
     [ -x "$VENV_PY" ] && "$VENV_PY" -c "import torch, transformers" 2>/dev/null && ok "torch + transformers in $VENV_PY" || note "no torch in $VENV_PY: \`dm.sh model\` cannot run (the model files may already exist)"
     [ -s "$FIXTURE/model.safetensors" ] && ok "the head's fixture: $FIXTURE" || bad "the HF fixture is missing: $FIXTURE (FIXTURE)"
     local m missing=""
@@ -436,6 +441,7 @@ case $cmd in
     status) status ;;
     verdicts) verdicts ;;
     once) export_env; export SALT; SALT=$(salt); ( cd "$A"; python3 dmdrive.py once ) ;;
+    selftest) python3 "$A/dmdrive.py" selftest && python3 "$A/dmdrive.py" selftest-drive | tail -8 ;;
     down) down ;;
     *) sed -n '2,42p' "$0"; exit 2 ;;
 esac
