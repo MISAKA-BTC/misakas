@@ -1,26 +1,30 @@
-//! **testnet-12's DAA-3,600 flag day: `palw_tir_fence2` and `palw_model_court_window`, one release** (the user's
-//! decision of 2026-10-01; `rcore/int-10`).
+//! **testnet-12's DAA-3,600 flag day: `palw_tir_fence2` ALONE** (the user's decision of 2026-10-01, one release;
+//! the coordinator's of the same day, the court window stays dormant on testnet-12; `rcore/int-10`).
 //!
-//! * **the list** — [`PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1`] is the two fences in one list at DAA 3,600, a
-//!   height no other fence of testnet-12 uses (750, 1,000, 1,300, 1,700 and 2,000 are the earlier flag days');
+//! * **the list** — [`PALW_T12_TIR_FENCE2_FENCES_V1`] is `palw_tir_fence2`, armed at DAA 3,600
+//!   ([`PALW_T12_TIR_FENCE2_DAA`]), a height no other fence of testnet-12 uses (750, 1,000, 1,300, 1,700 and
+//!   2,000 are the earlier flag days'); `palw_model_court_window` is armed nowhere
+//!   ([`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`);
 //! * **the baseline** — [`palw_t12_release_v4_params`] (the shipped ruleset with that list dormant) IS int-8's
 //!   ruleset, `4ca695b98`, the fleet's: its params id is the fingerprint the fleet prints today
-//!   (`3db42ea6…`), pinned here by value, so the fork-id comparison and every "only these two fences moved it"
-//!   twin keep a baseline that cannot drift with this release's re-pin;
-//! * **the release** — testnet-12 as shipped IS that baseline with the list armed at 3,600: the params and
-//!   schedule ids move, the identity does not, and no other fence moves;
+//!   (`3db42ea6…`), pinned here by value, so the fork-id comparison and the "only this fence moved it" twin
+//!   keep a baseline that cannot drift with this release's re-pin;
+//! * **the release** — testnet-12 as shipped IS that baseline with fence2 armed at 3,600: the params and
+//!   schedule ids move, the identity does not, and no other fence moves (the court window stays `None`);
 //! * **the fork id** — an int-8 node is kept below 3,600 in both directions and refused from 3,600;
-//! * **the prerequisites** — `palw_tir_v1` at or below the first fence, `palw_kary_court` at or below the
-//!   second, each refused by name otherwise;
-//! * **what a model gets** — the court window a registered class derives from its own shape, at testnet-12's
-//!   court: finite, never below the network window, monotone in the history, bounded by the court's own
-//!   structure (the numbers are printed, for the review).
+//! * **the prerequisites** — `palw_tir_v1` at or below `palw_tir_fence2`; and, for a ruleset that arms the dormant
+//!   window, `palw_kary_court` at or below it, each refused by name otherwise;
+//! * **what a model would get from the dormant window** — the court window a registered class derives from its own
+//!   shape, at testnet-12's court: finite, never below the network window, monotone in the history, bounded by the
+//!   court's own structure (the numbers are printed, for the review). That testnet-12 charges the held clock, so
+//!   the window is the network window for every admissible class, is proven in
+//!   `palw_t12_court_window_changes_no_admission`.
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_flag_day_3600`
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_IR2_COURT_FLAG_DAY_DAA, PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
+    ForkActivation, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1,
     PALW_T12_TIR_FLAG_DAY_DAA, Params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
@@ -47,27 +51,28 @@ fn fence_at(p: &Params, name: &str) -> Option<u64> {
 
 /// `p` with the flag day's list at `at` (`None`: dormant), through each entry's own `set`.
 fn with_list(mut p: Params, at: Option<u64>) -> Params {
-    for f in PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1 {
+    for f in PALW_T12_TIR_FENCE2_FENCES_V1 {
         (f.set)(&mut p, at.map(ForkActivation::new));
     }
     p
 }
 
 #[test]
-fn the_flag_day_is_two_fences_in_one_list_at_3600_a_height_no_other_fence_uses() {
-    assert_eq!(PALW_T12_IR2_COURT_FLAG_DAY_DAA, Some(FLAG_DAY), "the flag day's height (the user's decision of 2026-10-01)");
-    let names: Vec<&str> = PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1.iter().map(|f| f.name).collect();
-    assert_eq!(names, ["palw_tir_fence2", "palw_model_court_window"], "both fences, one list");
-    // The two singleton lists the drill's separate flags move are the same entries.
-    assert_eq!(PALW_T12_TIR_FENCE2_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), ["palw_tir_fence2"]);
+fn the_flag_day_is_fence2_alone_at_3600_a_height_no_other_fence_uses() {
+    assert_eq!(PALW_T12_TIR_FENCE2_DAA, Some(FLAG_DAY), "the flag day's height (the user's decision of 2026-10-01)");
+    let names: Vec<&str> = PALW_T12_TIR_FENCE2_FENCES_V1.iter().map(|f| f.name).collect();
+    assert_eq!(names, ["palw_tir_fence2"], "the DAA-3,600 list is fence2 ALONE (the coordinator's decision of 2026-10-01)");
+    // The court window has a list of its own, and no height: armed nowhere.
     assert_eq!(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), ["palw_model_court_window"]);
+    assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the model court window is dormant on testnet-12");
     // On no earlier list.
     for f in PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
         assert!(f.name != "palw_tir_fence2" && f.name != "palw_model_court_window", "{} is on an earlier list", f.name);
     }
     let shipped = palw_t12_shipped_params();
+    assert_eq!(fence_at(&shipped, "palw_model_court_window"), None, "armed nowhere on the shipped ruleset");
     for (name, fence) in shipped.palw_fences_v1() {
-        if name != "palw_tir_fence2" && name != "palw_model_court_window" {
+        if name != "palw_tir_fence2" {
             assert_ne!(fence.map(|f| f.daa_score()), Some(FLAG_DAY), "{name}: 3,600 is this flag day's alone");
         }
     }
@@ -100,37 +105,41 @@ fn testnet12_ships_the_flag_day_armed_at_3600_over_the_int8_release() {
     let baseline = palw_t12_release_v4_params();
     let shipped = palw_t12_shipped_params();
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(ids(&shipped), ids(&with_list(baseline.clone(), Some(FLAG_DAY))), "testnet-12 as shipped arms the list at 3,600 over int-8");
+    assert_eq!(
+        ids(&shipped),
+        ids(&with_list(baseline.clone(), Some(FLAG_DAY))),
+        "testnet-12 as shipped arms fence2 at 3,600 over int-8"
+    );
     assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
-    assert_ne!(sp, bp, "the ruleset names the two fences");
+    assert_ne!(sp, bp, "the ruleset names the fence");
     assert_ne!(ss, bs, "the schedule names 3,600");
     assert_eq!(si, bi, "the identity does not move: a future height is not an identity");
-    // No other fence moved.
+    // No other fence moved — the court window least of all.
     for ((name, now), (was_name, was)) in shipped.palw_fences_v1().into_iter().zip(baseline.palw_fences_v1()) {
         assert_eq!(name, was_name);
-        if name == "palw_tir_fence2" || name == "palw_model_court_window" {
+        if name == "palw_tir_fence2" {
             assert_eq!(now.map(|f| f.daa_score()), Some(FLAG_DAY), "{name}");
             assert_eq!(was, None, "{name} is dormant on the int-8 baseline");
         } else {
             assert_eq!(now, was, "{name}: moved by the DAA-3,600 flag day");
         }
     }
-    // Each rule is live from 3,600 and not below it; fence2's bundle mirror follows.
+    // The rule is live from 3,600 and not below it; fence2's bundle mirror follows; the court window is live nowhere.
     assert!(!shipped.palw_tir_fence2_active_at(FLAG_DAY - 1) && shipped.palw_tir_fence2_active_at(FLAG_DAY));
-    assert!(!shipped.palw_model_court_window_active_at(FLAG_DAY - 1) && shipped.palw_model_court_window_active_at(FLAG_DAY));
+    assert!(!shipped.palw_model_court_window_active_at(0) && !shipped.palw_model_court_window_active_at(u64::MAX - 1));
     let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
     assert_eq!(bundle.state.tir_fence2_from_daa(), Some(FLAG_DAY), "fence2's fold mirror");
     // `set(None)` gives int-8 back, to the id; `set(Some(never()))` keeps the identity and is dormant.
     assert_eq!(ids(&with_list(shipped.clone(), None)), ids(&baseline), "set(None): the int-8 ruleset");
     let mut never = shipped.clone();
-    for f in PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1 {
+    for f in PALW_T12_TIR_FENCE2_FENCES_V1 {
         (f.set)(&mut never, Some(ForkActivation::never()));
     }
     never.validate_palw_v2().expect("never() is dormant");
     assert_eq!(ids(&never).1, bi, "never(): the identity");
-    assert!(!never.palw_model_court_window_active_at(u64::MAX - 1) && !never.palw_tir_fence2_active_at(u64::MAX - 1));
+    assert!(!never.palw_tir_fence2_active_at(u64::MAX - 1));
 }
 
 #[test]
@@ -170,7 +179,8 @@ fn the_flag_day_holds_its_prerequisites_by_name() {
     let mut no_ir = shipped.clone();
     no_ir.palw_tir_v1 = None;
     refused_by(&no_ir, "palw_tir", "fence2 with no IR fence at all");
-    // `palw_model_court_window` needs `palw_kary_court` at or below it (`always()` on testnet-12).
+    // The dormant window's prerequisite, held for a ruleset that arms it: `palw_model_court_window` needs
+    // `palw_kary_court` at or below it (`always()` on testnet-12).
     assert_eq!(shipped.palw_kary_court, Some(ForkActivation::always()), "testnet-12's k-ary court is in force from genesis");
     for kary in [Some(ForkActivation::new(FLAG_DAY + 1)), Some(ForkActivation::never()), None] {
         let mut p = shipped.clone();
@@ -179,6 +189,10 @@ fn the_flag_day_holds_its_prerequisites_by_name() {
         // first on a ruleset this broken: all that is asserted here is that it does not validate.
         assert!(p.validate_palw_v2().is_err(), "{kary:?}: a ruleset with no k-ary court at the flag day does not validate");
     }
+    // The window armed on the int-8 baseline (a drill's `--palw-drill-model-court-at` does this) validates.
+    let mut armed = palw_t12_release_v4_params();
+    (PALW_T12_MODEL_COURT_WINDOW_FENCES_V1[0].set)(&mut armed, Some(ForkActivation::new(FLAG_DAY)));
+    armed.validate_palw_v2().expect("the dormant window, armed over the baseline, validates");
     // The model-window check ON ITS OWN (`validate_palw_model_court_window`): on a ruleset whose genesis registers a
     // fused row the k-ary court's own refusals answer first, so the rule is asked directly.
     let window_with = |kary: Option<ForkActivation>, at: u64| {
@@ -232,7 +246,8 @@ fn a_models_window_is_finite_floored_at_the_network_window_and_bounded_by_the_co
     // testnet-12 is a held network (its 2M row): the held derivation is the only one that has an admissible arity here.
     for held in [true] {
         let court = palw_court_params_held_at_v2(bundle, true, held).expect("testnet-12's court derives an arity");
-        let (ladder, turn, terminal) = (u64::from(court.bisection_rounds()), court.turn_deadline_daa(), u64::from(court.terminal_rounds()));
+        let (ladder, turn, terminal) =
+            (u64::from(court.bisection_rounds()), court.turn_deadline_daa(), u64::from(court.terminal_rounds()));
         let reserve = kaspa_consensus_core::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
         // 64 history rounds is the most `⌈log_k(positions/tile)⌉` can be at any arity ≥ 2 over a u64 space.
         let ceiling = (2 * (ladder + 64) + terminal + 1) * turn + reserve + 1;
@@ -254,7 +269,7 @@ fn a_models_window_is_finite_floored_at_the_network_window_and_bounded_by_the_co
             }
         }
         // At testnet-12's held court the window exceeds the network's only for absurd shapes: every history up to 2^32
-        // positions at tile 16 derives the network window itself (the flag day changes no admission there).
+        // positions at tile 16 derives the network window itself (the fence would change no admission there).
         for history in [512u64, 32_768, 131_072, 1 << 20, 2_000_000, 1 << 32] {
             assert_eq!(palw_court_window_for_history_v1(network, true, held, &court, history, 16), Ok(network), "{history}");
         }

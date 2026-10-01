@@ -1687,12 +1687,23 @@ pub(crate) async fn palw_until_exit_v1<F: std::future::Future>(exit: &kaspa_util
 /// **The step leaves an IR claim's data-availability answers can reach under the rules in force at
 /// `daa_score`**: every IR DA answer's check (`check_tir_trace_event_disclosure_v1`, the second IR
 /// fence's step, node and rows answers) verifies the claim's binding at
-/// `PALW_STEP_LEG_MAX_LEAVES` (2^22). Phase F's DA-ladder change under `palw_tir_fence2` moves the
-/// checks to the class's own ladder; this function moves with it — it is the producer guard's one
-/// reading of "the rules in force".
+/// `PALW_STEP_LEG_MAX_LEAVES` (2^22) below `palw_tir_fence2` — and at the claim's class's own ladder from it
+/// (RFC-0002 Phase F's DA ladder, `TransitionBuilder::tir_da_ladder_v1`): the held regime's network ladder —
+/// `palw_refutation_leaf_cap_v2(court, court ladder in force)` as the processor resolves it,
+/// `palw_court_step_ladder_at`, 2^40 on testnet-12 — floored at 2^22, which is what an IR class (it carries no
+/// held-map row of its own) is read at. Without the held context in force the fold carries no ladder and the
+/// checks stay at 2^22. This function is the producer guard's one reading of "the rules in force": it moves
+/// with the fold's, and a node that reads a smaller bound than the fold's only refuses more.
 pub(crate) fn palw_tir_da_answerable_leaves_v1(params: &kaspa_consensus_core::config::params::Params, daa_score: u64) -> u64 {
-    let _ = (params, daa_score);
-    kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES
+    let release = kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+    if !params.palw_tir_fence2_active_at(daa_score) || !params.palw_held_context_active_at(daa_score) {
+        return release;
+    }
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return release;
+    };
+    kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(&bundle.court, params.palw_court_ladder_active_at(daa_score))
+        .max(release)
 }
 
 /// **The producer guard's verdict**: a refusal when an IR job of `job_leaves` step leaves is past what
@@ -1831,26 +1842,43 @@ mod answer_only_tests {
 mod da_ladder_tests {
     use super::{palw_tir_da_answerable_leaves_v1, palw_tir_da_ladder_refusal_v1};
     use kaspa_consensus_core::Hash64;
-    use kaspa_consensus_core::config::params::palw_t12_shipped_params;
+    use kaspa_consensus_core::config::params::{palw_t12_release_v4_params, palw_t12_shipped_params};
+    use kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
     use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
 
     /// **The producer never produces an IR claim its DA court cannot hear answered** (Phase F's
-    /// big-model probe): the answerable ladder under t12's live rules is the checks' 2^22 at every
-    /// height; a job at it is produced, one leaf past it refused by name (a 70B-shaped job runs
-    /// 2^24–2^29); and the attempt path asks the guard with the job it is about to run, before it
-    /// runs it.
+    /// big-model probe): the answerable ladder under t12's live rules is the checks' 2^22 below
+    /// `palw_tir_fence2` (DAA 3,600) and the held regime's network ladder from it (2^40, what the fold's
+    /// `tir_da_ladder_v1` reads); a job at the ladder is produced, one leaf past it refused by name (a
+    /// 70B-shaped job runs 2^24–2^29, answerable from the fence on); and the attempt path asks the guard
+    /// with the job it is about to run, before it runs it.
     #[test]
     fn a_job_past_the_answerable_da_ladder_is_never_produced() {
         let params = palw_t12_shipped_params();
-        for daa in [0, 2_000, u64::MAX / 2] {
-            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_STEP_LEG_MAX_LEAVES, "DAA {daa}");
+        let flag_day = params.palw_tir_fence2.expect("the DAA-3,600 flag day").daa_score();
+        assert_eq!(flag_day, 3_600);
+        for daa in [0, 2_000, flag_day - 1] {
+            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_STEP_LEG_MAX_LEAVES, "DAA {daa}: below the second IR fence");
         }
+        for daa in [flag_day, flag_day + 1, 5_000, u64::MAX / 2] {
+            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_HELD_STEP_LADDER_V1, "DAA {daa}: the network's held ladder");
+        }
+        // The int-8 ruleset (no fence2) answers at 2^22 at every height; so does a ruleset with the fence and no held context.
+        let int8 = palw_t12_release_v4_params();
+        for daa in [0, flag_day, u64::MAX / 2] {
+            assert_eq!(palw_tir_da_answerable_leaves_v1(&int8, daa), PALW_STEP_LEG_MAX_LEAVES, "int-8 at DAA {daa}");
+        }
+        let mut no_held = params.clone();
+        no_held.palw_held_context = None;
+        assert_eq!(palw_tir_da_answerable_leaves_v1(&no_held, 5_000), PALW_STEP_LEG_MAX_LEAVES, "no held context: no ladder in the fold");
         let class = Hash64::from_bytes([0x70; 64]);
         assert!(palw_tir_da_ladder_refusal_v1(class, 1_260_000, PALW_STEP_LEG_MAX_LEAVES).is_none(), "SmolLM2 at 512");
         assert!(palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_LEAVES).is_none(), "at the ladder");
         let why = palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES + 1, PALW_STEP_LEG_MAX_LEAVES).expect("past it");
         assert!(why.contains("will not produce") && why.contains(&class.to_string()), "{why}");
-        assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_STEP_LEG_MAX_LEAVES).is_some(), "a 70B-shaped job");
+        assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_STEP_LEG_MAX_LEAVES).is_some(), "a 70B-shaped job below the fence");
+        assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_HELD_STEP_LADDER_V1).is_none(), "…and answerable from it");
+        assert!(palw_tir_da_ladder_refusal_v1(class, PALW_HELD_STEP_LADDER_V1 + 1, PALW_HELD_STEP_LADDER_V1).is_some(), "past the ladder");
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
         let at = src

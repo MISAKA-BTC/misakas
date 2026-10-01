@@ -21,7 +21,7 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_tir_fence_at_v1};
 use kaspa_consensus_core::config::params::{
-    PALW_T12_IR2_COURT_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA,
     PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_drill_params_v1, palw_t12_release_v3_params,
     palw_t12_release_v4_params, palw_t12_shipped_params,
 };
@@ -73,7 +73,7 @@ fn the_ir_flag_day_is_palw_tir_v1_alone_at_2000_a_height_no_other_fence_uses() {
     for earlier in [750, 1_000, 1_300, 1_700] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    let day_3600 = PALW_T12_IR2_COURT_FLAG_DAY_DAA.expect("the DAA-3,600 flag day");
+    let day_3600 = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
     assert_eq!(schedule.last(), Some(&day_3600), "the DAA-3,600 flag day is the schedule's last height ({schedule:?})");
     assert_eq!(schedule[schedule.len() - 2], FLAG_DAY, "and the IR flag day the one before it ({schedule:?})");
 }

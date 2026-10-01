@@ -3,13 +3,13 @@
 //! where armed, invisible to the identity until it fires, named by the fork id, refused without `palw_tir_v1`
 //! in force at or below it or with its mirror unsynced, and armed by its flag-day entry alone. The baseline
 //! these tests judge it against is `palw_t12_release_v4_params` — testnet-12 as the DAA-2,000 release ships it,
-//! before the DAA-3,600 flag day that arms this fence together with `palw_model_court_window`.
+//! before the DAA-3,600 flag day, whose whole list is this fence (the court window stays dormant).
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_fence2`
 
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_IR2_COURT_FLAG_DAY_DAA, PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1,
-    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA,
+    Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v4_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
@@ -41,10 +41,8 @@ fn mirror(p: &Params) -> Option<u64> {
 fn dormant_on_every_ruleset_and_listed_alone() {
     let names: Vec<&str> = PALW_T12_TIR_FENCE2_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_tir_fence2"]);
-    // The release arms it with `palw_model_court_window`, in one list at one height (the user's decision of 2026-10-01).
-    let flag_day: Vec<&str> = PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1.iter().map(|f| f.name).collect();
-    assert_eq!(flag_day, ["palw_tir_fence2", "palw_model_court_window"]);
-    assert_eq!(PALW_T12_IR2_COURT_FLAG_DAY_DAA, Some(3_600));
+    // The release arms it ALONE at 3,600 (the user's decision of 2026-10-01; the court window stays dormant).
+    assert_eq!(PALW_T12_TIR_FENCE2_DAA, Some(3_600));
     let shipped = palw_t12_shipped_params();
     assert_eq!(shipped.palw_tir_fence2, Some(ForkActivation::new(3_600)), "the shipped ruleset arms it at the flag day");
     assert!(!shipped.palw_tir_fence2_active_at(3_599) && shipped.palw_tir_fence2_active_at(3_600));

@@ -630,29 +630,15 @@ pub fn palw_drill_tir_fence_at_v1(params: &mut crate::config::params::Params, at
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_V1)
 }
 
-/// **A drill crosses the second IR flag day at a low height** (`--palw-drill-tir2-at`) —
+/// **A drill crosses testnet-12's DAA-3,600 flag day at a low height** (`--palw-drill-tir2-at`) —
 /// [`palw_drill_post_launch_fences_at_v1`] for
-/// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: ARMS `palw_tir_fence2` at `at` (its
-/// height is `None` on the release), through the entry's own `set`, and moves nothing else. Every
-/// refusal of the post-launch moves applies, named for this flag, and `validate_palw_v2` refuses the
-/// result unless `palw_tir_v1` is in force at or below `at` (combine with `--palw-drill-tir-at`).
+/// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: MOVES `palw_tir_fence2` from the release's
+/// DAA 3,600 to `at` (ARMS it on a ruleset that leaves it dormant), through the entry's own `set`, and
+/// moves nothing else — `palw_tir_fence2` is the whole DAA-3,600 list. Every refusal of the post-launch
+/// moves applies, named for this flag, and `validate_palw_v2` refuses the result unless `palw_tir_v1` is
+/// in force at or below `at` (combine with `--palw-drill-tir-at`).
 pub fn palw_drill_tir_fence2_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1)
-}
-
-/// **A drill crosses testnet-12's DAA-3,600 flag day at a low height** (`--palw-drill-ir2-court-at`) —
-/// [`palw_drill_post_launch_fences_at_v1`] for
-/// [`crate::config::params::PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1`]: moves `palw_tir_fence2` AND
-/// `palw_model_court_window` together, from the release's DAA 3,600 to `at`, each through its entry's
-/// own `set`, and nothing else — the one flag that rehearses the shipped flag day, since two separate
-/// flags cannot share a height (the fork id names heights, not fences). Every refusal of the post-launch
-/// moves applies, named for this flag, and `validate_palw_v2` refuses the result unless `palw_tir_v1` is
-/// in force at or below `at` (combine with `--palw-drill-tir-at`) and `palw_kary_court` is too.
-pub fn palw_drill_ir2_court_flag_day_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
-    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_IR2_COURT_V1)
 }
 
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
@@ -684,10 +670,6 @@ const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
 /// The model-specific finite court window alone (`--palw-drill-model-court-at`).
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
-
-/// The DAA-3,600 flag day: both of its fences at one height (`--palw-drill-ir2-court-at`).
-const PALW_DRILL_FLAG_DAY_IR2_COURT_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1, flag: "--palw-drill-ir2-court-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(
@@ -1248,13 +1230,11 @@ mod tests {
         assert_eq!(both.palw_capacity_weight_cap, Some(ForkActivation::new(60)));
     }
 
-    /// **A drill crosses the IR fence** ([`palw_drill_tir_fence_at_v1`], `--palw-drill-tir-at`): refused on
-    /// public testnet-12's genesis, at 0 / never and at another fence's height; below its prerequisites
-    /// the result does not validate; at a free height past them `palw_tir_v1` alone is ARMED (live from
-    /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
-    /// **A drill arms the second IR fence and nothing else**: refused on public testnet-12, at 0 and at
-    /// `u64::MAX`; below the IR fence (moved low with `--palw-drill-tir-at`) the result does not
-    /// validate; past it `palw_tir_fence2` alone is ARMED, its mirror follows, and the params id moves.
+    /// **A drill crosses the DAA-3,600 flag day and nothing else moves** ([`palw_drill_tir_fence2_at_v1`],
+    /// `--palw-drill-tir2-at`): refused on public testnet-12, at 0 and at `u64::MAX`; below the IR fence (moved
+    /// low with `--palw-drill-tir-at`) the result does not validate; past it `palw_tir_fence2` alone is MOVED
+    /// from the release's DAA 3,600 (the model court window stays dormant, as on the release), its mirror
+    /// follows, and the params id moves.
     #[test]
     fn a_drill_arms_the_second_ir_fence_and_nothing_else_moves() {
         use crate::config::params::palw_t12_shipped_params;
@@ -1274,8 +1254,8 @@ mod tests {
         assert_eq!(moves.len(), 1);
         assert_eq!(
             (moves[0].name, moves[0].was),
-            ("palw_tir_fence2", crate::config::params::PALW_T12_IR2_COURT_FLAG_DAY_DAA),
-            "the release arms it at DAA 3,600 with the court window: the flag moves it alone"
+            ("palw_tir_fence2", crate::config::params::PALW_T12_TIR_FENCE2_DAA),
+            "the release arms it at DAA 3,600, alone: the flag moves it and nothing else"
         );
         assert!(moves[0].to_string().contains("MOVED"), "{}", moves[0]);
         assert!(moved.palw_tir_fence2_active_at(1_030) && !moved.palw_tir_fence2_active_at(1_029));
@@ -1290,6 +1270,10 @@ mod tests {
         }
     }
 
+    /// **A drill crosses the IR fence** ([`palw_drill_tir_fence_at_v1`], `--palw-drill-tir-at`): refused on
+    /// public testnet-12's genesis, at 0 / never and at another fence's height; below its prerequisites
+    /// the result does not validate; at a free height past them `palw_tir_v1` alone is MOVED (live from
+    /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
     #[test]
     fn a_drill_crosses_the_ir_fence_and_nothing_else_moves() {
         use crate::config::params::{palw_t12_drill_params_v1, palw_t12_shipped_params};
@@ -1347,7 +1331,10 @@ mod tests {
             moves.iter().map(|m| m.name).collect::<Vec<_>>(),
             PALW_T12_MODEL_COURT_WINDOW_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>()
         );
-        assert_eq!(moves[0].was, crate::config::params::PALW_T12_IR2_COURT_FLAG_DAY_DAA);
+        assert_eq!(moves[0].was, crate::config::params::PALW_T12_MODEL_COURT_WINDOW_DAA, "the release arms it nowhere");
+        assert_eq!(moves[0].was, None);
+        assert!(moves[0].to_string().contains("ARMED"), "{}", moves[0]);
+        assert!(!base.palw_model_court_window_active_at(60), "dormant on the drill's base, like the release");
         assert!(moved.palw_model_court_window_active_at(60) && !moved.palw_model_court_window_active_at(59));
         assert_ne!(moved.consensus_params_id(), base.consensus_params_id());
         for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -1355,49 +1342,6 @@ mod tests {
                 assert_eq!(before, after, "{name} did not move");
             }
         }
-    }
-
-    /// **A drill crosses the DAA-3,600 flag day with ONE flag** ([`palw_drill_ir2_court_flag_day_at_v1`],
-    /// `--palw-drill-ir2-court-at`): both fences, `palw_tir_fence2` and `palw_model_court_window`, move
-    /// together to one height — each live from it and not below, the bundle mirror following — and nothing
-    /// else moves. Refused on public testnet-12, at 0 / never, and below `palw_tir_v1` (moved low with
-    /// `--palw-drill-tir-at`); the two separate flags cannot do it, because the second is refused for the
-    /// first's height (the fork id names heights, not fences), which is why this flag exists.
-    #[test]
-    fn a_drill_crosses_the_daa_3600_flag_day_with_both_fences_at_one_height() {
-        use crate::config::params::{PALW_T12_IR2_COURT_FLAG_DAY_DAA, palw_t12_drill_params_v1, palw_t12_shipped_params};
-        let mut drill = palw_t12_drill_params_v1(&salt(0x5E));
-        palw_drill_tir_fence_at_v1(&mut drill, 1_020).expect("the IR fence low");
-        let mut public = palw_t12_shipped_params();
-        assert!(palw_drill_ir2_court_flag_day_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
-        for bad in [0, u64::MAX] {
-            let mut p = drill.clone();
-            assert!(palw_drill_ir2_court_flag_day_at_v1(&mut p, bad).is_err(), "{bad}");
-            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
-        }
-        let mut early = drill.clone();
-        assert!(palw_drill_ir2_court_flag_day_at_v1(&mut early, 1_019).unwrap_err().contains("does not validate"), "below palw_tir_v1");
-        let mut moved = drill.clone();
-        let moves = palw_drill_ir2_court_flag_day_at_v1(&mut moved, 1_030).expect("past the IR fence");
-        assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), ["palw_tir_fence2", "palw_model_court_window"]);
-        assert!(moves.iter().all(|m| m.was == PALW_T12_IR2_COURT_FLAG_DAY_DAA && m.at == 1_030), "{moves:?}");
-        assert!(moved.palw_tir_fence2_active_at(1_030) && !moved.palw_tir_fence2_active_at(1_029));
-        assert!(moved.palw_model_court_window_active_at(1_030) && !moved.palw_model_court_window_active_at(1_029));
-        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &moved.palw_consensus_mode else { panic!("V2") };
-        assert_eq!(bundle.state.tir_fence2_from_daa(), Some(1_030), "fence2's mirror follows");
-        assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
-        assert_ne!(moved.consensus_schedule_id(), drill.consensus_schedule_id());
-        assert_eq!(moved.consensus_identity_id(), drill.consensus_identity_id(), "a future height is not an identity");
-        for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
-            if *name != "palw_tir_fence2" && *name != "palw_model_court_window" {
-                assert_eq!(before, after, "{name} did not move");
-            }
-        }
-        // The two separate flags cannot cross the shipped flag day at one height, which is why the combined one exists.
-        let mut separate = drill.clone();
-        palw_drill_tir_fence2_at_v1(&mut separate, 1_030).expect("the first");
-        let why = palw_drill_model_court_window_at_v1(&mut separate, 1_030).unwrap_err();
-        assert!(why.contains("already palw_tir_fence2's height"), "{why}");
     }
 
     /// **`--palw-drill-fence-at` on a drill ruleset: the release's fences at the drill's height, and

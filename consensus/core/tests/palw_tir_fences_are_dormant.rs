@@ -26,8 +26,9 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_IR2_COURT_FLAG_DAY_DAA, PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1,
-    PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
+    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
+    TESTNET11_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
     palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_shipped_params,
 };
@@ -58,10 +59,10 @@ fn slug(name: &str) -> String {
 }
 
 /// `p` with testnet-12's IR flag day set back to dormant (its one list, through each entry's `set`) — and the
-/// DAA-3,600 flag day's list with it (`palw_tir_fence2` + `palw_model_court_window`), which builds on the IR
-/// fence and which int-7, the pins' release, did not carry either.
+/// DAA-3,600 flag day's list with it (`palw_tir_fence2`, plus the court window, which is dormant everywhere),
+/// which builds on the IR fence and which int-7, the pins' release, did not carry either.
 fn without_the_ir_flag_day(mut p: Params) -> Params {
-    for f in PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1.iter().chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
+    for f in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1).chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
         (f.set)(&mut p, None);
     }
     p
@@ -272,14 +273,14 @@ fn every_shipped_ruleset_keeps_its_three_ids() {
 #[test]
 fn every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000() {
     let at = PALW_T12_TIR_FLAG_DAY_DAA.expect("testnet-12's IR flag day has a height");
-    let day = PALW_T12_IR2_COURT_FLAG_DAY_DAA.expect("testnet-12's DAA-3,600 flag day has a height");
+    let day = PALW_T12_TIR_FENCE2_DAA.expect("testnet-12's DAA-3,600 flag day has a height");
     for (name, armed) in armed_rows() {
         let dormant = without_the_ir_flag_day(armed.clone());
         let mut rearmed = dormant.clone();
         for f in PALW_T12_TIR_FLAG_DAY_FENCES_V1 {
             (f.set)(&mut rearmed, Some(ForkActivation::new(at)));
         }
-        for f in PALW_T12_IR2_COURT_FLAG_DAY_FENCES_V1 {
+        for f in PALW_T12_TIR_FENCE2_FENCES_V1 {
             (f.set)(&mut rearmed, Some(ForkActivation::new(day)));
         }
         assert_eq!(ids(&armed), ids(&rearmed), "{name}: the pinned row with the IR flag day at {at} and the DAA-3,600 flag day at {day}");
