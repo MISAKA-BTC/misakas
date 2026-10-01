@@ -7321,6 +7321,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is dropped by name**, first and
+            // charged nothing, for the generative objects' reason above.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score) {
+                info!("Block {block}: an evaluation court object was dropped by name below palw_improvement_v1, and the block stands (RFC-0004)");
+                continue;
+            }
             // **RFC-0002 Phase F: one IR class registration a block reaches admission v10**
             // (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`). Sizing an IR program costs every node up to
             // seconds, so a further `ClassRegisteredTirV1` is dropped by name HERE — before any rent,
@@ -9382,6 +9388,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score))
+                            })
+                            // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score))
                             });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
@@ -9711,6 +9722,12 @@ impl VirtualStateProcessor {
                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score) {
                         return Err(format!(
                             "court {session_id}: a generative close is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
+                        ));
+                    }
+                    // RFC-0004 A6: an evaluation close likewise below `palw_improvement_v1`.
+                    if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: an evaluation close is refused: palw_improvement_v1 is not in force at this block (RFC-0004)"
                         ));
                     }
                     // The close carries its proof now, so there is something to adjudicate. The
@@ -10983,6 +11000,12 @@ impl VirtualStateProcessor {
                     let claim_id = accusation.claim;
                     if !self.palw_tir_at(point.daa_score) {
                         return Err(format!("claim {claim_id}: an IR accusation is refused: palw_tir_v1 is not in force (RFC-0002)"));
+                    }
+                    // RFC-0004 A6: an evaluation close rides this accusation past `palw_improvement_v1` only.
+                    if accusation.proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: an evaluation accusation is refused: palw_improvement_v1 is not in force (RFC-0004)"
+                        ));
                     }
                     kaspa_consensus_core::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation)
                         .map_err(|e| format!("claim {claim_id}: {e}"))?;
