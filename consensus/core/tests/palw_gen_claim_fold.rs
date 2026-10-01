@@ -535,9 +535,10 @@ fn a_class_takes_no_more_claims_in_flight_than_the_fences_cap() {
     assert_eq!(taken, cap);
     let job = image_job(&class, net.image, EXECUTOR, PALW_FP_PRIVACY_PUBLIC_DA, 0xEE, 0xEE, 0);
     let leaves = leaves_of(&net, &job);
+    let capped = fold_one(&net, claim_object(&job, prompt(), leaves));
     assert!(
-        matches!(fold_one(&net, claim_object(&job, prompt(), leaves)), Err(PalwStateV2Error::GenClassInflightCapped { class, inflight, cap: c }) if class == net.image && inflight == cap as u64 && c == cap),
-        "the cap + 1th claim of the class is refused by name"
+        matches!(&capped, Err(PalwStateV2Error::GenClassInflightCapped { class, inflight, cap: c }) if *class == net.image && *inflight == cap as u64 && *c == cap),
+        "the cap + 1th claim of the class is refused by name: {capped:?}"
     );
     // The cap is per class: the embedding class is untouched by the image class's.
     let vision = vision_job(&vision_class(), net.vision, EXECUTOR, 1);
