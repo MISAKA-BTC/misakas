@@ -358,3 +358,52 @@ fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
         }
     }
 }
+
+/// **FR-26, the strict allow-list**: the bidirectional lowering reads learned positions, post-LN, plain multi-head
+/// attention with biases and the plain BERT embedding. A spec that sets a field it never reads — a RoPE encoder
+/// (ModernBERT, nomic-BERT, jina-v3, EuroBERT), a final norm, a factorised embedding (ALBERT) — used to lower to a
+/// WRONG program with no error; it is refused, naming the field.
+#[test]
+fn the_bidirectional_lowering_refuses_a_spec_field_it_does_not_read() {
+    use misaka_palw_tir_lower::lower::bidir::{BidirCfg, Pooling, lower_bidir};
+    use misaka_palw_tir_lower::spec::{Mixer, ModelSpec, NormSpec, Position};
+    let cfg = std::fs::read_to_string(fixture_dir("bert").join("config.json")).expect("config");
+    let base = misaka_palw_tir_lower::parse_config_str(&cfg).expect("the BERT adapter reads its fixture");
+    let hl = misaka_palw_tir_lower::hl::build_program(&base).expect("hl");
+    let c = BidirCfg { lmax: 8, pooling: Pooling::Cls, normalize: false };
+    assert!(lower_bidir(&hl, &base, &c).is_ok(), "the plain BERT lowers");
+    let refused = |what: &str, edit: &dyn Fn(&mut ModelSpec), why: &str| {
+        let mut s = base.clone();
+        edit(&mut s);
+        let e = lower_bidir(&hl, &s, &c).err().unwrap_or_else(|| panic!("{what}: lowered to a program that ignores it"));
+        assert!(e.to_string().contains("NOT_LOWERABLE") && e.to_string().contains(why), "{what}: {e}");
+    };
+    let attn = |s: &mut ModelSpec, f: &dyn Fn(&mut misaka_palw_tir_lower::spec::AttnSpec)| {
+        for l in &mut s.layers {
+            if let Mixer::Attention(a) = &mut l.mixer {
+                f(a);
+            }
+        }
+    };
+    refused(
+        "RoPE",
+        &|s| {
+            attn(s, &|a| {
+                a.position = Position::Rope(misaka_palw_tir_lower::rope::RopeSpec {
+                    rotary_dim: a.head_dim,
+                    offset: 0,
+                    style: misaka_palw_tir_lower::rope::RopeStyle::Half,
+                    freqs: misaka_palw_tir_lower::rope::RopeFreqs::plain(10000.0, a.head_dim),
+                })
+            })
+        },
+        "positional term",
+    );
+    refused("soft-cap", &|s| attn(s, &|a| a.softcap = Some(30.0)), "attention feature");
+    refused("clip_qkv", &|s| attn(s, &|a| a.clip_qkv = Some(8.0)), "attention feature");
+    refused("a gate", &|s| attn(s, &|a| a.output_gate = true), "attention feature");
+    refused("a final norm", &|s| s.final_norm = Some(NormSpec::layer_nobias(1e-5)), "final norm");
+    refused("an embedding scale", &|s| s.embedding.scale = 2.0, "embedding");
+    refused("a factorised embedding", &|s| s.embedding.dim = s.hidden_size / 2, "embedding");
+    refused("a projection after the lookup", &|s| s.embedding.proj_in = true, "embedding");
+}

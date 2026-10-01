@@ -384,6 +384,7 @@ being compiled or run**; the first action after the window lifts is a build, the
 | FR-07 | `float_ref::route`, `lower::lower_route`, the HL guard | the corpus entry `ernie4_5_moe` once its fixture runs; the golden gates must not move |
 | FR-02 | `AttnSpec.qk_norm_after_rope`, the HL order | `tests/qk_norm_post_rope.rs`; the corpus entries `hunyuan_v1_dense`, `hunyuan_v1_moe` |
 | FR-18 Phase 1 | `EncDecSpec` as data (`EncDecNames`, `family_names`, validation), adapters of kind `encdec` (`encdec-frame`, `mixin-bart-lineage`, `t5`, `bart`, `mbart`, `marian`, `pegasus`), `hf_schema::read_encdec`, the report, the SDK's two-stage check | `tests/encdec_adapters.rs` (the oracle: adapter = `parse_encdec` on every fixture, real config and single-key mutant), `tests/encdec.rs` unchanged and green |
-| not started | FR-18 Phase 2, FR-17, FR-19, FR-09 | — |
+| FR-17 step 1 / FR-26 | `lower::bidir::arch_of` is a strict allow-list: a RoPE encoder, a final norm, a factorised embedding (ALBERT's panic) or an unread attention feature is `NOT_LOWERABLE` naming the field, never a wrong program | `tests/encoders.rs::the_bidirectional_lowering_refuses_a_spec_field_it_does_not_read`; the encoder fixtures must still lower |
+| not started | FR-18 Phase 2, FR-17 steps 2–4, FR-19, FR-09 | — |
 
 Until the build, the commit is a design with a reviewed draft, nothing more.
