@@ -56,6 +56,7 @@ pub mod artifact;
 pub mod calib;
 pub mod cfg;
 pub mod convert;
+pub mod detmath;
 pub mod encoder;
 pub mod error;
 pub mod fidelity;
@@ -78,4 +79,4 @@ pub mod spec;
 pub mod weights;
 
 pub use error::{LowerError, Result};
-pub use hf_config::{parse_config, parse_config_str};
+pub use hf_config::{parse_config, parse_config_str, parse_config_str_with, parse_config_with};

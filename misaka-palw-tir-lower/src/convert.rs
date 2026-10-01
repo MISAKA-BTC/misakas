@@ -16,6 +16,7 @@ use crate::float_ref::SiteStat;
 use crate::float_ref::stream::OccParams;
 use crate::fidelity::Prepared;
 use crate::lower::{ChunkSink, StreamMaterialised, StreamOpts, StreamStats, materialise_stream};
+use crate::detmath::MathMode;
 use crate::quant::QuantPolicy;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, ChunkStoreStats, write_container_v1_chunked};
 use std::collections::BTreeMap;
@@ -35,6 +36,9 @@ pub struct ConvertOpts<'a> {
     /// Keep the chunk store after the container is written (it deduplicates later conversions: a
     /// composite's parent chunks, a rerun). Off: the store directory is removed.
     pub keep_chunks: bool,
+    /// The math the conversion's tables and scales are computed with ([`crate::detmath`]):
+    /// `LibmV1` is the same on every platform; `Std` only where the artifact was first built.
+    pub math: MathMode,
 }
 
 /// What a conversion did.
@@ -53,6 +57,8 @@ pub struct ConvertReport {
     pub distinct_chunks: usize,
     /// The most the chunk writer ever buffered.
     pub peak_chunk_buffer: usize,
+    /// The math mode the conversion ran in.
+    pub math: &'static str,
 }
 
 fn hex(b: &[u8]) -> String {
@@ -71,6 +77,10 @@ pub fn convert_to_container(
     opts: &ConvertOpts<'_>,
     progress: &dyn Fn(usize, usize),
 ) -> Result<ConvertReport> {
+    // The mode must be in force before anything is computed from floats — `prep` was lowered already,
+    // and a caller that lowered under another mode (the HL's RoPE frequencies are computed then) must
+    // set the same one for both: the converter sets what it was told and the caller's `prepare` ran under it.
+    crate::detmath::set_mode(opts.math);
     let store = ChunkStore::open(store_dir).map_err(|e| LowerError::Io(format!("{}: {e}", store_dir.display())))?;
     let mut sink = ChunkSink::new(&store);
     let m = materialise_stream(&prep.lowered, &prep.hl, loader, calib, policy, &opts.stream, &mut sink, progress)?;
@@ -88,6 +98,7 @@ pub fn convert_to_container(
         chunks: sink.artifact.chunk_count(),
         distinct_chunks: sink.artifact.distinct_chunks().len(),
         peak_chunk_buffer: sink.peak_buffer,
+        math: opts.math.name(),
     };
     if !opts.keep_chunks {
         drop(sink);

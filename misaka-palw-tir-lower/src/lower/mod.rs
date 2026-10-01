@@ -2367,11 +2367,11 @@ impl TableFn {
     fn eval(self, x: f64) -> f64 {
         match self {
             TableFn::Act(a) => crate::float_ref::act(a, x as f32) as f64,
-            TableFn::Softcap(c) => (x / c).tanh() * c,
+            TableFn::Softcap(c) => crate::detmath::tanh(x / c) * c,
             TableFn::Clamp(lo, hi) => x.clamp(lo, hi),
             TableFn::ClampedGlu { alpha, limit } => {
                 let g = x.min(limit);
-                g / (1.0 + (-(g * alpha)).exp())
+                g / (1.0 + crate::detmath::exp(-(g * alpha)))
             }
             TableFn::ClampedUp { limit } => x.clamp(-limit, limit) + 1.0,
         }
@@ -2473,7 +2473,7 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
                 for r in 0..rows {
                     for th in &inv {
                         let ang = (r as f64) * (1u64 << step) as f64 * (*th as f64);
-                        v.push(q24(if sin { ang.sin() } else { ang.cos() }));
+                        v.push(q24(if sin { crate::detmath::sin(ang) } else { crate::detmath::cos(ang) }));
                     }
                 }
                 Ok(IntTensor::i32(vec![rows, inv.len()], v))
@@ -2513,7 +2513,7 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
                 for pos in 0..hb {
                     for fr in f.inv_freq_at(pos) {
                         let ang = ((pos as f32) * fr) as f64;
-                        v.push(q24(if sin { ang.sin() } else { ang.cos() }));
+                        v.push(q24(if sin { crate::detmath::sin(ang) } else { crate::detmath::cos(ang) }));
                     }
                 }
                 Ok(IntTensor::i32(vec![hb, half], v))
@@ -2534,7 +2534,7 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
                 for r in 0..rows {
                     for th in &inv {
                         let ang = (r as f64) * (1u64 << step) as f64 * (*th as f64);
-                        v.push(q24(if sin { ang.sin() } else { ang.cos() }));
+                        v.push(q24(if sin { crate::detmath::sin(ang) } else { crate::detmath::cos(ang) }));
                     }
                 }
                 Ok(IntTensor::i32(vec![rows, inv.len()], v))
@@ -3563,7 +3563,7 @@ fn lower_gdn(
         let sv = c.scale(&kv)? / (1u64 << GDN_V_FRAC_BITS) as f64;
         let su = crate::quant::code_scale(c.absmax(&dn)?, ((1u64 << 24) - 1) as f64, c.policy.headroom32);
         let target = crate::quant::code_scale(c.absmax(&sn)?, crate::quant::CODE32_MAX, c.policy.headroom32);
-        let ws = (su / 32768.0 / target).log2().floor().clamp(-62.0, 20.0) as i32;
+        let ws = crate::detmath::floor_log2(su / 32768.0 / target).clamp(-62.0, 20.0) as i32;
         let ss = su / 32768.0 / 2f64.powi(ws);
         Ok((sv, su, ws, ss))
     });

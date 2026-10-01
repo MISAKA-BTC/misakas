@@ -269,7 +269,12 @@ fn deepseek_mla_and_routing() {
     assert!((m.scale - ms * ms / 192f64.sqrt()).abs() < 1e-12);
     assert_eq!(moe_of(&s, 1).router.groups, None, "greedy");
     assert_eq!(kinds(&p), 2);
-    refused("deepseek-v3-fp8", "quant_method=fp8");
+    // FP8 with block scales is a built-in descriptor (`fp8_block`): the checkpoint parses, and every
+    // projection of the MLA and MoE layers reads as the float weight its stored bytes define.
+    let (s, _) = ok("deepseek-v3-fp8");
+    let q = s.hf.quant.as_ref().expect("a quantised checkpoint");
+    assert!(!q.fmt.is_integers() && q.fmt.label().starts_with("FP8_BLOCK bi=128 bo=128"), "{}", q.fmt.label());
+    assert!(!q.lm_head);
     let (s, _) = ok("deepseek-v3-bf16");
     let r = &moe_of(&s, 3).router;
     assert_eq!((r.scoring, r.selection_bias, r.scale), (Scoring::Sigmoid, true, 2.5));

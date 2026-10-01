@@ -163,7 +163,7 @@ fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, 
 /// evaluation both call it).
 pub(super) fn apply_map(t: &mut Tensor, f: &MapFn, layer: Option<usize>) -> Result<()> {
     match f {
-        MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -((*x as f64).exp() as f32)),
+        MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -(crate::detmath::exp(*x as f64) as f32)),
         MapFn::Scale(c) => t.data.iter_mut().for_each(|x| *x = (*x as f64 * c) as f32),
         MapFn::RescaleByLayer { every } => {
             let l = layer.ok_or_else(|| LowerError::eval("rescale needs a layer"))?;

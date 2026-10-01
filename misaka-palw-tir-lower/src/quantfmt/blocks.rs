@@ -157,7 +157,10 @@ impl BlocksFormat {
             }
             tables.push(table_of(name, t)?);
         }
-        let DecodeDesc { target, group, q, scale, zero, min, value, code } = &d.decode;
+        let DecodeDesc { target, group, q, scale, zero, min, value, code, offset_term, order } = &d.decode;
+        if offset_term.is_some() || order.is_some() {
+            return Err(DslError("decode.offset_term and decode.order belong to tensors layouts (a blocks format's follow from its codes and its `min`)".into()));
+        }
         let group_size = match group.as_ref().map(|g| &g.size) {
             Some(SizeDesc::Fixed(n)) => *n,
             Some(SizeDesc::Expr(_)) => return Err(DslError("a blocks format's decode.group.size is a number".into())),
