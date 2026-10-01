@@ -7410,10 +7410,13 @@ pub enum PalwConsensusObjectV2 {
     /// (`palw_fp_gen_objects_from_accepted_txs_v1`) builds from a version-10 payload on the free-prompt
     /// subnetwork, past `palw_fp_job_v5` over `palw_gen_v1`. Like `FreePromptCommitted` it is **never
     /// serialized to a peer** (`palw_lifecycle_object_may_ride_v2` refuses it a carriage by name): the
-    /// transaction is the carrier, and this is what its payload means to the fold. Appended (tag 70 on this
-    /// branch; the integration with RFC-0004's objects, which also append past 69, renumbers it — its number
-    /// is not a wire fact). The fold's tensor branch derives the class, the work and the capacity and
-    /// writes a weightless claim (`palw_gen_claim_fold_v1`); below the fences it refuses it by name.
+    /// transaction is the carrier, and this is what its payload means to the fold. Appended after
+    /// `CourtGenRootClaimed` (tag 70 on this branch, where RFC-0004's objects 70-82 are not declared);
+    /// **its allocated tag is 87** (spec 17 section 17.0's next free tag, requested of the core lane; 83-85
+    /// stay Phase F's data-availability objects), taken where the integration declares it after RFC-0004's.
+    /// The number is a name, not a wire fact: the object is never serialized to a peer or stored. The
+    /// fold's tensor branch derives the class, the work and the capacity and writes a weightless claim
+    /// (`palw_gen_claim_fold_v1`); below the fences it refuses it by name.
     GenTensorCommitted {
         claim: Hash64,
         class_id: Hash64,
