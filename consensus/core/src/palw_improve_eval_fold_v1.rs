@@ -971,9 +971,96 @@ mod tests {
         p
     }
 
+    /// A test's subject class in place of the toy — a real decoder with attention, whose leaves are dissected
+    /// ([`use_golden_subject`]). One per test thread; the guard clears it.
+    #[derive(Clone)]
+    struct Subject {
+        program: TirProgramV1,
+        weights: MapParams,
+        layout: PalwTirLayoutV1,
+    }
+
+    thread_local! {
+        static SUBJECT: std::cell::RefCell<Option<Subject>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn subject() -> Option<Subject> {
+        SUBJECT.with(|s| s.borrow().clone())
+    }
+
+    struct SubjectGuard;
+    impl Drop for SubjectGuard {
+        fn drop(&mut self) {
+            SUBJECT.with(|s| *s.borrow_mut() = None);
+        }
+    }
+
+    /// The subject of every class the test registers: the golden decoder's program, weights and layout, or the toy's.
+    fn program() -> TirProgramV1 {
+        subject().map_or_else(toy_program, |s| s.program)
+    }
+
+    fn weights(p: &TirProgramV1, salt: usize) -> MapParams {
+        subject().map_or_else(|| toy_weights(p, salt), |s| s.weights)
+    }
+
+    fn layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
+        subject().map_or_else(|| toy_layout(p), |s| s.layout)
+    }
+
+    /// The layout the IR fixtures use for the golden programs: ragged multi-tile commit points and two-row history tiles.
+    fn golden_layout(p: &TirProgramV1, positions: u32) -> PalwTirLayoutV1 {
+        let mut tiles = Vec::new();
+        let mut k = 0u32;
+        for (bi, b) in p.blocks.iter().enumerate() {
+            for (ni, n) in b.nodes.iter().enumerate() {
+                if !n.commit {
+                    continue;
+                }
+                let is_logits = bi == p.schedule.post as usize && ni == p.logits as usize;
+                tiles.push(if is_logits { 4096 } else { 4 + (k * 7) % 6 });
+                k += 1;
+            }
+        }
+        PalwTirLayoutV1 {
+            version: PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: positions,
+            checkpoint_interval: 2,
+            h_tile: 2,
+            commit_tiles: tiles,
+            state_tiles: (0..p.states.len() as u32).map(|j| 4 + j % 3).collect(),
+        }
+    }
+
+    /// **The golden dense decoder with grouped-query attention as the subject** (`consensus-vectors/tir-v1/programs/
+    /// dense-gqa-2layer.json`, RFC-0002 F7): its attention leaves are dissected. Returns the guard that restores the
+    /// toy and the golden job's tokens.
+    fn use_golden_subject() -> (SubjectGuard, Vec<u32>) {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v1/programs/dense-gqa-2layer.json");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vector")).expect("json");
+        let unhex =
+            |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() };
+        let mut program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
+        let mut w = MapParams::default();
+        for e in v["params"].as_array().unwrap() {
+            let j = e["param"].as_u64().unwrap() as u16;
+            let layer = e["layer"].as_u64().map(|l| l as u16);
+            let d = &program.params[j as usize];
+            let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
+            w.tensors.insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &unhex(e["le_hex"].as_str().unwrap())).unwrap());
+        }
+        let tokens: Vec<u32> = v["steps"].as_array().unwrap().iter().map(|s| s["token"].as_u64().unwrap() as u32).collect();
+        program.logits_scheme_id.copy_from_slice(crate::palw_step_refute::tiled_logits_scheme_id_v1().as_byte_slice());
+        let program = TirProgramV1::decode_canonical(&program.encode()).expect("still canonical under the tiled scheme");
+        let layout = golden_layout(&program, 12);
+        SUBJECT.with(|s| *s.borrow_mut() = Some(Subject { program, weights: w, layout }));
+        (SubjectGuard, tokens)
+    }
+
     /// A toy IR class: an `i8` embedding, one layer of an `i8 [4, 4]` matrix and `i64` multiplier, an
     /// `i16` head over 16 ids (tiled logits).
-    fn program() -> TirProgramV1 {
+    fn toy_program() -> TirProgramV1 {
         let mut pb = ProgramBuilder::new(16, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
         let table = pb.param("embed.table", DType::I8, &[16, 4], false);
         let w = pb.param("blk.w", DType::I8, &[4, 4], true);
@@ -1011,7 +1098,7 @@ mod tests {
         p
     }
 
-    fn weights(p: &TirProgramV1, salt: usize) -> MapParams {
+    fn toy_weights(p: &TirProgramV1, salt: usize) -> MapParams {
         let mut out = MapParams::default();
         for (j, inst) in crate::palw_tir_artifact_v1::palw_tir_param_instances_v1(p).into_iter().enumerate() {
             let d = &p.params[j];
@@ -1029,7 +1116,7 @@ mod tests {
         out
     }
 
-    fn layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
+    fn toy_layout(p: &TirProgramV1) -> PalwTirLayoutV1 {
         let commits = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
         PalwTirLayoutV1 {
             version: PALW_TIR_LAYOUT_VERSION_V1,
@@ -1095,8 +1182,18 @@ mod tests {
         daa: u64,
         f: impl FnOnce(&mut TransitionBuilder<'_>),
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
-        let extras = PalwTransitionExtrasV1::default();
-        let mut builder = TransitionBuilder::new(state, p, false, false, false, false, &extras);
+        at_with(state, p, daa, &PalwTransitionExtrasV1::default(), f)
+    }
+
+    /// [`at`] under the block's `extras` (the held regime's ladder, say).
+    fn at_with(
+        state: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        extras: &PalwTransitionExtrasV1,
+        f: impl FnOnce(&mut TransitionBuilder<'_>),
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let mut builder = TransitionBuilder::new(state, p, false, false, false, false, extras);
         crate::palw_state_v2::palw_improve_fold_v1::advance_improvement_v1(&mut builder, &ctx(daa)).expect("the sweep");
         f(&mut builder);
         let delta = PalwStateDeltaV2 { point: ctx(daa), entries: builder.entries.clone() };
@@ -3048,6 +3145,208 @@ mod tests {
             after.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
             decided.improvement_result(&h(LINE), 1, likely_item, &PalwEvalSubjectV1::Parent),
             "a decided epoch's results stand"
+        );
+    }
+
+    /// [`fold_one`] under the block's `extras`.
+    fn fold_with(
+        s: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        extras: &PalwTransitionExtrasV1,
+        object: &PalwConsensusObjectV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let mut b = TransitionBuilder::new(s, p, false, false, false, false, extras);
+        apply_object(&mut b, &ctx(daa), object)
+    }
+
+    /// A signature the test's verifier accepts: the key, the message and the context, concatenated.
+    fn fake_sign(key: &[u8], message: &[u8], context: &[u8]) -> Vec<u8> {
+        let mut out = key.to_vec();
+        out.extend_from_slice(message);
+        out.extend_from_slice(context);
+        out
+    }
+
+    fn fake_verify(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+        signature == fake_sign(key, message, context).as_slice()
+    }
+
+    /// **A dissected leaf of an evaluation claim is argued by F7 through the fold** (spec 17 §17.8.6.3): the subject is
+    /// a real decoder with attention, its claim honest; a cone accusation that NAMES the attention leaf opens a session
+    /// at `Terminal` on it under the held regime (the leaf is never tried whole there), the responder's root claim
+    /// (`CourtEvalRootClaimed`) opens F7's phase over the claim's own evaluation context, the rounds and the choices are
+    /// F7's own objects, and the bottom (`EvalDissection`) is graded against the phase: an honest responder is acquitted
+    /// and the challenger pays; a responder whose totals lie — hidden in the last tile so every fold checks — is
+    /// convicted where the dissection narrows it, its claim voided and slashed.
+    #[test]
+    fn a_dissected_leaf_of_an_evaluation_claim_is_argued_by_f7_and_the_fold_convicts_where_the_totals_lie() {
+        use crate::palw_court_v2::{PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT, PalwCourtVerdictProofV2 as Proof};
+        use crate::palw_improve_eval_court_v1 as court_v1;
+        use crate::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirFoldV1};
+        use crate::palw_tir_one_move_v1::{PalwTirOneMoveOutcomeV1, palw_tir_one_move_accusation_v1, palw_tir_one_move_outcome_v1};
+        const FORM: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let (_subject, tokens) = use_golden_subject();
+        let prompt: Vec<u32> = tokens.iter().take(3).copied().collect();
+        let p = params();
+        let base = with_real_roots(evaluating());
+        test_disclosure::set(h(LINE), 1, 0, prompt.clone(), None);
+        let run = claim_run(&base, 0, PalwEvalSubjectV1::Parent, CAROL, 0xE0, prompt.clone(), None, Lie::None);
+        let id = h(0xE0);
+        let (s1, _) = at(&base, &p, 1_600, |b| apply_object(b, &ctx(1_600), &run.object).expect("an honest claim"));
+        let claim = s1.claims[&id].clone();
+        let ev = evidence_of(&s1, &run, &claim);
+
+        // The attention's commit point at the stream's last position: a leaf whose cone reduces over the history.
+        let sp = &run.execution.space.stages[0];
+        let dissected = sp
+            .leaves()
+            .iter()
+            .filter(|l| crate::palw_gen_court_v1::palw_gen_dissect_site_v1(sp, &l.coord).is_some())
+            .next_back()
+            .expect("the attention's commit points are dissected");
+        let index = run.execution.space.global_index(&dissected.coord).expect("a leaf of the space");
+
+        // The accusation names the leaf and carries nothing else: under the held regime it opens a dissection;
+        // outside it a leaf is argued whole, and this carries none of its cone.
+        let named = Proof::EvalCone { close: Box::new(ev.named_leaf_close(index).expect("a named leaf")) };
+        let mut accusation = palw_tir_one_move_accusation_v1(id, &claim, bond(BOB), PalwCourtVerdictV2::ExecutorGuilty, named);
+        accusation.signature = vec![9; 8];
+        crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(&accusation).expect("the accusation's own shape");
+        let outcome = |held: bool| palw_tir_one_move_outcome_v1(&s1, &claim, &accusation, &court(), 1 << 26, FORM, held);
+        assert_eq!(outcome(true), Ok(PalwTirOneMoveOutcomeV1::NeedsDissection { leaf: index }), "the held regime dissects it");
+        assert!(outcome(false).is_err(), "outside the held regime a leaf is argued whole, and this carries none of its cone");
+
+        // The fold, under the held regime: a session at Terminal on the leaf; the claim's path to Final is frozen.
+        let mut extras = PalwTransitionExtrasV1::default();
+        extras.held_context_ladder = Some(1 << 26);
+        let object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(accusation.clone()) };
+        let (s2, _) =
+            at_with(&s1, &p, 1_650, &extras, |b| apply_object(b, &ctx(1_650), &object).expect("the accusation opens a dissection"));
+        let sid = *s2.court_sessions.iter().find(|(_, session)| session.claim == id).map(|(sid, _)| sid).expect("a session opened");
+        assert_eq!(s2.court_session(&sid).unwrap().ladder.terminal_index(), Some(index), "at the named leaf");
+        assert!(!s2.claims[&id].phase.is_terminal(), "the claim stands while it is argued");
+        // An accusation that opens a dissection prosecutes: one declaring its own defeat is refused (the IR court's rule).
+        let mut defeat = accusation.clone();
+        defeat.verdict = PalwCourtVerdictV2::ChallengerDefeated;
+        let defeat_object = PalwConsensusObjectV2::TirShardCourtAccused { accusation: Box::new(defeat) };
+        assert!(
+            matches!(fold_with(&s1, &p, 1_650, &extras, &defeat_object), Err(PalwStateV2Error::ShardCourt(_))),
+            "an accusation that opens a dissection declares ExecutorGuilty"
+        );
+
+        // The responder's root claim: admitted by the acceptance layer's checks, then folded.
+        let root = ev.root_claim(index, &LIMITS).expect("a root claim");
+        let signature =
+            fake_sign(&[CAROL], &court_v1::palw_eval_root_claim_message_v1(&sid, &root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
+        crate::palw_court_v2::check_court_eval_root_claim_acceptance_v1(&s2, &sid, &root, &signature, fake_verify)
+            .expect("signed by the claim's bond");
+        let by_the_challenger =
+            fake_sign(&[BOB], &court_v1::palw_eval_root_claim_message_v1(&sid, &root), PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT);
+        assert_eq!(
+            crate::palw_court_v2::check_court_eval_root_claim_acceptance_v1(&s2, &sid, &root, &by_the_challenger, fake_verify),
+            Err(crate::palw_court_v2::PalwCourtV2Error::RungSignatureInvalid),
+            "the responder's key only"
+        );
+        let site = crate::palw_court_v2::check_court_eval_root_claim_admits_v1(&s2, &sid, &root, 2, 2, &court())
+            .expect("the root claim finalizes to the committed leaf");
+        assert!(
+            matches!(
+                crate::palw_court_v2::check_court_eval_root_claim_admits_v1(&s2, &sid, &root, 4, 2, &court()),
+                Err(crate::palw_court_v2::PalwCourtV2Error::ArityIsNotTheDerivedOne { declared: 4, derived: 2 })
+            ),
+            "the ruleset's arity only"
+        );
+
+        // Play the phase to its bottom, honest or with a lie in reduction `lying`'s first element, hidden in the last tile.
+        let tiles = (site.history_positions as u64).div_ceil(2);
+        let open_phase = |lying: Option<usize>| -> PalwChainStateV2 {
+            let mut claimed = root.clone();
+            if let Some(r) = lying {
+                claimed.totals.partials[r][0] += 1;
+            }
+            let signature = fake_sign(
+                &[CAROL],
+                &court_v1::palw_eval_root_claim_message_v1(&sid, &claimed),
+                PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+            );
+            let object = PalwConsensusObjectV2::CourtEvalRootClaimed { session_id: sid, root: Box::new(claimed), arity: 2, signature };
+            let (mut state, _) =
+                at_with(&s2, &p, 1_651, &extras, |b| apply_object(b, &ctx(1_651), &object).expect("the root claim opens F7's phase"));
+            let mut daa = 1_652;
+            while state.tir_dissection_v1(&sid).expect("an open phase").turn() == crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure
+            {
+                let phase = state.tir_dissection_v1(&sid).unwrap().clone();
+                let mut round = ev.round(&phase, &LIMITS).expect("honest children");
+                if let Some(r) = lying {
+                    let ranges = phase.child_ranges();
+                    let at = ranges.iter().position(|(first, count)| (*first..first + count).contains(&(tiles - 1))).unwrap_or(0);
+                    round.children[at].partials[r][0] += 1;
+                }
+                let claimed_children = round.children.clone();
+                let round_object = PalwConsensusObjectV2::CourtTirDissected { session_id: sid, round, signature: vec![1; 8] };
+                (state, _) = at_with(&state, &p, daa, &extras, |b| apply_object(b, &ctx(daa), &round_object).expect("a round"));
+                daa += 1;
+                // The challenger names the child its own partials disagree with.
+                let phase = state.tir_dissection_v1(&sid).unwrap().clone();
+                let honest = ev.round(&phase, &LIMITS).expect("honest children").children;
+                let child = claimed_children.iter().zip(&honest).position(|(c, h)| c != h).unwrap_or(0) as u8;
+                let choice = PalwTirDissectChoiceV1 {
+                    version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                    session_id: sid,
+                    round: phase.round(),
+                    child,
+                };
+                let choice_object = PalwConsensusObjectV2::CourtTirChildChosen { session_id: sid, choice, signature: vec![1; 8] };
+                (state, _) = at_with(&state, &p, daa, &extras, |b| apply_object(b, &ctx(daa), &choice_object).expect("a choice"));
+                daa += 1;
+            }
+            state
+        };
+        // The bottom close and the verdict the acceptance layer derives from it.
+        let close_of = |state: &PalwChainStateV2| -> (PalwConsensusObjectV2, PalwCourtVerdictV2) {
+            let phase = state.tir_dissection_v1(&sid).expect("an open phase").clone();
+            let bottom = ev.bottom(&phase, &LIMITS).expect("the bottom close");
+            let proof = Proof::EvalDissection { bottom: Box::new(bottom) };
+            let verdict =
+                crate::palw_court_v2::adjudicate_court_close_v3(state, &sid, &proof, &court(), 1 << 26, FORM, true, false, None)
+                    .expect("the bottom adjudicates");
+            (PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }, verdict)
+        };
+
+        // An honest responder is acquitted at the bottom, and the challenger pays.
+        let honest = open_phase(None);
+        let (close, verdict) = close_of(&honest);
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest responder is acquitted");
+        let bob_before = honest.bond(&bond(BOB)).unwrap().collateral;
+        let (done, _) = at_with(&honest, &p, 1_700, &extras, |b| apply_object(b, &ctx(1_700), &close).expect("the close folds"));
+        assert!(
+            done.court_session(&sid).is_none() && done.tir_dissection_v1(&sid).is_none(),
+            "the session and its phase end together"
+        );
+        assert!(!done.claims[&id].phase.is_terminal(), "the honest claim stands");
+        assert!(done.bond(&bond(BOB)).unwrap().collateral < bob_before, "the challenger pays");
+
+        // A responder whose totals lie is convicted where the dissection narrows it.
+        let r = (0..site.folds.len())
+            .rev()
+            .find(|i| site.folds[*i] == PalwTirFoldV1::Sum && !root.elements[*i].is_empty())
+            .expect("a sum reduction");
+        let lying = open_phase(Some(r));
+        let (close, verdict) = close_of(&lying);
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "the lie is convicted at its tile");
+        let carol_before = lying.bond(&bond(CAROL)).unwrap().collateral;
+        let (done, _) = at_with(&lying, &p, 1_700, &extras, |b| apply_object(b, &ctx(1_700), &close).expect("the close folds"));
+        assert!(
+            matches!(done.claims[&id].phase, PalwClaimPhaseV2::Voided { .. }),
+            "the claim is voided: {:?}",
+            done.claims[&id].phase
+        );
+        assert!(done.bond(&bond(CAROL)).unwrap().collateral < carol_before, "and its executor slashed");
+        assert!(done.court_session(&sid).is_none() && done.tir_dissection_v1(&sid).is_none());
+        assert!(
+            done.improvement_result(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent).is_none_or(|r| r.scores.is_empty()),
+            "a convicted claim records no score"
         );
     }
 }

@@ -33049,6 +33049,8 @@ fn apply_object(
                                 proof,
                                 crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }
                                     | crate::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { .. }
+                                    // RFC-0004 A6: an evaluation dissection's bottom likewise (E-C8).
+                                    | crate::palw_court_v2::PalwCourtVerdictProofV2::EvalDissection { .. }
                             ),
                         );
                         builder.convict_by_court_verdict_as_v1(
