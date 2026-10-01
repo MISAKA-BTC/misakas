@@ -17,6 +17,8 @@ pack!(
     "encdec-frame",
     "mixin-bart-lineage",
     "t5",
+    "t5-encoder",
+    "whisper",
     "bart",
     "mbart",
     "marian",

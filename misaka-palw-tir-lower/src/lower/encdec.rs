@@ -46,6 +46,10 @@ pub const COUNT_PARAM: &str = "input.count";
 /// The decoder's input params (lifted into inputs in this order).
 pub const XKV_PARAM: &str = "input.xkv";
 pub const ENC_COUNT_PARAM: &str = "input.enc_count";
+/// The encoder's input of a model that reads FEATURE FRAMES, not ids (Whisper's log-mel): `i16 [frames, bins]` in the fixed point
+/// `2^-MEL_Q` (a range of ±4: the features of a normalised log-mel spectrogram lie in about [−1, 1.5]).
+pub const MEL_PARAM: &str = "input.mel";
+pub const MEL_Q: i32 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -76,6 +80,29 @@ impl Positions {
             Positions::Relative { .. } => None,
         }
     }
+}
+
+/// One strided 1-D convolution of an encoder's front end (`Conv1d` with zero padding and a bias, then the stack's activation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StemConv {
+    pub k: usize,
+    pub stride: usize,
+    pub pad: usize,
+}
+
+/// What the encoder reads.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum EncInput {
+    /// Token ids (`input.ids`, padded to the source length; `input.count` real ones).
+    #[default]
+    Tokens,
+    /// Feature frames, `input.mel` = `i16 [frames, bins]`, through a stem of 1-D convolutions to the source rows (Whisper: two,
+    /// `k3 s1` and `k3 s2`, so `frames` = 2·rows). The source is a FIXED length: there is no count and no mask.
+    Frames { bins: usize, frames: usize, stem: Vec<StemConv> },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// One normalised encoder-decoder: the model's math ([`Positions`], norms, activation, scales) and where its
@@ -120,6 +147,16 @@ pub struct EncDecSpec {
     pub decoder_start: u32,
     /// The checkpoint's tensor names.
     pub names: EncDecNames,
+    /// What the encoder reads: ids (every family above), or feature frames through a stem (Whisper).
+    #[serde(default)]
+    pub input: EncInput,
+    /// The keys' projections carry a bias when [`Self::bias`] is set (Whisper's do not: `k_proj` is bias-free).
+    #[serde(default = "yes")]
+    pub k_bias: bool,
+    /// Rows of the ENCODER's absolute-position table when it is not the decoder's (`positions` gives the decoder's: Whisper's
+    /// encoder reads 1,500 rows, its decoder 448).
+    #[serde(default)]
+    pub enc_pos_rows: Option<usize>,
 }
 
 /// The schema id of a serialised [`EncDecSpec`]: what a data adapter of kind `encdec` instantiates.
@@ -134,23 +171,44 @@ impl EncDecSpec {
         self.dec_heads.saturating_mul(self.dec_head_dim)
     }
 
+    /// An encoder alone (`T5EncoderModel`): no decoder, the rows are the output.
+    pub fn encoder_only(&self) -> bool {
+        self.dec_layers == 0
+    }
+
+    /// A source of fixed length (feature frames): no count input, no mask over padding.
+    pub fn fixed_source(&self) -> bool {
+        matches!(self.input, EncInput::Frames { .. })
+    }
+
+    /// The encoder's rows of absolute positions, when it has a table.
+    fn enc_table_rows(&self, rows: usize) -> usize {
+        self.enc_pos_rows.unwrap_or(rows)
+    }
+
     /// A spec an adapter built (or a config produced) is untrusted: every size is bounded and the names must
     /// agree with the flags BEFORE anything is sized or bound on them. A refusal names the field.
     pub fn validate(&self) -> Result<()> {
         let bad = |m: String| LowerError::bad(format!("{}: {m}", self.architecture));
         const MAX_DIM: usize = 1 << 24;
-        for (what, v) in [
+        let mut sizes = vec![
             ("vocab_size", self.vocab),
             ("d_model", self.d),
             ("encoder layers", self.enc_layers),
-            ("decoder layers", self.dec_layers),
             ("encoder heads", self.enc_heads),
-            ("decoder heads", self.dec_heads),
             ("encoder head width", self.enc_head_dim),
-            ("decoder head width", self.dec_head_dim),
             ("encoder ffn width", self.enc_ffn),
-            ("decoder ffn width", self.dec_ffn),
-        ] {
+        ];
+        // An encoder alone has no decoder to size (its `dec_*` fields are never read).
+        if !self.encoder_only() {
+            sizes.extend([
+                ("decoder layers", self.dec_layers),
+                ("decoder heads", self.dec_heads),
+                ("decoder head width", self.dec_head_dim),
+                ("decoder ffn width", self.dec_ffn),
+            ]);
+        }
+        for (what, v) in sizes {
             if v == 0 || v > MAX_DIM {
                 return Err(bad(format!("{what} {v} is outside 1..=2^24")));
             }
@@ -163,6 +221,25 @@ impl EncDecSpec {
         }
         if self.dec_layers.saturating_mul(self.dec_inner()) > MAX_DIM {
             return Err(bad("decoder layers × cross-attention width is past 2^24 (the stacked cross keys/values)".into()));
+        }
+        if let EncInput::Frames { bins, frames, stem } = &self.input {
+            if *bins == 0 || *bins > 1 << 16 || *frames == 0 || *frames > MAX_DIM || stem.is_empty() || stem.len() > 8 {
+                return Err(bad(format!("a feature-frame input of {frames} frames of {bins} bins through {} stem convolutions", stem.len())));
+            }
+            if stem.iter().any(|c| c.k == 0 || c.k > 64 || c.stride == 0 || c.stride > 64 || c.pad > 64) {
+                return Err(bad("a stem convolution outside kernel 1..=64, stride 1..=64, padding 0..=64".into()));
+            }
+            if matches!(self.positions, Positions::Relative { .. }) {
+                return Err(bad("a feature-frame encoder has absolute positions, not a relative bias".into()));
+            }
+            if self.names.enc.stem.len() != stem.len() {
+                return Err(bad(format!("{} stem convolutions but names.enc.stem names {}", stem.len(), self.names.enc.stem.len())));
+            }
+        }
+        if let Some(r) = self.enc_pos_rows
+            && (r == 0 || r > MAX_DIM)
+        {
+            return Err(bad(format!("enc_pos_rows {r} is outside 1..=2^24")));
         }
         if self.decoder_start as usize >= self.vocab {
             return Err(bad(format!("decoder_start {} is not a token of a vocabulary of {}", self.decoder_start, self.vocab)));
@@ -202,6 +279,9 @@ impl EncDecSpec {
             name(&format!("qkvo[{i}]"), q)?;
         }
         for (which, st, decoder) in [("enc", &n.enc, false), ("dec", &n.dec, true)] {
+            if decoder && self.encoder_only() {
+                continue;
+            }
             name(&format!("{which}.prefix"), &st.prefix)?;
             if !st.layer.contains("{L}") || st.layer.matches('{').count() != 1 || st.layer.matches('}').count() != 1 {
                 return Err(bad(format!("names.{which}.layer `{}` must contain `{{L}}` once and no other braces", st.layer)));
@@ -225,6 +305,9 @@ impl EncDecSpec {
                     (true, None) => return Err(bad(format!("{what} is set but names.{which}.{what} is not given"))),
                     _ => {}
                 }
+            }
+            for (i, m) in st.stem.iter().enumerate() {
+                name(&format!("{which}.stem[{i}]"), m)?;
             }
             match (&self.positions, &st.positions, &st.rel_bias) {
                 (Positions::Learned { .. }, Some(p), _) => name(&format!("{which}.positions"), p)?,
@@ -328,6 +411,9 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
                 logits_bias: false,
                 decoder_start: start,
                 names: family_names(Family::T5, gated),
+                input: EncInput::Tokens,
+                k_bias: true,
+                enc_pos_rows: None,
             })
         }
         "BartForConditionalGeneration" | "MBartForConditionalGeneration" | "MarianMTModel" | "PegasusForConditionalGeneration" => {
@@ -383,6 +469,9 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
                 logits_bias: true,
                 decoder_start: start,
                 names: family_names(family, false),
+                input: EncInput::Tokens,
+                k_bias: true,
+                enc_pos_rows: None,
             })
         }
         other => Err(LowerError::not_lowerable(format!("`{other}` is not an encoder-decoder this lowerer models"))),
@@ -460,6 +549,9 @@ pub struct StackNames {
     /// T5's relative-position bias table: the tensor's name under layer 0's prefix.
     #[serde(default)]
     pub rel_bias: Option<String>,
+    /// The convolutions of a feature-frame encoder's stem, in order: modules under `prefix` (`conv1`, `conv2`).
+    #[serde(default)]
+    pub stem: Vec<String>,
 }
 
 /// The checkpoint's tensor names for both stacks: the data the five hard-wired families carried as Rust.
@@ -507,6 +599,7 @@ pub fn family_names(family: Family, gated: bool) -> EncDecNames {
                     final_norm: Some("final_layer_norm".into()),
                     positions: None,
                     rel_bias: Some("layer.0.SelfAttention.relative_attention_bias.weight".into()),
+                    stem: Vec::new(),
                 }
             };
             EncDecNames {
@@ -537,6 +630,7 @@ pub fn family_names(family: Family, gated: bool) -> EncDecNames {
                     final_norm: Some("layer_norm".into()),
                     positions: Some("embed_positions".into()),
                     rel_bias: None,
+                    stem: Vec::new(),
                 }
             };
             let ignored: &[&str] = if family == Family::Marian {
@@ -593,16 +687,20 @@ fn push_ffn(v: &mut Table, s: &EncDecSpec, lp: &str, st: &StackNames, inter: usi
 /// relative bias, `layernorm_embedding`.
 fn push_embedding(v: &mut Table, s: &EncDecSpec, decoder: bool, has: &dyn Fn(&str) -> bool) {
     let st = stack_names(s, decoder);
-    v.push(("embed.table".into(), vec![s.vocab, s.d], false, Src::t(s.names.shared.clone())));
+    // A feature-frame encoder has no token table: its input is the frames.
+    if decoder || !s.fixed_source() {
+        v.push(("embed.table".into(), vec![s.vocab, s.d], false, Src::t(s.names.shared.clone())));
+    }
     let positions = || format!("{}{}.weight", st.prefix, st.positions.as_deref().unwrap_or_default());
+    let table_rows = |rows: usize| if decoder { rows } else { s.enc_table_rows(rows) };
     match &s.positions {
         Positions::Learned { rows, .. } => {
-            v.push(("embed.pos_table".into(), vec![*rows, s.d], false, Src::t(positions())));
+            v.push(("embed.pos_table".into(), vec![table_rows(*rows), s.d], false, Src::t(positions())));
         }
         Positions::Sinusoidal { rows } => {
             let t = positions();
             if has(&t) {
-                v.push(("embed.pos_table".into(), vec![*rows, s.d], false, Src::t(t)));
+                v.push(("embed.pos_table".into(), vec![table_rows(*rows), s.d], false, Src::t(t)));
             }
         }
         Positions::Relative { buckets, .. } => {
@@ -634,21 +732,34 @@ fn encoder_table(s: &EncDecSpec, has: &dyn Fn(&str) -> bool) -> Table {
     let [q, k, vv, o] = &s.names.qkvo;
     let lp = &st.layer;
     let (d, inner) = (s.d, s.enc_inner());
+    // The stem's convolutions: `Conv1d` weights `[cout, cin, k]` as the `[cout, cin·k]` the lowering reads.
+    if let EncInput::Frames { bins, stem, .. } = &s.input {
+        for (i, c) in stem.iter().enumerate() {
+            let cin = if i == 0 { *bins } else { d };
+            let ck = format!("{}{}", st.prefix, st.stem[i]);
+            let id = format!("stem{}", i + 1);
+            v.push((format!("{id}.w"), vec![d, cin * c.k], false, Src::t(format!("{ck}.weight")).reshape(vec![d, cin * c.k])));
+            v.push((format!("{id}.b"), vec![d], false, Src::t(format!("{ck}.bias"))));
+        }
+    }
     push_norm(&mut v, "norm.self", &format!("{lp}{}", st.self_norm), d, s.bias, true);
     push_lin(&mut v, "attn.q", &format!("{lp}{}.{q}", st.self_attn), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias && s.k_bias, true);
     push_lin(&mut v, "attn.v", &format!("{lp}{}.{vv}", st.self_attn), inner, d, s.bias, true);
     push_lin(&mut v, "attn.o", &format!("{lp}{}.{o}", st.self_attn), d, inner, s.bias, true);
     push_norm(&mut v, "norm.ffn", &format!("{lp}{}", st.ffn_norm), d, s.bias, true);
     push_ffn(&mut v, s, lp, st, s.enc_ffn);
     push_final(&mut v, s, false);
+    if s.encoder_only() {
+        return v;
+    }
     let dst = &s.names.dec;
     let dl = dst.layer.replace("{L}", "{E}");
     let (dn, di) = (s.dec_layers, s.dec_inner());
-    for (role, proj) in [("xkv.k", k), ("xkv.v", vv)] {
+    for (role, proj, has_bias) in [("xkv.k", k, s.bias && s.k_bias), ("xkv.v", vv, s.bias)] {
         let w = Src::t(format!("{dl}{}.{proj}.weight", dst.cross_attn)).stack('E', dn).reshape(vec![dn * di, d]);
         v.push((format!("{role}.w"), vec![dn * di, d], false, w));
-        if s.bias {
+        if has_bias {
             let b = Src::t(format!("{dl}{}.{proj}.bias", dst.cross_attn)).stack('E', dn).reshape(vec![dn * di]);
             v.push((format!("{role}.b"), vec![dn * di], false, b));
         }
@@ -665,7 +776,7 @@ fn decoder_table(s: &EncDecSpec, has: &dyn Fn(&str) -> bool) -> Table {
     let (d, inner) = (s.d, s.dec_inner());
     push_norm(&mut v, "norm.self", &format!("{lp}{}", st.self_norm), d, s.bias, true);
     push_lin(&mut v, "attn.q", &format!("{lp}{}.{q}", st.self_attn), inner, d, s.bias, true);
-    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias, true);
+    push_lin(&mut v, "attn.k", &format!("{lp}{}.{k}", st.self_attn), inner, d, s.bias && s.k_bias, true);
     push_lin(&mut v, "attn.v", &format!("{lp}{}.{vv}", st.self_attn), inner, d, s.bias, true);
     push_lin(&mut v, "attn.o", &format!("{lp}{}.{o}", st.self_attn), d, inner, s.bias, true);
     push_norm(&mut v, "norm.cross", &format!("{lp}{}", st.cross_norm), d, s.bias, true);
@@ -738,9 +849,17 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
 /// checkpoint carries a tensor (an untied head, a saved sinusoid).
 #[allow(clippy::type_complexity)]
 pub fn hl_programs(s: &EncDecSpec, lmax: usize, has: &dyn Fn(&str) -> bool) -> Result<((HlProgram, Binding), (HlProgram, Binding))> {
-    let enc = synth(s, "encoder", encoder_table(s, has), s.enc_layers, lmax, &["final.", "xkv."])?;
+    if s.encoder_only() {
+        return Err(LowerError::not_lowerable(format!("{}: an encoder alone has no decoder program (use hl_encoder)", s.architecture)));
+    }
+    let enc = hl_encoder(s, lmax, has)?;
     let dec = synth(s, "decoder", decoder_table(s, has), s.dec_layers, 1, &["final.", "head."])?;
     Ok((enc, dec))
+}
+
+/// The encoder stage's HL program and binding alone (an encoder-only model has nothing else).
+pub fn hl_encoder(s: &EncDecSpec, lmax: usize, has: &dyn Fn(&str) -> bool) -> Result<(HlProgram, Binding)> {
+    synth(s, "encoder", encoder_table(s, has), s.enc_layers, lmax, &["final.", "xkv."])
 }
 
 // ───────────────────────────── the float reference ─────────────────────────────
@@ -948,22 +1067,84 @@ pub struct EncoderOut {
 /// The float encoder over the real source ids. With `stats`, every site's statistics under the
 /// lowering's names (`pre.embed.sum`, `L1.attn.q`, `post.xkv.L0.k`, …).
 pub fn float_encoder(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize], stats: Option<&mut Stats>) -> Result<EncoderOut> {
-    encoder_run(hl, s, params, ids, Obs { stats, trace: None })
+    encoder_run(hl, s, params, Source::Ids(ids), Obs { stats, trace: None })
+}
+
+/// What a float encoder run reads: the source ids, or the feature frames `[T][bins]` of a model with a stem.
+#[derive(Clone, Copy, Debug)]
+pub enum Source<'a> {
+    Ids(&'a [usize]),
+    Frames(&'a [Vec<f64>]),
+}
+
+/// [`float_encoder`] over either kind of input.
+pub fn float_encoder_src(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<'_>, stats: Option<&mut Stats>) -> Result<EncoderOut> {
+    encoder_run(hl, s, params, src, Obs { stats, trace: None })
 }
 
 /// [`float_encoder`], keeping every site's real rows for the per-site diagnosis.
 pub fn float_encoder_traced(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize], trace: &mut Trace) -> Result<EncoderOut> {
-    encoder_run(hl, s, params, ids, Obs { stats: None, trace: Some(trace) })
+    encoder_run(hl, s, params, Source::Ids(ids), Obs { stats: None, trace: Some(trace) })
 }
 
-fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize], mut stats: Obs<'_>) -> Result<EncoderOut> {
-    let p = P { hl, params, s };
-    let n = ids.len();
-    if n == 0 {
-        return Err(LowerError::eval("an empty source"));
+/// The stem's convolutions in `f64` (each with its activation), observing `pre.stem{i}` (the convolution's output) and
+/// `pre.stem{i}.act` (the activated one) under the lowering's site names.
+fn stem_float(p: &P<'_>, frames: &[Vec<f64>], stats: &mut Obs<'_>) -> Result<Vec<Vec<f64>>> {
+    let s = p.s;
+    let EncInput::Frames { bins, stem, .. } = &s.input else {
+        return Err(LowerError::eval("internal: a stem for a model that reads ids"));
+    };
+    if frames.first().is_some_and(|f| f.len() != *bins) {
+        return Err(LowerError::eval(format!("feature frames of {} bins for a model of {bins}", frames[0].len())));
     }
+    let get = |name: &str| -> Result<Vec<f32>> { Ok(p.params.get(hl_param(p.hl, name)?, None)?.data.clone()) };
+    let mut y = frames.to_vec();
+    for (i, c) in stem.iter().enumerate() {
+        let id = format!("stem{}", i + 1);
+        let cin = if i == 0 { *bins } else { s.d };
+        let op = super::cnn::ConvOp::conv1d(&id, cin, s.d, c.k, c.stride, c.pad, true);
+        let pre = super::cnn::conv1d_float(&y, &op, &get(&format!("{id}.w"))?, Some(&get(&format!("{id}.b"))?))?;
+        observe(stats, format!("pre.{id}"), &pre);
+        let act = |v: f64| crate::float_ref::act(s.act, v as f32) as f64;
+        y = pre.iter().map(|r| r.iter().map(|v| act(*v)).collect()).collect();
+        observe(stats, format!("pre.{id}.act"), &y);
+    }
+    Ok(y)
+}
+
+fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<'_>, mut stats: Obs<'_>) -> Result<EncoderOut> {
+    let p = P { hl, params, s };
     let (h, dh) = (s.enc_heads, s.enc_head_dim);
-    let mut x = p.embed(ids, 0, &mut stats)?;
+    let (n, mut x) = match src {
+        Source::Ids(ids) => {
+            if ids.is_empty() {
+                return Err(LowerError::eval("an empty source"));
+            }
+            (ids.len(), p.embed(ids, 0, &mut stats)?)
+        }
+        Source::Frames(f) => {
+            let y = stem_float(&p, f, &mut stats)?;
+            if y.is_empty() {
+                return Err(LowerError::eval("an empty source"));
+            }
+            // The encoder's absolute positions, read from row 0.
+            let table = p.get("embed.pos_table", None)?;
+            let d = s.d;
+            if y.len() * d > table.len() {
+                return Err(LowerError::eval(format!("{} source rows against a position table of {}", y.len(), table.len() / d)));
+            }
+            let x: Vec<Vec<f64>> = y.iter().enumerate().map(|(i, r)| r.iter().enumerate().map(|(j, v)| v + table[i * d + j]).collect()).collect();
+            observe(&mut stats, "pre.embed.sum".into(), &x);
+            let x = if s.embed_norm {
+                let y = p.norm("embed.norm", None, &x)?;
+                observe(&mut stats, "pre.embed.norm".into(), &y);
+                y
+            } else {
+                x
+            };
+            (y.len(), x)
+        }
+    };
     let rel = match &s.positions {
         Positions::Relative { buckets, max_distance } => {
             let t = p.get("attn.rel_bias", None)?;
@@ -1026,6 +1207,11 @@ fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize
     } else {
         x
     };
+    if s.encoder_only() {
+        // The rows are the output (`i32` at a calibrated power-of-two unit).
+        observe(&mut stats, "post.out".into(), &hidden);
+        return Ok(EncoderOut { count: n, hidden, xk: Vec::new(), xv: Vec::new() });
+    }
     let (dn, di) = (s.dec_layers, s.dec_inner());
     let (kw, vw) = (p.get("xkv.k.w", None)?, p.get("xkv.v.w", None)?);
     let (kb, vb) = (p.opt("xkv.k.b", None)?, p.opt("xkv.v.b", None)?);
@@ -1238,9 +1424,10 @@ fn norm_kind(s: &EncDecSpec) -> NormKind {
     if s.rms { NormKind::Rms } else { NormKind::Layer }
 }
 
-/// `{name}.b` when the family has biases.
+/// `{name}.b` when the family has biases (a key projection only when `k_bias`: Whisper's `k_proj` has none).
 fn bias_name(s: &EncDecSpec, name: &str) -> Option<String> {
-    s.bias.then(|| format!("{name}.b"))
+    let key = matches!(name, "attn.k" | "xattn.k");
+    (s.bias && (s.k_bias || !key)).then(|| format!("{name}.b"))
 }
 
 fn input_ref(b: &BlockBuilder<'_>, name: &str) -> Result<tir::Ref> {
@@ -1311,8 +1498,9 @@ fn word_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec,
 
 /// The absolute-position table at the residual scale, `i32 [rows, d]`: the checkpoint's (learned,
 /// or Pegasus's saved sinusoid) or the computed sinusoid (Marian).
-fn pos_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec, first: usize, count: usize) -> Result<tir::Ref> {
+fn pos_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec, first: usize, count: usize, decoder: bool) -> Result<tir::Ref> {
     let (rows, _) = s.positions.table().ok_or_else(|| LowerError::eval("internal: no absolute positions"))?;
+    let rows = if decoder { rows } else { s.enc_table_rows(rows) };
     let d = s.d;
     let pp = hl_param(cx.hl, "embed.pos_table").ok();
     if first + count > rows {
@@ -1490,10 +1678,22 @@ fn ctx_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, o: tir::Ref,
 /// Lower the encoder stage: one position over `L = lmax` source rows, out the stacked cross keys
 /// and values `i16 [D, 2, L, inner]` (the program's `Final` output).
 pub fn lower_encoder(hl: &HlProgram, s: &EncDecSpec, lmax: u32) -> Result<Lowered> {
-    if let Some((rows, off)) = s.positions.table()
-        && off + lmax as usize > rows
-    {
-        return Err(LowerError::not_lowerable(format!("{}: a source of {lmax} needs positions up to {} of {rows}", s.architecture, off + lmax as usize)));
+    if let Some((rows, off)) = s.positions.table() {
+        let rows = s.enc_table_rows(rows);
+        if off + lmax as usize > rows {
+            return Err(LowerError::not_lowerable(format!("{}: a source of {lmax} needs positions up to {} of {rows}", s.architecture, off + lmax as usize)));
+        }
+    }
+    if let EncInput::Frames { bins, frames, stem } = &s.input {
+        // The stem must map the frames onto exactly the source rows (the encoder's length is fixed).
+        let mut t = *frames;
+        for (i, c) in stem.iter().enumerate() {
+            let op = super::cnn::ConvOp::conv1d("stem", if i == 0 { *bins } else { s.d }, s.d, c.k, c.stride, c.pad, true);
+            t = super::cnn::conv1d_out_len(t, &op).ok_or_else(|| LowerError::bad(format!("{}: {t} frames are shorter than stem convolution {}'s window", s.architecture, i + 1)))?;
+        }
+        if t != lmax as usize {
+            return Err(LowerError::not_lowerable(format!("{}: {frames} frames through the stem give {t} source rows, not {lmax}", s.architecture)));
+        }
     }
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let token_bound = u32::try_from(s.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
@@ -1534,12 +1734,33 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
         BlockRole::Pre => {
             // The inputs first, so that lifting them leaves every other param's index alone.
             let lu = l as usize;
-            let ids = decl(&mut b, cx, &lb, IDS_PARAM, DType::Idx, &[lu], false, input_fill(DType::Idx, vec![lu]))?;
-            decl(&mut b, cx, &lb, COUNT_PARAM, DType::Idx, &[], false, input_fill(DType::Idx, vec![]))?;
-            let ids = b.clamp(ids, 0, s.vocab as i64 - 1, DType::Idx);
-            let word = word_rows(&mut b, cx, &lb, s, ids, l)?;
+            let word = match &s.input {
+                EncInput::Tokens => {
+                    let ids = decl(&mut b, cx, &lb, IDS_PARAM, DType::Idx, &[lu], false, input_fill(DType::Idx, vec![lu]))?;
+                    decl(&mut b, cx, &lb, COUNT_PARAM, DType::Idx, &[], false, input_fill(DType::Idx, vec![]))?;
+                    let ids = b.clamp(ids, 0, s.vocab as i64 - 1, DType::Idx);
+                    word_rows(&mut b, cx, &lb, s, ids, l)?
+                }
+                EncInput::Frames { bins, frames, stem } => {
+                    // The frames as `i16` codes at a fixed unit, through the stem's convolutions and their activations, to the
+                    // source rows at the residual scale.
+                    let mel = decl(&mut b, cx, &lb, MEL_PARAM, DType::I16, &[*frames, *bins], false, input_fill(DType::I16, vec![*frames, *bins]))?;
+                    let mut y = rows_val(mel, DType::I16, ScaleKey { base: Base::Fixed(2f64.powi(-MEL_Q)), factor: 1.0 }, *bins, "mel");
+                    let mut t = *frames;
+                    for (i, c) in stem.iter().enumerate() {
+                        let id = format!("stem{}", i + 1);
+                        let op = super::cnn::ConvOp::conv1d(&id, if i == 0 { *bins } else { s.d }, s.d, c.k, c.stride, c.pad, true);
+                        let v = super::cnn::lower_conv1d(&mut b, cx, &mut lb, &y, &id, &op, t, &codes_want(&id), false)?;
+                        t = super::cnn::conv1d_out_len(t, &op).ok_or_else(|| LowerError::eval("internal: the stem's geometry was checked"))?;
+                        note(&b, cx, &v);
+                        y = lower_table_named(&mut b, cx, &mut lb, &v, TableFn::Act(s.act), &format!("{id}.act"))?;
+                        note(&b, cx, &y);
+                    }
+                    coerce(&mut b, cx, &mut lb, &y, DType::I32, &resid)?.r
+                }
+            };
             let pos = match s.positions.table() {
-                Some((_, off)) => Some(pos_table(&mut b, cx, &lb, s, off, lu)?),
+                Some((_, off)) => Some(pos_table(&mut b, cx, &lb, s, off, lu, false)?),
                 None => None,
             };
             let x = embed_finish(&mut b, cx, &mut lb, s, word, pos)?;
@@ -1576,12 +1797,16 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 let sum = b.add(logits, bias, DType::I64);
                 logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
             }
-            // Keys at or past the count score i32::MIN, which IntExp maps to exactly 0.
-            let count = input_ref(&b, COUNT_PARAM)?;
-            let iota = b.iota(DType::Idx, &[Dim::Fixed(l)], 0, 0, 1);
-            let keep = b.compare(iota, count, tir::Cmp::Lt);
-            let neg = b.c(DType::I32, i32::MIN as i128);
-            let masked = b.select(keep, logits, neg, DType::I32);
+            // Keys at or past the count score i32::MIN, which IntExp maps to exactly 0 (a fixed-length source has none).
+            let masked = if s.fixed_source() {
+                logits
+            } else {
+                let count = input_ref(&b, COUNT_PARAM)?;
+                let iota = b.iota(DType::Idx, &[Dim::Fixed(l)], 0, 0, 1);
+                let keep = b.compare(iota, count, tir::Cmp::Lt);
+                let neg = b.c(DType::I32, i32::MIN as i128);
+                b.select(keep, logits, neg, DType::I32)
+            };
             let pm = if split_softmax(h, l, dh) { softmax_committed(&mut b, masked, 24 - LOGIT_Q) } else { b.softmax_shifted(masked, 24 - LOGIT_Q) };
             let o = b.matmul(pm, v.r, DType::I64);
             let ctx = ctx_rows(&mut b, cx, &mut lb, o, &v.key, "attn.ctx", l, h, dh)?;
@@ -1602,6 +1827,17 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             } else {
                 codes_rows(&mut b, cx, &mut lb, &x)?
             };
+            if s.encoder_only() {
+                // The rows are the output: `i32` at a calibrated power-of-two unit.
+                let ok = ScaleKey { base: Base::Pow2Site { names: vec!["out".into()] }, factor: 1.0 };
+                let rows = coerce(&mut b, cx, &mut lb, &Val { site: "out".into(), ..xn }, DType::I32, &ok)?;
+                let out = ensure_node(&mut b, &rows);
+                let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };
+                b.commit(out.r);
+                note_site(cx, tb, &out);
+                cx.logits_key = Some(ok);
+                return Ok((b.finish(&[]), Some(oi)));
+            }
             // Every decoder layer's k and v: one MatMul against the stacked projections, channel
             // `(l·2 + kv)·inner + j`, each narrowed to its decoder layer's own code scale.
             let (dn, di) = (s.dec_layers, s.dec_inner());
@@ -1666,8 +1902,10 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                     Ok(v)
                 }),
             )?;
+            // The offsets: a key or a value projection without a bias contributes zeros (Whisper's keys).
             let z = match (kbp, vbp) {
-                (Some(kb), Some(vb)) => Some(decl(
+                (None, None) => None,
+                (kb, vb) => Some(decl(
                     &mut b,
                     cx,
                     &lb,
@@ -1676,20 +1914,19 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                     &[n],
                     false,
                     Arc::new(move |c| {
-                        let (bk, bv) = (c.f(kb)?, c.f(vb)?);
+                        let (bk, bv) = (kb.map(|p| c.f(p)).transpose()?, vb.map(|p| c.f(p)).transpose()?);
                         let mut v = Vec::with_capacity(n);
                         for l in 0..dn {
                             for (kv, bt) in [&bk, &bv].into_iter().enumerate() {
                                 let st = c.scale(&key_of(l, kv))?;
                                 for j in 0..di {
-                                    v.push((bt.data[l * di + j] as f64 / st).round() as i64);
+                                    v.push(bt.map_or(0, |t| (t.data[l * di + j] as f64 / st).round() as i64));
                                 }
                             }
                         }
                         Ok(IntTensor::i64(vec![n], v))
                     }),
                 )?),
-                _ => None,
             };
             let acc = b.matmul(xn.r, wt, DType::I64);
             let r = narrow(&mut b, acc, m, sh, z, DType::I16);
@@ -1739,12 +1976,14 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
         BlockRole::Pre => {
             let lu = l as usize;
             decl(&mut b, cx, &lb, XKV_PARAM, DType::I16, &[dn, 2, lu, di], false, input_fill(DType::I16, vec![dn, 2, lu, di]))?;
-            decl(&mut b, cx, &lb, ENC_COUNT_PARAM, DType::Idx, &[], false, input_fill(DType::Idx, vec![]))?;
+            if !s.fixed_source() {
+                decl(&mut b, cx, &lb, ENC_COUNT_PARAM, DType::Idx, &[], false, input_fill(DType::Idx, vec![]))?;
+            }
             let tok = b.reshape_fixed(tir::Ref::Input(INPUT_TOKEN), &[1]);
             let word = word_rows(&mut b, cx, &lb, s, tok, 1)?;
             let pos = match s.positions.table() {
                 Some((rows, off)) => {
-                    let t = pos_table(&mut b, cx, &lb, s, 0, rows)?;
+                    let t = pos_table(&mut b, cx, &lb, s, 0, rows, true)?;
                     let p = b.cast(tir::Ref::Input(INPUT_POS), DType::I64);
                     let o = b.c(DType::I64, off as i128);
                     let at = b.add(p, o, DType::I64);
@@ -1830,11 +2069,15 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let (kq, kk2, vk, scale) = (xq.key.clone(), site_key("xattn.k"), site_key("xattn.v"), s.attn_scale);
             let (m, sh) = decl_ms(&mut b, cx, &lb, "xattn.score", 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk2)? * scale * (1u64 << LOGIT_Q) as f64])))?;
             let logits = narrow(&mut b, sc, m, sh, None, DType::I32);
-            let count = input_ref(&b, ENC_COUNT_PARAM)?;
-            let iota = b.iota(DType::Idx, &[Dim::Fixed(l)], 0, 0, 1);
-            let keep = b.compare(iota, count, tir::Cmp::Lt);
-            let neg = b.c(DType::I32, i32::MIN as i128);
-            let masked = b.select(keep, logits, neg, DType::I32);
+            let masked = if s.fixed_source() {
+                logits
+            } else {
+                let count = input_ref(&b, ENC_COUNT_PARAM)?;
+                let iota = b.iota(DType::Idx, &[Dim::Fixed(l)], 0, 0, 1);
+                let keep = b.compare(iota, count, tir::Cmp::Lt);
+                let neg = b.c(DType::I32, i32::MIN as i128);
+                b.select(keep, logits, neg, DType::I32)
+            };
             let pm = b.softmax_shifted(masked, 24 - LOGIT_Q);
             let o = b.matmul(pm, vv, DType::I64); // [h, 1, dh]
             let xctx = ctx_rows(&mut b, cx, &mut lb, o, &vk, "xattn.ctx", 1, h32, dh32)?;

@@ -311,6 +311,92 @@ fn pegasus_generates_through_the_two_stage_pipeline() {
     check("pegasus");
 }
 
+/// **`T5EncoderModel`** — an encoder alone (the text encoder of Flux, SD3, PixArt, Wan, Sana): the adapter `t5-encoder` is data
+/// only; the encoder's final-normed rows are the program's output (`i32` rows at a calibrated power-of-two unit). The float
+/// encoder against HF, calibration, the integer rows against HF's by cosine, the three implementations and the court, admission.
+#[test]
+fn t5_encoder_rows_match_hf() {
+    use misaka_palw_tir_lower::hf_schema::{AdapterSource, ReadOptions, read_encdec};
+    use rand::{Rng, SeedableRng};
+    let dir = fixture_dir("t5_encoder");
+    let cfg: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).expect("config")).expect("json");
+    let o: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
+    let read = read_encdec(&cfg, &ReadOptions::default()).unwrap_or_else(|e| panic!("the adapter: {e}"));
+    assert!(matches!(&read.adapter, AdapterSource::BuiltIn { id, .. } if id == "t5-encoder"), "{:?}", read.adapter);
+    let s = read.spec;
+    assert!(s.encoder_only());
+    let ck = Checkpoint::open(&dir).expect("checkpoint");
+    let names: std::collections::BTreeSet<String> = ck.names().into_iter().collect();
+    let has = |n: &str| names.contains(n);
+    let (ehl, ebind) = encdec::hl_encoder(&s, LMAX as usize, &has).expect("hl encoder");
+    let (ep, unread) = ParamStore::from_source(&ehl, &ebind, &ck).expect("encoder params");
+    assert!(unread.is_empty(), "checkpoint tensors the encoder never reads: {unread:?}");
+    // T5's buckets against HF's own.
+    if let encdec::Positions::Relative { buckets, max_distance } = s.positions {
+        let b = &o["buckets_bidirectional"];
+        let from = b["from"].as_i64().unwrap();
+        for (i, want) in ids_of(&b["buckets"]).iter().enumerate() {
+            assert_eq!(encdec::t5_bucket(from + i as i64, true, buckets, max_distance), *want, "bucket of {}", from + i as i64);
+        }
+    }
+    // 1. The float encoder is HF's.
+    let recs = o["records"].as_array().unwrap();
+    for rec in recs {
+        let src = ids_of(&rec["input_ids"]);
+        let enc = encdec::float_encoder(&ehl, &s, &ep, &src, None).expect("float encoder");
+        let r = rel(&enc.hidden.concat(), &rows_of(&rec["encoder_hidden"]).concat());
+        eprintln!("t5_encoder float vs HF rows: rel {r:.2e}");
+        assert!(r < 1e-4, "float encoder vs HF rel {r}");
+    }
+    // 2. Calibration, 3. the program.
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
+    let mut es = Stats::new();
+    for _ in 0..12 {
+        let n = rng.gen_range(3..=LMAX as usize);
+        let src: Vec<usize> = (0..n).map(|_| rng.gen_range(0..s.vocab)).collect();
+        encdec::float_encoder(&ehl, &s, &ep, &src, Some(&mut es)).expect("calibration");
+    }
+    let quiet = |_: usize, _: usize| {};
+    let elw = encdec::lower_encoder(&ehl, &s, LMAX).expect("lower encoder");
+    let emat = materialise(&elw, &ehl, &Resident(Arc::new(ep)), &es, &QuantPolicy::default(), &quiet).expect("materialise");
+    let e2 = encoder::encdec_encoder_v2(&elw, s.vocab as u32, LMAX).expect("encoder v2");
+    let e_params = encoder::lifted_params(&elw.program, &[encdec::IDS_PARAM, encdec::COUNT_PARAM], &emat.params);
+    let interp = tir::interp_v2::InterpreterV2::new(&e2).expect("interpreter");
+    for rec in recs {
+        let src: Vec<u32> = ids_of(&rec["input_ids"]).iter().map(|t| *t as u32).collect();
+        let mut padded = src.clone();
+        padded.resize(LMAX as usize, 0);
+        let mut inputs = tir::interp_v2::MapInputs::default();
+        inputs.constant.insert(0, IntTensor::idx(vec![LMAX as usize], padded).to_tir());
+        inputs.constant.insert(1, IntTensor::idx(vec![], vec![src.len() as u32]).to_tir());
+        let out = interp.run_positions(&e_params, &inputs, 1).expect("the integer encoder").remove(0).output;
+        let d = s.d;
+        let got: Vec<f64> = out.data[..src.len() * d].iter().map(|c| *c as f64 * emat.logits_scale).collect();
+        let want = rows_of(&rec["encoder_hidden"]).concat();
+        let r = rel(&got, &want);
+        let cos = got.iter().zip(&want).map(|(a, b)| a * b).sum::<f64>() / (got.iter().map(|a| a * a).sum::<f64>().sqrt() * want.iter().map(|a| a * a).sum::<f64>().sqrt());
+        eprintln!("t5_encoder integer rows vs HF ({} real of {LMAX}): cosine {cos:.6}, rel {r:.2e}", src.len());
+        assert!(cos > 0.999, "cosine {cos}, rel {r}");
+    }
+    // 4. The three implementations and the court (the ids and count are input params in the version-1 view).
+    {
+        let src: Vec<u32> = ids_of(&recs[0]["input_ids"]).iter().map(|t| *t as u32).collect();
+        let mut padded = src.clone();
+        padded.resize(LMAX as usize, 0);
+        let p6 = with_inputs(
+            &elw.program,
+            &emat.params,
+            &[(encdec::IDS_PARAM, IntTensor::idx(vec![LMAX as usize], padded)), (encdec::COUNT_PARAM, IntTensor::idx(vec![], vec![src.len() as u32]))],
+        );
+        let n3 = three_ways(&elw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("three implementations: {e}"));
+        let c = court_coverage(&elw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("court: {e}"));
+        eprintln!("t5_encoder COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes)", c.commits, c.nodes);
+        assert!(c.commits > 0);
+    }
+    // 5. Admission.
+    tir::admit_v2::tir_admit_program_v2(&e2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
+}
+
 /// What the diagnosis reads of one model's lowering.
 struct Stages<'a> {
     ehl: &'a misaka_palw_tir_lower::hl::HlProgram,

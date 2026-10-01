@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "t5-encoder",
+  "kind": "encdec",
+  "extends": ["t5"],
+  "doc": "T5EncoderModel (the encoder of any T5 / mT5 / T5 v1.1 / Flan-T5 checkpoint used alone: the text encoder of Flux, Stable Diffusion 3, PixArt, Wan, Sana): the T5 encoder stack of the `t5` adapter and nothing else — no decoder, no head; the final-normed rows are the output (`i32` rows at a calibrated power-of-two unit). The class binds the padded source and its count. Features: ENCDEC_FROM_SPEC_V1, OUTPUT_ROWS_V1.",
+  "match": {"architectures": ["T5EncoderModel"], "model_types": []},
+  "config": {
+    "inert": ["num_decoder_layers", "scale_decoder_outputs", "tie_word_embeddings", "decoder_start_token_id", "is_encoder_decoder"]
+  },
+  "vars": [
+    {"name": "dec_layers", "value": 0},
+    {"name": "sdo", "value": null},
+    {"name": "tie", "value": null},
+    {"name": "head_scale", "value": 1.0}
+  ]
+}
