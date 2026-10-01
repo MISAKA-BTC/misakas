@@ -44,7 +44,8 @@ USAGE:
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
-                         [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] <lowered.palwtir>
+                         [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>]
+                         [--parent <the parent's declared .palwtir>] <lowered.palwtir>
     palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|rollback>
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
                          [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
@@ -102,6 +103,11 @@ and a class under no scheme has no decode court), its logits node tiled at --log
 divisor of 4,096; unless given, the widest whose terminal close the chain can carry, PALW-TIR-38). The path from a Hugging Face
 checkpoint to a registration: check-architecture → palw-tir-fidelity → declare-layout → preflight →
 kaspad --palw-class-artifact <out> --palw-register-class <model-id>.
+A LoRA candidate's container (meta.composite, from palw-tir-fidelity --adapter and palw-class
+composite --parent-class) names the class over its COMPOSITE root (RFC-0004 §6.3), never over its
+whole inventory, and is refused without a recorded parent class. With --parent (the parent's
+declared container) its layout is judged by the composite admission (palw_tir_composite_admits_v1);
+without it the layout is written unjudged.
 
 `certify` (RFC-0002 Phase F) drills an IR (PALWTIR1) class end to end — a lie planted at a leaf of
 every committed unit, prefill and decode, convicted by the IR court, and the honest run acquitted —
@@ -383,8 +389,16 @@ fn run(args: &[String]) -> Result<(), String> {
                     None => None,
                 },
             };
+            let parent = take_flag(&mut args, "--parent");
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
-            declare_layout(&view, &path, &PathBuf::from(out), &choice, model_id.as_deref())
+            declare_layout(
+                &view,
+                &path,
+                &PathBuf::from(out),
+                &choice,
+                model_id.as_deref(),
+                parent.as_deref().map(std::path::Path::new),
+            )
         }
         "certify" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
@@ -1173,8 +1187,17 @@ fn declare_layout(
     output: &std::path::Path,
     choice: &misaka_palw_sdk::tir_layout::TirLayoutChoiceV1,
     model_id: Option<&str>,
+    parent: Option<&std::path::Path>,
 ) -> Result<(), String> {
-    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_v1(&view.params, &view.bundle, input, output, choice, model_id)?;
+    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_with_parent_v1(
+        &view.params,
+        &view.bundle,
+        input,
+        output,
+        choice,
+        model_id,
+        parent,
+    )?;
     let l = &d.layout;
     println!("wrote {} (file digest {})", output.display(), Hash64::from_bytes(d.file_digest));
     println!(
@@ -1187,14 +1210,26 @@ fn declare_layout(
         l.state_tiles.len()
     );
     println!("  class id        {}", d.class_id);
-    println!("  inventory root  {}", d.artifact_root);
+    match &d.composite {
+        Some(c) => {
+            println!("  artifact root   {} (composite: parent class {}, P {})", d.artifact_root, c.parent_class, c.p);
+            println!("  parent root     {}", c.parent_root);
+            println!("  adapter root    {}", c.adapter_root);
+        }
+        None => println!("  inventory root  {}", d.artifact_root),
+    }
+    let at = if d.composite.is_some() { d.admission_at.clone() } else { format!("admission v10 {}", d.admission_at) };
     match &d.admission {
+        Err(why) if why.starts_with("not judged") => {
+            println!("  UNJUDGED        {why}");
+            Err("the declared composite was not judged — nothing should be signed or funded for it yet".to_string())
+        }
         Ok(()) => {
-            println!("  ADMISSIBLE      admission v10 {}", d.admission_at);
+            println!("  ADMISSIBLE      {at}");
             Ok(())
         }
         Err(why) => {
-            println!("  REFUSED         admission v10 {}: {why}", d.admission_at);
+            println!("  REFUSED         {at}: {why}");
             Err("the declared class would be refused — nothing should be signed or funded for it".to_string())
         }
     }
