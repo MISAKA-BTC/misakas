@@ -236,14 +236,16 @@ fn what_a_descriptor_does_not_cover_is_refused_by_name() {
 
 #[test]
 fn a_method_no_descriptor_reads_says_what_to_supply() {
-    let e = refusal(parse_quant_config(&json!({"quant_method": "bitsandbytes", "load_in_4bit": true}), "LlamaForCausalLM", "llama"));
-    assert!(e.contains("quant_method=bitsandbytes") && e.contains("no quant-format descriptor") && e.contains("--quant-format"), "{e}");
+    let e = refusal(parse_quant_config(&json!({"quant_method": "brand_new_quant", "bits": 4}), "LlamaForCausalLM", "llama"));
+    assert!(e.contains("quant_method=brand_new_quant") && e.contains("no quant-format descriptor") && e.contains("--quant-format"), "{e}");
     assert!(e.contains("compressed-tensors/pack-quantized") && e.contains("gptq"), "the refusal lists what is known: {e}");
+    // bitsandbytes is described now — under conditions, and the refusal lists them.
+    assert!(e.contains("bitsandbytes [load_in_4bit = true, bnb_4bit_quant_type = \"nf4\"]"), "{e}");
     // A method that is known and not yet described says so, and what writing its descriptor takes.
     let e = refusal(parse_quant_config(&json!({"quant_method": "hqq", "quant_config": {}}), "LlamaForCausalLM", "llama"));
     assert!(e.contains("`hqq` is known and not yet described") && e.contains("zero point"), "{e}");
     assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().any(|k| k.method == "aqlm" && k.status == "known"));
-    assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().any(|k| k.method == "bitsandbytes" && k.status == "queued"));
+    assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().all(|k| k.method != "bitsandbytes"), "a described method is no longer listed as undescribed");
     let e = refusal(parse_quant_config(&json!({"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": {}}), "LlamaForCausalLM", "llama"));
     assert!(e.contains("quant_method=compressed-tensors/mixed-precision"), "{e}");
 }
@@ -476,4 +478,210 @@ fn an_mxfp4_configuration_is_read_by_its_descriptor() {
     v["mystery"] = json!(1);
     let e = refusal(parse_quant_config(&v, "GptOssForCausalLM", "gpt_oss"));
     assert!(e.contains("does not read") && e.contains("mystery"), "{e}");
+}
+
+
+// ───────────────────────────── bitsandbytes ─────────────────────────────
+
+fn bnb_cfg(load4: bool, qtype: &str, dq: bool) -> serde_json::Value {
+    json!({"_load_in_4bit": load4, "_load_in_8bit": !load4, "bnb_4bit_compute_dtype": "bfloat16", "bnb_4bit_quant_storage": "uint8",
+           "bnb_4bit_quant_type": qtype, "bnb_4bit_use_double_quant": dq, "llm_int8_enable_fp32_cpu_offload": false,
+           "llm_int8_has_fp16_weight": false, "llm_int8_skip_modules": null, "llm_int8_threshold": if load4 { json!(6.0) } else { json!(0.0) },
+           "load_in_4bit": load4, "load_in_8bit": !load4, "quant_method": "bitsandbytes"})
+}
+
+fn name_of(c: &QuantConfig) -> String {
+    let QFormat::Described(d) = &c.fmt else { panic!("{:?}", c.fmt) };
+    d.format.name().to_string()
+}
+
+/// One `quant_method` announces three descriptors, told apart by other keys of the configuration.
+#[test]
+fn a_bitsandbytes_configuration_picks_nf4_fp4_or_int8_by_its_own_keys() {
+    let read = |v: &serde_json::Value| parse_quant_config(v, "LlamaForCausalLM", "llama");
+    assert_eq!(name_of(&read(&bnb_cfg(true, "nf4", true)).expect("nf4")), "BNB_NF4");
+    assert_eq!(name_of(&read(&bnb_cfg(true, "fp4", false)).expect("fp4")), "BNB_FP4");
+    assert_eq!(name_of(&read(&bnb_cfg(false, "fp4", false)).expect("int8")), "BNB_INT8", "the 4-bit keys an 8-bit configuration carries as defaults are not read");
+    // The 4-bit type defaults to fp4 when the key is absent (as BitsAndBytesConfig's constructor does).
+    let mut v = bnb_cfg(true, "fp4", false);
+    v.as_object_mut().unwrap().remove("bnb_4bit_quant_type");
+    assert_eq!(name_of(&read(&v).expect("fp4 by default")), "BNB_FP4");
+    // A 4-bit type with no descriptor is a refusal that lists what is read, with the conditions.
+    let e = refusal(read(&bnb_cfg(true, "af4", false)));
+    assert!(e.contains("quant_method=bitsandbytes") && e.contains("no quant-format descriptor") && e.contains("bnb_4bit_quant_type"), "{e}");
+    // Neither width: nothing to read.
+    let mut v = bnb_cfg(true, "nf4", false);
+    v["load_in_4bit"] = json!(false);
+    assert!(refusal(read(&v)).contains("no quant-format descriptor"));
+    // The head is stored in float unless the checkpoint says otherwise (here it is not skipped: the format would read it, and falls back to the plain tensor).
+    let c = read(&bnb_cfg(true, "nf4", true)).unwrap();
+    assert!(c.lm_head);
+}
+
+/// `llm_int8_skip_modules` is read as transformers reads it: a module's last component, its whole name, or a path prefix.
+#[test]
+fn llm_int8_skip_modules_are_read_as_transformers_reads_them() {
+    let mut v = bnb_cfg(true, "nf4", false);
+    v["llm_int8_skip_modules"] = json!(["lm_head", "down_proj", "gate", "model.layers.0.self_attn"]);
+    let c = parse_quant_config(&v, "LlamaForCausalLM", "llama").unwrap();
+    assert!(!c.lm_head, "the head is named");
+    for (name, converted) in [
+        ("lm_head", false),
+        ("model.layers.3.mlp.down_proj", false),             // the last component
+        ("model.layers.3.mlp.experts.5.down_proj", false),   // ... of an expert too
+        ("model.layers.3.mlp.gate", false),                  // the router: its last component is `gate`
+        ("model.layers.3.mlp.gate_proj", true),              // `gate_proj` is not `gate`, and `gate.` does not occur in it
+        ("model.layers.0.self_attn.q_proj", false),          // a path prefix: `model.layers.0.self_attn.` occurs in it
+        ("model.layers.1.self_attn.q_proj", true),
+        ("model.layers.3.mlp.up_proj", true),
+    ] {
+        assert_eq!(c.converts(name), converted, "{name}");
+    }
+    // A key that is a suffix of the path but neither a whole name, a last component nor followed by a dot does not skip.
+    assert!(!skip_matches(&["path:mlp.gate".to_string()], "model.layers.3.mlp.gate"));
+    assert!(skip_matches(&["path:layers.3".to_string()], "model.layers.3.mlp.gate"), "a path prefix `layers.3.` inside the name");
+    assert!(!skip_matches(&["path:layers.3".to_string()], "model.layers.30.mlp.gate"));
+}
+
+/// What a descriptor does not cover is refused BY NAME — int8 outlier decomposition above all.
+#[test]
+fn what_bitsandbytes_cannot_reproduce_is_refused_by_name() {
+    let read = |v: &serde_json::Value| parse_quant_config(v, "LlamaForCausalLM", "llama");
+    // LLM.int8 with the default threshold decomposes each matmul at run time.
+    let mut v = bnb_cfg(false, "fp4", false);
+    v["llm_int8_threshold"] = json!(6.0);
+    let e = refusal(read(&v));
+    assert!(e.contains("llm_int8_threshold") && e.contains("outlier decomposition") && e.contains("run time") && e.contains("llm_int8_threshold 0"), "{e}");
+    // ... threshold 0 (written as an integer or a float) is read.
+    for t in [json!(0), json!(0.0)] {
+        let mut v = bnb_cfg(false, "fp4", false);
+        v["llm_int8_threshold"] = t;
+        assert_eq!(name_of(&read(&v).expect("threshold 0")), "BNB_INT8");
+    }
+    // 4-bit weights packed into another storage dtype have another stored shape.
+    let mut v = bnb_cfg(true, "nf4", false);
+    v["bnb_4bit_quant_storage"] = json!("bfloat16");
+    assert!(refusal(read(&v)).contains("storage dtype other than uint8"));
+    // A key nobody declared.
+    let mut v = bnb_cfg(true, "nf4", false);
+    v["bnb_4bit_something_new"] = json!(1);
+    let e = refusal(read(&v));
+    assert!(e.contains("does not read") && e.contains("bnb_4bit_something_new"), "{e}");
+}
+
+fn bnb_vector(file: &str, n: usize) -> (QuantFormat, serde_json::Value) {
+    let text = std::fs::read_to_string(format!("{}/quant-formats/{file}.json", env!("CARGO_MANIFEST_DIR"))).expect("descriptor");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    (QuantFormat::from_json(&text).expect("loads"), v["tests"][n].clone())
+}
+
+/// The role tensors of a descriptor's test vector, in the descriptor's role order.
+fn vector_roles(f: &QuantFormat, vec: &serde_json::Value) -> Vec<Option<RoleTensor>> {
+    let t = f.as_tensors().expect("a tensors format");
+    t.roles()
+        .map(|(name, ..)| {
+            vec["roles"].get(name).map(|r| RoleTensor {
+                shape: r["shape"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(),
+                dtype: r["dtype"].as_str().unwrap().to_string(),
+                data: (0..r["hex"].as_str().unwrap().len() / 2).map(|i| u8::from_str_radix(&r["hex"].as_str().unwrap()[2 * i..2 * i + 2], 16).unwrap()).collect(),
+            })
+        })
+        .collect()
+}
+
+/// A corrupted vector is refused: the vectors are checked, not decoration.
+#[test]
+fn a_bitsandbytes_descriptor_whose_vector_is_wrong_is_refused() {
+    for file in ["bnb_nf4", "bnb_fp4", "bnb_int8"] {
+        let text = std::fs::read_to_string(format!("{}/quant-formats/{file}.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let hex = v["tests"][0]["values_f32_hex"].as_str().unwrap().to_string();
+        let mut bytes: Vec<char> = hex.chars().collect();
+        bytes[9] = if bytes[9] == '0' { '1' } else { '0' };
+        v["tests"][0]["values_f32_hex"] = json!(bytes.into_iter().collect::<String>());
+        assert!(QuantFormat::from_json(&v.to_string()).is_err(), "{file}: a wrong expected value was accepted");
+    }
+}
+
+/// Double quantisation is a property of the module: absmax is 8-bit exactly when the nested statistics are there.
+#[test]
+fn a_double_quantised_module_with_float_absmax_or_a_plain_one_with_byte_absmax_is_refused() {
+    let (f, vec) = bnb_vector("bnb_nf4", 3); // (5, 24) bs 64, double quantised
+    let t = f.as_tensors().unwrap();
+    let params = f.read_config(&vec["config"]).expect("config").params;
+    let good = vector_roles(&f, &vec);
+    assert!(t.decode_floats(&good, &params).is_ok());
+    let idx = |name: &str| t.roles().position(|(n, ..)| n == name).unwrap();
+    // The nested tensors gone: absmax is bytes and nothing scales them.
+    let mut r = good.clone();
+    r[idx("nabs")] = None;
+    r[idx("nmap")] = None;
+    let e = t.decode_floats(&r, &params).unwrap_err().to_string();
+    assert!(e.contains("8-bit exactly when"), "{e}");
+    // Only one of the two.
+    let mut r = good.clone();
+    r[idx("nmap")] = None;
+    let e = t.decode_floats(&r, &params).unwrap_err().to_string();
+    assert!(e.contains("come together"), "{e}");
+    // Float absmax under nested tensors.
+    let mut r = good.clone();
+    let a = r[idx("absmax")].take().unwrap();
+    let n = a.shape[0];
+    r[idx("absmax")] = Some(RoleTensor { shape: vec![n], dtype: "F32".into(), data: vec![0u8; 4 * n] });
+    let e = t.decode_floats(&r, &params).unwrap_err().to_string();
+    assert!(e.contains("8-bit exactly when"), "{e}");
+}
+
+/// A document that is not one, a shape that is not a matrix, an absmax of the wrong length: each is its own refusal.
+#[test]
+fn a_malformed_bitsandbytes_module_is_refused_with_its_reason() {
+    let (f, vec) = bnb_vector("bnb_nf4", 0);
+    let t = f.as_tensors().unwrap();
+    let params = f.read_config(&vec["config"]).expect("config").params;
+    let good = vector_roles(&f, &vec);
+    let q = t.roles().position(|(n, ..)| n == "qstate").unwrap();
+    let doc = |r: &mut Vec<Option<RoleTensor>>, text: &str| {
+        r[q] = Some(RoleTensor { shape: vec![text.len()], dtype: "U8".into(), data: text.as_bytes().to_vec() });
+    };
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("not JSON", "this is not json".into(), "not a JSON document"),
+        ("a truncated document", r#"{"quant_type": "nf4", "blocksize": 64"#.into(), "not a JSON document"),
+        ("no shape", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16"}"#.into(), "has no `shape[0]`"),
+        ("a 3-D shape", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16", "shape": [8, 4, 8]}"#.into(), "not a matrix"),
+        ("a dtype nobody uses", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "int4", "shape": [8, 32]}"#.into(), "int4"),
+        ("a shape that does not match the tensors", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16", "shape": [8, 33]}"#.into(), "packed weight is not"),
+        ("a block size that does not match absmax", r#"{"quant_type": "nf4", "blocksize": 32, "dtype": "float16", "shape": [8, 32]}"#.into(), "one per block"),
+        ("a float block size", r#"{"quant_type": "nf4", "blocksize": 64.5, "dtype": "float16", "shape": [8, 32]}"#.into(), "not an integer"),
+    ];
+    for (what, text, needle) in cases {
+        let mut r = good.clone();
+        doc(&mut r, &text);
+        let e = t.decode_floats(&r, &params).unwrap_err().to_string();
+        assert!(e.contains(needle), "{what}: `{e}` does not mention `{needle}`");
+    }
+}
+
+/// An int8 weight stored in a hardware-reordered layout is not row-major: refused; `weight_format` 0 and an absent one are read.
+#[test]
+fn a_reordered_int8_layout_is_refused_and_row_major_is_read() {
+    let (f, vec) = bnb_vector("bnb_int8", 0);
+    let t = f.as_tensors().unwrap();
+    let params = f.read_config(&vec["config"]).expect("config").params;
+    let good = vector_roles(&f, &vec);
+    let w = t.decode_integers(&good, &params).expect("row-major");
+    let w_idx = t.roles().position(|(n, ..)| n == "wfmt").unwrap();
+    let mut r = good.clone();
+    r[w_idx] = None;
+    let w2 = t.decode_integers(&r, &params).expect("older bitsandbytes does not write weight_format");
+    assert_eq!(w.q, w2.q);
+    for fmt in [1u8, 2, 3] {
+        let mut r = good.clone();
+        r[w_idx] = Some(RoleTensor { shape: vec![], dtype: "U8".into(), data: vec![fmt] });
+        let e = t.decode_integers(&r, &params).unwrap_err().to_string();
+        assert!(e.contains("hardware-reordered layout") && e.contains("col32"), "{e}");
+    }
+    // The stored integers are the integers, whatever their values: the scale is SCB / 127.
+    assert_eq!((w.out, w.inp), (6, 16));
+    assert!(w.q.iter().all(|q| (-128..=127).contains(q)));
+    assert_eq!(w.scale[0], 0.0, "an all-zero row has SCB 0");
 }

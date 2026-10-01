@@ -26,6 +26,9 @@ Every fixture is a tiny random decoder (transformers' own config classes) whose 
     and `down_proj` are kept as `<name>_blocks` uint8 [E, out, in/32, 16] and `<name>_scales` uint8 [E, out, in/32]
     (E8M0 exponent, bias 127), one shared exponent per 32 inputs, codes the nearest FP4 (E2M1) value; the reference's
     expert weights are transformers' own `convert_moe_packed_tensors` of the stored tensors.
+  bitsandbytes (`quant_method: bitsandbytes`, tools/bnb_ref.py): 4-bit nf4 / fp4 (`weight` uint8 [N/2, 1], `weight.absmax`, `weight.quant_map`,
+    `weight.quant_state.bitsandbytes__nf4` JSON, and under double quantisation uint8 absmax + `nested_absmax` + `nested_quant_map`) and LLM.int8
+    (`weight` int8, `SCB`, `weight_format`).
   compressed-tensors (llm-compressor):
     pack-quantized (W4A16 / W8A16): `weight_packed` int32 [out, in/pack] (codes along the INPUT, offset by
     2^(b-1)), `weight_scale` fp16 [out, G], asymmetric `weight_zero_point` int32 [out/pack, G] (packed along the
@@ -56,6 +59,9 @@ import sys
 import numpy as np
 import torch
 from safetensors.numpy import save_file
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bnb_ref
 
 try:
     import transformers
@@ -119,6 +125,31 @@ def ct_config(bits, group_size, sym, strategy, actorder=None, fmt="pack-quantize
                                           "weights": {"num_bits": bits, "type": typ, "symmetric": sym, "strategy": strategy, "group_size": group_size,
                                                       "actorder": actorder, "dynamic": False, "observer": "minmax", "observer_kwargs": {}, "block_structure": None}}}}
 
+
+def bnb_config(load4, qtype="nf4", dq=False, skip=None, threshold=6.0, compute="bfloat16"):
+    """A `BitsAndBytesConfig.to_dict()` as transformers writes it into config.json."""
+    return {"_load_in_4bit": load4, "_load_in_8bit": not load4, "bnb_4bit_compute_dtype": compute, "bnb_4bit_quant_storage": "uint8",
+            "bnb_4bit_quant_type": qtype, "bnb_4bit_use_double_quant": dq, "llm_int8_enable_fp32_cpu_offload": False,
+            "llm_int8_has_fp16_weight": False, "llm_int8_skip_modules": skip, "llm_int8_threshold": threshold, "load_in_4bit": load4,
+            "load_in_8bit": not load4, "quant_method": "bitsandbytes"}
+
+
+# The dtype the quantised weights had when bitsandbytes quantised them (the JSON document's `dtype`) and the block size, per fixture.
+BNB_STATE = {"bnb_nf4_g64": ("float16", 64), "bnb_nf4_dq_bf16": ("bfloat16", 64), "bnb_fp4_g128": ("bfloat16", 128), "bnb_fp4_dq_f32": ("float32", 64),
+             "bnb_nf4_skip_down": ("float16", 64), "bnb_nf4_dq_qwen3moe": ("bfloat16", 64)}
+
+
+CONFIGS.update({
+    "bnb_nf4_g64": ("llama", bnb_config(True, "nf4", False)),
+    "bnb_nf4_dq_bf16": ("qwen2", bnb_config(True, "nf4", True)),
+    "bnb_fp4_g128": ("llama", bnb_config(True, "fp4", False)),
+    "bnb_fp4_dq_f32": ("qwen2", bnb_config(True, "fp4", True, compute="float16")),
+    # llm_int8_skip_modules: every down_proj and the head stay float (transformers reads an entry as a module's last component or a path prefix)
+    "bnb_nf4_skip_down": ("llama", bnb_config(True, "nf4", False, skip=["lm_head", "down_proj"])),
+    "bnb_nf4_dq_qwen3moe": ("qwen3moe", bnb_config(True, "nf4", True, skip=["gate"])),
+    "bnb_int8": ("qwen2", bnb_config(False, threshold=0.0)),
+    "bnb_int8_llama": ("llama", bnb_config(False, threshold=0.0, skip=["lm_head"])),
+})
 
 CONFIGS.update({
     "mxfp4_gptoss": ("gptoss", {"quant_method": "mxfp4", "modules_to_not_convert": ["model.layers.*.self_attn", "model.layers.*.mlp.router", "model.embed_tokens", "lm_head"]}),
@@ -424,6 +455,24 @@ def build(name):
                     tensors[f"{mod}.weight"] = q8
                     tensors[f"{mod}.weight_scale"] = sc
                     deq[k] = np.ascontiguousarray((q8.astype(np.float64) * sc.astype(np.float64)), dtype=np.float32)
+                continue
+            if method == "bitsandbytes":
+                skip = qc.get("llm_int8_skip_modules") or []
+                leaf = mod.split(".")[-1]
+                if leaf in skip or any(key + "." in mod or key == mod for key in skip):      # transformers' _replace_with_bnb_linear
+                    tensors[k] = v.astype(np.float16)
+                    deq[k] = v.astype(np.float16).astype(np.float32)
+                    continue
+                if qc["load_in_4bit"]:
+                    dtype, bs = BNB_STATE[name]
+                    t = bnb_ref.quantize_4bit(w, qc["bnb_4bit_quant_type"], bs, qc["bnb_4bit_use_double_quant"], dtype)
+                    back = bnb_ref.dequantize_4bit(t)
+                else:
+                    t = bnb_ref.quantize_int8(w)
+                    back = bnb_ref.dequantize_int8(t)
+                for suffix, arr in t.items():
+                    tensors[mod + suffix] = arr
+                deq[k] = np.ascontiguousarray(back, dtype=np.float32)
                 continue
             if method == "gptq" or (method == "compressed-tensors" and ct_fmt == "pack-quantized"):
                 if method == "compressed-tensors":
