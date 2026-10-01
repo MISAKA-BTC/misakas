@@ -13,7 +13,7 @@ they come from a numpy transcription of the documented layout (random valid code
 weight computed in float64 and rounded to float32). A descriptor that passes them proves the descriptor says what this script says, not that
 the script says what the library does. The layouts are transcribed from the libraries' documentation and source as recalled; each is marked.
 
-Not written, and why (see docs/design/palw/tir/corpus-v2.md §9): bitsandbytes NF4/FP4 (the weight's [out, in] shape lives only in a JSON blob
+Not written, and why (see docs/design/palw/tir/corpus-v2.md §8): bitsandbytes NF4/FP4 (the weight's [out, in] shape lives only in a JSON blob
 stored as a uint8 tensor, `weight.quant_state.bitsandbytes__nf4`, and the descriptor language can read a shape only from the role tensors),
 HQQ (the same, in a pickled `meta`), EXL2/EXL3, AQLM, Quanto, torchao (tensor subclasses with metadata).
 
