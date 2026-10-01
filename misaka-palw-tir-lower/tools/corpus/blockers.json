@@ -494,6 +494,10 @@
   "FR-28": {
    "title": "DeepStack rows (Qwen3-VL images; the text stage is Level B)",
    "size": "S-M"
+  },
+  "FR-29": {
+   "title": "prediction head transform (dense + activation + norm) before the vocabulary projection",
+   "size": "S"
   }
  }
 }

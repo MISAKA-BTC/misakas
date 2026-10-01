@@ -821,6 +821,10 @@ not mapped (`MIXER_LAYER_PATTERN_HYBRID_V1`) — but the third-party adapter
 Granite-MoE FFN with a shared MLP, Granite's multipliers) and passes every stage on a patched checkpoint (FR-01). Request:
 a `refuse` entry applies only when no adapter, built-in or user, claims the architecture; delete the stale entry. The harness
 bypasses the refusal for such adapters by renaming the architecture in memory and records `refusal_bypassed_for_user_adapter`.
+**Second instance (the census):** `MiniCPM3ForCausalLM` is refused by name ("MLA + muP remote code is not modelled yet"), yet the native transformers 5 class
+is DeepSeek-V2's MLA with the plain rotation, a dense MLP and muP scalings — all existing features. `tools/corpus/census-adapters/minicpm3.json`
+(25 lines, extends the built-in `deepseek-v3`) passes every stage, court included, once the refusal is bypassed. The refusal is stale for the same
+reason: it describes the remote-code model, not the class transformers 5.17 ships (which also moved the head scaling into `config.logits_scaling`).
 
 ### FR-26 lowerer robustness and Level A honesty (S)
 
@@ -835,6 +839,13 @@ bypasses the refusal for such adapters by renaming the architecture in memory an
    binder on names and shapes and **refuse if any tensor is unread** (the check `bind` does in the harness; it is what caught
    Arcee and BitNet), and (b) print "Level A: UNCONFIRMED — rope pairing, norm placement and MLP gating are class code, not
    configuration" unless a fixture check passed.
+
+### FR-29 `HEAD_TRANSFORM_V1` — a prediction head before the vocabulary projection (S, found by the census: `modernbert_decoder`; also the MLM head of every BERT-lineage model)
+
+`modeling_modernbert_decoder.py:ModernBertDecoderPredictionHead`: `h → LayerNorm(act(dense(h)))`, then the tied vocabulary projection plus a `decoder.bias [V]` — the same shape as BERT's `cls.predictions.transform` (`dense → gelu → LayerNorm`) and `decoder.bias`. In the fixture the head owns
+`lm_head.dense.weight`, `lm_head.norm.weight`, `decoder.bias` and the tied embedding. **Spec**: `HeadSpec.transform: Option<HeadTransformSpec{bias, act, norm}>` and `HeadSpec.bias`; **decomposition**: `Lin` → the activation table → the norm template (`layer_norm_exact`), then the existing tied head with an `Add` of the bias; no primitive, no new commit-point kind. The rest of
+`modernbert_decoder` is readable by data once the per-layer-type rope convention of FR-27's neighbours exists in the template (measured: `standard-v3` fixes the rope refusal and the family then stops at its own keys `norm_eps`, `hidden_activation`, `local_attention`, `classifier_*`, which an adapter maps) — layer 0 has no `attn_norm` (`Identity`), the Q/K/V are separate (not ModernBERT's fused `Wqkv`), the GeGLU `Wi` rows are `[input|gate]` (`FusedGateFirst`).
+**Acceptance**: `modernbert_decoder` (census). *Evidence: read from the transformers code; the fixture exists in `tools/corpus/census-specs/modernbert_decoder`.*
 
 ### FR-24 `REFERENCE_REMOTE_CODE_V1` — a way to pin a remote-code reference (policy; `chatglm3`)
 

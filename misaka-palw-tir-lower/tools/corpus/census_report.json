@@ -172,14 +172,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "AXK1ForCausalLM",
    "id": "axk1",
-   "level": "C",
+   "level": "B",
    "model_type": "axk1",
-   "ms": 8,
+   "ms": 3040,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -208,7 +208,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(AXK1ForCausalLM: config key(s) this lowerer does not model: first_k_dense_replace, kv_lora_rank, moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, routed_scaling_factor, topk_group, v_head_dim \u2014 a key that might change the math is refused, not ignored)",
@@ -237,65 +237,287 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "7799489e3e41f6ab4a63f37ca736edfafccbc1934f658fbb75687ec0a8b7779132a1bbeb9173cb1e0fbba411c2cb7333396e1004c87f1b1b9df1a7f67bef2f25",
+      "id": "axk1",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "num_nextn_predict_layers"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4 heads, latent 8",
+       "id": "MIXER_MLA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_GROUPED_ROUTING_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_NORM_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SIGMOID_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_SELECTION_BIAS_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "16",
+       "id": "MLP_MOE_SHARED_EXPERT_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 8, k = 2",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_SANDWICH_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_INTERLEAVED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(AXK1ForCausalLM: config key(s) this lowerer does not model: first_k_dense_replace, kv_lora_rank, moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, routed_scaling_factor, topk_group, v_head_dim \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "first_k_dense_replace",
-      "kv_lora_rank",
-      "moe_intermediate_size",
-      "n_group",
-      "n_routed_experts",
-      "n_shared_experts",
-      "norm_topk_prob",
-      "num_experts_per_tok",
-      "q_lora_rank",
-      "qk_head_dim",
-      "qk_nope_head_dim",
-      "qk_rope_head_dim",
-      "rope_interleave",
-      "routed_scaling_factor",
-      "topk_group",
-      "v_head_dim"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "7799489e3e41f6ab4a63f37ca736edfafccbc1934f658fbb75687ec0a8b7779132a1bbeb9173cb1e0fbba411c2cb7333396e1004c87f1b1b9df1a7f67bef2f25",
+      "id": "axk1",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "first_k_dense_replace",
-     "kv_lora_rank",
-     "moe_intermediate_size",
-     "n_group",
-     "n_routed_experts",
-     "n_shared_experts",
-     "norm_topk_prob",
-     "num_experts_per_tok",
-     "q_lora_rank",
-     "qk_head_dim",
-     "qk_nope_head_dim",
-     "qk_rope_head_dim",
-     "rope_interleave",
-     "routed_scaling_factor",
-     "topk_group",
-     "v_head_dim"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 2607,
+     "cones": 55,
+     "dissected_cones": 2,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 7,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1550,
+      "elementwise": 54543570,
+      "macs": 41964992,
+      "peak_live_bytes": 52429224,
+      "state_bytes": 12582912,
+      "step_leaves": 55,
+      "transcendentals": 2097187
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      },
+      {
+       "block": 2,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 2,
+      "chunk": true,
+      "macs": 5120,
+      "node": 251,
+      "opened_bytes": 3331,
+      "operands": 6,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 2,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 1080,
+      "Gather": 72,
+      "Reshape": 96,
+      "TopK": 72
+     },
+     "commit_points_replayed": 1320,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1320
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 4.292680916598205e-07,
+     "ms": 4,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.1737094326918955,
+     "kl_mean": 0.0036274531302922775,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 152,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": 0.013714350206276427,
+     "top1": 0.9305555555555556
+    },
+    "lower": {
+     "blocks": 4,
+     "commit_points": 55,
+     "commit_roles": {
+      "carry_out": 3,
+      "hist_append_input": 4,
+      "logits": 1,
+      "lowerer_cone_split": 44,
+      "topk": 3
+     },
+     "digest": "ea4c8585ff5b35578cdd2a36d48d056c7df1f9482c08ca9be46c125b9ef6482c709ca60fc600a145447cd2a4dea7c12dea760bc72b6bd599fa505c5978ad51d8",
+     "layers": 2,
+     "ms": 7,
+     "nodes": 905,
+     "ok": true,
+     "params": 179,
+     "prim_kinds": 22,
+     "prims": {
+      "Add": 42,
+      "Broadcast": 1,
+      "Clamp": 213,
+      "Compare": 3,
+      "Concat": 6,
+      "Div": 110,
+      "Gather": 119,
+      "HistAppend": 4,
+      "IntExp": 3,
+      "IntRsqrt": 14,
+      "Iota": 1,
+      "Log2Floor": 10,
+      "MatMul": 45,
+      "Mul": 141,
+      "ReduceMax": 3,
+      "ReduceSum": 14,
+      "Reshape": 127,
+      "Select": 3,
+      "Slice": 16,
+      "Sub": 21,
+      "TopK": 3,
+      "Transpose": 6
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 52,
+     "ok": true,
+     "tensors": 179
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2675,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 54,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `axk1` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -2637,14 +2859,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "ExaoneMoeForCausalLM",
    "id": "exaone_moe",
-   "level": "C",
+   "level": "B",
    "model_type": "exaone_moe",
-   "ms": 10,
+   "ms": 84913,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -2668,7 +2890,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(ExaoneMoeForCausalLM: config key(s) this lowerer does not model: first_k_dense_replace, mlp_layer_types, moe_intermediate_size, n_group, norm_topk_prob, num_experts, num_experts_per_tok, num_shared_experts, routed_scaling_factor, sliding_window_pattern, topk_group \u2014 a key that might change the math is refused, not ignored)",
@@ -2692,66 +2914,306 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "c5de6a0b29cbffc9c04664a64d1aed4ff5a356f1990a4d3cd7817fe70fc6ada8396a513948ece08031536f7c846ec585461732759847206030b57ce6ac670266",
+      "id": "exaone_moe",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "attention_bias",
+      "mlp_bias"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "PerHeadShared",
+       "id": "ATTN_QK_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "window 4096",
+       "id": "ATTN_SLIDING_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_GROUPED_ROUTING_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_NORM_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SIGMOID_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_SELECTION_BIAS_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "1024",
+       "id": "MLP_MOE_SHARED_EXPERT_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 64, k = 8",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_GROUPED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(ExaoneMoeForCausalLM: config key(s) this lowerer does not model: first_k_dense_replace, mlp_layer_types, moe_intermediate_size, n_group, norm_topk_prob, num_experts, num_experts_per_tok, num_shared_experts, routed_scaling_factor, sliding_window_pattern, topk_group \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "first_k_dense_replace",
-      "mlp_layer_types",
-      "moe_intermediate_size",
-      "n_group",
-      "norm_topk_prob",
-      "num_experts",
-      "num_experts_per_tok",
-      "num_shared_experts",
-      "routed_scaling_factor",
-      "sliding_window_pattern",
-      "topk_group"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "c5de6a0b29cbffc9c04664a64d1aed4ff5a356f1990a4d3cd7817fe70fc6ada8396a513948ece08031536f7c846ec585461732759847206030b57ce6ac670266",
+      "id": "exaone_moe",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "first_k_dense_replace",
-     "mlp_layer_types",
-     "moe_intermediate_size",
-     "n_group",
-     "norm_topk_prob",
-     "num_experts",
-     "num_experts_per_tok",
-     "num_shared_experts",
-     "routed_scaling_factor",
-     "sliding_window_pattern",
-     "topk_group"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 2298,
+     "cones": 45,
+     "dissected_cones": 2,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 6,
+     "ok": true,
+     "position": {
+      "commit_lanes": 38195,
+      "elementwise": 2458095,
+      "macs": 1429760,
+      "peak_live_bytes": 1000140,
+      "state_bytes": 524288,
+      "step_leaves": 616,
+      "transcendentals": 32922
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 4096
+      },
+      {
+       "block": 2,
+       "window": 4096
+      }
+     ],
+     "worst_terminal": {
+      "block": 2,
+      "chunk": false,
+      "macs": 65536,
+      "node": 352,
+      "opened_bytes": 99416,
+      "operands": 2,
+      "transcendentals": 0
+     }
+    },
+    "bind": {
+     "ms": 243,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 792,
+      "Gather": 72,
+      "Reshape": 144,
+      "TopK": 72
+     },
+     "commit_points_replayed": 1080,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1080
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 6.379202669752455e-07,
+     "ms": 137,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.0002911783360335917,
+     "kl_mean": 0.00011973869981366482,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 979,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": 0.000337558253896697,
+     "top1": 0.9861111111111112
+    },
+    "lower": {
+     "blocks": 4,
+     "commit_points": 45,
+     "commit_roles": {
+      "carry_out": 3,
+      "hist_append_input": 4,
+      "logits": 1,
+      "lowerer_cone_split": 34,
+      "topk": 3
+     },
+     "digest": "fdbd1c38cc66b351a81b87d2446439a689f7051df20315ac67cb06b5a9416c6cbd617522653034f691a242382d60d43fdcdc0f644f81b1e05397115ec2f36656",
+     "layers": 2,
+     "ms": 2,
+     "nodes": 781,
+     "ok": true,
+     "params": 150,
+     "prim_kinds": 22,
+     "prims": {
+      "Add": 39,
+      "Broadcast": 1,
+      "Clamp": 183,
+      "Compare": 3,
+      "Concat": 4,
+      "Div": 95,
+      "Gather": 106,
+      "HistAppend": 4,
+      "IntExp": 3,
+      "IntRsqrt": 13,
+      "Iota": 1,
+      "Log2Floor": 9,
+      "MatMul": 37,
+      "Mul": 126,
+      "ReduceMax": 3,
+      "ReduceSum": 13,
+      "Reshape": 103,
+      "Select": 3,
+      "Slice": 8,
+      "Sub": 20,
+      "TopK": 3,
+      "Transpose": 4
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 630,
+     "ok": true,
+     "tensors": 150
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 82898,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 219,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `exaone_moe` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "FlexOlmoForCausalLM",
    "id": "flex_olmo",
-   "level": "C",
+   "level": "B",
    "model_type": "flex_olmo",
-   "ms": 9,
+   "ms": 6575,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -2767,7 +3229,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(FlexOlmoForCausalLM: config key(s) this lowerer does not model: norm_topk_prob, num_experts, num_experts_per_tok \u2014 a key that might change the math is refused, not ignored)",
@@ -2783,39 +3245,251 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "5386a72b7b4b0c9c83d71116c691abf232a4b0b2e8514131633287016c04181c7cb33531bc14ed7f75a642ba99133de1f8ac10f02f75a3fd9e7949dc80ffdfef",
+      "id": "flex_olmo",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "mlp_bias"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "Whole",
+       "id": "ATTN_QK_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SOFTMAX_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 7, k = 5",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_GROUPED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_SANDWICH_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(FlexOlmoForCausalLM: config key(s) this lowerer does not model: norm_topk_prob, num_experts, num_experts_per_tok \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "norm_topk_prob",
-      "num_experts",
-      "num_experts_per_tok"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "5386a72b7b4b0c9c83d71116c691abf232a4b0b2e8514131633287016c04181c7cb33531bc14ed7f75a642ba99133de1f8ac10f02f75a3fd9e7949dc80ffdfef",
+      "id": "flex_olmo",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "norm_topk_prob",
-     "num_experts",
-     "num_experts_per_tok"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 1097,
+     "cones": 27,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 3,
+     "ok": true,
+     "position": {
+      "commit_lanes": 3988,
+      "elementwise": 75589675,
+      "macs": 33625856,
+      "peak_live_bytes": 50332456,
+      "state_bytes": 33554432,
+      "step_leaves": 87,
+      "transcendentals": 2097185
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 4096,
+      "node": 173,
+      "opened_bytes": 8897,
+      "operands": 5,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 4,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 936,
+      "Gather": 96,
+      "Reshape": 144,
+      "TopK": 48
+     },
+     "commit_points_replayed": 1224,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1224
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 2.8039607958618625e-07,
+     "ms": 11,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.0005412503462571359,
+     "kl_mean": 0.00014681166075705207,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 188,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.000812697228320225,
+     "top1": 0.9583333333333334
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 27,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 21,
+      "topk": 1
+     },
+     "digest": "3f3f599d0152cae81474a4a560304772fc12ceb57839c4391c6e2ee9b1fad6915a51cb8bfe9f67bc6adb979e54687711aab44153d4bb3efe407d833dc5f21477",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 387,
+     "ok": true,
+     "params": 74,
+     "prim_kinds": 18,
+     "prims": {
+      "Add": 14,
+      "Clamp": 98,
+      "Concat": 2,
+      "Div": 55,
+      "Gather": 56,
+      "HistAppend": 2,
+      "IntExp": 2,
+      "IntRsqrt": 7,
+      "Log2Floor": 5,
+      "MatMul": 14,
+      "Mul": 66,
+      "ReduceMax": 2,
+      "ReduceSum": 7,
+      "Reshape": 39,
+      "Slice": 4,
+      "Sub": 11,
+      "TopK": 1,
+      "Transpose": 2
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 91,
+     "ok": true,
+     "tensors": 132
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 6262,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 63,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `flex_olmo` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -3491,14 +4165,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "Glm4MoeLiteForCausalLM",
    "id": "glm4_moe_lite",
-   "level": "C",
+   "level": "B",
    "model_type": "glm4_moe_lite",
-   "ms": 8,
+   "ms": 2993,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -3527,7 +4201,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(Glm4MoeLiteForCausalLM: config key(s) this lowerer does not model: kv_lora_rank, mlp_layer_types, moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, routed_scaling_factor, topk_group, v_head_dim \u2014 a key that might change the math is refused, not ignored)",
@@ -3556,65 +4230,281 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "195ac122393419f346e41007c883b1488d210d7c0b5929d5f3b04605b49ff20899e0a4bf16379b6a60b4055de70e015970ba8b233187a4eddc18501a91ea46e3",
+      "id": "glm4_moe_lite",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "first_k_dense_replace",
+      "num_nextn_predict_layers"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4 heads, latent 8",
+       "id": "MIXER_MLA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_GROUPED_ROUTING_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_NORM_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SIGMOID_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_SELECTION_BIAS_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "16",
+       "id": "MLP_MOE_SHARED_EXPERT_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 8, k = 2",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_INTERLEAVED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(Glm4MoeLiteForCausalLM: config key(s) this lowerer does not model: kv_lora_rank, mlp_layer_types, moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, routed_scaling_factor, topk_group, v_head_dim \u2014 a key that might change the math is refused, not ignored\u2026",
-     "unmapped_config_keys": [
-      "kv_lora_rank",
-      "mlp_layer_types",
-      "moe_intermediate_size",
-      "n_group",
-      "n_routed_experts",
-      "n_shared_experts",
-      "norm_topk_prob",
-      "num_experts_per_tok",
-      "q_lora_rank",
-      "qk_head_dim",
-      "qk_nope_head_dim",
-      "qk_rope_head_dim",
-      "rope_interleave",
-      "routed_scaling_factor",
-      "topk_group",
-      "v_head_dim"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "195ac122393419f346e41007c883b1488d210d7c0b5929d5f3b04605b49ff20899e0a4bf16379b6a60b4055de70e015970ba8b233187a4eddc18501a91ea46e3",
+      "id": "glm4_moe_lite",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "kv_lora_rank",
-     "mlp_layer_types",
-     "moe_intermediate_size",
-     "n_group",
-     "n_routed_experts",
-     "n_shared_experts",
-     "norm_topk_prob",
-     "num_experts_per_tok",
-     "q_lora_rank",
-     "qk_head_dim",
-     "qk_nope_head_dim",
-     "qk_rope_head_dim",
-     "rope_interleave",
-     "routed_scaling_factor",
-     "topk_group",
-     "v_head_dim"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 2514,
+     "cones": 51,
+     "dissected_cones": 2,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 7,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1415,
+      "elementwise": 54542999,
+      "macs": 41964992,
+      "peak_live_bytes": 52429224,
+      "state_bytes": 12582912,
+      "step_leaves": 51,
+      "transcendentals": 2097186
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      },
+      {
+       "block": 2,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 2,
+      "chunk": true,
+      "macs": 5120,
+      "node": 251,
+      "opened_bytes": 3331,
+      "operands": 6,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 2,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 984,
+      "Gather": 72,
+      "Reshape": 96,
+      "TopK": 72
+     },
+     "commit_points_replayed": 1224,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1224
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 4.419044525673063e-06,
+     "ms": 4,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.03920795465567352,
+     "kl_mean": 0.0005707017678373494,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 148,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.002978057524159361,
+     "top1": 0.9722222222222222
+    },
+    "lower": {
+     "blocks": 4,
+     "commit_points": 51,
+     "commit_roles": {
+      "carry_out": 3,
+      "hist_append_input": 4,
+      "logits": 1,
+      "lowerer_cone_split": 40,
+      "topk": 3
+     },
+     "digest": "e8848b6c0fb635116d6cd8f6f682146820e3454434bcc82a34cd067aa960f2e9d39f23c7f64b12cf3de02d4732e1b661883e8d2b2ab06a7d91062052bbd5cf39",
+     "layers": 2,
+     "ms": 3,
+     "nodes": 869,
+     "ok": true,
+     "params": 172,
+     "prim_kinds": 22,
+     "prims": {
+      "Add": 41,
+      "Broadcast": 1,
+      "Clamp": 201,
+      "Compare": 3,
+      "Concat": 6,
+      "Div": 103,
+      "Gather": 114,
+      "HistAppend": 4,
+      "IntExp": 3,
+      "IntRsqrt": 13,
+      "Iota": 1,
+      "Log2Floor": 9,
+      "MatMul": 45,
+      "Mul": 134,
+      "ReduceMax": 3,
+      "ReduceSum": 13,
+      "Reshape": 127,
+      "Select": 3,
+      "Slice": 16,
+      "Sub": 20,
+      "TopK": 3,
+      "Transpose": 6
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 52,
+     "ok": true,
+     "tensors": 172
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2761,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 53,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `glm4_moe_lite` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -5157,14 +6047,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "HYV3ForCausalLM",
    "id": "hy_v3",
-   "level": "C",
+   "level": "B",
    "model_type": "hy_v3",
-   "ms": 8,
+   "ms": 2946,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -5184,7 +6074,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(HYV3ForCausalLM: config key(s) this lowerer does not model: enable_moe_fp32_combine, mlp_layer_types, moe_intermediate_size, num_experts, num_experts_per_tok, num_shared_experts, router_scaling_factor \u2014 a key that might change the math is refused, not ignored)",
@@ -5204,47 +6094,276 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "c5489a2c7716e5b1d334aa8e130ee23fbf70b947a31b3dc32ffba8405c6070148dadae031e665cba52b00a0514bc6dfed613b3cce0edeca9098664aa83de9800",
+      "id": "hy_v3",
+      "kind": "user_file"
      },
      "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "PerHeadShared",
+       "id": "ATTN_QK_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_NORM_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SIGMOID_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_SELECTION_BIAS_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "16",
+       "id": "MLP_MOE_SHARED_EXPERT_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 8, k = 2",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_GROUPED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(HYV3ForCausalLM: config key(s) this lowerer does not model: enable_moe_fp32_combine, mlp_layer_types, moe_intermediate_size, num_experts, num_experts_per_tok, num_shared_experts, router_scaling_factor \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "enable_moe_fp32_combine",
-      "mlp_layer_types",
-      "moe_intermediate_size",
-      "num_experts",
-      "num_experts_per_tok",
-      "num_shared_experts",
-      "router_scaling_factor"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "c5489a2c7716e5b1d334aa8e130ee23fbf70b947a31b3dc32ffba8405c6070148dadae031e665cba52b00a0514bc6dfed613b3cce0edeca9098664aa83de9800",
+      "id": "hy_v3",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "enable_moe_fp32_combine",
-     "mlp_layer_types",
-     "moe_intermediate_size",
-     "num_experts",
-     "num_experts_per_tok",
-     "num_shared_experts",
-     "router_scaling_factor"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 2133,
+     "cones": 43,
+     "dissected_cones": 2,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 6,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1316,
+      "elementwise": 75514877,
+      "macs": 33577408,
+      "peak_live_bytes": 50332328,
+      "state_bytes": 33554432,
+      "step_leaves": 43,
+      "transcendentals": 2097194
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      },
+      {
+       "block": 2,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 2,
+      "chunk": true,
+      "macs": 4096,
+      "node": 215,
+      "opened_bytes": 8897,
+      "operands": 5,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 792,
+      "Gather": 72,
+      "Reshape": 144,
+      "TopK": 24
+     },
+     "commit_points_replayed": 1032,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1032
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 2.5022247052379293e-07,
+     "ms": 3,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.011994495228780301,
+     "kl_mean": 0.0002171965896705682,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 131,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": 0.0026799171476563632,
+     "top1": 1.0
+    },
+    "lower": {
+     "blocks": 4,
+     "commit_points": 43,
+     "commit_roles": {
+      "carry_out": 3,
+      "hist_append_input": 4,
+      "logits": 1,
+      "lowerer_cone_split": 34,
+      "topk": 1
+     },
+     "digest": "58928844426ab4963143f67441495b73f199b7f05e6e831a4c1e3a0646e1681d195234e3c8e1f35975dadcd4ca55a81f862e0f87a1a174a23a42346e40c32955",
+     "layers": 2,
+     "ms": 2,
+     "nodes": 768,
+     "ok": true,
+     "params": 150,
+     "prim_kinds": 20,
+     "prims": {
+      "Add": 39,
+      "Clamp": 183,
+      "Compare": 2,
+      "Concat": 4,
+      "Div": 95,
+      "Gather": 105,
+      "HistAppend": 4,
+      "IntExp": 3,
+      "IntRsqrt": 13,
+      "Log2Floor": 9,
+      "MatMul": 37,
+      "Mul": 126,
+      "ReduceMax": 2,
+      "ReduceSum": 12,
+      "Reshape": 99,
+      "Select": 2,
+      "Slice": 8,
+      "Sub": 20,
+      "TopK": 1,
+      "Transpose": 4
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 47,
+     "ok": true,
+     "tensors": 150
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2741,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 51,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `hy_v3` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -5307,14 +6426,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "HyperCLOVAXForCausalLM",
    "id": "hyperclovax",
-   "level": "C",
+   "level": "B",
    "model_type": "hyperclovax",
-   "ms": 8,
+   "ms": 2377,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -5328,7 +6447,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(HyperCLOVAXForCausalLM: config key(s) this lowerer does not model: use_post_norm \u2014 a key that might change the math is refused, not ignored)",
@@ -5342,46 +6461,236 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "5bdedbf6467afd614130f231250ad7985ccc2fbbd42f7d94e8ac1d5ecd8f9ce48888cf09bdda385b858e1387858e7d2b4a91bb0f03494467ea0ae81b53f090ed",
+      "id": "hyperclovax",
+      "kind": "user_file"
      },
      "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_SANDWICH_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(HyperCLOVAXForCausalLM: config key(s) this lowerer does not model: use_post_norm \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "use_post_norm"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "5bdedbf6467afd614130f231250ad7985ccc2fbbd42f7d94e8ac1d5ecd8f9ce48888cf09bdda385b858e1387858e7d2b4a91bb0f03494467ea0ae81b53f090ed",
+      "id": "hyperclovax",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "use_post_norm"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 997,
+     "cones": 19,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 2,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1312,
+      "elementwise": 75510767,
+      "macs": 33580032,
+      "peak_live_bytes": 50332232,
+      "state_bytes": 33554432,
+      "step_leaves": 35,
+      "transcendentals": 2097169
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 4096,
+      "node": 159,
+      "opened_bytes": 8897,
+      "operands": 5,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 648,
+      "Gather": 48,
+      "Reshape": 144
+     },
+     "commit_points_replayed": 840,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 840
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 4.119040188211944e-07,
+     "ms": 3,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.0002241953482276807,
+     "kl_mean": 7.10523054641352e-05,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 125,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.0012084152222993083,
+     "top1": 0.9722222222222222
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 19,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 14
+     },
+     "digest": "138cb1d32c59529010f8ba6a8e984087444bf86a4a42fa643c0c5bd1b60e024e04c8af4f4130bcf91665b362c022237ae96c41a4549c9c26608b992d338b61ee",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 369,
+     "ok": true,
+     "params": 77,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 19,
+      "Clamp": 92,
+      "Concat": 2,
+      "Div": 46,
+      "Gather": 51,
+      "HistAppend": 2,
+      "IntExp": 1,
+      "IntRsqrt": 6,
+      "Log2Floor": 5,
+      "MatMul": 18,
+      "Mul": 62,
+      "ReduceMax": 1,
+      "ReduceSum": 6,
+      "Reshape": 42,
+      "Slice": 4,
+      "Sub": 10,
+      "Transpose": 2
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 51,
+     "ok": true,
+     "tensors": 138
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2180,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 25,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `hyperclovax` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "Jais2ForCausalLM",
    "id": "jais2",
-   "level": "C",
+   "level": "B",
    "model_type": "jais2",
-   "ms": 8,
+   "ms": 2097,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -5395,7 +6704,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(Jais2ForCausalLM: config key(s) this lowerer does not model: layer_norm_eps \u2014 a key that might change the math is refused, not ignored)",
@@ -5409,35 +6718,232 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "753f103ec4432ef94b5450e720d827bc2c966a4adf98d55802b798a5e427e239aa43e7d7cfbb9dd3d3e4376f01b22ef9ea5f0b76bfffad0a89bce5b414963d99",
+      "id": "jais2",
+      "kind": "user_file"
      },
      "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "features": [
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ATTN_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_PLAIN_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_LAYER_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(Jais2ForCausalLM: config key(s) this lowerer does not model: layer_norm_eps \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "layer_norm_eps"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "753f103ec4432ef94b5450e720d827bc2c966a4adf98d55802b798a5e427e239aa43e7d7cfbb9dd3d3e4376f01b22ef9ea5f0b76bfffad0a89bce5b414963d99",
+      "id": "jais2",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "layer_norm_eps"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 865,
+     "cones": 15,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 2,
+     "ok": true,
+     "position": {
+      "commit_lanes": 928,
+      "elementwise": 75508611,
+      "macs": 33573888,
+      "peak_live_bytes": 50332232,
+      "state_bytes": 33554432,
+      "step_leaves": 27,
+      "transcendentals": 2097165
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 4096,
+      "node": 172,
+      "opened_bytes": 8897,
+      "operands": 5,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 456,
+      "Gather": 48,
+      "Reshape": 144
+     },
+     "commit_points_replayed": 648,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 648
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 2.244652956077005e-07,
+     "ms": 3,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.00011302541165821428,
+     "kl_mean": 4.0011175121201544e-05,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 110,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.0007055917762032182,
+     "top1": 0.9861111111111112
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 15,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 10
+     },
+     "digest": "675e69ba4cb302f9fe3736736afcbeab7ea85158187dedc568f8103c63d258875337f61cf0f5d598479d0f73d0072669abe139f0cc4d1afa5c7863c95a1fd385",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 318,
+     "ok": true,
+     "params": 69,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 24,
+      "Clamp": 80,
+      "Concat": 2,
+      "Div": 37,
+      "Gather": 39,
+      "HistAppend": 2,
+      "IntExp": 1,
+      "IntRsqrt": 4,
+      "Log2Floor": 3,
+      "MatMul": 15,
+      "Mul": 50,
+      "ReduceMax": 1,
+      "ReduceSum": 7,
+      "Reshape": 36,
+      "Slice": 4,
+      "Sub": 11,
+      "Transpose": 2
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 43,
+     "ok": true,
+     "tensors": 121
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 1924,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 36,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `jais2` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -5689,14 +7195,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "MiniCPM3ForCausalLM",
    "id": "minicpm3",
-   "level": "C",
+   "level": "B",
    "model_type": "minicpm3",
-   "ms": 1,
+   "ms": 5832,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -5719,7 +7225,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(MiniCPM3ForCausalLM: MiniCPM3 (MLA + muP remote code) is not modelled yet)",
@@ -5739,43 +7245,259 @@
      },
      "ok": false
     },
-    "refusal_bypassed_for_user_adapter": false,
+    "refusal_bypassed_for_user_adapter": true,
     "report": {
      "adapter": {
-      "kind": "none"
+      "hash": "3386c49797864f1bf27b7ed24b1ad4a422d10df454043b86558971bd638d732ac1941d94ecb5a3d44a56a33096178fb51540b8fff43f55f0588d9b638e1784d3",
+      "id": "minicpm3",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
-     "missing": [
+     "assumed_defaults": [
+      "moe_intermediate_size",
+      "n_group",
+      "n_routed_experts",
+      "n_shared_experts",
+      "norm_topk_prob",
+      "num_experts_per_tok",
+      "num_nextn_predict_layers",
+      "routed_scaling_factor",
+      "topk_group"
+     ],
+     "features": [
       {
-       "general_primitive": null,
-       "what": "REFERENCE_REMOTE_CODE_V1",
-       "why": "a reference implementation that is remote Python code outside transformers"
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_SCALE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
       },
       {
-       "general_primitive": null,
-       "what": "SCALE_MUP_V1",
-       "why": "muP multipliers on the embedding, branches and logits"
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "HEAD_PRE_SCALE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "HEAD_TIED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4 heads, latent 8",
+       "id": "MIXER_MLA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_SCALED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
       }
      ],
+     "level": "B",
+     "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(MiniCPM3ForCausalLM: MiniCPM3 (MLA + muP remote code) is not modelled yet)",
+     "result": "LOWERABLE",
      "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "3386c49797864f1bf27b7ed24b1ad4a422d10df454043b86558971bd638d732ac1941d94ecb5a3d44a56a33096178fb51540b8fff43f55f0588d9b638e1784d3",
+      "id": "minicpm3",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 1066,
+     "cones": 22,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 3,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1376,
+      "elementwise": 54538311,
+      "macs": 41967104,
+      "peak_live_bytes": 52429224,
+      "state_bytes": 12582912,
+      "step_leaves": 41,
+      "transcendentals": 2097169
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 5120,
+      "node": 239,
+      "opened_bytes": 3331,
+      "operands": 6,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 0,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 840,
+      "Gather": 48,
+      "Reshape": 96
+     },
+     "commit_points_replayed": 984,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 984
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.4425466191661163e-07,
+     "ms": 4,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 1.563793689977718e-27,
+     "kl_mean": 2.529419137916537e-29,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 271,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.0020223120818650964,
+     "top1": 1.0
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 22,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 17
+     },
+     "digest": "90a4bc2cb4874691dcaf8756368db31f3d04a378445792da65521edea0e7ea8be4ed33e7f94f3449d3d2bd9e1bd0a206901342513dfcece976660666631df7c2",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 396,
+     "ok": true,
+     "params": 84,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 19,
+      "Clamp": 99,
+      "Concat": 3,
+      "Div": 50,
+      "Gather": 53,
+      "HistAppend": 2,
+      "IntExp": 1,
+      "IntRsqrt": 6,
+      "Log2Floor": 5,
+      "MatMul": 21,
+      "Mul": 65,
+      "ReduceMax": 1,
+      "ReduceSum": 6,
+      "Reshape": 44,
+      "Slice": 8,
+      "Sub": 10,
+      "Transpose": 3
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 363,
+     "ok": true,
+     "tensors": 156
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 4986,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 26,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `minicpm3` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -9804,14 +11526,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "SolarOpenForCausalLM",
    "id": "solar_open",
-   "level": "C",
+   "level": "B",
    "model_type": "solar_open",
-   "ms": 8,
+   "ms": 3534,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -9832,7 +11554,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(SolarOpenForCausalLM: config key(s) this lowerer does not model: moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, routed_scaling_factor, topk_group \u2014 a key that might change the math is refused, not ignored)",
@@ -9853,49 +11575,262 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "01110b9c68be3dbc2b6fc51eef458d486177ad0007c59497178e8e1211c4a1bbd5c0fa8dfdbded3ca5156aed26d40a08d72e04d8a90cff1c8ef24a4ce5743412",
+      "id": "solar_open",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "intermediate_size"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_GROUPED_ROUTING_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_NORM_TOPK_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_ROUTER_SIGMOID_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_MOE_SELECTION_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "16",
+       "id": "MLP_MOE_SHARED_EXPERT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "E = 8, k = 2",
+       "id": "MLP_MOE_TOPK_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(SolarOpenForCausalLM: config key(s) this lowerer does not model: moe_intermediate_size, n_group, n_routed_experts, n_shared_experts, norm_topk_prob, num_experts_per_tok, routed_scaling_factor, topk_group \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "moe_intermediate_size",
-      "n_group",
-      "n_routed_experts",
-      "n_shared_experts",
-      "norm_topk_prob",
-      "num_experts_per_tok",
-      "routed_scaling_factor",
-      "topk_group"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "01110b9c68be3dbc2b6fc51eef458d486177ad0007c59497178e8e1211c4a1bbd5c0fa8dfdbded3ca5156aed26d40a08d72e04d8a90cff1c8ef24a4ce5743412",
+      "id": "solar_open",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "moe_intermediate_size",
-     "n_group",
-     "n_routed_experts",
-     "n_shared_experts",
-     "norm_topk_prob",
-     "num_experts_per_tok",
-     "routed_scaling_factor",
-     "topk_group"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 1283,
+     "cones": 27,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 3,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1262,
+      "elementwise": 75517795,
+      "macs": 33574784,
+      "peak_live_bytes": 50332232,
+      "state_bytes": 33554432,
+      "step_leaves": 51,
+      "transcendentals": 2097199
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 4096,
+      "node": 159,
+      "opened_bytes": 8897,
+      "operands": 5,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 2,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 840,
+      "Gather": 96,
+      "Reshape": 144,
+      "TopK": 144
+     },
+     "commit_points_replayed": 1224,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 1224
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.6573025756537082e-07,
+     "ms": 3,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 8.557723936011617e-05,
+     "kl_mean": 3.32289243844959e-05,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 136,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": 0.0008660926223453824,
+     "top1": 1.0
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 27,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 19,
+      "topk": 3
+     },
+     "digest": "b93b80560d0d9be90096976162d743fc693a947d5231ed373f343f861974d2549ee6fa6543b33525318123013c3a354d79e61bf67c364d8ddff56aeaaa85d26c",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 403,
+     "ok": true,
+     "params": 83,
+     "prim_kinds": 22,
+     "prims": {
+      "Add": 20,
+      "Broadcast": 1,
+      "Clamp": 89,
+      "Compare": 3,
+      "Concat": 2,
+      "Div": 46,
+      "Gather": 59,
+      "HistAppend": 2,
+      "IntExp": 2,
+      "IntRsqrt": 6,
+      "Iota": 1,
+      "Log2Floor": 3,
+      "MatMul": 21,
+      "Mul": 62,
+      "ReduceMax": 2,
+      "ReduceSum": 6,
+      "Reshape": 57,
+      "Select": 3,
+      "Slice": 4,
+      "Sub": 9,
+      "TopK": 3,
+      "Transpose": 2
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 61,
+     "ok": true,
+     "tensors": 150
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 3313,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 73,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `solar_open` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -10250,14 +12185,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "VaultGemmaForCausalLM",
    "id": "vaultgemma",
-   "level": "C",
+   "level": "B",
    "model_type": "vaultgemma",
-   "ms": 8,
+   "ms": 2767,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -10271,7 +12206,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(VaultGemmaForCausalLM: config key(s) this lowerer does not model: hidden_activation \u2014 a key that might change the math is refused, not ignored)",
@@ -10285,35 +12220,268 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "875a6e6468b8f38dacf064d7db9219ebc8c6d1fb4ba92a7a91d6c3172f2eb287281b73facf51e67cb4a42892055c2b98523662bf3184da3a4ab3946bf4bc86b2",
+      "id": "vaultgemma",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "mlp_bias"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "4q/2kv \u00d7 8 (group 2)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "window 4096",
+       "id": "ATTN_SLIDING_V1",
+       "layers": 1,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ATTN_SOFTCAP_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_SCALE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "HEAD_SOFTCAP_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "HEAD_TIED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_GAIN_ONE_PLUS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(VaultGemmaForCausalLM: config key(s) this lowerer does not model: hidden_activation \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "hidden_activation"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "875a6e6468b8f38dacf064d7db9219ebc8c6d1fb4ba92a7a91d6c3172f2eb287281b73facf51e67cb4a42892055c2b98523662bf3184da3a4ab3946bf4bc86b2",
+      "id": "vaultgemma",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "hidden_activation"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 1706,
+     "cones": 33,
+     "dissected_cones": 2,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 5,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1312,
+      "elementwise": 57519649,
+      "macs": 17064448,
+      "peak_live_bytes": 50331944,
+      "state_bytes": 17039360,
+      "step_leaves": 33,
+      "transcendentals": 3194893
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 4096
+      },
+      {
+       "block": 2,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 2,
+      "chunk": true,
+      "macs": 4096,
+      "node": 179,
+      "opened_bytes": 8930,
+      "operands": 5,
+      "transcendentals": 772
+     }
+    },
+    "bind": {
+     "ms": 4,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 624,
+      "Gather": 72,
+      "Reshape": 96
+     },
+     "commit_points_replayed": 792,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 792
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.4849924436159505e-07,
+     "ms": 3,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 1.8540925013737564e-06,
+     "kl_mean": 1.019502176604929e-07,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 120,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": -0.0018222476211762206,
+     "top1": 1.0
+    },
+    "lower": {
+     "blocks": 4,
+     "commit_points": 33,
+     "commit_roles": {
+      "carry_out": 3,
+      "hist_append_input": 4,
+      "logits": 1,
+      "lowerer_cone_split": 25
+     },
+     "digest": "a6c947aeb8da18c3d6278c5951afca83a931ef532c5c7181e671c23896ddefab8dc0ddf2e51b29b8c8871ffbd6d6a783e8f4e9673f5cd79862ba58f355b4c00d",
+     "layers": 2,
+     "ms": 2,
+     "nodes": 621,
+     "ok": true,
+     "params": 129,
+     "prim_kinds": 19,
+     "prims": {
+      "Add": 34,
+      "Clamp": 146,
+      "Compare": 4,
+      "Concat": 4,
+      "Div": 72,
+      "Gather": 82,
+      "HistAppend": 4,
+      "IntExp": 4,
+      "IntRsqrt": 9,
+      "Log2Floor": 5,
+      "MatMul": 33,
+      "Mul": 106,
+      "ReduceMax": 2,
+      "ReduceSum": 7,
+      "Reshape": 74,
+      "Select": 4,
+      "Slice": 8,
+      "Sub": 19,
+      "Transpose": 4
+     },
+     "states": 4
+    },
+    "materialise": {
+     "ms": 48,
+     "ok": true,
+     "tensors": 129
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2567,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 20,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `vaultgemma` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",
@@ -10645,14 +12813,14 @@
   },
   {
    "category": "census/text",
-   "claimed_level": "C",
-   "failed_stage": "read",
+   "claimed_level": "B",
+   "failed_stage": null,
    "heavy_fixture": true,
    "hf_arch": "YoutuForCausalLM",
    "id": "youtu",
-   "level": "C",
+   "level": "B",
    "model_type": "youtu",
-   "ms": 8,
+   "ms": 2278,
    "read": {
     "a_diff": null,
     "a_same_as_adapter": null,
@@ -10673,7 +12841,7 @@
      },
      "ok": false
     },
-    "claimed_level": "C",
+    "claimed_level": "B",
     "none": {
      "failure": {
       "error": "NOT_LOWERABLE(YoutuForCausalLM: config key(s) this lowerer does not model: embedding_initializer_range, kv_lora_rank, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, v_head_dim \u2014 a key that might change the math is refused, not ignored)",
@@ -10694,49 +12862,242 @@
     "refusal_bypassed_for_user_adapter": false,
     "report": {
      "adapter": {
-      "hash": "45d6b9f2bfe45e88bca77498de8efa1a6837fdeeead07f081f9f7674d0c6863232d929096cd0a4e006921b408414c9ccc0a5fd80535ae90b13bb04384f422144",
-      "id": "standard-decoder",
-      "kind": "built_in"
+      "hash": "bdeab6c0a70cc3e35c843bb0da71f921c69d2c3337c96dd23f77efcf6a392dd8d12949a1ac03036d23c67ca7e37c9167fedbd0a7a6276e5ae92891fdf8afb677",
+      "id": "youtu",
+      "kind": "user_file"
      },
-     "assumed_defaults": [],
-     "features": [],
-     "level": "C",
+     "assumed_defaults": [
+      "moe_intermediate_size",
+      "n_group",
+      "n_routed_experts",
+      "n_shared_experts",
+      "norm_topk_prob",
+      "num_experts_per_tok",
+      "num_nextn_predict_layers",
+      "routed_scaling_factor",
+      "topk_group"
+     ],
+     "features": [
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "HEAD_TIED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4 heads, latent 8",
+       "id": "MIXER_MLA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_GATED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_RMS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_LOGITS_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_PRE_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_DEFAULT_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ROPE_INTERLEAVED_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
      "missing": [],
      "new_court_kernel_required": false,
      "new_primitive_required": false,
-     "result": "NOT_LOWERABLE: NOT_LOWERABLE(YoutuForCausalLM: config key(s) this lowerer does not model: embedding_initializer_range, kv_lora_rank, q_lora_rank, qk_head_dim, qk_nope_head_dim, qk_rope_head_dim, rope_interleave, v_head_dim \u2014 a key that might change the math is refused, not ignored)",
-     "unmapped_config_keys": [
-      "embedding_initializer_range",
-      "kv_lora_rank",
-      "q_lora_rank",
-      "qk_head_dim",
-      "qk_nope_head_dim",
-      "qk_rope_head_dim",
-      "rope_interleave",
-      "v_head_dim"
-     ]
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "bdeab6c0a70cc3e35c843bb0da71f921c69d2c3337c96dd23f77efcf6a392dd8d12949a1ac03036d23c67ca7e37c9167fedbd0a7a6276e5ae92891fdf8afb677",
+      "id": "youtu",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
     }
    },
    "refuted_routes": [],
    "route": "decoder",
    "share": null,
-   "stages": {},
-   "synthesized": {
-    "blocked_by_keys": [
-     "embedding_initializer_range",
-     "kv_lora_rank",
-     "q_lora_rank",
-     "qk_head_dim",
-     "qk_nope_head_dim",
-     "qk_rope_head_dim",
-     "rope_interleave",
-     "v_head_dim"
-    ],
-    "tried": []
+   "stages": {
+    "admit": {
+     "admitted": true,
+     "checkpoint_interval": 65536,
+     "cone_work": 1090,
+     "cones": 22,
+     "dissected_cones": 1,
+     "inputs": {
+      "h_chunk": 64,
+      "max_tile_macs": 16777216,
+      "tile_len": 64
+     },
+     "ms": 3,
+     "ok": true,
+     "position": {
+      "commit_lanes": 1376,
+      "elementwise": 54538471,
+      "macs": 41967104,
+      "peak_live_bytes": 52429224,
+      "state_bytes": 12582912,
+      "step_leaves": 41,
+      "transcendentals": 2097169
+     },
+     "windows": [
+      {
+       "block": 1,
+       "window": 262144
+      }
+     ],
+     "worst_terminal": {
+      "block": 1,
+      "chunk": true,
+      "macs": 5120,
+      "node": 251,
+      "opened_bytes": 3331,
+      "operands": 6,
+      "transcendentals": 260
+     }
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 840,
+      "Gather": 48,
+      "Reshape": 96
+     },
+     "commit_points_replayed": 984,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 984
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.821980654471776e-07,
+     "ms": 4,
+     "near_ties": 0,
+     "ok": true,
+     "positions": 10,
+     "reference": "full"
+    },
+    "int_vs_float": {
+     "kl_max": 0.001281442607827037,
+     "kl_mean": 4.886727966059703e-05,
+     "max_kl": 0.01,
+     "min_top1": 0.9,
+     "ms": 132,
+     "ok": true,
+     "positions": 72,
+     "ppl_delta": 0.008735120872277014,
+     "top1": 1.0
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 22,
+     "commit_roles": {
+      "carry_out": 2,
+      "hist_append_input": 2,
+      "logits": 1,
+      "lowerer_cone_split": 17
+     },
+     "digest": "877db4b3f95d47939638d0143549134f9314f81f7c371a6a198bb8ad04087fa57b0ecc40f1d2148c45315719c53e0ff5f24d687a86f27085e6534989700a37e1",
+     "layers": 2,
+     "ms": 1,
+     "nodes": 408,
+     "ok": true,
+     "params": 84,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 19,
+      "Clamp": 99,
+      "Concat": 3,
+      "Div": 50,
+      "Gather": 53,
+      "HistAppend": 2,
+      "IntExp": 1,
+      "IntRsqrt": 6,
+      "Log2Floor": 5,
+      "MatMul": 21,
+      "Mul": 65,
+      "ReduceMax": 1,
+      "ReduceSum": 6,
+      "Reshape": 56,
+      "Slice": 8,
+      "Sub": 10,
+      "Transpose": 3
+     },
+     "states": 2
+    },
+    "materialise": {
+     "ms": 49,
+     "ok": true,
+     "tensors": 156
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 2072,
+     "ok": true,
+     "positions": 24,
+     "sequences": 2
+    }
    },
+   "synthesized": null,
    "tensors": 26,
    "usage": "l",
-   "via": "-"
+   "via": "third-party adapter `youtu` (tools/corpus/adapters)"
   },
   {
    "category": "census/text",

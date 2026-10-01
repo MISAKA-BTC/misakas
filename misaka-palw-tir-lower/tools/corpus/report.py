@@ -291,12 +291,15 @@ def census_md(rep, cman):
     for e in ents:
         if e["level"] == "B":
             v = e.get("via", "")
-            via["synthesized" if (e.get("synthesized") or {}).get("adapter") else ("built-in" if "built-in" in v else "user adapter")] += 1
+            via["synthesized" if (e.get("synthesized") or {}).get("adapter") else ("built-in" if "built-in" in v else "third-party")] += 1
     total = n + len(cen.get("not_derivable", [])) + len(cen.get("excluded", []))
     rows = ["| outcome | families | share of the " + str(total) + " |", "| --- | ---: | ---: |"]
     rows.append(f"| Level A (the standard template alone) | {lv.get('A', 0)} | {pct(lv.get('A', 0), total)} |")
     rows.append(f"| Level B through the built-in adapter pack (nobody wrote anything for this run) | {via.get('built-in', 0)} | {pct(via.get('built-in', 0), total)} |")
+    rows.append(f"| Level B through a third-party adapter (written by this lane for this table, data only: `tools/corpus/census-adapters/`) | {via.get('third-party', 0)} | {pct(via.get('third-party', 0), total)} |")
     rows.append(f"| Level B through a synthesised adapter (convention search) | {via.get('synthesized', 0)} | {pct(via.get('synthesized', 0), total)} |")
+    ab = lv.get("A", 0) + lv.get("B", 0)
+    rows.append(f"| **A + B** | **{ab}** | **{pct(ab, total)}** (of the {n} buildable: {pct(ab, n)}) |")
     rows.append(f"| Level C (read refused or a later stage failed) | {lv.get('C', 0)} | {pct(lv.get('C', 0), total)} |")
     rows.append(f"| no automatic tiny config (listed below) | {len(cen.get('not_derivable', []))} | {pct(len(cen.get('not_derivable', [])), total)} |")
     rows.append(f"| excluded: not a standalone text decoder (listed below, with the reason) | {len(cen.get('excluded', []))} | {pct(len(cen.get('excluded', [])), total)} |")

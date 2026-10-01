@@ -1,0 +1,12 @@
+{
+  "_doc": "Census families whose gap this lane has read in the transformers code (not all 51 Level C: the others are listed by the refusal the reader gave, in the generated census table, and are NOT classified). class: feature | route | refusal | data (an adapter is expected to hold, not yet written) ; frs: the feature requests (docs/design/palw/tir/feature-requests.md) that name it.",
+  "nanochat": {"class": "feature", "frs": ["FR-02"], "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU² ungated MLP; the standard template reads it and bind refutes it", "evidence": "read from modeling_nanochat.py; the standard template reads it (Level A refuted at bind)"},
+  "modernbert_decoder": {"class": "feature", "frs": ["FR-29"], "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection, plus layer 0 without attn_norm and its own key names", "evidence": "read from modeling_modernbert_decoder.py; the per-layer-type rope convention alone does not make it readable"},
+  "axk2": {"class": "feature", "frs": ["FR-09"], "short": "DeepSeek sparse attention layers", "evidence": "the reader's own refusal: layer type deepseek_sparse_attention"},
+  "glm_moe_dsa": {"class": "feature", "frs": ["FR-09"], "short": "DeepSeek sparse attention (interleaved indexer rope, shared indexer layers)", "evidence": "the reader's own refusal"},
+  "hy_v4": {"class": "feature", "frs": ["FR-09", "FR-10"], "short": "DSA indexer plus hyper-connections without a mixing matrix and swiglu_limit", "evidence": "the reader's own refusal"},
+  "codegen": {"class": "feature", "frs": ["FR-01"], "short": "qkv stored in an mp_num-partitioned layout the binder cannot express", "evidence": "the reader's own refusal"},
+  "olmo_hybrid": {"class": "feature", "frs": [], "short": "gated delta rule layers with SEPARATE q/k/v convolutions, allow_neg_eigval and different norm placement per layer type: needs a read of the layer, not yet done", "evidence": "config and tensor names only"},
+  "minimax": {"class": "feature", "frs": [], "short": "lightning (linear) attention layers: not yet read", "evidence": "the reader's own refusal"},
+  "recurrent_gemma": {"class": "feature", "frs": [], "short": "RG-LRU recurrent blocks: a new mixer, not yet read", "evidence": "config keys only"}
+}
