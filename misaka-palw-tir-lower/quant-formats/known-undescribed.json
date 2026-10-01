@@ -1,0 +1,18 @@
+{
+ "schema": "misaka.palw.quant-known-undescribed.v1",
+ "doc": "Quantisation methods a Hugging Face checkpoint can announce (`quantization_config.quant_method`) that no built-in descriptor reads yet. A model that uses one is refused by name — and, so that nobody mistakes the refusal for a verdict on the model, preflight lists the method here as known and not yet described, with what writing its descriptor takes. Writing one is a file (misaka.palw.quant-format.v1), not a release; the ones marked `queued` are next.",
+ "methods": [
+  {"method": "bitsandbytes", "status": "queued", "title": "bitsandbytes", "note": "nf4 and fp4 (16-entry codebooks, one absmax per block, the absmax itself 8-bit quantised under a second level when `bnb_4bit_use_double_quant`), and LLM.int8 (row-wise int8 with per-row scales; the outlier-threshold variant decomposes the matmul at run time and is refused by name)"},
+  {"method": "mxfp4", "status": "queued", "title": "OCP MXFP4 from safetensors (gpt-oss)", "note": "expert tensors fused on a leading expert axis, `_blocks` (two 4-bit codes a byte) and `_scales` (e8m0, one a block of 32): needs a descriptor with an expert axis and per-block e8m0 scales over a 3-D tensor"},
+  {"method": "hqq", "status": "known", "title": "Half-Quadratic Quantization", "note": "per-group scale and zero point with an optional offset axis and packed codes; a descriptor is expressible, none written yet"},
+  {"method": "aqlm", "status": "known", "title": "Additive Quantization of Language Models", "note": "multi-codebook additive codes with per-group scales: a codebook gather and a sum per weight; expressible in principle, none written yet"},
+  {"method": "quip", "status": "known", "title": "QuIP / QuIP#", "note": "lattice codebooks under incoherence processing: the weights are decoded and then rotated by Hadamard transforms at run time, which is not a static decode; refused until a transform feature exists"},
+  {"method": "vptq", "status": "known", "title": "Vector Post-Training Quantization", "note": "vector codebooks with residual and outlier parts; none written yet"},
+  {"method": "torchao", "status": "known", "title": "torchao", "note": "tensors serialised as Python objects (pickle), not safetensors tensors: refused, not described"},
+  {"method": "fbgemm_fp8", "status": "known", "title": "FBGEMM FP8", "note": "float8 weights with a scale per output row (`weight_scale`); a floats descriptor like CT_FP8_CHANNEL, none written yet"},
+  {"method": "eetq", "status": "known", "title": "EETQ int8", "note": "int8 weights with a per-channel scale; none written yet"},
+  {"method": "spqr", "status": "known", "title": "SpQR", "note": "grouped codes with a sparse outlier set in CSR form; none written yet"},
+  {"method": "higgs", "status": "known", "title": "HIGGS", "note": "Hadamard-rotated grid quantisation (a run-time transform); refused until a transform feature exists"},
+  {"method": "bitnet", "status": "known", "title": "BitNet b1.58", "note": "ternary weights with a per-tensor scale; activation quantisation is part of the layer; none written yet"}
+ ]
+}

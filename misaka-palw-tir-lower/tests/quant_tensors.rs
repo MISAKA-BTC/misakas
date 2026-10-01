@@ -239,6 +239,11 @@ fn a_method_no_descriptor_reads_says_what_to_supply() {
     let e = refusal(parse_quant_config(&json!({"quant_method": "bitsandbytes", "load_in_4bit": true}), "LlamaForCausalLM", "llama"));
     assert!(e.contains("quant_method=bitsandbytes") && e.contains("no quant-format descriptor") && e.contains("--quant-format"), "{e}");
     assert!(e.contains("compressed-tensors/pack-quantized") && e.contains("gptq"), "the refusal lists what is known: {e}");
+    // A method that is known and not yet described says so, and what writing its descriptor takes.
+    let e = refusal(parse_quant_config(&json!({"quant_method": "hqq", "quant_config": {}}), "LlamaForCausalLM", "llama"));
+    assert!(e.contains("`hqq` is known and not yet described") && e.contains("zero point"), "{e}");
+    assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().any(|k| k.method == "aqlm" && k.status == "known"));
+    assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().any(|k| k.method == "bitsandbytes" && k.status == "queued"));
     let e = refusal(parse_quant_config(&json!({"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": {}}), "LlamaForCausalLM", "llama"));
     assert!(e.contains("quant_method=compressed-tensors/mixed-precision"), "{e}");
 }

@@ -177,18 +177,61 @@ impl NeedsDescriptor {
             (None, None) => format!("a {} format", self.scheme),
         };
         let some: Vec<&String> = self.tensors.iter().take(3).collect();
+        let known_note = match (self.scheme.as_str(), &self.name) {
+            ("config", Some(n)) => known_undescribed_method(n.split('/').next().unwrap_or(n))
+                .map(|k| format!(" `{}` is known and not yet described ({}): {}.", k.method, k.status, k.note))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         let which = if self.tensors.is_empty() {
             String::new()
         } else {
             format!(": {} tensor(s) need one ({}{})", self.tensors.len(), some.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), if self.tensors.len() > 3 { ", …" } else { "" })
         };
         format!(
-            "{what} has no quant-format descriptor{which}. \
+            "{what} has no quant-format descriptor{which}.{known_note} \
              A descriptor is a file (misaka.palw.quant-format.v1) — supply it with --quant-format <file.json> or a pack's quant.descriptors; \
              no code change is needed. Without one: use the model's original safetensors, or re-quantise it to a described type ({})",
             known.join(", ")
         )
     }
+}
+
+/// A quantisation method a checkpoint can announce that no descriptor reads yet.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct KnownUndescribed {
+    pub method: String,
+    /// `queued` (next to be described) or `known`.
+    pub status: String,
+    pub title: String,
+    /// What writing its descriptor takes (or why it cannot be one yet).
+    pub note: String,
+}
+
+/// The methods that are known and not yet described (`quant-formats/known-undescribed.json`).
+pub fn known_undescribed() -> &'static [KnownUndescribed] {
+    static K: OnceLock<Vec<KnownUndescribed>> = OnceLock::new();
+    K.get_or_init(|| {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../../quant-formats/known-undescribed.json")).expect("the known-undescribed list is JSON");
+        assert_eq!(v["schema"], "misaka.palw.quant-known-undescribed.v1");
+        v["methods"]
+            .as_array()
+            .expect("methods")
+            .iter()
+            .map(|m| KnownUndescribed {
+                method: m["method"].as_str().unwrap_or_default().to_string(),
+                status: m["status"].as_str().unwrap_or("known").to_string(),
+                title: m["title"].as_str().unwrap_or_default().to_string(),
+                note: m["note"].as_str().unwrap_or_default().to_string(),
+            })
+            .collect()
+    })
+}
+
+/// The entry for a `quant_method` that is known and not described, if it is one (a described method is not).
+pub fn known_undescribed_method(method: &str) -> Option<&'static KnownUndescribed> {
+    let m = method.to_ascii_lowercase();
+    known_undescribed().iter().find(|k| k.method == m)
 }
 
 /// Descriptors by name and by the ids a checkpoint announces them with.
