@@ -15,7 +15,7 @@ use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};
 use misaka_palw_tir::program::INPUT_POS;
 use misaka_palw_tir::{DType, Ref};
 
-use super::act::QAct;
+use super::act::{Act, lower_act_codes};
 use super::conv::{ConvSpec, QConv, QConvRefs, lower_conv_rows};
 use super::linear::{QLinear, QLinearRefs, lower_linear_codes};
 use super::sink::ParamSink;
@@ -170,12 +170,15 @@ pub fn lower_timestep_row(b: &mut BlockBuilder<'_>, steps: Ref, r: &TimestepRefs
     b.reshape_fixed(row, &[1, t.dim as u32])
 }
 
-/// A two-layer embedder: `Linear → SiLU → Linear` (diffusers' `TimestepEmbedding` and `PixArtAlphaTextProjection`).
+/// A two-layer embedder: `Linear → SiLU → Linear` (diffusers' `TimestepEmbedding` and `PixArtAlphaTextProjection`),
+/// the SiLU composed (no table: see [`super::act`]).
 #[derive(Clone, Debug)]
 pub struct QEmbedder {
     pub l1: QLinear,
-    pub act: QAct,
     pub l2: QLinear,
+    /// The SiLU's input and output code scales.
+    pub h_scale: f64,
+    pub a_scale: f64,
 }
 
 impl QEmbedder {
@@ -196,31 +199,27 @@ impl QEmbedder {
     ) -> Self {
         Self {
             l1: QLinear::new(w1, d, inn, Some(b1), x_scale, h_scale),
-            act: QAct::silu(h_scale, a_scale),
             l2: QLinear::new(w2, d, d, Some(b2), a_scale, y_scale),
+            h_scale,
+            a_scale,
         }
     }
 
     pub fn declare(&self, pb: &mut ProgramBuilder, sink: &mut ParamSink, name: &str) -> QEmbedderRefs {
-        QEmbedderRefs {
-            l1: self.l1.declare(pb, sink, &format!("{name}.l1")),
-            act: self.act.declare(pb, sink, &format!("{name}.act")),
-            l2: self.l2.declare(pb, sink, &format!("{name}.l2")),
-        }
+        QEmbedderRefs { l1: self.l1.declare(pb, sink, &format!("{name}.l1")), l2: self.l2.declare(pb, sink, &format!("{name}.l2")) }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct QEmbedderRefs {
     pub l1: QLinearRefs,
-    pub act: Ref,
     pub l2: QLinearRefs,
 }
 
 /// The embedder over rows `x:[R, in]` `i16` codes: `[R, d]` `i16` codes.
-pub fn lower_embedder(b: &mut BlockBuilder<'_>, x: Ref, r: &QEmbedderRefs) -> Ref {
+pub fn lower_embedder(b: &mut BlockBuilder<'_>, x: Ref, r: &QEmbedderRefs, e: &QEmbedder) -> Ref {
     let h = lower_linear_codes(b, x, &r.l1);
-    let a = b.act_table(h, r.act);
+    let a = lower_act_codes(b, h, Act::Silu, e.h_scale, e.a_scale);
     lower_linear_codes(b, a, &r.l2)
 }
 
@@ -326,7 +325,7 @@ mod tests {
         let x2 = x.clone();
         let y = run_one_block(
             |pb, sink| (sink.put(pb, "x", DType::I16, &[1, inn as u32], x2), e.declare(pb, sink, "emb")),
-            |b, (xs, r)| lower_embedder(b, xs, &r),
+            |b, (xs, r)| lower_embedder(b, xs, &r, &e),
         );
         for o in 0..d {
             let h: Vec<f64> = (0..d)

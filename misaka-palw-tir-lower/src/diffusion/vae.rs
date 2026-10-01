@@ -22,7 +22,7 @@ use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::program_v2::{InputSource, OutputDecl, TirProgramV2};
 use misaka_palw_tir::{DType, Ref, Rounding, TensorType};
 
-use super::act::{QAct, lower_act};
+use super::act::{Act, lower_act_codes};
 use super::attn::{JointAttnSpec, LOGIT_Q, attn_narrowings, softmax_committed};
 use super::calib::Calib;
 use super::conv::{ConvSpec, QConv, QConvRefs, lower_conv};
@@ -127,10 +127,12 @@ pub fn upsample_index(c: usize, h: usize, w: usize) -> Vec<u32> {
 /// A resnet's quantised parts.
 struct QResnet {
     n1: QGroupNorm,
-    a1: QAct,
+    s_n1: f64,
+    s_a1: f64,
     c1: QConv,
     n2: QGroupNorm,
-    a2: QAct,
+    s_n2: f64,
+    s_a2: f64,
     c2: QConv,
     sc: Option<QConv>,
     /// `x → s_o` and `c2 → s_o`.
@@ -140,10 +142,8 @@ struct QResnet {
 
 struct QResnetRefs {
     n1: QGroupNormRefs,
-    a1: Ref,
     c1: QConvRefs,
     n2: QGroupNormRefs,
-    a2: Ref,
     c2: QConvRefs,
     sc: Option<QConvRefs>,
 }
@@ -166,10 +166,12 @@ fn resnet_stage(
     let s_short = if has_sc { sc("sc") } else { s_in };
     let q = QResnet {
         n1: qgn(vae, &format!("{prefix}.norm1"), c_in, h, w, s_in, sn1),
-        a1: QAct::silu(sn1, sa1),
+        s_n1: sn1,
+        s_a1: sa1,
         c1: qconv(vae, &format!("{prefix}.conv1"), h, w, 1, sa1, sc1),
         n2: qgn(vae, &format!("{prefix}.norm2"), c_out, h, w, sc1, sn2),
-        a2: QAct::silu(sn2, sa2),
+        s_n2: sn2,
+        s_a2: sa2,
         c2: qconv(vae, &format!("{prefix}.conv2"), h, w, 1, sa2, sc2),
         sc: has_sc.then(|| qconv(vae, &format!("{prefix}.conv_shortcut"), h, w, 0, s_in, s_short)),
         r_x: mul_shift(s_short / so),
@@ -184,22 +186,30 @@ fn resnet_stage(
         (-32_767, 32_767),
         |pb, sink| QResnetRefs {
             n1: q.n1.declare(pb, sink, &format!("{prefix}.norm1")),
-            a1: q.a1.declare(pb, sink, &format!("{prefix}.act1")),
             c1: q.c1.declare(pb, sink, &format!("{prefix}.conv1")),
             n2: q.n2.declare(pb, sink, &format!("{prefix}.norm2")),
-            a2: q.a2.declare(pb, sink, &format!("{prefix}.act2")),
             c2: q.c2.declare(pb, sink, &format!("{prefix}.conv2")),
             sc: q.sc.as_ref().map(|c| c.declare(pb, sink, &format!("{prefix}.conv_shortcut"))),
         },
         |b, r, x| {
+            // Every lowerer's output is a commit point: a cone is then one lowerer's, never the resnet's.
             let n1 = lower_group_norm(b, x, &q.n1, &r.n1);
-            let a1 = lower_act(b, n1, r.a1);
+            b.commit(n1);
+            let a1 = lower_act_codes(b, n1, Act::Silu, q.s_n1, q.s_a1);
+            b.commit(a1);
             let c1 = lower_conv(b, a1, &r.c1, &spec1);
+            b.commit(c1);
             let n2 = lower_group_norm(b, c1, &q.n2, &r.n2);
-            let a2 = lower_act(b, n2, r.a2);
+            b.commit(n2);
+            let a2 = lower_act_codes(b, n2, Act::Silu, q.s_n2, q.s_a2);
+            b.commit(a2);
             let c2 = lower_conv(b, a2, &r.c2, &spec2);
+            b.commit(c2);
             let short = match (&r.sc, spec_sc) {
-                (Some(rc), Some(spec)) => lower_conv(b, x, rc, &spec),
+                (Some(rc), Some(spec)) => {
+                    let sc = lower_conv(b, x, rc, &spec);
+                    b.commit(sc)
+                }
                 _ => x,
             };
             lower_add_codes(b, short, q.r_x, c2, q.r_c2)
@@ -257,6 +267,7 @@ fn attention_stage(
         },
         |b, (rgn, rq, rk, rv, ro): (QGroupNormRefs, QLinearRefs, QLinearRefs, QLinearRefs, QLinearRefs), x| {
             let n = lower_group_norm(b, x, &gn, &rgn);
+            b.commit(n);
             let flat = b.reshape_fixed(n, &[c32, t as u32]);
             let rows = b.transpose(flat, &[1, 0]); // [T, C]
             let q = lower_linear_codes(b, rows, &rq);
@@ -277,6 +288,7 @@ fn attention_stage(
             let codes = b.narrow(o, &Narrowing::new(cm, cs, None), -32_767, 32_767, DType::I16);
             let codes = b.commit(codes);
             let proj = lower_linear_codes(b, codes, &ro); // [T, C]
+            b.commit(proj);
             let back = b.transpose(proj, &[1, 0]);
             let back = b.reshape_fixed(back, &[c32, h32, w32]);
             lower_add_codes(b, x, r_x, back, r_p)
@@ -390,7 +402,6 @@ fn last_stage(vae: &Vae, cal: &Calib, c: usize, h: usize, w: usize, s_in: f64) -
     let cfg = &vae.cfg;
     let (s_no, s_ao, s_img) = (cal.scale16("vae.no"), cal.scale16("vae.ao"), cal.scale16("vae.img"));
     let gn = qgn(vae, "decoder.conv_norm_out", c, h, w, s_in, s_no);
-    let act = QAct::silu(s_no, s_ao);
     let co = qconv(vae, "decoder.conv_out", h, w, 1, s_ao, s_img);
     let spec = co.spec;
     // `pixel = Clamp(HAFZ((y + 1) · 255 / 2), 0, 255)` on `y` in Q24 (the RFC's `Div_HAFZ((y + ONE)·255, 2·ONE)`).
@@ -403,14 +414,16 @@ fn last_stage(vae: &Vae, cal: &Calib, c: usize, h: usize, w: usize, s_in: f64) -
         |pb, sink| {
             (
                 gn.declare(pb, sink, "decoder.conv_norm_out"),
-                act.declare(pb, sink, "decoder.conv_act"),
                 co.declare(pb, sink, "decoder.conv_out"),
             )
         },
-        |b, (rgn, ra, rco): (QGroupNormRefs, Ref, QConvRefs), x| {
+        |b, (rgn, rco): (QGroupNormRefs, QConvRefs), x| {
             let n = lower_group_norm(b, x, &gn, &rgn);
-            let a = lower_act(b, n, ra);
+            b.commit(n);
+            let a = lower_act_codes(b, n, Act::Silu, s_no, s_ao);
+            b.commit(a);
             let y = lower_conv(b, a, &rco, &spec); // [3, H, W] codes
+            b.commit(y);
             let yq = lower_requant(b, y, to_q24, i32::MIN as i64, i32::MAX as i64, DType::I32);
             let one = b.c(DType::I64, 1 << 24);
             let shifted = b.add(yq, one, DType::I64);
