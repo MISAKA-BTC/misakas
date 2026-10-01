@@ -31,10 +31,34 @@ use serde::Serialize;
 use crate::check_architecture::{ArchVerdictV1, check_ir_program_at_v1, tir_admit_inputs_v1, tir_ceilings_v1};
 use crate::tir_layout::{TirLayoutChoiceV1, tir_choose_layout_v1};
 
-/// The memory a seat has when the operator does not say: the reference seat of the fleet this repository's drills
-/// run on (a 64 GiB host shared by four seats). An assumption the report names, overridable with
-/// `--seat-memory-gib`.
-pub const REFERENCE_SEAT_MEMORY_GIB: u64 = 16;
+/// One tier of seat: a name and the memory share a seat of that tier declares.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SeatShare {
+    pub name: String,
+    pub bytes: u64,
+}
+
+/// The seat tiers of the testnet-12 fleet (coordinator, 2026-10-01): the 5.104 seats hold a memory share of 3.5 GiB
+/// (MemoryMax 9 GiB) and the ibm/.113 seats 8 GiB (MemoryMax 16-20 GiB). `--seat-share` replaces them.
+pub fn default_seat_shares() -> Vec<SeatShare> {
+    vec![
+        SeatShare { name: "5.104 seats (MemoryMax 9 GiB)".into(), bytes: 3_758_096_384 },
+        SeatShare { name: "ibm/.113 seats (MemoryMax 16-20 GiB)".into(), bytes: 8 << 30 },
+    ]
+}
+
+/// `[name=]GiB` (a decimal GiB) as a tier.
+pub fn parse_seat_share(s: &str) -> Result<SeatShare, String> {
+    let (name, gib) = match s.split_once('=') {
+        Some((n, g)) => (n.to_string(), g),
+        None => (format!("{s} GiB"), s),
+    };
+    let g: f64 = gib.parse().map_err(|e| format!("--seat-share {s}: {e}"))?;
+    if !(g >= 0.0) || !g.is_finite() {
+        return Err(format!("--seat-share {s}: a share in GiB"));
+    }
+    Ok(SeatShare { name, bytes: (g * (1u64 << 30) as f64) as u64 })
+}
 
 /// A network the preflight judges on.
 pub struct PreflightNetwork {
@@ -130,12 +154,19 @@ pub struct SeatInfo {
     pub peak_live_bytes: u64,
     pub widest_tile_opened_bytes: u64,
     pub needed_bytes: u64,
-    pub share_bytes: u64,
-    pub share_source: String,
-    pub fits: bool,
-    /// The widest context at which the class fits the seat, when it does not at the declared one.
-    pub fits_at_context: Option<u32>,
+    /// Where the tiers came from.
+    pub tiers_source: String,
+    pub tiers: Vec<SeatTier>,
     pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SeatTier {
+    pub name: String,
+    pub share_bytes: u64,
+    pub fits: bool,
+    /// The widest context at which the class fits this tier, when it does not at the declared one.
+    pub fits_at_context: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -911,7 +942,15 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
             id if id.starts_with("fence:") => continue,
             _ => ("ADMISSION_EXCEEDS", "admission's sizing of the program is over a ceiling"),
         };
-        if register.iter().any(|b| b.code == code && (code != "ADMISSION_EXCEEDS" || b.arg.as_deref() == Some(c.id.as_str()))) {
+        if let Some(b) =
+            register.iter_mut().find(|b| b.code == code && (code != "ADMISSION_EXCEEDS" || b.arg.as_deref() == Some(c.id.as_str())))
+        {
+            // The gate named it without numbers: the condition has them.
+            if let (None, Some(need), Some(limit)) = (b.have, c.needed, c.limit) {
+                b.have = Some(need);
+                b.need = Some(limit);
+                b.unit = Some(c.unit.clone());
+            }
             continue;
         }
         let mut b = Blocker::new(Stage::Register, code, format!("{what} ({}: {})", c.id, c.what));
@@ -939,36 +978,55 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
         let widest_tile = a.cones.iter().map(|c| c.tile_opened_bytes).max().unwrap_or(0);
         let peak = a.position.peak_live_bytes;
         let needed = artifact_bytes.saturating_add(state).saturating_add(peak).saturating_add(widest_tile);
-        let (share_gib, share_source) = match opts.seat_memory_gib {
-            Some(g) => (g, "given (--seat-memory-gib)".to_string()),
-            None => (
-                REFERENCE_SEAT_MEMORY_GIB,
-                format!("the reference seat, assumed ({REFERENCE_SEAT_MEMORY_GIB} GiB): pass --seat-memory-gib to set it"),
-            ),
-        };
-        let share = share_gib.saturating_mul(1 << 30);
-        let fits = needed <= share;
-        let fits_at = if fits {
-            None
+        let (tiers_in, tiers_source) = if opts.seat_shares.is_empty() {
+            (default_seat_shares(), "the testnet-12 fleet's seat tiers (--seat-share replaces them)".to_string())
         } else {
-            widest_context(ctx, &|c| {
-                artifact_bytes.saturating_add(state_bytes_at(program, c)).saturating_add(peak).saturating_add(widest_tile) <= share
-            })
+            (opts.seat_shares.clone(), "given (--seat-share)".to_string())
         };
-        if !fits {
+        let tiers: Vec<SeatTier> = tiers_in
+            .iter()
+            .map(|t| {
+                let fits = needed <= t.bytes;
+                let fits_at_context = if fits {
+                    None
+                } else {
+                    widest_context(ctx, &|c| {
+                        artifact_bytes.saturating_add(state_bytes_at(program, c)).saturating_add(peak).saturating_add(widest_tile)
+                            <= t.bytes
+                    })
+                };
+                SeatTier { name: t.name.clone(), share_bytes: t.bytes, fits, fits_at_context }
+            })
+            .collect();
+        let holding: Vec<&str> = tiers.iter().filter(|t| t.fits).map(|t| t.name.as_str()).collect();
+        if holding.is_empty() {
+            let biggest = tiers.iter().map(|t| t.share_bytes).max().unwrap_or(0);
             mine.push(
                 Blocker::new(
                     Stage::Mine,
                     "SEAT_MEMORY_SHORT",
-                    "a seat with this memory share never becomes ready for the class: it cannot replay a claim",
+                    "no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
                 )
-                .numbers(needed, share, "bytes")
-                .evidence([format!("share: {share_source}")])
-                .safe(match fits_at {
-                    Some(c) if c > 0 => vec![format!("at a context of {c} positions the class fits this seat (--max-context {c})")],
-                    _ => vec!["the artifact alone is larger than the seat: a smaller model, or a larger seat".to_string()],
-                }),
+                .numbers(needed, biggest, "bytes")
+                .evidence(tiers.iter().map(|t| format!("{}: share {}", t.name, super::render::size(t.share_bytes))))
+                .safe(
+                    tiers
+                        .iter()
+                        .filter_map(|t| {
+                            t.fits_at_context
+                                .filter(|c| *c > 0)
+                                .map(|c| format!("at a context of {c} positions the class fits {} (--max-context {c})", t.name))
+                        })
+                        .chain(std::iter::once("or a smaller model, or a larger seat".to_string())),
+                ),
             );
+        } else if holding.len() < tiers.len() {
+            let short: Vec<&str> = tiers.iter().filter(|t| !t.fits).map(|t| t.name.as_str()).collect();
+            notes.push(format!(
+                "only {} can hold the class; {} cannot, so those seats never become ready for it (RFC-0002 §II.7.3 F4)",
+                holding.join(", "),
+                short.join(", ")
+            ));
         }
         seat = Some(SeatInfo {
             artifact_bytes,
@@ -976,10 +1034,8 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
             peak_live_bytes: peak,
             widest_tile_opened_bytes: widest_tile,
             needed_bytes: needed,
-            share_bytes: share,
-            share_source,
-            fits,
-            fits_at_context: fits_at,
+            tiers_source,
+            tiers,
             note: "an estimate: the artifact mapped, the state at the declared context, one position's peak live bytes and the widest tile a close opens".into(),
         });
     }

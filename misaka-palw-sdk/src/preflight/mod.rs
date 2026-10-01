@@ -199,7 +199,7 @@ pub struct Options {
     /// The program's history bound is the held one (`--held`).
     pub held: bool,
     /// The memory a seat has, in GiB; `None` is the reference seat.
-    pub seat_memory_gib: Option<u64>,
+    pub seat_shares: Vec<chain::SeatShare>,
 }
 
 impl Default for Options {
@@ -215,7 +215,7 @@ impl Default for Options {
             tile_len: crate::check_architecture::IR_DEFAULT_TILE_LEN_V1,
             h_chunk: crate::check_architecture::IR_DEFAULT_H_CHUNK_V1,
             held: false,
-            seat_memory_gib: None,
+            seat_shares: Vec::new(),
         }
     }
 }

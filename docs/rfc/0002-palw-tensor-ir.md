@@ -933,7 +933,7 @@ where the build has it, and the numbers each would give; for `SEAT_MEMORY_SHORT`
 - **The network.** Parameters (`Params`), fences and registration terms come from the named network preset or, with `--node`, from
   the node (`getPalwRegistrationTerms`), so a live chain's terms — which differ from genesis after a retarget — are the ones
   judged.
-- **The seat share.** The default share is the memory a seat of the reference fleet has; `--seat-memory-gib` overrides it.
+- **The seat share.** The default tiers are the testnet-12 fleet's: a memory share of 3.5 GiB (the 5.104 seats, MemoryMax 9 GiB) and 8 GiB (the ibm/.113 seats, MemoryMax 16–20 GiB); `--seat-share [name=]GiB` (repeatable) replaces them.
 
 ### II.2.7 The JSON form
 
@@ -981,8 +981,7 @@ of it (the same report, `--json` the same bytes). Where the build differs from, 
   parameters — plus the program and the tokenizer files; the download figure is the tensors the class reads, minus what the
   scope leaves out. The inventory's leaf count is an estimate (it only sets the depth of a close's paths).
 - **The seat.** `needed = artifact (mapped) + state at the declared context + one position's peak live bytes + the widest tile a
-  close opens`; the share is `--seat-memory-gib`, else a **reference seat assumed at 16 GiB** (a named assumption, printed with
-  the verdict; the fleet's real shares are an operator fact). `SEAT_MEMORY_SHORT` carries the context at which the class fits.
+  close opens`; the report gives the need against each seat tier (the fleet's two, or `--seat-share`) and says which tiers hold the class and which never become ready for it; `SEAT_MEMORY_SHORT` is raised only when no tier holds it, with the context at which each fits; a class only some tiers hold is a note.
 - **The forecast** is `palw_derive_profile_v1` over `palw_tir_model_work_v2`: the registry's own derivation of the window,
   prefetch, ready seats, in-flight claims and registration bond. It does not know how many independent operators the network has.
 - **Tokenizer.** `TOKENIZER_MISSING` is raised for a directory (no `tokenizer.json`, `tokenizer.model` or `vocab.json`) and for a

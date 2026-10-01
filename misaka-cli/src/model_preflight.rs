@@ -40,9 +40,9 @@ pub struct ModelPreflightArgs {
     /// The program's history bound is the held one.
     #[arg(long)]
     pub held: bool,
-    /// The memory a seat has, in GiB (default: the reference seat).
-    #[arg(long, value_name = "GIB")]
-    pub seat_memory_gib: Option<u64>,
+    /// A seat tier to hold the class against, `[name=]GiB`; repeatable (default: the testnet-12 fleet's tiers, 3.5 and 8 GiB).
+    #[arg(long, value_name = "[NAME=]GIB")]
+    pub seat_share: Vec<String>,
 }
 
 /// Whether `input` is a model to read the headers of (a directory with a config.json, a config.json, a .gguf), and
@@ -66,7 +66,12 @@ pub fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) -> CliRe
         tile_len: a.tile_len.unwrap_or(defaults.tile_len),
         h_chunk: a.h_chunk.unwrap_or(defaults.h_chunk),
         held: a.held,
-        seat_memory_gib: a.seat_memory_gib,
+        seat_shares: a
+            .seat_share
+            .iter()
+            .map(|s| misaka_palw_sdk::preflight::chain::parse_seat_share(s))
+            .collect::<Result<_, _>>()
+            .map_err(|e| CliError::new(exit::CONFIG, e))?,
     };
     let report = run(input, &opts).map_err(|e| CliError::new(exit::MODEL, e))?;
     if ctx.output == OutputFormat::Json {

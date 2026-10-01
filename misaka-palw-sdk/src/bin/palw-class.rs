@@ -51,7 +51,7 @@ metadata and tensor table). The first line says which mode ran. It judges three 
 mine — each ok, blocked or unknown, with a stable code, the numbers and what exists instead per blocker.
 --depth headers stops at the convert stage; shape (the default) adds the chain's conditions on --network (default
 testnet-12) at --height (default: the first height at which every scheduled fence is in force): admission, the
-court window, the canonical job, the fences, the seat's memory (--seat-memory-gib) and the lifecycle forecast.
+court window, the canonical job, the fences, the seat's memory (--seat-share [name=]GiB) and the lifecycle forecast.
 --quant-format <file.json> (repeatable) adds quant-format descriptors, --adapter <file.json> a data adapter,
 --max-context N / --tile-len N / --h-chunk N the layout it is judged at, --held the held history bound,
 --json the machine form (misaka.palw.preflight.v1: no timestamp, no path). Exits 0 when nothing blocks, 2 when
@@ -343,7 +343,10 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
     let max_context = number(take_flag(args, "--max-context"), "--max-context")?.map(|v| v as u32);
     let tile_len = number(take_flag(args, "--tile-len"), "--tile-len")?.map(|v| v as u32);
     let h_chunk = number(take_flag(args, "--h-chunk"), "--h-chunk")?.map(|v| v as u32);
-    let seat_memory_gib = number(take_flag(args, "--seat-memory-gib"), "--seat-memory-gib")?;
+    let mut seat_shares = Vec::new();
+    while let Some(v) = take_flag(args, "--seat-share") {
+        seat_shares.push(misaka_palw_sdk::preflight::chain::parse_seat_share(&v)?);
+    }
     let headers = take_flag(args, "--headers").map(PathBuf::from);
     let adapter = take_flag(args, "--adapter").map(PathBuf::from);
     let mut quant_formats = Vec::new();
@@ -366,7 +369,7 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         tile_len: tile_len.unwrap_or(defaults.tile_len),
         h_chunk: h_chunk.unwrap_or(defaults.h_chunk),
         held,
-        seat_memory_gib,
+        seat_shares,
     };
     let report = misaka_palw_sdk::preflight::run(&path, &opts)?;
     if json {

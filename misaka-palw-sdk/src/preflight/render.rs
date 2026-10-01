@@ -293,13 +293,17 @@ impl Report {
         }
         if let Some(s) = &self.seat {
             let _ = writeln!(o);
-            let _ = writeln!(
-                o,
-                "seat            needs about {} to replay a claim, against {} ({})",
-                size(s.needed_bytes),
-                size(s.share_bytes),
-                s.share_source
-            );
+            let _ = writeln!(o, "seat            needs about {} to replay a claim ({})", size(s.needed_bytes), s.tiers_source);
+            for t in &s.tiers {
+                let _ = writeln!(
+                    o,
+                    "  {:<40} share {:>9}  {}{}",
+                    t.name,
+                    size(t.share_bytes),
+                    if t.fits { "holds it" } else { "CANNOT hold it" },
+                    t.fits_at_context.map(|c| format!(" (fits at a context of {})", n(u64::from(c)))).unwrap_or_default()
+                );
+            }
             let _ = writeln!(
                 o,
                 "  artifact {} · state {} · peak live {} · widest tile {}",
@@ -308,9 +312,6 @@ impl Report {
                 size(s.peak_live_bytes),
                 size(s.widest_tile_opened_bytes)
             );
-            if let Some(c) = s.fits_at_context {
-                let _ = writeln!(o, "  fits at       a context of {} positions", n(u64::from(c)));
-            }
         }
         if let Some(f) = &self.forecast {
             let _ = writeln!(o);

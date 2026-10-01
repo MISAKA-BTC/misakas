@@ -300,7 +300,7 @@ fn the_chain_conditions_are_shown_as_needed_against_limit_at_a_height() {
     }
     let w = r.chain.iter().find(|c| c.id == "court_window").expect("window");
     assert!(w.needed.expect("needed") < w.limit.expect("limit"), "{w:?}");
-    assert!(r.seat.as_ref().is_some_and(|s| s.fits) && r.forecast.as_ref().is_some_and(|f| f.required_ready_seats == 7));
+    assert!(r.seat.as_ref().is_some_and(|s| s.tiers.iter().all(|t| t.fits)) && r.forecast.as_ref().is_some_and(|f| f.required_ready_seats == 7));
     // The JSON carries no path and no clock.
     let json = r.to_json();
     assert!(!json.contains(dir.to_string_lossy().as_ref()) && !json.contains("timestamp"));
@@ -323,7 +323,8 @@ fn a_context_past_the_canonical_prompts_bound_is_named_with_the_context_that_reg
 fn a_court_window_that_is_too_short_is_named_early_with_the_numbers_and_the_context_that_fits() {
     // The window is a function of the context and the history tile: devnet's court has 300 DAA, and at 65,536 positions it needs 308.
     let dir = copy_fixture(&fixture("hf/llama"), "chain-window", true);
-    let r = run(&dir, &Options { network: Some("devnet".into()), max_context: Some(65_536), ..opts(Depth::Shape) }).expect("preflight");
+    let r =
+        run(&dir, &Options { network: Some("devnet".into()), max_context: Some(65_536), ..opts(Depth::Shape) }).expect("preflight");
     let b = r.blockers().into_iter().find(|b| b.code == "COURT_WINDOW_EXCEEDED").expect("blocker");
     assert_eq!((b.have, b.need), (Some(308), Some(300)), "{b:?}");
     assert!(b.safe_paths.iter().any(|p| p.contains("--max-context 16384")), "{:?}", b.safe_paths);
@@ -349,13 +350,24 @@ fn below_the_fence_the_registration_waits_for_it_and_the_rest_is_judged_as_if_it
 }
 
 #[test]
-fn a_seat_with_too_little_memory_is_told_the_context_that_fits_it() {
+fn the_seat_is_judged_against_each_tier_and_a_tier_that_cannot_hold_the_class_is_named() {
+    use misaka_palw_sdk::preflight::chain::SeatShare;
     let dir = copy_fixture(&fixture("hf/llama"), "seat", true);
-    // 1 GiB is more than this tiny model needs; a share of zero GiB is not.
-    let r = run(&dir, &Options { seat_memory_gib: Some(0), ..opts(Depth::Shape) }).expect("preflight");
+    // The fleet's tiers hold this tiny class.
+    let r = run(&dir, &opts(Depth::Shape)).expect("preflight");
+    let seat = r.seat.as_ref().expect("seat");
+    assert_eq!(seat.tiers.len(), 2);
+    assert!(seat.tiers.iter().all(|t| t.fits), "{seat:?}");
+    // One tier too small: the class still registers a seat on the other, and the report says which cannot.
+    let tiers = vec![SeatShare { name: "tiny".into(), bytes: 1 << 20 }, SeatShare { name: "big".into(), bytes: 8 << 30 }];
+    let r = run(&dir, &Options { seat_shares: tiers, ..opts(Depth::Shape) }).expect("preflight");
+    assert_eq!(r.verdict.mine.status, StageStatus::Ok);
+    assert!(r.notes.iter().any(|n| n.contains("only big can hold the class")), "{:?}", r.notes);
+    // No tier holds it: a blocker with the numbers.
+    let r = run(&dir, &Options { seat_shares: vec![SeatShare { name: "none".into(), bytes: 0 }], ..opts(Depth::Shape) })
+        .expect("preflight");
     let b = r.blockers().into_iter().find(|b| b.code == "SEAT_MEMORY_SHORT").expect("blocker");
     assert_eq!(b.stage, misaka_palw_sdk::preflight::Stage::Mine);
-    assert_eq!(r.verdict.mine.status, StageStatus::Blocked);
     assert_eq!(r.verdict.register.status, StageStatus::Ok, "the chain admits it; the seat cannot replay it");
     let _ = std::fs::remove_dir_all(dir);
 }
