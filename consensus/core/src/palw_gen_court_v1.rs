@@ -309,7 +309,7 @@ pub fn palw_gen_output_tile_of_v1(
     }
     match output {
         OutputDecl::Final { .. } => (pos + 1 == trip).then_some(step_tile),
-        OutputDecl::Rows { .. } => (row_elements % tile_len as u64 == 0).then_some(pos as u64 * per_row + step_tile),
+        OutputDecl::Rows { .. } => row_elements.is_multiple_of(tile_len as u64).then_some(pos as u64 * per_row + step_tile),
         OutputDecl::Logits { .. } => None,
     }
 }

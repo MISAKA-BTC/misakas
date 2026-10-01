@@ -193,7 +193,7 @@ impl PalwChainStateV2 {
                 epochs.push(PalwImprovementEpochStatusV1 {
                     epoch: epoch.clone(),
                     candidates: self.improvement_candidates(&id, e).into_iter().map(|(_, c)| c.clone()).collect(),
-                    grants: self.improvement_grants(&id, e).into_iter().map(|(_, g)| g.clone()).collect(),
+                    grants: self.improvement_grants(&id, e).into_iter().map(|(_, g)| *g).collect(),
                 });
             }
             lines.push(PalwImprovementLineStatusV1 {
