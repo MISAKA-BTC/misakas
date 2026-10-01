@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 60f4e1e9…, 8275f4b7…)
+// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was ef97201e…, a3918cba…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "ef97201e7e32ad83e9f037165c77cf5695e1abefd252117aac9513f735aae183",
+    "dbd158a43a9315829304f554c0aa0f03936e5ea947e5599c4e4e2edbc1abf5bb",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "a3918cbaf1e0d313ed5c7affa25590c6398ff019973a671c5bfd95b32c90537c",
+    "78a252156f8ddfca4e4fca4cfc9a07e4413549c589f812a99a8ca43dab9c150d",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 770fb822…, 9410712f…)
+// re-pin 2026-10-01 @b1b35d8104e4: int-10: palw_tir_fence2 + palw_model_court_window at DAA 3,600 (was 3db42ea6…, 9d6b83fe…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "3db42ea638f3c4274f326b4049aa1ef82408cb044c03f4ccf52848446a77702a",
+    "c5e9fd82632a35173116c2f4f2c310e394d2b85b6b5f93a5e6f76f92cf8d5ead",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "9d6b83fe744b6374daf0fabeed391b612e9ac5c1faa2f1bd17712657d1478b67",
+    "686f65ea8d1f778d734294cc5a929c9144fc7a27ef0f5aee3c05ca03b934f109",
 );
 
 fn shipped(name: &str) -> Params {
