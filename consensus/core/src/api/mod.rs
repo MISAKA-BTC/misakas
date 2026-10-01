@@ -1263,6 +1263,19 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// RFC-0004 (A10, the node lane): every open epoch's evaluation view at the tip — the drawn items'
+    /// disclosed prompts and references, and every evaluation job that holds a claim with the roots it
+    /// committed. Empty off ConsensusV2 and below the fence.
+    fn palw_improvement_eval_views_v1(&self) -> Vec<crate::palw_improve_node_v1::PalwImprovementEvalViewV1> {
+        Vec::new()
+    }
+
+    /// RFC-0004 (A10, the node lane): the improvement protocol's status at the tip — every line, its
+    /// head history and pool, and every epoch row the chain still keeps with its candidates and grants.
+    fn palw_improvement_status_v1(&self) -> crate::palw_improve_node_v1::PalwImprovementStatusV1 {
+        Default::default()
+    }
+
     /// ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive (the
     /// pruned-sync path). Self-authenticating against chain state — see the processor's impl.
     fn palw_adopt_class_carriage_v1(&self, _class_id: kaspa_hashes::Hash64, _carriage: &[u8]) -> Result<(), String> {

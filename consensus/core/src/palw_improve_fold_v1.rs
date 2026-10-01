@@ -52,6 +52,12 @@ impl PalwChainStateV2 {
         self.improvement_lines.get(line_id)
     }
 
+    /// **Every line the state holds** — governed, opting out or dissolved — in line-id order (the node
+    /// lane's status door, `palw_improve_node_v1`).
+    pub fn improvement_lines_iter_v1(&self) -> impl Iterator<Item = &PalwImprovementLineV1> {
+        self.improvement_lines.values()
+    }
+
     /// Is the line governed at `daa` (opted in, not yet out)?
     pub fn improvement_governed_at(&self, line_id: &Hash64, daa: u64) -> bool {
         self.improvement_lines.get(line_id).is_some_and(|line| line.governed_at(daa))

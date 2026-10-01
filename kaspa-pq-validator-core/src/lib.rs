@@ -869,6 +869,41 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// **Sign and build an evaluation claim's commitment transaction** (RFC-0004 A6, MIP-17): the FP
+    /// commitment whose job is version 9 with its evaluation job as the tail, then the claim's payload
+    /// tail ([`PalwEvalClaimTailV1`]: the stream's ids, the committed score, the subject's layout and
+    /// the scoring parameters) after the FP payload's bytes. The signature is over the claim id, which is
+    /// total over the commitment (the job included), as every free-prompt commitment's is.
+    ///
+    /// Refused here, before a fee is spent, by the chain's own stateless checks for such a claim: the job's
+    /// shape and the tail against the commitment (`palw_fp_eval_claim_check_v1`), and the payload's size.
+    /// An evaluation claim earns no quantum, so there is no price to ask (MIP-17: no quanta, no pwu); its
+    /// reservation, its fee and its escrow are the fold's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_eval_commitment_tx(
+        &self,
+        commitment: PalwFreePromptCommitmentV3,
+        tail: &kaspa_consensus_core::palw_improve_eval_v1::PalwEvalClaimTailV1,
+        prompt_token_ids: Vec<u32>,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_claim_check_v1(&commitment, &prompt_token_ids, tail, &[])
+            .map_err(|e| format!("the evaluation claim is not admissible: {e}"))?;
+        let signature =
+            self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
+        let bytes = kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_payload_encode_v1(&payload, tail);
+        if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
+            return Err(format!(
+                "evaluation claim payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
+                bytes.len()
+            ));
+        }
+        self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+    }
+
     /// **The receipt lane's carriage: a signed spend of one certified quantum (FP-R5).**
     ///
     /// The mirror of [`Self::build_fp_commitment_tx`], for the other end of the claim's life: that
