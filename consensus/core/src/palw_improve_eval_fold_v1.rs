@@ -2942,6 +2942,84 @@ mod tests {
         assert!(matches!(fold_one(&s3, &p, 1_700, &guilty), Err(PalwStateV2Error::WrongPhase { .. })), "a claim already voided");
     }
 
+    /// **D-M3: a lying evaluation claim loses the whole bond, and every job it held is free again** (ADR-0160 AG-2
+    /// over spec 17 §17.8.6). With the aggregate-liability fence armed, one conviction — an `EvalCone` close of a
+    /// planted leaf, or an `EvalDecodeToken` close of a wrong id (the two proofs the drill's liar can be caught by) —
+    /// is an intent-class conviction (`CourtFraud`): the producer's whole posted collateral is forfeited, the bond is
+    /// frozen for good, the convicted claim is voided `CourtFraud`, and the liar's OTHER live evaluation claim is
+    /// voided `AggregateForfeit`. Both jobs are claimable again and no score of either was recorded; an honest
+    /// bystander's claim and its job are untouched; and an honest executor re-takes both jobs.
+    #[test]
+    fn d_m3_a_lying_claim_forfeits_the_whole_bond_voids_its_other_claims_and_frees_every_job() {
+        use crate::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
+        let p = court_params().with_capacity_liability(Some(PalwCapacityLiabilityV1 {
+            activation: crate::config::params::ForkActivation::new(0),
+            steps: vec![PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 }],
+        }));
+        let s = with_real_roots(evaluating());
+        let honest_probe = claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xC0, vec![3, 5, 0], None, Lie::None);
+        let last = honest_probe.execution.space.stages[0].leaves().len() - 1;
+        for by_decode in [false, true] {
+            // The liar's two claims: item 0 carries the lie, item 1 is an honest tree of the same bond.
+            let lie = if by_decode { Lie::Id { t: 1 } } else { Lie::Leaf { stage: 0, index: last, delta: 1 } };
+            let lying = claim_run(&s, 0, PalwEvalSubjectV1::Parent, CAROL, 0xC1, vec![3, 5, 0], None, lie);
+            let other = claim_run(&s, 1, PalwEvalSubjectV1::Parent, CAROL, 0xC2, vec![3, 5, 1], None, Lie::None);
+            let bystander = claim_run(&s, 2, PalwEvalSubjectV1::Parent, ALICE, 0xC3, vec![3, 5, 2], None, Lie::None);
+            let (s1, _) = at(&s, &p, 1_600, |b| {
+                for run in [&lying, &other, &bystander] {
+                    apply_object(b, &ctx(1_600), &run.object).expect("a claim the fold cannot see into is accepted");
+                }
+            });
+            let (liar, other_id, bystander_id) = (h(0xC1), h(0xC2), h(0xC3));
+            assert!(s1.bond(&bond(CAROL)).unwrap().collateral > 0 && s1.bond_freeze_of_v1(&bond(CAROL)).is_none());
+
+            // The accusation: the proof the drill's accuser files, adjudicated as the acceptance layer re-derives it.
+            let accused = s1.claims[&liar].clone();
+            let evidence = evidence_of(&s1, &lying, &accused);
+            let proof = if by_decode {
+                crate::palw_court_v2::PalwCourtVerdictProofV2::EvalDecodeToken { close: Box::new(evidence.decode_close(1).unwrap()) }
+            } else {
+                cone_proof(&evidence, last as u64)
+            };
+            let (guilty, verdict) = accusation_of(&s1, liar, BOB, proof);
+            assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty);
+            let (s2, _) = at(&s1, &p, 1_650, |b| apply_object(b, &ctx(1_650), &guilty).expect("the accusation folds"));
+
+            // AG-2: the convicted claim is the court's, the sibling the bond's, and the whole bond is gone.
+            assert!(voided_by_the_court(&s2, &liar), "{:?}", s2.claims[&liar].phase);
+            assert!(
+                matches!(
+                    s2.claims[&other_id].phase,
+                    PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::AggregateForfeit, .. }
+                ),
+                "the liar's other evaluation claim: {:?}",
+                s2.claims[&other_id].phase
+            );
+            assert_eq!(s2.bond(&bond(CAROL)).unwrap().collateral, 0, "AG-2 takes the whole posted collateral");
+            assert!(s2.bond_freeze_of_v1(&bond(CAROL)).is_some_and(|f| f.final_), "and freezes the bond for good");
+            // The honest bystander is untouched.
+            assert_eq!(s2.claims[&bystander_id], s1.claims[&bystander_id]);
+            // Both jobs are free: no holder, nothing pending, no score; the bystander's job is still held.
+            for item in [0u32, 1] {
+                let job =
+                    s2.improvement_eval_job(&h(LINE), 1, item, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).unwrap();
+                assert!(!s2.improvement_eval_claim_held_v1(&job.claim.unwrap().claim_id), "item {item}: the holder is dead");
+                assert!(!s2.improvement_eval_row_pending_v1(job), "item {item}: nothing pending");
+                assert!(s2.improvement_result(&h(LINE), 1, item, &PalwEvalSubjectV1::Parent).is_none(), "item {item}: no score");
+            }
+            let held = s2.improvement_eval_job(&h(LINE), 1, 2, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).unwrap();
+            assert!(s2.improvement_eval_row_pending_v1(held), "the bystander's job is live");
+            // The freed jobs are re-taken by an honest executor of another bond.
+            for (item, word, prompt) in [(0u32, 0xC4u8, vec![3, 5, 0]), (1, 0xC5, vec![3, 5, 1])] {
+                let retake = claim_with(&s2, item, PalwEvalSubjectV1::Parent, BOB, word, prompt, None);
+                assert_eq!(fold_one(&s2, &p, 1_700, &retake), Ok(()), "item {item} is re-taken");
+            }
+            // The liar cannot take them back: its bond is frozen.
+            let again = claim_with(&s2, 0, PalwEvalSubjectV1::Parent, CAROL, 0xC6, vec![3, 5, 0], None);
+            assert!(fold_one(&s2, &p, 1_700, &again).is_err(), "a frozen bond claims nothing");
+        }
+    }
+
     /// **A wrong generated id over an honest tree is a wrong decode** (`EvalDecodeToken`, `Token`): the committed id is
     /// not the lane FP Job V4's rules select from the committed logits row it was read from.
     #[test]

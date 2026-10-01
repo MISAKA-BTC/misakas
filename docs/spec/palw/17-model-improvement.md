@@ -1091,6 +1091,19 @@ its own life.
   **`max_eval_budget_permille` bounds them**: the class's evaluation claims whose replay is still owed, with
   the one asked about, may not exceed that share of the class's capacity in claims (at least one is always
   admitted) — evaluation cannot crowd out the class's attempts. A claim past either is refused by name.
+- *The network room's verification term `L_ver`* **[capacity line, int-11; dormant]**. The network room's level
+  `L_net = min(L_seat, L_carry, L_anchor)` bounds the unlicensed claims the network holds by capital and
+  carriage, not by what the seats can verify, and an evaluation claim that sits in that queue waits for its licence
+  like any claim. `palw_network_verify_level_v1` adds a fourth term, a constant sized from the measured supply:
+  `L_ver = ⌊μ_floor × W_safe⌋`, `μ_floor` = 1.5 licences a DAA (`PALW_NETWORK_VERIFY_FLOOR_MILLI_V1` = 1,500) and
+  `W_safe = (window_receipt − anchor_delay) / 2` DAA, half the receipt window. At the shipped 600 / 20 windows
+  `L_ver = 435`; it is 0 when the window does not exceed the anchor delay. The level used is
+  `palw_network_level_with_verify_v1`: `L_net` capped by `L_ver` once the fence that arms it is in force, `L_net` as
+  today below it, so the term only ever lowers the level. A refused attempt is skipped, never charged
+  (`NetworkRoomExhausted` is non-fatal for the block). The term is a function of the ruleset's windows alone and
+  reads no state; the feedback form (`μ` observed from a ring of licences) is the capacity line's stage 6 and is
+  not here. Nothing in this chapter reads `L_ver`: the evaluation claim's capacity rules above are unchanged by it,
+  and the integration (lane A) wires it behind its own dormant fence.
 
 **Panels** (who seats an evaluation claim, and who is paid). An evaluation claim is an FP claim of the class it
 runs, so the chain derives its panel as it derives any claim's (the same seed, the same draw over the seats ready
