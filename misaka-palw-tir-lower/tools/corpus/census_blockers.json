@@ -1,12 +1,102 @@
 {
-  "_doc": "Census families whose gap this lane has read in the transformers code (not all 51 Level C: the others are listed by the refusal the reader gave, in the generated census table, and are NOT classified). class: feature | route | refusal | data (an adapter is expected to hold, not yet written) ; frs: the feature requests (docs/design/palw/tir/feature-requests.md) that name it.",
-  "nanochat": {"class": "feature", "frs": ["FR-02"], "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU² ungated MLP; the standard template reads it and bind refutes it", "evidence": "read from modeling_nanochat.py; the standard template reads it (Level A refuted at bind)"},
-  "modernbert_decoder": {"class": "feature", "frs": ["FR-29"], "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection, plus layer 0 without attn_norm and its own key names", "evidence": "read from modeling_modernbert_decoder.py; the per-layer-type rope convention alone does not make it readable"},
-  "axk2": {"class": "feature", "frs": ["FR-09"], "short": "DeepSeek sparse attention layers", "evidence": "the reader's own refusal: layer type deepseek_sparse_attention"},
-  "glm_moe_dsa": {"class": "feature", "frs": ["FR-09"], "short": "DeepSeek sparse attention (interleaved indexer rope, shared indexer layers)", "evidence": "the reader's own refusal"},
-  "hy_v4": {"class": "feature", "frs": ["FR-09", "FR-10"], "short": "DSA indexer plus hyper-connections without a mixing matrix and swiglu_limit", "evidence": "the reader's own refusal"},
-  "codegen": {"class": "feature", "frs": ["FR-01"], "short": "qkv stored in an mp_num-partitioned layout the binder cannot express", "evidence": "the reader's own refusal"},
-  "olmo_hybrid": {"class": "feature", "frs": [], "short": "gated delta rule layers with SEPARATE q/k/v convolutions, allow_neg_eigval and different norm placement per layer type: needs a read of the layer, not yet done", "evidence": "config and tensor names only"},
-  "minimax": {"class": "feature", "frs": [], "short": "lightning (linear) attention layers: not yet read", "evidence": "the reader's own refusal"},
-  "recurrent_gemma": {"class": "feature", "frs": [], "short": "RG-LRU recurrent blocks: a new mixer, not yet read", "evidence": "config keys only"}
+ "_doc": "Census families whose gap this lane has read in the transformers code (not all 51 Level C: the others are listed by the refusal the reader gave, in the generated census table, and are NOT classified). class: feature | route | refusal | data (an adapter is expected to hold, not yet written) ; frs: the feature requests (docs/design/palw/tir/feature-requests.md) that name it.",
+ "nanochat": {
+  "class": "feature",
+  "frs": [
+   "FR-02"
+  ],
+  "short": "q/k RMS norm AFTER the rotation, weightless norms everywhere, an extra norm on the embeddings, ReLU\u00b2 ungated MLP; the standard template reads it and bind refutes it",
+  "evidence": "read from modeling_nanochat.py; the standard template reads it (Level A refuted at bind)"
+ },
+ "modernbert_decoder": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a prediction head (dense + activation + norm) before the tied vocabulary projection, plus layer 0 without attn_norm and its own key names",
+  "evidence": "read from modeling_modernbert_decoder.py; the per-layer-type rope convention alone does not make it readable"
+ },
+ "axk2": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "DeepSeek sparse attention layers",
+  "evidence": "the reader's own refusal: layer type deepseek_sparse_attention"
+ },
+ "glm_moe_dsa": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "DeepSeek sparse attention (interleaved indexer rope, shared indexer layers)",
+  "evidence": "the reader's own refusal"
+ },
+ "hy_v4": {
+  "class": "feature",
+  "frs": [
+   "FR-09",
+   "FR-10"
+  ],
+  "short": "DSA indexer plus hyper-connections without a mixing matrix and swiglu_limit",
+  "evidence": "the reader's own refusal"
+ },
+ "codegen": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "qkv stored in an mp_num-partitioned layout the binder cannot express",
+  "evidence": "the reader's own refusal"
+ },
+ "olmo_hybrid": {
+  "class": "feature",
+  "frs": [],
+  "short": "gated delta rule layers with SEPARATE q/k/v convolutions, allow_neg_eigval and different norm placement per layer type: needs a read of the layer, not yet done",
+  "evidence": "config and tensor names only"
+ },
+ "minimax": {
+  "class": "feature",
+  "frs": [],
+  "short": "lightning (linear) attention layers: not yet read",
+  "evidence": "the reader's own refusal"
+ },
+ "recurrent_gemma": {
+  "class": "feature",
+  "frs": [],
+  "short": "RG-LRU recurrent blocks: a new mixer, not yet read",
+  "evidence": "config keys only"
+ },
+ "granitemoeshared_shared": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "the shared expert's gate and up are one fused tensor (shared_mlp.input_linear); the default tiny config has no shared expert, so `granitemoeshared` itself is Level B while every real checkpoint is blocked",
+  "evidence": "adapter: its own check refuses and names FR-01"
+ },
+ "afmoe": {
+  "class": "feature",
+  "frs": [
+   "FR-30"
+  ],
+  "short": "a SEPARATE output-gate tensor (self_attn.gate_proj [H*hd, D], sigmoid, per element): the binder reads an output gate only from the fused q_proj rows (Qwen3-Next layout); also rotary on the sliding layers only and pre/post norms around both sub-layers",
+  "evidence": "read from modeling_afmoe.py and hf_weights.rs:316"
+ },
+ "laguna": {
+  "class": "feature",
+  "frs": [
+   "FR-30"
+  ],
+  "short": "a separate output-gate tensor with a SOFTPLUS activation, per head (self_attn.g_proj [H, D]; per element when gating is false), per-layer head counts, per-layer-type partial rotary, a router with logit soft-capping, a shared expert",
+  "evidence": "read from modeling_laguna.py"
+ },
+ "mimo_v2_flash": {
+  "class": "feature",
+  "frs": [
+   "FR-31"
+  ],
+  "short": "attention_value_scale (values times 0.707) has no spec field; the rest (per-layer-type kv heads, sinks on the sliding layers only under the hub name attention_sink_bias, per-layer-type partial rotary, a sigmoid router with a correction bias) is data",
+  "evidence": "read from modeling_mimo_v2_flash.py; an adapter that treats the scale as inert is expected to stop at float_vs_hf (not yet run: quiet window)"
+ }
 }

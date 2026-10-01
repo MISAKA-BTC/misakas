@@ -67,6 +67,13 @@ OVERRIDES = {
     "zamba": dict(layers_block_type=["mamba", "hybrid"]),
 }
 
+# Variants: a second tiny config of a family where the first one cannot exercise a feature the real checkpoints use (a shared expert
+# of width 0 is no shared expert). id -> (model_type, overrides, why). They are census entries of their own and need their own adapter file.
+VARIANTS = {
+    "granitemoeshared_shared": ("granitemoeshared", dict(shared_intermediate_size=32),
+                                "the real Granite-MoE-shared checkpoints have a shared expert (shared_intermediate_size > 0); the default tiny config has none"),
+}
+
 # Families the census does not build, with the reason. Never dropped silently.
 EXCLUDED = {
     "blenderbot": "the decoder half of an encoder-decoder (its `ForCausalLM` is not a standalone model)",
@@ -178,10 +185,17 @@ def manifest():
             continue
         entries.append(C.entry(r["model_type"].replace("-", "_"), "census/text", "decoder", r["class"], r["model_type"], "causal", OVERRIDES.get(r["model_type"], {}),
                                usage="l", why="a transformers 5.17 causal-LM family at its tiny default (census)", options={}))
+    for vid, (mt, ov, why) in VARIANTS.items():
+        base = next((r for r in recs if r["model_type"] == mt and r["ok"]), None)
+        if base is None:
+            continue
+        cfg = dict(OVERRIDES.get(mt, {}), **ov)
+        entries.append(C.entry(vid, "census/text", "decoder", base["class"], mt, "causal", cfg, usage="l", why=why, options={}))
     failed = [r for r in recs if not r["ok"]]
     doc = {"schema": "misaka.palw.corpus-v2", "positions": 10, "vocab": C.V, "usage_weight": C.USAGE_WEIGHT, "entries": entries,
            "census": {"families": len(recs), "built": len(entries), "not_derivable": failed,
-                      "excluded": [{"model_type": k, "why": v} for k, v in sorted(EXCLUDED.items())]}}
+                      "excluded": [{"model_type": k, "why": v} for k, v in sorted(EXCLUDED.items())],
+                      "variants": [{"id": k, "model_type": v[0], "why": v[2]} for k, v in sorted(VARIANTS.items())]}}
     with open(os.path.join(HERE, "census_v2.json"), "w") as f:
         json.dump(doc, f, indent=1)
         f.write("\n")

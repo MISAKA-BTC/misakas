@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "granitemoeshared",
+  "doc": "GraniteMoeShared (IBM): GraniteMoE plus an optional shared expert of width shared_intermediate_size (default 0 = none). The shared expert's gate and up are fused into one tensor (shared_mlp.input_linear), which the binder cannot slice yet (FR-01), so this adapter claims the family only for shared_intermediate_size = 0 and REFUSES otherwise, naming FR-01. Third-party adapter (lane H): data only, extends the built-in granitemoe.",
+  "extends": ["granitemoe"],
+  "match": {"architectures": ["GraniteMoeSharedForCausalLM"], "model_types": ["granitemoeshared"]},
+  "config": {"defaults": {"shared_intermediate_size": 0}},
+  "vars": [
+    {"name": "shared_ok", "value": {"$check": [{"$eq": [{"$cfg": "shared_intermediate_size"}, 0]}, "shared_intermediate_size > 0: the shared expert's gate and up are one fused tensor, which needs weights as data (FR-01)"]}},
+    {"name": "model_type", "value": "granitemoeshared"}
+  ]
+}

@@ -1551,11 +1551,30 @@
    "real_config": null,
    "tiny": true,
    "note": ""
+  },
+  {
+   "id": "granitemoeshared_shared",
+   "category": "census/text",
+   "route": "decoder",
+   "hf_arch": "GraniteMoeSharedForCausalLM",
+   "model_type": "granitemoeshared",
+   "builder": "causal",
+   "cfg": {
+    "shared_intermediate_size": 32
+   },
+   "usage": "l",
+   "share": null,
+   "why": "the real Granite-MoE-shared checkpoints have a shared expert (shared_intermediate_size > 0); the default tiny config has none",
+   "examples": [],
+   "options": {},
+   "real_config": null,
+   "tiny": true,
+   "note": ""
   }
  ],
  "census": {
   "families": 93,
-  "built": 83,
+  "built": 84,
   "not_derivable": [
    {
     "model_type": "bamba",
@@ -1690,6 +1709,13 @@
    {
     "model_type": "xmod",
     "why": "an encoder with per-language adapters; the causal head needs a default language"
+   }
+  ],
+  "variants": [
+   {
+    "id": "granitemoeshared_shared",
+    "model_type": "granitemoeshared",
+    "why": "the real Granite-MoE-shared checkpoints have a shared expert (shared_intermediate_size > 0); the default tiny config has none"
    }
   ]
  }

@@ -498,6 +498,14 @@
   "FR-29": {
    "title": "prediction head transform (dense + activation + norm) before the vocabulary projection",
    "size": "S"
+  },
+  "FR-30": {
+   "title": "attention output gate from a separate tensor (sigmoid or softplus, per head or per element)",
+   "size": "S-M"
+  },
+  "FR-31": {
+   "title": "a constant scale on the attention values",
+   "size": "S"
   }
  }
 }

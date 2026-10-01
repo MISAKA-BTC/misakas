@@ -288,9 +288,11 @@ def census_reason(e):
 
 
 def census_md(rep, cman):
-    ents = rep["entries"]
-    n = len(ents)
     cen = cman.get("census", {})
+    vids = {v["id"] for v in cen.get("variants", [])}
+    ents = [e for e in rep["entries"] if e["id"] not in vids]
+    variants = [e for e in rep["entries"] if e["id"] in vids]
+    n = len(ents)
     lv = Counter(e["level"] for e in ents)
     via = Counter()
     for e in ents:
@@ -343,6 +345,10 @@ def census_md(rep, cman):
         other |= keyed[k]
     rows.append(f"| everything else (family-specific keys) | {len(other)} | {len(rest)} distinct keys |")
     out.append("\n".join(rows))
+    if variants:
+        out.append("")
+        out.append("Variants (a second tiny config where the first cannot exercise a feature real checkpoints use; not counted as families): " + "; ".join(
+            f"`{e['id']}` is Level {e.get('level_label') or e['level']}" + (f" ({e['read'].get('user', {}).get('failure', {}).get('error', '')[:150]})" if e["level"] == "C" else "") for e in variants) + ".")
     nd = cen.get("not_derivable", [])
     if nd:
         out.append("")
