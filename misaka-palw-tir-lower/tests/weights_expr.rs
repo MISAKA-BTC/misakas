@@ -28,8 +28,8 @@ fn config(name: &str) -> String {
 }
 
 /// A model's spec, HL program and weight binding, read through `adapter` (`None`: the built-in choice).
-fn read(cfg: &str, adapter: Option<&str>) -> Result<(ModelSpec, hl::HlProgram, Binding), String> {
-    let opts = ReadOptions { adapter: adapter.map_or(AdapterChoice::Auto, |t| AdapterChoice::Text(t.to_string())) };
+fn read(cfg: &str, adapter: Option<String>) -> Result<(ModelSpec, hl::HlProgram, Binding), String> {
+    let opts = ReadOptions { adapter: adapter.map_or(AdapterChoice::Auto, AdapterChoice::Text) };
     let spec = hf_config::parse_config_str_read(cfg, &opts, QuantRegistry::builtin()).map_err(|e| e.to_string())?;
     let prog = hl::build_program(&spec).map_err(|e| e.to_string())?;
     let binding = hf_weights::bind(&spec, &prog).map_err(|e| e.to_string())?;
@@ -149,7 +149,7 @@ fn dbrx_flat_experts_bind_by_expression() {
     };
     // The roles of the three expert tensors are NOT named: the expressions make them unnecessary.
     let names = json!({"moe.router": "{p}layers.{L}.block_sparse_moe.gate"});
-    let (spec1, prog1, bind1) = read(&cfg, Some(&adapter("mixtral", Some(names.clone()), weights("")))).unwrap_or_else(|e| panic!("{e}"));
+    let (spec1, prog1, bind1) = read(&cfg, Some(adapter("mixtral", Some(names.clone()), weights("")))).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(spec1.hf.weights.len(), 3);
     let compared = assert_same_params("dbrx-style experts", &prog0, &bind0, &ck, &prog1, &bind1, &relaid);
     assert!(compared > 10, "{compared}");
@@ -164,11 +164,11 @@ fn dbrx_flat_experts_bind_by_expression() {
 
     // A param that is NOT overridden keeps the old error when its role is missing — the tolerance is only
     // for the params an expression replaces.
-    let partial = read(&cfg, Some(&adapter("mixtral", Some(names), weights("moe.experts.up")))).unwrap_err();
+    let partial = read(&cfg, Some(adapter("mixtral", Some(names), weights("moe.experts.up")))).unwrap_err();
     assert!(partial.contains("no HF tensor name for role `moe.up`"), "{partial}");
 
     // A typo is never a silent no-op: the key must name a param of the graph, and the message names its neighbours.
-    let typo = read(&cfg, Some(&adapter("mixtral", None, json!({"moe.expert.gate": ["x"]})))).unwrap_err();
+    let typo = read(&cfg, Some(adapter("mixtral", None, json!({"moe.expert.gate": ["x"]})))).unwrap_err();
     assert!(typo.contains("moe.expert.gate") && typo.contains("moe.experts.gate"), "{typo}");
 
     // Streaming: the gate and up experts (a reshape that keeps the last axis) are evaluated by row ranges,
@@ -233,7 +233,7 @@ fn a_fused_shared_expert_binds_by_row_ranges() {
         "moe.shared.gate.w": ["{p}layers.{L}.mlp.shared_fused.weight", {"rows": [0, shared]}],
         "moe.shared.up.w": ["{p}layers.{L}.mlp.shared_fused.weight", {"rows": [shared, shared]}],
     });
-    let (_, prog1, bind1) = read(&cfg, Some(&adapter("qwen2-moe", Some(names), weights))).unwrap_or_else(|e| panic!("{e}"));
+    let (_, prog1, bind1) = read(&cfg, Some(adapter("qwen2-moe", Some(names), weights))).unwrap_or_else(|e| panic!("{e}"));
     assert_same_params("fused shared expert", &prog0, &bind0, &ck, &prog1, &bind1, &relaid);
     let rep = check_weights(&prog1, &bind1, &relaid);
     assert!(rep.errors.is_empty() && rep.unused.is_empty(), "{:?} {:?}", rep.errors, rep.unused);
@@ -265,7 +265,7 @@ fn a_size_one_axis_is_a_reshape_step_never_a_silent_squeeze() {
     assert!(err.contains("size-1") && err.contains("\"reshape\": \"param\""), "{err}");
     // With the step: bound, and equal to the original binding on the original layout.
     let weights = json!({"moe.sel_bias": ["{p}layers.{L}.mlp.gate.e_score_correction_bias", {"reshape": "param"}]});
-    let (_, prog1, bind1) = read(&cfg, Some(&adapter("deepseek-v3", None, weights))).unwrap_or_else(|e| panic!("{e}"));
+    let (_, prog1, bind1) = read(&cfg, Some(adapter("deepseek-v3", None, weights))).unwrap_or_else(|e| panic!("{e}"));
     assert_same_params("squeezed bias", &prog0, &bind0, &ck, &prog1, &bind1, &relaid);
     let rep = check_weights(&prog1, &bind1, &relaid);
     assert!(rep.errors.is_empty() && rep.unused.is_empty(), "{:?} {:?}", rep.errors, rep.unused);
