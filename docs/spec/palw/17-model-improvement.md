@@ -1032,7 +1032,9 @@ job-table row holds another claim adjudicates nothing (`DoesNotAdjudicate`).
 A challenger holding the accused execution's trace (the claim's data-availability units, §17.0 tags 83–85) replays the
 claim's job and compares leaf by leaf, in the claim's one order (stage-major): the first leaf that differs is the
 *first divergent leaf* — every leaf before it matches the accused tree, so its cone is provable from authenticated
-operands — and the close at it is the proof the one-move accusation files. A divergence only at the *last* output (the
+operands — and the close at it is the proof the one-move accusation files
+(`palw_eval_first_divergent_leaf_v1` finds it; a leaf the accused cannot open counts as a divergence there: the accused
+withholds it, a data-availability matter). A divergence only at the *last* output (the
 score, or an id) with an honest tree under it shows as no divergent leaf: the claim's tail `score` differs from the
 score stage's output tile, or a committed id from the row it was selected from, and the close is the decode close.
 

@@ -541,6 +541,47 @@ fn an_executor_that_ran_other_weights_is_convicted_at_its_first_divergent_leaf()
     );
 }
 
+/// **The first divergent leaf is where the accused tree parts from the honest replay** (spec 17 §17.8.6.1), and the close
+/// at it convicts: a planted lie's leaf, and, for a run over other weights, the first leaf the weights touch; an honest
+/// tree has none; a lie only in the committed score or ids over an honest tree shows none either (the decode close's).
+#[test]
+fn the_first_divergent_leaf_is_where_the_accused_tree_parts_from_the_honest_replay() {
+    let honest = generation();
+    let space = &honest.execution.space;
+    assert_eq!(palw_eval_first_divergent_leaf_v1(space, &honest.execution, &honest.execution), None, "an honest tree has none");
+    // A planted lie: its leaf, and the close at it convicts.
+    let (stage, index) = (0, honest.execution.space.stages[0].leaves().len() / 2);
+    let lied = honest.rebound(lie(&honest.execution, stage, index, 1), vec![]);
+    let g = global(&lied, stage, index);
+    assert_eq!(palw_eval_first_divergent_leaf_v1(&lied.execution.space, &lied.execution, &honest.execution), Some(g));
+    assert_eq!(check(&lied, &cone(&lied, g), Some(g)), Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })));
+    // A run over other weights: every leaf before the first divergent one acquits, and that one convicts.
+    let other = generation_over(1);
+    let first = palw_eval_first_divergent_leaf_v1(&other.execution.space, &other.execution, &honest.execution)
+        .expect("other weights part from the class's replay somewhere");
+    for g in 0..first {
+        assert_eq!(check(&other, &cone(&other, g), Some(g)), Ok(None), "leaf {g} matches the honest replay");
+    }
+    assert_eq!(check(&other, &cone(&other, first), Some(first)), Ok(Some(PalwStepFaultV1::ComputationMismatch { value_index: 0 })));
+    // A wrong generated id over an honest tree shows no divergent leaf: the decode close's.
+    let mut ids = honest.execution.clone();
+    ids.claim.generated[1] ^= 1;
+    let wrong_id = honest.rebound(ids, vec![]);
+    assert_eq!(palw_eval_first_divergent_leaf_v1(&wrong_id.execution.space, &wrong_id.execution, &honest.execution), None);
+    // A store that cannot open a leaf is a divergence at it (the accused withholds it).
+    struct Withholding<'a>(&'a PalwGenExecutionV1, u8, u64);
+    impl PalwEvalLeafStoreV1 for Withholding<'_> {
+        fn open_leaf(&self, stage: u8, index: u64) -> Option<kaspa_consensus_core::palw_gen_step_v1::PalwGenOpenedLeafV1> {
+            (stage != self.1 || index != self.2).then(|| self.0.open(stage, index)).flatten()
+        }
+    }
+    assert_eq!(
+        palw_eval_first_divergent_leaf_v1(&honest.execution.space, &Withholding(&honest.execution, 0, 3), &honest.execution),
+        Some(3),
+        "a withheld leaf"
+    );
+}
+
 #[test]
 fn the_evidence_id_binds_the_claim_the_leaf_and_the_fault() {
     let claim = generation();

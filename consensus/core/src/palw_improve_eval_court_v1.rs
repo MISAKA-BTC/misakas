@@ -619,6 +619,31 @@ impl PalwEvalLeafStoreV1 for crate::palw_gen_worker_v1::PalwGenExecutionV1 {
     }
 }
 
+/// **The first divergent leaf** (spec 17 §17.8.6.1): the first leaf, in the claim's one order (stage-major), at which the
+/// accused execution's committed values are not the honest replay's — `Some(global index)`, or `None` when every leaf
+/// matches (a lie that lives only in the committed score or the generated ids, over an honest tree, is the decode close's
+/// to convict, not a leaf's). A leaf the accused store cannot open counts as a divergence too: the accused withholds it,
+/// which is a data-availability matter. Every leaf before the first matches the accused tree, so the cone of the first is
+/// provable from authenticated operands: the close at it ([`PalwEvalEvidenceV1::cone_close`]) convicts.
+pub fn palw_eval_first_divergent_leaf_v1(
+    space: &PalwGenStepSpaceV1,
+    accused: &dyn PalwEvalLeafStoreV1,
+    honest: &crate::palw_gen_worker_v1::PalwGenExecutionV1,
+) -> Option<u64> {
+    let mut global = 0u64;
+    for (stage, sp) in space.stages.iter().enumerate() {
+        for index in 0..sp.leaves().len() {
+            let same =
+                accused.open_leaf(stage as u8, index as u64).is_some_and(|leaf| leaf.values == honest.leaf_values[stage][index]);
+            if !same {
+                return Some(global);
+            }
+            global += 1;
+        }
+    }
+    None
+}
+
 /// **An executor's evidence** — the claim's facts, its weights, its run, its binding and the item's prompt — from
 /// which it (or a challenger holding the same inputs) builds every court move, each carrying exactly the units the
 /// court's evaluation reads (the builders record them).
