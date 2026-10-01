@@ -218,8 +218,12 @@ pub struct QEmbedderRefs {
 
 /// The embedder over rows `x:[R, in]` `i16` codes: `[R, d]` `i16` codes.
 pub fn lower_embedder(b: &mut BlockBuilder<'_>, x: Ref, r: &QEmbedderRefs, e: &QEmbedder) -> Ref {
+    // The hidden tensor and its activation are commit points (an output tile of the second linear needs all of its inputs: the
+    // cone would otherwise open every row of the first linear).
     let h = lower_linear_codes(b, x, &r.l1);
+    b.commit(h);
     let a = lower_act_codes(b, h, Act::Silu, e.h_scale, e.a_scale);
+    b.commit(a);
     lower_linear_codes(b, a, &r.l2)
 }
 

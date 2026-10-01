@@ -1126,8 +1126,24 @@ impl PalwGenEvidenceV1<'_> {
     /// every image tile, every param leaf.
     fn full_close(&self, v: &PalwGenVerifiedBindingV1, index: u64) -> Result<PalwGenCloseV1, String> {
         let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
-        let open =
-            |s: usize, i: usize| self.execution.open(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"));
+        // The stages' trees are built once: every prior leaf is opened, and a path rebuilt per leaf is quadratic.
+        let levels: Vec<Vec<Vec<Hash64>>> =
+            (0..=s as usize).map(|st| crate::palw_gen_step_v1::palw_gen_leaf_levels_v1(&self.execution.leaf_hashes[st])).collect();
+        let open = |s: usize, i: usize| -> Result<PalwGenOpenedLeafV1, String> {
+            let leaf = self
+                .execution
+                .space
+                .stages
+                .get(s)
+                .and_then(|st| st.leaves().get(i))
+                .ok_or_else(|| format!("stage {s} leaf {i} does not open"))?;
+            Ok(PalwGenOpenedLeafV1 {
+                coord: leaf.coord,
+                values: self.execution.leaf_values[s][i].clone(),
+                path: crate::palw_gen_step_v1::palw_gen_path_in_levels_v1(&levels[s], i)
+                    .ok_or_else(|| format!("stage {s} leaf {i} does not open"))?,
+            })
+        };
         let mut operands = Vec::new();
         for st in 0..=s as usize {
             let n = if st == s as usize { i as usize } else { v.space.stages[st].leaves().len() };
