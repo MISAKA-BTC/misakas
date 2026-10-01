@@ -23,6 +23,7 @@ use kaspa_consensus_core::palw_gen_job_v1::{
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+use kaspa_rpc_core::api::rpc::RpcApi;
 use misaka_palw_sdk::lineages::generative::GenLineageV1;
 use std::path::Path;
 
