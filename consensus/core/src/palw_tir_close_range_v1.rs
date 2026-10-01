@@ -1173,7 +1173,7 @@ pub fn palw_tir_worst_closes_range_work_v1(
             }
             // An `H`-carrying tile whose cone reduces nothing over `H` is H-LOCAL (spec 04b §10.3).
             let local = !dissected && has_h && reductions.is_empty() && !has_fixed && p_late <= p_max;
-            let mut worst = PalwTirCloseBoundV1 { block: bi8, node: ni16, dissected, close_bytes: 0, root_claim_bytes: 0 };
+            let mut worst = PalwTirCloseBoundV1 { block: bi8, node: ni16, checkpoint: None, dissected, close_bytes: 0, root_claim_bytes: 0 };
             for occ in chosen.iter().copied().filter(|o| occurrences[*o as usize].0 == bi8) {
                 let twin = |pos: u32,
                             ranges: &PalwTirRangesV1,
