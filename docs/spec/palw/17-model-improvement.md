@@ -1065,7 +1065,9 @@ no close carries a program or a policy. *E-C4*: a close is priced by its own enc
 swing lock; a false accusation is charged `min(reserved, floor)`. *E-C6*: a convicted `Final` claim retracts its
 score — and the judged scores that read a convicted generation — while the epoch takes scores (conservative: missing
 scores favour the incumbent). *E-C7*: a claim is beyond the one-move court once `Final`; a later conviction by another
-path is E-C6's. *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
+path is E-C6's. *E-C8*: an evaluation dissection's verdict is recorded as an IR dissection's — `CourtHeldVerdict` past
+`palw_offence_attribution` (the bottom proves the responder's filings false, not necessarily the committed execution;
+charged the same). *Open*: calibrating the false-accusation charge for evaluation claims, whose reservations are larger
 than an ordinary claim's, is D-M1's.
 
 ## 17.9 Promotion
