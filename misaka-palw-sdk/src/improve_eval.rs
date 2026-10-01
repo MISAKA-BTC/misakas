@@ -367,13 +367,17 @@ fn eval_run_on_v1(held: &PalwEvalHeldV1, task: &PalwImproveEvalTaskV1, stage: Pa
 // ---------------------------------------------------------------------------------------------
 
 impl PalwEvalHeldV1 {
-    /// **Does this node's executor compute this subject's evaluations?** True when the executor compiles
-    /// the class's program over the held weights — every evaluation's subject stage then runs there —
-    /// and false where the reference interpreter would run it (a log line's word; the result is the
-    /// same either way).
+    /// **Does this node's executor compute this subject's evaluations?** True when the held artifact's plan
+    /// is the class's program — every evaluation's subject stage then runs there — and false where the
+    /// reference interpreter would run it (a log line's word; the result is the same either way). Read off
+    /// the plan alone for a held artifact: no executor is built, so no weight is scanned on the caller's
+    /// thread; in-memory weights (tools, tests) are compiled and bound to answer.
     pub fn evaluates_on_executor_v1(&self) -> bool {
         let Ok(decl) = palw_improve_subject_program_v1(&self.program) else { return false };
-        with_params(self, |params| params.stepper(0, &decl).is_some())
+        match &self.weights {
+            PalwEvalWeightsV1::Artifact { artifact } => TirStageStepperV1::serves(artifact.plan(), &decl),
+            PalwEvalWeightsV1::Map(_) => with_params(self, |params| params.stepper(0, &decl).is_some()),
+        }
     }
 
     /// **The weights this subject's executor reads**, by inventory root: a composite candidate's parent's
