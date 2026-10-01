@@ -1464,6 +1464,15 @@ pub fn palw_class_default_residency_v1(available: Option<u64>) -> misaka_palw_sd
 /// **What this process can take**: the host's `MemAvailable`, or its memory cgroup's headroom
 /// where that is smaller — a pool slot in a 6 GiB cgroup on a host with 8 GB available has 6 GiB
 /// less what it holds, not 8. `None` off Linux.
+///
+/// **The cgroup's headroom counts what the kernel can give back as free** (the 2026-10-01 backlog,
+/// `docs/design/palw/t12-panel-backlog-1001.md`): kaspad runs mimalloc with `purge_decommits = false`
+/// (`utils/alloc`), so memory the process has freed is handed back with `MADV_FREE` — still mapped,
+/// still charged to the cgroup, and dropped by the kernel without I/O the moment it needs the room.
+/// On b6 that was 9.3 of 17.1 GiB of anonymous memory; `memory.current` sat at 98.5 % of
+/// `memory.max`, `max − current − 1 GiB` read 0.00 GiB with nothing reserved, and the ledger held
+/// every duty for hours on a host with 18.7 GB `MemAvailable`. The host-wide `MemAvailable` already
+/// counts those pages as available; the cgroup term did not.
 pub fn host_available_bytes_v1() -> Option<u64> {
     let host = mem_available_bytes_v1()?;
     Some(cgroup_headroom_bytes_v1().map_or(host, |cgroup| cgroup.min(host)))
@@ -1473,7 +1482,7 @@ fn cgroup_headroom_bytes_v1() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let own = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        cgroup_headroom_from_v1(&own, |path| std::fs::read_to_string(path).ok())
+        cgroup_headroom_from_v1(&own, process_lazyfree_bytes_v1(), |path| std::fs::read_to_string(path).ok())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1481,13 +1490,73 @@ fn cgroup_headroom_bytes_v1() -> Option<u64> {
     }
 }
 
-/// The smallest `limit − usage` over a process's memory cgroup and every ancestor that sets a
-/// limit, from `/proc/self/cgroup`'s text and a reader for the cgroup filesystem. cgroup v2's
+/// **This process's clean `MADV_FREE`d anonymous bytes** — `LazyFree:` of `/proc/self/smaps_rollup`:
+/// pages the allocator has freed and the kernel has not yet taken back, which it drops without
+/// writing them anywhere (a page written to since is dirty again and is NOT counted — the kernel's
+/// own rule in `smaps_account`). A lower bound on what the cgroup can reclaim at once.
+///
+/// **Sampled on its own thread, never on the caller's.** The rollup walks every page table of the
+/// process: measured on b6 (20 GB resident) at 0.63 s of system time a read — too much for the
+/// ledger's per-second callers, and it holds the process's `mmap` lock for reading while it runs. So
+/// one thread reads it every [`PALW_LAZYFREE_SAMPLE_SECS_V1`] and the ledger reads the last figure; before
+/// the first sample the figure is 0 (no credit — the old, conservative reading). A figure up to one
+/// period old can be too high by what the process has written to those pages since; the ledger's
+/// other terms (the declared share, every reservation, the 1 GiB reserve) and the credit's cap
+/// ([`PALW_LAZYFREE_CREDIT_PERMILLE_V1`]) are what that error is spent against.
+#[cfg(target_os = "linux")]
+fn process_lazyfree_bytes_v1() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SAMPLED: OnceLock<std::sync::Arc<AtomicU64>> = OnceLock::new();
+    let cell = SAMPLED.get_or_init(|| {
+        let cell = std::sync::Arc::new(AtomicU64::new(0));
+        let writer = std::sync::Arc::clone(&cell);
+        let spawned = std::thread::Builder::new().name("palw-lazyfree".into()).spawn(move || {
+            loop {
+                if let Ok(text) = std::fs::read_to_string("/proc/self/smaps_rollup") {
+                    writer.store(lazyfree_from_smaps_rollup_v1(&text), Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(PALW_LAZYFREE_SAMPLE_SECS_V1));
+            }
+        });
+        if let Err(e) = spawned {
+            warn!("[palw-host] the lazily-freed-memory sampler did not start ({e}): the ledger reads the cgroup without the credit");
+        }
+        cell
+    });
+    cell.load(Ordering::Relaxed)
+}
+
+/// How often the lazily-freed-memory sampler reads `/proc/self/smaps_rollup`.
+pub const PALW_LAZYFREE_SAMPLE_SECS_V1: u64 = 15;
+
+/// **The share of a cgroup's `memory.max` the lazily-freed credit may lift the headroom by**, in
+/// permille: a stale sample can overstate what is reclaimable (above), so the credit is capped at
+/// 60 % of the limit — b6's 9.3 of 17 GiB is 53 % — and the cgroup the ledger believes in never
+/// shows more headroom than `max × 60 % + (max − current)`.
+pub const PALW_LAZYFREE_CREDIT_PERMILLE_V1: u64 = 600;
+
+/// `LazyFree:` of a `smaps_rollup` text, in bytes (0 where the kernel does not print it).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn lazyfree_from_smaps_rollup_v1(text: &str) -> u64 {
+    text.lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("LazyFree:")?.trim();
+            rest.strip_suffix("kB")?.trim().parse::<u64>().ok().map(|kb| kb.saturating_mul(1024))
+        })
+        .unwrap_or(0)
+}
+
+/// The smallest `limit − (usage − reclaimable)` over a process's memory cgroup and every ancestor
+/// that sets a limit, from `/proc/self/cgroup`'s text and a reader for the cgroup filesystem.
+/// `lazy_free` is the process's clean `MADV_FREE`d bytes ([`process_lazyfree_bytes_v1`]): charged to
+/// every cgroup on the way up, reclaimable from each, so it is credited at every level — capped at
+/// [`PALW_LAZYFREE_CREDIT_PERMILLE_V1`] of that level's limit and at its own usage. cgroup v2's
 /// unified `0::<path>` reads `memory.max` (`max` is no limit) and `memory.current`; failing that,
 /// v1's `memory` controller reads `memory.limit_in_bytes` (its no-limit is a page-rounded
-/// `i64::MAX`) and `memory.usage_in_bytes`. `None` when nothing on the way up sets a limit.
+/// `i64::MAX`) and `memory.usage_in_bytes` (v1 gets no credit: the node's fleet is v2, and a v1
+/// reading stays the conservative one). `None` when nothing on the way up sets a limit.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn cgroup_headroom_from_v1(proc_self_cgroup: &str, read: impl Fn(&Path) -> Option<String>) -> Option<u64> {
+fn cgroup_headroom_from_v1(proc_self_cgroup: &str, lazy_free: u64, read: impl Fn(&Path) -> Option<String>) -> Option<u64> {
     let number = |path: PathBuf| read(&path).and_then(|text| text.trim().parse::<u64>().ok());
     if let Some(rel) = proc_self_cgroup.lines().find_map(|line| line.strip_prefix("0::")) {
         let root = Path::new("/sys/fs/cgroup");
@@ -1495,7 +1564,8 @@ fn cgroup_headroom_from_v1(proc_self_cgroup: &str, read: impl Fn(&Path) -> Optio
         let mut least: Option<u64> = None;
         while dir.starts_with(root) && dir != root {
             if let (Some(max), Some(current)) = (number(dir.join("memory.max")), number(dir.join("memory.current"))) {
-                let headroom = max.saturating_sub(current);
+                let credit = lazy_free.min(current).min(max / 1_000 * PALW_LAZYFREE_CREDIT_PERMILLE_V1);
+                let headroom = max.saturating_sub(current.saturating_sub(credit));
                 least = Some(least.map_or(headroom, |l| l.min(headroom)));
             }
             if !dir.pop() {
@@ -1529,6 +1599,9 @@ pub struct PalwProcessMemoryV1 {
     pub pss_anon_bytes: u64,
     pub pss_file_bytes: u64,
     pub swap_bytes: u64,
+    /// Clean `MADV_FREE`d anonymous bytes: freed by the allocator, still charged to the cgroup,
+    /// dropped by the kernel on demand — the part of `pss_anon_bytes` that is not live.
+    pub lazy_free_bytes: u64,
 }
 
 pub fn process_memory_v1() -> Option<PalwProcessMemoryV1> {
@@ -1549,6 +1622,7 @@ pub fn process_memory_v1() -> Option<PalwProcessMemoryV1> {
             pss_anon_bytes: field("Pss_Anon:"),
             pss_file_bytes: field("Pss_File:"),
             swap_bytes: field("Swap:"),
+            lazy_free_bytes: lazyfree_from_smaps_rollup_v1(&text),
         })
     }
     #[cfg(not(target_os = "linux"))]
@@ -1561,10 +1635,12 @@ pub fn process_memory_v1() -> Option<PalwProcessMemoryV1> {
 pub fn process_memory_line_v1() -> String {
     match process_memory_v1() {
         Some(m) => format!(
-            "PSS {:.2} GiB = {:.2} GiB anonymous + {:.2} GiB file-backed (shared with every process that maps the same \
+            "PSS {:.2} GiB = {:.2} GiB anonymous (of which {:.2} GiB freed by the allocator and not yet taken back by \
+             the kernel — reclaimable, not live) + {:.2} GiB file-backed (shared with every process that maps the same \
              files); swapped out {:.2} GiB",
             gib(m.pss_bytes),
             gib(m.pss_anon_bytes),
+            gib(m.lazy_free_bytes),
             gib(m.pss_file_bytes),
             gib(m.swap_bytes)
         ),
@@ -1600,14 +1676,16 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
         Some(m) => {
             let unaccounted = m.pss_anon_bytes.saturating_sub(caches);
             info!(
-                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation)",
+                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live",
                 gib(m.rss_bytes),
                 gib(m.pss_bytes),
                 gib(m.pss_anon_bytes),
                 gib(m.pss_file_bytes),
                 gib(m.swap_bytes),
                 gib(caches),
-                gib(unaccounted)
+                gib(unaccounted),
+                gib(m.lazy_free_bytes),
+                gib(m.pss_anon_bytes.saturating_sub(m.lazy_free_bytes))
             );
         }
         None => info!(
@@ -2359,7 +2437,7 @@ mod tests {
             ("/sys/fs/cgroup/system.slice/memory.current", "20000000000\n"),
         ]);
         assert_eq!(
-            cgroup_headroom_from_v1("0::/system.slice/misaka-pool-slot@06.service\n", slot),
+            cgroup_headroom_from_v1("0::/system.slice/misaka-pool-slot@06.service\n", 0, slot),
             Some(6_442_450_944 - 6_323_744_768),
             "the slot's own limit, not the slice's none"
         );
@@ -2369,18 +2447,62 @@ mod tests {
             ("/sys/fs/cgroup/a/memory.max", "1000"),
             ("/sys/fs/cgroup/a/memory.current", "900"),
         ]);
-        assert_eq!(cgroup_headroom_from_v1("0::/a/b", nested), Some(100), "an ancestor's limit binds its children");
-        assert_eq!(cgroup_headroom_from_v1("0::/", files(&[])), None, "the root sets nothing");
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 0, nested), Some(100), "an ancestor's limit binds its children");
+        assert_eq!(cgroup_headroom_from_v1("0::/", 0, files(&[])), None, "the root sets nothing");
         let v1 = files(&[
             ("/sys/fs/cgroup/memory/user.slice/memory.limit_in_bytes", "4294967296"),
             ("/sys/fs/cgroup/memory/user.slice/memory.usage_in_bytes", "1073741824"),
         ]);
-        assert_eq!(cgroup_headroom_from_v1("12:memory:/user.slice\n0::/user.slice", v1), Some(3 << 30), "v1 where v2 sets nothing");
+        assert_eq!(cgroup_headroom_from_v1("12:memory:/user.slice\n0::/user.slice", 0, v1), Some(3 << 30), "v1 where v2 sets nothing");
         let unlimited = files(&[
             ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "9223372036854771712"),
             ("/sys/fs/cgroup/memory/memory.usage_in_bytes", "1"),
         ]);
-        assert_eq!(cgroup_headroom_from_v1("5:cpu,memory:/", unlimited), None, "v1's no-limit is no limit");
+        assert_eq!(cgroup_headroom_from_v1("5:cpu,memory:/", 0, unlimited), None, "v1's no-limit is no limit");
+    }
+
+    /// **The 2026-10-01 b6 reading, replayed.** `memory.max` 18,253,611,008, `memory.current`
+    /// 17,975,808,000 (98.5 %), of which `LazyFree:` 9,478,508,544 bytes (9,256,356 kB of
+    /// `smaps_rollup`) are `MADV_FREE`d pages the kernel drops on demand. The old reading was
+    /// `max − current` = 0.26 GiB, which with the ledger's 1 GiB reserve is the "host headroom
+    /// 0.00 GiB … 0.00 GiB already reserved" that held every duty for three hours; crediting the lazy
+    /// pages reads 8.7 GiB, and the credit is capped (a stale sample is never trusted past 60 % of
+    /// the limit) and never past what the cgroup holds.
+    #[test]
+    fn a_cgroup_full_of_lazily_freed_pages_is_not_out_of_headroom() {
+        let max = 18_253_611_008u64;
+        let current = 17_975_808_000u64;
+        let lazy = lazyfree_from_smaps_rollup_v1("Rss: 20795852 kB\nPss_Anon: 17160712 kB\nLazyFree:        9256356 kB\nSwap: 0 kB\n");
+        assert_eq!(lazy, 9_256_356 * 1024);
+        let pairs: Vec<(String, String)> = vec![
+            ("/sys/fs/cgroup/system.slice/misaka-t12-node.service/memory.max".into(), max.to_string()),
+            ("/sys/fs/cgroup/system.slice/misaka-t12-node.service/memory.current".into(), current.to_string()),
+        ];
+        let read = move |path: &Path| pairs.iter().find(|(p, _)| Path::new(p) == path).map(|(_, v)| v.clone());
+        let cg = "0::/system.slice/misaka-t12-node.service\n";
+        assert_eq!(cgroup_headroom_from_v1(cg, 0, &read), Some(max - current), "no credit: the old reading, 0.26 GiB");
+        let credited = cgroup_headroom_from_v1(cg, lazy, &read).expect("a limit");
+        assert_eq!(credited, max - (current - lazy), "the pages the kernel hands back are headroom");
+        assert!(credited > 8 << 30, "8.7 GiB: a 3.37 GiB full seat, a 0.5 GiB floor replay and the 1 GiB reserve all fit");
+        // A sample larger than the cgroup holds, or than the cap allows, is clamped.
+        let capped = cgroup_headroom_from_v1(cg, u64::MAX, &read).expect("a limit");
+        assert_eq!(capped, max - (current - max / 1_000 * PALW_LAZYFREE_CREDIT_PERMILLE_V1), "never more than the cap");
+        assert!(capped < max, "and never the whole limit");
+        // A kernel without the field, or an unreadable file, credits nothing.
+        assert_eq!(lazyfree_from_smaps_rollup_v1("Rss: 1 kB\n"), 0);
+        assert_eq!(lazyfree_from_smaps_rollup_v1(""), 0);
+        // The credit applies at every level of the hierarchy: an ancestor that is the tighter limit
+        // is credited too (its usage includes the same pages).
+        let nested: Vec<(String, String)> = vec![
+            ("/sys/fs/cgroup/a/b/memory.max".into(), "max".into()),
+            ("/sys/fs/cgroup/a/b/memory.current".into(), "900".into()),
+            ("/sys/fs/cgroup/a/memory.max".into(), "1000".into()),
+            ("/sys/fs/cgroup/a/memory.current".into(), "900".into()),
+        ];
+        let read = move |path: &Path| nested.iter().find(|(p, _)| Path::new(p) == path).map(|(_, v)| v.clone());
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 0, &read), Some(100));
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 400, &read), Some(500), "400 of the 900 held are reclaimable: 1000 − 500");
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", 800, &read), Some(400), "the credit is capped at 60 % of the limit: 1000 − 600");
     }
 
     /// **Two duties naming one file hold one mapping.** The producer's and the panel's
