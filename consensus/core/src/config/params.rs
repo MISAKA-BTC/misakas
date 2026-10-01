@@ -15275,14 +15275,11 @@ pub fn palw_v2_params_with_class_rows_v1(
             .genesis_objects
             .iter()
             .filter_map(|o| match o {
-                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, .. }
-                    if *class_id == bundle.base_class_id =>
-                {
-                    match pwu_rule {
-                        crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => Some(*pwu_per_inference),
-                        _ => None,
-                    }
-                }
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                    class_id,
+                    pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
+                    ..
+                } if *class_id == bundle.base_class_id => Some(*pwu_per_inference),
                 _ => None,
             })
             .max()
@@ -20533,26 +20530,26 @@ pub fn palw_rc_base_params() -> Params {
 // testnet-12 — the 2026-09-22 regenesis of testnet-11, with every rule in force from DAA 0
 // =================================================================================================
 
-/// **testnet-12's base identity: testnet-11's, at a new genesis, with every fence at DAA 0.**
-///
-/// The operator's instruction for this regenesis was one sentence — "過去に fence をつけて DAA から
-/// 有効にしていたもの、将来なるものを genesis から有効にすること" — and a regenesis is the one
-/// moment it can be obeyed literally. On a LIVE chain a rule arrives at a height because the blocks
-/// below that height were judged under the old rule and cannot be re-judged (ADR-0083 path (a)); a
-/// chain with no blocks below has nothing to protect, so the honest form of every one of those rules
-/// is `always()`. That is what [`palw_t12_arm_every_rule_from_genesis`] does, and doing it through
-/// `for_each_fence` rather than by hand is what keeps it true of fences added after today.
-///
-/// What is NOT inherited from t11:
-/// * the genesis block ([`crate::config::genesis::PALW_T12_GENESIS`]) and with it the premine —
-///   the 858M t12 community table on its own sentinel txid;
-/// * every scheduled height. t11's flag days (1,150 / 1,900 / 2,150 / 2,400 / 3,500 / 4,000 / 6,900
-///   / 7,100 / 7,101 / 7,200 / 7,300 / 7,301 / 7,780 / 7,800 / 8,100 / 8,160 / 8,500 / 8,600 /
-///   8,700) are gone, not moved: there is no height at which this chain changes its mind.
-///
-/// What IS inherited, deliberately: the eight genesis bond cards (the operators hold those keys
-/// already), the frozen 120 s cadence, the P2P port (26311 — see `NetworkId::default_p2p_port`),
-/// the DNS seeder names, and the EVM lane.
+// **testnet-12's base identity: testnet-11's, at a new genesis, with every fence at DAA 0.**
+//
+// The operator's instruction for this regenesis was one sentence — "過去に fence をつけて DAA から
+// 有効にしていたもの、将来なるものを genesis から有効にすること" — and a regenesis is the one
+// moment it can be obeyed literally. On a LIVE chain a rule arrives at a height because the blocks
+// below that height were judged under the old rule and cannot be re-judged (ADR-0083 path (a)); a
+// chain with no blocks below has nothing to protect, so the honest form of every one of those rules
+// is `always()`. That is what [`palw_t12_arm_every_rule_from_genesis`] does, and doing it through
+// `for_each_fence` rather than by hand is what keeps it true of fences added after today.
+//
+// What is NOT inherited from t11:
+// * the genesis block ([`crate::config::genesis::PALW_T12_GENESIS`]) and with it the premine —
+//   the 858M t12 community table on its own sentinel txid;
+// * every scheduled height. t11's flag days (1,150 / 1,900 / 2,150 / 2,400 / 3,500 / 4,000 / 6,900
+//   / 7,100 / 7,101 / 7,200 / 7,300 / 7,301 / 7,780 / 7,800 / 8,100 / 8,160 / 8,500 / 8,600 /
+//   8,700) are gone, not moved: there is no height at which this chain changes its mind.
+//
+// What IS inherited, deliberately: the eight genesis bond cards (the operators hold those keys
+// already), the frozen 120 s cadence, the P2P port (26311 — see `NetworkId::default_p2p_port`),
+// the DNS seeder names, and the EVM lane.
 
 /// **ADR-0151 D3: can this network advance its consensus clock without admitting a claim?**
 ///
@@ -21302,7 +21299,6 @@ pub fn palw_v2_params_on_base(
     // that exists: testnet-11 arms `palw_held_context` at a height, so `is_active(0)` is false and
     // this branch never runs; devnet, simnet and mainnet leave the fence dormant. No fingerprint
     // moves.
-    let mut bundle = bundle;
     if params.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0)) {
         let derived = crate::palw_court_v2::palw_court_params_held_at_v2(&bundle, true, true).map_err(|_| {
             crate::palw_mode_v2::PalwModeV2Error::Invalid(

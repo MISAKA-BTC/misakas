@@ -169,7 +169,7 @@ impl PalwPipelineBindingV1 {
             stage_roots: binding.stage_roots.clone(),
             prompt_root: binding.prompt_root,
             prompt_tokens: binding.prompt_tokens,
-            params: binding.params.clone(),
+            params: binding.params,
             generated_root: binding.generated_root(),
             finalized_root: binding.finalized_root(),
             score: binding.score.clone(),
@@ -293,7 +293,7 @@ pub fn palw_pipeline_stage_root_v1(stage: u8, leaf_count: u64, merkle_root: &Has
 /// exactly `palw_gen_step_leaf_hash_v1`'s construction over a leaf's lanes. `None` for lanes that are not
 /// whole 4-byte lanes.
 pub fn palw_pipeline_leaf_hash_v1(coord: &PalwGenLeafCoordV1, lanes_le: &[u8]) -> Option<Hash64> {
-    if lanes_le.len() % 4 != 0 {
+    if !lanes_le.len().is_multiple_of(4) {
         return None;
     }
     let n = u32::try_from(lanes_le.len() / 4).ok()?;
@@ -374,7 +374,7 @@ fn fold_frontier(leaf_count: u64, level: u8, index: u64, below: u8, frontier: &[
         let mut k = 0usize;
         while k < nodes.len() {
             let position = start + k as u64;
-            if position % 2 != 0 {
+            if !position.is_multiple_of(2) {
                 return None;
             }
             if position + 1 < width {

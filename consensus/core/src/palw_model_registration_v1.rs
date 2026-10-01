@@ -346,10 +346,10 @@ pub fn palw_model_preflight_v1(
     if already_registered {
         checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::ModelAlreadyRegistered, false));
     }
-    if let Some(root) = registered_root {
-        if root != *artifact_root {
-            checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::ArtifactRootMismatch, false));
-        }
+    if let Some(root) = registered_root
+        && root != *artifact_root
+    {
+        checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::ArtifactRootMismatch, false));
     }
     if let Some(row) = fit.rows.iter().find(|r| r.wall == PalwFitWallV1::GeometryCeiling) {
         let ok = row.verdict == PalwFitVerdictV1::Admitted;

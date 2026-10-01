@@ -131,7 +131,7 @@ pub fn fp_job_id_v5_carried(job: &PalwFreePromptJobV3) -> Hash64 {
 fn fp_job_id_v5_bytes(bytes: &[u8]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_V5_DOMAIN_JOB_ID).to_state();
     state.update(&(bytes.len() as u64).to_le_bytes());
-    state.update(&bytes);
+    state.update(bytes);
     let mut out = [0u8; 64];
     out.copy_from_slice(state.finalize().as_bytes());
     Hash64::from_bytes(out)
