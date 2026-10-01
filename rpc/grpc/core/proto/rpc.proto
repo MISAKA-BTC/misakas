@@ -1921,6 +1921,10 @@ message GetPalwNodeStatusResponseMessage {
   // real network) — what an off-node signer checks before it signs.
   string genesisHash = 31;
   string drillSaltId = 32;
+  // The verification debt (the 2026-10-01 panel backlog): key=value pairs — the memory ledger's readings
+  // with and without reclaimable pages, this seat's slots, schedule and receipts in the last hour, and
+  // the producer's backpressure gate. Empty from an older node.
+  string verification = 33;
   RPCError error = 1000;
 }
 

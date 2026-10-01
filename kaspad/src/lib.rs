@@ -28,6 +28,9 @@ pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;
+/// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
+/// (node policy).
+pub mod palw_producer_backpressure;
 /// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
 pub mod palw_readiness_escalation;
 #[cfg(test)]

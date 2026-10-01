@@ -7147,6 +7147,8 @@ impl PalwPanelService {
         // replay. Swept with `replayed`.
         let mut seat_replays = PalwSeatReplaysV1::default();
         seat_replays.configure_slots(self.config.seat_replay_slots);
+        // When this seat filed each receipt in the last hour — the `verification` status's receipts/h.
+        let mut receipts_filed_at: std::collections::VecDeque<std::time::Instant> = std::collections::VecDeque::new();
         // SEAT-S4's resume of a C7 partial seat's mask (`PalwSeatResumesV1`), in the same slots.
         let mut seat_resumes = PalwSeatResumesV1::default();
         // N-5: the duties this seat reached the material wait on holding nothing, with the DAA it
@@ -9523,6 +9525,30 @@ impl PalwPanelService {
                     false,
                 )
             };
+            // The verification debt this seat reports (`getPalwNodeStatus.verification`): what it owes, how long
+            // the oldest has waited, how many receipts it filed in the last hour, and its slots.
+            while receipts_filed_at.front().is_some_and(|at| at.elapsed() > std::time::Duration::from_secs(3600)) {
+                receipts_filed_at.pop_front();
+            }
+            {
+                let slots = seat_replays.occupancy();
+                let status = format!(
+                    "seat_duties={} seat_oldest_wait_daa={} seat_receipts_1h={} sched_needed={} sched_backup={} sched_satisfied={} \
+                     slots={} running={} overdue={} detached={} load_limited={}",
+                    duties.len(),
+                    duties.iter().map(|duty| current_daa.saturating_sub(duty.bound_daa)).max().unwrap_or(0),
+                    receipts_filed_at.len(),
+                    seat_schedule_tiers[0],
+                    seat_schedule_tiers[1],
+                    seat_schedule_tiers[2],
+                    slots.slots,
+                    slots.running,
+                    slots.overdue,
+                    slots.detached,
+                    slots.load_limited
+                );
+                self.flow_context.update_palw_runtime(|r| r.verification_seat = status);
+            }
             if seat_r && !duties.is_empty() {
                 crate::palw_backends::note_throttled_v1("seat-schedule", || {
                     format!(
@@ -11052,6 +11078,7 @@ impl PalwPanelService {
                     None
                 };
                 self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
+                receipts_filed_at.push_back(std::time::Instant::now());
                 let key = seat_duty_panel_key_v1(duty);
                 let now = std::time::Instant::now();
                 let filed = |segments| crate::palw_receipt_pool::OwnFiledV1 {

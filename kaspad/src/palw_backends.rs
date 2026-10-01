@@ -436,6 +436,7 @@ impl PalwBackendRegistry {
 /// pool's snapshot, as `getPalwNodeStatus` reports it. Called by the panel's per-tick publish and by
 /// the producer at its gate, so the figures a hold names are the figures a program can read.
 pub fn publish_memory_ledger_v1(runtime: &mut kaspa_p2p_flows::flow_context::PalwNodeRuntimeV1) {
+    runtime.verification_memory = host_memory_status_v1();
     let snapshot = crate::palw_memory_ledger::host_ledger_v1().snapshot();
     runtime.memory_share_bytes = snapshot.share_bytes.unwrap_or(0);
     runtime.memory_headroom_bytes = snapshot.live_bytes.unwrap_or(0);
@@ -1754,6 +1755,36 @@ pub fn replay_memory_budget_v1(need_bytes: u64) -> Result<(), String> {
 /// the number the reservation ledger's live bound reads (`palw_memory_ledger`).
 fn host_headroom_of_v1(available: u64) -> u64 {
     available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1).saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000
+}
+
+/// **The memory half of the `verification` status** — `key=value` pairs, in MiB: the host's
+/// `MemAvailable`, the cgroup headroom as the kernel's `memory.max − memory.current` says it
+/// (`cgroup_naive`) and as the ledger now reads it with the clean `MADV_FREE`d pages credited
+/// (`cgroup_credited`), and those pages themselves (`lazyfree`) — so the difference that held every duty
+/// on b6 is readable on a live node. Empty off Linux.
+pub fn host_memory_status_v1() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let mib = |bytes: u64| bytes >> 20;
+        let lazy = process_lazyfree_bytes_v1();
+        let own = std::fs::read_to_string("/proc/self/cgroup").ok();
+        let read = |path: &Path| std::fs::read_to_string(path).ok();
+        let naive = own.as_deref().and_then(|text| cgroup_headroom_from_v1(text, 0, read));
+        let credited = own.as_deref().and_then(|text| cgroup_headroom_from_v1(text, lazy, read));
+        let field = |name: &str, value: Option<u64>| format!("{name}={}", value.map_or("none".to_string(), |v| mib(v).to_string()));
+        format!(
+            "{} {} {} {} host_load_milli={}",
+            field("mem_available_mib", mem_available_bytes_v1()),
+            field("cgroup_naive_mib", naive),
+            field("cgroup_credited_mib", credited),
+            field("lazyfree_mib", Some(lazy)),
+            host_load_per_cpu_milli_v1().map_or("none".to_string(), |v| v.to_string())
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        String::new()
+    }
 }
 
 /// **The host's one-minute load average per CPU, in thousandths** (`/proc/loadavg`'s first field over

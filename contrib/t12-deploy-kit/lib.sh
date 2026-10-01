@@ -557,8 +557,15 @@ cgroup_memory() {
     pid=$(systemctl show -p MainPID --value "$u"); rss_kb=$(awk '/VmRSS/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
     say "  cgroup: memory.max $([ "$max" = max ] && echo none || echo "$((max / 1048576)) MiB"), current $((cur / 1048576)) MiB (anon $((anon / 1048576)), file/page cache $((file / 1048576))), process RSS $((${rss_kb:-0} / 1024)) MiB"
     if [ "$max" != max ]; then
+        # 10-01: kaspad frees memory with MADV_FREE (mimalloc purge_decommits=false), which stays charged to the cgroup
+        # until the kernel needs it; the node's ledger (int-10.1) credits those pages, so the figure that matters is
+        # max − (current − lazyfree). LazyFree is the clean part of the process's anonymous memory (smaps_rollup).
+        local lazy_kb lazy
+        lazy_kb=$(awk '/^LazyFree:/{s+=$2} END{print s+0}' "/proc/$pid/smaps_rollup" 2>/dev/null || echo 0)
+        lazy=$(( lazy_kb / 1024 ))
         live=$(( (max - cur) / 1048576 - 1024 ))
-        [ "$live" -ge "$N_SHARE" ] || warn "b$N_ID: memory.max − memory.current − 1 GiB = ${live} MiB < share ${N_SHARE} MiB — the ledger is bound by the cgroup, not the share (page cache ${file:+$((file / 1048576)) MiB}); PLAN.md §2: raise this node's memmax or set '-'"
+        say "  cgroup: freed-not-yet-reclaimed (MADV_FREE) $((lazy)) MiB; ledger headroom without that credit ${live} MiB, with it $((live + lazy)) MiB"
+        [ "$((live + lazy))" -ge "$N_SHARE" ] || warn "b$N_ID: memory.max − (memory.current − lazyfree) − 1 GiB = $((live + lazy)) MiB < share ${N_SHARE} MiB — the ledger is bound by the cgroup, not the share (page cache ${file:+$((file / 1048576)) MiB}); PLAN.md §2: raise this node's memmax or set '-'"
     fi
 }
 
