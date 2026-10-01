@@ -768,7 +768,7 @@ impl PalwEvalEvidenceV1<'_> {
     pub fn named_leaf_close(&self, index: u64) -> Result<PalwEvalConeCloseV1, String> {
         let v = self.verified()?;
         let (s, i) = v.space.locate(index).ok_or_else(|| format!("{index} is no leaf of this execution"))?;
-        let opened = self.execution.open_leaf(s as u8, i as u64).ok_or_else(|| format!("stage {s} leaf {i} does not open"))?;
+        let opened = self.execution.open_leaf(s, i).ok_or_else(|| format!("stage {s} leaf {i} does not open"))?;
         let disputed = PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("the named leaf does not ride")?;
         Ok(PalwEvalConeCloseV1 {
             version: PALW_IMPROVE_EVAL_COURT_VERSION_V1,

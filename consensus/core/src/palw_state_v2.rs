@@ -8807,7 +8807,7 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // RFC-0004 A6: the evaluation root claim, by the same questions.
         PalwConsensusObjectV2::CourtEvalRootClaimed { root, .. } => {
             session.dissection.is_none()
-                && state.tir_dissections.get(session_id).is_none()
+                && !state.tir_dissections.contains_key(session_id)
                 && session.ladder.terminal_index().is_some()
                 && root.version == crate::palw_tir_dissect_v1::PALW_TIR_DISSECT_OBJECT_VERSION_V1
         }
