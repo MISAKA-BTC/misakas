@@ -573,9 +573,9 @@ impl<'a> Env<'a> {
                         if n.f() <= 0.0 {
                             return Err(bad("`$ln` of a non-positive number"));
                         }
-                        N::F(n.f().ln()).value()
+                        N::F(crate::detmath::ln(n.f())).value()
                     }
-                    "$exp" => N::F(n.f().exp()).value(),
+                    "$exp" => N::F(crate::detmath::exp(n.f())).value(),
                     "$floor" => N::I(n.f().floor() as i64).value(),
                     "$ceil" => N::I(n.f().ceil() as i64).value(),
                     "$round" => N::I(n.f().round() as i64).value(),
@@ -614,7 +614,9 @@ impl<'a> Env<'a> {
                     (N::I(b), N::I(e)) if (0..=62).contains(&e) => {
                         Ok(Value::from(b.checked_pow(e as u32).ok_or_else(|| bad("integer overflow in `$pow`"))?))
                     }
-                    (b, e) => N::F(b.f().powf(e.f())).value(),
+                    // Through detmath, like every transcendental the conversion evaluates: a constant an adapter computes must
+                    // be the same number on every machine (`math: "libm-v1"`).
+                    (b, e) => N::F(crate::detmath::powf(b.f(), e.f())).value(),
                 }
             }
             // ───────────── comparison and logic ─────────────
@@ -1091,6 +1093,11 @@ impl<'a> Env<'a> {
         let top_orig = get("top_orig")?.filter(|v| !v.is_null()).map(|v| as_usize(&v, op)).transpose()?;
         let q_scaled = get("q_scaled")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
         let offset = get("offset")?.map(|v| as_usize(&v, op)).transpose()?.unwrap_or(0);
+        // `"reverse": true` — rotation by −θ (nanochat's `rotate_half`; `ROPE_REVERSED_V1`).
+        let reverse = get("reverse")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
+        if reverse && op != "$rope" {
+            return Err(bad(format!("`{op}`: reverse applies to a rope, not a temperature")));
+        }
         // `"longrope": "short_only"`: LongRoPE as Phi-3.5-MoE runs it in transformers 5.17 (the short
         // factors at every length); an ordinary `default` rope falls through to the usual reading.
         let short_only = match get("longrope")? {
@@ -1105,6 +1112,9 @@ impl<'a> Env<'a> {
         let (mut spec, temp) =
             crate::rope::rope_spec_from_config(&self.cur(), rotary_dim, style, theta, layer_type.as_deref(), partial, max_pos, top_orig, q_scaled)?;
         spec.offset = offset;
+        if reverse {
+            spec.freqs = spec.freqs.reverse()?;
+        }
         if op == "$rope" {
             serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
         } else {

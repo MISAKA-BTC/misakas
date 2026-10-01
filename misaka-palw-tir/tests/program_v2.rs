@@ -435,6 +435,50 @@ fn every_version_2_rule_refuses_by_name() {
     assert!(kind(&enc).is_some(), "post appends to no history");
 }
 
+/// **G9's audit, on the IR side**: every declaration whose dimensions are each legal (`≤ 2^24`) and
+/// whose element count is past `u64` is refused by name (`NormalForm`) by the validator — through
+/// the bytes too — and never a multiply-overflow panic. The count is a saturating product checked
+/// against its cap before any other use (`check_static_shape`, `check_param_shape`,
+/// `check_tensor_type`).
+#[test]
+fn an_element_count_past_u64_is_refused_by_name_and_never_panics() {
+    let base = denoiser_program();
+    assert_eq!(kind(&base), None);
+    let big = 1u32 << 24;
+    let huge = vec![big; 4];
+    type Edit = Box<dyn Fn(&mut TirProgramV2)>;
+    let cases: Vec<(&str, Edit)> = vec![
+        ("an input", Box::new({
+            let huge = huge.clone();
+            move |p| p.inputs[1].shape = huge.clone()
+        })),
+        ("a param", Box::new({
+            let huge = huge.clone();
+            move |p| p.params[0].shape = huge.clone()
+        })),
+        ("a state", Box::new({
+            let huge = huge.clone();
+            move |p| p.states[0].shape = huge.clone()
+        })),
+        ("a node's type", Box::new({
+            let huge = huge.clone();
+            move |p| {
+                use misaka_palw_tir::types::Dim;
+                p.blocks[0].nodes[0].out.shape = huge.iter().map(|d| Dim::Fixed(*d)).collect();
+            }
+        })),
+    ];
+    for (what, edit) in cases {
+        let mut p = base.clone();
+        edit(&mut p);
+        // A declaration is a normal-form refusal, a node's type a shape one: both by name.
+        assert!(matches!(kind(&p), Some(TirErrorKind::NormalForm | TirErrorKind::Shape)), "{what}: {:?}", kind(&p));
+        // Through the bytes: the decoder refuses it the same way.
+        let err = TirProgramV2::decode_canonical(&p.encode()).expect_err(what);
+        assert!(matches!(err.kind, TirErrorKind::NormalForm | TirErrorKind::Shape), "{what}: {err:?}");
+    }
+}
+
 #[test]
 fn a_parameterless_decode_is_a_valid_empty_params_program() {
     // The decoder declares no param at all: inputs alone are enough.

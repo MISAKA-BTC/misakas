@@ -175,6 +175,7 @@ fn walk(
                 Some(profile) => PalwFpDerivedWorkCapV1::Derived(profile),
                 None => PalwFpDerivedWorkCapV1::Unpublished,
             },
+            logits_q24: s.class_commits_q24_logits_v1(class_id),
         },
         true,
         false,

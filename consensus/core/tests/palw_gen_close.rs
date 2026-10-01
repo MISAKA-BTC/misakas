@@ -122,6 +122,7 @@ fn fixture() -> Fixture {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         tokenizer_id: Hash64::from_bytes([0x72; 64]),
     };
@@ -201,8 +202,9 @@ fn cone(f: &Fixture, e: &PalwGenExecutionV1, binding: &PalwGenStepBindingV1, sta
     let reads = palw_gen_stage_reads_prompt_v1(&f.pipeline, stage);
     PalwGenConeCloseV1 {
         version: PALW_GEN_CLOSE_VERSION_V1,
-        binding: binding.clone(),
+        binding: binding.clone().into(),
         prompt_ids: if reads { prompt() } else { vec![] },
+        negative_ids: vec![],
         disputed: wire(stage, index),
         operands,
         image_tiles,
@@ -264,14 +266,14 @@ fn the_binding_is_the_claims_execution_root() {
     lying.step_leaf_count += 1;
     lying.committed_execution_root = lying.execution_root();
     let mut close = cone(&f, &e, &lying, 0, 0);
-    close.binding = lying.clone();
+    close.binding = lying.clone().into();
     assert_eq!(check(&f, &close, &lying.committed_execution_root, None), Ok(Some(PalwStepFaultV1::StepLeafCountNotCanonical)));
     // A job the class does not take: another image size.
     let mut other = binding.clone();
     other.job.images[0].w += 1;
     other.committed_execution_root = other.execution_root();
     let mut close = cone(&f, &e, &other, 0, 0);
-    close.binding = other.clone();
+    close.binding = other.clone().into();
     assert!(matches!(check(&f, &close, &other.committed_execution_root, None), Err(PalwGenCloseErrorV1::Binding(_))));
 }
 

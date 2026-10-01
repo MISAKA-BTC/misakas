@@ -11990,6 +11990,16 @@ impl PalwChainStateV2 {
         self.gen_classes.get(class_id)
     }
 
+    /// **Does the class commit its logits in Q24** (RFC-0001 §A.3's unit; RFC-0003 §I.3)? Every legacy
+    /// class does: K = 24 integer kernels. An IR class (`tir_classes`) or a generative class
+    /// (`gen_classes`) commits them in the unit its lowerer calibrated, which is declared nowhere —
+    /// until the fence that makes Q24 a guarantee of the lowering, when a class registered past it
+    /// answers `true` here (the registration height is in its class row). A class the registry does
+    /// not hold is a legacy question for the transition to refuse by name, and answers `true`.
+    pub fn class_commits_q24_logits_v1(&self, class_id: &Hash64) -> bool {
+        !self.tir_classes.contains_key(class_id) && !self.gen_classes.contains_key(class_id)
+    }
+
     /// **RFC-0003 §II.2.1: a V5 claim's class, resolved against the generative registry** — the row
     /// its job names, holding the job to it (`palw_fp_v5_resolve_class_v1`). `armed` is
     /// `Params::palw_fp_job_v5` in force at the judged height.

@@ -54,6 +54,12 @@ pub struct RopeFreqs {
     /// `(t, h, w)` rotates each frequency. With the components equal (text only) it is the plain
     /// rope.
     pub mrope: Option<MRope>,
+    /// **`ROPE_REVERSED_V1`**: the rotation is by `−θ` (nanochat's `rotate_half` computes
+    /// `[x₁cos + x₂sin, −x₁sin + x₂cos]`, the inverse of the usual one). `inv_freq` is then stored negated, so every
+    /// table of `cos(pos·f)`, `sin(pos·f)` — float reference, the lowering's two-level tables — follows with no further
+    /// change; the flag is the marker (the feature, the reports).
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 /// `mrope_section` and its layout over the `dim / 2` frequencies.
@@ -118,7 +124,22 @@ impl RopeFreqs {
             dynamic: None,
             longrope: None,
             mrope: None,
+            reversed: false,
         }
+    }
+
+    /// The same rope rotating by `−θ` (`ROPE_REVERSED_V1`). Frequencies that depend on the position (dynamic NTK,
+    /// LongRoPE) or on a multimodal component are not reversed: refused, never half-reversed.
+    pub fn reverse(mut self) -> Result<Self> {
+        if self.reversed {
+            return Err(LowerError::bad("a rope reversed twice"));
+        }
+        if self.dynamic.is_some() || self.longrope.is_some() || self.mrope.is_some() {
+            return Err(LowerError::not_lowerable("ROPE_REVERSED_V1 over position-dependent or multimodal frequencies is not modelled"));
+        }
+        self.inv_freq.iter_mut().for_each(|f| *f = -*f);
+        self.reversed = true;
+        Ok(self)
     }
 
     /// The inverse frequencies in force at `pos`.
@@ -217,6 +238,7 @@ pub fn longrope_short_only_spec(cfg: &Cfg, head_dim: usize, theta_default: Optio
             dynamic: None,
             longrope: None,
             mrope: None,
+            reversed: false,
         },
     }))
 }
@@ -599,6 +621,19 @@ pub fn bf16_round(x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reversed_rope_rotates_by_minus_theta() {
+        let f = super::RopeFreqs::plain(10000.0, 16);
+        let r = f.clone().reverse().unwrap();
+        assert!(r.reversed && !f.reversed);
+        for pos in [0usize, 1, 7, 100] {
+            let ((c, s), (rc, rs)) = (f.cos_sin(pos), r.cos_sin(pos));
+            assert_eq!(c, rc, "cos is even");
+            assert_eq!(s.iter().map(|x| -x).collect::<Vec<_>>(), rs, "sin is odd: {pos}");
+        }
+        assert!(r.reverse().is_err(), "reversed twice");
+    }
+
     use super::*;
     use serde_json::json;
 

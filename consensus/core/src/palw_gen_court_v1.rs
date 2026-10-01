@@ -55,6 +55,14 @@ pub struct PalwGenDrawV1 {
 
 /// **Lane `lane` of a random input at stage position `pos`**, recomputed from the job: the domain's
 /// word at `(seed, step, item, lane)`, then `Uniform`'s word or `Normal`'s table entry (PALW-RND-4).
+///
+/// This function is more lenient than the input declaration it serves, by design: it accepts domain 0
+/// (not an input domain), a `Uniform` whose `bits` are not its domain's word width, and a lane past `2^28`
+/// (past any tensor), each of which the program's normal form (NF-26) or the demand machinery's bound on
+/// the tensor's shape already refuses. It is safe only as long as those run first — a class whose programs
+/// were decoded and validated (`PalwGenClassV1::decode`) — and the evaluator now also holds every element
+/// it is answered to the input's declared interval (PALW-TIR-42), so a mis-derived draw fails `Operand`
+/// by name (the independent second implementation's observation on this function).
 pub fn palw_gen_random_element_v1(
     domain: u16,
     dist: RandomDist,
@@ -134,7 +142,7 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageRows { stage: up, drop, .. } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    let per_row: u64 = d.shape[1..].iter().map(|x| *x as u64).product();
+                    let per_row: u64 = d.shape[1..].iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64));
                     let rows =
                         facts.get(*up as usize).ok_or_else(|| missing(format!("no facts of stage {up}")))?.trip.saturating_sub(*drop);
                     PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: rows as u64 * per_row }
@@ -142,7 +150,11 @@ pub fn palw_gen_stage_answers_v1(
                 Binding::StageFinal { stage: up } => {
                     let up_prog = &programs[pipeline.stages[*up as usize].program as usize];
                     let iv = misaka_palw_tir::interval_v2::output_interval_v2(up_prog)?;
-                    PalwGenInputAnswerV1::Edge { lo: iv.lo, hi: iv.hi, kept: d.shape.iter().map(|x| *x as u64).product() }
+                    PalwGenInputAnswerV1::Edge {
+                        lo: iv.lo,
+                        hi: iv.hi,
+                        kept: d.shape.iter().fold(1u64, |acc, x| acc.saturating_mul(*x as u64)),
+                    }
                 }
                 Binding::JobImage { index } => {
                     let image = images.get(*index as usize).ok_or_else(|| missing(format!("the job has no image {index}")))?;
@@ -448,7 +460,7 @@ fn edge_leaf(case: &PalwGenCourtCaseV1<'_>, stage: usize, input: u16, index: usi
         }
         Binding::StageRows { stage: u, drop, .. } => {
             let prog = &case.programs[case.pipeline.stages[stage].program as usize];
-            let row: u64 = prog.inputs[input as usize].shape[1..].iter().map(|d| *d as u64).product();
+            let row: u64 = prog.inputs[input as usize].shape[1..].iter().fold(1u64, |acc, d| acc.saturating_mul(*d as u64));
             (*u, (index as u64 / row) as u32 + drop, index as u64 % row)
         }
         _ => return None,
@@ -1163,6 +1175,24 @@ pub fn palw_gen_cone_units_v1(
     })?;
     out.map_err(|v| R::Unadjudicable(format!("an edge the cone reads convicts: {v:?}")))?;
     Ok(used)
+}
+
+/// **The close that convicts on PALW-TIR-33 alone** (finding G21): when the disputed leaf of `full` is
+/// under its stage's root and one of its lanes is outside its node's proven interval — whatever the
+/// dtype, an `i16` node's 32,768 included — the leaf and nothing else is a conviction
+/// ([`palw_gen_adjudicate_leaf_v1`] convicts before it reads an operand, a param or an image), so a
+/// challenger that finds such a lane files exactly this. `None` when the leaf's lanes are all inside the
+/// interval, or when the leaf does not prove (evidence that does not hold convicts nobody).
+pub fn palw_gen_interval_conviction_close_v1(case: &PalwGenCourtCaseV1<'_>, full: &PalwGenCloseV1) -> Option<PalwGenCloseV1> {
+    let d = &full.disputed;
+    let sp = case.space.stages.get(d.coord.stage as usize)?;
+    let stage_root = case.claim.stage_roots.get(d.coord.stage as usize)?;
+    if !palw_gen_verify_leaf_v1(sp, stage_root, d) {
+        return None;
+    }
+    let interval = leaf_interval(case, &d.coord)?;
+    first_outside(&d.values, interval)?;
+    Some(PalwGenCloseV1 { disputed: d.clone(), operands: Vec::new(), image_tiles: Vec::new(), params: Vec::new() })
 }
 
 /// **A close cut down to the units in `used`**: the disputed leaf, the carried leaves the evaluation

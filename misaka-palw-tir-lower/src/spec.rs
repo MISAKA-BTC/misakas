@@ -247,6 +247,22 @@ pub struct AttnSpec {
     /// top-scoring blocks of earlier keys, plus the tokens of the block still being filled.
     #[serde(default)]
     pub sparse: Option<SparseBlockSpec>,
+    /// **`ATTN_OUTPUT_GATE_SEPARATE_V1`**: the attention output is multiplied by `act(gate_proj(x))` from a projection of
+    /// its OWN (`attn.gate`), per element or per head (AfMoE: sigmoid per element; Laguna: softplus per head). Distinct
+    /// from `output_gate`, Qwen3-Next's gate fused into `q_proj`; the two are exclusive.
+    #[serde(default)]
+    pub gate: Option<SeparateGateSpec>,
+    /// **`ATTN_VALUE_SCALE_V1`**: a constant on the values after their projection (`attention_value_scale`, MiMo-V2-Flash).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub v_scale: f64,
+}
+
+/// A separate attention output gate: `o ·= act(gate_proj(x))`, the projection `[H·v_dim, D]` per element or `[H, D]` per head.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeparateGateSpec {
+    pub act: Act,
+    #[serde(default)]
+    pub per_head: bool,
 }
 
 /// **`ATTN_SPARSE_BLOCK_V1`** — a learned index chooses which blocks of the history a query reads.
@@ -763,6 +779,20 @@ pub struct HeadSpec {
     /// `tanh(z / c) · c` on the logits (Gemma-2).
     #[serde(default)]
     pub softcap: Option<f64>,
+    /// **`HEAD_TRANSFORM_V1`**: a prediction head before the vocabulary projection — `dense → act → norm` (BERT's
+    /// `cls.predictions.transform`, ModernBERT-decoder's `lm_head`, RoBERTa's `lm_head.dense`/`layer_norm`).
+    #[serde(default)]
+    pub transform: Option<HeadTransformSpec>,
+}
+
+/// `h → norm(act(dense(h)))`, the head's own transform; then the (tied) vocabulary projection and its bias.
+/// Tensors: roles `head.transform.dense` (`.weight`, `.bias` when `bias`) and `head.transform.norm`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeadTransformSpec {
+    #[serde(default)]
+    pub bias: bool,
+    pub act: Act,
+    pub norm: NormSpec,
 }
 
 /// What a program's `post` produces (RFC-0003 §I.2.3's output kinds are chosen per class, from it).
@@ -870,6 +900,10 @@ fn one_shard() -> usize {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_one(x: &f64) -> bool {
+    *x == 1.0
 }
 
 impl HfStorage {

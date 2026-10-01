@@ -376,6 +376,9 @@ impl Builder<'_> {
         }
         // An encoder: the final row, projected and normalised as the class says; no head.
         if let OutputSpec::Embedding { proj, normalize } = &s.output {
+            if h.transform.is_some() {
+                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under an embedding output: the transform belongs to a language-model head"));
+            }
             let mut width = d;
             if let Some((w, bias)) = *proj {
                 x = self.linear(&mut bk, x, "embed.proj", w, d, bias, false, "embed.proj")?;
@@ -390,6 +393,12 @@ impl Builder<'_> {
             }
             self.blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: bk.nodes, outputs: vec![x] });
             return Ok(self.blocks.len() - 1);
+        }
+        // `HEAD_TRANSFORM_V1`: dense, activation, norm — then the vocabulary projection.
+        if let Some(t) = &h.transform {
+            x = self.linear(&mut bk, x, "head.transform.dense", d, d, t.bias, false, "head.transform.dense")?;
+            x = bk.f(Op::Act(t.act), vec![x], d, "head.transform.act");
+            x = self.full_norm(&mut bk, x, t.norm, "head.transform.norm", d, false)?;
         }
         if h.pre_scale != 1.0 {
             x = bk.f(Op::Scale { c: h.pre_scale }, vec![x], d, "head.pre_scaled");
@@ -831,7 +840,7 @@ impl Builder<'_> {
         let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
         // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
         if let Some(KvShare::Consumer { slot }) = a.kv_share {
-            if a.output_gate || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
+            if a.output_gate || a.gate.is_some() || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
                 return Err(LowerError::not_lowerable("a KV-sharing layer with a gated, clipped, sinked or K = V attention"));
             }
             if let Some(qk) = &a.qk_norm
@@ -890,6 +899,23 @@ impl Builder<'_> {
             self.linear(bk, x, &n("v"), vn, d, a.v_bias, true, &n("v"))?
         };
         let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, d, false, true, &n("gate"))?) } else { None };
+        // `ATTN_VALUE_SCALE_V1`: a constant on the values (it joins the value narrowing's multiplier in the lowering).
+        if a.v_scale != 1.0 {
+            v = bk.f(Op::Scale { c: a.v_scale }, vec![v], vn, &n("v_scaled"));
+        }
+        // `ATTN_OUTPUT_GATE_SEPARATE_V1`: `act(gate_proj(x))`, per element or per head, from a projection of its own.
+        let sep_gate = match &a.gate {
+            Some(_) if a.output_gate => {
+                return Err(LowerError::not_lowerable("ATTN_OUTPUT_GATE_SEPARATE_V1 beside the fused (q_proj) output gate"));
+            }
+            Some(g) => {
+                let width = if g.per_head { h } else { h * vd };
+                let gl = self.linear(bk, x, &n("gate"), width, d, false, true, &n("gate"))?;
+                let ga = bk.f(Op::Act(g.act), vec![gl], width, &n("gate_act"));
+                Some(if g.per_head { bk.f(Op::GroupRepeat { groups: h, size: vd }, vec![ga], h * vd, &n("gate_rep")) } else { ga })
+            }
+            None => None,
+        };
         if let Some(c) = a.clip_qkv {
             q = bk.f(Op::Clamp { lo: -c, hi: c }, vec![q], qn, &n("q_clip"));
             k = bk.f(Op::Clamp { lo: -c, hi: c }, vec![k], kn, &n("k_clip"));
@@ -976,6 +1002,9 @@ impl Builder<'_> {
             blocks,
         };
         let mut o = bk.f(op, ins, h * vd, &n("ctx"));
+        if let Some(sg) = sep_gate {
+            o = bk.f(Op::Mul, vec![o, sg], h * vd, &n("gated"));
+        }
         if let Some(g) = gate {
             let s = bk.f(Op::Act(Act::Sigmoid), vec![g], qn, &n("gate_act"));
             o = bk.f(Op::Mul, vec![o, s], qn, &n("gated"));

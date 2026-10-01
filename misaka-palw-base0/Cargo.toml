@@ -27,6 +27,8 @@ serde_json.workspace = true
 # RFC-0002 Phase F: the A16 engine written as a PALW-TIR program (the IR's builder and
 # templates), and its artifacts converted into the PALWTIR1 container.
 misaka-palw-tir.workspace = true
+# RFC-0003: the canonical output's digest (the tensor worker's, the court's output close).
+misaka-palw-gen.workspace = true
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 # The A16 fast kernels run output channels in parallel. Safe to add because ADR-0040 Decision E
 # makes the thread count invisible to the result — in a float class this dependency would be a

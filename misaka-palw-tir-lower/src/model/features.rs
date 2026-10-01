@@ -144,6 +144,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ROPE_PROPORTIONAL_V1", Position, "proportional rope", Implemented, [], NoReq, ["fidelity_tiny::gemma4", "fidelity_tiny::gemma4_kvshare"], "Gemma-4's full-attention rope: frequencies on the first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), divided by `factor`."),
     feature!("ROPE_PARTIAL_V1", Position, "rotation of a prefix of each head", Implemented, [], NoReq, ["fidelity_tiny::phi", "fidelity_tiny::stablelm_parallel"], "`partial_rotary_factor` < 1: the rest of the head passes through."),
     feature!("ROPE_INTERLEAVED_V1", Position, "interleaved rotary pairs", Implemented, [], NoReq, ["fidelity_tiny::gptj", "fidelity_tiny::glm"], "(2i, 2i+1) pairs instead of (i, i + d/2)."),
+    feature!("ROPE_REVERSED_V1", Position, "rotation by −θ (the inverse rotate_half)", Implemented, [], NoReq, ["rope_reversed::a_reversed_rope_is_the_inverse_rotation_and_lowers"], "nanochat: [x1·cos + x2·sin, −x1·sin + x2·cos]. Stored as negated inverse frequencies, so every cos/sin table follows; refused over position-dependent or multimodal frequencies."),
     feature!("ROPE_MROPE_V1", Position, "multimodal rope sections", Implemented, [], NoReq, ["fidelity_tiny::qwen3_5"], "Sections of the frequencies take the t/h/w position components; text-only they are all the position."),
     feature!("POS_ALIBI_V1", Position, "ALiBi distance bias", Implemented, ["Iota"], NoReq, ["fidelity_tiny::bloom", "fidelity_tiny::falcon_alibi", "fidelity_tiny::mpt"], "A per-head slope times the key distance, added to the scores."),
     feature!("POS_NOPE_V1", Position, "attention layers without a positional term", Implemented, [], NoReq, ["fidelity_tiny::smollm3"], "SmolLM3, Cohere-2 and Llama-4 global layers."),
@@ -155,6 +156,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_SOFTCAP_V1", Attention, "tanh soft-capping of the scores", Implemented, ["Compare", "Select"], NoReq, ["fidelity_tiny::gemma2"], "cap·tanh(s/cap) through the integer sigmoid."),
     feature!("ATTN_SINKS_V1", Attention, "attention sinks", Implemented, [], NoReq, ["fidelity_tiny::gpt_oss"], "A learned logit per head that joins the softmax and is dropped."),
     feature!("ATTN_OUTPUT_GATE_V1", Attention, "sigmoid gate on the attention output", Implemented, [], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "q_proj also emits a per-head gate."),
+    feature!("ATTN_OUTPUT_GATE_SEPARATE_V1", Attention, "an attention output gate from a projection of its own, per element or per head", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "AfMoE (sigmoid per element) and Laguna (softplus per head): o *= act(gate_proj(x)); a per-head gate is repeated over the head's width (HL GroupRepeat: a Broadcast). Exclusive with the fused q_proj gate."),
+    feature!("ATTN_VALUE_SCALE_V1", Attention, "a constant on the values after their projection", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "MiMo-V2-Flash attention_value_scale: the constant joins the value narrowing's multiplier; no node of its own survives."),
     feature!("ATTN_QK_NORM_V1", Attention, "norm on the queries and keys", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe", "fidelity_tiny::olmoe", "fidelity_tiny::cohere"], "Per-head shared, per-head separate or whole-projection scope."),
     feature!("ATTN_QK_NORM_POST_ROPE_V1", Attention, "the q/k norms act after the rotation", Implemented, [], NoReq, ["qk_norm_post_rope::the_order_of_the_norm_and_the_rotation_is_part_of_the_function"], "Hunyuan: q = rope(q); q = RMSNorm_head(q). Qwen3's order is the reverse. A rotation preserves a head's L2 norm but a per-channel gain does not commute with it, so the orders are different functions (8.9e-2 and 4.6e-2 of the logit scale on the two Hunyuan fixtures). The history keeps the normed, rotated key; no node is new, only their order."),
     feature!("ATTN_V_NORM_V1", Attention, "norm on the values", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
@@ -209,8 +212,14 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("HEAD_LOGIT_SCALE_V1", Head, "constant multiplier on the logits", Implemented, [], NoReq, ["fidelity_tiny::cohere", "fidelity_tiny::granite"], "Cohere, Granite."),
     feature!("HEAD_PRE_SCALE_V1", Head, "constant multiplier before the head", Implemented, [], NoReq, ["real_configs::minicpm"], "MiniCPM."),
     feature!("HEAD_PROJ_OUT_V1", Head, "projection to the embedding width before the head", Implemented, [], NoReq, ["fidelity_tiny::opt_postln_proj"], "OPT-350m."),
+    feature!("HEAD_TRANSFORM_V1", Head, "a prediction head before the vocabulary projection: dense, activation, norm", Implemented, [], NoReq, ["head_transform::a_head_transform_is_dense_act_norm_before_the_head"], "BERT's cls.predictions.transform, ModernBERT-decoder's and RoBERTa's lm_head: h -> norm(act(dense(h))), then the (tied) vocabulary projection and its bias. Roles head.transform.dense and head.transform.norm; no new node kinds."),
     feature!("OUTPUT_LOGITS_V1", Head, "logits output", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Next-token logits."),
     feature!("OUTPUT_EMBEDDING_V1", Head, "embedding output (pooled hidden row)", Implemented, [], NoReq, ["encoders::clip_text_encoder_matches_its_hf_fixture"], "RFC-0003 Embedding profile."),
+    feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Learned positions, post-LN, plain multi-head attention with biases, a plain MLP; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
+    feature!("HEAD_POOL_CLS_V1", Head, "pooling: row 0 of the encoder (the class-start token)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture"], "An option of the Embedding class (RFC-0003 section II.3), chosen by the operator or the sentence-transformers stack, not read from the model's config."),
+    feature!("HEAD_POOL_MEAN_V1", Head, "pooling: the mean over the count real rows", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "As HEAD_POOL_CLS_V1; the mean is over the unpadded rows only."),
+    feature!("HEAD_NORMALIZE_L2_V1", Head, "L2-normalised embedding row (Q30)", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "sentence-transformers' Normalize: the pooled row divided by its norm, the output unit exactly 2^-30."),
+    feature!("OUTPUT_EMBEDDING_CLASS_V1", Model, "an encoder as the pieces of a registered Embedding class (program v2, one-stage pipeline, EmbeddingI32 row)", Implemented, [], NoReq, ["encoders::bert_mean_pooled_and_normalised_matches_its_hf_fixture"], "Lane D's `embedding::lower_bidir_embedding_v1` (RFC-0003 step 7): the pooled vector as the `Final` output of shape [1, d], the pipeline `JobTokens` over prefix, prompt, suffix padded to L, the integer parameters in the v2 program's order. End to end in misaka-palw-sdk/tests/gen_embedding_e2e.rs (registration gate, job, seat replay, court conviction)."),
     // ───────────────────────────── known gaps (Level C): named, not implemented ─────────────────────────────
     feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: a predicted/corrected multi-stream residual", Missing, [], NoReq, [], "Gemma-3n. Expressible with the existing primitives once described; not in the vocabulary yet."),
     feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Missing, [], NoReq, [], "Gemma-3n."),
@@ -302,6 +311,9 @@ fn rope_features(u: &mut Uses, r: &crate::rope::RopeSpec, head_dim: usize, layer
     if f.mrope.is_some() {
         u.add("ROPE_MROPE_V1", Some(layer), "");
     }
+    if f.reversed {
+        u.add("ROPE_REVERSED_V1", Some(layer), "");
+    }
 }
 
 fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
@@ -356,6 +368,12 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 }
                 if a.output_gate {
                     u.add("ATTN_OUTPUT_GATE_V1", lay, "");
+                }
+                if let Some(g) = &a.gate {
+                    u.add("ATTN_OUTPUT_GATE_SEPARATE_V1", lay, format!("{:?}{}", g.act, if g.per_head { " per head" } else { "" }));
+                }
+                if a.v_scale != 1.0 {
+                    u.add("ATTN_VALUE_SCALE_V1", lay, "");
                 }
                 if let Some(q) = &a.qk_norm {
                     u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
@@ -532,7 +550,14 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     // head and output
     match &s.output {
         OutputSpec::Logits => u.add("OUTPUT_LOGITS_V1", None, ""),
-        OutputSpec::Embedding { .. } => u.add("OUTPUT_EMBEDDING_V1", None, ""),
+        OutputSpec::Embedding { .. } => {
+            u.add("OUTPUT_EMBEDDING_V1", None, "");
+            // The BERT lineage: post-LN layers under an embedding output (a causal embedder — CLIP's text tower,
+            // Qwen3-Embedding — is pre-norm and takes the decoder's route).
+            if !s.layers.is_empty() && s.layers.iter().all(|l| matches!(l.residual, Residual::PostNorm { .. })) {
+                u.add("ENC_BIDIR_V1", None, "");
+            }
+        }
     }
     let h = &s.head;
     if matches!(s.output, OutputSpec::Logits) && h.tied {
@@ -552,6 +577,10 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if h.proj_out {
         u.add("HEAD_PROJ_OUT_V1", None, "");
+    }
+    if let Some(t) = &h.transform {
+        u.add("HEAD_TRANSFORM_V1", None, format!("{:?}", t.act));
+        norm_features(&mut u, &t.norm, None);
     }
     // storage
     if let Some(q) = &s.hf.quant {

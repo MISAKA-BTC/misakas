@@ -194,6 +194,10 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             m.put("embed.proj.b", Src::t(format!("{}.bias", m.role("embed_proj")?)))?;
         }
     }
+    if logits && let Some(t) = &spec.head.transform {
+        m.lin("head.transform.dense", "head.transform.dense", t.bias)?;
+        m.norm("head.transform.norm", "head.transform.norm", &t.norm)?;
+    }
     if logits && spec.head.proj_out {
         let w = m.w("proj_out")?;
         m.put("head.proj_out.w", w)?;
@@ -412,6 +416,9 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
         }
     }
     m.lin(&n("o"), "attn.o", a.o_bias)?;
+    if a.gate.is_some() {
+        m.lin(&n("gate"), "attn.gate", false)?;
+    }
     let norms = [(a.qk_norm, "q_norm", h), (a.qk_norm, "k_norm", kv), (a.v_norm, "v_norm", kv)];
     for (qk, which, heads) in norms {
         let Some(qk) = qk else { continue };

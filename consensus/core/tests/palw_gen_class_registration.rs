@@ -96,7 +96,13 @@ fn offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2]) -> PalwGenOffersV
     let encoder = pipeline.stages.iter().find(|st| st.tokens.is_some()).unwrap();
     let max_prompt = encoder.max_trip - (rule.prefix.len() + rule.suffix.len()) as u32;
     PalwGenOffersV1 {
-        steps: (1..=steps_max).collect(),
+        // Two offered step counts: the toy denoiser's scalar 1 is the step count's position in them.
+        steps: vec![steps_max - 1, steps_max],
+        profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 {
+            sampler_id: Hash64::from_bytes([0x5A; 64]),
+            guidance: Some(PalwGenGuidanceOfferV1 { scalar: 0, lo: scalars[0].lo as u16, hi: scalars[0].hi as u16 }),
+            steps_scalar: Some(1),
+        }),
         scalars,
         max_prompt_tokens: max_prompt,
         max_negative_tokens: 0,
@@ -347,6 +353,33 @@ fn the_preflight_refuses_by_name() {
     assert!(palw_gen_class_preflight_v1(&ok, &g).is_ok(), "the image class is judged under the image ceilings");
 }
 
+/// **G9 (the independent second implementation's finding), at the door a registrant reaches it
+/// from.** A class's output header is the registrant's: every dimension legal (`≤ 2^24`) and the
+/// element count past `u64` made `OutputSpecV1::layout` panic with a multiply overflow before the
+/// `2^28` bound ran, and the class preflight calls it on the header as carried. A video class's
+/// header is the one whose kind the preflight lets through to that call (an image class's rank-3
+/// header cannot overflow `u64`), so the overflowing headers below are video and tensor headers; each
+/// is a named `Output` refusal and never a panic.
+#[test]
+fn an_output_header_whose_element_count_overflows_is_refused_by_name() {
+    let ok = class();
+    let f = fence();
+    let big = 1u32 << 24;
+    for (what, profile, spec) in [
+        ("video [2^24, 2^24, 2^24, 3]", PalwGenProfileV1::Video, OutputSpecV1::video_rgb8(big, big, big, 30, 1)),
+        ("video [2^20, 2^20, 2^20, 3]", PalwGenProfileV1::Video, OutputSpecV1::video_rgb8(1 << 20, 1 << 20, 1 << 20, 30, 1)),
+        ("an image [2^24, 2^24, 3]", PalwGenProfileV1::Image, OutputSpecV1::image_rgb8(big, big)),
+        ("an embedding [2^24, 2^24]", PalwGenProfileV1::Embedding, OutputSpecV1::embedding_i32(big, big, 0, false)),
+        ("audio [2^24, 2^24]", PalwGenProfileV1::Audio, OutputSpecV1::pcm_i16(big, big, 48_000)),
+    ] {
+        let mut c = ok.clone();
+        c.profile = profile as u8;
+        c.output = spec;
+        let e = palw_gen_class_preflight_v1(&c, &f).expect_err(what);
+        assert!(matches!(e, PalwGenClassErrorV1::Output(_)), "{what}: {e}");
+    }
+}
+
 /// The toy vision pipeline (`toy-vision.json`) as an Embedding class with one image slot.
 fn vision_class() -> PalwGenClassV1 {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines/toy-vision.json");
@@ -375,6 +408,7 @@ fn vision_class() -> PalwGenClassV1 {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::Embedding(PalwGenEmbeddingOffersV1 { pooling: PALW_GEN_POOLING_CLS_V1, dims: vec![4] }),
         },
         output: OutputSpecV1::embedding_i32(1, 4, 0, false),
         pipeline,
@@ -464,6 +498,7 @@ fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         output: OutputSpecV1::tokens(max_trip),
         pipeline,
@@ -541,6 +576,7 @@ fn a_text_only_pipeline_is_a_text_class() {
             max_source_tokens: 0,
             forced_prompt_prefix: vec![],
             source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
         },
         output: OutputSpecV1::tokens(12),
         pipeline: p,

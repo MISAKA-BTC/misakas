@@ -522,6 +522,13 @@ impl<'a> Session<'a> {
                 let g = a.len() / groups;
                 one((0..*groups).map(|k| (0..g).map(|j| a[k * g + j] as f64 * b[k * g + j] as f64).sum::<f64>() as f32).collect())
             }
+            Op::GroupRepeat { groups, size } => {
+                let a = x(0)?;
+                if a.len() != *groups {
+                    return Err(LowerError::eval(format!("GroupRepeat: {} values for {groups} groups", a.len())));
+                }
+                one(a.iter().flat_map(|v| std::iter::repeat_n(*v, *size)).collect())
+            }
             Op::GatherRows { heads, dim } => {
                 let ids = x(0)?.to_vec();
                 let t = self.param(ins[1], layer)?;
@@ -1458,6 +1465,9 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     let idx = top_k_indices(&choice, k);
     let mut w: Vec<f64> = match r.scoring {
         Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
+        // Softmax weights are the choice scores — masked experts (DeepSeek-V2's group-limited greedy) weigh 0 — unless a
+        // selection bias made the choice scores something else: then the weights stay the unbiased probabilities.
+        Scoring::Softmax if sel_bias.is_none() => idx.iter().map(|i| choice[*i]).collect(),
         Scoring::Softmax | Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
         Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };

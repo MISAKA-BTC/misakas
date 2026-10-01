@@ -121,6 +121,18 @@ pub trait DemandSource {
 /// (spec 04b §15.3–15.4). Empty for a version-1 program.
 pub type ExtraWritersV1<'a> = &'a [(u16, (u16, u16))];
 
+/// **The inputs of a version-2 program's view** (spec 04b §15.4, PALW-TIR-42): view param
+/// `first_input + k` is input `k`, whose every element must lie in `intervals[k]` — the evaluator
+/// holds an input's answer to its declared interval exactly as it holds a param's to its dtype, so a
+/// source that answers a value outside it (a hostile carriage, a mis-derived draw) fails the
+/// evaluation `Operand`, by name, and never lets a value past the bounds admission proved over the
+/// declared intervals. Empty for a version-1 program, which has no inputs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DemandInputsV1<'a> {
+    pub first_input: u16,
+    pub intervals: &'a [(i128, i128)],
+}
+
 /// The work an evaluation did: computed (non-leaf) elements, and reduction terms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DemandWork {
@@ -280,11 +292,11 @@ pub fn eval_demanded(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
-    eval_demanded_ext(program, info, request, source, limits, &[])
+    eval_demanded_ext(program, info, request, source, limits, &[], DemandInputsV1::default())
 }
 
-/// [`eval_demanded`] with writers [`state_writer_v1`] does not see (a version-2 program's view,
-/// spec 04b §15.4).
+/// [`eval_demanded`] with writers [`state_writer_v1`] does not see and the inputs a version-2
+/// program's view reads (spec 04b §15.4, PALW-TIR-42).
 pub fn eval_demanded_ext<'p>(
     program: &'p TirProgramV1,
     info: &'p ProgramInfo,
@@ -292,6 +304,7 @@ pub fn eval_demanded_ext<'p>(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
     extra_writers: ExtraWritersV1<'p>,
+    inputs: DemandInputsV1<'p>,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
     let target_node = match request.target {
         DemandTarget::Node { ctx, node } => Some((ctx, node)),
@@ -313,6 +326,7 @@ pub fn eval_demanded_ext<'p>(
         supplied: Vec::new(),
         range: None,
         extra_writers,
+        inputs,
     };
     let mut out = Vec::with_capacity(request.elements.len());
     match request.target {
@@ -411,10 +425,11 @@ pub fn eval_demanded_range(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
-    eval_demanded_range_ext(program, info, request, source, limits, &[])
+    eval_demanded_range_ext(program, info, request, source, limits, &[], DemandInputsV1::default())
 }
 
-/// [`eval_demanded_range`] with writers [`state_writer_v1`] does not see (spec 04b §15.4).
+/// [`eval_demanded_range`] with writers [`state_writer_v1`] does not see and the inputs a version-2
+/// program's view reads (spec 04b §15.4, PALW-TIR-42).
 pub fn eval_demanded_range_ext<'p>(
     program: &'p TirProgramV1,
     info: &'p ProgramInfo,
@@ -422,6 +437,7 @@ pub fn eval_demanded_range_ext<'p>(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
     extra_writers: ExtraWritersV1<'p>,
+    inputs: DemandInputsV1<'p>,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
     let mut engine = Engine {
         program,
@@ -439,6 +455,7 @@ pub fn eval_demanded_range_ext<'p>(
         supplied: request.supplied.to_vec(),
         range: request.range,
         extra_writers,
+        inputs,
     };
     let ci = engine.context(request.ctx)?;
     let block = &program.blocks[engine.ctxs[ci].block as usize];
@@ -515,6 +532,8 @@ struct Engine<'p, 's> {
     range: Option<(usize, usize)>,
     /// Writers [`state_writer_v1`] does not see (a version-2 program's `post` writes).
     extra_writers: ExtraWritersV1<'p>,
+    /// The inputs of a version-2 program's view and their declared intervals (PALW-TIR-42).
+    inputs: DemandInputsV1<'p>,
 }
 
 fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
@@ -819,6 +838,14 @@ impl Engine<'_, '_> {
                 let v = self.source.param_at(self.ctxs[ci].key.pos, j, layer, index).map_err(refused)?;
                 if !d.dtype.contains(v) {
                     return operand_err(format!("param {}: {v} is not a {}", d.name, d.dtype.name()));
+                }
+                // PALW-TIR-42: an input is held to its declared INTERVAL as well as its dtype, at the
+                // same point — the bounds admission proved assume it.
+                if let Some(k) = j.checked_sub(self.inputs.first_input)
+                    && let Some((lo, hi)) = self.inputs.intervals.get(k as usize)
+                    && (v < *lo || v > *hi)
+                {
+                    return operand_err(format!("input {}: {v} is outside its interval [{lo}, {hi}]", d.name));
                 }
                 Ok(Fetch::Ready(v))
             }

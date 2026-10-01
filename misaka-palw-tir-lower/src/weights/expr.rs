@@ -390,7 +390,7 @@ mod tests {
             json!(["a", {"reshape": [2], "rows": [0, 1]}]),
             json!(["a", {"reshape": [0]}]),
             json!(["a", {"reshape": []}]),
-            json!(["a", {"reshape": [1099511627777]}]),
+            json!(["a", {"reshape": [1099511627777u64]}]),
             json!(["a", {"reshape": [1048576, 1048577]}]),
             json!(["a", {"rows": [0]}]),
             json!(["a", {"rows": [0, 0]}]),
