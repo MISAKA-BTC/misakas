@@ -785,6 +785,16 @@ impl PalwProducerService {
         }
     }
 
+    /// The DA-ladder refusal, said once a class at ERROR level (the attempt lane returns it every tick).
+    fn warn_once_da_ladder(&self, class_id: kaspa_consensus_core::Hash64, refusal: &str) {
+        use std::sync::OnceLock;
+        static WARNED: OnceLock<std::sync::Mutex<std::collections::HashSet<kaspa_consensus_core::Hash64>>> = OnceLock::new();
+        let warned = WARNED.get_or_init(Default::default);
+        if warned.lock().map(|mut w| w.insert(class_id)).unwrap_or(false) {
+            error!("[palw-producer] {refusal}");
+        }
+    }
+
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         // **Armed here or the flag is half a flag.** `resolve_or_chain`'s chain arm goes through
         // the SDK's `resolve_chain_registered`, which refuses unless the SDK ITSELF was armed — so
@@ -1372,6 +1382,20 @@ impl PalwProducerService {
             job,
             self.consensus_config.params.palw_prefill_draw_active_at(template.block.header.daa_score),
         );
+        // **RFC-0002: never an IR claim its data-availability court cannot hear answered** (Phase F's
+        // big-model probe, 2026-09-29). Every IR DA answer is checked by verifying the claim's binding
+        // at the answerable ladder ([`palw_tir_da_answerable_leaves_v1`]); a job of more step leaves
+        // than that is a claim no honest executor can answer a demand of, defaulted for the price of one
+        // accusation. Refused like every class this build cannot defend (the court and dissection
+        // refusals above): not producing costs a block, producing costs the bond.
+        if let Some(Ok(tir)) = self.backends().resolve_tir_v1(facts.class_id, facts.artifact_root) {
+            let answerable = palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, template.block.header.daa_score);
+            let leaves = tir.space().leaf_count_capped(&job, u64::MAX).map_err(|e| format!("the IR job does not count: {e}"))?;
+            if let Some(refusal) = palw_tir_da_ladder_refusal_v1(facts.class_id, leaves, answerable) {
+                self.warn_once_da_ladder(facts.class_id, &refusal);
+                return Err(refusal);
+            }
+        }
         // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
         // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search
@@ -1660,6 +1684,33 @@ pub(crate) async fn palw_until_exit_v1<F: std::future::Future>(exit: &kaspa_util
 /// hybrid, and produces the 8k row, whose held dissection it answers (the panel's held route). Below
 /// the fence, and on every network that does not arm it, the PRODUCER's refusal is what it was; the
 /// panel's canonical claim asks it too, which is new there (node policy, no consensus effect).
+/// **The step leaves an IR claim's data-availability answers can reach under the rules in force at
+/// `daa_score`**: every IR DA answer's check (`check_tir_trace_event_disclosure_v1`, the second IR
+/// fence's step, node and rows answers) verifies the claim's binding at
+/// `PALW_STEP_LEG_MAX_LEAVES` (2^22). Phase F's DA-ladder change under `palw_tir_fence2` moves the
+/// checks to the class's own ladder; this function moves with it — it is the producer guard's one
+/// reading of "the rules in force".
+pub(crate) fn palw_tir_da_answerable_leaves_v1(params: &kaspa_consensus_core::config::params::Params, daa_score: u64) -> u64 {
+    let _ = (params, daa_score);
+    kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES
+}
+
+/// **The producer guard's verdict**: a refusal when an IR job of `job_leaves` step leaves is past what
+/// its DA answers can reach (`answerable`).
+pub(crate) fn palw_tir_da_ladder_refusal_v1(
+    class_id: kaspa_consensus_core::Hash64,
+    job_leaves: u64,
+    answerable: u64,
+) -> Option<String> {
+    (job_leaves > answerable).then(|| {
+        format!(
+            "this node will not produce for IR class {class_id}: its job commits {job_leaves} step leaves, past the {answerable} a \
+             data-availability answer is checked at under the rules in force, so no demand of such a claim can be answered and one \
+             accusation defaults it (RFC-0002 Phase F, the DA ladder)"
+        )
+    })
+}
+
 pub(crate) fn palw_dissection_refusal_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     params: &kaspa_consensus_core::config::params::Params,
@@ -1773,6 +1824,47 @@ mod answer_only_tests {
         assert!(!src.contains("self.flow_context.broadcast_palw_material(message, material)"), "no capture announced past the switch");
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_answer_only: args.palw_drill_answer_only && palw_private_drill,"), "a private drill's only");
+    }
+}
+
+#[cfg(test)]
+mod da_ladder_tests {
+    use super::{palw_tir_da_answerable_leaves_v1, palw_tir_da_ladder_refusal_v1};
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::config::params::palw_t12_shipped_params;
+    use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+
+    /// **The producer never produces an IR claim its DA court cannot hear answered** (Phase F's
+    /// big-model probe): the answerable ladder under t12's live rules is the checks' 2^22 at every
+    /// height; a job at it is produced, one leaf past it refused by name (a 70B-shaped job runs
+    /// 2^24–2^29); and the attempt path asks the guard with the job it is about to run, before it
+    /// runs it.
+    #[test]
+    fn a_job_past_the_answerable_da_ladder_is_never_produced() {
+        let params = palw_t12_shipped_params();
+        for daa in [0, 2_000, u64::MAX / 2] {
+            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_STEP_LEG_MAX_LEAVES, "DAA {daa}");
+        }
+        let class = Hash64::from_bytes([0x70; 64]);
+        assert!(palw_tir_da_ladder_refusal_v1(class, 1_260_000, PALW_STEP_LEG_MAX_LEAVES).is_none(), "SmolLM2 at 512");
+        assert!(palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_LEAVES).is_none(), "at the ladder");
+        let why = palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES + 1, PALW_STEP_LEG_MAX_LEAVES).expect("past it");
+        assert!(why.contains("will not produce") && why.contains(&class.to_string()), "{why}");
+        assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_STEP_LEG_MAX_LEAVES).is_some(), "a 70B-shaped job");
+        let src = include_str!("palw_producer.rs");
+        let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
+        let at = src
+            .find("if let Some(Ok(tir)) = self.backends().resolve_tir_v1(facts.class_id, facts.artifact_root) {")
+            .expect("the guard");
+        let guard = &src[at..at + 900];
+        assert!(guard.contains("tir.space().leaf_count_capped(&job, u64::MAX)"), "the job it is about to run");
+        assert!(
+            guard.contains("palw_tir_da_ladder_refusal_v1(facts.class_id, leaves, answerable)")
+                && guard.contains("return Err(refusal);")
+        );
+        let job = src.find("let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(").expect("the job");
+        let reservation = src.find("let need = self.backends().role_memory_need_for_backend_or_chain_v1(").expect("the reservation");
+        assert!(job < at && at < reservation, "after the job is fixed, before a byte of the run is reserved");
     }
 }
 

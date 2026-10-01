@@ -12,9 +12,18 @@
 //! ```text
 //! cargo run --release -p misaka-palw-tir-exec --bin tir-exec-bench -- [--layers 28] [--prefill 64] [--decode 32] [--profile]
 //! cargo run --release -p misaka-palw-tir-exec --features legacy-bench --bin tir-exec-bench -- --legacy [...]
+//! cargo run --release -p misaka-palw-tir-exec --features node --bin tir-exec-bench -- --geo 70b --container <path> [--reuse] [--prefill 16]
 //! ```
 //!
 //! One engine per process (each holds ~1.6–1.8 GB of weights).
+//!
+//! **`--geo 1.5b|32b|70b`** picks the geometry (Qwen2.5-1.5B, a Qwen2.5-32B shape, a Llama-3-70B shape in
+//! this program's Qwen2 conventions). **`--container <path>`** (feature `node`) is the seat's case for a
+//! large class: the synthetic params are written as a PALWTIR1 container, one instance at a time (never
+//! all in memory), then mapped as a node maps an IR artifact (`TirArtifactV1`) and run from the mapping —
+//! reporting the write, the load, the streamed inventory root pass, the inventory tree's build and size,
+//! the time of each position (cold, then warm page cache) and the resident set. `--reuse` maps an
+//! existing file of the same geometry instead of writing it.
 
 use std::borrow::Cow;
 use std::time::Instant;
@@ -39,6 +48,10 @@ struct Geo {
 
 /// Qwen2.5-1.5B.
 const QWEN25_1_5B: Geo = Geo { layers: 28, d: 1536, heads: 12, kv: 2, hd: 128, ff: 8960, vocab: 151_936 };
+/// A Qwen2.5-32B shape (≈ 31 G `i8`).
+const QWEN25_32B: Geo = Geo { layers: 64, d: 5120, heads: 40, kv: 8, hd: 128, ff: 27_648, vocab: 152_064 };
+/// A Llama-3-70B shape, in this program's Qwen2 conventions (≈ 69 G `i8`).
+const LLAMA3_70B: Geo = Geo { layers: 80, d: 8192, heads: 64, kv: 8, hd: 128, ff: 28_672, vocab: 128_256 };
 
 /// How a param is filled.
 #[derive(Clone, Copy, Debug)]
@@ -278,7 +291,12 @@ fn rss_mib() -> Option<u64> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mut g = QWEN25_1_5B;
+    let mut g = match arg(&args, "--geo", String::from("1.5b")).as_str() {
+        "1.5b" => QWEN25_1_5B,
+        "32b" => QWEN25_32B,
+        "70b" => LLAMA3_70B,
+        other => panic!("--geo {other}: one of 1.5b, 32b, 70b"),
+    };
     g.layers = arg(&args, "--layers", g.layers);
     let prefill: usize = arg(&args, "--prefill", 64);
     let decode: usize = arg(&args, "--decode", 32);
@@ -314,6 +332,14 @@ fn main() {
     }
     if args.iter().any(|a| a == "--fused-kernels") {
         fused_kernels(arg(&args, "--steps", 24));
+        return;
+    }
+    if let Some(path) = args.iter().position(|a| a == "--container").and_then(|i| args.get(i + 1)) {
+        #[cfg(feature = "node")]
+        container(&g, std::path::Path::new(path), args.iter().any(|a| a == "--reuse"), prefill);
+        #[cfg(not(feature = "node"))]
+        panic!("--container {path}: build with --features node");
+        #[allow(unreachable_code)]
         return;
     }
     let t = Instant::now();
@@ -389,6 +415,84 @@ fn main() {
                 count / decode as u64
             );
         }
+    }
+}
+
+/// **A large class as a seat holds it** (`--container`): the synthetic params written as a PALWTIR1
+/// container one instance at a time (each instance's fill seeded by its `(param, layer)`, so a rewrite
+/// is byte-identical), mapped as a node maps an IR artifact, and run from the mapping.
+#[cfg(feature = "node")]
+fn container(g: &Geo, path: &std::path::Path, reuse: bool, prefill: usize) {
+    use misaka_palw_tir_exec::node::TirArtifactV1;
+    let (program, fills) = qwen2_program(g);
+    let seeded =
+        |j: u16, layer: Option<u16>| Rng(0x9e37_79b9_7f4a_7c15 ^ (u64::from(j) << 32) ^ u64::from(layer.map_or(0xFFFF, |l| l)));
+    if !(reuse && path.exists()) {
+        let t = Instant::now();
+        let mut written = 0u64;
+        misaka_palw_tir_artifact::write_container_v1(
+            path,
+            &program,
+            Vec::new(),
+            [0x61; 64],
+            "{\"model_id\":\"bench/synthetic\"}".into(),
+            &mut |j, l| {
+                let d = &program.params[j as usize];
+                let n: usize = d.shape.iter().map(|x| *x as usize).product();
+                let bytes = fill(fills[j as usize], n, &mut seeded(j, l)).slice().to_le_bytes();
+                written += bytes.len() as u64;
+                Ok(bytes)
+            },
+        )
+        .expect("the container");
+        println!(
+            "container: {:.2} GiB written in {:.1} s ({:.2} GiB/s); RSS {} MiB",
+            written as f64 / (1u64 << 30) as f64,
+            t.elapsed().as_secs_f64(),
+            written as f64 / (1u64 << 30) as f64 / t.elapsed().as_secs_f64(),
+            rss_mib().unwrap_or(0)
+        );
+    }
+    let t = Instant::now();
+    let artifact = TirArtifactV1::open(path).expect("the container maps");
+    println!("load (open, check, map, bind in place): {:.2} s; RSS {} MiB", t.elapsed().as_secs_f64(), rss_mib().unwrap_or(0));
+    let t = Instant::now();
+    let (root, leaves) = artifact.inventory_root().expect("the inventory root");
+    println!(
+        "inventory root (streamed pass): {:.1} s, {leaves} leaves, root {}…; RSS {} MiB",
+        t.elapsed().as_secs_f64(),
+        &root.to_string()[..16],
+        rss_mib().unwrap_or(0)
+    );
+    let t = Instant::now();
+    let tree = artifact.inventory_tree().expect("the inventory tree");
+    assert_eq!(tree.root(), root, "the held tree roots where the streamed pass does");
+    println!(
+        "inventory tree (second pass, every level held): {:.1} s, ≈ {:.0} MiB of nodes; RSS {} MiB",
+        t.elapsed().as_secs_f64(),
+        (2 * tree.leaf_count() as u64 * 64) as f64 / (1u64 << 20) as f64,
+        rss_mib().unwrap_or(0)
+    );
+    let mut exec = TirExecutor::new(artifact.plan(), artifact.params()).expect("every param bound in place");
+    let mut times = Vec::with_capacity(prefill);
+    for i in 0..prefill {
+        let tok = ((i as u64 * 7919 + 1013) % g.vocab as u64) as u32;
+        let s = Instant::now();
+        exec.step(tok, &mut NoSink).expect("a step");
+        times.push(s.elapsed().as_secs_f64());
+        if i < 4 || i + 1 == prefill {
+            println!("  position {i}: {:.3} s; RSS {} MiB", times[i], rss_mib().unwrap_or(0));
+        }
+    }
+    let warm = &times[times.len().min(1)..];
+    if !warm.is_empty() {
+        println!(
+            "positions from the mapping: first {:.3} s (cold), then {:.3} s mean over {} (weights {:.2} GiB per position)",
+            times[0],
+            warm.iter().sum::<f64>() / warm.len() as f64,
+            warm.len(),
+            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64 / (1u64 << 30) as f64
+        );
     }
 }
 
