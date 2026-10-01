@@ -506,6 +506,10 @@
   "FR-31": {
    "title": "a constant scale on the attention values",
    "size": "S"
+  },
+  "FR-32": {
+   "title": "lightning attention: linear attention with a constant per-head decay",
+   "size": "M"
   }
  }
 }

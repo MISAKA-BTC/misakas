@@ -51,21 +51,26 @@
  },
  "olmo_hybrid": {
   "class": "feature",
-  "frs": [],
-  "short": "gated delta rule layers with SEPARATE q/k/v convolutions, allow_neg_eigval and different norm placement per layer type: needs a read of the layer, not yet done",
-  "evidence": "config and tensor names only"
+  "frs": [
+   "FR-16"
+  ],
+  "short": "gated delta rule layers with SEPARATE q/k/v projections and convolutions (the GdnLayout enum has only Qwen3-Next's fused and Qwen3.5's split-projection layouts), allow_neg_eigval (beta times 2) and a different norm placement per layer type; the same split-conv shape as Kimi's KDA",
+  "evidence": "config and tensor names (q_conv1d, k_conv1d, v_conv1d, a_proj, b_proj, g_proj, o_norm)"
  },
  "minimax": {
   "class": "feature",
-  "frs": [],
-  "short": "lightning (linear) attention layers: not yet read",
-  "evidence": "the reader's own refusal"
+  "frs": [
+   "FR-32",
+   "FR-30"
+  ],
+  "short": "lightning attention: linear attention with a constant per-head decay (Mamba-2's update without dt, conv or skip), an RMS norm over all heads and a SEPARATE sigmoid output gate; hybrid with softmax attention layers",
+  "evidence": "read from modeling_minimax.py"
  },
  "recurrent_gemma": {
   "class": "feature",
   "frs": [],
-  "short": "RG-LRU recurrent blocks: a new mixer, not yet read",
-  "evidence": "config keys only"
+  "short": "RG-LRU recurrent blocks (a gated linear recurrence with a learned decay and a convolution) beside local attention: a new mixer, not yet read in detail",
+  "evidence": "config keys (lru_width, conv1d_width, block_types)"
  },
  "granitemoeshared_shared": {
   "class": "feature",
