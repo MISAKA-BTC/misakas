@@ -210,7 +210,7 @@ impl PalwPanelService {
         let Some(artifact_root) = job.artifact_root.filter(|_| super::palw_operator_da::palw_operator_da_replayable_v1(job)) else {
             return unjudged(duty, "the lane does not replay this claim");
         };
-        let backend = match self.resolve_backend(session, job.class_id, artifact_root) {
+        let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
             Ok(backend) => backend,
             Err(why) => return unjudged(duty, &format!("its class does not resolve on this host ({why})")),
         };
@@ -220,16 +220,16 @@ impl PalwPanelService {
             return unjudged(duty, "its block's header is not held here");
         };
         let key = (claim, ctx.job_id);
-        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-            backend.as_ref(),
-            job.class_id,
-            artifact_root,
-            Some(&ctx),
-            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-            |id| self.chain_carriage_v1(session, id),
-        );
-        let reserved = match self.reserve_replay_v1(super::palw_operator_da::PALW_OPERATOR_DA_REPLAY_ROLE_V1, &need, job.class_id, claim) {
-            Ok(reserved) => reserved,
+        // At the widest prefill run the ledger grants, on this duty's own instance — the one the
+        // replay below runs on (int-10.2 A2).
+        let backends = self.backends();
+        let role = super::palw_operator_da::PALW_OPERATOR_DA_REPLAY_ROLE_V1;
+        let reserved = match self.reserve_replay_at_widest_run_v1(role, backend.as_mut(), job.class_id, claim, |b| {
+            backends.role_memory_need_for_backend_or_chain_v1(b, job.class_id, artifact_root, Some(&ctx), super::FULL_SEAT_V1, |id| {
+                self.chain_carriage_v1(session, id)
+            })
+        }) {
+            Ok((reserved, _)) => reserved,
             Err(why) => {
                 crate::palw_backends::note_throttled_v1("panel-audit-duty-ledger", || {
                     format!("[{PALW_PANEL}] claim {claim}: the audit replay waits: {why} (ADR-0160 F-Q)")

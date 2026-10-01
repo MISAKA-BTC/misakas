@@ -43,5 +43,17 @@ move_source_spec() { # <id> <host>
 # there is 0.3 GiB (ollama, journald, seeder, faucet, tunnel), so 1,536 leaves 1.2 GiB of margin and the sum 23,808.
 move_reserve_mib() { case $1 in 113) echo 4096 ;; ibm) echo 1536 ;; 5104) echo 4096 ;; *) return 1 ;; esac; }
 
+# int-10.2 D1: the TARGET host's memory configuration, as its install-<host>.sh sets it (lib.sh writes the moved seat's
+# launch script and unit from it): the host pinner and the host ledger on a multi-seat host (t12-replay-memory-1001.md
+# §5). .113 has one seat until b7 arrives — then install-113.sh gets the same two lines, and this table with it. A host
+# that caps the prefill run (PREFILL_RUN_MAX in its install-<host>.sh) sets it here too.
+move_host_memory_env() { # <host> — sets HOST_PINNER and HOST_LEDGER_DIR
+    case $1 in
+        5104|ibm) HOST_PINNER=1; HOST_LEDGER_DIR=/run/misaka-palw ;;
+        113) HOST_PINNER=0; HOST_LEDGER_DIR= ;;
+        *) return 1 ;;
+    esac
+}
+
 # Every public node a moved seat needs up while it is away (the 8k class keeps a margin of one ready seat):
 MOVE_REQUIRE_UP=(169.58.232.113:26311 169.58.39.220:26311 169.58.39.220:26321)

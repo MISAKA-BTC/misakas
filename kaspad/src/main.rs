@@ -24,6 +24,25 @@ pub fn main() {
 
     let args = parse_args();
 
+    // int-10.2 D1: `--palw-host-pinner` is a process that holds the host's pinned class artifacts and
+    // nothing else — no chain, no appdir, no bond — so their page cache is charged to its own cgroup and not
+    // to whichever seat loaded first (`palw_artifact_pin::run_host_pinner_v1`). It logs to the console only
+    // (the journal, under its unit) and never returns.
+    if args.palw_host_pinner {
+        kaspa_core::log::init_logger(None, &args.log_level);
+        kaspad_lib::palw_host_ledger::arm_shared_host_ledger_v1(
+            args.palw_host_ledger_dir.as_deref().map(std::path::Path::new),
+            kaspad_lib::palw_host_ledger::PALW_HOST_MEMBER_PINNER_V1,
+        );
+        let policy = kaspad_lib::palw_artifact_pin::arm_artifact_pin_policy_v1(
+            true,
+            args.palw_artifact_pin_max_bytes,
+            kaspa_utils::sysinfo::SystemInfo::default().total_memory,
+        );
+        let paths: Vec<std::path::PathBuf> = args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect();
+        kaspad_lib::palw_artifact_pin::run_host_pinner_v1(&paths, policy);
+    }
+
     // audit H-01: refuse to launch a MAINNET node while the premine custody ceremony is pending.
     // The ceremony is COMPLETE as of the 2026-06-17 re-genesis (the premine — 10B since the
     // 2026-08-30 cap, ADR-0059 — is locked to the operator custody address,

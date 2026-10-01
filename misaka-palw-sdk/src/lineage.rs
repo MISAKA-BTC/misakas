@@ -20,8 +20,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// **How much of a mapped class's weights a node keeps in memory** (ADR-0112): the policy a
-/// lineage whose container is a mapping honours at [`PalwModelLineageV1::load`]. A lineage whose
-/// artifact is owned whole (the dense tier's 1.7 GiB files) has nothing to decide and ignores it.
+/// lineage whose container is a mapping it reads THROUGH honours at [`PalwModelLineageV1::load`] —
+/// the Qwen3.6 tier, whose residency reads the always-set and the routed experts into owned buffers.
+/// A lineage whose replay reads the whole file in place has nothing to decide here and ignores it:
+/// the dense tier maps its `.palwart` and reads the int8 slabs straight out of the page cache (one
+/// copy on the host, evicted and refaulted under pressure unless the node pins it — kaspad
+/// `palw_artifact_pin`), and an IR container binds its params in place the same way.
 pub use misaka_palw_base0::qwen36::Qwen36ResidencyPolicyV1 as PalwWeightResidencyV1;
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;

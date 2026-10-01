@@ -285,6 +285,12 @@ shared across the host + a 3.4 GiB peak while an 8k replay runs; a busy seat ave
 at the peak and every core: the host swaps all night. The rule: **seats per host ≤ ⌊(RAM − 4 GiB) / (3.2 + 3.4 GiB)⌋ = 3** on
 a 24 GiB host (live set + one heavy replay each), and ≤ 1 per 2 cores. Target: 3 seats on 5.104, 3 on ibm, 2 on .113.
 
+*With int-10.2* (`t12-replay-memory-1001.md`): the artifacts are pinned and counted ONCE for the host, and a replay's trace scratch
+follows the run width the ledger can grant, so the rule becomes **seats per host ≤ ⌊(RAM − 4 GiB − P) / (3.2 + R_W)⌋**, P = the
+distinct pinned artifacts (8k 1.68 + IR 1.74 = 3.42 GiB), R_W = an 8k replay at width W (1.74 GiB at 64, 0.87 at 32, 0.45 at 16):
+on 24 GiB, 3 at W = 64, **4 at W ≤ 32** — and still ≤ 1 per 2 cores (4 on 8). `move-host.sh preflight add` counts the pinned
+artifacts once for the host when the staged kaspad pins.
+
 **Which.** **b7 → .113** (b6's host: load 1.6 on 8 cores, 83 % idle, no swap) and **b3 → ibm** (load 2–3, 79 % idle, 19 GB
 available). b7 is the seat the kit made as its own unit (mode `new`, nothing of the route-matrix session's under it); b3 is the
 heaviest seat on 5.104 (RES 6.4 GB). b2, b4, b5 stay (b2's borsh port 26313 is what `misaka-dnsseeder-t12` there asks).

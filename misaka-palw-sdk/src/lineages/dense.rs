@@ -1,7 +1,10 @@
 //! **The dense-container lineage: the derived floor, converted dense classes, and the A16 tier.**
 //!
 //! One lineage, because one container: everything here rides a `.palwart` file (or derives its
-//! bytes from the RC seed), decodes whole through `decode_artifact_file_v1`, and is tabled by
+//! bytes from the RC seed) — mapped read-only and decoded in place on a POSIX node
+//! (`decode_artifact_file_mapped_v1`: the int8 slabs stay page-cache pages, shared on the host; only
+//! the a16 store and the small tables are copied), read whole through `decode_artifact_file_v1`
+//! where the platform cannot map — and is tabled by
 //! `misaka_palw_base0::classes::canonical_classes_v1` — the registry this module deliberately does
 //! NOT restate. The SDK wraps that table rather than copying it, so a new dense-family member is
 //! still exactly what it was: a geometry constant and a table row in `classes.rs`, visible here

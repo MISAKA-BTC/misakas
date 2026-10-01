@@ -272,6 +272,27 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// every family byte for byte what it was.
     fn set_held_answerability_v1(&mut self, _armed: bool) {}
 
+    /// **The prefill run width this instance executes at** (ADR-0117 Decision 2; the 2026-10-01
+    /// replay-memory note, `docs/design/palw/t12-replay-memory-1001.md`): how many prompt positions a
+    /// family that walks its prefill a layer at a time runs together, holding their committed traces
+    /// until they are captured. A NODE-LOCAL choice, like the cache's runtime profile: every width
+    /// commits the same rows and the same roots, and nothing the chain reads depends on it — it sizes
+    /// one term of the role's working set
+    /// ([`crate::palw_resource_profile_v1::PalwRuntimeLimitsV1::prefill_run_positions`]) and the time
+    /// the run takes. `None` for a family, or an instance whose plan cannot run a prefill a layer at a
+    /// time, whose memory does not move with it: the node then prices the role once, as it always did.
+    fn prefill_run_positions_v1(&self) -> Option<u32> {
+        None
+    }
+
+    /// **Run this instance's prefill `positions` at a time** — set by the node on the instance it
+    /// reserved memory for, at the width it derived that reservation's need at, and read by the
+    /// execution the reservation pays for: one value, carried by the instance from the reservation to
+    /// the run, so the figure reserved and the run that spends it cannot disagree. A family whose
+    /// memory does not move with the width keeps the default no-op; a family that has one reads `0`
+    /// as `1`.
+    fn set_prefill_run_positions_v1(&mut self, _positions: u32) {}
+
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;

@@ -992,7 +992,7 @@ impl PalwPanelService {
         let Some(artifact_root) = job.artifact_root.filter(|_| palw_operator_da_replayable_v1(job)) else {
             return unjudged(book, "the lane does not replay this claim", String::new());
         };
-        let backend = match self.resolve_backend(session, job.class_id, artifact_root) {
+        let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
             Ok(backend) => backend,
             Err(why) => return unjudged(book, "its class does not resolve on this host", format!(" ({why})")),
         };
@@ -1002,24 +1002,29 @@ impl PalwPanelService {
             return unjudged(book, "its block's header is not held here", String::new());
         };
         let key = (claim, ctx.job_id);
-        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
-            backend.as_ref(),
-            job.class_id,
-            artifact_root,
-            Some(&ctx),
-            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
-            |id| self.chain_carriage_v1(session, id),
-        );
-        let reserved = match self.reserve_replay_v1(PALW_OPERATOR_DA_REPLAY_ROLE_V1, &need, job.class_id, claim) {
-            Ok(reserved) => reserved,
-            Err(why) => {
-                book.replay_held(current_daa);
-                crate::palw_backends::note_throttled_v1("panel-operator-da-ledger", || {
-                    format!("[{PALW_PANEL}] claim {claim}: the operator's replay waits: {why} (lane B)")
-                });
-                return;
-            }
-        };
+        // At the widest prefill run the ledger grants, on this duty's own instance — the one the
+        // replay below runs on (int-10.2 A2).
+        let backends = self.backends();
+        let reserved =
+            match self.reserve_replay_at_widest_run_v1(PALW_OPERATOR_DA_REPLAY_ROLE_V1, backend.as_mut(), job.class_id, claim, |b| {
+                backends.role_memory_need_for_backend_or_chain_v1(
+                    b,
+                    job.class_id,
+                    artifact_root,
+                    Some(&ctx),
+                    super::FULL_SEAT_V1,
+                    |id| self.chain_carriage_v1(session, id),
+                )
+            }) {
+                Ok((reserved, _)) => reserved,
+                Err(why) => {
+                    book.replay_held(current_daa);
+                    crate::palw_backends::note_throttled_v1("panel-operator-da-ledger", || {
+                        format!("[{PALW_PANEL}] claim {claim}: the operator's replay waits: {why} (lane B)")
+                    });
+                    return;
+                }
+            };
         info!(
             "[{PALW_PANEL}] claim {claim}: judging the claim by replaying the anchor's job off the loop before any accusation \
              (lane B's replay gate, judge {rank} of {of}; producer {:?}, {} outside Valid signer(s))",
