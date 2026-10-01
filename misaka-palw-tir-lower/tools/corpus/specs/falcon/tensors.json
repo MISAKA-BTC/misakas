@@ -1,0 +1,125 @@
+{
+ "transformer.h.0.ln_attn.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_attn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_mlp.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_mlp.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "transformer.h.0.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.h.0.self_attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.h.0.self_attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.h.1.ln_attn.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_attn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_mlp.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_mlp.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "transformer.h.1.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.h.1.self_attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.h.1.self_attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.ln_f.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.ln_f.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.word_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

@@ -1,0 +1,872 @@
+{
+ "audio_encoder.decoder.layers.0.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "audio_encoder.decoder.layers.0.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.0.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   8,
+   7
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.bias_hh_l0": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.bias_hh_l1": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.bias_ih_l0": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.bias_ih_l1": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.weight_hh_l0": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.weight_hh_l1": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.weight_ih_l0": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.decoder.layers.1.lstm.weight_ih_l1": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.decoder.layers.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.decoder.layers.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   8,
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.1.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.1.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.1.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   8,
+   3
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.4.block.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   4,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.4.shortcut.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.decoder.layers.4.shortcut.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.4.shortcut.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   8,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.6.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.6.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.6.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   4,
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.1.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   2
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.1.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   2,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.1.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   2,
+   4,
+   3
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.7.block.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   2,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.7.shortcut.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.decoder.layers.7.shortcut.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.7.shortcut.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   4,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.9.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.9.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   1,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.decoder.layers.9.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   1,
+   4,
+   7
+  ]
+ },
+ "audio_encoder.encoder.layers.0.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.0.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.0.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   7
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.1.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   2
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.1.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   2,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.1.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   2,
+   4,
+   3
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.1.block.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   2,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.1.shortcut.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.1.shortcut.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.1.shortcut.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   4,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.encoder.layers.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   4,
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.1.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.1.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.1.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   4,
+   8,
+   3
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.3.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.3.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.4.block.3.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   4,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.4.shortcut.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.encoder.layers.4.shortcut.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.4.shortcut.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   8,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.6.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "audio_encoder.encoder.layers.6.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.6.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   8,
+   4
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.bias_hh_l0": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.bias_hh_l1": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.bias_ih_l0": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.bias_ih_l1": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.weight_hh_l0": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.weight_hh_l1": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.weight_ih_l0": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.encoder.layers.7.lstm.weight_ih_l1": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "audio_encoder.encoder.layers.9.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "audio_encoder.encoder.layers.9.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   1,
+   1
+  ]
+ },
+ "audio_encoder.encoder.layers.9.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   16,
+   7
+  ]
+ },
+ "decoder.lm_heads.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "decoder.lm_heads.1.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "decoder.model.decoder.embed_tokens.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   17,
+   32
+  ]
+ },
+ "decoder.model.decoder.embed_tokens.1.weight": {
+  "dtype": "F32",
+  "shape": [
+   17,
+   32
+  ]
+ },
+ "decoder.model.decoder.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.encoder_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.fc1.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.fc2.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "decoder.model.decoder.layers.0.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.0.self_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.encoder_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.fc1.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.fc2.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "decoder.model.decoder.layers.1.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "decoder.model.decoder.layers.1.self_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.SelfAttention.k.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.SelfAttention.o.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.SelfAttention.q.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.SelfAttention.v.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.0.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.1.DenseReluDense.wi.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.1.DenseReluDense.wo.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "text_encoder.encoder.block.0.layer.1.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "text_encoder.encoder.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "text_encoder.shared.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

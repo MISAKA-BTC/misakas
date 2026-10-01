@@ -1,0 +1,169 @@
+{
+ "model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp.input_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   128,
+   32
+  ]
+ },
+ "model.layers.0.mlp.output_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.router.layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.self_attention.experts.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.self_attention.experts.input_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   256,
+   32
+  ]
+ },
+ "model.layers.0.self_attention.experts.output_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32,
+   256
+  ]
+ },
+ "model.layers.0.self_attention.experts.router.layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.0.self_attention.kv_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "model.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp.input_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   128,
+   32
+  ]
+ },
+ "model.layers.1.mlp.output_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.router.layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.self_attention.experts.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.self_attention.experts.input_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   256,
+   32
+  ]
+ },
+ "model.layers.1.self_attention.experts.output_linear.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32,
+   256
+  ]
+ },
+ "model.layers.1.self_attention.experts.router.layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.1.self_attention.kv_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "model.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

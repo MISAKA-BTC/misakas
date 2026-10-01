@@ -1,0 +1,224 @@
+{
+ "embedder.embedder.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   3,
+   7,
+   7
+  ]
+ },
+ "embedder.embedder.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "embedder.embedder.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "embedder.embedder.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "embedder.embedder.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "embedder.embedder.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.0.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   8,
+   3,
+   3
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.0.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.0.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "encoder.stages.0.layers.0.layer.0.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.0.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.0.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.1.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   8,
+   3,
+   3
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.1.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.1.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "encoder.stages.0.layers.0.layer.1.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.1.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.0.layers.0.layer.1.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.0.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   8,
+   3,
+   3
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.0.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.0.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "encoder.stages.1.layers.0.layer.0.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.0.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.0.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.1.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   16,
+   3,
+   3
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.1.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.1.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "encoder.stages.1.layers.0.layer.1.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.1.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.layer.1.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.shortcut.convolution.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   8,
+   1,
+   1
+  ]
+ },
+ "encoder.stages.1.layers.0.shortcut.normalization.bias": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.shortcut.normalization.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "encoder.stages.1.layers.0.shortcut.normalization.running_mean": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.shortcut.normalization.running_var": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "encoder.stages.1.layers.0.shortcut.normalization.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ }
+}

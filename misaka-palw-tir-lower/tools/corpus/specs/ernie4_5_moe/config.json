@@ -1,0 +1,38 @@
+{
+  "architectures": [
+    "Ernie4_5_MoeForCausalLM"
+  ],
+  "bos_token_id": 1,
+  "dtype": "bfloat16",
+  "eos_token_id": 2,
+  "hidden_act": "silu",
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "max_position_embeddings": 128,
+  "model_type": "ernie4_5_moe",
+  "moe_intermediate_size": 1536,
+  "moe_k": 6,
+  "moe_layer_end_index": 1,
+  "moe_layer_interval": 1,
+  "moe_layer_start_index": 1,
+  "moe_norm_min": 1e-12,
+  "moe_num_experts": 64,
+  "moe_num_shared_experts": 2,
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "num_key_value_heads": 2,
+  "output_router_logits": false,
+  "pad_token_id": 0,
+  "rms_norm_eps": 1e-05,
+  "rope_parameters": {
+    "rope_theta": 500000.0,
+    "rope_type": "default"
+  },
+  "router_aux_loss_coef": 0.001,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_bias": false,
+  "use_cache": true,
+  "vocab_size": 64
+}
