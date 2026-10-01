@@ -118,23 +118,16 @@ pub fn unpatchify_index(c: usize, gh: usize, gw: usize, p: usize) -> Vec<u32> {
     out
 }
 
-/// Declare the unpatchify table as the `Idx` param `<name>.idx` `[C, gh·p, gw·p]`.
-pub fn declare_unpatchify(pb: &mut ProgramBuilder, sink: &mut ParamSink, name: &str, c: usize, gh: usize, gw: usize, p: usize) -> Ref {
-    sink.put(
-        pb,
-        &format!("{name}.idx"),
-        DType::Idx,
-        &[c as u32, (gh * p) as u32, (gw * p) as u32],
-        unpatchify_index(c, gh, gw, p).iter().map(|v| *v as i128).collect(),
-    )
-}
-
-/// **Unpatchify**: `rows:[gh·gw, p·p·C]` to `[C, gh·p, gw·p]`, one `Gather` by [`unpatchify_index`] (clamped into the
-/// rows' range: a clamp that never fires and makes the analysis total for any registered table).
-pub fn lower_unpatchify(b: &mut BlockBuilder<'_>, rows: Ref, idx: Ref, elems: usize) -> Ref {
-    let flat = b.reshape_fixed(rows, &[elems as u32]);
-    let at = b.clamp(idx, 0, elems as i64 - 1, DType::Idx);
-    b.gather(flat, at, 0, 0)
+/// **Unpatchify by static maps**: `rows:[gh·gw, p·p·C]` (element `(h·gw + w, (pi·p + qi)·C + ch)`) to `[C, gh·p, gw·p]`
+/// (element `(ch, h·p + pi, w·p + qi)`) — diffusers' `nhwpqc → nchpwq`: `[gh, gw, p, p·C]` → `[gh, p, gw, p·C]` →
+/// `[gh·p, gw, p, C]` → `[C, gh·p, gw, p]`, read as `[C, gh·p, gw·p]`. No table (see [`super::conv`] on why).
+pub fn lower_unpatchify(b: &mut BlockBuilder<'_>, rows: Ref, c: usize, gh: usize, gw: usize, p: usize) -> Ref {
+    let (c, gh, gw, p) = (c as u32, gh as u32, gw as u32, p as u32);
+    let r = b.reshape_fixed(rows, &[gh, gw, p, p * c]);
+    let r = b.transpose(r, &[0, 2, 1, 3]); // [gh, p, gw, p·C]
+    let r = b.reshape_fixed(r, &[gh * p, gw, p, c]);
+    let r = b.transpose(r, &[3, 0, 1, 2]); // [C, gh·p, gw, p]
+    b.reshape_fixed(r, &[c, gh * p, gw * p])
 }
 
 #[cfg(test)]
@@ -197,6 +190,7 @@ mod tests {
         }
     }
 
+    /// The static unpatchify is diffusers' `nhwpqc → nchpwq`, and the table the float reference reads.
     #[test]
     fn unpatchify_is_the_einsum_nhwpqc_to_nchpwq() {
         let (c, gh, gw, p) = (3usize, 2usize, 3usize, 2usize);
@@ -205,13 +199,8 @@ mod tests {
         let rows: Vec<i128> = (0..n * p * p * c).map(|i| i as i128).collect();
         let r2 = rows.clone();
         let y = run_one_block(
-            |pb, sink| {
-                (
-                    sink.put(pb, "rows", DType::I32, &[n as u32, (p * p * c) as u32], r2),
-                    declare_unpatchify(pb, sink, "un", c, gh, gw, p),
-                )
-            },
-            |b, (r, idx)| lower_unpatchify(b, r, idx, n * p * p * c),
+            |pb, sink| sink.put(pb, "rows", DType::I32, &[n as u32, (p * p * c) as u32], r2),
+            |b, r| lower_unpatchify(b, r, c, gh, gw, p),
         );
         assert_eq!(y.shape, vec![c, gh * p, gw * p]);
         for ch in 0..c {

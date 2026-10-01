@@ -20,7 +20,7 @@ use misaka_palw_tir::builder::{BlockBuilder, ProgramBuilder};
 use misaka_palw_tir::library::Narrowing;
 use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::program_v2::{InputSource, OutputDecl, TirProgramV2};
-use misaka_palw_tir::{DType, Ref, Rounding, TensorType};
+use misaka_palw_tir::{DType, Dim, Ref, Rounding, TensorType};
 
 use super::act::{Act, lower_act_codes};
 use super::attn::{JointAttnSpec, LOGIT_Q, attn_narrowings, softmax_committed};
@@ -111,7 +111,18 @@ fn make_stage<D>(
     Ok((program, sink))
 }
 
-/// The nearest-neighbour ×2 table: for each element `(c, 2h, 2w)` the flat index of `(c, h, w)`.
+/// **Nearest-neighbour ×2 by static maps**: `x:[C, H, W]` read as `[C·H, 1, W, 1]`, broadcast to `[C·H, 2, W, 2]` and read as
+/// `[C, 2H, 2W]` — element `(c, 2h + a, 2w + b)` is `(c, h, w)`. No table: a gather's data element sits at a value's index,
+/// which the chain cannot read when it prices a close (see [`super::conv`]).
+pub fn lower_upsample_nearest(b: &mut BlockBuilder<'_>, x: Ref, c: usize, h: usize, w: usize) -> Ref {
+    let (c, h, w) = (c as u32, h as u32, w as u32);
+    let r = b.reshape_fixed(x, &[c * h, 1, w, 1]);
+    let t = b.broadcast(r, &[Dim::Fixed(c * h), Dim::Fixed(2), Dim::Fixed(w), Dim::Fixed(2)]);
+    b.reshape_fixed(t, &[c, 2 * h, 2 * w])
+}
+
+/// The nearest-neighbour ×2 table (the reference [`lower_upsample_nearest`] is held to): for each element `(c, 2h, 2w)` the flat
+/// index of `(c, h, w)`.
 pub fn upsample_index(c: usize, h: usize, w: usize) -> Vec<u32> {
     let mut out = Vec::with_capacity(c * h * w * 4);
     for ch in 0..c {
@@ -314,29 +325,14 @@ fn upsample_stage(vae: &Vae, cal: &Calib, prefix: &str, s: &str, c: usize, h: us
     let s_uc = cal.scale16(&uc_site);
     let q = qconv(vae, &format!("{prefix}.conv"), 2 * h, 2 * w, 1, s_in, s_uc);
     let spec = q.spec;
-    let idx = upsample_index(c, h, w);
-    let n = (c * h * w) as u32;
     let (c32, h32, w32) = (c as u32, h as u32, w as u32);
     let (program, sink) = make_stage(
         DType::I16,
         &[c32, h32, w32],
         (-32_767, 32_767),
-        |pb, sink| {
-            (
-                sink.put(
-                    pb,
-                    &format!("{prefix}.nearest_idx"),
-                    DType::Idx,
-                    &[c32, 2 * h32, 2 * w32],
-                    idx.iter().map(|v| *v as i128).collect(),
-                ),
-                q.declare(pb, sink, &format!("{prefix}.conv")),
-            )
-        },
-        |b, (idx, rc): (Ref, QConvRefs), x| {
-            let flat = b.reshape_fixed(x, &[n]);
-            let at = b.clamp(idx, 0, n as i64 - 1, DType::Idx);
-            let up = b.gather(flat, at, 0, 0); // [C, 2H, 2W]
+        |pb, sink| q.declare(pb, sink, &format!("{prefix}.conv")),
+        |b, rc: QConvRefs, x| {
+            let up = lower_upsample_nearest(b, x, c, h, w); // [C, 2H, 2W]
             lower_conv(b, up, &rc, &spec)
         },
     )?;
@@ -515,6 +511,22 @@ mod tests {
             cal.merge(&run);
         }
         cal
+    }
+
+    /// The static upsample is the table's gather, element for element.
+    #[test]
+    fn the_static_upsample_is_the_nearest_tables_gather() {
+        use super::super::testkit::run_one_block;
+        let (c, h, w) = (3usize, 2usize, 4usize);
+        let x: Vec<i128> = (0..c * h * w).map(|i| i as i128 * 7 - 50).collect();
+        let x2 = x.clone();
+        let up = run_one_block(
+            |pb, sink| sink.put(pb, "x", DType::I16, &[c as u32, h as u32, w as u32], x2),
+            |b, xs| lower_upsample_nearest(b, xs, c, h, w),
+        );
+        assert_eq!(up.shape, vec![c, 2 * h, 2 * w]);
+        let want: Vec<i128> = upsample_index(c, h, w).iter().map(|i| x[*i as usize]).collect();
+        assert_eq!(up.data, want);
     }
 
     #[test]
