@@ -935,11 +935,12 @@ mod tests {
             "palw-drill-answer-only",
             "palw-drill-refuse-leaf-evidence",
             "palw-drill-tamper-fp-leaf",
+            "palw-drill-tamper-eval",
         ] {
             let text = help_of(id);
             assert!(!text.contains("  "), "--{id}'s help has a run of spaces: {text}");
         }
-        for id in ["palw-drill-answer-only", "palw-drill-refuse-leaf-evidence", "palw-drill-tamper-fp-leaf"] {
+        for id in ["palw-drill-answer-only", "palw-drill-refuse-leaf-evidence", "palw-drill-tamper-fp-leaf", "palw-drill-tamper-eval"] {
             assert!(help_of(id).contains("OR A SALTED TESTNET-12 DRILL ONLY"), "--{id}");
         }
     }

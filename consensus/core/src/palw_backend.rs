@@ -781,6 +781,18 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Ok((digest.root(), digest.leaf_count()))
     }
 
+    /// **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): the tree a possession proof of this class opens**, when it
+    /// is not the tree of the class's registered root. A composite candidate's registered root is
+    /// `H(parent_class ‖ parent_root ‖ adapter_root ‖ P)` — no inventory root, and no multiproof opens it —
+    /// so its possession is proved over its ADAPTER section: this is that section's own root (the chain's
+    /// `adapter_root`) and leaf count. [`Self::artifact_readiness_material`] and
+    /// [`Self::artifact_readiness_material_streamed_v1`] then serve THAT tree: its root, its leaf hashes,
+    /// the drawn leaves rebased to it (the draw is over this leaf count). `None` — the default — for every
+    /// class whose registered root is its inventory's, which is every class but a composite candidate.
+    fn artifact_possession_tree_v1(&self) -> Option<Result<(crate::Hash64, u32), String>> {
+        None
+    }
+
     /// **What a readiness multiproof is built from, in one pass**: the root, every leaf's hash, and
     /// the drawn leaves' bytes — the inputs of `palw_artifact_multiproof_v1`, in the draw's order.
     ///

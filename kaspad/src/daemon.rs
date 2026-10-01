@@ -1863,6 +1863,32 @@ Do you confirm? (y/n)";
                         canonical_interval_daa: args.palw_canonical_interval_daa,
                         improve_evaluate: args.palw_improve_evaluate,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
+                        improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
+                        improve_tamper: match args.palw_drill_tamper_eval.as_deref() {
+                            None => None,
+                            // Devnet, simnet, or a salted testnet-12 drill — a private chain by construction.
+                            Some(spec) if !palw_private_drill => {
+                                panic!(
+                                    "--palw-drill-tamper-eval={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                                )
+                            }
+                            Some(spec) => match crate::palw_improve_watch::palw_improve_tamper_spec_v1(spec) {
+                                Ok(tamper) => {
+                                    warn!(
+                                        "PALW DRILL: this node's first evaluation of {} will be committed with the fault {}. \
+                                         It is meant to be disputed by an honest replay and convicted by the evaluation court.",
+                                        if tamper.line_prefix.is_empty() {
+                                            "any line".to_string()
+                                        } else {
+                                            format!("a line starting {}", tamper.line_prefix)
+                                        },
+                                        tamper.fault.describe()
+                                    );
+                                    Some(tamper)
+                                }
+                                Err(why) => panic!("--palw-drill-tamper-eval={spec}: {why}"),
+                            },
+                        },
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
                             // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
                             // private chain by construction; never public testnet-12.

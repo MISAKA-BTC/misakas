@@ -563,6 +563,12 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_registry_v1()
     }
 
+    /// RFC-0004: the improvement protocol's status at the tip — lines, epochs, and the composite classes
+    /// (the node lane's second door; empty below `palw_improvement_v1`).
+    pub fn palw_improvement_status_v1(&self) -> kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1 {
+        self.consensus.palw_improvement_status_v1()
+    }
+
     /// ADR-0088 Decision 12: one version of a line, with its usage and evaluations.
     pub fn palw_model_version_v1(
         &self,

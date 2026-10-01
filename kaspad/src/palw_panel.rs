@@ -3322,6 +3322,11 @@ pub struct PalwPanelConfig {
     pub improve_evaluate: bool,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
+    /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
+    /// drill's evidence transport on one machine; default beside the node's other retention.
+    pub improve_capture_dir: Option<PathBuf>,
+    /// **DRILL ONLY (D-M3): commit one evaluation with a fault** (`--palw-drill-tamper-eval`).
+    pub improve_tamper: Option<crate::palw_improve_watch::PalwImproveTamperV1>,
     /// Where THIS node's producer persists the material behind its own attempts, when it produces.
     ///
     /// A court can open long after a claim licensed, and the in-memory pool does not live that
@@ -4056,6 +4061,9 @@ impl PalwPanelService {
             .map(|c| c.class_id)
             .collect();
         let mut out = Vec::new();
+        // RFC-0004 §6.7: the chain's composite records, read once and only if a held class is a composite.
+        let mut composite_records: Option<Vec<(Hash64, kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1)>> =
+            None;
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
             // memory to replay this class proves nothing for it — the standing proof expires by
@@ -4208,6 +4216,48 @@ impl PalwPanelService {
                     palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1, palw_readiness_v2_opening_is_the_challenge_v1,
                     palw_seat_readiness_message_v2,
                 };
+                // **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite candidate is possessed over its ADAPTER section.**
+                // Its registered root commits two trees (the parent's and the section's) and opens neither, so the proof
+                // the chain checks opens the section's own root — the `adapter_root` the candidate's acceptance recorded —
+                // and the draw is over the section's leaves. The parent is proved as the class of its own the seat holds
+                // (the chain counts a seat ready for a composite only with that proof standing too). The chain verifies
+                // the proof against its record, so a composite the chain holds no record of yet (registered, not yet
+                // admitted as a candidate) is not proved: a fee for a proof the fold would refuse.
+                let (possession_root, leaf_count) = match backend.artifact_possession_tree_v1() {
+                    None => (class.artifact_root, leaf_count),
+                    Some(Err(e)) => {
+                        self.readiness_note(
+                            class.class_id,
+                            format!("no proof — the composite's adapter section cannot be rooted ({e})"),
+                        );
+                        continue;
+                    }
+                    Some(Ok((section_root, section_leaves))) => {
+                        let records = composite_records.get_or_insert_with(|| session.palw_improvement_status_v1().composite_classes);
+                        match records.iter().find(|(id, _)| *id == class.class_id) {
+                            Some((_, record))
+                                if record.adapter_root == section_root && record.artifact_root() == class.artifact_root =>
+                            {
+                                (section_root, section_leaves)
+                            }
+                            Some(_) => {
+                                self.readiness_note(
+                                    class.class_id,
+                                    "no proof — the chain's composite record names another adapter section than the one this node holds".to_string(),
+                                );
+                                continue;
+                            }
+                            None => {
+                                self.readiness_note(
+                                    class.class_id,
+                                    "no proof — the chain holds no composite record for this class yet (not admitted as a candidate)"
+                                        .to_string(),
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                };
                 // Built once per (class, span): the draw is a function of (class, bond, span), so the
                 // proof is too, and a tick that could not submit it must not pay for it again.
                 let cached = self.readiness_built.lock().unwrap().get(&class.class_id).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
@@ -4313,7 +4363,7 @@ impl PalwPanelService {
                         };
                         drop(leaves);
                         drop(proof_bytes);
-                        if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, class.artifact_root) {
+                        if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, possession_root) {
                             self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
                             continue;
                         }
@@ -20862,6 +20912,31 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert_eq!(
             palw_readiness_proof_materialized_need_v1(649_480),
             649_480 * 64 * 4 + crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1
+        );
+    }
+
+    /// **RFC-0004 §6.7 (spec 17 §17.7.1): a composite is possessed over its adapter section, and only against the chain's
+    /// record.** The duty asks the backend for its possession tree before it draws, reads the chain's composite records for a
+    /// composite (a class the chain holds none of, or whose record names another section, is not proved: the fold would refuse
+    /// the proof), draws over the section's own leaf count and checks the proof against the section's root — never against a
+    /// composite's registered root, which no multiproof opens.
+    #[test]
+    fn the_readiness_duty_proves_a_composite_over_its_adapter_section_against_the_chains_record() {
+        let source = production();
+        let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
+        let duties = &duties[..duties.find("\n    }\n").expect("its end")];
+        let tree = duties.find("backend.artifact_possession_tree_v1()").expect("the possession tree");
+        let records = duties.find("session.palw_improvement_status_v1().composite_classes").expect("the chain's composite records");
+        let draw = duties.find("palw_readiness_v2_draw_v1(&seed_v2, leaf_count)").expect("the draw");
+        assert!(tree < records && records < draw, "possession tree, then the record, then the draw over the section's leaves");
+        assert!(
+            duties.contains("record.adapter_root == section_root && record.artifact_root() == class.artifact_root"),
+            "the record names this section and this class"
+        );
+        assert!(duties.contains("verify_artifact_multiproof_v1(&proof, possession_root)"), "the proof is checked against the section's root");
+        assert!(
+            !duties.contains("verify_artifact_multiproof_v1(&proof, class.artifact_root)"),
+            "never against a composite's registered root"
         );
     }
 

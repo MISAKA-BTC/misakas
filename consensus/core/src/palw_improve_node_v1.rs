@@ -97,6 +97,11 @@ pub struct PalwImprovementEpochStatusV1 {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwImprovementStatusV1 {
     pub lines: Vec<PalwImprovementLineStatusV1>,
+    /// Every class admitted as a composite candidate with the reference it was admitted with (decision
+    /// 7a), in class-id order — kept for as long as the class lives, which the epoch rows are not
+    /// (RFC-0004 §6.7: a seat proves a composite's possession over its adapter section, which only this
+    /// record names).
+    pub composite_classes: Vec<(Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1)>,
 }
 
 impl PalwChainStateV2 {
@@ -204,7 +209,10 @@ impl PalwChainStateV2 {
                 epochs,
             });
         }
-        PalwImprovementStatusV1 { lines }
+        PalwImprovementStatusV1 {
+            lines,
+            composite_classes: self.improvement_composite_classes_v1().map(|(class, r)| (*class, *r)).collect(),
+        }
     }
 }
 

@@ -286,7 +286,79 @@ pub(crate) fn palw_improve_status_json_v1(
             })
         })
         .collect();
-    json!({ "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines, "evaluation": evaluation })
+    // The composite candidate classes the chain recorded: what a seat's possession proof of one opens (the adapter
+    // section's root), kept for as long as the class lives.
+    let composite_classes: Vec<serde_json::Value> = status
+        .composite_classes
+        .iter()
+        .map(|(class, r)| {
+            json!({
+                "class": class.to_string(), "parent_class": r.parent_class.to_string(), "parent_root": r.parent_root.to_string(),
+                "adapter_root": r.adapter_root.to_string(), "p": r.p,
+            })
+        })
+        .collect();
+    json!({
+        "schema": "misaka.palw.improve-status.v1", "daa": daa, "lines": lines, "evaluation": evaluation,
+        "composite_classes": composite_classes,
+    })
+}
+
+/// **A drill's tamper** (`--palw-drill-tamper-eval=<fault>[@<line>]`): the fault this node's executor commits
+/// ([`PalwEvalFaultV1`]: `leaf:<index>`, `output` or `score`) and the line whose evaluation it spoils — a hex prefix
+/// of the line id, empty for any. Once per run of the node: one lie, then honest (a convicted bond is slashed once).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PalwImproveTamperV1 {
+    pub fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1,
+    pub line_prefix: String,
+}
+
+impl PalwImproveTamperV1 {
+    /// Does the tamper spoil an evaluation of this line?
+    pub(crate) fn applies_to(&self, line: &Hash64) -> bool {
+        line.to_string().starts_with(&self.line_prefix)
+    }
+}
+
+/// Parse `--palw-drill-tamper-eval`'s value: `<fault>` or `<fault>@<line hex prefix>`.
+pub(crate) fn palw_improve_tamper_spec_v1(spec: &str) -> Result<PalwImproveTamperV1, String> {
+    let (fault, line) = match spec.split_once('@') {
+        Some((fault, line)) => (fault, line.trim().to_ascii_lowercase()),
+        None => (spec, String::new()),
+    };
+    if !line.chars().all(|c| c.is_ascii_hexdigit()) || line.len() > 128 {
+        return Err(format!("`{line}` is not a hex prefix of a line id"));
+    }
+    Ok(PalwImproveTamperV1 { fault: misaka_palw_sdk::improve_eval::PalwEvalFaultV1::parse(fault)?, line_prefix: line })
+}
+
+/// **A dispute this node found**: an evaluation claim whose replay on this node's weights differs, with where it
+/// parts from the honest run when the accused's capture was at hand, and how the dispute stands (what was filed, or
+/// why nothing was).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PalwImproveDisputeV1 {
+    pub claim_id: Hash64,
+    pub job_id: Hash64,
+    /// `leaf`, `output` or `score` (located from the capture), or `unlocated`: the replay differs and nothing says where.
+    pub kind: &'static str,
+    pub detail: String,
+    pub found_daa: u64,
+    pub filing: String,
+}
+
+/// The disputes as the status file lists them.
+pub(crate) fn palw_improve_disputes_json_v1(disputes: &[PalwImproveDisputeV1]) -> serde_json::Value {
+    serde_json::Value::Array(
+        disputes
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "claim": d.claim_id.to_string(), "job": d.job_id.to_string(), "kind": d.kind, "detail": d.detail,
+                    "found_daa": d.found_daa, "filing": d.filing,
+                })
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -362,7 +434,11 @@ mod tests {
         };
         assert_eq!(palw_improve_admitting_classes_v1(None), None, "no registry read: every class is planned");
         assert_eq!(palw_improve_admitting_classes_v1(Some(&read(false, 500, None))), None, "an inactive registry governs nothing");
-        assert_eq!(palw_improve_admitting_classes_v1(Some(&read(true, 50, None))), None, "inside the grace nothing is judged by evidence");
+        assert_eq!(
+            palw_improve_admitting_classes_v1(Some(&read(true, 50, None))),
+            None,
+            "inside the grace nothing is judged by evidence"
+        );
         assert_eq!(
             palw_improve_admitting_classes_v1(Some(&read(true, 500, None))),
             Some([h(1), h(4), h(5), h(6), h(8)].into()),
@@ -380,7 +456,8 @@ mod tests {
         let mut chain: PalwImproveMemChainV1 = misaka_palw_sdk::improve::testing::chain(PalwEpochStateV1::Submission, false);
         let line = h(misaka_palw_sdk::improve::testing::LINE);
         let head = h(misaka_palw_sdk::improve::testing::HEAD);
-        let mut node = PalwImproveNodeV1 { holds: [head].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
+        let mut node =
+            PalwImproveNodeV1 { holds: [head].into(), evaluates: true, prefetch_full: false, admitting: None, ceilings: None };
         let mut watch = PalwImproveWatchV1::default();
         let tick = watch.tick(&chain, &node, 160);
         assert_eq!(tick.moved, vec![(line, 3, PalwEpochStateV1::Submission)]);
@@ -430,6 +507,56 @@ mod tests {
         assert_eq!(json["daa"], 123);
         assert_eq!(json["lines"], serde_json::json!([]));
         assert_eq!(json["evaluation"], serde_json::json!([]));
+        assert_eq!(json["composite_classes"], serde_json::json!([]));
+    }
+
+    /// **The status lists the chain's composite classes** (what a seat's possession proof of one opens), and the
+    /// drill's tamper spec and dispute records have their one reader each.
+    #[test]
+    fn the_status_lists_composite_classes_and_the_drill_specs_parse() {
+        use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
+        use misaka_palw_sdk::improve_eval::PalwEvalFaultV1;
+        let status = kaspa_consensus_core::palw_improve_node_v1::PalwImprovementStatusV1 {
+            lines: vec![],
+            composite_classes: vec![(
+                h(0xC1),
+                PalwTirCompositeRefV1 { parent_class: h(0xA0), parent_root: h(0xA1), adapter_root: h(0xA2), p: 17 },
+            )],
+        };
+        let json = palw_improve_status_json_v1(&status, &[], 5);
+        let c = &json["composite_classes"][0];
+        assert_eq!(c["class"], h(0xC1).to_string());
+        assert_eq!(
+            (c["parent_class"].as_str(), c["adapter_root"].as_str(), c["p"].as_u64()),
+            (Some(h(0xA0).to_string().as_str()), Some(h(0xA2).to_string().as_str()), Some(17))
+        );
+        // The tamper spec.
+        let any = palw_improve_tamper_spec_v1("leaf:7").expect("a spec");
+        assert_eq!((any.fault, any.line_prefix.as_str()), (PalwEvalFaultV1::Leaf(7), ""));
+        assert!(any.applies_to(&h(1)) && any.applies_to(&h(2)));
+        let line = h(0x11E).to_string();
+        let one = palw_improve_tamper_spec_v1(&format!("output@{line}")).expect("a spec with a line");
+        assert_eq!(one.fault, PalwEvalFaultV1::Output);
+        assert!(one.applies_to(&h(0x11E)) && !one.applies_to(&h(0x11F)), "only the named line");
+        assert_eq!(palw_improve_tamper_spec_v1("score@AB").expect("case-insensitive").line_prefix, "ab");
+        for bad in ["", "leaf", "leaf:x", "tree", "leaf:1@zz"] {
+            assert!(palw_improve_tamper_spec_v1(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(palw_improve_tamper_spec_v1("output@").expect("an empty line is any").line_prefix, "");
+        // The dispute records.
+        let json = palw_improve_disputes_json_v1(&[PalwImproveDisputeV1 {
+            claim_id: h(1),
+            job_id: h(2),
+            kind: "leaf",
+            detail: "leaf 9".to_string(),
+            found_daa: 77,
+            filing: "not filed".to_string(),
+        }]);
+        assert_eq!(
+            (json[0]["kind"].as_str(), json[0]["found_daa"].as_u64(), json[0]["claim"].as_str()),
+            (Some("leaf"), Some(77), Some(h(1).to_string().as_str()))
+        );
+        assert_eq!(palw_improve_disputes_json_v1(&[]), serde_json::json!([]));
     }
 
     /// **The status file carries the evaluation view** — the drill's watcher counts the claims, their
@@ -493,14 +620,20 @@ mod tests {
         };
         let json = palw_improve_status_json_v1(&Default::default(), &[view], 400);
         let e = &json["evaluation"][0];
-        assert_eq!((e["epoch"].as_u64(), e["items"].as_array().map(Vec::len), e["jobs"].as_array().map(Vec::len)), (Some(3), Some(2), Some(1)));
+        assert_eq!(
+            (e["epoch"].as_u64(), e["items"].as_array().map(Vec::len), e["jobs"].as_array().map(Vec::len)),
+            (Some(3), Some(2), Some(1))
+        );
         assert_eq!((e["items"][0]["prompt_disclosed"].as_bool(), e["items"][0]["prompt_len"].as_u64()), (Some(true), Some(4)));
         assert_eq!((e["items"][1]["prompt_disclosed"].as_bool(), e["items"][1]["dropped"].as_bool()), (Some(false), Some(true)));
         assert_eq!(e["items"][0]["reference"], "ExactKey");
         let j = &e["jobs"][0];
         assert_eq!((j["subject"].as_str(), j["kind"].as_str(), j["item"].as_u64()), (Some("Candidate"), Some("ExactMatch"), Some(1)));
         assert_eq!(j["subject_class"].as_str(), Some(h(0xC1).to_string().as_str()));
-        assert_eq!((j["claim"]["accepted_daa"].as_u64(), j["claim"]["final_daa"].as_u64(), j["claim"]["voided"].as_bool()), (Some(351), Some(502), Some(false)));
+        assert_eq!(
+            (j["claim"]["accepted_daa"].as_u64(), j["claim"]["final_daa"].as_u64(), j["claim"]["voided"].as_bool()),
+            (Some(351), Some(502), Some(false))
+        );
         assert_eq!(j["claim"]["bond"], format!("{}:2", TransactionId::from_u64_word(9)));
     }
 }

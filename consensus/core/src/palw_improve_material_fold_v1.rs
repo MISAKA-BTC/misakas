@@ -94,6 +94,13 @@ impl PalwChainStateV2 {
         self.improvement_composite_classes.get(class_id).copied()
     }
 
+    /// **Every composite candidate class with its reference**, in class-id order (the node lane's read: a
+    /// seat proves a composite's possession over its adapter section, RFC-0004 §6.7, and only this record
+    /// names the section's root — it outlives the epoch row that admitted the candidate).
+    pub fn improvement_composite_classes_v1(&self) -> impl Iterator<Item = (&Hash64, &PalwTirCompositeRefV1)> + '_ {
+        self.improvement_composite_classes.iter()
+    }
+
     /// **Does any material table hold a row?** The `improvement-material/v1` root block's and the
     /// carriage's one guard: all empty on every network below the fence.
     pub fn has_improvement_material_rows_v1(&self) -> bool {
@@ -1840,6 +1847,11 @@ mod tests {
         let ok = submission(CAND_A, reference, vec![(public.dataset_id, 1_000)], vec![]);
         let s = try_at(&s, 1_200, |b, x| apply_candidate_submitted_v1(b, x, &ok, &bond(ALICE))).expect("admitted");
         assert_eq!(s.improvement_composite_class(&h(CAND_A)), reference.composite(), "recorded for its openings");
+        // The node's read lists the record for as long as the class lives (a seat proves a composite's possession
+        // over the adapter section the record names).
+        let listed: Vec<_> = reference.composite().map(|r| (h(CAND_A), r)).into_iter().collect();
+        assert_eq!(s.improvement_composite_classes_v1().map(|(c, r)| (*c, *r)).collect::<Vec<_>>(), listed);
+        assert_eq!(s.improvement_status_v1().composite_classes, listed, "the status door carries it");
         assert_eq!(s.improvement_candidates(&h(LINE), 1).len(), 1);
         assert_eq!(s.improvement_line_classes(&h(LINE)), vec![h(LINE)]);
         conserved(&s);

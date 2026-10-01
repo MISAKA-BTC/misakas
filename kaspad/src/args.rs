@@ -380,6 +380,15 @@ pub struct Args {
     /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
     /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
     pub palw_improve_artifact_dir: Option<String>,
+    /// **RFC-0004 (D-M3): where evaluation captures are retained and read** — the executor writes the capture of
+    /// every evaluation claim it carries here, a challenger (`--palw-challenge`) reads the accused's from here.
+    /// The evidence transport of a drill on one machine; default beside the node's other retention.
+    pub palw_improve_capture_dir: Option<String>,
+    /// **DRILL ONLY (RFC-0004 D-M3): commit one evaluation with a fault** — `leaf:<index>`, `output` or `score`,
+    /// optionally `@<line id hex prefix>`: the executor's first evaluation of that line is a self-consistent lie
+    /// (its roots bind what it committed) that an honest replay disputes. Salted drill chains and devnet only.
+    #[serde(skip)]
+    pub palw_drill_tamper_eval: Option<String>,
     /// **Run the IR fused kernels** (RFC-0002 §7, Phase G): every IR backend this node builds runs
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
@@ -611,6 +620,8 @@ impl Default for Args {
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
             palw_improve_artifact_dir: None,
+            palw_improve_capture_dir: None,
+            palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
@@ -1686,6 +1697,30 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-improve-capture-dir")
+                .long("palw-improve-capture-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (RFC-0004, D-M3): the directory this node retains the capture of every evaluation claim it carries in \
+                     (<claim id>.capture) and reads an accused claim's capture from when it replays one that differs \
+                     (--palw-challenge). The evidence transport of a drill on one machine; default: beside the node's retention.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tamper-eval")
+                .long("palw-drill-tamper-eval")
+                .env("KASPAD_PALW_DRILL_TAMPER_EVAL")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW DRILL ONLY (RFC-0004, D-M3): commit this node's first evaluation of a line with a fault — leaf:<index>, \
+                     output or score, optionally @<line id hex prefix> — with the claim's roots re-derived so the lie is \
+                     self-consistent and only a replay can see it. Exists so the evaluation court can be shown convicting on a \
+                     live chain. DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
             Arg::new("palw-tir-fused-kernels")
                 .long("palw-tir-fused-kernels")
                 .action(clap::ArgAction::SetTrue)
@@ -2624,6 +2659,8 @@ impl Args {
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
+            palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
+            palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
