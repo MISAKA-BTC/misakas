@@ -2676,3 +2676,162 @@ interval carries no operand, param or image, because the court convicts on PALW-
 
 There are no `Hist` tile leaves (RFC-0003 §II.2.1, finding G14). The stages are concatenated stage-major, so
 every leaf is adjudicated from leaves that precede it.
+
+### 15.15 The tensor claim's carriage (RFC-0003 §I.4; findings G23, G24)
+
+**Status.** Dormant: nothing below `palw_fp_job_v5` over `palw_gen_v1` reads any of it, and every shipped
+preset carries neither. Built in `kaspa-consensus-core` (`palw_gen_claim_v1`, `palw_gen_claim_fold_v1`,
+`palw_gen_one_move_v1`), the validator's two doors and the processor's walk, with `palw_gen_claim_wire`,
+`palw_gen_claim_fold` and `palw_gen_one_move` as the evidence; **not built**: the node's worker production,
+seat replay and filing loops (§15.15.8). A second implementation computes everything below from this text and
+the RFC's §I.4.
+
+**15.15.1 The version-10 job.** A tensor job rides the lane's job type `PalwFreePromptJobV3` at
+`version = 10`. Its Borsh is the V3 fields in this order, then the tail, and nothing else:
+
+```
+version u16 = 10 ‖ network_domain Hash64 ‖ class_id Hash64 ‖ executor_bond (txid Hash64, index u32) ‖
+executor_pubkey (u32 length, bytes) ‖ operator_id Hash64 ‖ anchor_block Hash64 ‖ anchor_daa u64 ‖
+job_nonce [u8; 32] ‖ tokenizer_id Hash64 ‖ prompt_token_ids_hash Hash64 ‖ prompt_tokens u32 ‖
+decode_token_limit u32 ‖ max_context_tokens u32 ‖ privacy_mode u8 ‖ prompt_mode u8 ‖ sampling_seed [u8; 32] ‖
+temperature_q u32 ‖ borsh(PalwGenJobTailV1 { seed: [u8; 32], body: PalwGenBodyV1 })
+```
+
+(no decode configuration: the V4 tail is absent at this version). `PalwGenBodyV1` and the reconstruction are §15.13's.
+The shell is one encoding per behaviour: `tokenizer_id`, `prompt_token_ids_hash`, `prompt_tokens`,
+`decode_token_limit`, `max_context_tokens`, `sampling_seed` and `temperature_q` are zero and a non-zero value is
+refused by name (`ShellNotCanonical`); a version-10 job with a decode configuration or without its tail is
+`NotATensorJob`. The job the chain reads is `PalwGenJobV1 { version: 1, envelope, seed, body }` (the envelope
+from the shell's envelope fields, the seed and body from the tail), and **the job id is `palw_gen_job_id_v1`
+of that reconstruction** — the lane's `fp_job_id_v3` of a version-10 job returns it; a version-10 value that is
+not a well-formed tensor job has an id under the key `"misaka-palw/gen/fp-job-id/malformed/v1"` over its
+Borsh (an id is total over whatever a struct holds; validation refuses the job by name).
+
+**15.15.2 The commitment** (`PalwFreePromptCommitmentV3` over that job, in the lane's payload and under the
+lane's signature, `fp_claim_id_v3`):
+
+| field | value |
+| --- | --- |
+| `trace_root` | the step root (§15.14: `palw_gen_step_root_v1` over the stage roots) |
+| `output_root` | the canonical output root (§15.13, `misaka_palw_gen::output_root_v1`) |
+| `schedule_root` | zero |
+| `execution_root` | `palw_gen_tensor_execution_root_v1(job_id, class_id, work_leaves, trace_root, output_root)` — recomputed at acceptance |
+| `decode_tokens_executed`, `stop_reason` | `0`, `ExactBudgetReached` |
+| `work_leaves` | the step tree's leaf count, and the chain's own count of the job's step space |
+| `trace_manifest_root`, `trace_chunk_count`, `trace_retention_daa` | zero, `1`, zero |
+
+Under `PublicDa` the payload's `prompt_token_ids` are the job's prompt ids then its negative ids; under `PanelDa`
+none. **The stateless check, in order** (`palw_fp_gen_claim_check_v1`; each refusal is named, none corrects):
+`PayloadVersion`; the job (`NotATensorJob`, `ShellNotCanonical`); `NetworkDomainMismatch` (where the walk
+knows the domain); the privacy mode (`PrivacyModeNotOffered`, `PanelDaNotArmed`); `PromptModeNotOffered` (the
+user's only); `MissingPublicKey`; `SignatureLength` (ML-DSA-87's); `EmptyIdsEncoding` (an id list is the zero
+hash and a count of 0, and nothing else); `CommitmentNotCanonical` (the table's fixed fields: decode tokens,
+stop reason, schedule root, the data-availability trio); `ZeroWorkLeaves`; `WorkLeavesAboveCap` (the class's
+ladder at the walk, the structural cap at the door); `ZeroRoot` (trace, output, execution);
+`ExecutionRootNotItsParts`; and the ids (`PanelDaPayloadCarriesIds`, `IdsCount`, `IdsNotTheJobs`: each list
+against its own hash in the network's form). The signature is the walk's.
+
+**15.15.3 The three doors.** (1) *Isolation* (height-free): where the ruleset carries `palw_fp_job_v5`, a
+payload whose job version word (bytes 2..4) is 10 meets the tensor door
+(`validate_palw_fp_gen_commitment_tx_v1`: the check above, with no network domain and the structural cap);
+everywhere else the lane's own door refuses it by name (`UnsupportedVersion`), as a build without the fence
+refuses its bytes. (2) *Header context* (the containing block's DAA): a version-10 payload below the fence is
+refused (`PalwFpJobVersionAtHeight`). (3) *The acceptance walk*, past **both** fences only
+(`palw_gen_lane_open_v1`): each version-10 payload that passes the check at its class's ladder under the
+network's domain and `PanelDa` arming, with its signature verified under the key it carries, becomes
+`GenTensorCommitted { claim, class_id, bond, executor_pubkey, work_leaves, prompt_token_ids, trace_root,
+output_root, execution_root, job_pin, job }` (`job_pin` is the lane's `palw_fp_job_pin_v1` of the commitment);
+anything else is skipped with its reason, never rejected. The tensor walk's objects follow the lane's walk's
+in the block's object list.
+
+**15.15.4 The fold's tensor branch** (`apply_gen_tensor_commitment_v1`), in this order, every refusal by name:
+
+1. both fences in force at the block (`GenClaimRefused`; below `palw_gen_v1` the generic lock refuses first,
+   `GenObjectRefused`); a live claim of the id (`DuplicateClaim`);
+2. the bond: it exists (`MissingBond`), its key is the signer's (`BondKeyMismatch`), it is not retiring
+   (`RetiringBond`), not below the producer floor (`ProducerBelowFloor`) and not frozen (`ProducerFrozen`);
+3. the class: it exists (`MissingClass`), its status is `Active` (`FrozenClass`; any other status is
+   `GenClaimRefused`), it has a `gen_classes` row, and passes the verification-deadline admission
+   (ADR-0152 §4-quater V2). **The registry lifecycle is not asked** (its row for a pipeline is `Registered` and
+   never admits);
+4. the job against the class: `palw_gen_job_resolve_class_v1` (§15.13's refusals, as `GenClaimRefused`), the
+   profile an Image or an Embedding, and under `PublicDa` the carried ids within the class's counts and token
+   bounds;
+5. the execution root is non-zero (`UnadjudicableCommitment`) and the tensor execution root of the
+   commitment's parts;
+6. **the work**: `work_leaves` equals the chain's count — `PalwGenStepSpaceV1::leaf_count_v1(pipeline,
+   programs, layouts, trips, None, 0)` with `trips` from `stage_job_facts` over the class and the job with
+   zeros of the id lengths (the trips depend on the lengths alone) — else `GenClaimRefused`;
+7. **capacity**: the class's live free-prompt claims number fewer than the fence's `max_inflight_claims` for the
+   profile (`GenClassInflightCapped`), and the bond holds fewer than `⌈cap / 2⌉` claims of the class not yet
+   licensed (`BondClassShareExceeded`);
+8. **the work identity**: `work_id = H64(key "misaka-palw/gen/work-id/v1", class_id ‖ borsh(PalwGenJobTailV1) ‖
+   borsh(executor_bond))`; a live claim of it refuses (`DuplicateWork`);
+9. **the reservation**: `palw_claim_weight_reservation_of_v1(params, 0, 0, work_leaves × slash_value_per_pwu,
+   daa)` with the class's registered `slash_value_per_pwu`, held against the bond's committed ledger room and
+   the lane's exposure ceiling (`FreePromptExposureCeiling`);
+10. the claim is written: `FreePrompt { quanta: 0, spent: ∅ }`, `pwu = 0`, `rights_reserved = 0`,
+    `escrowed_reward = 0`, `immature_contribution = 0`, the roots as committed, `trace_chunk_count = 1`,
+    `trace_retention_daa = accepted_daa + palw_min_trace_retention_daa_v1`, the work id and the lane's job
+    identity, phase `Provisional`; the reservation is taken and the bind deadline armed. The consistency
+    check that guards every load accepts `quanta = 0` only for a claim that earns nothing at all.
+
+From here the claim is the lane's: panel at the bind (a bought class takes an outsider seat, ADR-0147), receipts,
+licence, `Final`, retirement, the lane's slash on a conviction. Weight for a tensor claim is a later fence.
+
+**15.15.5 The court under the held regime: the generative one-move accusation (G23).** Object
+`GenShardCourtAccused { accusation: PalwGenOneMoveAccusationV1 }`, tag 88 (requested):
+
+```
+PalwGenOneMoveAccusationV1 { version: u16 = 1, claim: Hash64, execution_root: Hash64, trace_root: Hash64,
+  executor_bond, accuser_bond, verdict: PalwCourtVerdictV2, proof: PalwCourtVerdictProofV2, signature: Vec<u8> }
+session_id = H64(key "misaka-palw/gen/one-move/session/v1",
+                 le32(|domain|) ‖ domain ‖ le16(version) ‖ claim ‖ execution_root ‖ trace_root ‖
+                 borsh(executor_bond) ‖ borsh(accuser_bond) ‖ borsh(verdict) ‖ le64(|borsh(proof)|) ‖ borsh(proof))
+signature  = ML-DSA-87(accuser's registered key, session_id, context "misaka-palw/gen/one-move/accuse/mldsa87/v1")
+```
+
+*Shape* (stateless, `palw_gen_one_move_shape_v1`): version 1; a non-empty signature; `proof` a `GenCone`,
+`GenOutputTile` or `GenDecodeToken` (`GenDissection` is a session's bottom and is refused); the proof's
+binding commits `execution_root`; `executor_bond ≠ accuser_bond`. *Acceptance*: `palw_gen_v1` in force; the
+shape; the signature; a live claim of a generative class whose executor, `execution_root` and `trace_root` are the
+claim's; and the **verdict re-derived** by `adjudicate_close_proof_v2` (the court close's own adjudication: cost
+ceiling, prompt form, the claim's `gen_classes` row, the binding's job and roots against the claim's, the
+generative court at the ruleset's limits) must equal the declared one, in either direction. *Fold*: a live
+non-terminal claim of a class with a `gen_classes` row; the executor and roots the claim's
+(`ShardCourtExecutorIsNotTheClaims`, `ShardCourtRootsDiffer`); an accuser that is not the producer; no open
+session on the claim unless `palw_offence_attribution` is armed; an Active accuser at or above the floor;
+then, outside a dissection, `ExecutorGuilty` convicts (`convict_by_court_verdict_v1`: the claim voids as
+`CourtFraud`, the executor is charged) and `ChallengerDefeated` charges the accuser
+`palw_shard_court_false_accusation_charge_v1(claim.reserved, floor)`. **Under the held regime a `GenCone` at a
+dissected leaf** (`palw_gen_dissect_site_v1` finds a site, the binding verified and not convicting on its face)
+**declares `ExecutorGuilty` and opens a dissection at that leaf** (`open_dissection_at_named_leaf_v1`; the
+responder's `CourtGenRootClaimed` is its first move). The object spends the block's adjudication slot, is a
+court opening for the H-1 heartbeat lane (`CourtOpening(claim)`), and is dropped by name below `palw_gen_v1`.
+
+**15.15.6 One carrier (G24, open).** The accusation is one lifecycle object in one carrier (about 100,000 bytes,
+`PALW_OBJECT_CHUNK_MAX_BYTES`); the chunk path for larger objects is `palw_chunked_object_kind_admitted_v1`
+(`FamilyCertified` only), and a close's own chunks (`CourtCloseDeclared`/`CourtCloseChunk`, PALW-TIR-38's
+3.2 MB) are keyed to a session's bonds. On a held-regime chain a pipeline class is therefore convictable in
+one move only at leaves whose close fits one carrier. **PALW-GEN-21** (to be built with the gate's twin,
+PALW-GEN-20): registration of a pipeline class on a network that carries `palw_held_context` MUST be refused
+when any terminal close exceeds one carrier, until a chunked one-move accusation exists (recommended: the
+close's group rule keyed to (claim id, accuser bond)).
+
+**15.15.7 Allocations.** FP job version 10; object tags 87 `GenTensorCommitted` (approved) and 88
+`GenShardCourtAccused` (requested); court proof tag 16 `GenOutputTile` (§15.13; the enum's discriminants are
+explicit); the fence `palw_fp_job_v5` over `palw_gen_v1` (the per-profile `max_inflight_claims` is in the
+latter's value; the V2 bundle mirrors both, borsh-skipped, written only by `sync_palw_gen_v1`); keys
+`"misaka-palw/gen/work-id/v1"`, `"misaka-palw/gen/fp-job-id/malformed/v1"`,
+`"misaka-palw/gen/one-move/session/v1"` and the context `"misaka-palw/gen/one-move/accuse/mldsa87/v1"`.
+
+**15.15.8 The node's halves (not built).** The worker serves `PalwGenTensorRequestV1` (the job, its prompt and
+negative ids, its images) and answers with the claim's binding; the claim is submitted as the lane's
+commitment with the request frame retained for its panel; a seat replays the request over its held class
+(`gen_tensor_seat_judge_v1`) and files `Valid` iff the replay's `execution_root` is the claim's; a challenger
+replays the job, finds the first divergent leaf (`gen_tensor_court_candidates_v1`, `gen_tensor_output_audit_v1`)
+and files the one-move accusation; where bisection is played the ladder's prefix state is a node-side convention both parties compute alike:
+`H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖ le64(take) ‖ the first take
+leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention, `tir_bisect_prefix_state_v1`,
+under its own key). The worker, seat and court halves are built and tested at the library level in
+`misaka-palw-base0`'s `gen_tensor_worker`.
