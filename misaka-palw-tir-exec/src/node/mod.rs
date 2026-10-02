@@ -7,6 +7,7 @@
 pub mod annex;
 pub mod artifact;
 pub mod backend;
+pub mod cell;
 pub mod drill;
 pub mod evidence;
 pub mod inventory;
@@ -23,6 +24,10 @@ pub use artifact::TirArtifactV1;
 pub use backend::{
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
     tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
+};
+pub use cell::{
+    CpuKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1, TirCellV1,
+    TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, verify_cell_v1,
 };
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,

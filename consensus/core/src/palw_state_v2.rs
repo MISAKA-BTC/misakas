@@ -16402,6 +16402,40 @@ impl PalwFoldReadV1<'_> {
             return None;
         }
         let row = self.state.model_lifecycles.get(class_id)?;
+        // **RFC-0006 §6.2, decision 7: an IR class with a layer-shard plan has the BINDING SHARD's room.** A class's verification
+        // supply is the ready seats of each shard, not of the whole model: `min over shards of ⌊ ready_eff(c, i) × per_seat ×
+        // window / (2 × eccu × w_i / w) ⌋`, a shard's ready seats being the bonds whose possession proof of that shard's rows is
+        // fresh. The measured-speed constant is unchanged (decision 9).
+        if self.params.tir_shard_active_at(now_daa)
+            && !palw_rcore_class_is_c7_v1(self.params, self.state, class_id)
+            && let Some(plan) = self.state.tir_shard_plans.get(class_id)
+        {
+            let pricing = crate::palw_verify_capacity_v1::palw_replay_pricing_v1(self.params.capacity_room_active_at(now_daa), &fold.globals);
+            let ready: Vec<u128> = (0..plan.s_l)
+                .map(|shard| {
+                    let ready_class = crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(class_id, plan.s_l, shard);
+                    u128::from(self.model_registry_ready_seats(&ready_class, now_daa, fold))
+                })
+                .collect();
+            let permille: Vec<u32> = (0..usize::from(plan.s_l))
+                .map(|shard| {
+                    plan.cell_permille
+                        .iter()
+                        .skip(shard * usize::from(plan.s_p))
+                        .take(usize::from(plan.s_p))
+                        .map(|p| u32::from(*p))
+                        .sum()
+                })
+                .collect();
+            let window = (row.profile.verification_window_spans as u64).max(1);
+            return Some(crate::palw_tir_shard_v1::palw_tir_shard_room_v1(
+                &ready,
+                &permille,
+                pricing.per_seat_per_span,
+                window,
+                row.work.economic_ccu_per_claim,
+            ));
+        }
         Some(if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
             row.profile.max_inflight_claims as u64
         } else {

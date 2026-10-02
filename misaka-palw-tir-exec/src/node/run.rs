@@ -99,6 +99,11 @@ fn lanes_le(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
     with_slice!(data, v => lanes_typed(&v[from..from + n], out));
 }
 
+/// [`lanes_le`] for the cell verifier (RFC-0006): the same lanes, the same encoding.
+pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    lanes_le(data, from, n, out);
+}
+
 fn lanes_typed<T: Elem>(v: &[T], out: &mut Vec<u8>) {
     // A committed value is i8, i16, i32 or idx (NF-17); each is exactly one 4-byte lane.
     if T::DTYPE == DType::Idx {
