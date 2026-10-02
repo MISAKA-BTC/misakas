@@ -50,6 +50,7 @@ pack!(
     "mobilenet-v1",
     "bitnet",
     "apertus",
+    "lfm2",
     "bert",
     "bloom",
     "clip-text",

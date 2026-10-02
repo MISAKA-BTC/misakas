@@ -49,7 +49,7 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
     let mut names: Vec<String> =
         std::fs::read_dir(&root).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
     names.sort();
-    assert_eq!(names.len(), 87);
+    assert_eq!(names.len(), 88);
     let mut failed = Vec::new();
     let mut total = 0;
     for n in &names {

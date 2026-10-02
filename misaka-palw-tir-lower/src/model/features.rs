@@ -250,6 +250,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("GEN_STAGE_VAE_V1", Model, "a VAE decoder as a chain of single-position stages (resnet, mid attention, nearest x2 upsample, RGB head)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Image output ImageRgb8 HWC; each stage's float reference is checked."),
     // The capabilities the diffusers read path names when a component's lowering lacks them (`hf_schema::diffusers`): each is
     // expressible with the existing primitives once described; none is in the vocabulary yet.
+    feature!("MIXER_SHORT_CONV_V1", Mixer, "a gated short convolution: [B | C | x] = in_proj(x), a causal depthwise convolution of B*x with no activation, out_proj of C times it", Implemented, [], NoReq, ["fidelity_tiny::lfm2", "hf_fixtures::lfm2"], "LFM2's conv layers: three linears (the rows of in_proj), a Mul, the existing causal depthwise convolution (CONV_DEPTHWISE_CAUSAL_V1, activation None), a Mul and out_proj; one flag gives biases to all three. No primitive."),
     feature!("ATTN_LOCAL_BIDIR_V1", Attention, "an encoder's self-attention restricted to the keys within a radius of the query on both sides", Implemented, ["Select"], NoReq, ["encdec::longt5_generates_through_the_two_stage_pipeline"], "LongT5's local attention: |i - j| <= local_radius (HF's block split and 3-block neighbourhood masked to |i - j| < block is this band), T5's relative bias over the true distance; a pinned [L, L] 0/1 mask and a Select to i32::MIN, like the count mask."),
     feature!("ATTN_TRANSIENT_GLOBAL_V1", Attention, "local attention plus transient global tokens (each block's tokens pooled) every query also attends to", Missing, [], NoReq, [], "LongT5's transient-global encoder attention (encoder_attention_type = transient-global)."),
     feature!("POS_ROPE_AXES_V1", Embedding, "a rotary embedding over several position axes", Missing, [], NoReq, [], "FLUX: axes_dims_rope splits the head dimension over the ids of the text tokens (zeros) and the image tokens (row, column)."),
@@ -491,6 +492,10 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             Mixer::Mamba2(m) => {
                 u.add("MIXER_MAMBA2_V1", lay, format!("{} heads × {}", m.heads, m.head_dim));
                 u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", m.conv_kernel));
+            }
+            Mixer::ShortConv(c) => {
+                u.add("MIXER_SHORT_CONV_V1", lay, format!("kernel {}", c.kernel));
+                u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", c.kernel));
             }
             Mixer::RwkvTime(r) => {
                 u.add(if r.version == 4 { "MIXER_RWKV4_V1" } else if r.version == 7 { "MIXER_RWKV7_V1" } else { "MIXER_RWKV56_V1" }, lay, format!("RWKV-{}", r.version));

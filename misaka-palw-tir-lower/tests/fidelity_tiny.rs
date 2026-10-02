@@ -161,7 +161,7 @@ macro_rules! recurrent {
     )*};
 }
 
-recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv);
+recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv, lfm2);
 
 // Qwen4-Exp's generic features (hyper-connection streams, hashed n-gram per-layer embeddings, sparse block attention,
 // delta nets at any ratio, a routed MoE): the named acceptance matrix is `tests/qwen4_exp.rs`; here every fixture
@@ -219,7 +219,7 @@ fn a_recurrent_program_is_calibrated_as_long_as_its_context() {
         misaka_palw_tir_lower::hl::build_program(&spec).expect("hl")
     };
     let short = vec![vec![1usize; 32]; 4];
-    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv"] {
+    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv", "lfm2"] {
         let hl = hl_of(recurrent);
         assert!(fidelity::check_calibration_length(&hl, &short, 64).is_err(), "{recurrent}");
         assert_eq!(fidelity::check_calibration_length(&hl, &short, 32), Ok(Some(32)), "{recurrent}");

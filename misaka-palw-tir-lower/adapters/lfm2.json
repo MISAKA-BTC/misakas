@@ -1,0 +1,391 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "lfm2",
+  "doc": "LFM2 (Lfm2ForCausalLM; LiquidAI/LFM2-*): Llama's pre-norm residual (operator_norm, ffn_norm), a gated SiLU MLP (feed_forward.w1 gate, w3 up, w2 down; its width adjusted by block_auto_adjust_ff_dim, block_ffn_dim_multiplier and block_multiple_of exactly as HF does), and per layer either a gated SHORT CONVOLUTION (layer type `conv`: [B|C|x] = in_proj(x), a causal depthwise convolution of B*x of kernel conv_L_cache with NO activation, out_proj of C times it; conv_bias gives biases to all three, MIXER_SHORT_CONV_V1) or grouped-query attention with a per-head RMS norm on q and k before the rotation (`full_attention`; q_layernorm, k_layernorm, out_proj). The FINAL norm is `embedding_norm`; the head is tied (`tie_embedding`, the legacy spelling HF still reads, or `tie_word_embeddings`; the legacy `block_ff_dim` likewise names `intermediate_size`; the other legacy `block_*`/`conv_dim*`/`num_heads`/`use_pos_enc` keys are ones HF's class never reads). The layer types come from `layer_types` or, in older configs, from full_attn_idxs. Features: MIXER_SHORT_CONV_V1, CONV_DEPTHWISE_CAUSAL_V1, ATTN_GQA_V1, ATTN_QK_NORM_V1, ROPE_DEFAULT_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "Lfm2ForCausalLM"
+    ],
+    "model_types": [
+      "lfm2"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 65536,
+      "hidden_size": 2560,
+      "num_hidden_layers": 16,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 8,
+      "max_position_embeddings": 128000,
+      "norm_eps": 1e-05,
+      "conv_bias": false,
+      "conv_L_cache": 3,
+      "block_multiple_of": 256,
+      "block_ffn_dim_multiplier": 1.0,
+      "block_auto_adjust_ff_dim": true
+    },
+    "inert": [
+      "initializer_range",
+      "use_cache",
+      "block_dim",
+      "block_mlp_init_scale",
+      "block_norm_eps",
+      "block_out_init_scale",
+      "block_use_swiglu",
+      "block_use_xavier_init",
+      "conv_dim",
+      "conv_dim_out",
+      "conv_use_xavier_init",
+      "num_heads",
+      "use_pos_enc"
+    ]
+  },
+  "vars": [
+    {
+      "name": "no_mlp_bias",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$forbid": [
+              "mlp_bias",
+              "Lfm2MLP has no biases"
+            ]
+          },
+          false
+        ]
+      }
+    },
+    {
+      "name": "tied",
+      "value": {
+        "$alias": [
+          [
+            "tie_embedding",
+            "tie_word_embeddings"
+          ],
+          true
+        ]
+      }
+    },
+    {
+      "name": "eps",
+      "value": {
+        "$cfg": "norm_eps"
+      }
+    },
+    {
+      "name": "rope_theta",
+      "value": 1000000.0
+    },
+    {
+      "name": "qk_norm",
+      "value": {
+        "norm": {
+          "kind": "Rms",
+          "eps": {
+            "$var": "eps"
+          },
+          "gain": "W",
+          "bias": false
+        },
+        "scope": "PerHeadShared"
+      }
+    },
+    {
+      "name": "inter0",
+      "value": {
+        "$alias": [
+          [
+            "block_ff_dim",
+            "intermediate_size"
+          ],
+          12288
+        ]
+      }
+    },
+    {
+      "name": "inter1",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$cfg?": "block_multiple_of"
+          },
+          {
+            "$let": [
+              "_",
+              {
+                "$cfg?": "block_ffn_dim_multiplier"
+              },
+              {
+                "$if": [
+                  {
+                    "$cfg": "block_auto_adjust_ff_dim"
+                  },
+                  {
+                    "$let": [
+                      "t",
+                      {
+                        "$floor": {
+                          "$div": [
+                            {
+                              "$mul": [
+                                2,
+                                {
+                                  "$var": "inter0"
+                                }
+                              ]
+                            },
+                            3
+                          ]
+                        }
+                      },
+                      {
+                        "$let": [
+                          "mult",
+                          {
+                            "$cfg?": "block_ffn_dim_multiplier"
+                          },
+                          {
+                            "$if": [
+                              {
+                                "$ne": [
+                                  {
+                                    "$var": "mult"
+                                  },
+                                  null
+                                ]
+                              },
+                              {
+                                "$let": [
+                                  "m",
+                                  {
+                                    "$floor": {
+                                      "$mul": [
+                                        {
+                                          "$var": "mult"
+                                        },
+                                        {
+                                          "$var": "t"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "$mul": [
+                                      {
+                                        "$cfg": "block_multiple_of"
+                                      },
+                                      {
+                                        "$idiv": [
+                                          {
+                                            "$add": [
+                                              {
+                                                "$var": "m"
+                                              },
+                                              {
+                                                "$sub": [
+                                                  {
+                                                    "$cfg": "block_multiple_of"
+                                                  },
+                                                  1
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "$cfg": "block_multiple_of"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "$var": "t"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "$var": "inter0"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "inter",
+      "value": {
+        "$var": "inter1"
+      }
+    },
+    {
+      "name": "types",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$cfg?": "full_attn_idxs"
+          },
+          {
+            "$layer_types": {
+              "n": {
+                "$var": "n"
+              },
+              "allowed": [
+                "conv",
+                "full_attention"
+              ],
+              "each": {
+                "$if": [
+                  {
+                    "$contains": [
+                      {
+                        "$cfg": [
+                          "full_attn_idxs",
+                          []
+                        ]
+                      },
+                      {
+                        "$var": "i"
+                      }
+                    ]
+                  },
+                  "full_attention",
+                  "conv"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "is_conv",
+      "layer": true,
+      "value": {
+        "$eq": [
+          {
+            "$index": [
+              {
+                "$var": "types"
+              },
+              {
+                "$var": "i"
+              }
+            ]
+          },
+          "conv"
+        ]
+      }
+    },
+    {
+      "name": "attn",
+      "layer": true,
+      "value": {
+        "Attention": {
+          "heads": {
+            "$var": "heads"
+          },
+          "kv_heads": {
+            "$var": "kv"
+          },
+          "head_dim": {
+            "$var": "hd"
+          },
+          "v_head_dim": {
+            "$var": "hd"
+          },
+          "q_bias": false,
+          "k_bias": false,
+          "v_bias": false,
+          "o_bias": false,
+          "qk_norm": {
+            "$var": "qk_norm"
+          },
+          "position": {
+            "Rope": {
+              "$var": "rope"
+            }
+          },
+          "scale": {
+            "$var": "attn_scale"
+          },
+          "window": null,
+          "q_temperature": null
+        }
+      }
+    },
+    {
+      "name": "l_mixer",
+      "layer": true,
+      "value": {
+        "$if": [
+          {
+            "$var": "is_conv"
+          },
+          {
+            "ShortConv": {
+              "kernel": {
+                "$cfg": "conv_L_cache"
+              },
+              "bias": {
+                "$cfg": "conv_bias"
+              }
+            }
+          },
+          {
+            "$var": "attn"
+          }
+        ]
+      }
+    },
+    {
+      "name": "final_norm",
+      "value": {
+        "$var": "norm"
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "final_norm": "{p}embedding_norm",
+            "norm.mix": "{p}layers.{L}.operator_norm",
+            "norm.ffn": "{p}layers.{L}.ffn_norm",
+            "attn.o": "{p}layers.{L}.self_attn.out_proj",
+            "attn.q_norm": "{p}layers.{L}.self_attn.q_layernorm",
+            "attn.k_norm": "{p}layers.{L}.self_attn.k_layernorm",
+            "mlp.gate": "{p}layers.{L}.feed_forward.w1",
+            "mlp.up": "{p}layers.{L}.feed_forward.w3",
+            "mlp.down": "{p}layers.{L}.feed_forward.w2",
+            "shortconv.in": "{p}layers.{L}.conv.in_proj",
+            "shortconv.conv": "{p}layers.{L}.conv.conv",
+            "shortconv.out": "{p}layers.{L}.conv.out_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "lfm2"
+    }
+  ]
+}

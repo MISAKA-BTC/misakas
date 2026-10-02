@@ -138,6 +138,12 @@ CONFIGS = {
                   rope_parameters={"rope_type": "llama3", "rope_theta": 12000000.0, "factor": 8.0, "low_freq_factor": 1.0,
                                    "high_freq_factor": 4.0, "original_max_position_embeddings": 16},
                   max_position_embeddings=128), {}),
+    # LFM2: gated short convolutions (conv_L_cache 3, biases) and one attention layer with per-head q/k RMS norm; the final norm is
+    # `embedding_norm`, the head tied (MIXER_SHORT_CONV_V1).
+    "lfm2": (c("lfm2", "Lfm2ForCausalLM", L, num_hidden_layers=4, head_dim=8, conv_L_cache=3, conv_bias=True,
+               layer_types=["conv", "conv", "full_attention", "conv"], block_auto_adjust_ff_dim=False,
+               rope_parameters={"rope_type": "default", "rope_theta": 1000000.0}, max_position_embeddings=128,
+               tie_word_embeddings=True), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),

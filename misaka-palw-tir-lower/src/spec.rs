@@ -473,6 +473,16 @@ pub struct Mamba2Spec {
     pub d_mlp: usize,
 }
 
+/// A gated short convolution (LFM2's `Lfm2ShortConv`): the kernel of the depthwise causal convolution, and one flag that gives biases to
+/// the convolution, `in_proj` and `out_proj` together (`conv_bias`). Tensors: roles `shortconv.in` (`[3D, D]`: B, C, x rows),
+/// `shortconv.conv` (`[D, 1, K]`) and `shortconv.out`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShortConvSpec {
+    pub kernel: usize,
+    #[serde(default)]
+    pub bias: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RwkvTimeSpec {
     pub version: u8,
@@ -500,6 +510,9 @@ pub enum Mixer {
     Mamba(MambaSpec),
     Mamba2(Mamba2Spec),
     RwkvTime(RwkvTimeSpec),
+    /// **`MIXER_SHORT_CONV_V1`** (LFM2): `[B | C | x] = in_proj(x)`, `u = B ⊙ x`, `v = causal_depthwise_conv(u)` (no activation),
+    /// `out_proj(C ⊙ v)`.
+    ShortConv(ShortConvSpec),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

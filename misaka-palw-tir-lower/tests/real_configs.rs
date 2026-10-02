@@ -211,6 +211,34 @@ fn bitnet_and_apertus() {
     assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Xielu)));
 }
 
+/// **LFM2** (`MIXER_SHORT_CONV_V1`, a data adapter): the 1.2B shape, ten gated short-convolution layers and six attention layers named by
+/// `layer_types`, the MLP width HF derives from `block_ff_dim` (2/3 of 12288, a multiple of 256: 8192), `embedding_norm` as the final norm,
+/// and the legacy spellings (`tie_embedding`, `block_ff_dim`) read as HF reads them.
+#[test]
+fn lfm2_short_convolutions_and_six_attention_layers() {
+    let (s, p) = ok("lfm2-1.2b");
+    assert_eq!(s.layers.len(), 16);
+    let attn_layers: Vec<usize> = (0..16).filter(|&l| matches!(s.layers[l].mixer, Mixer::Attention(_))).collect();
+    assert_eq!(attn_layers, vec![2, 5, 8, 10, 12, 14]);
+    for l in (0..16).filter(|l| !attn_layers.contains(l)) {
+        assert!(matches!(&s.layers[l].mixer, Mixer::ShortConv(c) if c.kernel == 3 && !c.bias), "layer {l}");
+    }
+    assert_eq!((attn(&s, 2).heads, attn(&s, 2).kv_heads, attn(&s, 2).head_dim), (32, 8, 64));
+    assert!(attn(&s, 2).qk_norm.is_some());
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.intermediate == 8192 && m.act == Act::Silu));
+    assert!(s.head.tied);
+    assert_eq!(s.hf.names["final_norm"], "model.embedding_norm");
+    assert_eq!(s.hf.names["shortconv.in"], "model.layers.{L}.conv.in_proj");
+    assert!(p.params.iter().any(|d| d.name.starts_with("shortconv.in.b.")) && p.params.iter().any(|d| d.name == "shortconv.conv.w"));
+    // The legacy spelling HF still reads: `tie_embedding: false` unties the head (the head is then `lm_head`).
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/lfm2-1.2b.json")).unwrap();
+    let untied = parse_config_str(&cfg.replace("\"tie_embedding\": true", "\"tie_embedding\": false")).unwrap();
+    assert!(!untied.head.tied);
+    // Disagreeing spellings are refused, not resolved by order.
+    let both = cfg.replace("\"tie_embedding\": true", "\"tie_embedding\": true, \"tie_word_embeddings\": false");
+    assert!(parse_config_str(&both).is_err());
+}
+
 /// **PaliGemma as its text decoder** (`ATTN_PREFIX_LM_V1`, the text-only path): a Gemma-1 decoder (MQA, head_dim 256, GeGLU, (1+w) norms,
 /// tied head) under `language_model.`; the spec says it is the prefix-LM model's text-only causal path, and binding image rows to it is
 /// refused by name.

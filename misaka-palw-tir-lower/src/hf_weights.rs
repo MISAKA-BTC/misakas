@@ -317,6 +317,7 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         Mixer::GatedDeltaNet(g) => gdn(m, g)?,
         Mixer::Mamba(mm) => mamba(m, mm)?,
         Mixer::Mamba2(mm) => mamba2(m, mm)?,
+        Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
         Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
     }
     match &ls.ffn {
@@ -611,6 +612,20 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
     m.put("mamba2.D", Src::t(m.role("mamba2.D")?))?;
     m.put("mamba2.norm.gain", Src::t(format!("{}.weight", m.role("mamba2.norm")?)))?;
     m.lin("mamba2.out", "mamba2.out", s.proj_bias)
+}
+
+/// LFM2's short convolution: `in_proj [3D, D]` rows `[B | C | x]` as three linears, the depthwise convolution `[D, 1, K]`, `out_proj`.
+fn short_conv(m: &mut M, c: &ShortConvSpec, d: usize) -> Result<()> {
+    let w = m.w("shortconv.in")?;
+    for (i, part) in ["b", "c", "x"].into_iter().enumerate() {
+        m.put(format!("shortconv.in.{part}.w"), w.clone().rows(Pick::Range { start: i * d, len: d }))?;
+        if c.bias {
+            let b = m.b("shortconv.in")?;
+            m.put(format!("shortconv.in.{part}.b"), b.rows(Pick::Range { start: i * d, len: d }))?;
+        }
+    }
+    conv(m, "shortconv.conv", d, c.kernel, c.bias)?;
+    m.lin("shortconv.out", "shortconv.out", c.bias)
 }
 
 fn rescaled(src: Src, rescale: Option<usize>) -> Src {

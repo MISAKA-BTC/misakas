@@ -662,6 +662,7 @@ impl Builder<'_> {
             Mixer::Mamba(mm) => self.mamba(bk, mm, x),
             Mixer::Mamba2(mm) => self.mamba2(bk, mm, x),
             Mixer::RwkvTime(r) => self.rwkv_time(bk, r, x),
+            Mixer::ShortConv(c) => self.short_conv(bk, c, x),
         }
     }
 
@@ -1214,13 +1215,32 @@ impl Builder<'_> {
 
     /// Depthwise causal conv under role `name` (`name.w [C, K]`, `name.b`), SiLU activated.
     fn conv(&mut self, bk: &mut Bk, x: Ref, ch: usize, kernel: usize, bias: bool, name: &str) -> Result<Ref> {
+        self.conv_act(bk, x, ch, kernel, bias, name, Some(Act::Silu))
+    }
+
+    /// [`Self::conv`] with the activation the convolution applies (`None`: the plain convolution of LFM2's short conv).
+    #[allow(clippy::too_many_arguments)]
+    fn conv_act(&mut self, bk: &mut Bk, x: Ref, ch: usize, kernel: usize, bias: bool, name: &str, act: Option<Act>) -> Result<Ref> {
         let w = self.param(&format!("{name}.w"), vec![ch, kernel], true, Init::Normal(0.3))?;
         let st = self.state(&format!("{name}.window"), StateKind::Fixed, vec![kernel.saturating_sub(1), ch], 0.0)?;
         let mut ins = vec![x, st, w];
         if bias {
             ins.push(self.param(&format!("{name}.b"), vec![ch], true, Init::Uniform(-0.1, 0.1))?);
         }
-        Ok(bk.fw(Op::CausalConv1d { channels: ch, kernel, bias, act: Some(Act::Silu), dilation: 1 }, ins, ch, Some(name), vec![sid(st)]))
+        Ok(bk.fw(Op::CausalConv1d { channels: ch, kernel, bias, act, dilation: 1 }, ins, ch, Some(name), vec![sid(st)]))
+    }
+
+    /// **`MIXER_SHORT_CONV_V1`** (LFM2): `[B|C|x] = in_proj(x)`, `u = B·x`, `v = conv(u)` (a causal depthwise convolution, no
+    /// activation), `out_proj(C·v)`. The three chunks of `in_proj` are three linears (their rows sliced at load).
+    fn short_conv(&mut self, bk: &mut Bk, c: &ShortConvSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let b = self.linear(bk, x, "shortconv.in.b", d, d, c.bias, true, "shortconv.b")?;
+        let g = self.linear(bk, x, "shortconv.in.c", d, d, c.bias, true, "shortconv.c")?;
+        let xx = self.linear(bk, x, "shortconv.in.x", d, d, c.bias, true, "shortconv.x")?;
+        let u = bk.f(Op::Mul, vec![b, xx], d, "shortconv.bx");
+        let v = self.conv_act(bk, u, d, c.kernel, c.bias, "shortconv.conv", None)?;
+        let y = bk.f(Op::Mul, vec![g, v], d, "shortconv.gated");
+        self.linear(bk, y, "shortconv.out", d, d, c.bias, true, "shortconv.out")
     }
 
     // ───────────────────────────── Mamba ─────────────────────────────
@@ -1481,6 +1501,7 @@ fn block_name(ls: &LayerSpec) -> String {
         Mixer::GatedDeltaNet(_) => "gdn".into(),
         Mixer::Mamba(_) => "mamba".into(),
         Mixer::Mamba2(_) => "mamba2".into(),
+        Mixer::ShortConv(_) => "shortconv".into(),
         Mixer::RwkvTime(r) => format!("rwkv{}", r.version),
     };
     let ffn = match &ls.ffn {

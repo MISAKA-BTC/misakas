@@ -148,6 +148,7 @@ fixtures!(
     granite,
     bitnet,
     apertus,
+    lfm2,
     nemotron,
     exaone4,
     smollm3,

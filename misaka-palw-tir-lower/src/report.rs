@@ -170,6 +170,7 @@ fn mixer(m: &Mixer) -> String {
             format!("Mamba2 {} heads × {} state {} groups {} conv {}", m.heads, m.head_dim, m.state, m.groups, m.conv_kernel)
         }
         Mixer::RwkvTime(r) => format!("RWKV-{} time mix, attention dim {}", r.version, r.attn_dim),
+        Mixer::ShortConv(c) => format!("gated short convolution, kernel {}", c.kernel),
     }
 }
 

@@ -407,6 +407,12 @@
     "params": 142,
     "program": "add6798af9edd6ed4b1f8fc55745d8d63552e6eb3aa803439b6792d1134628727565096667bf514f5800280f2b7dba503eb614ab5a006b0bd4eda2040083aaba"
   },
+  "hf/lfm2": {
+    "artifact": "7aa1e354b9e335daedfe128680ad7707cae8065f50037915ab5b4d958dd34336bb2c82573cd1e176440b3d70b9733b4b9d79e8a67adac54b70af9db28dd1996e",
+    "nodes": 581,
+    "params": 136,
+    "program": "d1275ab409a01379ae0fb3662c3aff25bdb8bc45288c42a7283fc67d7a2e28c9afda30e3e7e0d030ee3aed9ad1ecb76d2e342b86b4e2d41241e8f10f840f91e0"
+  },
   "hf/llama": {
     "artifact": "1381652189f4845fd54104c3ac8d1f98ae28607865a1d660285c1cd44df79f3384c275da3668fdc8a5056f2b6ade7d0bae9c885d74d506e739a2fd3ffe2046be",
     "nodes": 331,
@@ -874,6 +880,11 @@
     "nodes": 995,
     "params": 221,
     "program": "0bff738ec86a21fa0c9f2a03b4647d1c540e7e1e1885fb154a276d8ce670cedd24c88a002b1e744c60d4f6db57b2fb6b577f31c8a7f57f67ddff73edc267e6df"
+  },
+  "real/lfm2-1.2b.json": {
+    "nodes": 571,
+    "params": 131,
+    "program": "06d3b2a0ea04ad11d8abe39196384fc76e9bb7f3da5e85f3174712f3df087da55b9d5dc60b77d2738eef71071b8ca2b90a813545d6015b7d3b69582cb165912c"
   },
   "real/llama-3.1-8b-gptq.json": {
     "nodes": 366,
