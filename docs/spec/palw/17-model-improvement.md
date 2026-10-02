@@ -99,7 +99,10 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
 | 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
 | 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
-| 91 and up | free | the next tag is 91 | |
+| 91 | `TirShardPlanDeclared` | RFC-0006 (spec 18 §18.2): a class's layer-shard plan, declared once by its registrant, under the dormant fence `palw_tir_shard_v1` (lane S) | yes |
+| 92 | `TirShardReceiptLicensed` | RFC-0006 (spec 18 §18.6): one shard's licensing part, its class seats' and its outsider's cell-masked (`PalwSeatReceiptV4`) receipts (lane S) | yes |
+| 93 | `TirSeatReadinessProved` | RFC-0006 (spec 18 §18.9): a possession proof over one shard's inventory rows (lane S) | yes |
+| 94 and up | free | the next tag is 94 | |
 
 **Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
 a held leaf challenge opens is at a fused IR or pipeline terminal with no phase open, where the court clocks the
@@ -170,7 +173,7 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | Lane | Delta entries | Carriage tails | `state_root` block (after `improvement/v1`) |
 | --- | --- | --- | --- |
 | cand (A4: cases, setter sets, datasets, artifacts, licences, opt-ins) | 93–99 | `0xC5`–`0xCB` | `improvement-material/v1` |
-| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 101–103 stay free (100 is `ClassCourtWindow`, the release line's) | `0xCC` (`0xCD`–`0xCF` free) | `improvement-eval/v1` |
+| eval (A6: per-job state) | none: the job table is `ImprovementRow` table 13 (`improvement_eval_jobs`); 103 stays free (100 is `ClassCourtWindow`, the release line's; **101–102 are RFC-0006's** `TirShardPlan`, `TirShardClaim`, spec 18 §18.0) | `0xCC` (`0xCD`–`0xCF` free; **`0xE1` is RFC-0006's**, the tables `tir_shard_plans` and `tir_shard_claims`) | `improvement-eval/v1` |
 
 ### Court and step ids (reserved, not used by step 0)
 
@@ -178,8 +181,8 @@ Headers are O(1); everything that grows lives in a keyed table (the Phase F revi
 | --- | --- | --- |
 | `PalwCourtVerdictProofV2` tags | 13 `EvalCone`, 14 `EvalDecodeToken`, 15 `EvalDissection` (the evaluation lane's, defined in §17.8.6: an evaluation claim's court moves carry its `PalwEvalBindingV1` and composite parameter openings); **16 `GenOutputTile`** (RFC-0003's tensor claim's output close — it first took 13, the next positional number, and moved here on the coordinator's decision of 2026-10-01; the enum carries its discriminants explicitly, `#[borsh(use_discriminant = true)]`, so a variant declared before it never renumbers it); 17 and up free | 12 (`GenDissection`, RFC-0003); 16 is RFC-0003's, after the reserved range |
 | `PalwStepFaultV1` discriminants | 22 and up | 21 (`TirOutputDigestMismatch`, RFC-0003) |
-| `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit), 7 spare | 4 (`TirRowNode { level, index }`, the second IR fence's) |
-| `PalwDaAnswerV1` tags | 7 and up for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind) | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
+| `PalwDaUnitV1` tags | 5–6 for Phase F's pipeline-claim units (step leaf, step node; an evaluation claim has no rows unit); **7 `TirStepRun { first, count }`** (RFC-0006, spec 18 §18.10: a run of contiguous IR step leaves, one range opening; lane S); 8 and up free | 4 (`TirRowNode { level, index }`, the second IR fence's) |
+| `PalwDaAnswerV1` tags | 7–9 for the pipeline-claim answers (the out-of-range proof is an answer of tag 5's shape, generic over the claim kind); **10 `TirStepRun`** (RFC-0006, the answer of unit 7; lane S); 11 and up free | 6 (the row node's answer, after `TirStepOutOfRange` 5) |
 
 Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that already exist. A new proof
 or fault is added only if A6/A7 show one is needed, and takes the next number here. A6 needed three proofs
