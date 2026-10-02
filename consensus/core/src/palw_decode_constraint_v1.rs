@@ -184,7 +184,7 @@ impl PalwDecodeConstraintV1 {
     pub fn validate_form(&self, version: u16, max_nodes: usize, max_bytes: usize) -> Result<(), PalwDecodeConstraintError> {
         let bad = PalwDecodeConstraintError::Invalid;
         if self.version != version {
-            return Err(bad("the header version is not the form's"));
+            return Err(bad(if version == PALW_DECODE_CONSTRAINT_VERSION_V1 { "the header version is not 1" } else { "the header version is not the form's" }));
         }
         if self.frames.is_empty() {
             return Err(bad("an automaton has at least one frame"));
