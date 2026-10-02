@@ -516,7 +516,7 @@ def outcome_of(erow):
 # ---------------------------------------------------------------------------------------------------------------------
 XB = PLAN.get("extra_bonds", {})
 XB_ORDER = [int(x) for x in XB.get("order", [10, 11, 12, 13, 8, 9])]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
-XB_FROM_DAA = int(XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
+XB_FROM_DAA = int(E.get("XB_FROM_DAA") or XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
 XB_FLOAT_MSK = int(XB.get("float_msk", 150))                              # on top of the collateral: the 100 MSK fee float the genesis seats carry, and fees
 XB_WAIT_DAA = int(XB.get("registrar_wait_daa", 12))                       # a registrar that has not printed its bond after this many DAA is stopped and tried again
 LIARS = PLAN.get("liars", {})
@@ -803,7 +803,7 @@ class Drive:
         if self.daa < cur.get("daa", 0) + 3:
             return
         lack = first_lacking_fence()
-        pat_new = r"Block \S+: \S+ was dropped by name below palw_improvement_v1, and the block stands \(RFC-0004\)"
+        pat_new = r"Block \S+: .+? was dropped by name below palw_improvement_v1, and the block stands \(RFC-0004\)"
         pat_old = r"\[palw-lifecycle\] carrier .* produced no object"
         got_new = self.log_after("new0", cur.get("cur_new", 0), pat_new)
         got_old = self.log_after("old", cur.get("cur_old", 0), pat_old)
@@ -869,7 +869,8 @@ class Drive:
                 art = ["--artifact", f"{MODEL}/{asset}.palwtirs", "--parent", f"{MODEL}/head.class.palwtir"]
             else:
                 art = ["--artifact", f"{MODEL}/{asset}.class.palwtir"]
-            cmd = cli_prefix("new3") + ["palw", "tir-registration", *art, "--bond", bond_of(7), "--key-file", seed_of(7), "--out", out]
+            cmd = cli_prefix("new3") + ["palw", "tir-registration", *art, "--bond", bond_of(7), "--key-file", seed_of(7), "--out", out,
+                                                                   "--skip-pack-verify"]   # the release layer gates registration on a runtime pack (RFC-0002 preflight); the drill classes have none, the chain does not enforce it
             rc, text = run(cmd, home=UHOME)
             if rc != 0:
                 log(f"register {cls}: cannot build ({text.strip()[-200:]})")
@@ -1424,7 +1425,7 @@ class Drive:
         hi_all = max(w[1] for w in CAP_WINDOWS.values())
         if "cap-armed" not in self.s.d["data"]:
             rc, h = run([KASPAD, "--help"], timeout=60)
-            self.s.put("cap-armed", {fence: (f"--palw-drill-{fence.replace('_', '-')}-at" in h) for _, fence in CAP_STEPS})
+            self.s.put("cap-armed", {fence: (f"--palw-drill-{fence.replace('_', '-')}-at" in h or ("--palw-drill-int11-at" in h and E.get("INT11", "1") == "1")) for _, fence in CAP_STEPS})
         for name, fence in CAP_STEPS:
             at = CAP_WINDOWS[name][0] - int(CAP.get("settle_daa", 10))
             if self.daa >= at:
