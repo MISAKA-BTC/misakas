@@ -157,6 +157,10 @@ pub struct EncDecSpec {
     /// encoder reads 1,500 rows, its decoder 448).
     #[serde(default)]
     pub enc_pos_rows: Option<usize>,
+    /// **`ATTN_LOCAL_BIDIR_V1`** (LongT5's local attention): the encoder's self-attention sees the keys within `r` positions of
+    /// the query on both sides (`|i − j| ≤ r`), the relative bias as ever; the decoder is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enc_local_radius: Option<usize>,
 }
 
 /// The schema id of a serialised [`EncDecSpec`]: what a data adapter of kind `encdec` instantiates.
@@ -240,6 +244,11 @@ impl EncDecSpec {
             && (r == 0 || r > MAX_DIM)
         {
             return Err(bad(format!("enc_pos_rows {r} is outside 1..=2^24")));
+        }
+        if let Some(r) = self.enc_local_radius
+            && r > MAX_DIM
+        {
+            return Err(bad(format!("enc_local_radius {r} is outside 0..=2^24")));
         }
         if self.decoder_start as usize >= self.vocab {
             return Err(bad(format!("decoder_start {} is not a token of a vocabulary of {}", self.decoder_start, self.vocab)));
@@ -414,6 +423,7 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
                 input: EncInput::Tokens,
                 k_bias: true,
                 enc_pos_rows: None,
+                enc_local_radius: None,
             })
         }
         "BartForConditionalGeneration" | "MBartForConditionalGeneration" | "MarianMTModel" | "PegasusForConditionalGeneration" => {
@@ -472,6 +482,7 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
                 input: EncInput::Tokens,
                 k_bias: true,
                 enc_pos_rows: None,
+                enc_local_radius: None,
             })
         }
         other => Err(LowerError::not_lowerable(format!("`{other}` is not an encoder-decoder this lowerer models"))),
@@ -1173,7 +1184,8 @@ fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<
         observe(&mut stats, format!("{pre}attn.q"), &q);
         observe(&mut stats, format!("{pre}attn.k"), &k);
         observe(&mut stats, format!("{pre}attn.v"), &v);
-        let ctx = attend(&q, &k, &v, h, dh, s.attn_scale, &bias, &|_, _| true);
+        let local = s.enc_local_radius;
+        let ctx = attend(&q, &k, &v, h, dh, s.attn_scale, &bias, &|i, j| local.is_none_or(|r| (j as i64 - i as i64).unsigned_abs() <= r as u64));
         observe(&mut stats, format!("{pre}attn.ctx"), &ctx);
         let o = p.lin("attn.o", ly, &ctx)?;
         observe(&mut stats, format!("{pre}attn.o"), &o);
@@ -1797,6 +1809,14 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 let bias = b.transpose(bias, &[2, 0, 1]);
                 let sum = b.add(logits, bias, DType::I64);
                 logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            }
+            // LongT5's local attention: a key farther than `r` from its query scores i32::MIN (a pinned `[L, L]` mask of 0/1).
+            if let Some(r) = s.enc_local_radius {
+                let lu = l as usize;
+                let band: Vec<i8> = (0..lu).flat_map(|i| (0..lu).map(move |j| i8::from(((j as i64) - (i as i64)).unsigned_abs() <= r as u64))).collect();
+                let bp = decl(&mut b, cx, &lb, "attn.band", DType::I8, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::i8(vec![lu, lu], band.clone()))))?;
+                let neg = b.c(DType::I32, i32::MIN as i128);
+                logits = b.select(bp, logits, neg, DType::I32);
             }
             // Keys at or past the count score i32::MIN, which IntExp maps to exactly 0 (a fixed-length source has none).
             let masked = if s.fixed_source() {

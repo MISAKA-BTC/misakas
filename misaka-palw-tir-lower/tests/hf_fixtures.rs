@@ -183,6 +183,7 @@ fixtures!(
     qwen3_5_vlm,
     mistral3_vlm,
     llava,
+    paligemma_vlm,
     qwen4_exp,
     qwen4_gdn_1_1,
     qwen4_gdn_1_3,

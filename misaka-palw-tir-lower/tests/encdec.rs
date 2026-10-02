@@ -117,7 +117,14 @@ fn check(name: &str) {
     let dir = fixture_dir(name);
     let cfg = std::fs::read_to_string(dir.join("config.json")).expect("config");
     let o: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
-    let s = encdec::parse_encdec(&cfg).expect("parse");
+    // The Rust reader for the families it has; the family adapters (data only) for the others (LongT5).
+    let s = match encdec::parse_encdec(&cfg) {
+        Ok(s) => s,
+        Err(_) => {
+            let v: serde_json::Value = serde_json::from_str(&cfg).expect("config json");
+            misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).unwrap_or_else(|e| panic!("{name}: {e}")).spec
+        }
+    };
     let ck = Checkpoint::open(&dir).expect("checkpoint");
     let names: std::collections::BTreeSet<String> = ck.names().into_iter().collect();
     let has = |n: &str| names.contains(n);
@@ -289,6 +296,12 @@ fn t5_relu_tied_generates_through_the_two_stage_pipeline() {
 #[test]
 fn t5_gated_untied_generates_through_the_two_stage_pipeline() {
     check("t5_gated");
+}
+
+/// LongT5's LOCAL encoder attention (`ATTN_LOCAL_BIDIR_V1`): the band `|i − j| <= 2` over a source of 10 and of 7 tokens.
+#[test]
+fn longt5_generates_through_the_two_stage_pipeline() {
+    check("longt5");
 }
 
 #[test]
@@ -508,6 +521,31 @@ fn diagnose(name: &str, s: &encdec::EncDecSpec, ck: &Checkpoint, st: &Stages<'_>
     for (k, (dd, bb)) in &acc {
         eprintln!("DIAG {name} decoder site {k}: rel {:.2e}", (dd / bb.max(1e-300)).sqrt());
     }
+}
+
+/// **A real LongT5-local-base** (the data adapter `longt5`, no Rust reader): its stages lower at 512 source rows with the encoder's local
+/// band, and the pipeline is admitted or refused by the name of a ceiling (a dense `[h, L, L]` score is the lowering's, whatever the band).
+#[test]
+fn a_real_long_t5_local_base_lowers_and_names_its_admission() {
+    use tir::pipeline::{TokenPad, TokenRule, TokenSource};
+    const L: u32 = 512;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encdec/long-t5-local-base.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("config")).expect("json");
+    let r = misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).expect("the longt5 adapter reads it");
+    let s = r.spec;
+    assert_eq!(s.enc_local_radius, Some(127));
+    let ((ehl, _), (dhl, _)) = encdec::hl_programs(&s, L as usize, &|_| false).expect("hl programs");
+    let elw = encdec::lower_encoder(&ehl, &s, L).expect("lower encoder");
+    let dlw = encdec::lower_decoder(&dhl, &s, L, L).expect("lower decoder");
+    let e2 = encoder::encdec_encoder_v2(&elw, s.vocab as u32, L).expect("encoder v2");
+    let d2 = encoder::encdec_decoder_v2(&dlw, L).expect("decoder v2");
+    let rule = TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: L }) };
+    let pipe = encoder::encdec_pipeline(rule, L);
+    let verdict = match tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[e2.encode(), d2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1()) {
+        Ok(pa) => format!("ADMITTED: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves),
+        Err(e) => format!("REFUSED by name: {e}"),
+    };
+    eprintln!("long-t5-local-base at L = {L}: encoder {} nodes, decoder {} nodes; {verdict}", e2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), d2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>());
 }
 
 /// **Real configurations** (hand-written from the hub, `tests/configs/encdec/`), no weights: both

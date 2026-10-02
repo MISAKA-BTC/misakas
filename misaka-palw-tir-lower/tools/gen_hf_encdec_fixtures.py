@@ -71,6 +71,13 @@ CONFIGS = {
     "pegasus": dict(cls="PegasusConfig", model="PegasusForConditionalGeneration", embed_mul=0.5, seed_off=1,
                     kw=dict(BART_DIMS, activation_function="gelu", scale_embedding=True, pad_token_id=0, eos_token_id=1,
                             decoder_start_token_id=0, forced_eos_token_id=None)),
+    # LongT5 with LOCAL encoder attention: T5's stages, the encoder's self-attention restricted to |i - j| <= local_radius (2 here, so
+    # a source of 10 tokens is not dense).
+    "longt5": dict(cls="LongT5Config", model="LongT5ForConditionalGeneration", embed_mul=0.3,
+                   kw=dict(vocab_size=V, d_model=32, d_kv=8, d_ff=64, num_layers=2, num_decoder_layers=2, num_heads=4,
+                           relative_attention_num_buckets=8, relative_attention_max_distance=8, feed_forward_proj="relu",
+                           encoder_attention_type="local", local_radius=2, global_block_size=4,
+                           pad_token_id=0, eos_token_id=1, decoder_start_token_id=0)),
     # T5's encoder alone (T5EncoderModel): the text encoder of Flux, Stable Diffusion 3, PixArt, Wan and Sana. Gated-GELU.
     "t5_encoder": dict(cls="T5Config", model="T5EncoderModel", embed_mul=0.3, encoder_only=True,
                        kw=dict(vocab_size=V, d_model=32, d_kv=8, d_ff=64, num_layers=2, num_heads=4,
@@ -93,7 +100,7 @@ OUT_GAIN = 8.0
 
 def out_norm_names(spec, cfg):
     """The norm whose output is the decoder's output (the head's input)."""
-    if spec["cls"] == "T5Config":
+    if spec["cls"] in ("T5Config", "LongT5Config"):
         return {"decoder.final_layer_norm.weight"}
     if spec["cls"] in ("MBartConfig", "PegasusConfig"):
         return {"model.decoder.layer_norm.weight", "model.decoder.layer_norm.bias"}
@@ -147,7 +154,7 @@ def make_encoder_only(name, spec):
             recs.append({"input_ids": src, "encoder_hidden": enc.tolist()})
     meta = {"records": recs, "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,
             "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager"}
-    if spec["cls"] == "T5Config":
+    if spec["cls"] in ("T5Config", "LongT5Config"):
         t5_bucket_meta(cfg, meta)
     with open(os.path.join(d, "outputs.json"), "w") as f:
         json.dump(meta, f)
@@ -276,7 +283,7 @@ def make(name):
     meta = {"records": recs, "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,
             "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager",
             "decoder_start_token_id": cfg.decoder_start_token_id, "eos_token_id": eos}
-    if spec["cls"] == "T5Config":
+    if spec["cls"] in ("T5Config", "LongT5Config"):
         from transformers.models.t5.modeling_t5 import T5Attention
         nb, md = cfg.relative_attention_num_buckets, cfg.relative_attention_max_distance
         rel = torch.arange(-40, 41)

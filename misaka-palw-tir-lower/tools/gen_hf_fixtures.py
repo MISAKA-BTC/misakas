@@ -276,6 +276,12 @@ CONFIGS = {
                                         vision_output_dim=32, image_size=28, patch_size=14, projector_input_dim=32,
                                         projector_output_dim=32),
                      boi_token_index=V - 3, eoi_token_index=V - 2, image_token_index=V - 4), {"vlm": True}),
+    # PaliGemma: the Gemma-1 text decoder over a text-only prompt (causal, 1-indexed rope positions); the prefix-LM attention of an image
+    # prompt is not lowered (`prefix_lm`).
+    "paligemma_vlm": (c("paligemma", "PaliGemmaForConditionalGeneration",
+                        text_config=dict(L, model_type="gemma", num_hidden_layers=2, head_dim=8, hidden_act="gelu_pytorch_tanh",
+                                         num_image_tokens=4, max_position_embeddings=128),
+                        vision_config=dict(VIS_SIGLIP, projection_dim=32), image_token_index=V - 1, projection_dim=32), {"vlm": True}),
     "llava": (c("llava", "LlavaForConditionalGeneration", text_config=dict(L, model_type="llama", num_hidden_layers=2),
                 vision_config=dict(model_type="clip_vision_model", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
                                    num_attention_heads=2, image_size=28, patch_size=14, projection_dim=16),

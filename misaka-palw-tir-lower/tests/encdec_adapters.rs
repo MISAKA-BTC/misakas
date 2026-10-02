@@ -21,7 +21,7 @@ fn tests_dir() -> PathBuf {
 }
 
 /// The fixtures of the families an adapter reads and Rust never did: they are held by their own tests (`whisper.rs`, `encdec.rs`).
-const DATA_ONLY: [&str; 2] = ["whisper", "t5_encoder"];
+const DATA_ONLY: [&str; 3] = ["whisper", "t5_encoder", "longt5"];
 
 /// Every encoder-decoder config the crate carries: the tiny fixtures (`hf-encdec/*`) and the published configs
 /// (`configs/encdec/*.json`), as `(name, text)`.
@@ -42,7 +42,7 @@ fn configs() -> Vec<(String, String)> {
     files.sort();
     for p in files {
         let n = p.file_stem().unwrap().to_string_lossy().to_string();
-        if n.starts_with("whisper") || n.contains("encoder") {
+        if n.starts_with("whisper") || n.contains("encoder") || n.starts_with("long-t5") {
             continue;
         }
         out.push((format!("real {n}"), std::fs::read_to_string(&p).unwrap()));

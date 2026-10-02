@@ -104,6 +104,7 @@ dense!(
     gemma3,
     gemma3_vlm,
     llava,
+    paligemma_vlm,
     mistral3_vlm,
     phi3_longrope,
     olmo,

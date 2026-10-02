@@ -250,6 +250,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("GEN_STAGE_VAE_V1", Model, "a VAE decoder as a chain of single-position stages (resnet, mid attention, nearest x2 upsample, RGB head)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Image output ImageRgb8 HWC; each stage's float reference is checked."),
     // The capabilities the diffusers read path names when a component's lowering lacks them (`hf_schema::diffusers`): each is
     // expressible with the existing primitives once described; none is in the vocabulary yet.
+    feature!("ATTN_LOCAL_BIDIR_V1", Attention, "an encoder's self-attention restricted to the keys within a radius of the query on both sides", Implemented, ["Select"], NoReq, ["encdec::longt5_generates_through_the_two_stage_pipeline"], "LongT5's local attention: |i - j| <= local_radius (HF's block split and 3-block neighbourhood masked to |i - j| < block is this band), T5's relative bias over the true distance; a pinned [L, L] 0/1 mask and a Select to i32::MIN, like the count mask."),
+    feature!("ATTN_TRANSIENT_GLOBAL_V1", Attention, "local attention plus transient global tokens (each block's tokens pooled) every query also attends to", Missing, [], NoReq, [], "LongT5's transient-global encoder attention (encoder_attention_type = transient-global)."),
     feature!("POS_ROPE_AXES_V1", Embedding, "a rotary embedding over several position axes", Missing, [], NoReq, [], "FLUX: axes_dims_rope splits the head dimension over the ids of the text tokens (zeros) and the image tokens (row, column)."),
     feature!("ATTN_QK_NORM_JOINT_V1", Attention, "an RMS norm of q and k per stream inside a joint-stream attention", Missing, [], NoReq, [], "FLUX and SD3.5's MMDiT; the decoder's ATTN_QK_NORM_V1 lowering is not wired into the diffusion block."),
     feature!("GEN_ATTN_DUAL_V1", Attention, "dual-attention layers: a second self-attention over the image stream", Missing, [], NoReq, [], "SD3.5 (dual_attention_layers)."),
@@ -689,6 +691,9 @@ pub fn encdec_features(s: &crate::lower::encdec::EncDecSpec) -> Vec<FeatureUse> 
     } else {
         u.add("OUTPUT_ROWS_V1", None, "");
         u.add("EMBED_TOKEN_V1", None, format!("{} × {}", s.vocab, s.d));
+    }
+    if let Some(r) = s.enc_local_radius {
+        u.add("ATTN_LOCAL_BIDIR_V1", None, format!("radius {r}"));
     }
     if let EncInput::Frames { bins, frames, stem } = &s.input {
         u.add("EMBED_FRAMES_CONV1D_V1", None, format!("{frames} frames of {bins} bins through {} convolutions", stem.len()));

@@ -527,6 +527,12 @@
     "params": 68,
     "program": "d91278d87314e98be9a176d067cbff483354b4cb08f0d43b0a3afb570be884a1c1c0f2f715fa11f2df5ab0e2ef4121b92e8fba33c16234107443b3ef45f1daa8"
   },
+  "hf/paligemma_vlm": {
+    "artifact": "2b32dd8e696ba204d5039f8ea8101b715fadb0db9954e4ffabd9d9d819943d6b052f572066d983b6a81cfe7e61dce48d823d278073e11a8db974476962ee1461",
+    "nodes": 308,
+    "params": 67,
+    "program": "93f561145c3a7df42fdfd475237a90477c627b8c084ef24dfa6db1cea49018b1115f50e275680afc552ba9b14ee0ba159bd7b518cd1d0fe5f247d63749d36ddd"
+  },
   "hf/phi": {
     "artifact": "245e452c7c759cf0b102fa0d38ec9bb1b61a61daaea6ab5582120f7df4dc74dd06b73bf2b37acdbc4ac99c39d5a6e1691cb00fbfd6c3c97c95bda7a289916cc1",
     "nodes": 361,
@@ -953,6 +959,11 @@
     "nodes": 254,
     "params": 68,
     "program": "c13a90349180609312516988b760fe9c311c51ccd8c9314025d5534b6287377a85558886be3661d4b5890b2f9d6cb3b6e94384af6a8092ee089f30d890f28409"
+  },
+  "real/paligemma-3b-pt-224.json": {
+    "nodes": 308,
+    "params": 67,
+    "program": "219389fab5f860eb385e15852336bc00976b972acd58f069281c6b1a18269f6ad5e8bef56251d09e5743feafe89f823de3402b87fbb77e834e7b677116330c33"
   },
   "real/phi-2.json": {
     "nodes": 293,

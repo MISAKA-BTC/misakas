@@ -122,6 +122,12 @@ pub fn open_model_read(
 
 /// [`prepare`] from a spec (a GGUF checkpoint's, `crate::gguf::GgufModel::spec`).
 pub fn prepare_spec(spec: ArchSpec, opts: &LowerOpts) -> Result<Prepared> {
+    if spec.prefix_lm && opts.image_rows.is_some() {
+        return Err(crate::error::LowerError::not_lowerable(format!(
+            "{}: image rows over a prefix-LM text decoder — its prompt attends bidirectionally over the image tokens (ATTN_PREFIX_LM_V1, FR-20: a prefix stage that is not built); this lowering is the text-only causal path",
+            spec.architecture
+        )));
+    }
     let hl = crate::hl::build_program(&spec)?;
     let binding = crate::hf_weights::bind(&spec, &hl)?;
     // A pre-quantised checkpoint's projections lower from their stored integers.

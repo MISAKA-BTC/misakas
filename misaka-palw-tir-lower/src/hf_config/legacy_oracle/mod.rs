@@ -548,6 +548,7 @@ impl P<'_> {
                 weights: Default::default(),
             },
             notes: std::mem::take(&mut self.notes),
+            prefix_lm: false,
         }
     }
 }

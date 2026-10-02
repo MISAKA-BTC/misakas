@@ -923,6 +923,12 @@ pub struct ModelSpec {
     /// Things a reader of this spec should know (HF quirks followed on purpose, …).
     #[serde(default)]
     pub notes: Vec<String>,
+    /// **`ATTN_PREFIX_LM_V1`** (PaliGemma): the model attends bidirectionally over an image-and-prompt prefix when it is given
+    /// `token_type_ids` (an image prompt). This spec lowers the text-only path — a prompt of token ids, causal, which is what HF
+    /// computes without `token_type_ids` — so a lowering that binds image rows to it is REFUSED by name: causal attention over
+    /// the image tokens would be another function (`fidelity::prepare_spec`; the prefix stage is FR-20's pipeline, not built).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prefix_lm: bool,
 }
 
 impl ModelSpec {

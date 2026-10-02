@@ -636,6 +636,32 @@ is a chain of 10 admitted stages of 18 – 205 nodes. **Not done:** admission at
 float references widen it to `f64`; the probe is for the reduced and the mid-size components) and the other classes' lowerings — the table
 above is the list of what each needs.
 
+### 9.12 PaliGemma as its text decoder, and LongT5's local attention (`ATTN_PREFIX_LM_V1` scoped, `ATTN_LOCAL_BIDIR_V1`; FR-20, FR-18)
+
+**PaliGemma, the text-only path** (`adapters/{paligemma,vlm-gemma,vlm-gemma2}.json`; the refusal of `PaliGemmaForConditionalGeneration` is
+deleted from `refusals.json`). transformers computes a prompt of token ids WITHOUT `token_type_ids` causally, with 1-indexed rope positions —
+a rotation by one position more, which leaves every attention score unchanged — so the text decoder (Gemma-1: MQA, head_dim 256, GeGLU,
+`(1+w)` norms, a tied head; Gemma-2 for PaliGemma 2) is the ordinary decoder under `language_model.`, read from `text_config` through the
+VLM mixin like every other VLM's. What it does NOT compute is the bidirectional attention an IMAGE prompt gets (`use_bidirectional_attention`,
+block ids from `token_type_ids`): those prefix keys and values at layer `l >= 1` depend on later prefix tokens through the layers below, so
+they are not expressible in a causal scan and FR-20's pipeline (a prefix stage, one position over the padded prompt, its `Final` the post-rope
+K and V of every layer, a text stage seeded from them) is not built. The spec says so — `ModelSpec.prefix_lm`, a note in the report — and a
+lowering that binds image rows to it is REFUSED by name (`fidelity::prepare_spec`: `ATTN_PREFIX_LM_V1`), so no image prompt silently gets
+causal attention over its image tokens. The text-only decoder is what the corpus measures (as for every VLM entry: llava, gemma3_vlm, the Qwen
+VLMs); an image-conditioned PaliGemma needs FR-20. Evidence: the tiny HF model (float `3.8·10⁻⁶` on logits of scale 34, integer top-1 1.000,
+the three implementations bit-identical), the real PaliGemma-3B-pt-224 configuration read as an 18-layer MQA Gemma, and the refusal.
+
+**LongT5's local attention** (`adapters/longt5.json`, data only; `EncDecSpec.enc_local_radius`). LongT5 splits the encoder's sequence into
+blocks of `local_radius + 1` and lets each query block attend to its neighbours, then masks to `|i - j| < block`: that is the band
+`|i - j| <= local_radius` with T5's relative bias over the true distance. The lowering adds a pinned `[L, L]` 0/1 mask and a `Select` to
+`i32::MIN` before the count mask (the same primitive the count mask uses); the float reference masks the same pairs. The transient-global
+variant (`encoder_attention_type = "transient-global"`: block-pooled global tokens every query also attends to) is refused by name
+(`ATTN_TRANSIENT_GLOBAL_V1`, a `Missing` registry entry). Evidence: the tiny HF LongT5 (local radius 2, sources of 10 and 7 tokens) generates
+through the two-stage pipeline equal to transformers' on the teacher-forced and the random-id streams (float `10⁻⁶`, integer top-1 agreement as
+the T5 fixtures), and the real long-t5-local-base lowers and is ADMITTED at 512 source rows (1.09·10¹¹ MACs a job, 3.65 M step leaves of 4.19 M). A
+dense `[h, L, L]` score is the lowering's, whatever the band: at the model's own 4,096 – 16,384 tokens the leaf cap refuses it by name, and the
+banded form (`[L, 2r + 1]` scores through a gather) is the lever.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

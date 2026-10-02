@@ -211,6 +211,24 @@ fn bitnet_and_apertus() {
     assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Xielu)));
 }
 
+/// **PaliGemma as its text decoder** (`ATTN_PREFIX_LM_V1`, the text-only path): a Gemma-1 decoder (MQA, head_dim 256, GeGLU, (1+w) norms,
+/// tied head) under `language_model.`; the spec says it is the prefix-LM model's text-only causal path, and binding image rows to it is
+/// refused by name.
+#[test]
+fn paligemma_is_its_text_decoder_and_refuses_image_rows() {
+    let (s, _) = ok("paligemma-3b-pt-224");
+    assert!(s.prefix_lm && s.head.tied);
+    assert_eq!((s.layers.len(), attn(&s, 0).heads, attn(&s, 0).kv_heads, attn(&s, 0).head_dim), (18, 8, 1, 256));
+    assert!(s.notes.iter().any(|n| n.contains("ATTN_PREFIX_LM_V1")), "{:?}", s.notes);
+    assert!(s.hf.names["embed"].starts_with("language_model.model."), "{:?}", s.hf.names.get("embed"));
+    // The same decoder with image rows bound is another function: refused.
+    let cfg = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/paligemma-3b-pt-224.json")).unwrap();
+    let rows = misaka_palw_tir_lower::lower::ImageRows { rows: 256, width: 2048, unit: 1.0 / 4096.0, placeholder: 257152, mrope: None };
+    let opts = misaka_palw_tir_lower::lower::LowerOpts { image_rows: Some(rows), ..Default::default() };
+    let e = misaka_palw_tir_lower::fidelity::prepare(&cfg, &opts).err().expect("refused").to_string();
+    assert!(e.contains("ATTN_PREFIX_LM_V1"), "{e}");
+}
+
 #[test]
 fn remote_code_llama_likes_are_lowered_but_marked_unsure() {
     for n in ["internlm2.5-7b-chat", "minicpm-2b-sft-bf16", "exaone-3.5-2.4b-instruct"] {
