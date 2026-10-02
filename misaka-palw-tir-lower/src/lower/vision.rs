@@ -36,14 +36,17 @@ use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Pick, Src};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The image input's param name (lifted into an input by [`crate::encoder::vision_v2`]).
 pub const IMAGE_PARAM: &str = "input.image";
 
 /// What the tower's `post` produces.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum VisionOut {
+    /// ViT, DeiT: `layernorm` over every row (CLS included); all `rows()` rows are the output.
+    Rows,
     /// CLIP: the CLS row through `post_layernorm`, then `visual_projection` when `proj` is set.
     ClipPooled { proj: Option<usize> },
     /// SigLIP: `post_layernorm` over every row, then the attention-pooling head.
@@ -54,8 +57,11 @@ pub enum VisionOut {
     Projector { out: usize, act: Act },
 }
 
+/// The schema an adapter of kind `vision` instantiates (`VISION_FROM_SPEC_V1`).
+pub const VISION_SPEC_SCHEMA_V1: &str = "misaka.palw.vision-spec.v1";
+
 /// A vision tower as the lowering reads it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisionSpec {
     pub architecture: String,
     /// The canonical input size (before any downscale) and the downscale ratio.
@@ -89,6 +95,9 @@ pub struct VisionSpec {
     pub out: VisionOut,
     /// HL param name → checkpoint tensor template (`{L}` for the layer).
     pub names: BTreeMap<String, String>,
+    /// Checkpoint tensor prefixes the tower never reads by design (a pooler, a classification head).
+    #[serde(default)]
+    pub ignored: Vec<String>,
 }
 
 impl VisionSpec {
@@ -113,6 +122,7 @@ impl VisionSpec {
     /// Rows of the output.
     pub fn out_rows(&self) -> usize {
         match self.out {
+            VisionOut::Rows => self.rows(),
             VisionOut::ClipPooled { .. } | VisionOut::SiglipHead => 1,
             VisionOut::Merger { .. } => self.patches() / (self.merge * self.merge) as usize,
             VisionOut::Projector { .. } => self.patches(),
@@ -121,7 +131,7 @@ impl VisionSpec {
     pub fn out_width(&self) -> usize {
         match self.out {
             VisionOut::ClipPooled { proj } => proj.unwrap_or(self.d),
-            VisionOut::SiglipHead => self.d,
+            VisionOut::SiglipHead | VisionOut::Rows => self.d,
             VisionOut::Merger { out } | VisionOut::Projector { out, .. } => out,
         }
     }
@@ -141,10 +151,82 @@ fn cfg_act(v: &Value, k: &str, default: &str) -> Result<Act> {
     Act::from_hf(name).ok_or_else(|| LowerError::not_lowerable(format!("vision activation `{name}` is not modelled")))
 }
 
-/// Parse a vision tower's `config.json`. `size` is the class's declared input size when the model
-/// has none (Qwen2-VL), and `mean_std` the processor's normalisation (`preprocessor_config.json`;
-/// each family's default when `None`).
+impl VisionSpec {
+    /// A spec an adapter built is untrusted: the tiling, the head split and every size are checked before anything is
+    /// sized on it. A refusal names the field.
+    pub fn validate(&self) -> Result<()> {
+        const MAX_DIM: usize = 1 << 24;
+        let bad = |m: String| LowerError::bad(format!("{}: {m}", self.architecture));
+        for (what, v) in [("hidden size", self.d), ("heads", self.heads), ("intermediate size", self.inter), ("layers", self.layers)] {
+            if v == 0 || v > MAX_DIM {
+                return Err(bad(format!("{what} {v} outside [1, 2^24]")));
+            }
+        }
+        if self.patch == 0 || self.downscale == 0 || self.merge == 0 || self.temporal == 0 || self.h == 0 || self.w == 0 || self.h > 1 << 14 || self.w > 1 << 14 {
+            return Err(bad("a zero or oversized patch, downscale, merge, temporal size or input".into()));
+        }
+        if self.run > self.layers {
+            return Err(bad(format!("{} layers run of {}", self.run, self.layers)));
+        }
+        if self.std.iter().any(|s| *s <= 0.0 || !s.is_finite()) || self.mean.iter().any(|m| !m.is_finite()) {
+            return Err(bad("a normalisation mean or std that is not finite and positive".into()));
+        }
+        let (gh, gw) = self.grid();
+        if self.h % (self.downscale * self.patch) != 0 || self.w % (self.downscale * self.patch) != 0 || gh % self.merge != 0 || gw % self.merge != 0 {
+            return Err(LowerError::not_lowerable(format!(
+                "{}: a {}×{} input does not tile into {}-pixel patches (merge {})",
+                self.architecture, self.h, self.w, self.patch, self.merge
+            )));
+        }
+        if self.d % self.heads != 0 {
+            return Err(bad(format!("hidden {} not divisible by {} heads", self.d, self.heads)));
+        }
+        Ok(())
+    }
+}
+
+/// An adapter's vision spec, with the class's input size and the processor's normalisation applied (they are not in
+/// `config.json`), validated.
+pub fn vision_spec_from_value(mut v: Value, size: Option<(u32, u32)>, mean_std: Option<([f64; 3], [f64; 3])>) -> Result<VisionSpec> {
+    let o = v.as_object_mut().ok_or_else(|| LowerError::bad(format!("an invalid {VISION_SPEC_SCHEMA_V1}: not an object")))?;
+    if let Some((h, w)) = size {
+        o.insert("h".into(), Value::from(h));
+        o.insert("w".into(), Value::from(w));
+    }
+    if let Some((m, s)) = mean_std {
+        o.insert("mean".into(), serde_json::to_value(m).unwrap_or(Value::Null));
+        o.insert("std".into(), serde_json::to_value(s).unwrap_or(Value::Null));
+    }
+    if o.get("h").is_none_or(Value::is_null) || o.get("w").is_none_or(Value::is_null) {
+        return Err(LowerError::bad("this tower needs the class's declared input size (its config has none)"));
+    }
+    let s: VisionSpec = serde_json::from_value(v).map_err(|e| LowerError::bad(format!("an invalid {VISION_SPEC_SCHEMA_V1}: {e}")))?;
+    s.validate()?;
+    Ok(s)
+}
+
+/// Parse a vision tower's `config.json` through the adapter (kind `vision`) that claims its architecture. `size` is
+/// the class's declared input size when the model has none (Qwen2-VL), and `mean_std` the processor's normalisation
+/// (`preprocessor_config.json`; the adapter's default when `None`). The Rust reader below is the oracle of the
+/// adapters (`parse_vision_rust`); a tower inside a wrapper model (a VLM) is reached by `match.tower_of`.
 pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f64; 3], [f64; 3])>) -> Result<VisionSpec> {
+    let root: Value = serde_json::from_str(config).map_err(|e| LowerError::bad(format!("config.json: {e}")))?;
+    let arch = root["architectures"][0].as_str().unwrap_or("");
+    let model_type = root.get("model_type").and_then(Value::as_str);
+    // A tower alone, or the tower inside a wrapper model (a VLM): either is an adapter of kind `vision`.
+    match crate::adapter::builtin::find_vision_for(arch, model_type).or_else(|| crate::adapter::builtin::find_tower_in(arch)) {
+        Some(a) => {
+            let built = crate::adapter::eval::build_vision_spec(a, &root)?;
+            vision_spec_from_value(built.spec, size, mean_std)
+        }
+        None => parse_vision_rust(config, size, mean_std),
+    }
+}
+
+/// The Rust reader of the towers that predate adapters of kind `vision` (CLIP, SigLIP, LLaVA, Qwen2-VL, Qwen2.5-VL), kept as
+/// the ORACLE of their data forms (`adapters/{clip,siglip,qwen2-vl,qwen2-5-vl,llava}-vision*.json`): `tests/vision_adapters.rs`
+/// holds the adapters equal to it on every fixture, every real configuration and every single-key mutant. Nothing else calls it.
+pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f64; 3], [f64; 3])>) -> Result<VisionSpec> {
     let root: Value = serde_json::from_str(config).map_err(|e| LowerError::bad(format!("config.json: {e}")))?;
     let arch = root["architectures"][0].as_str().unwrap_or("").to_string();
     let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -220,6 +302,7 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
                 window: None,
                 out,
                 names,
+                ignored: vec![],
             }
         }
         "SiglipVisionModel" => {
@@ -274,6 +357,7 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
                 window: None,
                 out: VisionOut::SiglipHead,
                 names,
+                ignored: vec![],
             }
         }
         "Qwen2VisionTransformerPretrainedModel"
@@ -351,6 +435,7 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
                 window,
                 out: VisionOut::Merger { out },
                 names,
+                ignored: vec![],
             }
         }
         other => return Err(LowerError::not_lowerable(format!("`{other}` is not a vision tower this lowering models"))),
@@ -395,10 +480,10 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
         v.push(("patch.b".into(), vec![d], false, Src::t(n("patch.b")?)));
     }
     if s.cls {
-        v.push(("cls".into(), vec![d], false, Src::t(n("cls")?)));
+        v.push(("cls".into(), vec![d], false, Src::t(n("cls")?).reshape(vec![d])));
     }
     if s.learned_pos {
-        v.push(("pos".into(), vec![s.rows(), d], false, Src::t(n("pos")?)));
+        v.push(("pos".into(), vec![s.rows(), d], false, Src::t(n("pos")?).reshape(vec![s.rows(), d])));
     }
     if s.pre_norm {
         norm(&mut v, "pre_norm", "pre_norm", d, true, false)?;
@@ -427,6 +512,7 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
     lin(&mut v, "mlp.down", "mlp.down", d, s.inter, true, true)?;
     // post
     match &s.out {
+        VisionOut::Rows => norm(&mut v, "post_norm", "post_norm", d, true, false)?,
         VisionOut::ClipPooled { proj } => {
             norm(&mut v, "post_norm", "post_norm", d, true, false)?;
             if let Some(p) = proj {
@@ -541,6 +627,7 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         }
         ignored.push("language_model.".into());
     }
+    ignored.extend(s.ignored.iter().cloned());
     let mut aliases = vec![];
     if s.architecture.ends_with("VLForConditionalGeneration") {
         // A whole Qwen2-VL checkpoint: the language model is another stage's.
@@ -857,6 +944,12 @@ pub fn float_forward(
     observe("post.carry0".into(), &x);
     let gelu = |a: Act, z: f64| crate::float_ref::act(a, z as f32) as f64;
     let out: Vec<Vec<f64>> = match &s.out {
+        VisionOut::Rows => {
+            let (g, b) = (p("post_norm.gain", None)?, p("post_norm.bias", None)?);
+            let xn: Vec<Vec<f64>> = x.iter().map(|r| ln(r, &g, Some(&b), s.eps, false)).collect();
+            observe("post.post_norm".into(), &xn);
+            xn
+        }
         VisionOut::ClipPooled { proj } => {
             let (g, b) = (p("post_norm.gain", None)?, p("post_norm.bias", None)?);
             let pooled = ln(&x[0], &g, Some(&b), s.eps, false);
@@ -961,6 +1054,8 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         quant: BTreeMap::new(),
         table_shift: 0,
         carry_keys: BTreeMap::new(),
+        table_chunk: 1 << 24,
+        conv_weight_bits: 8,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -987,7 +1082,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
     Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
-fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
+pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
     let blk = &hl.blocks[hbk];
     let n = blk.nodes.len();
     let prefixes: Vec<String> = match blk.role {
@@ -1017,6 +1112,7 @@ fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
         suffix,
         appended: BTreeMap::new(),
         carry_in: Vec::new(),
+        gx: Default::default(),
     }
 }
 
@@ -1330,6 +1426,7 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let x = rows_val(tir::Ref::CarryIn(0), DType::I32, resid.clone(), d, "carry0");
             let ok = out_key();
             let out = match &s.out {
+                VisionOut::Rows => norm_rows_kind(&mut b, cx, &mut lb, &x, NormKind::Layer, s.eps, "post_norm", true, &Want { dt: DType::I32, key: ok.clone() })?,
                 VisionOut::ClipPooled { proj } => {
                     let row = b.slice(x.r, 0, 0, 1);
                     let row = Val { r: row, ..x.clone() };

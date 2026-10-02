@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod described;
+pub mod expr;
 mod remote;
 pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 #[cfg(feature = "remote")]
@@ -588,6 +589,13 @@ pub enum Src {
         src: Box<Src>,
         shape: Vec<usize>,
     },
+    /// The value's leading axes flattened into rows (`[Π lead, cols]`), then zero rows appended up to
+    /// `rows`: per-layer tables of different heights (a hashed n-gram embedding's primes differ by
+    /// layer) brought to the one shape their shared block declares.
+    PadRows {
+        src: Box<Src>,
+        rows: usize,
+    },
     /// A group-quantised linear stored as `{module}.qweight`, `.qzeros`, `.scales` (and GPTQ's
     /// `.g_idx`): its value is the `[out, in]` weight the format defines ([`QWeight::dequant`]);
     /// [`eval_qsrc`] reads the stored integers themselves.
@@ -603,7 +611,12 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers(),
             Src::Tensor(_) => false,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.is_quant()
             }
         }
@@ -613,7 +626,12 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers().then_some(fmt),
             Src::Tensor(_) => None,
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Stack { src, .. }
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => {
                 src.quant_format()
             }
         }
@@ -635,6 +653,10 @@ impl Src {
     }
     pub fn reshape(self, shape: Vec<usize>) -> Src {
         Src::Reshape { src: Box::new(self), shape }
+    }
+    /// [`Src::PadRows`].
+    pub fn pad_rows(self, rows: usize) -> Src {
+        Src::PadRows { src: Box::new(self), rows }
     }
     pub fn stack(self, var: char, count: usize) -> Src {
         Src::Stack { src: Box::new(self), var, count }
@@ -682,15 +704,26 @@ impl<'a> Resolver<'a> {
         self
     }
 
-    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes).
+    /// Tensors of the checkpoint the program never read (excluding the ignored prefixes and the module
+    /// buffers older checkpoints save, [`is_module_buffer`]).
     pub fn untouched(&self) -> Vec<String> {
         let t = self.touched.borrow();
         self.names
             .iter()
-            .filter(|n| !t.contains(*n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
+            .filter(|n| !t.contains(*n) && !is_module_buffer(n) && !self.ignored_prefixes.iter().any(|p| n.starts_with(p.as_str())))
             .cloned()
             .collect()
     }
+}
+
+/// A **buffer** of a module, not a parameter: rotary frequency tables and position-id ranges that older
+/// checkpoints saved (newer ones do not) and no forward pass reads as a weight. A tensor the reading does not use
+/// is a feature it may be missing (FR-26) — these are not. Any other buffer (a causal-mask table) is listed by
+/// the adapter that knows its family, in `ignored_prefixes`.
+pub fn is_module_buffer(name: &str) -> bool {
+    ["inv_freq", "cos_cached", "sin_cached", "position_ids"]
+        .iter()
+        .any(|b| name == *b || name.ends_with(&format!(".{b}")))
 }
 
 fn expand(template: &str, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<String> {
@@ -808,6 +841,15 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
                 return Err(LowerError::weights(format!("reshape {s:?} → {shape:?}")));
             }
             Ok(shape.clone())
+        }
+        Src::PadRows { src, rows } => {
+            let s = src_shape(src, r, layer, vars)?;
+            let Some((cols, lead)) = s.split_last() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let have: usize = lead.iter().product();
+            if have > *rows {
+                return Err(LowerError::weights(format!("{have} rows do not fit the {rows} the table is padded to")));
+            }
+            Ok(vec![*rows, *cols])
         }
         Src::Quant { module, fmt: QFormat::Gguf { .. } } => {
             let m = expand(module, layer, vars)?;
@@ -1001,6 +1043,16 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             }
             Ok(Tensor::new(shape.clone(), t.data))
         }
+        Src::PadRows { src, rows } => {
+            let t = eval_src(src, r, layer, vars)?;
+            let Some(cols) = t.shape.last().copied() else { return Err(LowerError::weights("padding the rows of a scalar")) };
+            let mut data = t.data;
+            if data.len() > rows * cols {
+                return Err(LowerError::weights(format!("{} rows do not fit the {rows} the table is padded to", data.len() / cols.max(1))));
+            }
+            data.resize(rows * cols, 0.0);
+            Ok(Tensor::new(vec![*rows, cols], data))
+        }
         Src::Quant { module, fmt } if fmt.is_integers() => Ok(load_quant(module, fmt, r, layer, vars)?.dequant()),
         Src::Quant { module, fmt } => load_quant_floats(module, fmt, r, layer, vars),
     }
@@ -1012,6 +1064,12 @@ pub fn layers_of_param(prog: &HlProgram, p: u32) -> Vec<usize> {
     prog.schedule.iter().enumerate().filter(|(_, k)| blocks.contains(&(**k as usize))).map(|(l, _)| l).collect()
 }
 
+/// The MODEL layers whose checkpoint tensors a per-layer param reads (the occurrences of its block,
+/// mapped through [`HlProgram::model_layer`]: a layer run as several blocks counts once).
+pub fn model_layers_of_param(prog: &HlProgram, p: u32) -> Vec<Option<usize>> {
+    layers_of_param(prog, p).into_iter().map(|l| prog.model_layer(l)).collect::<BTreeSet<usize>>().into_iter().map(Some).collect()
+}
+
 /// A frontend's weight mapping: one [`Src`] per HL param (same order as `HlProgram::params`),
 /// plus the prefix aliases its tensor names may appear under.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1020,6 +1078,21 @@ pub struct Binding {
     pub aliases: Vec<(String, String)>,
     /// Tensor-name prefixes that are unread by design and not reported as unused.
     pub ignored_prefixes: Vec<String>,
+}
+
+/// The tail of a shape-mismatch message when `got` and `want` differ only by size-1 axes (a bias stored
+/// `[1, E]` where the graph wants `[E]`): the fix an adapter author can apply. Shapes are never coerced
+/// silently — an implicit squeeze would be the same class of defect as a dropped flag — so the message
+/// names the step instead (`WEIGHTS_EXPR_V1`).
+pub fn size_one_hint(param: &str, got: &[usize], want: &[usize]) -> String {
+    let core = |s: &[usize]| s.iter().copied().filter(|d| *d != 1).collect::<Vec<usize>>();
+    if got != want && core(got) == core(want) {
+        format!(
+            ": the shapes differ only by size-1 axes — add the step {{\"reshape\": \"param\"}} to the expression of `{param}` in the adapter's `spec.hf.weights`"
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// A shape-only check of a checkpoint against a program.
@@ -1036,15 +1109,16 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         for l in layers {
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
                 Ok(s) => rep.errors.push(format!(
-                    "param `{}`{}: checkpoint gives {s:?}, graph needs {:?}",
+                    "param `{}`{}: checkpoint gives {s:?}, graph needs {:?}{}",
                     d.name,
                     l.map(|x| format!(" (layer {x})")).unwrap_or_default(),
-                    d.shape
+                    d.shape,
+                    size_one_hint(&d.name, &s, &d.shape)
                 )),
                 Err(e) => {
                     rep.errors.push(format!("param `{}`{}: {e}", d.name, l.map(|x| format!(" (layer {x})")).unwrap_or_default()))
@@ -1086,7 +1160,9 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
                     }
                 }
             }
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } => leaves(src, out),
+            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
+                leaves(src, out)
+            }
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
                 leaves(src, &mut inner);
@@ -1102,7 +1178,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
     }
     for (pi, d) in prog.params.iter().enumerate() {
         let layers: Vec<Option<usize>> =
-            if d.per_layer { layers_of_param(prog, pi as u32).into_iter().map(Some).collect() } else { vec![None] };
+            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         let mut ls = vec![];
         leaves(&binding.srcs[pi], &mut ls);
         for l in layers {

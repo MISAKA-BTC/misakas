@@ -287,6 +287,27 @@ pub fn encdec_encoder_v2(lw: &Lowered, vocab: u32, lmax: u32) -> Result<TirProgr
     )
 }
 
+/// **A feature-frame encoder-decoder's encoder stage** (Whisper): `input.mel` (`i16 [frames, bins]`, a fixed point of
+/// `2^-MEL_Q`, over `[−32768, 32767]`) lifted into an input, the stacked cross keys and values (or, for an encoder alone, the
+/// rows) its `Final` output. A class needs a binding that supplies the frames (`JobAudio`, FR-23: not in the protocol yet); until
+/// then the program runs standalone.
+pub fn encdec_frames_encoder_v2(lw: &Lowered) -> Result<TirProgramV2> {
+    use crate::lower::encdec::MEL_PARAM;
+    use tir::program_v2::InputSource;
+    lift_v2(lw, &[(MEL_PARAM, InputSource::External { lo: -32768, hi: 32767 })], OutputDecl::Final { node: lw.program.logits })
+}
+
+/// **The decoder of a fixed-length source** (the encoder's rows are all real: no count, no mask): `input.xkv` alone lifted.
+pub fn encdec_fixed_decoder_v2(lw: &Lowered) -> Result<TirProgramV2> {
+    use crate::lower::encdec::XKV_PARAM;
+    use tir::program_v2::InputSource;
+    lift_v2(
+        lw,
+        &[(XKV_PARAM, InputSource::External { lo: -32767, hi: 32767 })],
+        OutputDecl::Logits { node: lw.program.logits, scheme_id: lw.program.logits_scheme_id },
+    )
+}
+
 /// **An encoder-decoder's decoder**, the text stage: `input.xkv` (the encoder's codes, `i16` over
 /// `[−32767, 32767]`) and `input.enc_count` (`idx []` in `[0, L]`) lifted, its logits the
 /// `Logits` output.

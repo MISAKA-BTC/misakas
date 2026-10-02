@@ -46,6 +46,11 @@
 //!   corpus names (SiLU, GELU erf/tanh, quick-GELU, ReLU², sigmoid, tanh, softplus) is one table;
 //!   the table IS the exactly rounded float function on the code grid.
 //! * **Elementwise product** (the GLU): `Mul → i32`, then `N`.
+//! * **Generic features** ([`generic`]): hyper-connection streams (`StreamMean`, `StreamOuter`), the
+//!   hashed n-gram per-layer embedding (the hash in `i64` arithmetic, a per-head table read cut into
+//!   chunks under NF-8's `2^24` rows), sparse block attention (a fixed-K `TopK` over block scores, a
+//!   key mask on the attention logits) and the dilated causal convolution — each a combination of the
+//!   25 primitives, none a new one.
 //!
 //! Commit points: every carry-out, the logits, the K/V rows (normal form), and every `i16` code
 //! row at a matmul boundary (norm outputs, projection outputs, the attention context, the GLU
@@ -55,10 +60,13 @@
 //! commit point is added for cone size.
 
 pub mod bidir;
+pub mod cnn;
 pub mod encdec;
 pub mod qlinear;
 pub mod vision;
+mod dsa;
 pub mod fill;
+mod generic;
 pub mod stream;
 
 use crate::error::{LowerError, Result};
@@ -96,6 +104,16 @@ pub struct LowerOpts {
     /// touch — an executor's activations can land in all of them (PALW-GEN-20) — and a piece is 32 KiB: a class that must be
     /// convictable in one carrier needs a table of at most two pieces (`1`), or no table.
     pub table_shift: u8,
+    /// The rows of a chunk of a hashed embedding's per-head table (`None`: `2^24`, NF-8's largest
+    /// dimension). A table taller than this is cut into chunks of this many rows; a smaller value is
+    /// how the tests exercise the chunked lookup on tables of a few dozen rows.
+    pub table_chunk_rows: Option<u32>,
+    /// The width of a convolution's weight codes, the registrant's choice of fidelity against size: `8` (the default, `i8` per
+    /// output row) or `16` (`i16` per output row — twice the weight bytes and no rounding to speak of through a deep network:
+    /// MobileNetV2's integer cosine to transformers goes from about 0.99 to above 0.9995). A convolution is a gather and a
+    /// matmul either way, so the choice is the weight parameter's dtype: no primitive, no court change. Honoured by the
+    /// convolutional-network lowering ([`cnn::lower_cnn_opts`]); any other value is refused by name.
+    pub conv_weight_bits: u8,
 }
 
 impl Default for LowerOpts {
@@ -106,6 +124,8 @@ impl Default for LowerOpts {
             image_rows: None,
             quant: BTreeMap::new(),
             table_shift: 0,
+            table_chunk_rows: None,
+            conv_weight_bits: 8,
         }
     }
 }
@@ -213,6 +233,56 @@ pub enum RowKind {
     /// computes in a first pass over the blocks and hands the sibling fills ready-made
     /// ([`FillCtx::inject_split`]); this param's own codes are made in a second.
     SplitMain { kx: ScaleKey, f_max: i32 },
+    /// **A gathered table's codes at ONE scale per (layer, table)** (the hashed n-gram per-layer embedding's chunks;
+    /// any huge `Gather` table whose rows share a scale): the artifact's rows are NOT the checkpoint's rows in
+    /// order — the [`RowMap`] says which HL rows feed which artifact rows — and the scale is a reduction over the
+    /// HL rows the table uses (`max |x| / 32767`), a first pass over the blocks that keeps nothing but the maximum
+    /// ([`FillCtx::table_amax`]). The whole-tensor path computes the same number, so streaming = whole, byte for byte.
+    Mapped(MapRef),
+}
+
+/// A run of rows: artifact rows `dest..dest+len` are HL rows `src..src+len`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowRun {
+    pub dest: usize,
+    pub src: usize,
+    pub len: usize,
+}
+
+/// How an artifact param's rows come from ONE HL param's rows ([`RowKind::Mapped`]): the hook a streaming writer calls
+/// to read exactly the checkpoint rows a block of artifact rows needs.
+pub trait RowMap: Send + Sync {
+    /// Identifies the map (equality, debugging).
+    fn key(&self) -> String;
+    /// The runs of this occurrence (`layer`: the occurrence's layer index). Artifact rows no run covers are zero.
+    fn runs(&self, hl: &HlProgram, layer: Option<usize>) -> Result<Vec<RowRun>>;
+    /// HL rows `0..used` carry the table (the rest is padding): the range the shared scale is taken over.
+    fn used_rows(&self, hl: &HlProgram, layer: Option<usize>) -> Result<usize>;
+}
+
+/// A shared [`RowMap`], equal by its key.
+#[derive(Clone)]
+pub struct MapRef(pub Arc<dyn RowMap>);
+
+impl std::fmt::Debug for MapRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MapRef({})", self.0.key())
+    }
+}
+
+impl PartialEq for MapRef {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.key() == o.0.key()
+    }
+}
+
+/// Artifact rows `0..total` from the HL rows `src` (a flat `[rows, dim]`) by `runs`; the rows no run covers are zero.
+pub fn gather_runs(runs: &[RowRun], src: &[f32], dim: usize, total: usize) -> Vec<f32> {
+    let mut out = vec![0f32; total * dim];
+    for r in runs {
+        out[r.dest * dim..(r.dest + r.len) * dim].copy_from_slice(&src[r.src * dim..(r.src + r.len) * dim]);
+    }
+    out
 }
 
 /// A TIR param whose integers are [`RowKind`] codes of the HL param `hl`: row `r` of the artifact's
@@ -329,7 +399,10 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
             tir::program::MAX_CARRY
         )));
     }
-    if hl.carries.iter().any(|c| c.shape.len() != 1) || hl.carries.first().map(|c| c.shape.as_slice()) != Some(&[hl.hidden][..]) {
+    // The residual carry is the hidden width, or `streams` times it under hyper-connections.
+    if hl.carries.iter().any(|c| c.shape.len() != 1)
+        || !hl.carries.first().is_some_and(|c| c.shape[0] % hl.hidden.max(1) == 0 && c.shape[0] >= hl.hidden)
+    {
         return Err(LowerError::eval("internal: the carries are the residual, then rows"));
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
@@ -382,6 +455,8 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         quant: opts.quant.clone(),
         table_shift: opts.table_shift,
         carry_keys: BTreeMap::new(),
+        table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
+        conv_weight_bits: 8,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -534,6 +609,10 @@ struct Cx<'h> {
     /// The scale of each carry past the residual (a KV slot's rows), fixed by the one layer that
     /// fills it ([`carry_out`]).
     carry_keys: BTreeMap<usize, ScaleKey>,
+    /// [`LowerOpts::table_chunk_rows`], resolved.
+    table_chunk: i64,
+    /// [`LowerOpts::conv_weight_bits`] (8 or 16).
+    conv_weight_bits: u8,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -631,6 +710,8 @@ struct Lb {
     /// Per carry past the residual: its width, and its scale once the layer that fills it is
     /// lowered.
     carry_in: Vec<(usize, Option<ScaleKey>)>,
+    /// What the generic feature lowerers ([`generic`]) share inside one block.
+    gx: generic::Shared,
 }
 
 fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(u8, Option<u16>)> {
@@ -678,6 +759,7 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         suffix,
         appended: BTreeMap::new(),
         carry_in,
+        gx: generic::Shared::default(),
     };
     gdn_patterns(hl, blk, &mut lb)?;
     ssm_patterns(blk, &mut lb)?;
@@ -835,6 +917,17 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
                     want[j as usize] = Some(Want { dt: w.dt, key: w.key.times(1.0 / c) });
                 }
             }
+            // The same value repeated (hyper-connection streams) is produced where the
+            // concatenation is wanted, so the copies are concatenated as they are.
+            Op::Concat => {
+                if let hl::Ref::Node(j, 0) = n.inputs[0]
+                    && n.inputs.len() > 1
+                    && n.inputs.iter().all(|r| *r == n.inputs[0])
+                    && want[j as usize].is_none()
+                {
+                    want[j as usize] = Some(w.clone());
+                }
+            }
             // `x · p` keeps the key: the product is formed in integers.
             Op::ScaleParam => {
                 if let hl::Ref::Node(j, 0) = n.inputs[0]
@@ -858,12 +951,49 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
     want
 }
 
-/// The key of `post`'s output node: the logits at their site's `i32` scale, or an encoder's
-/// embedding in fixed point — `Q30` when L2-normalised (every lane is in `[−1, 1]`), else a
-/// power-of-two unit sized on the calibration ([`Base::Pow2Site`]).
+/// **The lowering's version** — the recipe that turns a spec into a program and an artifact.
+///
+/// * `1` — until `LOGITS_Q24_V1`: the logits at a calibrated static scale (an arbitrary real,
+///   `≈ 2^−27.5 … 2^−23.7` on the tiny fixtures), so a sampler had to read the scale from the pack.
+/// * `2` — `LOGITS_Q24_V1`: **a text program's `logits` are natural-log units × 2^24 in an `i32`,
+///   whatever the model** (temperature means the same for every class). The last narrowing of the
+///   head lands on `2^−24` instead of the calibrated scale — the same nodes, other `(m, s)` params.
+///   `i32` holds `|logit| < 128`; calibration that sees a logit past [`LOGITS_Q24_REFUSE_AT`] is
+///   refused ([`check_logits_range`]), and an input beyond 128 at run time saturates.
+pub const LOWERING_VERSION: u32 = 2;
+
+/// A model whose calibrated logits reach this many natural-log units is refused (`i32` at `2^−24`
+/// holds ±127.99999994; the margin keeps ordinary inputs from saturating).
+pub const LOGITS_Q24_REFUSE_AT: f64 = 120.0;
+
+/// `LOGITS_Q24_V1`'s bound, checked where the post occurrence's scales resolve: the calibrated
+/// absmax of the logits site, in natural-log units, must fit.
+pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>) -> Result<()> {
+    if !matches!(hl.output, hl::HlOutput::Logits) {
+        return Ok(());
+    }
+    let site = match hl.blocks[hl.post].outputs.first() {
+        Some(hl::Ref::Node(i, _)) => hl.blocks[hl.post].nodes[*i as usize].site.clone(),
+        _ => None,
+    };
+    let Some(site) = site else { return Ok(()) };
+    let amax = ctx.absmax(&site)?;
+    if amax >= LOGITS_Q24_REFUSE_AT {
+        return Err(LowerError::not_lowerable(format!(
+            "LOGITS_Q24_V1: the calibrated logits reach {amax:.1} natural-log units (limit {LOGITS_Q24_REFUSE_AT}); the Q24 logits of a text program hold |logit| < 128. \
+             A randomly initialised model can have logits this large; a trained model's are far below — a property of the checkpoint, not of the lowering"
+        )));
+    }
+    Ok(())
+}
+
+/// The key of `post`'s output node: the logits in Q24 (`LOGITS_Q24_V1`: natural-log units × 2^24,
+/// the same for every model), or an encoder's embedding in fixed point — `Q30` when L2-normalised
+/// (every lane is in `[−1, 1]`), else a power-of-two unit sized on the calibration
+/// ([`Base::Pow2Site`]).
 fn output_key(hl: &HlProgram, site: &str) -> ScaleKey {
     match hl.output {
-        hl::HlOutput::Logits => ScaleKey::site(vec![site.to_string()], true),
+        hl::HlOutput::Logits => ScaleKey::q24(),
         hl::HlOutput::Embedding { normalized: true } => ScaleKey { base: Base::Fixed(1.0 / (1u64 << 30) as f64), factor: 1.0 },
         hl::HlOutput::Embedding { normalized: false } => {
             ScaleKey { base: Base::Pow2Site { names: vec![site.to_string()] }, factor: 1.0 }
@@ -881,7 +1011,7 @@ fn q14() -> ScaleKey {
 fn rope_consumer_sites(blk: &hl::Block) -> Vec<Vec<String>> {
     let mut out = vec![Vec::new(); blk.nodes.len()];
     for n in &blk.nodes {
-        if let Op::Rope { .. } = n.op
+        if let Op::Rope { .. } | Op::RopeAtBlock { .. } = n.op
             && let hl::Ref::Node(j, 0) = n.inputs[0]
             && let Some(s) = &n.site
         {
@@ -1135,7 +1265,9 @@ fn decl_rows(
     let (dt, fill) = match kind {
         RowKind::W8 => (DType::I8, weight_codes(hl_p)),
         RowKind::T16 => (DType::I16, table_codes(hl_p)),
-        RowKind::SplitMain { .. } => return Err(LowerError::eval("internal: a split main is declared with decl_rows_with")),
+        RowKind::SplitMain { .. } | RowKind::Mapped(_) => {
+            return Err(LowerError::eval("internal: a split main or a mapped table is declared with decl_rows_with"));
+        }
     };
     decl_rows_with(b, cx, lb, name, dt, shape, per_layer, kind, hl_p, fill)
 }
@@ -1363,6 +1495,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = codes(b, cx, lb, &x)?;
             one(lower_table(b, cx, lb, i, &x, TableFn::Act(*a), &site)?)
         }
+        Op::Xielu => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let ps = [pidx(node.inputs[1])?, pidx(node.inputs[2])?, pidx(node.inputs[3])?, pidx(node.inputs[4])?];
+            one(lower_xielu(b, cx, lb, i, &x, ps, &site)?)
+        }
         Op::Softcap { cap } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
@@ -1460,13 +1598,15 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
             ])
         }
-        Op::MoeExperts { top_k, act, glu, bias, input_scaled } => {
+        Op::MoeExperts { top_k, act, glu, bias, input_scaled, gated } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let idx = operand(lb, node.inputs[1])?;
             let w = operand(lb, node.inputs[2])?;
-            let ps: Vec<u32> = (3..if *bias { 9 } else { 6 }).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, &site, &want)?;
+            // Gated: gate, up, down (+ three biases); plain: up, down.
+            let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+            let ps: Vec<u32> = (3..3 + n_params).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, *gated, &site, &want)?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -1528,7 +1668,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             }
             Ok(vec![None])
         }
-        Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks, chunk } => {
+        Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window: _, alibi, sinks, chunk, blocks } => {
             let sink_param = if *sinks { Some(pidx(node.inputs[3])?) } else { None };
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
@@ -1544,6 +1684,25 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 StateKind::Fixed => return Err(LowerError::eval("internal: attention over a Fixed state")),
             };
             let shape = AttnDims { heads: *heads, kv: *kv_heads, d: *head_dim, dv: *v_head_dim, window };
+            // Sparse block attention: the indexer's block ids are the node's last input.
+            let sparse = match blocks {
+                Some(ratio) => {
+                    let ids_ref = *node.inputs.last().ok_or_else(|| LowerError::eval("internal: sparse attention without block ids"))?;
+                    let ids = operand(lb, ids_ref)?;
+                    let nb = match ids_ref {
+                        hl::Ref::Node(j, 0) => match &hl.blocks[lb.hb].nodes[j as usize].op {
+                            Op::BlockSelect { blocks, .. } => *blocks,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    };
+                    if nb == 0 {
+                        return Err(LowerError::eval("internal: sparse attention's block ids are not a BlockSelect's"));
+                    }
+                    Some(SparseBlocks { ratio: *ratio, ids: ids.r, blocks: nb })
+                }
+                None => None,
+            };
             let extra = AttnExtras {
                 scale: *scale,
                 softcap: *softcap,
@@ -1551,10 +1710,11 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 sinks: sink_param,
                 rel_bias: None,
                 chunk: *chunk,
+                sparse,
             };
             one(lower_attention(b, cx, lb, &q, (kw, kk), (vw, vk), shape, &extra, &site, &want)?)
         }
-        Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
+        Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale, indexer } => {
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
             let (hl::Ref::State(ls), hl::Ref::State(rs)) = (node.inputs[1], node.inputs[2]) else {
@@ -1566,7 +1726,24 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dims = MlaDims { heads: *heads, nope: *nope, rope: *rope, vd: *v_dim, r: *kv_lora };
             let want =
                 if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
-            one(lower_mla(b, cx, lb, &q, lat, kr, kvb, dims, *scale, &site, &want)?)
+            // DeepSeek sparse attention: the indexer's query, head weights and key window.
+            let idx = match indexer {
+                Some(ix) => {
+                    let iq = operand(lb, node.inputs[4])?;
+                    let iq = codes(b, cx, lb, &iq)?;
+                    let iw = operand(lb, node.inputs[5])?;
+                    let iw = codes(b, cx, lb, &iw)?;
+                    let hl::Ref::State(ih) = node.inputs[6] else { return Err(LowerError::eval("internal: a token indexer without its key history")) };
+                    let keys = lb.windows.get(&ih).cloned().ok_or_else(|| LowerError::eval("internal: indexer keys read before their append"))?;
+                    let window = match hl.states[ih as usize].kind {
+                        StateKind::Hist { window } => hist_window(cx, lb.hb, window),
+                        StateKind::Fixed => return Err(LowerError::eval("internal: the indexer's keys are a Fixed state")),
+                    };
+                    Some(dsa::IndexInputs { q: iq, w: iw, keys, heads: ix.heads, dim: ix.dim, topk: ix.topk, window })
+                }
+                None => None,
+            };
+            one(lower_mla(b, cx, lb, &q, lat, kr, kvb, dims, *scale, &site, &want, idx.as_ref())?)
         }
         Op::TokenShift => {
             // The previous position's row (zeros at position 0, as the state starts), and this
@@ -1648,6 +1825,25 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         }
         Op::Concat => {
             let parts: Vec<Val> = node.inputs.iter().map(|r| operand(lb, *r)).collect::<Result<_>>()?;
+            // One value repeated, already at the wanted `i32` scale: the copies are concatenated wide.
+            if parts.len() > 1
+                && parts.len() <= 64
+                && node.inputs.iter().all(|r| *r == node.inputs[0])
+                && want.dt == DType::I32
+                && parts[0].dt == DType::I32
+                && parts[0].key.same(&want.key)
+            {
+                // A node takes at most 8 inputs (NF-14): more copies are concatenated in groups of 8.
+                let mut refs = vec![parts[0].r; parts.len()];
+                while refs.len() > 8 {
+                    refs = refs.chunks(8).map(|c| if c.len() == 1 { c[0] } else { b.concat(c, 0) }).collect();
+                }
+                let r = b.concat(&refs, 0);
+                let site = if site.is_empty() { parts[0].site.clone() } else { site };
+                let v = Val { r, len: out_len, site, ..parts[0].clone() };
+                note_resid(cx, lb, &v);
+                return one(v);
+            }
             let first = codes(b, cx, lb, &parts[0])?;
             let mut refs = vec![first.r];
             for p in &parts[1..] {
@@ -1661,13 +1857,13 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let site = if site.is_empty() { first.site.clone() } else { site };
             one(Val { r, len: out_len, site, ..first })
         }
-        Op::CausalConv1d { channels, kernel, bias, act } => {
+        Op::CausalConv1d { channels, kernel, bias, act, dilation } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let hl::Ref::State(st) = node.inputs[1] else { return Err(LowerError::eval("internal: conv without a state")) };
             let w = pidx(node.inputs[2])?;
             let bp = if *bias { Some(pidx(node.inputs[3])?) } else { None };
-            one(lower_conv(b, cx, lb, i, &x, st, w, bp, *channels, *kernel, *act, &site)?)
+            one(lower_conv(b, cx, lb, i, &x, st, w, bp, *channels, *kernel, *dilation, *act, &site)?)
         }
         Op::L2Norm { groups, eps: _ } => {
             // `x·rsqrt(Σx² + eps)`: the library's Q15 L2 norm (a zero row stays zero; eps ≈ 1e-6
@@ -1693,16 +1889,19 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dims = GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale };
             one(lower_gdn(b, cx, lb, &q, &k, &v, &a, &bb, &gi, st, dims, &site, &want)?)
         }
-        Op::GatedRmsNorm { eps, groups, gate_first } => {
+        Op::GatedRmsNorm { eps, groups, gate_first, act } => {
             let x = operand(lb, node.inputs[0])?;
             let z = operand(lb, node.inputs[1])?;
             let z = codes(b, cx, lb, &z)?;
             let gain = pidx(node.inputs[2])?;
             let v = if *gate_first {
+                if *act != Act::Silu {
+                    return Err(LowerError::not_lowerable(format!("a gate-first gated norm with a {act:?} gate")));
+                }
                 let x = codes(b, cx, lb, &x)?;
                 lower_gated_norm_first(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?
             } else {
-                lower_gated_norm(b, cx, lb, &x, &z, gain, *eps, *groups, &site, &want)?
+                lower_gated_norm(b, cx, lb, &x, &z, gain, *eps, *groups, *act, &site, &want)?
             };
             note_resid(cx, lb, &v);
             one(v)
@@ -1732,6 +1931,66 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dt = lb.ssm.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: scan step size not matched"))?;
             let dims = SsmDims { heads: *heads, p: *head_dim, groups: *groups, n: *state, per_state_decay: false };
             one(lower_ssm(b, cx, lb, &x, &bb, &cc, ap, dp, st, &dt, dims, &site, &want)?)
+        }
+        Op::StreamMean { streams } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            one(generic::stream_mean(b, cx, lb, &x, *streams, &site, &want)?)
+        }
+        Op::StreamOuter { streams } => {
+            let o = operand(lb, node.inputs[0])?;
+            let o = codes(b, cx, lb, &o)?;
+            let w = operand(lb, node.inputs[1])?;
+            let w = codes(b, cx, lb, &w)?;
+            one(generic::stream_outer(b, cx, lb, &o, &w, *streams, &site, &want)?)
+        }
+        Op::GroupDot { groups } => {
+            let a = operand(lb, node.inputs[0])?;
+            let a = codes(b, cx, lb, &a)?;
+            let c = operand(lb, node.inputs[1])?;
+            let c = codes(b, cx, lb, &c)?;
+            one(generic::group_dot(b, cx, lb, &a, &c, *groups, &site, &want)?)
+        }
+        Op::GroupRepeat { groups, size } => {
+            let x = operand(lb, node.inputs[0])?;
+            if x.key.split() > 0 {
+                return Err(LowerError::eval("internal: GroupRepeat reads a value with per-channel scales"));
+            }
+            let (g, sz) = (*groups as u32, *size as u32);
+            let col = b.reshape_fixed(x.r, &[g, 1]);
+            let bc = b.broadcast(col, &[Dim::Fixed(g), Dim::Fixed(sz)]);
+            let r = b.reshape_fixed(bc, &[g * sz]);
+            one(Val { r, len: groups * size, ..x })
+        }
+        Op::NgramIds { ple, layers } => one(generic::ngram_ids(b, cx, lb, node, ple, layers, &site)?),
+        Op::GatherRows { .. } => {
+            let ids = operand(lb, node.inputs[0])?;
+            let tp = pidx(node.inputs[1])?;
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(generic::gather_rows(b, cx, lb, node, &ids, tp, &site, &want)?)
+        }
+        Op::BlockMean { ratio } => {
+            let k = operand(lb, node.inputs[0])?;
+            let k = codes(b, cx, lb, &k)?;
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(generic::block_mean(b, cx, lb, node, &k, *ratio, &site, &want)?)
+        }
+        Op::BlockWrite { ratio, blocks } => {
+            let row = operand(lb, node.inputs[0])?;
+            generic::block_write(b, cx, lb, node, &row, *ratio, *blocks)?;
+            Ok(vec![None])
+        }
+        Op::BlockSelect { heads, dim, ratio, blocks, top } => {
+            let q = operand(lb, node.inputs[0])?;
+            let q = codes(b, cx, lb, &q)?;
+            let cand = operand(lb, node.inputs[1])?;
+            let cand = codes(b, cx, lb, &cand)?;
+            one(generic::block_select(b, cx, lb, node, &q, &cand, *heads, *dim, *ratio, *blocks, *top, &site)?)
+        }
+        Op::RopeAtBlock { heads, head_dim, rotary_dim, offset, style, table, ratio } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            one(generic::rope_at_block(b, cx, lb, &x, *heads, *head_dim, *rotary_dim, *offset, *style, *table, *ratio)?)
         }
         Op::Zeros => {
             let n: usize = node.outs[0].iter().product();
@@ -2393,50 +2652,48 @@ impl TableFn {
     }
 }
 
+/// xIELU reads parameters of its layer (`Op::Xielu`): a table of the activation alone would be another function.
+fn refuse_learned_act(f: TableFn) -> Result<()> {
+    if matches!(f, TableFn::Act(Act::Xielu)) {
+        return Err(LowerError::not_lowerable("xIELU is a learned activation: only a dense MLP's reads its parameters"));
+    }
+    Ok(())
+}
+
+/// A table's function, made at fill time (it may read the layer's own float parameters, as xIELU's does).
+type TableMaker = Arc<dyn Fn(&FillCtx<'_>) -> Result<Box<dyn Fn(f64) -> f64 + Send + Sync>> + Send + Sync>;
+
 /// `Table(x; T)`: `Gather(T, Cast_idx(x + 32768))`, `T` the float function on the code grid,
 /// rounded to the output site's codes.
 fn lower_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, x: &Val, f: TableFn, site: &str) -> Result<Val> {
+    refuse_learned_act(f)?;
     // A table has one output scale (its own site's, and any RoPE's that rotates it).
     let mut names = vec![site.to_string()];
     names.extend(lb.rope_sites[i].iter().cloned());
     let out_key = ScaleKey::site(names, false);
-    let (kx, ko) = (x.key.clone(), out_key.clone());
-    let shift = cx.table_shift.min(8) as u32;
-    let entries = 65536usize >> shift;
-    let t = decl(
+    table_with(b, cx, lb, x, site, out_key, Arc::new(move |_| Ok(Box::new(move |v| f.eval(v)))))
+}
+
+/// **xIELU** (`ACT_LEARNED_POINTWISE_V1`): the table of `αp·x² + β·x` / `(expm1(min(x, ε)) − x)·αn + β·x` over the code grid, made
+/// from the layer's four scalars `ps` (`p`, `n`, `β`, `ε`: float params read at fill time, so one table per layer in the layer
+/// block's stacked param). A lookup like every other activation: one `Gather` of a 65,536-entry `i16` table.
+fn lower_xielu(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, x: &Val, ps: [u32; 4], site: &str) -> Result<Val> {
+    let mut names = vec![site.to_string()];
+    names.extend(lb.rope_sites[i].iter().cloned());
+    let out_key = ScaleKey::site(names, false);
+    table_with(
         b,
         cx,
         lb,
-        &format!("{site}.table"),
-        DType::I16,
-        &[entries],
-        per_layer(lb),
+        x,
+        site,
+        out_key,
         Arc::new(move |c| {
-            let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
-            // Entry `i` stands for the codes `i·2^shift ..= i·2^shift + 2^shift − 1`: the function at their midpoint.
-            let width = (1i64 << shift) as f64;
-            Ok(IntTensor::i16(
-                vec![entries],
-                (0..entries as i64)
-                    .map(|i| {
-                        let mid = i as f64 * width + (width - 1.0) / 2.0 - 32768.0;
-                        (f.eval(mid * sx) / so).round().clamp(-32767.0, 32767.0) as i16
-                    })
-                    .collect(),
-            ))
+            let sc = |p: u32| -> Result<f64> { Ok(c.f(p)?.data[0] as f64) };
+            let (p, n, beta, eps) = (sc(ps[0])?, sc(ps[1])?, sc(ps[2])?, sc(ps[3])?);
+            Ok(Box::new(move |v| crate::float_ref::xielu(v, p, n, beta, eps)))
         }),
-    )?;
-    // `(code + 32768) >> shift` into `idx` (every i16 code lands in [0, 65535 >> shift]).
-    let off = b.c(DType::I32, 32768);
-    let at = if shift == 0 {
-        b.add(x.r, off, DType::Idx)
-    } else {
-        let biased = b.add(x.r, off, DType::I32);
-        b.shr(biased, shift, Rounding::Floor, DType::Idx)
-    };
-    let r = b.gather(t, at, 0, 0);
-    b.commit(r);
-    Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
+    )
 }
 
 /// [`lower_table`] for a value that is not an HL node's output (a sub-site of a composite).
@@ -2454,26 +2711,53 @@ fn lower_table_keyed(
     site: &str,
     out_key: ScaleKey,
 ) -> Result<Val> {
+    refuse_learned_act(f)?;
+    table_with(b, cx, lb, x, site, out_key, Arc::new(move |_| Ok(Box::new(move |v| f.eval(v)))))
+}
+
+/// The table param `{site}.table` (the function over the input's code grid, rounded to the output's codes) and its lookup.
+///
+/// **How coarsely it is indexed** (`LowerOpts::table_shift`): the input code `c` is looked up at `(c + 32768) >> table_shift` in a
+/// table of `65536 >> table_shift` entries, each the function at the midpoint of the `2^table_shift` codes it stands for. `0` (the
+/// default) is the full `i16` domain, a 128 KiB table. A pipeline class prices a close at every distinct artifact piece a tile's
+/// lookups can touch — an executor's activations can land in all of them (PALW-GEN-20) — and a piece is 32 KiB: a class that must
+/// be convictable in one carrier needs a table of at most two pieces (`1`), or no table.
+fn table_with(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, site: &str, out_key: ScaleKey, make: TableMaker) -> Result<Val> {
     let (kx, ko) = (x.key.clone(), out_key.clone());
+    let shift = cx.table_shift.min(8) as u32;
+    let entries = 65536usize >> shift;
     let t = decl(
         b,
         cx,
         lb,
         &format!("{site}.table"),
         DType::I16,
-        &[65536],
+        &[entries],
         per_layer(lb),
         Arc::new(move |c| {
             let (sx, so) = (c.scale(&kx)?, c.scale(&ko)?);
+            let f = make(c)?;
+            // Entry `i` stands for the codes `i·2^shift ..= i·2^shift + 2^shift − 1`: the function at their midpoint.
+            let width = (1i64 << shift) as f64;
             Ok(IntTensor::i16(
-                vec![65536],
-                (0..65536i64).map(|i| (f.eval((i - 32768) as f64 * sx) / so).round().clamp(-32767.0, 32767.0) as i16).collect(),
+                vec![entries],
+                (0..entries as i64)
+                    .map(|i| {
+                        let mid = i as f64 * width + (width - 1.0) / 2.0 - 32768.0;
+                        (f(mid * sx) / so).round().clamp(-32767.0, 32767.0) as i16
+                    })
+                    .collect(),
             ))
         }),
     )?;
-    // `code + 32768` straight into `idx` (every i16 code lands in [0, 65535]).
+    // `(code + 32768) >> shift` into `idx` (every i16 code lands in [0, 65535 >> shift]).
     let off = b.c(DType::I32, 32768);
-    let at = b.add(x.r, off, DType::Idx);
+    let at = if shift == 0 {
+        b.add(x.r, off, DType::Idx)
+    } else {
+        let biased = b.add(x.r, off, DType::I32);
+        b.shr(biased, shift, Rounding::Floor, DType::Idx)
+    };
     let r = b.gather(t, at, 0, 0);
     b.commit(r);
     Ok(Val { r, dt: DType::I16, key: out_key, len: x.len, site: site.to_string() })
@@ -2529,6 +2813,17 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
         lb.angles.insert(t, out);
         return Ok(out);
     }
+    let out = rope_angles_at(b, cx, lb, t, tir::Ref::Input(INPUT_POS))?;
+    lb.angles.insert(t, out);
+    Ok(out)
+}
+
+/// The `(cos, sin)` Q24 rows of RoPE table `t` at the position `pos` (an `idx` or `i64` scalar):
+/// the block's own position for a token's rotation, the first position of its block of keys for a
+/// pooled key's ([`generic::rope_at_block`]). Not cached.
+fn rope_angles_at(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32, pos: tir::Ref) -> Result<(tir::Ref, tir::Ref)> {
+    let hl = cx.hl;
+    let f = hl.rope_tables[t as usize].clone();
     let half = f.inv_freq.len();
     let hb = cx.history_bound as usize;
     let per_position = f.dynamic.is_some() || f.longrope.is_some();
@@ -2550,7 +2845,6 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
         };
         let cos = decl(b, cx, lb, &format!("rope{t}.cos"), DType::I32, &[hb, half], false, mk(false))?;
         let sin = decl(b, cx, lb, &format!("rope{t}.sin"), DType::I32, &[hb, half], false, mk(true))?;
-        let pos = tir::Ref::Input(INPUT_POS);
         (b.gather(cos, pos, 0, 0), b.gather(sin, pos, 0, 0))
     } else {
         let lo_bits = hb.trailing_zeros().div_ceil(2);
@@ -2573,9 +2867,8 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
         let sh = decl(b, cx, lb, &format!("rope{t}.sin_hi"), DType::I32, &[hi_rows, half], false, mk(hi_rows, lo_bits, true))?;
         let cl = decl(b, cx, lb, &format!("rope{t}.cos_lo"), DType::I32, &[lo_rows, half], false, mk(lo_rows, 0, false))?;
         let sl = decl(b, cx, lb, &format!("rope{t}.sin_lo"), DType::I32, &[lo_rows, half], false, mk(lo_rows, 0, true))?;
-        b.rope_angles_two_level(tir::Ref::Input(INPUT_POS), ch, sh, cl, sl, lo_bits)
+        b.rope_angles_two_level(pos, ch, sh, cl, sl, lo_bits)
     };
-    lb.angles.insert(t, out);
     Ok(out)
 }
 
@@ -2636,11 +2929,29 @@ fn lower_rope(
     style: RopeStyle,
     t: u32,
 ) -> Result<Val> {
+    let (cos, sin) = rope_angles(b, cx, lb, t)?;
+    lower_rope_with(b, cx, lb, x, heads, hd, rd, off, style, t, (cos, sin))
+}
+
+/// [`lower_rope`] with the angle rows given.
+#[allow(clippy::too_many_arguments)]
+fn lower_rope_with(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    heads: usize,
+    hd: usize,
+    rd: usize,
+    off: usize,
+    style: RopeStyle,
+    t: u32,
+    (cos, sin): (tir::Ref, tir::Ref),
+) -> Result<Val> {
     let f = cx.hl.rope_tables[t as usize].attention_factor;
     if rd / 2 != cx.hl.rope_tables[t as usize].inv_freq.len() {
         return Err(LowerError::eval("internal: rotary dim and frequency count disagree"));
     }
-    let (cos, sin) = rope_angles(b, cx, lb, t)?;
     let x2 = b.reshape_fixed(x.r, &[heads as u32, hd as u32]);
     let xr = if off == 0 && rd == hd { x2 } else { b.slice(x2, 1, off as u32, rd as u32) };
     let rot = match style {
@@ -2709,6 +3020,20 @@ struct AttnExtras {
     rel_bias: Option<RelBias>,
     /// Llama-4's chunked attention: only the keys of the query's own chunk.
     chunk: Option<usize>,
+    /// `ATTN_SPARSE_BLOCK_V1`: only the keys of the blocks the indexer selected and of the
+    /// incomplete tail.
+    sparse: Option<SparseBlocks>,
+}
+
+/// The block selection a sparse-attention node reads (the ids [`generic::block_select`] picks).
+#[derive(Clone, Copy)]
+struct SparseBlocks {
+    /// Positions per block.
+    ratio: usize,
+    /// `idx [top]`: the selected block ids.
+    ids: tir::Ref,
+    /// The number of blocks the program keeps keys for (the id range).
+    blocks: usize,
 }
 
 /// T5's relative-position bias on the causal scores: `table[bucket(pos − j)]` per head, in
@@ -2739,7 +3064,7 @@ fn lower_attention(
     let AttnDims { heads, kv, d, dv, window } = dims;
     let g = heads / kv;
     let (kv32, g32, d32, dv32) = (kv as u32, g as u32, d as u32, dv as u32);
-    if ex.softcap.is_none() && ex.alibi.is_none() && ex.rel_bias.is_none() && ex.chunk.is_none() && dv == d {
+    if ex.softcap.is_none() && ex.alibi.is_none() && ex.rel_bias.is_none() && ex.chunk.is_none() && ex.sparse.is_none() && dv == d {
         return lower_attention_library(b, cx, lb, q, k, v, dims, ex, site, want);
     }
     let qg = b.reshape_fixed(q.r, &[kv32, g32, d32]);
@@ -2901,6 +3226,9 @@ fn lower_attention(
         let sum = b.add(logits, bias, DType::I64);
         logits = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
     }
+    if let Some(sp) = ex.sparse {
+        logits = generic::mask_unselected_blocks(b, cx, lb, logits, sp.ratio, sp.ids, sp.blocks, window)?;
+    }
     let probs = match ex.sinks {
         None => b.softmax_shifted(logits, 24 - LOGIT_Q),
         Some(sp) => {
@@ -3051,12 +3379,36 @@ fn lower_route(
     if r.scoring == Scoring::SparseMixer {
         return Ok(lower_sparsemixer(b, l.r, experts, r.jitter_eps, up));
     }
+    // The per-expert selection bias (DeepSeek-V3's and ERNIE-4.5's `e_score_correction_bias`) as a Q24 param, added
+    // to the scores the selection RANKS (never to the weights).
+    let biased = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, scores: tir::Ref| -> Result<tir::Ref> {
+        match sel_bias {
+            Some(bp) => {
+                let bias = decl(
+                    b,
+                    cx,
+                    lb,
+                    &format!("{site}.sel_bias"),
+                    DType::I32,
+                    &[experts],
+                    per_layer(lb),
+                    Arc::new(move |c| {
+                        Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
+                    }),
+                )?;
+                Ok(b.selection_bias(scores, bias))
+            }
+            None => Ok(scores),
+        }
+    };
     // (scores the weights are read from, choice scores the selection ranks, the value a masked
     // expert takes)
     let (scores, choice, fill): (tir::Ref, tir::Ref, i64) = match r.scoring {
         Scoring::Softmax => {
             let probs = b.softmax_shifted(l.r, up);
-            (probs, probs, 0)
+            let choice = biased(b, cx, lb, probs)?;
+            // A masked expert scores 0 under plain softmax; a bias can push a kept expert below 0.
+            (probs, choice, if sel_bias.is_some() { i32::MIN as i64 } else { 0 })
         }
         Scoring::TopKThenSoftmax | Scoring::TopKThenSigmoid | Scoring::SparseMixer => (l.r, l.r, i32::MIN as i64),
         Scoring::Sigmoid => {
@@ -3064,24 +3416,7 @@ fn lower_route(
             let y = b.mul(l.r, c, DType::I64);
             let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
             let sig = b.int_sigmoid(y);
-            let choice = match sel_bias {
-                Some(bp) => {
-                    let bias = decl(
-                        b,
-                        cx,
-                        lb,
-                        &format!("{site}.sel_bias"),
-                        DType::I32,
-                        &[experts],
-                        per_layer(lb),
-                        Arc::new(move |c| {
-                            Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
-                        }),
-                    )?;
-                    b.selection_bias(sig, bias)
-                }
-                None => sig,
-            };
+            let choice = biased(b, cx, lb, sig)?;
             (sig, choice, i32::MIN as i64)
         }
     };
@@ -3167,12 +3502,15 @@ fn lower_moe(
     act: Act,
     glu: crate::spec::Glu,
     input_scaled: bool,
+    gated: bool,
     site: &str,
     want: &Want,
 ) -> Result<Val> {
     let hl = cx.hl;
-    let (gp, upp, dp) = (ps[0], ps[1], ps[2]);
-    let (e, i, d) = (hl.params[gp as usize].shape[0], hl.params[gp as usize].shape[1], hl.params[gp as usize].shape[2]);
+    // `ps`: gate, up, down (+ biases) — or, a plain expert, up, down.
+    let (gp, upp, dp) = if gated { (Some(ps[0]), ps[1], ps[2]) } else { (None, ps[0], ps[1]) };
+    let shape = &hl.params[upp as usize].shape;
+    let (e, i, d) = (shape[0], shape[1], shape[2]);
     let pl = per_layer(lb);
     let sub = |s: &str| format!("{site}.{s}");
     let kx = x.key.clone();
@@ -3240,7 +3578,7 @@ fn lower_moe(
         let sk = b.gather(s, idx.r, 0, 0);
         Ok(narrow(b, acc, mk, sk, z, dt))
     };
-    let (gb, ub, db) = if ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
+    let (gb, ub, db) = if gated && ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
     // Llama-4: every selected expert reads `w_j · x`, exact to 2^-16 of a code in `i32`
     // (`(x · w_j) >> 8` of a Q24 weight), and the outputs are summed at unit weight.
     let (xb, kx) = if input_scaled {
@@ -3253,29 +3591,41 @@ fn lower_moe(
         (b.reshape_fixed(x.r, &[d as u32, 1]), kx)
     };
     let (gk, uk) = (ScaleKey::site(vec![sub("gate")], false), ScaleKey::site(vec![sub("up")], false));
-    let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
-    b.commit(g16);
-    let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
-    b.commit(u16_);
-    let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
-    let (a16, u16_, uk) = match glu {
-        crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
-        // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
-        // clamped up half lies in `[1 − l, 1 + l]`.
-        crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {
-            let a = lower_table_keyed(b, cx, lb, &gv, TableFn::ClampedGlu { alpha, limit }, &sub("glu"), gk.clone())?;
-            let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
-            let ukey = ScaleKey { base: Base::Fixed((limit + 1.0) * 2.0 / crate::quant::CODE16_MAX), factor: 1.0 };
-            let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampedUp { limit }, &sub("up1"), ukey.clone())?;
-            (a, u.r, ukey)
-        }
+    // The hidden vector of the selected experts and its scale key.
+    let (hid, hk) = if let Some(gp) = gp {
+        let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
+        b.commit(g16);
+        let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
+        b.commit(u16_);
+        let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
+        let (a16, u16_, uk) = match glu {
+            crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
+            // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
+            // clamped up half lies in `[1 − l, 1 + l]`.
+            crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {
+                let a = lower_table_keyed(b, cx, lb, &gv, TableFn::ClampedGlu { alpha, limit }, &sub("glu"), gk.clone())?;
+                let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+                let ukey = ScaleKey { base: Base::Fixed((limit + 1.0) * 2.0 / crate::quant::CODE16_MAX), factor: 1.0 };
+                let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampedUp { limit }, &sub("up1"), ukey.clone())?;
+                (a, u.r, ukey)
+            }
+        };
+        let hk = ScaleKey::site(vec![sub("hidden")], false);
+        let p = b.mul(a16.r, u16_, DType::I32);
+        let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
+        let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
+        let hid = narrow(b, p, m, s, None, DType::I16);
+        b.commit(hid);
+        (hid, hk)
+    } else {
+        // A plain expert (`MOE_EXPERTS_PLAIN_V1`): `down(act(up(x)))` — the activation table over the up projection IS the hidden vector.
+        let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
+        b.commit(u16_);
+        let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+        let a16 = lower_table_named(b, cx, lb, &uv, TableFn::Act(act), &sub("act"))?;
+        b.commit(a16.r);
+        (a16.r, a16.key.clone())
     };
-    let hk = ScaleKey::site(vec![sub("hidden")], false);
-    let p = b.mul(a16.r, u16_, DType::I32);
-    let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
-    let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
-    let hid = narrow(b, p, m, s, None, DType::I16);
-    b.commit(hid);
     let hb = b.reshape_fixed(hid, &[k as u32, i as u32, 1]);
     let ok = ScaleKey::site(vec![sub("out")], true);
     let y = proj(b, cx, lb, dp, db, hb, hk, &sub("out"), ok.clone(), DType::I32)?;
@@ -3392,15 +3742,21 @@ fn lower_conv(
     bias: Option<u32>,
     ch: usize,
     kernel: usize,
+    dilation: usize,
     act: Option<Act>,
     site: &str,
 ) -> Result<Val> {
+    // A convolution has at least one tap, spaced at least one position apart (a config with none is a
+    // mistaken one, refused here rather than underflowing the window's length).
+    if kernel == 0 || dilation == 0 {
+        return Err(LowerError::bad(format!("a causal convolution of {kernel} taps dilated {dilation}")));
+    }
     let hl = cx.hl;
     let sd = &hl.states[st as usize];
     let ts = match cx.tstate.get(&st) {
         Some(t) => *t,
         None => {
-            let t = b.pb.fixed_state(&sd.name, DType::I16, &[(kernel - 1) as u32, ch as u32], -32767, 32767, true);
+            let t = b.pb.fixed_state(&sd.name, DType::I16, &[((kernel - 1) * dilation) as u32, ch as u32], -32767, 32767, true);
             cx.tstate.insert(st, t);
             t
         }
@@ -3429,7 +3785,7 @@ fn lower_conv(
             Ok(IntTensor::i8(vec![kernel, ch], t))
         }),
     )?;
-    let acc = b.causal_conv(ts, row, taps);
+    let acc = if dilation == 1 { b.causal_conv(ts, row, taps) } else { generic::causal_conv_dilated(b, ts, row, taps, kernel, dilation) };
     let pre_key = ScaleKey::site(vec![format!("{site}.pre")], false);
     let (kx, kp) = (x.key.clone(), pre_key.clone());
     let (m, s) = decl_ms(
@@ -3677,6 +4033,7 @@ fn lower_gated_norm(
     gain: u32,
     eps: f64,
     groups: usize,
+    gate_act: Act,
     site: &str,
     want: &Want,
 ) -> Result<Val> {
@@ -3693,7 +4050,7 @@ fn lower_gated_norm(
     let eps_p = decl_eps(b, cx, lb, site, eps_q)?;
     let u = rms_unit(b, xr, eps_p);
     let u = b.reshape_fixed(u, &[n as u32]);
-    let gate = lower_table_named(b, cx, lb, z, TableFn::Act(Act::Silu), &format!("{site}.gate"))?;
+    let gate = lower_table_named(b, cx, lb, z, TableFn::Act(gate_act), &format!("{site}.gate"))?;
     let p = b.mul(u, gate.r, DType::I64);
     let (kg, ky) = (gate.key.clone(), want.key.clone());
     let (m, s) = decl_ms(
@@ -3757,6 +4114,14 @@ fn ssm_patterns(blk: &hl::Block, lb: &mut Lb) -> Result<()> {
             absorbed.push(at);
             at = node_of(*a).ok_or_else(bad)?;
         }
+        // A constant multiplier on the projection (`MAMBA2_MUP_V1`'s dt chunk): `Op::Scale` is a change of scale key, so the projection is
+        // asked for at `Q24 / c` and its codes ARE the Q24 of the scaled value.
+        let mut scale = 1.0;
+        if let Op::Scale { c } = blk.nodes[at].op {
+            scale = c;
+            absorbed.push(at);
+            at = node_of(blk.nodes[at].inputs[0]).ok_or_else(bad)?;
+        }
         if !matches!(blk.nodes[at].op, Op::Linear { .. }) || consumers[at] != 1 {
             return Err(bad());
         }
@@ -3766,7 +4131,7 @@ fn ssm_patterns(blk: &hl::Block, lb: &mut Lb) -> Result<()> {
             }
             lb.absorbed[j] = true;
         }
-        lb.wants[at] = Some(Want { dt: DType::I32, key: ScaleKey::q24() });
+        lb.wants[at] = Some(Want { dt: DType::I32, key: ScaleKey::q24().times(1.0 / scale) });
         lb.ssm.insert(i, SsmDt { proj: at as u32, bias, clamp });
     }
     Ok(())
@@ -4016,6 +4381,7 @@ fn lower_mla(
     scale: f64,
     site: &str,
     want: &Want,
+    idx: Option<&dsa::IndexInputs>,
 ) -> Result<Val> {
     let MlaDims { heads, nope, rope, vd, r } = dims;
     let (h32, n32, ro32, v32, r32) = (heads as u32, nope as u32, rope as u32, vd as u32, r as u32);
@@ -4131,6 +4497,15 @@ fn lower_mla(
     let l2 = narrow(b, s2, m2, sh2, None, DType::I32);
     let ls = b.add(l1, l2, DType::I64);
     let logits = b.clamp(ls, i32::MIN as i64, i32::MAX as i64, DType::I32);
+    // DeepSeek sparse attention: the softmax runs over the indexer's top-k tokens only.
+    let logits = match idx {
+        Some(ix) => {
+            let vis = dsa::token_index_mask(b, cx, lb, ix, site)?;
+            let floor = b.c(DType::I32, i32::MIN as i128);
+            b.select(vis, logits, floor, DType::I32)
+        }
+        None => logits,
+    };
     let probs = b.softmax_shifted(logits, 24 - LOGIT_Q);
     // Latent context, then the value half.
     let ctx = b.matmul(probs, lw, DType::I64);

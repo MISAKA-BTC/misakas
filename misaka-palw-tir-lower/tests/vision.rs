@@ -13,6 +13,8 @@
 //! tower over the job image, the LM as the text stage — against HF's greedy `generate`
 //! ([`text_stage`]).
 
+mod common;
+
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
@@ -81,7 +83,15 @@ pub struct Built {
 }
 
 pub fn check_tower(name: &str, key: &str) -> Built {
-    let fx = load(name);
+    check_tower_with(name, key, None)
+}
+
+/// [`check_tower`] with the class's output choice overridden (a ViT's rows instead of its class embedding).
+pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -> Built {
+    let mut fx = load(name);
+    if let Some(o) = out {
+        fx.spec.out = o;
+    }
     let s = &fx.spec;
     let dir = fixture_dir(name);
     let (hl, binding) = vision::hl_program(s).expect("hl");
@@ -163,7 +173,17 @@ pub fn check_tower(name: &str, key: &str) -> Built {
     )
     .expect("tir_admit_pipeline_v1");
     eprintln!("{name} pipeline (JobImage) admitted: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves);
-    // 6. Admission of the program alone.
+    // 6. The three implementations and the court, on the tower's version-1 view (the image an input param).
+    {
+        let img = &fx.images[0].0;
+        let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+        let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
+        let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
+        let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
+        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        assert!(c.commits > 0);
+    }
+    // 7. Admission of the program alone.
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
     eprintln!(
         "{name} admitted: {} nodes, {} cones, {} params, position {:?}",
@@ -183,6 +203,14 @@ fn clip_vision_with_projection_matches_its_hf_fixture() {
 #[test]
 fn siglip_vision_with_its_pooling_head_matches_its_hf_fixture() {
     check_tower("siglip_vision", "pooler_output");
+}
+
+/// FR-19: a ViT from data only (no Rust reader of this family): the class embedding, and, as the class's other output
+/// choice, every row through the final norm.
+#[test]
+fn vit_class_embedding_and_rows_match_their_hf_fixture() {
+    check_tower("vit", "cls");
+    check_tower_with("vit", "last_hidden_state", Some(vision::VisionOut::Rows));
 }
 
 #[test]
@@ -591,5 +619,26 @@ fn real_size_towers_are_admitted() {
             a.view.position.cost.macs as f64,
             a.view.position.step_leaves
         );
+    }
+}
+
+/// **The adapters of kind `vision` are the Rust reader's data form**: CLIP's and SigLIP's adapters instantiate the same
+/// `VisionSpec` (every field, every name) as `parse_vision_rust` on the fixtures' configurations.
+#[test]
+fn the_vision_adapters_agree_with_the_rust_reader() {
+    for name in ["clip_vision", "siglip_vision"] {
+        let dir = fixture_dir(name);
+        let cfg = std::fs::read_to_string(dir.join("config.json")).expect("config");
+        let o: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
+        let arr = |v: &serde_json::Value| -> [f64; 3] { [v[0].as_f64().unwrap(), v[1].as_f64().unwrap(), v[2].as_f64().unwrap()] };
+        let size = (o["size"][0].as_u64().unwrap() as u32, o["size"][1].as_u64().unwrap() as u32);
+        let ms = Some((arr(&o["mean"]), arr(&o["std"])));
+        let a = vision::parse_vision(&cfg, Some(size), ms).expect("adapter");
+        let r = vision::parse_vision_rust(&cfg, Some(size), ms).expect("rust");
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name}");
+        // And without the processor's numbers: each family's default normalisation.
+        let a = vision::parse_vision(&cfg, None, None).expect("adapter");
+        let r = vision::parse_vision_rust(&cfg, None, None).expect("rust");
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name} defaults");
     }
 }

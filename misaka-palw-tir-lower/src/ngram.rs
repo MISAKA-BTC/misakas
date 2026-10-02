@@ -112,7 +112,8 @@ impl NgramTables {
         let mut total = 0i64;
         for h in 0..ngram_heads {
             let global = (p.layer_index * ngram_heads + h) as u64;
-            let size = nth_prime_after(p.vocab_base as u64 - 1, global + 1) as i64;
+            // `vocab_base − 1` as the reference does it, floored at 0 (the primes after −1 and after 0 are the same)
+            let size = nth_prime_after((p.vocab_base as u64).saturating_sub(1), global + 1) as i64;
             head_sizes.push(size);
             head_offsets.push(total);
             total += size;
@@ -128,6 +129,23 @@ impl NgramTables {
             total_vocab: total,
             padded_vocab: (total + div - 1) / div * div,
         }
+    }
+
+    /// [`NgramTables::new`], memoised by spec: the head sizes are primes found by trial division,
+    /// which takes a moment at a vocabulary of tens of millions and is asked for per layer and per
+    /// param.
+    pub fn cached(p: &NgramPleSpec) -> std::sync::Arc<NgramTables> {
+        use std::sync::{Arc, Mutex, OnceLock};
+        type Cache = Mutex<std::collections::BTreeMap<String, Arc<NgramTables>>>;
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+        let key = format!("{p:?}");
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some(t) = cache.lock().expect("n-gram cache").get(&key) {
+            return t.clone();
+        }
+        let t = Arc::new(NgramTables::new(p));
+        cache.lock().expect("n-gram cache").insert(key, t.clone());
+        t
     }
 
     pub fn heads(&self) -> usize {

@@ -43,10 +43,10 @@ except ImportError as e:  # pragma: no cover
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CRATE = os.path.dirname(HERE)
-# Held in their own roots while the generic lowering of these features is being built, so the
-# loops over `tests/fixtures/hf` and `tests/configs/tiny` keep meaning "everything lowers".
-TINY = os.path.join(CRATE, "tests", "configs", os.environ.get("QWEN4_TINY", "tiny-q4"))
-FIX = os.path.join(CRATE, "tests", "fixtures", os.environ.get("QWEN4_FIX", "hf-q4"))
+# Written beside every other fixture: the loops over `tests/fixtures/hf` and `tests/configs/tiny`
+# (fidelity, admission, three-way, golden, streaming) cover them. QWEN4_TINY / QWEN4_FIX redirect.
+TINY = os.path.join(CRATE, "tests", "configs", os.environ.get("QWEN4_TINY", "tiny"))
+FIX = os.path.join(CRATE, "tests", "fixtures", os.environ.get("QWEN4_FIX", "hf"))
 
 # Reuse the generic helpers (`randomise`, `decode_logits`) of the other generator.
 _spec = importlib.util.spec_from_file_location("gen_hf_fixtures", os.path.join(HERE, "gen_hf_fixtures.py"))

@@ -32,6 +32,7 @@ use crate::float_ref::stream::OccParams;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::hl::HlProgram;
 use crate::quant::{QuantPolicy, RowCodes};
+use crate::weights::Tensor;
 use crate::weights::stream::row_blocks;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, ChunkedArtifactV1, InstanceWriter};
 use std::collections::{BTreeMap, BTreeSet};
@@ -216,6 +217,7 @@ pub fn materialise_stream(
                     done.insert(key);
                 }
                 if hbk == hl.post {
+                    super::check_logits_range(hl, &ctx)?;
                     logits_scale = Some(ctx.scale(&lw.logits_key)?);
                 }
                 Ok(())
@@ -258,6 +260,52 @@ fn fill_by_blocks(
     let d = &lw.program.params[pi as usize];
     let rs = loader.row_source().ok_or_else(|| LowerError::eval("internal: a deferred param without a row source"))?;
     let not_rows = |why: String| LowerError::eval(format!("{DEFERRED_MARK}{}: {why}", rp.hl));
+    // A mapped table (the n-gram embedding's chunks): its artifact rows are gathered from the checkpoint's by runs, and
+    // its one scale is a first pass over the used rows.
+    if let RowKind::Mapped(map) = &rp.kind {
+        let (_, cols) = rs.row_space(rp.hl, layer)?.ok_or_else(|| not_rows("not readable by rows".into()))?;
+        let (drows, dcols) = (d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(), *d.shape.last().expect("a param has a shape") as usize);
+        if cols != dcols {
+            return Err(not_rows(format!("the checkpoint's rows are {cols} wide, the param's are {dcols}")));
+        }
+        let (runs, used) = (map.0.runs(hl, layer)?, map.0.used_rows(hl, layer)?);
+        let amax = super::fill::table_amax_blocks(rs, rp.hl, layer, used, cols, opts.block_elems)?;
+        sink.begin(key.0, key.1, bytes)?;
+        let step = (opts.block_elems / cols.max(1)).max(1);
+        for blk in row_blocks(drows, step) {
+            let mut data = vec![0f32; blk.len() * cols];
+            for run in &runs {
+                let (a, b) = (run.dest.max(blk.start), (run.dest + run.len).min(blk.end));
+                if a >= b {
+                    continue;
+                }
+                let src0 = run.src + (a - run.dest);
+                let t = rs.rows(rp.hl, layer, src0..src0 + (b - a))?;
+                st.max_block_f32_bytes = st.max_block_f32_bytes.max(t.numel() * 4);
+                data[(a - blk.start) * cols..(b - blk.start) * cols].copy_from_slice(&t.data);
+            }
+            let mut bstore = ParamStore::default();
+            bstore.insert(rp.hl, None, Tensor::new(vec![blk.len(), cols], data), None);
+            let bctx = FillCtx::for_scales(hl, &bstore, layer, prefix, calib, resid, policy).with_block(blk.clone());
+            bctx.inject_amax(rp.hl, amax);
+            let it: IntTensor =
+                (lw.fills[pi as usize])(&bctx).map_err(|e| LowerError::eval(format!("filling `{}` at {prefix}, rows {blk:?}: {e}", d.name)))?;
+            if it.dtype != d.dtype || it.len() != blk.len() * cols {
+                return Err(LowerError::eval(format!(
+                    "internal: the block of `{}` gave {} × {}, wanted {} × {cols}",
+                    d.name,
+                    it.dtype.name(),
+                    it.len(),
+                    blk.len()
+                )));
+            }
+            sink.push(&it.le_bytes())?;
+            st.blocks += 1;
+        }
+        sink.end()?;
+        st.by_blocks += 1;
+        return Ok(());
+    }
     let (rows, cols) = rs.row_space(rp.hl, layer)?.ok_or_else(|| not_rows("not readable by rows".into()))?;
     let (drows, dcols) = (d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(), *d.shape.last().expect("a param has a shape") as usize);
     if (rows, cols) != (drows, dcols) {

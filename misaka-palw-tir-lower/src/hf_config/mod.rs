@@ -76,6 +76,13 @@ pub fn parse_config_str_with(text: &str, reg: &crate::quantfmt::QuantRegistry) -
     parse_config_with(&v, reg)
 }
 
+/// [`parse_config_str_with`] choosing the adapter by `read` (a user-supplied adapter file, a built-in
+/// by id, or none): how a model written for as data is lowered, end to end, with no code change.
+pub fn parse_config_str_read(text: &str, read: &crate::hf_schema::ReadOptions, reg: &crate::quantfmt::QuantRegistry) -> Result<ArchSpec> {
+    let v: Value = serde_json::from_str(&sanitize_json(text)).map_err(|e| LowerError::bad(format!("config.json is not JSON: {e}")))?;
+    crate::hf_schema::read_model_with(&v, None, read, reg).map(|r| r.spec).map_err(|f| f.error)
+}
+
 pub(crate) fn remote_module(auto_map: &Map<String, Value>) -> Option<String> {
     let v = auto_map.get("AutoModelForCausalLM").or_else(|| auto_map.get("AutoModel"))?;
     let s = match v {

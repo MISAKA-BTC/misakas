@@ -379,5 +379,7 @@ pub fn adapter_json(a: &crate::model::AdapterSource) -> serde_json::Value {
         S::None => serde_json::json!({ "kind": "none" }),
         S::BuiltIn { id, hash } => serde_json::json!({ "kind": "built-in", "id": id, "hash": hash }),
         S::UserFile { id, hash } => serde_json::json!({ "kind": "user-file", "id": id, "hash": hash }),
+        // A reader written in Rust (the diffusers route's): named, with no data file to hash.
+        S::CoreReader { id } => serde_json::json!({ "kind": "core-reader", "id": id }),
     }
 }

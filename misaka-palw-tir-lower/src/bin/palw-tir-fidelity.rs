@@ -125,6 +125,11 @@ struct Args {
     /// `quantization_config` the built-in registry does not describe; repeatable.
     #[arg(long = "quant-format")]
     quant_format: Vec<PathBuf>,
+    /// How the config is read: `auto` (the built-in adapter that claims it, else the standard keys),
+    /// `none`, `builtin:<id>`, or the path of an adapter file (`misaka.palw.model-adapter.v1`): a
+    /// model written for as data lowers with no code change.
+    #[arg(long = "model-adapter", default_value = "auto")]
+    model_adapter: String,
 }
 
 fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Result<(Vec<Vec<usize>>, serde_json::Value), String> {
@@ -156,7 +161,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     );
     // A Hugging Face directory, or a GGUF file (`model.gguf` in the directory, or its path).
     let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::with_files(&a.quant_format).map_err(|e| e.to_string())?;
-    let (prep, ck) = fidelity::open_model_with(&a.model, &opts, &reg).map_err(|e| e.to_string())?;
+    let (prep, ck) = fidelity::open_model_read(&a.model, &misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(&a.model_adapter).map_err(|e| e.to_string())? }, &opts, &reg).map_err(|e| e.to_string())?;
     let ck = ck.as_ref();
     // RFC-0004: a LoRA candidate replaces the program; the parent stays for its calibration.
     let (prep, candidate) = match &a.adapter {
@@ -254,7 +259,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                         calib.len(),
                         calib.iter().map(Vec::len).sum::<usize>()
                     ));
-                    let parent_loader = Streamed { prog: &c.parent.hl, binding: &c.parent.binding, source: ck };
+                    let parent_loader = Streamed::new(&c.parent.hl, &c.parent.binding, ck);
                     fidelity::calibrate(&c.parent.hl, &parent_loader, &calib, &progress("parent calibration"))
                         .map_err(|e| e.to_string())?
                 }
@@ -286,6 +291,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "architecture": prep.spec.architecture,
             "resid_scale": mat.resid_scale,
             "logits_scale": mat.logits_scale,
+            "lowering_version": misaka_palw_tir_lower::lower::LOWERING_VERSION,
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
             "calibrated_context": calib.iter().map(Vec::len).max(),

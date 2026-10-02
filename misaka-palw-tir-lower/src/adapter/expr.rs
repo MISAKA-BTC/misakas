@@ -19,9 +19,9 @@
 //! | variables | `$var`, `$let` (`["name", value, body]`) |
 //! | arithmetic | `$add $sub $mul $div $idiv $mod $neg $abs $min $max $pow $sqrt $ln $exp $floor $ceil $round $int $float` |
 //! | logic | `$eq $ne $lt $le $gt $ge $and $or $not $if` (`[c, a, b]`) `$switch` (`[value, {case: result}, default]`) |
-//! | lists, objects and strings | `$list $range $len $index $contains $concat $flatten $repeat $map $is_num` (`[list, "name", body]`) `$sum $cat $starts_with $ends_with $merge $omit $set` |
+//! | lists, objects and strings | `$list $range $len $index $contains $concat $flatten $repeat $map $is_num` (`[list, "name", body]`) `$sum $cat $chars` (a string as the list of its characters) `$starts_with $ends_with $merge $omit $set` |
 //! | checks | `$check` (`[cond, message]`: NOT_LOWERABLE if false), `$bad` (`[cond, message]`: bad config) |
-//! | generic features | `$act` (an HF activation name → `Act`), `$rope` / `$rope_temp` (a rope spec / query temperature from the config's rope fields), `$rope_plain` (the default frequencies at a given base), `$alibi` (ALiBi slopes), `$scope` (`{key, inert, body}`: evaluate with the configuration narrowed to a nested object), `$partial_rotary` (the effective partial-rotary factor), `$layers` (`{count, each}`), `$layer_types` (`{n, allowed, each}`: the config's `layer_types`, validated, or the class's own rule) |
+//! | generic features | `$act` (an HF activation name → `Act`), `$rope` / `$rope_temp` (a rope spec / query temperature from the config's rope fields), `$rope_plain` (the default frequencies at a given base), `$alibi` (ALiBi slopes), `$scope` (`{key, inert, body}`: evaluate with the configuration narrowed to a nested object), `$partial_rotary` (the effective partial-rotary factor), `$layers` (`{count, each}`), `$layer_types` (`{n, allowed, each, key?}`: the config's `layer_types` — or the list under `key` — validated, or the class's own rule) |
 
 use crate::cfg::Cfg;
 use crate::error::{LowerError, Result};
@@ -614,6 +614,8 @@ impl<'a> Env<'a> {
                     (N::I(b), N::I(e)) if (0..=62).contains(&e) => {
                         Ok(Value::from(b.checked_pow(e as u32).ok_or_else(|| bad("integer overflow in `$pow`"))?))
                     }
+                    // Through detmath, like every transcendental the conversion evaluates: a constant an adapter computes must
+                    // be the same number on every machine (`math: "libm-v1"`).
                     (b, e) => N::F(crate::detmath::powf(b.f(), e.f())).value(),
                 }
             }
@@ -683,6 +685,15 @@ impl<'a> Env<'a> {
                     return Err(bad("`$range` too long"));
                 }
                 Ok(Value::Array((0..n as u64).map(Value::from).collect()))
+            }
+            // A string as the list of its characters, each a one-character string (Nemotron-H's `hybrid_override_pattern`).
+            "$chars" => {
+                let v = self.ev(arg, d)?;
+                let s = as_str(&v, op)?;
+                if s.chars().count() > MAX_LIST {
+                    return Err(bad("`$chars` too long"));
+                }
+                Ok(Value::Array(s.chars().map(|c| Value::String(c.to_string())).collect()))
             }
             "$len" => {
                 let v = self.ev(arg, d)?;
@@ -874,20 +885,25 @@ impl<'a> Env<'a> {
                     .iter()
                     .filter_map(|v| v.as_str().map(str::to_string))
                     .collect();
-                match self.cur().raw("layer_types") {
+                // The key the list is stored under (`layer_types` unless the class says otherwise: Nemotron-H's `layers_block_type`).
+                let key = match o.get("key") {
+                    Some(k) => as_str(&self.ev(k, d)?, op)?.to_string(),
+                    None => "layer_types".to_string(),
+                };
+                match self.cur().raw(&key) {
                     Some(Value::Array(a)) => {
                         if a.len() != n {
-                            return Err(bad(format!("{}: layer_types has {} entries for {n} layers", self.arch, a.len())));
+                            return Err(bad(format!("{}: {key} has {} entries for {n} layers", self.arch, a.len())));
                         }
                         for t in a {
-                            let t = t.as_str().ok_or_else(|| bad(format!("{}: layer_types holds a non-string", self.arch)))?;
+                            let t = t.as_str().ok_or_else(|| bad(format!("{}: {key} holds a non-string", self.arch)))?;
                             if !allowed.iter().any(|x| x == t) {
                                 return Err(LowerError::not_lowerable(format!("{}: layer type `{t}` is not modelled", self.arch)));
                             }
                         }
                         Ok(Value::Array(a.clone()))
                     }
-                    Some(_) => Err(bad(format!("{}: `layer_types` is not a list", self.arch))),
+                    Some(_) => Err(bad(format!("{}: `{key}` is not a list", self.arch))),
                     None => {
                         let each = o.get("each").ok_or_else(|| bad("`$layer_types`: each"))?;
                         if n > MAX_LAYERS {
@@ -950,6 +966,9 @@ impl<'a> Env<'a> {
                 };
                 if dim == 0 || dim % 2 != 0 {
                     return Err(bad(format!("{}: rotary dim {dim} must be even and positive", self.arch)));
+                }
+                if dim > crate::rope::MAX_ROTARY_DIM {
+                    return Err(bad(format!("{}: rotary dim {dim} is past the {} a program rotates", self.arch, crate::rope::MAX_ROTARY_DIM)));
                 }
                 let spec = crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
@@ -1088,6 +1107,11 @@ impl<'a> Env<'a> {
         let top_orig = get("top_orig")?.filter(|v| !v.is_null()).map(|v| as_usize(&v, op)).transpose()?;
         let q_scaled = get("q_scaled")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
         let offset = get("offset")?.map(|v| as_usize(&v, op)).transpose()?.unwrap_or(0);
+        // `"reverse": true` — rotation by −θ (nanochat's `rotate_half`; `ROPE_REVERSED_V1`).
+        let reverse = get("reverse")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
+        if reverse && op != "$rope" {
+            return Err(bad(format!("`{op}`: reverse applies to a rope, not a temperature")));
+        }
         // `"longrope": "short_only"`: LongRoPE as Phi-3.5-MoE runs it in transformers 5.17 (the short
         // factors at every length); an ordinary `default` rope falls through to the usual reading.
         let short_only = match get("longrope")? {
@@ -1102,6 +1126,9 @@ impl<'a> Env<'a> {
         let (mut spec, temp) =
             crate::rope::rope_spec_from_config(&self.cur(), rotary_dim, style, theta, layer_type.as_deref(), partial, max_pos, top_orig, q_scaled)?;
         spec.offset = offset;
+        if reverse {
+            spec.freqs = spec.freqs.reverse()?;
+        }
         if op == "$rope" {
             serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
         } else {

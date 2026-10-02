@@ -1,0 +1,147 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "longt5",
+  "kind": "encdec",
+  "extends": [
+    "t5"
+  ],
+  "doc": "LongT5 with LOCAL encoder attention (LongT5ForConditionalGeneration, encoder_attention_type = \"local\"; google/long-t5-local-*): T5's encoder-decoder (RMSNorm, relative position bias, gated or ReLU FFN, a decoder output scaled by d^-1/2 before a tied head) whose encoder self-attention sees only the keys within local_radius positions of the query on both sides (ATTN_LOCAL_BIDIR_V1): HF splits the sequence into blocks of local_radius + 1 and lets each attend to its neighbours, then masks to |i - j| < block, which is the band |i - j| <= local_radius with T5's relative bias over the true distance. The decoder is T5's. The transient-global variant (encoder_attention_type = \"transient-global\") adds global tokens (ATTN_TRANSIENT_GLOBAL_V1) and is refused by name.",
+  "match": {
+    "architectures": [
+      "LongT5ForConditionalGeneration"
+    ],
+    "model_types": [
+      "longt5"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "encoder_attention_type": "local",
+      "local_radius": 127,
+      "global_block_size": 16
+    },
+    "inert": [
+      "initializer_factor",
+      "global_block_size"
+    ]
+  },
+  "vars": [
+    {
+      "name": "eat",
+      "value": {
+        "$cfg": "encoder_attention_type"
+      }
+    },
+    {
+      "name": "eat_ok",
+      "value": {
+        "$check": [
+          {
+            "$eq": [
+              {
+                "$var": "eat"
+              },
+              "local"
+            ]
+          },
+          {
+            "$cat": [
+              "encoder_attention_type `",
+              {
+                "$var": "eat"
+              },
+              "` is not lowered: only the local attention is (ATTN_TRANSIENT_GLOBAL_V1 is the missing capability)"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "radius",
+      "value": {
+        "$cfg": "local_radius"
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "shared": "shared.weight",
+        "qkvo": [
+          "q",
+          "k",
+          "v",
+          "o"
+        ],
+        "enc": {
+          "prefix": "encoder.",
+          "layer": "encoder.block.{L}.",
+          "self_attn": "layer.0.LocalSelfAttention",
+          "self_norm": "layer.0.layer_norm",
+          "ffn_norm": "layer.1.layer_norm",
+          "ffn_up": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.1.DenseReluDense.wi_1",
+              "layer.1.DenseReluDense.wi"
+            ]
+          },
+          "ffn_down": "layer.1.DenseReluDense.wo",
+          "ffn_gate": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.1.DenseReluDense.wi_0",
+              null
+            ]
+          },
+          "final_norm": "final_layer_norm",
+          "rel_bias": "layer.0.LocalSelfAttention.relative_attention_bias.weight"
+        },
+        "dec": {
+          "prefix": "decoder.",
+          "layer": "decoder.block.{L}.",
+          "self_attn": "layer.0.SelfAttention",
+          "self_norm": "layer.0.layer_norm",
+          "ffn_norm": "layer.2.layer_norm",
+          "ffn_up": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.2.DenseReluDense.wi_1",
+              "layer.2.DenseReluDense.wi"
+            ]
+          },
+          "ffn_down": "layer.2.DenseReluDense.wo",
+          "ffn_gate": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.2.DenseReluDense.wi_0",
+              null
+            ]
+          },
+          "final_norm": "final_layer_norm",
+          "rel_bias": "layer.0.SelfAttention.relative_attention_bias.weight",
+          "cross_attn": "layer.1.EncDecAttention",
+          "cross_norm": "layer.1.layer_norm"
+        },
+        "lm_head": "lm_head.weight",
+        "ignored": [
+          "encoder.embed_tokens.",
+          "decoder.embed_tokens.",
+          "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias."
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "enc_local_radius": {
+      "$var": "radius"
+    }
+  }
+}

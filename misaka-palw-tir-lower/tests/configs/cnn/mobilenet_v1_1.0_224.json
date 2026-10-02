@@ -1,0 +1,25 @@
+{
+  "architectures": [
+    "MobileNetV1ForImageClassification"
+  ],
+  "classifier_dropout_prob": 0.999,
+  "depth_multiplier": 1.0,
+  "hidden_act": "relu6",
+  "id2label": {
+    "0": "background",
+    "1": "tench"
+  },
+  "image_size": 224,
+  "initializer_range": 0.02,
+  "label2id": {
+    "background": 0,
+    "tench": 1
+  },
+  "layer_norm_eps": 0.001,
+  "min_depth": 8,
+  "model_type": "mobilenet_v1",
+  "num_channels": 3,
+  "tf_padding": true,
+  "torch_dtype": "float32",
+  "transformers_version": "4.31.0.dev0"
+}

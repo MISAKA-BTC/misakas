@@ -14,6 +14,16 @@ macro_rules! pack {
 pack!(
     "refusals",
     "spec-frame",
+    "encdec-frame",
+    "mixin-bart-lineage",
+    "t5",
+    "t5-encoder",
+    "longt5",
+    "whisper",
+    "bart",
+    "mbart",
+    "marian",
+    "pegasus",
     "decoder-core",
     "standard-decoder",
     "mixin-gdn-hybrid",
@@ -22,13 +32,37 @@ pack!(
     "mixin-qwen-sliding",
     "mixin-vlm",
     "mixin-bert-encoder",
+    "nomic-bert",
+    "modernbert",
+    "albert",
+    "deberta-v2",
+    "clip-vision",
+    "siglip-vision",
+    "vit",
+    "qwen2-vl-vision",
+    "qwen2-vl-vision-in-vlm",
+    "qwen2-5-vl-vision",
+    "qwen2-5-vl-vision-in-vlm",
+    "llava-vision",
+    "resnet",
+    "convnext",
+    "mobilenet-v2",
+    "mobilenet-v1",
+    "bitnet",
+    "apertus",
+    "lfm2",
+    "nemotron-h",
+    "falcon-h1",
     "bert",
     "bloom",
     "clip-text",
     "cohere",
     "cohere2",
     "deepseek-v2",
+    "dbrx",
     "deepseek-v3",
+    "deepseek-v32",
+    "ernie4-5-moe",
     "exaone",
     "exaone4",
     "falcon",
@@ -48,6 +82,7 @@ pack!(
     "gptj",
     "granite",
     "granitemoe",
+    "granitemoehybrid",
     "distilbert",
     "internlm2",
     "jamba",
@@ -84,6 +119,9 @@ pack!(
     "starcoder2",
     "vlm",
     "vlm-gemma3",
+    "paligemma",
+    "vlm-gemma",
+    "vlm-gemma2",
     "vlm-llama",
     "vlm-llama4",
     "vlm-mistral",
@@ -109,9 +147,36 @@ pub fn by_id(id: &str) -> Option<&'static Adapter> {
     all().iter().find(|a| a.id == id)
 }
 
-/// The built-in adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
+/// The built-in DECODER adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
+/// (An adapter of kind `encdec` is found by [`find_encdec_for`]; the decoder reader never sees one.)
 pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
-    let real = || all().iter().filter(|a| a.value.get("spec").is_some() || a.value.get("dispatch").is_some());
+    let real = || all().iter().filter(|a| a.kind() == "decoder" && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some()));
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in ENCODER-DECODER adapter (kind `encdec`) claiming a configuration, by `architectures[0]`, else by
+/// `model_type`.
+pub fn find_encdec_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
+    let real = || all().iter().filter(|a| a.kind() == "encdec" && a.value.get("match").is_some());
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in VISION-TOWER adapter (kind `vision`) claiming a configuration, by `architectures[0]`, else by `model_type`.
+pub fn find_vision_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
+    let real = || all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some());
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// The built-in VISION-TOWER adapter (kind `vision`) that reads the tower INSIDE a wrapper model (`match.tower_of`: a VLM's
+/// `Qwen2VLForConditionalGeneration`, `LlavaForConditionalGeneration`). The wrapper itself is a text model: only the
+/// component's lowering asks for this.
+pub fn find_tower_in(arch: &str) -> Option<&'static Adapter> {
+    all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some()).find(|a| a.tower_of().contains(&arch))
+}
+
+/// The built-in CONVOLUTIONAL-NETWORK adapter (kind `cnn`) claiming a configuration, by `architectures[0]`, else by `model_type`.
+pub fn find_cnn_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
+    let real = || all().iter().filter(|a| a.kind() == "cnn" && a.value.get("match").is_some());
     real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 

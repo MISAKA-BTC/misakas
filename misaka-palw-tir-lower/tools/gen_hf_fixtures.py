@@ -130,6 +130,53 @@ CONFIGS = {
                                       "original_max_position_embeddings": 4, "max_position_embeddings": 64,
                                       "beta_fast": 32.0, "beta_slow": 1.0, "mscale_all_dim": 1.0, "mscale": 1.0,
                                       "llama_4_scaling_beta": 0.5}), {}),
+    # BitNet b1.58 (bf16 master): ReLU^2 gated MLP and the two sub-layer norms (SUBLAYER_NORMS_V1).
+    "bitnet": (c("bitnet", "BitNetForCausalLM", L, num_hidden_layers=2, hidden_act="relu2", head_dim=8,
+                 rope_parameters={"rope_type": "default", "rope_theta": 500000.0}, max_position_embeddings=128), {}),
+    # Apertus: xIELU (the layer's own alpha_p, alpha_n, beta, eps), q/k norm, llama3 rope (ACT_LEARNED_POINTWISE_V1).
+    "apertus": (c("apertus", "ApertusForCausalLM", L, num_hidden_layers=2, hidden_act="xielu", head_dim=8,
+                  rope_parameters={"rope_type": "llama3", "rope_theta": 12000000.0, "factor": 8.0, "low_freq_factor": 1.0,
+                                   "high_freq_factor": 4.0, "original_max_position_embeddings": 16},
+                  max_position_embeddings=128), {}),
+    # LFM2: gated short convolutions (conv_L_cache 3, biases) and one attention layer with per-head q/k RMS norm; the final norm is
+    # `embedding_norm`, the head tied (MIXER_SHORT_CONV_V1).
+    "lfm2": (c("lfm2", "Lfm2ForCausalLM", L, num_hidden_layers=4, head_dim=8, conv_L_cache=3, conv_bias=True,
+               layer_types=["conv", "conv", "full_attention", "conv"], block_auto_adjust_ff_dim=False,
+               rope_parameters={"rope_type": "default", "rope_theta": 1000000.0}, max_position_embeddings=128,
+               tie_word_embeddings=True), {}),
+    # (The Nemotron-H fixtures take HF's DECODE logits as the reference and a dt_bias that keeps the step size above the clamp: transformers 5.17's
+    # chunked prefill (and a decode's first token) clamps the Mamba-2 step size at `time_step_min`, its recurrent decode and the original code do not,
+    # and the per-position program is the decode's.)
+    # Nemotron-H: ONE block per layer (Mamba-2, attention with no rotary embedding, a plain relu^2 MLP, a routed MoE of plain experts with a plain
+    # shared expert) under one pre-norm each (LAYER_FFN_ONLY_V1, MOE_EXPERTS_PLAIN_V1); the second fixture runs the routed experts in a latent
+    # space (MOE_LATENT_PROJ_V1) with group-limited routing and no mamba biases.
+    "nemotron_h": (c("nemotron_h", "NemotronHForCausalLM", L, head_dim=8,
+                     layers_block_type=["linear_attention", "moe", "full_attention", "mlp", "linear_attention", "moe"],
+                     mamba_num_heads=8, mamba_head_dim=8, ssm_state_size=4, n_groups=2, conv_kernel=4, use_bias=True,
+                     n_routed_experts=4, num_experts_per_tok=2, moe_intermediate_size=16, moe_shared_expert_intermediate_size=24,
+                     routed_scaling_factor=2.5, max_position_embeddings=128), {"decode": True, "dt_bias": (-1.0, 1.0)}),
+    "nemotron_h_latent": (c("nemotron_h", "NemotronHForCausalLM", L, head_dim=8,
+                            layers_block_type=["linear_attention", "moe", "full_attention", "moe"],
+                            mamba_num_heads=8, mamba_head_dim=8, ssm_state_size=4, n_groups=2, conv_kernel=4,
+                            n_routed_experts=4, num_experts_per_tok=2, moe_intermediate_size=16, moe_shared_expert_intermediate_size=24,
+                            moe_latent_size=16, n_group=2, topk_group=1, routed_scaling_factor=1.5, norm_topk_prob=False,
+                            max_position_embeddings=128), {"decode": True, "dt_bias": (-1.0, 1.0)}),
+    # Falcon-H1: a Mamba-2 mixer and attention IN PARALLEL in every layer (MIXER_PARALLEL_BRANCH_V1) with every muP multiplier away from 1
+    # (SCALE_MUP_V1), the gate alone after the scan (no mamba norm); then the same with a grouped mamba RMS norm after the gate / before the gate and every bias on.
+    "falcon_h1": (c("falcon_h1", "FalconH1ForCausalLM", L, num_hidden_layers=2, mamba_d_ssm=64, mamba_n_heads=8, mamba_d_state=4, mamba_n_groups=1,
+                    mamba_d_conv=4, mamba_rms_norm=False, max_position_embeddings=128,
+                    rope_parameters={"rope_type": "default", "rope_theta": 10000.0},
+                    lm_head_multiplier=0.5, embedding_multiplier=2.0, mlp_multipliers=[0.7, 1.3], key_multiplier=0.8,
+                    attention_out_multiplier=1.5, attention_in_multiplier=0.9, ssm_multipliers=[0.35, 0.25, 0.35, 0.5, 0.35],
+                    ssm_in_multiplier=0.6, ssm_out_multiplier=1.2), {}),
+    "falcon_h1_norm": (c("falcon_h1", "FalconH1ForCausalLM", L, num_hidden_layers=2, mamba_d_ssm=64, mamba_n_heads=8, mamba_d_state=4, mamba_n_groups=2,
+                         mamba_d_conv=4, mamba_rms_norm=True, mamba_norm_before_gate=True, mamba_proj_bias=True, projectors_bias=True,
+                         attention_bias=True, mlp_bias=True, max_position_embeddings=128,
+                         rope_parameters={"rope_type": "default", "rope_theta": 10000.0}, mlp_multipliers=[0.8, 1.2],
+                         ssm_multipliers=[0.5, 1.5, 0.75, 1.25, 0.9]), {}),
+    "falcon_h1_gate": (c("falcon_h1", "FalconH1ForCausalLM", L, num_hidden_layers=2, mamba_d_ssm=64, mamba_n_heads=8, mamba_d_state=4, mamba_n_groups=2,
+                         mamba_d_conv=4, mamba_rms_norm=True, mamba_norm_before_gate=False, max_position_embeddings=128,
+                         rope_parameters={"rope_type": "default", "rope_theta": 10000.0}), {}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),
@@ -268,6 +315,12 @@ CONFIGS = {
                                         vision_output_dim=32, image_size=28, patch_size=14, projector_input_dim=32,
                                         projector_output_dim=32),
                      boi_token_index=V - 3, eoi_token_index=V - 2, image_token_index=V - 4), {"vlm": True}),
+    # PaliGemma: the Gemma-1 text decoder over a text-only prompt (causal, 1-indexed rope positions); the prefix-LM attention of an image
+    # prompt is not lowered (`prefix_lm`).
+    "paligemma_vlm": (c("paligemma", "PaliGemmaForConditionalGeneration",
+                        text_config=dict(L, model_type="gemma", num_hidden_layers=2, head_dim=8, hidden_act="gelu_pytorch_tanh",
+                                         num_image_tokens=4, max_position_embeddings=128),
+                        vision_config=dict(VIS_SIGLIP, projection_dim=32), image_token_index=V - 1, projection_dim=32), {"vlm": True}),
     "llava": (c("llava", "LlavaForConditionalGeneration", text_config=dict(L, model_type="llama", num_hidden_layers=2),
                 vision_config=dict(model_type="clip_vision_model", hidden_size=16, intermediate_size=32, num_hidden_layers=1,
                                    num_attention_heads=2, image_size=28, patch_size=14, projection_dim=16),
@@ -323,6 +376,16 @@ def make(name, cfg_dict, opts):
     tc = cfg.get_text_config()
     hidden = getattr(tc, "hidden_size", None) or getattr(tc, "n_embd", None) or getattr(tc, "d_model")
     randomise(model, hidden, seed)
+    if "dt_bias" in opts:
+        # Mamba-2's step-size bias: the models' own init (softplus(dt_bias) in 0.001 .. 0.1) leaves transformers' chunked prefill clamping the step
+        # size at `time_step_min` (its recurrent decode, and the original code, do not); a bias that keeps the step size well above the clamp makes
+        # every reference agree, and exercises the scan with decays that matter.
+        lo, hi = opts["dt_bias"]
+        gen = torch.Generator().manual_seed(seed + 5)
+        with torch.no_grad():
+            for pname, p in model.named_parameters():
+                if pname.endswith("dt_bias"):
+                    p.copy_((torch.rand(p.shape, generator=gen) * (hi - lo) + lo).to(torch.bfloat16).to(torch.float32))
     ids = torch.tensor([[(seed * 7 + 13 * i + i * i) % V for i in range(T)]])
     d = os.path.join(FIX, name)
     os.makedirs(d, exist_ok=True)

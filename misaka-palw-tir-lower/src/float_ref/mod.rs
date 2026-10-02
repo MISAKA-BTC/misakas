@@ -141,7 +141,11 @@ impl ParamStore {
 
 fn check_shape(name: &str, t: &Tensor, want: &[usize]) -> Result<()> {
     if t.shape != want {
-        return Err(LowerError::weights(format!("param `{name}`: checkpoint gives {:?}, graph needs {want:?}", t.shape)));
+        return Err(LowerError::weights(format!(
+            "param `{name}`: checkpoint gives {:?}, graph needs {want:?}{}",
+            t.shape,
+            crate::weights::size_one_hint(name, &t.shape, want)
+        )));
     }
     Ok(())
 }
@@ -248,6 +252,8 @@ pub struct Session<'a> {
     /// M-RoPE position components `(t, h, w)` by position (Qwen2-VL's `get_rope_index`); a
     /// position absent here reads its own index in all three.
     pub mrope_pos: BTreeMap<usize, [usize; 3]>,
+    /// The hash constants of each PLE layer (`crate::ngram`), by model layer.
+    ngram_tables: BTreeMap<usize, crate::ngram::NgramTables>,
 }
 
 impl<'a> Session<'a> {
@@ -262,6 +268,7 @@ impl<'a> Session<'a> {
             trace: None,
             overrides: BTreeMap::new(),
             mrope_pos: BTreeMap::new(),
+            ngram_tables: BTreeMap::new(),
         }
     }
     pub fn with_site_stats(mut self) -> Self {
@@ -447,6 +454,11 @@ impl<'a> Session<'a> {
             }
             Op::Scale { c } => one(x(0)?.iter().map(|v| (*v as f64 * c) as f32).collect()),
             Op::Act(a) => one(x(0)?.iter().map(|v| act(*a, *v)).collect()),
+            Op::Xielu => {
+                let sc = |i: usize| -> Result<f64> { Ok(self.param(ins[i], layer)?.data[0] as f64) };
+                let (p, n, beta, eps) = (sc(1)?, sc(2)?, sc(3)?, sc(4)?);
+                one(x(0)?.iter().map(|v| xielu(*v as f64, p, n, beta, eps) as f32).collect())
+            }
             Op::Clamp { lo, hi } => one(x(0)?.iter().map(|v| (*v as f64).clamp(*lo, *hi) as f32).collect()),
             Op::Softcap { cap } => one(x(0)?.iter().map(|v| ((*v as f64 / cap).tanh() * cap) as f32).collect()),
             Op::Lerp => {
@@ -464,11 +476,11 @@ impl<'a> Session<'a> {
                 let bias = if ins.len() > 2 { Some(self.param(ins[2], layer)?) } else { None };
                 one(norm(x(0)?, spec.kind, spec.eps, spec.gain, gain, bias, *groups))
             }
-            Op::GatedRmsNorm { eps, groups, gate_first } => {
+            Op::GatedRmsNorm { eps, groups, gate_first, act: gate_act } => {
                 let w = self.param(ins[2], layer)?;
-                let gate: Vec<f32> = x(1)?.iter().map(|z| act(Act::Silu, *z)).collect();
+                let gate: Vec<f32> = x(1)?.iter().map(|z| act(*gate_act, *z)).collect();
                 self.sub_site(prefix, &node.site, "gate", &gate);
-                one(gated_rms_norm(x(0)?, x(1)?, &w.data, *eps, *groups, *gate_first))
+                one(gated_rms_norm_act(x(0)?, x(1)?, &w.data, *eps, *groups, *gate_first, *gate_act))
             }
             Op::L2Norm { groups, eps } => {
                 let v = x(0)?;
@@ -493,6 +505,121 @@ impl<'a> Session<'a> {
                 };
                 one(rope(x(0)?, *heads, *head_dim, *rotary_dim, *offset, *style, &c, &s))
             }
+            Op::RopeAtBlock { heads, head_dim, rotary_dim, offset, style, table, ratio } => {
+                let f = &self.prog.rope_tables[*table as usize];
+                let (c, s) = f.cos_sin(pos - pos % ratio);
+                one(rope(x(0)?, *heads, *head_dim, *rotary_dim, *offset, *style, &c, &s))
+            }
+            Op::StreamMean { streams } => {
+                let v = x(0)?;
+                let d = v.len() / streams;
+                one((0..d).map(|j| ((0..*streams).map(|k| v[k * d + j] as f64).sum::<f64>() / *streams as f64) as f32).collect())
+            }
+            Op::StreamOuter { streams } => {
+                let (o, w) = (x(0)?, x(1)?);
+                if w.len() != *streams {
+                    return Err(LowerError::eval(format!("StreamOuter: {} weights for {streams} streams", w.len())));
+                }
+                one((0..*streams).flat_map(|k| o.iter().map(move |v| *v * w[k]).collect::<Vec<f32>>()).collect())
+            }
+            Op::GroupDot { groups } => {
+                let (a, b) = (x(0)?, x(1)?);
+                let g = a.len() / groups;
+                one((0..*groups).map(|k| (0..g).map(|j| a[k * g + j] as f64 * b[k * g + j] as f64).sum::<f64>() as f32).collect())
+            }
+            Op::GroupRepeat { groups, size } => {
+                let a = x(0)?;
+                if a.len() != *groups {
+                    return Err(LowerError::eval(format!("GroupRepeat: {} values for {groups} groups", a.len())));
+                }
+                one(a.iter().flat_map(|v| std::iter::repeat_n(*v, *size)).collect())
+            }
+            Op::GatherRows { heads, dim } => {
+                let ids = x(0)?.to_vec();
+                let t = self.param(ins[1], layer)?;
+                if ids.len() != *heads || t.shape[1] != *dim {
+                    return Err(LowerError::eval("GatherRows: ids or table of the wrong shape"));
+                }
+                let mut out = Vec::with_capacity(heads * dim);
+                for id in ids {
+                    let r = id as usize;
+                    if r >= t.shape[0] {
+                        return Err(LowerError::eval(format!("GatherRows: row {r} of {}", t.shape[0])));
+                    }
+                    out.extend_from_slice(&t.data[r * dim..(r + 1) * dim]);
+                }
+                one(out)
+            }
+            Op::NgramIds { ple, layers } => {
+                let Ref::State(s) = ins[1] else { return Err(LowerError::eval("NgramIds without a window state")) };
+                // `layer` is the occurrence; the hash constants follow the model layer.
+                let l = self.prog.model_layer(layer.ok_or_else(|| LowerError::eval("NgramIds outside a layer"))?);
+                let ple_index = layers
+                    .iter()
+                    .find(|(ml, _)| *ml == l)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| LowerError::eval(format!("NgramIds: layer {l} is not a PLE layer of this block")))?;
+                if !self.ngram_tables.contains_key(&l) {
+                    let mut spec = ple.clone();
+                    spec.layer_index = ple_index;
+                    self.ngram_tables.insert(l, crate::ngram::NgramTables::new(&spec));
+                }
+                let t = self.ngram_tables[&l].clone();
+                let st = self.fixed_mut(s, lyr);
+                let window: Vec<i64> = st.iter().map(|v| *v as i64).collect();
+                let ids: Vec<f32> = t.ids(token as i64, &window).into_iter().map(|v| v as f32).collect();
+                // the next position's window: this token, then the older ones unless this token ends a segment
+                let eos = t.eos;
+                for k in (1..st.len()).rev() {
+                    st[k] = if token as i64 == eos { eos as f32 } else { st[k - 1] };
+                }
+                st[0] = token as f32;
+                one(ids)
+            }
+            Op::BlockMean { ratio } => {
+                let Ref::State(s) = ins[1] else { return Err(LowerError::eval("BlockMean without a state")) };
+                let k = x(0)?.to_vec();
+                let sum = self.fixed_mut(s, lyr);
+                if pos % ratio == 0 {
+                    sum.iter_mut().for_each(|v| *v = 0.0);
+                }
+                for (a, b) in sum.iter_mut().zip(&k) {
+                    *a += *b;
+                }
+                one(sum.iter().map(|v| *v / *ratio as f32).collect())
+            }
+            Op::BlockWrite { ratio, blocks } => {
+                let Ref::State(s) = ins[1] else { return Err(LowerError::eval("BlockWrite without a state")) };
+                let row = x(0)?.to_vec();
+                let dim = row.len();
+                if (pos + 1) % ratio == 0 && pos / ratio < *blocks {
+                    let b = pos / ratio;
+                    self.fixed_mut(s, lyr)[b * dim..(b + 1) * dim].copy_from_slice(&row);
+                }
+                Ok(vec![vec![]])
+            }
+            Op::BlockSelect { heads, dim, ratio, blocks, top } => {
+                let Ref::State(s) = ins[2] else { return Err(LowerError::eval("BlockSelect without a state")) };
+                let (q, cand) = (x(0)?.to_vec(), x(1)?.to_vec());
+                let keys = self.fixed_mut(s, lyr).clone();
+                let complete_old = pos / ratio;
+                let completing = (pos + 1) % ratio == 0;
+                let score = |key: &[f32]| -> f64 {
+                    (0..*heads).map(|h| (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0)).sum::<f64>() / (*dim as f64).sqrt()
+                };
+                let scores: Vec<f64> = (0..*blocks)
+                    .map(|b| {
+                        if b < complete_old {
+                            score(&keys[b * dim..(b + 1) * dim])
+                        } else if b == complete_old && completing {
+                            score(&cand)
+                        } else {
+                            f64::NEG_INFINITY
+                        }
+                    })
+                    .collect();
+                one(top_k_indices(&scores, *top).into_iter().map(|i| i as f32).collect())
+            }
             Op::PosScale { temp } => {
                 let t = temp.at(pos);
                 one(x(0)?.iter().map(|v| v * t).collect())
@@ -507,7 +634,7 @@ impl<'a> Session<'a> {
                 self.hist.entry((s, lyr)).or_default().push(row);
                 Ok(vec![vec![]])
             }
-            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks, chunk } => {
+            Op::Attention { heads, kv_heads, head_dim, v_head_dim, scale, softcap, window, alibi, sinks, chunk, blocks } => {
                 let (Ref::State(ks), Ref::State(vs)) = (ins[1], ins[2]) else {
                     return Err(LowerError::eval("attention without states"));
                 };
@@ -516,6 +643,22 @@ impl<'a> Session<'a> {
                 // Borrowed, not cloned: a clone would copy the whole history every layer and step.
                 let keys: &[Vec<f32>] = self.hist.get(&(ks, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let values: &[Vec<f32>] = self.hist.get(&(vs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                // Sparse block attention: only the rows of the selected blocks and of the incomplete
+                // tail take part (a masked softmax is the softmax over the rows left).
+                let (keys_sel, values_sel);
+                let (keys, values) = match blocks {
+                    Some(ratio) => {
+                        let ids = x(ins.len() - 1)?;
+                        let n = keys.len();
+                        let complete = n / ratio;
+                        let sel: std::collections::BTreeSet<usize> = ids.iter().map(|v| *v as usize).collect();
+                        let vis: Vec<usize> = (0..n).filter(|j| sel.contains(&(*j / ratio)) || *j >= complete * ratio).collect();
+                        keys_sel = vis.iter().map(|j| keys[*j].clone()).collect::<Vec<_>>();
+                        values_sel = vis.iter().map(|j| values[*j].clone()).collect::<Vec<_>>();
+                        (keys_sel.as_slice(), values_sel.as_slice())
+                    }
+                    None => (keys, values),
+                };
                 let shape = AttnShape { heads: *heads, kv_heads: *kv_heads, head_dim: *head_dim, v_head_dim: *v_head_dim };
                 let want = self.sites.is_some();
                 // A chunk keeps the last `p mod c + 1` keys: the query's own chunk.
@@ -532,26 +675,39 @@ impl<'a> Session<'a> {
                 self.sub_site(prefix, &node.site, "probs", &probs);
                 one(out)
             }
-            Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale } => {
+            Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, scale, indexer } => {
                 let (Ref::State(ls), Ref::State(rs)) = (ins[1], ins[2]) else { return Err(LowerError::eval("MLA without states")) };
                 let q = x(0)?.to_vec();
                 let kvb = self.param(ins[3], layer)?;
+                // DeepSeek sparse attention: the indexer's scores over the window and the tokens it keeps.
+                let keep: Option<Vec<bool>> = match indexer {
+                    Some(ix) => {
+                        let (iq, iw) = (x(4)?.to_vec(), x(5)?.to_vec());
+                        let Ref::State(ihs) = ins[6] else { return Err(LowerError::eval("a token indexer without its key history")) };
+                        let keys: &[Vec<f32>] = self.hist.get(&(ihs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                        let scores = token_index_scores(&iq, &iw, keys, ix.heads, ix.dim);
+                        let sv: Vec<f32> = scores.iter().map(|v| *v as f32).collect();
+                        self.sub_site(prefix, &node.site, "idx_score", &sv);
+                        Some(token_index_keep(&scores, ix.topk))
+                    }
+                    None => None,
+                };
                 let lat: &[Vec<f32>] = self.hist.get(&(ls, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let kr: &[Vec<f32>] = self.hist.get(&(rs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let (mut qt, mut ctx) = (Vec::new(), Vec::new());
-                let out = mla_traced(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, &mut qt, &mut ctx);
+                let out = mla_traced_keep(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, keep.as_deref(), &mut qt, &mut ctx);
                 // The absorbed query and the latent context: where an integer MLA narrows.
                 self.sub_site(prefix, &node.site, "qt", &qt);
                 self.sub_site(prefix, &node.site, "latent_ctx", &ctx);
                 one(out)
             }
-            Op::CausalConv1d { channels, kernel, bias, act: a } => {
+            Op::CausalConv1d { channels, kernel, bias, act: a, dilation } => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("conv without state")) };
                 let w = self.param(ins[2], layer)?.data.clone();
                 let b = if *bias { Some(self.param(ins[3], layer)?.data.clone()) } else { None };
                 let xv = x(0)?.to_vec();
                 let st = self.fixed_mut(s, lyr);
-                let pre = causal_conv(&xv, st, &w, b.as_deref(), *channels, *kernel, None);
+                let pre = causal_conv_dilated(&xv, st, &w, b.as_deref(), *channels, *kernel, *dilation, None);
                 // The pre-activation is a sub-site: an integer conv narrows there before its table.
                 self.sub_site(prefix, &node.site, "pre", &pre);
                 one(match a {
@@ -642,19 +798,22 @@ impl<'a> Session<'a> {
                 self.sub_site(prefix, &node.site, "logits", &logits);
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }
-            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled } => {
+            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled, gated } => {
                 let xv = x(0)?.to_vec();
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
-                let g = self.param(ins[3], layer)?;
-                let u = self.param(ins[4], layer)?;
-                let d = self.param(ins[5], layer)?;
+                // A gated expert: gate, up, down (inputs 3, 4, 5); a plain one (`MOE_EXPERTS_PLAIN_V1`): up, down (3, 4).
+                let (g, u, d) = if *gated {
+                    (Some(self.param(ins[3], layer)?), self.param(ins[4], layer)?, self.param(ins[5], layer)?)
+                } else {
+                    (None, self.param(ins[3], layer)?, self.param(ins[4], layer)?)
+                };
                 let biases = if *bias {
                     Some((self.param(ins[6], layer)?, self.param(ins[7], layer)?, self.param(ins[8], layer)?))
                 } else {
                     None
                 };
-                let (e_i, e_d) = (g.shape[1], g.shape[2]);
+                let (e_i, e_d) = (u.shape[1], u.shape[2]);
                 let mut y = vec![0f64; e_d];
                 // Sub-sites over the selected experts: what a lowering scales each stage by.
                 let (mut gate_all, mut up_all, mut act_all, mut hidden_all, mut out_all) =
@@ -664,25 +823,36 @@ impl<'a> Session<'a> {
                         let per: usize = t.shape[1..].iter().product();
                         t.data[e * per..(e + 1) * per].to_vec()
                     };
-                    let (gw, uw, dw) = (slice(g, e), slice(u, e), slice(d, e));
+                    let (uw, dw) = (slice(u, e), slice(d, e));
+                    let gw = g.map(|g| slice(g, e));
                     let gb = biases.map(|(a, _, _)| slice(a, e));
                     let ub = biases.map(|(_, b, _)| slice(b, e));
                     let db = biases.map(|(_, _, c)| slice(c, e));
                     // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
                     let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
-                    let gv = linear_raw(&xs, &gw, e_i, gb.as_deref());
                     let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
-                    let hv: Vec<f32> = match glu {
-                        Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
-                        Glu::ClampedSwiGlu { alpha, limit } => {
-                            gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
+                    let (gv, hv): (Vec<f32>, Vec<f32>) = match &gw {
+                        Some(gw) => {
+                            let gv = linear_raw(&xs, gw, e_i, gb.as_deref());
+                            let hv = match glu {
+                                Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
+                                Glu::ClampedSwiGlu { alpha, limit } => {
+                                    gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
+                                }
+                            };
+                            (gv, hv)
                         }
+                        // A plain expert: the activation of the up projection is the hidden vector.
+                        None => (Vec::new(), uv.iter().map(|u| act(*a, *u)).collect()),
                     };
                     let ov = linear_raw(&hv, &dw, e_d, db.as_deref());
                     if self.sites.is_some() {
                         gate_all.extend_from_slice(&gv);
                         up_all.extend_from_slice(&uv);
-                        act_all.extend(gv.iter().map(|g| act(*a, *g)));
+                        match gw {
+                            Some(_) => act_all.extend(gv.iter().map(|g| act(*a, *g))),
+                            None => act_all.extend_from_slice(&hv),
+                        }
                         hidden_all.extend_from_slice(&hv);
                         out_all.extend_from_slice(&ov);
                     }
@@ -692,7 +862,9 @@ impl<'a> Session<'a> {
                     }
                 }
                 for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {
-                    self.sub_site(prefix, &node.site, sub, v);
+                    if !(v.is_empty() && !*gated && sub == "gate") {
+                        self.sub_site(prefix, &node.site, sub, v);
+                    }
                 }
                 one(y.into_iter().map(|v| v as f32).collect())
             }
@@ -773,6 +945,24 @@ pub fn erf(x: f64) -> f64 {
     if x < 0.0 { -r } else { r }
 }
 
+/// **xIELU** with the layer's scalars: `αp = softplus(p)`, `αn = β + softplus(n)`, `y = x > 0 ? αp·x² + β·x :
+/// (expm1(min(x, ε)) − x)·αn + β·x` (`activations.py:XIELUActivation._xielu_python`; softplus at torch's threshold of 20).
+pub fn xielu(x: f64, p: f64, n: f64, beta: f64, eps: f64) -> f64 {
+    let softplus = |v: f64| if v > 20.0 { v } else { crate::detmath::ln_1p(crate::detmath::exp(v)) };
+    let (alpha_p, alpha_n) = (softplus(p), beta + softplus(n));
+    if x > 0.0 {
+        alpha_p * x * x + beta * x
+    } else {
+        let z = x.min(eps);
+        (expm1(z) - x) * alpha_n + beta * x
+    }
+}
+
+/// `exp(z) − 1`, accurate near 0 (a series below 1e-5, where the difference of two nearly equal numbers loses digits).
+fn expm1(z: f64) -> f64 {
+    if z.abs() < 1e-5 { z * (1.0 + z * (0.5 + z / 6.0)) } else { crate::detmath::exp(z) - 1.0 }
+}
+
 pub fn act(a: Act, v: f32) -> f32 {
     let x = v as f64;
     let sig = |z: f64| 1.0 / (1.0 + crate::detmath::exp(-z));
@@ -782,6 +972,10 @@ pub fn act(a: Act, v: f32) -> f32 {
         Act::GeluTanh => 0.5 * x * (1.0 + crate::detmath::tanh((2.0 / std::f64::consts::PI).sqrt() * (x + 0.044715 * x * x * x))),
         Act::QuickGelu => x * sig(1.702 * x),
         Act::Relu => x.max(0.0),
+        Act::Relu6 => x.clamp(0.0, 6.0),
+        // torch: `x * relu6(x + 3) / 6` and `relu6(x + 3) / 6`
+        Act::HardSwish => x * (x + 3.0).clamp(0.0, 6.0) / 6.0,
+        Act::HardSigmoid => (x + 3.0).clamp(0.0, 6.0) / 6.0,
         Act::Relu2 => {
             let r = x.max(0.0);
             r * r
@@ -797,6 +991,19 @@ pub fn act(a: Act, v: f32) -> f32 {
             }
         }
         Act::Identity => x,
+        // xIELU reads the layer's parameters (`Op::Xielu`); an activation of the input alone is none (the lowering refuses it).
+        Act::Xielu => f64::NAN,
+        // torch: `x.abs().clamp_min(1e-6).sqrt() * x.sign()`
+        Act::SignedSqrt => {
+            let sign = if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            };
+            x.abs().max(1e-6).sqrt() * sign
+        }
     }) as f32
 }
 
@@ -849,8 +1056,13 @@ pub fn norm(
 }
 
 pub fn gated_rms_norm(x: &[f32], z: &[f32], w: &[f32], eps: f64, groups: usize, gate_first: bool) -> Vec<f32> {
+    gated_rms_norm_act(x, z, w, eps, groups, gate_first, Act::Silu)
+}
+
+/// [`gated_rms_norm`] with the gate's activation named.
+pub fn gated_rms_norm_act(x: &[f32], z: &[f32], w: &[f32], eps: f64, groups: usize, gate_first: bool, gate_act: Act) -> Vec<f32> {
     let n = x.len();
-    let silu = |v: f32| act(Act::Silu, v);
+    let silu = |v: f32| act(gate_act, v);
     let pre: Vec<f32> = if gate_first { x.iter().zip(z).map(|(a, b)| a * silu(*b)).collect() } else { x.to_vec() };
     let g = n / groups.max(1);
     let mut out = Vec::with_capacity(n);
@@ -1002,23 +1214,71 @@ pub fn mla_traced(
     qt_out: &mut Vec<f32>,
     ctx_out: &mut Vec<f32>,
 ) -> Vec<f32> {
+    mla_traced_keep(q, kvb, lat, kr, heads, nope, rope, vd, r, scale, None, qt_out, ctx_out)
+}
+
+/// The indexer's scores of DeepSeek sparse attention over its key history (`ATTN_TOKEN_INDEXER_V1`):
+/// `s_t = Σ_h w_h · ReLU(q_h · k_t)`. The positive factors `head_dim^-½` and `heads^-½` of the model's formula
+/// move no rank and are left out, so a score is in the units the integer lowering calibrates.
+pub fn token_index_scores(iq: &[f32], iw: &[f32], keys: &[Vec<f32>], heads: usize, dim: usize) -> Vec<f64> {
+    keys.iter()
+        .map(|k| {
+            (0..heads)
+                .map(|h| {
+                    let dot: f64 = (0..dim).map(|j| iq[h * dim + j] as f64 * k[j] as f64).sum();
+                    iw[h] as f64 * dot.max(0.0)
+                })
+                .sum()
+        })
+        .collect()
+}
+
+/// The tokens a top-`topk` selection keeps: the `min(topk, n)` best scores, **ties to the lowest index** (the IR's
+/// `TopK` rule).
+pub fn token_index_keep(scores: &[f64], topk: usize) -> Vec<bool> {
+    let mut keep = vec![false; scores.len()];
+    for i in top_k_indices(scores, topk.min(scores.len())) {
+        keep[i] = true;
+    }
+    keep
+}
+
+/// [`mla_traced`] over the history rows `keep` marks (all of them when `None`): DeepSeek sparse attention's softmax.
+#[allow(clippy::too_many_arguments)]
+pub fn mla_traced_keep(
+    q: &[f32],
+    kvb: &[f32],
+    lat: &[Vec<f32>],
+    kr: &[Vec<f32>],
+    heads: usize,
+    nope: usize,
+    rope: usize,
+    vd: usize,
+    r: usize,
+    scale: f64,
+    keep: Option<&[bool]>,
+    qt_out: &mut Vec<f32>,
+    ctx_out: &mut Vec<f32>,
+) -> Vec<f32> {
     let qd = nope + rope;
     let mut out = vec![0f32; heads * vd];
+    let rows: Vec<usize> = (0..lat.len()).filter(|j| keep.is_none_or(|k| k[*j])).collect();
     for h in 0..heads {
-        let rows = &kvb[h * (nope + vd) * r..(h + 1) * (nope + vd) * r];
-        let (wk, wv) = rows.split_at(nope * r);
+        let kv_rows = &kvb[h * (nope + vd) * r..(h + 1) * (nope + vd) * r];
+        let (wk, wv) = kv_rows.split_at(nope * r);
         let qn = &q[h * qd..h * qd + nope];
         let qr = &q[h * qd + nope..(h + 1) * qd];
         let qt: Vec<f64> = (0..r).map(|c| (0..nope).map(|i| wk[i * r + c] as f64 * qn[i] as f64).sum()).collect();
-        let sc: Vec<f64> = (0..lat.len())
-            .map(|j| {
+        let sc: Vec<f64> = rows
+            .iter()
+            .map(|&j| {
                 let a: f64 = qt.iter().zip(&lat[j]).map(|(x, y)| x * *y as f64).sum();
                 let b: f64 = qr.iter().zip(&kr[j]).map(|(x, y)| *x as f64 * *y as f64).sum();
                 (a + b) * scale
             })
             .collect();
         let p = softmax_with_sink(&sc, None);
-        let ctx: Vec<f64> = (0..r).map(|c| (0..lat.len()).map(|j| p[j] * lat[j][c] as f64).sum()).collect();
+        let ctx: Vec<f64> = (0..r).map(|c| rows.iter().enumerate().map(|(n, &j)| p[n] * lat[j][c] as f64).sum()).collect();
         qt_out.extend(qt.iter().map(|v| *v as f32));
         ctx_out.extend(ctx.iter().map(|v| *v as f32));
         for i in 0..vd {
@@ -1029,12 +1289,19 @@ pub fn mla_traced(
 }
 
 pub fn causal_conv(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, ch: usize, k: usize, a: Option<Act>) -> Vec<f32> {
-    // state: (k−1) rows of `ch`, oldest first.
+    causal_conv_dilated(x, st, w, b, ch, k, 1, a)
+}
+
+/// [`causal_conv`] with the taps `dilation` positions apart: the state holds the last
+/// `(k − 1)·dilation` rows of `ch` (oldest first), tap `t < k − 1` reads its row `t·dilation`, the
+/// last tap the input. Zeros before the sequence start.
+#[allow(clippy::too_many_arguments)]
+pub fn causal_conv_dilated(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, ch: usize, k: usize, dil: usize, a: Option<Act>) -> Vec<f32> {
     let mut out = vec![0f32; ch];
     for c in 0..ch {
         let mut s = 0f64;
         for t in 0..k {
-            let v = if t + 1 == k { x[c] } else { st[t * ch + c] };
+            let v = if t + 1 == k { x[c] } else { st[t * dil * ch + c] };
             s += w[c * k + t] as f64 * v as f64;
         }
         if let Some(b) = b {
@@ -1263,9 +1530,12 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
         return sparsemixer(&l, r.jitter_eps, r.scale);
     }
     let (scores, mut choice): (Vec<f64>, Vec<f64>) = match r.scoring {
+        // The selection bias (ERNIE-4.5's `e_score_correction_bias`, DeepSeek-V3's) joins the CHOICE scores only; the
+        // weights stay the unbiased probabilities (`scores`).
         Scoring::Softmax => {
             let p = softmax_with_sink(&l, None);
-            (p.clone(), p)
+            let c = p.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
+            (p, c)
         }
         Scoring::Sigmoid => {
             let s: Vec<f64> = l.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
@@ -1289,7 +1559,9 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             })
             .collect();
         let keep = top_k_indices(&gs, g.topk_group);
-        let fill = if r.scoring == Scoring::Softmax { 0.0 } else { f64::NEG_INFINITY };
+        // A masked expert scores 0 under plain softmax (every probability is ≥ 0); with a bias a kept expert can score
+        // below 0, so the mask must be below every biased score.
+        let fill = if r.scoring == Scoring::Softmax && sel_bias.is_none() { 0.0 } else { f64::NEG_INFINITY };
         for (i, c) in choice.iter_mut().enumerate() {
             if !keep.contains(&(i / per)) {
                 *c = fill;
@@ -1299,8 +1571,10 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
     let idx = top_k_indices(&choice, k);
     let mut w: Vec<f64> = match r.scoring {
         Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
-        Scoring::Softmax => idx.iter().map(|i| choice[*i]).collect(),
-        Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
+        // Softmax weights are the choice scores — masked experts (DeepSeek-V2's group-limited greedy) weigh 0 — unless a
+        // selection bias made the choice scores something else: then the weights stay the unbiased probabilities.
+        Scoring::Softmax if sel_bias.is_none() => idx.iter().map(|i| choice[*i]).collect(),
+        Scoring::Softmax | Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
         Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {

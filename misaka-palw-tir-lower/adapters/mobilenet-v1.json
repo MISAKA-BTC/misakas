@@ -1,0 +1,47 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mobilenet-v1",
+  "kind": "cnn",
+  "doc": "MobileNetV1 (MobileNetV1Model and the base of MobileNetV1ForImageClassification; google/mobilenet_v1_*): a 3x3 stride-2 stem convolution and thirteen depthwise-separable pairs (a depthwise 3x3 at the pair's stride, a pointwise 1x1 that widens at the stride-2 pairs and the first), every convolution with its batch norm (folded exactly: BN_FOLD_V1) and ReLU6 (a narrowing into its fixed unit, ACT_CLAMP_FIXED_UNIT_V1) and TensorFlow 'SAME' padding (CONV_PAD_TF_SAME_V1; tf_padding = false is the symmetric padding). Channel counts follow HF's max(int(depth * depth_multiplier), min_depth). The output is the pooled vector (global average pooling, `pooler_output`). Written as data only. Features: CNN_FROM_SPEC_V1, CONV_DENSE_V1, CONV_DEPTHWISE_2D_V1, BN_FOLD_V1, CONV_PAD_TF_SAME_V1, ACT_CLAMP_FIXED_UNIT_V1, POOL_AVG_GLOBAL_V1.",
+  "match": {"architectures": ["MobileNetV1Model", "MobileNetV1ForImageClassification"], "model_types": ["mobilenet_v1"]},
+  "config": {
+    "defaults": {"num_channels": 3, "image_size": 224, "depth_multiplier": 1.0, "min_depth": 8, "hidden_act": "relu6", "tf_padding": true, "layer_norm_eps": 0.001},
+    "inert": ["classifier_dropout_prob", "initializer_range", "id2label", "label2id", "num_labels", "problem_type", "is_decoder", "cross_attention_hidden_size", "add_cross_attention", "tie_word_embeddings"]
+  },
+  "vars": [
+    {"name": "nc_ok", "value": {"$check": [{"$eq": [{"$cfg": "num_channels"}, 3]}, "num_channels other than 3 (the class's image is RGB)"]}},
+    {"name": "dm", "value": {"$cfg": "depth_multiplier"}},
+    {"name": "dm_ok", "value": {"$check": [{"$gt": [{"$var": "dm"}, 0]}, "depth_multiplier must be positive"]}},
+    {"name": "mind", "value": {"$cfg": "min_depth"}},
+    {"name": "tfp", "value": {"$cfg": "tf_padding"}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "depths", "value": [32, 64, 128, 128, 256, 256, 512, 512, 512, 512, 512, 512, 1024, 1024]},
+    {"name": "chs", "value": {"$map": [{"$var": "depths"}, "d", {"$max": [{"$var": "mind"}, {"$floor": {"$mul": [{"$var": "d"}, {"$var": "dm"}]}}]}]}},
+    {"name": "strides", "value": [1, 2, 1, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1]},
+    {"name": "stem", "value": [
+      {"Conv": {"name": "conv_stem.convolution", "cin": 3, "cout": {"$index": [{"$var": "chs"}, 0]}, "k": 3, "stride": 2, "pad": {"$if": [{"$var": "tfp"}, 0, 1]}, "tf_same": {"$var": "tfp"}, "bn": {"name": "conv_stem.normalization", "eps": {"$var": "eps"}}, "act": {"$var": "act"}}}
+    ]},
+    {"name": "pairs", "value": {"$flatten": {"$map": [{"$range": 13}, "i",
+      {"$let": ["cin", {"$index": [{"$var": "chs"}, {"$var": "i"}]},
+      {"$let": ["cout", {"$index": [{"$var": "chs"}, {"$add": [{"$var": "i"}, 1]}]},
+      [
+        {"Conv": {"name": {"$cat": ["layer.", {"$mul": [{"$var": "i"}, 2]}, ".convolution"]}, "cin": {"$var": "cin"}, "cout": {"$var": "cin"}, "k": 3, "stride": {"$index": [{"$var": "strides"}, {"$var": "i"}]}, "pad": {"$if": [{"$var": "tfp"}, 0, 1]}, "tf_same": {"$var": "tfp"}, "groups": {"$var": "cin"}, "bn": {"name": {"$cat": ["layer.", {"$mul": [{"$var": "i"}, 2]}, ".normalization"]}, "eps": {"$var": "eps"}}, "act": {"$var": "act"}}},
+        {"Conv": {"name": {"$cat": ["layer.", {"$add": [{"$mul": [{"$var": "i"}, 2]}, 1]}, ".convolution"]}, "cin": {"$var": "cin"}, "cout": {"$var": "cout"}, "k": 1, "stride": 1, "pad": 0, "bn": {"name": {"$cat": ["layer.", {"$add": [{"$mul": [{"$var": "i"}, 2]}, 1]}, ".normalization"]}, "eps": {"$var": "eps"}}, "act": {"$var": "act"}}}
+      ]
+      ]}]}
+    ]}}},
+    {"name": "ops", "value": {"$concat": [{"$var": "stem"}, {"$var": "pairs"}]}},
+    {"name": "image", "value": {"$cfg": "image_size"}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": {"$if": [{"$is_list": {"$var": "image"}}, {"$index": [{"$var": "image"}, 0]}, {"$var": "image"}]},
+    "w": {"$if": [{"$is_list": {"$var": "image"}}, {"$index": [{"$var": "image"}, 1]}, {"$var": "image"}]},
+    "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
+    "ops": {"$var": "ops"},
+    "out": "GlobalAvg",
+    "ignored": ["classifier."],
+    "aliases": [["", "mobilenet_v1."]]
+  }
+}

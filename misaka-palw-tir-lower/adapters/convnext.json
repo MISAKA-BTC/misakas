@@ -1,0 +1,64 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "convnext",
+  "kind": "cnn",
+  "doc": "ConvNeXt (ConvNextModel and the base of ConvNextForImageClassification; facebook/convnext-*): a patch-size convolution (stride = kernel) and a LayerNorm over the channels, then stages of blocks — a 2x2 stride-2 convolution behind a channel LayerNorm between stages — each block a 7x7 depthwise convolution, a channel LayerNorm, a pointwise expansion to four times the width with the activation (gelu), a pointwise projection and the learned per-channel layer scale (folded exactly into the projection: LAYER_SCALE_FOLD_V1), added to the block's input. The output is the pooled vector: the mean over positions through the final LayerNorm (`pooler_output`). Written as data only: every operation is one the CNN lowering already has (a convolution is a gather and a matmul; a LayerNorm over channels is the encoder's LayerNorm over rows). No Rust reader of this family. Features: CNN_FROM_SPEC_V1, CONV_DENSE_V1, CONV_DEPTHWISE_2D_V1, NORM_LAYER_V1, LAYER_SCALE_FOLD_V1, ACT_TABLE_V1, RESIDUAL_ADD_ACT_V1, POOL_AVG_GLOBAL_V1. ConvNeXt V2 (a global response normalisation between the activation and the projection) is a different family and is not claimed.",
+  "match": {"architectures": ["ConvNextModel", "ConvNextForImageClassification"], "model_types": ["convnext"]},
+  "config": {
+    "defaults": {"num_channels": 3, "patch_size": 4, "num_stages": 4, "hidden_sizes": [96, 192, 384, 768], "depths": [3, 3, 9, 3], "hidden_act": "gelu", "layer_norm_eps": 1e-12, "layer_scale_init_value": 1e-06, "image_size": 224},
+    "inert": ["drop_path_rate", "initializer_range", "out_features", "out_indices", "stage_names", "id2label", "label2id", "num_labels", "problem_type", "is_decoder", "cross_attention_hidden_size", "add_cross_attention", "tie_word_embeddings"]
+  },
+  "vars": [
+    {"name": "nc_ok", "value": {"$check": [{"$eq": [{"$cfg": "num_channels"}, 3]}, "num_channels other than 3 (the class's image is RGB)"]}},
+    {"name": "ps", "value": {"$cfg": "patch_size"}},
+    {"name": "p", "value": {"$if": [{"$is_list": {"$var": "ps"}}, {"$index": [{"$var": "ps"}, 0]}, {"$var": "ps"}]}},
+    {"name": "p_ok", "value": {"$check": [{"$if": [{"$is_list": {"$var": "ps"}}, {"$eq": [{"$index": [{"$var": "ps"}, 0]}, {"$index": [{"$var": "ps"}, 1]}]}, true]}, "a patch_size that is not square"]}},
+    {"name": "sizes", "value": {"$cfg": "hidden_sizes"}},
+    {"name": "depths", "value": {"$cfg": "depths"}},
+    {"name": "ns", "value": {"$cfg": "num_stages"}},
+    {"name": "ns_ok", "value": {"$check": [{"$and": [{"$ge": [{"$var": "ns"}, 1]}, {"$le": [{"$var": "ns"}, {"$len": {"$var": "sizes"}}]}, {"$le": [{"$var": "ns"}, {"$len": {"$var": "depths"}}]}]}, "num_stages exceeds hidden_sizes or depths"]}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "ls_on", "value": {"$gt": [{"$cfg": "layer_scale_init_value"}, 0]}},
+    {"name": "image", "value": {"$cfg": "image_size"}},
+    {"name": "stem", "value": [
+      {"Conv": {"name": "embeddings.patch_embeddings", "cin": 3, "cout": {"$index": [{"$var": "sizes"}, 0]}, "k": {"$var": "p"}, "stride": {"$var": "p"}, "pad": 0, "bias": true}},
+      {"ChannelNorm": {"name": "embeddings.layernorm", "eps": 1e-06}}
+    ]},
+    {"name": "ops", "value": {"$concat": [{"$var": "stem"}, {"$flatten": {"$map": [{"$range": {"$var": "ns"}}, "s",
+      {"$let": ["dim", {"$index": [{"$var": "sizes"}, {"$var": "s"}]},
+      {"$let": ["sp", {"$cat": ["encoder.stages.", {"$var": "s"}, "."]},
+      {"$concat": [
+        {"$if": [{"$gt": [{"$var": "s"}, 0]},
+          [
+            {"ChannelNorm": {"name": {"$cat": [{"$var": "sp"}, "downsampling_layer.0"]}, "eps": 1e-06}},
+            {"Conv": {"name": {"$cat": [{"$var": "sp"}, "downsampling_layer.1"]}, "cin": {"$index": [{"$var": "sizes"}, {"$sub": [{"$var": "s"}, 1]}]}, "cout": {"$var": "dim"}, "k": 2, "stride": 2, "pad": 0, "bias": true}}
+          ],
+          []
+        ]},
+        {"$map": [{"$range": {"$index": [{"$var": "depths"}, {"$var": "s"}]}}, "l",
+          {"$let": ["bp", {"$cat": [{"$var": "sp"}, "layers.", {"$var": "l"}, "."]},
+          {"Residual": {
+            "main": [
+              {"Conv": {"name": {"$cat": [{"$var": "bp"}, "dwconv"]}, "cin": {"$var": "dim"}, "cout": {"$var": "dim"}, "k": 7, "stride": 1, "pad": 3, "groups": {"$var": "dim"}, "bias": true}},
+              {"ChannelNorm": {"name": {"$cat": [{"$var": "bp"}, "layernorm"]}, "eps": 1e-06}},
+              {"Conv": {"name": {"$cat": [{"$var": "bp"}, "pwconv1"]}, "cin": {"$var": "dim"}, "cout": {"$mul": [{"$var": "dim"}, 4]}, "k": 1, "stride": 1, "pad": 0, "bias": true, "act": {"$var": "act"}}},
+              {"Conv": {"name": {"$cat": [{"$var": "bp"}, "pwconv2"]}, "cin": {"$mul": [{"$var": "dim"}, 4]}, "cout": {"$var": "dim"}, "k": 1, "stride": 1, "pad": 0, "bias": true, "layer_scale": {"$if": [{"$var": "ls_on"}, {"$cat": [{"$var": "bp"}, "layer_scale_parameter"]}, null]}}}
+            ],
+            "shortcut": [],
+            "act": null
+          }}]}
+        ]}
+      ]}]}]}
+    ]}}]}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": {"$if": [{"$is_list": {"$var": "image"}}, {"$index": [{"$var": "image"}, 0]}, {"$var": "image"}]},
+    "w": {"$if": [{"$is_list": {"$var": "image"}}, {"$index": [{"$var": "image"}, 1]}, {"$var": "image"}]},
+    "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
+    "ops": {"$var": "ops"},
+    "out": {"GlobalAvgNorm": {"name": "layernorm", "eps": {"$cfg": "layer_norm_eps"}}},
+    "ignored": ["classifier."],
+    "aliases": [["", "convnext."]]
+  }
+}

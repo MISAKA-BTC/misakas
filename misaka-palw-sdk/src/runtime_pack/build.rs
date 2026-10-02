@@ -142,6 +142,8 @@ fn pin_of(a: &misaka_palw_tir_lower::model::AdapterSource, user_file: Option<&st
         S::None => AdapterPin { kind: "none".into(), id: None, hash: None, file: None },
         S::BuiltIn { id, hash } => AdapterPin { kind: "built-in".into(), id: Some(id.clone()), hash: Some(hash.clone()), file: None },
         S::UserFile { id, hash } => AdapterPin { kind: "user-file".into(), id: Some(id.clone()), hash: Some(hash.clone()), file: user_file.map(str::to_string) },
+        // A reader written in Rust (the diffusers route's): pinned by name; a pack of such a class has no adapter file to hash.
+        S::CoreReader { id } => AdapterPin { kind: "core-reader".into(), id: Some(id.clone()), hash: None, file: None },
     }
 }
 

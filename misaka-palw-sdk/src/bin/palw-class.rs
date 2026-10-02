@@ -36,7 +36,7 @@ USAGE:
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
     palw-class verify    --network <id> [--artifact <artifact-path>] <measured.json>
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
-    palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
+    palw-class check-architecture --network <id> (--config <config.json | hf dir> | <hf dir | config.json>) [--adapter <file | builtin:ID | none>] [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --config <config.json> --lora-budget [--lora-rank R] [--max-context N]
                          [--logits-tile N] [--max-window N] [--checkpoint-interval N] [--held] [--tile-len N]
@@ -150,7 +150,12 @@ the dense tier of testnet-11 and then of testnet-12. `--check` recomputes an exi
 exits 1 on any disagreement instead of writing.
 
 `check-architecture` (RFC-0002 Phase F): would this Hugging Face architecture be admitted on this
-network? IR mode lowers the config to a PALW-TIR program and admits it with tir_admit_v1 (spec 04b
+network? Give a model directory (`config.json` and its safetensors headers) or a `config.json`. The
+report starts with the FEATURES the model combines — each SUPPORTED, or MISSING with the capability
+that would close the gap; the `model_type` is informational and selects nothing — the support level
+(A: the standard keys and tensor names; B: a data adapter, `--adapter <file | builtin:ID | none>`, the
+one used is named; C: a capability is missing), and whether a new consensus primitive or a new court
+kernel would be required. Then IR mode lowers the config to a PALW-TIR program and admits it with tir_admit_v1 (spec 04b
 §10.3: normal form, ranges, per-position costs, every commit point's court cone, checkpoint
 intervals) under the network's palw_tir_v1 ceilings (testnet-12's provisional values while the
 fence is dormant — said in the output) and primitive set, at --tile-len values per step leaf and an
@@ -319,13 +324,26 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "check-architecture" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
-            let config = take_flag(&mut args, "--config");
+            let mut config = take_flag(&mut args, "--config");
             let tir = take_flag(&mut args, "--tir");
+            let adapter = take_flag(&mut args, "--adapter");
             let number = |v: Option<String>, name: &str, default: u32| -> Result<u32, String> {
                 v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).unwrap_or(Ok(default))
             };
             let tile_len = number(take_flag(&mut args, "--tile-len"), "--tile-len", 64)?;
             let h_chunk = number(take_flag(&mut args, "--h-chunk"), "--h-chunk", 64)?;
+            // An encoder-decoder is judged at a source length and a target window (defaults 128 and 128): a registration
+            // declares its own.
+            let source_len = number(take_flag(&mut args, "--source-len"), "--source-len", 128)?;
+            let target_len = number(take_flag(&mut args, "--target-len"), "--target-len", 128)?;
+            // The model may also be given as the first plain argument: `check-architecture <hf dir | config.json>`
+            // (after every flag that takes a value has taken it).
+            if config.is_none()
+                && tir.is_none()
+                && let Some(i) = args.iter().position(|a| !a.starts_with("--"))
+            {
+                config = Some(args.remove(i));
+            }
             let legacy = args.iter().any(|a| a == "--legacy");
             let held = args.iter().any(|a| a == "--held");
             let json = args.iter().any(|a| a == "--json");
@@ -346,7 +364,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 };
                 return lora_budget(&view, config, &choice, json);
             }
-            let flags = ArchFlags { legacy, held, json, tile_len, h_chunk };
+            let flags = ArchFlags { legacy, held, json, tile_len, h_chunk, adapter, source_len, target_len };
             match check_architecture(&view, config.as_deref(), tir.as_deref(), &flags)? {
                 true => Ok(()),
                 false => std::process::exit(2),
@@ -505,15 +523,34 @@ struct ArchFlags {
     /// The layout facts IR mode admits with (`--tile-len`, `--h-chunk`).
     tile_len: u32,
     h_chunk: u32,
+    /// `--source-len` / `--target-len`: the lengths an encoder–decoder is judged at.
+    source_len: u32,
+    target_len: u32,
+    /// `--adapter`: a user-supplied adapter file, `builtin:<id>`, `none` or `auto` (the default).
+    adapter: Option<String>,
+}
+
+/// The config text of a Hugging Face directory (`config.json`, and the checkpoint's tensor names when
+/// it holds weights) or of a `config.json` file.
+fn read_model_config(path: &str) -> Result<(String, Option<misaka_palw_tir_lower::hf_schema::TensorIndex>), String> {
+    let p = std::path::Path::new(path);
+    if p.is_dir() {
+        let text = std::fs::read_to_string(p.join("config.json")).map_err(|e| format!("{path}/config.json: {e}"))?;
+        let tensors = misaka_palw_tir_lower::hf_schema::TensorIndex::from_checkpoint_path(p).ok();
+        Ok((text, tensors))
+    } else {
+        Ok((std::fs::read_to_string(p).map_err(|e| format!("{path}: {e}"))?, None))
+    }
 }
 
 /// `check-architecture`: returns whether the verdict is ADMISSIBLE.
 fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str>, flags: &ArchFlags) -> Result<bool, String> {
     use misaka_palw_sdk::check_architecture::*;
-    let ArchFlags { legacy, held, json, tile_len, h_chunk } = *flags;
+    let ArchFlags { legacy, held, json, tile_len, h_chunk, adapter, source_len, target_len } = flags;
+    let (legacy, held, json, tile_len, h_chunk) = (*legacy, *held, *json, *tile_len, *h_chunk);
     if legacy {
         let path = config.ok_or("--legacy needs --config")?;
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let (text, _) = read_model_config(path)?;
         let sdk = sdk_for(view);
         let r = check_legacy_config_v1(&view.params, &view.bundle, &sdk, &text);
         if json {
@@ -549,8 +586,15 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
     }
     let r = match (config, tir) {
         (Some(path), None) => {
-            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-            check_ir_config_at_v1(&view.params, &text, held, tile_len, h_chunk)
+            let (text, tensors) = read_model_config(path)?;
+            let read = misaka_palw_tir_lower::hf_schema::ReadOptions {
+                adapter: match adapter {
+                    Some(a) => misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(a).map_err(|e| e.to_string())?,
+                    None => misaka_palw_tir_lower::hf_schema::AdapterChoice::Auto,
+                },
+            };
+            let shape = IrShapeV1 { source_len: *source_len, target_len: *target_len };
+            check_ir_config_shaped_v1(&view.params, &text, tensors.as_ref(), &read, held, tile_len, h_chunk, shape)
         }
         (None, Some(path)) => {
             let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -563,18 +607,29 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({ "mode": "ir", "network": view.network_id.to_string(),
-                "architecture": r.architecture, "verdict": r.verdict.to_string(), "ceilings": r.ceilings_source,
-                "program_bytes": r.program_bytes, "blocks": r.blocks, "nodes": r.nodes, "unrolled_nodes": r.unrolled_nodes,
+                "architecture": r.architecture, "architecture_report": r.architecture_report,
+                "verdict": r.verdict.to_string(), "ceilings": r.ceilings_source,
+                "program_bytes": r.program_bytes, "artifact_bytes": r.artifact_bytes.to_string(), "blocks": r.blocks, "nodes": r.nodes, "unrolled_nodes": r.unrolled_nodes,
                 "max_context": r.max_context, "graph_ir_root": r.graph_ir_root.map(|h| h.to_string()),
                 "admission": r.admission_json, "unverified": r.unverified }))
             .unwrap_or_default()
         );
     } else {
         println!("IR mode on {} — {}", view.network_id, if r.architecture.is_empty() { "(program)" } else { &r.architecture });
+        if let Some(a) = &r.architecture_report {
+            // The features the model combines, each SUPPORTED or MISSING, the level, the adapter used.
+            for line in a.render().lines() {
+                println!("  {line}");
+            }
+        }
         println!("  verdict: {}", r.verdict);
         println!("  ceilings: {}", r.ceilings_source);
         if r.program_bytes > 0 {
             println!("  program: {} bytes, {} blocks, {} nodes", r.program_bytes, r.blocks, r.nodes);
+        }
+        if r.artifact_bytes > 0 {
+            // Reported, never judged: a registration may carry any artifact size; a seat's resources gate its readiness.
+            println!("  seat need: {:.2} GiB of integer parameters resident (a seat's resources gate readiness, not admission)", r.artifact_bytes as f64 / (1u64 << 30) as f64);
         }
         if let Some(h) = r.graph_ir_root {
             println!("  graph_ir_root {h}");

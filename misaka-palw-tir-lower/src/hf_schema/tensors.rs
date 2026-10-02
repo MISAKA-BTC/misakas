@@ -22,7 +22,28 @@ pub struct TensorIndex {
     pub tensors: BTreeMap<String, TensorEntry>,
 }
 
+/// A tensor source that knows **names and shapes only** — a safetensors header — which is all the shape
+/// check of the weight binding needs (`weights::check_weights`); it holds no data.
+pub struct HeaderSource<'a>(pub &'a TensorIndex);
+
+impl TensorSource for HeaderSource<'_> {
+    fn shape(&self, name: &str) -> Option<Vec<usize>> {
+        self.0.shape(name).map(<[usize]>::to_vec)
+    }
+    fn load(&self, name: &str) -> Result<crate::weights::Tensor> {
+        Err(LowerError::weights(format!("`{name}`: a header-only source holds no tensor data")))
+    }
+    fn names(&self) -> Vec<String> {
+        self.0.names().map(str::to_string).collect()
+    }
+}
+
 impl TensorIndex {
+    /// Whether every tensor has a shape (a header was read, not just an index).
+    pub fn has_all_shapes(&self) -> bool {
+        self.tensors.values().all(|e| e.shape.is_some())
+    }
+
     /// From names alone (a hub file listing, an index file).
     pub fn from_names<I: IntoIterator<Item = S>, S: Into<String>>(names: I) -> Self {
         TensorIndex { tensors: names.into_iter().map(|n| (n.into(), TensorEntry { dtype: String::new(), shape: None })).collect() }

@@ -25,7 +25,7 @@ pub mod scope;
 
 pub use crate::spec::ModelSpec;
 pub use features::{
-    Area, BASE_PRIMITIVES, FeatureId, FeatureInfo, FeatureUse, Lowering, REGISTRY, Requirement, feature_info,
+    Area, BASE_PRIMITIVES, FeatureId, FeatureInfo, FeatureUse, Lowering, REGISTRY, Requirement, encdec_features, feature_info,
 };
 pub use crate::hf_schema::{AdapterSource, Level, MissingItem};
 pub use report::{ArchitectureReport, FeatureReport, FeatureStatus, ReportResult, analyze, analyze_with};

@@ -19,6 +19,14 @@ fn silu() -> Act {
     Act::Silu
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn infinity() -> f64 {
     f64::INFINITY
 }
@@ -114,12 +122,25 @@ pub enum Act {
     /// `x·σ(1.702x)`.
     QuickGelu,
     Relu,
+    /// `min(max(x, 0), 6)` (MobileNet v1/v2) — a clamp, so exact on codes: the narrowing's own clamp in a fixed `6/32767` unit.
+    Relu6,
+    /// `x·relu6(x+3)/6` (MobileNet v3, LeViT) — a table.
+    HardSwish,
+    /// `relu6(x+3)/6` (squeeze-excite gates of MobileNet v3) — a table.
+    HardSigmoid,
     /// `relu(x)²` (Nemotron, RWKV channel mix).
     Relu2,
     Sigmoid,
     Tanh,
     Softplus,
     Identity,
+    /// `sign(x)·√max(|x|, 10⁻⁶)` — the gate of Qwen4-Exp's n-gram embedding.
+    SignedSqrt,
+    /// **xIELU** (Apertus, `ACT_LEARNED_POINTWISE_V1`; NOT in [`Act::from_hf`]: an adapter that knows its four tensors names it
+    /// by this variant, every other reader still refuses `hidden_act = "xielu"` by name): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
+    /// `αp = softplus(p)`, `αn = β + softplus(n)` and `p`, `n`, `β`, `ε` the layer's own tensors. It reads parameters, so only a
+    /// dense MLP lowers it (`Op::Xielu`); anywhere else it is refused by name — `float_ref::act` of it is NaN, never a number.
+    Xielu,
 }
 
 impl Act {
@@ -131,6 +152,9 @@ impl Act {
             "gelu_new" | "gelu_pytorch_tanh" | "gelu_fast" | "gelu_accurate" => Act::GeluTanh,
             "quick_gelu" => Act::QuickGelu,
             "relu" => Act::Relu,
+            "relu6" => Act::Relu6,
+            "hardswish" | "hard_swish" => Act::HardSwish,
+            "hardsigmoid" | "hard_sigmoid" => Act::HardSigmoid,
             "relu2" => Act::Relu2,
             "sigmoid" => Act::Sigmoid,
             "tanh" => Act::Tanh,
@@ -195,6 +219,16 @@ pub struct AttnSpec {
     pub o_bias: bool,
     #[serde(default)]
     pub qk_norm: Option<QkNorm>,
+    /// **`ATTN_QK_NORM_POST_ROPE_V1`**: the q/k norms act AFTER the rotation (Hunyuan:
+    /// `q = rope(q); q = RMSNorm_head(q)`); Qwen3's order, the default, is the reverse. Rotation preserves a head's
+    /// L2 norm but a per-channel gain does not commute with it, so the two orders are different functions. The
+    /// history keeps the normed, rotated key either way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub qk_norm_after_rope: bool,
+    /// **`SUBLAYER_NORMS_V1`**: a norm over the attention output (all heads concatenated) before `o_proj` — BitNet's
+    /// `attn_sub_norm` (`RMSNorm(hidden)`), the sub-LN of MAGNETO/RetNet-style models. Tensors `attn.sub_norm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub o_norm: Option<NormSpec>,
     /// `clamp(q|k|v, −c, c)` after projection (OLMo `clip_qkv`, MPT).
     #[serde(default)]
     pub clip_qkv: Option<f64>,
@@ -239,6 +273,22 @@ pub struct AttnSpec {
     /// top-scoring blocks of earlier keys, plus the tokens of the block still being filled.
     #[serde(default)]
     pub sparse: Option<SparseBlockSpec>,
+    /// **`ATTN_OUTPUT_GATE_SEPARATE_V1`**: the attention output is multiplied by `act(gate_proj(x))` from a projection of
+    /// its OWN (`attn.gate`), per element or per head (AfMoE: sigmoid per element; Laguna: softplus per head). Distinct
+    /// from `output_gate`, Qwen3-Next's gate fused into `q_proj`; the two are exclusive.
+    #[serde(default)]
+    pub gate: Option<SeparateGateSpec>,
+    /// **`ATTN_VALUE_SCALE_V1`**: a constant on the values after their projection (`attention_value_scale`, MiMo-V2-Flash).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub v_scale: f64,
+}
+
+/// A separate attention output gate: `o ·= act(gate_proj(x))`, the projection `[H·v_dim, D]` per element or `[H, D]` per head.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeparateGateSpec {
+    pub act: Act,
+    #[serde(default)]
+    pub per_head: bool,
 }
 
 /// **`ATTN_SPARSE_BLOCK_V1`** — a learned index chooses which blocks of the history a query reads.
@@ -308,6 +358,38 @@ impl QTemperature {
     }
 }
 
+/// **`ATTN_TOKEN_INDEXER_V1`** — DeepSeek sparse attention (DSA): a learned scorer chooses which `topk` of the visible
+/// tokens an MLA layer attends over (`DeepseekV32Indexer`, `GlmMoeDsaIndexer`).
+///
+/// For a query at position `p` the indexer reads the MLA's **q-latent** `qr = q_a_norm(q_a x)` (so the layer must have
+/// `q_lora_rank`), projects it to `heads` query heads of `head_dim` (`wq_b`), rotates the first `rope.rotary_dim` lanes of
+/// each (the rotated lanes come FIRST, the opposite of MLA's nope-first layout; `rope.style` is rotate-half for
+/// DeepSeek-V3.2 and interleaved for GLM-MoE-DSA), and scores every visible token `t` by
+///
+/// ```text
+/// s_t = Σ_h w_h · ReLU( head_dim^-½ · q_h · k_t ),   w = weights_proj(x) · heads^-½
+/// k_t = rotate( LayerNorm(wk x_t) )                     one head, cached per position
+/// ```
+///
+/// The attention is the layer's ordinary MLA softmax restricted to the `min(topk, p + 1)` best tokens — **ties to the
+/// lowest index** (the IR's `TopK` rule; `torch.topk` leaves its tie order unspecified, and ReLU makes exact-zero scores
+/// common). When the window holds at most `topk` tokens every token is selected and the layer is dense MLA.
+///
+/// Not [`SparseBlockSpec`]: that scores block means of raw keys with the layer input as the query.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TokenIndexerSpec {
+    /// `index_n_heads`.
+    pub heads: usize,
+    /// `index_head_dim`.
+    pub head_dim: usize,
+    /// `index_topk`.
+    pub topk: usize,
+    /// The rotation of the first `rotary_dim` lanes of the indexer's query and key (`offset` 0).
+    pub rope: RopeSpec,
+    /// The key's LayerNorm (gain, bias; eps 1e-6 in both implementations).
+    pub k_norm: NormSpec,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MlaSpec {
     pub heads: usize,
@@ -323,6 +405,9 @@ pub struct MlaSpec {
     pub a_bias: bool,
     pub rope: RopeSpec,
     pub scale: f64,
+    /// **`ATTN_TOKEN_INDEXER_V1`**: DeepSeek sparse attention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<TokenIndexerSpec>,
 }
 
 /// Which key head a value head reads when `v_heads > k_heads`.
@@ -394,6 +479,42 @@ pub struct Mamba2Spec {
     pub dt_max: f64,
     /// Leading `2·d_mlp` rows of `in_proj` that HF discards.
     pub d_mlp: usize,
+    /// **`MAMBA2_GATE_NORM_VARIANTS_V1`**: how the output gate and the RMS norm combine ([`Mamba2Norm`]).
+    #[serde(default, skip_serializing_if = "Mamba2Norm::is_default")]
+    pub norm_mode: Mamba2Norm,
+    /// **`MAMBA2_MUP_V1`** (Falcon-H1): multipliers of the five chunks of the projection `[z | x | B | C | dt]`, applied before the convolution
+    /// (HF's `mup_vector`). The convolution is channel-wise, so with scales the x, B and C channels are three linears and three convolutions
+    /// of their own, each on its scaled chunk (the same function); the scales are `Op::Scale`, a change of scale key and no node of the integer program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_scales: Option<[f64; 5]>,
+}
+
+/// How a Mamba-2 mixer's output gate `z` and its RMS norm combine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mamba2Norm {
+    /// `norm(y · silu(z))` — the gate first (Mamba-2, Zamba2, Bamba, Nemotron-H, Granite-hybrid).
+    #[default]
+    GateFirst,
+    /// `norm(y) · silu(z)` — the norm first (Falcon-H1 with `mamba_norm_before_gate`).
+    NormFirst,
+    /// `y · silu(z)`, no norm and no gain (Falcon-H1 without `mamba_rms_norm`).
+    Ungated,
+}
+
+impl Mamba2Norm {
+    pub fn is_default(&self) -> bool {
+        *self == Mamba2Norm::GateFirst
+    }
+}
+
+/// A gated short convolution (LFM2's `Lfm2ShortConv`): the kernel of the depthwise causal convolution, and one flag that gives biases to
+/// the convolution, `in_proj` and `out_proj` together (`conv_bias`). Tensors: roles `shortconv.in` (`[3D, D]`: B, C, x rows),
+/// `shortconv.conv` (`[D, 1, K]`) and `shortconv.out`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShortConvSpec {
+    pub kernel: usize,
+    #[serde(default)]
+    pub bias: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -423,6 +544,25 @@ pub enum Mixer {
     Mamba(MambaSpec),
     Mamba2(Mamba2Spec),
     RwkvTime(RwkvTimeSpec),
+    /// **`MIXER_SHORT_CONV_V1`** (LFM2): `[B | C | x] = in_proj(x)`, `u = B ⊙ x`, `v = causal_depthwise_conv(u)` (no activation),
+    /// `out_proj(C ⊙ v)`.
+    ShortConv(ShortConvSpec),
+    /// **`LAYER_FFN_ONLY_V1`** (Nemotron-H's `mlp` and `moe` layers): no mixer — the layer is its FFN under its own pre-norm. Only under
+    /// [`Residual::Sequential`] with no mixer norms, and the layer must have an FFN.
+    None,
+    /// **`MIXER_PARALLEL_BRANCH_V1`** (Falcon-H1): the layer's mixer is the sum of several branches reading the same normed input,
+    /// each with its own input and output scale. At most one branch of each kind; no KV sharing inside.
+    Parallel(Vec<Branch>),
+}
+
+/// One branch of a [`Mixer::Parallel`]: `out_scale · mixer(in_scale · x)`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Branch {
+    pub mixer: Mixer,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub in_scale: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub out_scale: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,6 +599,10 @@ pub struct MlpSpec {
     pub up_bias: bool,
     #[serde(default)]
     pub down_bias: bool,
+    /// **`SUBLAYER_NORMS_V1`**: a norm over the hidden activation (the gated product, or the activation of a plain MLP) before
+    /// `down_proj` — BitNet's `ffn_sub_norm` (`RMSNorm(intermediate)`). Tensors `mlp.sub_norm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_norm: Option<NormSpec>,
     /// The HL name of the MLP's params (`mlp` unless given): layers whose MLPs differ in width
     /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
     #[serde(default)]
@@ -550,6 +694,14 @@ pub struct MoeSpec {
     /// outputs are summed unweighted.
     #[serde(default)]
     pub input_scaled: bool,
+    /// **`MOE_EXPERTS_PLAIN_V1`** (Nemotron-H): `false` — the experts (and the shared expert) are plain MLPs, `down(act(up(x)))`, with no gate
+    /// projection. Experts have no biases then.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub gated: bool,
+    /// **`MOE_LATENT_PROJ_V1`** (Nemotron-H's `moe_latent_size`): the routed experts run in a latent space of this width — `fc1_latent_proj`
+    /// before them, `fc2_latent_proj` after — while the router and the shared expert read the layer's input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latent: Option<usize>,
 }
 
 /// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,
@@ -720,6 +872,13 @@ pub struct EmbeddingSpec {
     /// `project_in` (OPT-350m).
     #[serde(default)]
     pub proj_in: bool,
+    /// `EMBED_PROJ_IN_AFTER_NORM_V1` (ALBERT's `embedding_hidden_mapping_in`): the projection comes LAST — positions, token
+    /// types and the embedding norm all act at the token table's width, and the projection (with its bias, when
+    /// `proj_in_bias`) lifts the normed row to the hidden width. OPT's projection, the default, comes first.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub proj_after_norm: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub proj_in_bias: bool,
     /// A token-type table of this many rows (BERT's `token_type_embeddings`); a single-segment
     /// encoder adds row 0 to every position.
     #[serde(default)]
@@ -728,6 +887,24 @@ pub struct EmbeddingSpec {
     /// layer (MPNet: T5's bidirectional buckets). Read by `lower::bidir` only.
     #[serde(default)]
     pub rel_bias: Option<RelBiasSpec>,
+    /// **`ATTN_DISENTANGLED_V1`** (DeBERTa-v2/v3): relative-position embeddings projected by the layer's own key and
+    /// query projections (`share_att_key`) and added to the scores as content-to-position and position-to-content
+    /// terms. Read by `lower::bidir` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disentangled: Option<DisentangledSpec>,
+}
+
+/// DeBERTa's disentangled attention (`position_buckets`, `max_relative_positions`, `pos_att_type`, `norm_rel_ebd`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DisentangledSpec {
+    /// `position_buckets`: the table has `2·span` rows and a relative position is log-bucketed into `[-span, span)`.
+    pub span: usize,
+    /// The largest relative distance the log buckets reach (`max_relative_positions`, else `max_position_embeddings`).
+    pub max_position: usize,
+    pub c2p: bool,
+    pub p2c: bool,
+    /// `norm_rel_ebd = layer_norm`: the table passes through this norm (a bias per `bias`) once.
+    pub norm: Option<NormSpec>,
 }
 
 /// `table[bucket(j − i), head]` added to the scaled scores of query `i` and key `j`.
@@ -755,6 +932,20 @@ pub struct HeadSpec {
     /// `tanh(z / c) · c` on the logits (Gemma-2).
     #[serde(default)]
     pub softcap: Option<f64>,
+    /// **`HEAD_TRANSFORM_V1`**: a prediction head before the vocabulary projection — `dense → act → norm` (BERT's
+    /// `cls.predictions.transform`, ModernBERT-decoder's `lm_head`, RoBERTa's `lm_head.dense`/`layer_norm`).
+    #[serde(default)]
+    pub transform: Option<HeadTransformSpec>,
+}
+
+/// `h → norm(act(dense(h)))`, the head's own transform; then the (tied) vocabulary projection and its bias.
+/// Tensors: roles `head.transform.dense` (`.weight`, `.bias` when `bias`) and `head.transform.norm`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeadTransformSpec {
+    #[serde(default)]
+    pub bias: bool,
+    pub act: Act,
+    pub norm: NormSpec,
 }
 
 /// What a program's `post` produces (RFC-0003 §I.2.3's output kinds are chosen per class, from it).
@@ -803,6 +994,12 @@ pub struct ModelSpec {
     /// Things a reader of this spec should know (HF quirks followed on purpose, …).
     #[serde(default)]
     pub notes: Vec<String>,
+    /// **`ATTN_PREFIX_LM_V1`** (PaliGemma): the model attends bidirectionally over an image-and-prompt prefix when it is given
+    /// `token_type_ids` (an image prompt). This spec lowers the text-only path — a prompt of token ids, causal, which is what HF
+    /// computes without `token_type_ids` — so a lowering that binds image rows to it is REFUSED by name: causal attention over
+    /// the image tokens would be another function (`fidelity::prepare_spec`; the prefix stage is FR-20's pipeline, not built).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prefix_lm: bool,
 }
 
 impl ModelSpec {
@@ -847,10 +1044,25 @@ pub struct HfStorage {
     /// tensor-name template, concatenated in order): Qwen4-Exp's n-gram tables (`split_ngram_parts`).
     #[serde(default = "one_shard")]
     pub table_shards: usize,
+    /// **`WEIGHTS_EXPR_V1` — weights as data.** HL parameter name → weight expression (a JSON array: the
+    /// checkpoint tensor's complete name, then steps; [`crate::weights::expr`]). An entry replaces the
+    /// parameter's default binding, so a checkpoint layout the enumerated ones above do not describe is
+    /// written in the adapter, not in Rust. Evaluated and validated by [`crate::hf_weights::bind`]; absent from
+    /// the serialised spec when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weights: BTreeMap<String, serde_json::Value>,
 }
 
 fn one_shard() -> usize {
     1
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_one(x: &f64) -> bool {
+    *x == 1.0
 }
 
 impl HfStorage {

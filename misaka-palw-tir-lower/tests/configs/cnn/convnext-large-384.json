@@ -1,0 +1,48 @@
+{
+  "architectures": [
+    "ConvNextForImageClassification"
+  ],
+  "depths": [
+    3,
+    3,
+    27,
+    3
+  ],
+  "drop_path_rate": 0.0,
+  "hidden_act": "gelu",
+  "hidden_sizes": [
+    192,
+    384,
+    768,
+    1536
+  ],
+  "id2label": {
+    "0": "tench"
+  },
+  "image_size": 384,
+  "initializer_range": 0.02,
+  "label2id": {
+    "tench": 0
+  },
+  "layer_norm_eps": 1e-12,
+  "layer_scale_init_value": 1e-06,
+  "model_type": "convnext",
+  "num_channels": 3,
+  "num_stages": 4,
+  "out_features": [
+    "stage4"
+  ],
+  "out_indices": [
+    4
+  ],
+  "patch_size": 4,
+  "stage_names": [
+    "stem",
+    "stage1",
+    "stage2",
+    "stage3",
+    "stage4"
+  ],
+  "torch_dtype": "float32",
+  "transformers_version": "4.20.0.dev0"
+}
