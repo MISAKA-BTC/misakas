@@ -37,7 +37,9 @@
 //!    generative classes: `palw_gen_v1` opens registration, panels and the court), so a generative
 //!    class registers at 0‰ — permissionless (ADR-0069 D5) — and anything else is refused by name
 //!    (`GenEarnsNoWeight`);
-//! 6. **every close the court can be asked for is carriable, priced as carried (PALW-GEN-20)**: the
+//! 6. **every close the court can be asked for is carriable, priced as carried (PALW-GEN-20)**: the whole closes — a text
+//!    class's decode close (every tile of a logits row, `GenDecodeToken`) and a tensor class's output close (`GenOutputTile`), in
+//!    closed form ([`crate::palw_gen_close_price_v1::palw_gen_whole_closes_v1`]) — and the
 //!    worst terminal close of every commit point and every checkpoint leaf of every stage, over every job of the class —
 //!    [`crate::palw_gen_close_price_v1`], an upper bound of what the builder carries (every leaf with its
 //!    own path at its own stage's depth, every param row a whole opening at the class inventory's depth,
@@ -408,10 +410,17 @@ pub fn verify_gen_class_admission_v1(
         return Err(PalwClassAdmissionError::GenEarnsNoWeight { share: *share_permille });
     }
 
-    // 6. **PALW-GEN-20: every close the court can be asked for is CARRIABLE, priced as carried** — the worst terminal close of
-    // every commit point of every stage, over every job of the class, an upper bound of what its builder carries
-    // ([`crate::palw_gen_close_price_v1`]); every dissected point's worst root claim within one carrier. Last, as the costliest
-    // check (at most the sizing's work cap). The catalog records the worst of them: what the class's closes can weigh.
+    // 6. **PALW-GEN-20: every close the court can be asked for is CARRIABLE, priced as carried.** First the whole closes, in
+    // closed form: the decode close of a text class (every tile of a logits row) and the output close of a tensor class — the
+    // other two proofs a one-move accusation may carry. Then the worst terminal close of every commit point and checkpoint leaf of
+    // every stage, over every job of the class, an upper bound of what its builder carries ([`crate::palw_gen_close_price_v1`]);
+    // every dissected point's worst root claim within one carrier. Last, as the costliest check (at most the sizing's work cap).
+    // The catalog records the worst of them: what the class's closes can weigh.
+    let mut worst_close = 0u64;
+    for (kind, bytes) in crate::palw_gen_close_price_v1::palw_gen_whole_closes_v1(class, pipeline, programs)? {
+        exceeds(kind.what(), bytes, carriable)?;
+        worst_close = worst_close.max(bytes);
+    }
     let (bounds, _work) = crate::palw_gen_close_price_v1::palw_gen_worst_closes_of_class_v1(
         class,
         pipeline,
@@ -422,7 +431,6 @@ pub fn verify_gen_class_admission_v1(
         crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
         crate::palw_gen_close_price_v1::PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
     )?;
-    let mut worst_close = 0u64;
     for (s, stage) in bounds.iter().enumerate() {
         for b in stage {
             if b.checkpoint.is_none() && b.dissected != dissected_points.contains(&(s as u8, b.block, b.node)) {

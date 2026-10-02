@@ -38,7 +38,11 @@ check on this class. Also held: every non-dissected commit leaf of the golden to
 * **checkpoint leaves**: none in this class (no `Fixed` state outside `post`); the toy VLM's seven are priced per state (7,245 B) against
   a measured largest of 4,327 B.
 * **sizing work**: 66,871,506 steps for the class (denoiser 14.9 M, the ten VAE stages 51.7 M, the text stages 0.2 M), 4 s on an
-  idle machine; the cap is 2^27.
+  idle machine. **The cap is 2^26 — the IR's own (`PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`); the generative gate is no looser than the IR one
+  (coordinator, 2026-10-02).** The class sits 237,358 steps (0.35 %) under it; the margin is pinned
+  (`gen_sd3_class.rs::the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap`: the work is asserted equal to 66,871,506 and the
+  headroom at least 100,000 steps, each failing by name with what moved), and `palw_gen_close_price.rs::the_generative_sizing_work_cap_is_no_looser_than_the_ir_one`
+  holds the cap itself.
 
 ## What the first run of the sound price found, and what changed
 
@@ -64,6 +68,76 @@ sampled denoiser leaf at positions ≥ 1 whose measured close carries such a lea
 cone (by coordinate) and the point's price is at least the measured close. Measured: 258 cone closes of the blocks that read the latent
 (`pre`, `post`) at positions 1–3; 84 of them carry the committed write of the previous position, 282 such leaves in all, each in the
 twin's read set; priced ≥ measured at all 258 (smallest margin 68 B).
+
+## The closes that are not cone closes: the decode close and the output close
+
+A one-move accusation carries one of three proofs (`palw_gen_one_move_proof_is_admissible_v1`): a cone close (priced above), a decode
+close (`GenDecodeToken`, tag 11) or an output close (`GenOutputTile`, tag 16); a dissection's bottom is a cone close and its root claim
+is priced with the dissected point. The gate priced only the cone closes: a class whose decode close, or output close, could not ride
+a carrier was admitted — the same unconvictable lie the SD3 sweep found, in the proofs the sweep did not look at. The price is now
+closed form (`palw_gen_whole_closes_v1`, asked by the gate before the sizing; the catalog's `max_close_bytes` is the worst of all):
+
+* **decode close** (a text class's: a generated id against the committed logits row it was selected from — EVERY tile of the row, each
+  opened under the text stage's root, because the decode rule selects over all the lanes):
+  `frame + 4 · max_trip + 4 · V + ⌈V / T⌉ · (23 + 64 · depth)` — the close object at the widest binding (the executor key, every stage
+  root, the decode rules at their bounds, the images and the source at their maxima), the ids it carries at the offers' maximum, the
+  lanes of the row (four bytes a lane) and, per tile, a coordinate and a whole path of the text stage's depth. `V` is the logits node's
+  elements, `T` its commit tile.
+* **output close** (a tensor class's: an output tile of the canonical output, its path under the claim's `output_root`, and the output
+  node's committed step tile of the same lanes under its stage's root): `frame + T · (element bytes + 4) + 64 · ⌈log2 ⌈E / T⌉⌉`.
+
+**Measured against the price** — every id of a run for a decode close, every tile for an output close, serialized as the one-move
+accusation carries it (`consensus/core/tests/palw_gen_close_price.rs`, `misaka-palw-sdk/tests/gen_sd3_class.rs`):
+
+| class | tile | closes | largest measured | priced | margin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| toy VLM (text stage, V = 16) | 4 | 4 | 5,164 B | 8,194 B | 3,030 B |
+| toy VLM | 8 | 4 | 4,224 B | 7,124 B | 2,900 B |
+| toy VLM | 16 | 4 | 3,882 B | 6,717 B | 2,835 B |
+| lowered tiny LLaVA (HF frontend, its own calibrated weights) | 16 | 6 | 6,644 B | 10,130 B | 3,486 B |
+| toy VLM's language model at V = 4,096 | 16 | 4 | 222,100 B | 241,510 B | 19,410 B |
+| (same) | 64 | 4 | 62,228 B | 69,158 B | 6,930 B |
+| (same) | 256 | 4 | 28,404 B | 32,214 B | 3,810 B |
+| … at V = 32,000 (a Llama-2-class vocabulary) | 16 | 4 | 2,095,476 B | 2,228,246 B | 132,770 B |
+| (same) | 256 | 4 | 222,226 B | 233,121 B | 10,895 B |
+| (same) | 1,024 | 4 | 150,612 B | 155,462 B | 4,850 B |
+| … at V = 151,936 (a Qwen2.5-class vocabulary) | 16 | 4 | 11,151,780 B | 11,771,790 B | 620,010 B |
+| (same) | 64 | 4 | 2,942,488 B | 3,099,568 B | 157,080 B |
+| (same) | 256 | 4 | 1,118,496 B | 1,159,876 B | 41,380 B |
+| (same) | 1,024 | 4 | 719,394 B | 731,849 B | 12,455 B |
+| **output** — toy image class | 4 / 8 / 16 | 3 / 2 / 1 | 3,923 / 3,815 / 3,707 B | 3,990 / 3,882 / 3,774 B | 67 B |
+| toy vision (embedding) class | 4 / 8 / 16 | 1 | 3,419 B | 3,618 B | 199 B |
+| **SD3-tiny** (the drill class) | 16 | 48 (every tile) | 5,263 B | 5,330 B | 67 B |
+
+The margins of the decode closes are the widest job's: the price sizes the text stage's tree at `max_trip` positions, so a path is one
+level deeper than the measured run's, `⌈V / T⌉` times 64 B. A job at the widest decode rules (300 logit-bias entries, 4 stop sequences of
+16 ids, every penalty active) measures larger than a plain one by the rules' bytes in the binding, and the price still bounds it
+(`the_price_bounds_a_decode_close_of_a_job_at_the_widest_decode_rules`: at V = 4,096, T = 64 the widest rules measure 64,900 B against
+62,228 B plain, priced 69,158 B; at V = 32,000, T = 256 224,898 B against 222,226 B, priced 233,121 B).
+
+**What a real vocabulary costs** (`the_registrable_real_vocabulary_classes_are_where_the_regime_carries_their_decode_close`, the grid
+`a_decode_close_past_what_can_be_carried_is_refused_by_name_and_the_catalog_records_the_one_it_admits`): a decode close is at least
+`4 · V` bytes, so it is a property of the vocabulary and the tile, never of the model's depth, and the tile trades it against the cone
+closes (a cone of a logits tile opens `T` head rows, each a leaf of the artifact with a path of about 1.1 to 1.3 KB). The gate's verdicts, with
+the cone closes' largest (what the gate priced before):
+
+| V | T | decode close | cone closes (largest) | where a close can only ride one carrier (95,037 B) | with chunks (3.2 MB) |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 4,096 | 16 | 241,510 B | 24,090 B | **refused: decode** (before: admitted) | admitted |
+| 4,096 | 64 | 69,158 B | 68,906 B | admitted | admitted |
+| 4,096 | 256 | 32,214 B | 248,938 B | refused: cone close | admitted |
+| 32,000 | 16 | 2,228,246 B | 26,650 B | **refused: decode** (before: admitted) | admitted |
+| 32,000 | 64 | 593,746 B | 77,610 B | **refused: decode** (before: admitted) | admitted |
+| 32,000 | 256 | 233,121 B | 282,218 B | refused: decode | admitted |
+| 32,000 | 1,024 | 155,462 B | 1,101,418 B | refused: decode | admitted |
+| 151,936 | 16 | 11,771,790 B | 30,170 B | **refused: decode** (before: admitted) | **refused: decode** (before: admitted) |
+| 151,936 | 64 | 3,099,568 B | 90,346 B | **refused: decode** (before: admitted) | admitted (3.10 MB of 3.2 MB) |
+| 151,936 | 256 | 1,159,876 B | 331,818 B | refused: decode | admitted |
+| 151,936 | 1,024 | 731,849 B | 1,298,474 B | refused: decode | admitted |
+
+So a vocabulary of about 23,000 ids or more (`4 · V` past one carrier) is convictable only where closes ride chunks, whatever its tile;
+a vocabulary of 4,096 registers everywhere at a tile of 64; and a Qwen2.5-class vocabulary at a fine tile is past even the carried cap.
+Where the registration was admitted before and is refused now, a lie at any generated id could never have been convicted.
 
 ## The table
 

@@ -82,9 +82,21 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
   openings share one build of the artifact tree and of each stage's step tree; **the pipeline admission prices every close as the builder
   carries it** (`palw_gen_close_price_v1`: the PALW-TIR-38 twin over every stage, the generative court's reading of inputs and of
   `post`-written states, per-leaf paths at the stage's depth, params at the class's depth, the frame at its widest binding, checkpoint
-  leaves; work cap 2^27, the reduced SD3 class needs 66.9 M) in place of the operand-bytes necessary condition. `palw_gen_close_price` 4/4
-  (every non-dissected commit leaf of the toy image, embedding and VLM classes, checkpoint leaves included), `palw_gen_one_move` 6/6,
+  leaves; **work cap 2^26 — the IR's own, the generative gate is no looser; the reduced SD3 class needs 66.9 M, 237,358 steps (0.35 %)
+  under it, pinned in `gen_sd3_class`'s sizing test**) in place of the operand-bytes necessary condition, **and every other proof a
+  one-move accusation may carry: the decode close of a text class and the output close of a tensor class are priced in closed form
+  (`palw_gen_whole_closes_v1`, asked first; the SD3 class's 48 output closes measure 5,071–5,263 B against 5,330 B priced; a text class
+  of 23,000+ ids registers only where closes may ride chunks)**. `palw_gen_close_price` 13/13
+  (every non-dissected commit leaf of the toy image, embedding and VLM classes, checkpoint leaves included; every decode close of the toy
+  VLM, the lowered tiny LLaVA and the toy language model at vocabularies of 4,096–151,936 over tiles of 16–1,024; every output close;
+  the gate's verdict grid; the cap), `palw_gen_one_move` 6/6,
   `palw_gen_dissect` 3/3, `palw_gen_tensor` 14/14, `palw_gen_vlm_admission` 4/4 (asking the carried bound: the HF activation tables are
   four pieces), `palw_held_close_chunks` 7/7, `palw_tir_close_size` 1/1 (the IR twin unchanged).
+* **A text-only class is refused by name** (`PalwGenClassErrorV1::TextOnly`, the preflight's, so the gate's first step, under the gen fence):
+  a `Text`-profile class that offers no image slot and no source takes FP Job V4 — the text lane's — and the generative court binds FP Job
+  V5 alone, so it could be registered and never claimed. The refusal points the registrant at the text lane (an IR class,
+  `misaka palw tir-registration`). None of the drill's classes is text-only (`toy-image`, `toy-embed`, `wide-embed`, `sd3-tiny`); tests:
+  `palw_gen_class_registration` (the preflight), `palw_gen_vlm_admission` (the gate: dropped below the fence, refused from it whatever the
+  court and the carrier allow, the same model behind an image slot admitted).
 * NOT exercised: `gen-claim --plant`/`--list-leaves` against a node, the filer's chunk delivery against a live chain, the
   capture fetch of a 1 MB sd3 claim. Those are what the drill is for.
