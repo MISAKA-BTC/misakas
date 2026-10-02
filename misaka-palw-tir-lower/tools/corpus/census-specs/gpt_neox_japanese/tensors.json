@@ -1,0 +1,131 @@
+{
+ "gpt_neox_japanese.embed_in.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "gpt_neox_japanese.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   96,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.input_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "gpt_neox_japanese.layers.0.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.post_attention_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.attention.dense_bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   96,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.input_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "gpt_neox_japanese.layers.1.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.post_attention_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "gpt_neox_japanese.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

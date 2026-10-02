@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "granitemoe_swa",
+  "doc": "GraniteMoeSWA (IBM): GraniteSWA's attention (per-layer sliding window, per-head sinks, per-layer rotary base) with GraniteMoE's top-k-then-softmax experts stored STACKED as block_sparse_moe.experts.gate_up_proj [E, 2I, D] (gate rows first) and experts.down_proj [E, D, I], the router at block_sparse_moe.router.weight; shared_intermediate_size must be 0 (a shared expert would be a fused tensor, FR-01). Third-party adapter (lane H): data only, extends the built-in granitemoe.",
+  "extends": ["granitemoe"],
+  "match": {"architectures": ["GraniteMoeSWAForCausalLM"], "model_types": ["granitemoe_swa"]},
+  "config": {"defaults": {"sliding_window": 128, "tie_word_embeddings": false, "shared_intermediate_size": 0}},
+  "vars": [
+    {"name": "shared_ok", "value": {"$check": [{"$eq": [{"$cfg": "shared_intermediate_size"}, 0]}, "a shared expert is stored as one fused tensor (FR-01): not expressible as data yet"]}},
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 128]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$eq": [{"$mod": [{"$var": "i"}, 4]}, 0]}, "full_attention", "sliding_attention"]}}}},
+    {"name": "lrt", "value": {"$cfg?": "layer_rope_theta"}},
+    {"name": "attn_extra", "value": {"sinks": true}},
+    {"name": "l_position", "layer": true, "value": {"$if": [{"$and": [{"$ne": [{"$var": "lrt"}, null]}, {"$eq": [{"$index": [{"$var": "lrt"}, {"$var": "i"}]}, 0]}]}, "None", {"Rope": {"$if": [{"$ne": [{"$var": "lrt"}, null]}, {"$rope_plain": {"dim": {"$var": "hd"}, "theta": {"$index": [{"$var": "lrt"}, {"$var": "i"}]}, "style": {"$var": "rope_style"}}}, {"$var": "rope"}]}}]}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.sinks": "{p}layers.{L}.self_attn.sinks", "moe.router": "{p}layers.{L}.block_sparse_moe.router", "moe.gate_up.stacked": "{p}layers.{L}.block_sparse_moe.experts.gate_up_proj", "moe.down.stacked": "{p}layers.{L}.block_sparse_moe.experts.down_proj"}]}},
+    {"name": "model_type", "value": "granitemoe_swa"}
+  ]
+}

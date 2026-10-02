@@ -1,0 +1,14 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen3-vl",
+  "doc": "Qwen3-VL (Qwen3VLForConditionalGeneration), the text stage for text-only prompts: a Qwen3 decoder (per-head q/k norm, head_dim from the config) under `model.language_model.*` with its interleaved M-RoPE, which for a text-only stream is the plain rotary embedding of the position. The tower, the patch merger and the DeepStack mergers (`model.visual.*`) belong to the vision stage; DeepStack's addition of vision features to early layers does not happen without an image. Third-party adapter (lane H).",
+  "extends": ["qwen3", "mixin-vlm"],
+  "match": {"architectures": ["Qwen3VLForConditionalGeneration"], "model_types": ["qwen3_vl"]},
+  "vars": [
+    {"name": "p", "value": "model.language_model."},
+    {"name": "lm_head_name", "value": "lm_head"},
+    {"name": "prefix_aliases", "value": []},
+    {"name": "tie_rule", "value": "false"},
+    {"name": "model_type", "value": "qwen3_vl"}
+  ]
+}

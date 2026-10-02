@@ -1,0 +1,673 @@
+{
+ "speech_decoder_postnet.feat_out.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "speech_decoder_postnet.feat_out.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "speech_decoder_postnet.layers.0.batch_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "speech_decoder_postnet.layers.0.batch_norm.num_batches_tracked": {
+  "dtype": "I64",
+  "shape": []
+ },
+ "speech_decoder_postnet.layers.0.batch_norm.running_mean": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "speech_decoder_postnet.layers.0.batch_norm.running_var": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "speech_decoder_postnet.layers.0.batch_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "speech_decoder_postnet.layers.0.conv.weight": {
+  "dtype": "F32",
+  "shape": [
+   8,
+   8,
+   3
+  ]
+ },
+ "speech_decoder_postnet.prob_out.bias": {
+  "dtype": "F32",
+  "shape": [
+   2
+  ]
+ },
+ "speech_decoder_postnet.prob_out.weight": {
+  "dtype": "F32",
+  "shape": [
+   2,
+   32
+  ]
+ },
+ "speecht5.decoder.prenet.encode_positions.alpha": {
+  "dtype": "F32",
+  "shape": []
+ },
+ "speecht5.decoder.prenet.final_layer.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.prenet.final_layer.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "speecht5.decoder.prenet.layers.0.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "speecht5.decoder.prenet.layers.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   8
+  ]
+ },
+ "speecht5.decoder.prenet.speaker_embeds_layer.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.prenet.speaker_embeds_layer.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   544
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.encoder_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.0.self_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.encoder_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.decoder.wrapped_decoder.layers.1.self_attn_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.prenet.embed_tokens.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "speecht5.encoder.prenet.encode_positions.alpha": {
+  "dtype": "F32",
+  "shape": []
+ },
+ "speecht5.encoder.wrapped_encoder.embed_positions.pe_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   320,
+   8
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.attention.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.0.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.attention.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "speecht5.encoder.wrapped_encoder.layers.1.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ }
+}

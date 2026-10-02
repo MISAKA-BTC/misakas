@@ -1,0 +1,402 @@
+{
+ "context_embedder.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "context_embedder.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "norm_out.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "norm_out.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "proj_out.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "proj_out.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.norm_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "single_transformer_blocks.0.attn.norm_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_k.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_q.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_v.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "single_transformer_blocks.0.attn.to_v.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.norm.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   48
+  ]
+ },
+ "single_transformer_blocks.0.norm.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   48,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.proj_mlp.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "single_transformer_blocks.0.proj_mlp.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "single_transformer_blocks.0.proj_out.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "single_transformer_blocks.0.proj_out.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   80
+  ]
+ },
+ "time_text_embed.text_embedder.linear_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "time_text_embed.text_embedder.linear_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "time_text_embed.text_embedder.linear_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "time_text_embed.text_embedder.linear_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "time_text_embed.timestep_embedder.linear_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "time_text_embed.timestep_embedder.linear_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   256
+  ]
+ },
+ "time_text_embed.timestep_embedder.linear_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "time_text_embed.timestep_embedder.linear_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.add_v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.norm_added_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "transformer_blocks.0.attn.norm_added_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "transformer_blocks.0.attn.norm_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "transformer_blocks.0.attn.norm_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   8
+  ]
+ },
+ "transformer_blocks.0.attn.to_add_out.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_add_out.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_k.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_out.0.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_out.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_q.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_v.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn.to_v.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.0.proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "transformer_blocks.0.ff.net.0.proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   64
+  ]
+ },
+ "transformer_blocks.0.ff_context.net.0.proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "transformer_blocks.0.ff_context.net.0.proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "transformer_blocks.0.ff_context.net.2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.ff_context.net.2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   64
+  ]
+ },
+ "transformer_blocks.0.norm1.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   96
+  ]
+ },
+ "transformer_blocks.0.norm1.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   96,
+   16
+  ]
+ },
+ "transformer_blocks.0.norm1_context.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   96
+  ]
+ },
+ "transformer_blocks.0.norm1_context.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   96,
+   16
+  ]
+ },
+ "x_embedder.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "x_embedder.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ }
+}

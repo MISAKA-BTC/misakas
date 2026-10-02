@@ -1,0 +1,13 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma4_unified_text",
+  "doc": "Gemma-4 Unified, the text decoder: Gemma-4's block (sandwich norms, per-head q/k norms with gains and a weightless v norm, sliding/global layers with their own rope keyed by layer type, the layer scalar, k=v on the global layers, KV sharing, the double-wide MLP) WITHOUT the per-layer input (PLE) tables and WITHOUT the MoE block (both attributes are removed from the unified text config). use_bidirectional_attention = vision only changes the mask of vision tokens: text-only prompts are plain causal. PENDING VALIDATION (written during the quiet window). Third-party adapter (lane H): data only, extends the built-in gemma4-text.",
+  "extends": ["gemma4-text"],
+  "match": {"architectures": ["Gemma4UnifiedForCausalLM"], "model_types": ["gemma4_unified_text"]},
+  "vars": [
+    {"name": "d_pl", "value": 0},
+    {"name": "vocab_pl", "value": 0},
+    {"name": "moe_on", "value": false},
+    {"name": "model_type", "value": "gemma4_unified_text"}
+  ]
+}

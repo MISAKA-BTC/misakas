@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "axk1",
+  "doc": "A.X-K1 (SK Telecom): DeepSeek-V3 with one delta - an extra RMS norm on the output of every MoE block (mlp.post_mlp_layernorm), i.e. x += post_norm(moe(pre_norm x)) on the sparse layers; the leading dense layers are unchanged. Third-party adapter (lane H): data only, extends the built-in deepseek-v3.",
+  "extends": ["deepseek-v3"],
+  "match": {"architectures": ["AXK1ForCausalLM"], "model_types": ["axk1"]},
+  "vars": [
+    {"name": "l_residual", "layer": true, "value": {"$if": [{"$ge": [{"$var": "i"}, {"$var": "first_dense"}]}, {"Sequential": {"pre_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "post_ffn": {"$var": "norm"}, "multiplier": 1.0}}, {"$var": "residual"}]}},
+    {"name": "names", "value": {"$merge": [{"mla.q": "{p}layers.{L}.self_attn.q_proj", "mla.q_a": "{p}layers.{L}.self_attn.q_a_proj", "mla.q_a_norm": "{p}layers.{L}.self_attn.q_a_layernorm", "mla.q_b": "{p}layers.{L}.self_attn.q_b_proj", "mla.kv_a": "{p}layers.{L}.self_attn.kv_a_proj_with_mqa", "mla.kv_a_norm": "{p}layers.{L}.self_attn.kv_a_layernorm", "mla.kv_b": "{p}layers.{L}.self_attn.kv_b_proj", "mla.o": "{p}layers.{L}.self_attn.o_proj", "moe.router": "{p}layers.{L}.mlp.gate", "moe.sel_bias": "{p}layers.{L}.mlp.gate.e_score_correction_bias", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj", "moe.shared.gate": "{p}layers.{L}.mlp.shared_experts.gate_proj", "moe.shared.up": "{p}layers.{L}.mlp.shared_experts.up_proj", "moe.shared.down": "{p}layers.{L}.mlp.shared_experts.down_proj", "norm.post_ffn": "{p}layers.{L}.post_mlp_layernorm"}, {"$var": "names_base"}]}},
+    {"name": "model_type", "value": "axk1"}
+  ]
+}
