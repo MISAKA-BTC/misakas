@@ -248,9 +248,6 @@ mod tests {
             assert_eq!(db.get(b"b-big").unwrap().map(|v| v.len()), Some(40 << 20));
             assert_eq!(db.get(b"c-small").unwrap().as_deref(), Some(&b"2"[..]));
         }
-        db.property_int_value("rocksdb.block-cache-usage"),
-            db.property_int_value("rocksdb.block-cache-pinned-usage")
-        );
         db.property_int_value("rocksdb.block-cache-usage").unwrap().unwrap_or(0)
     }
 

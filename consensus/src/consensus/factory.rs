@@ -315,7 +315,7 @@ impl Factory {
     }
 
     /// **The block cache a consensus database is opened with.** `--rocksdb-cache-size` (and the HDD preset's own
-    /// figure) when the operator or the preset names one; otherwise, under the default preset, 192 MiB instead of
+    /// figure) when the operator or the preset names one; otherwise, under the default preset, 256 MiB instead of
     /// RocksDB's built-in 32 MB — the PALW chain state's ~57 MB tip row makes a data block no 32 MB cache can keep, so
     /// every point read of a row beside it was a 57 MB disk read (the 2026-10-03 panel starvation,
     /// docs/design/palw/t12-panel-backlog-1003.md §4). Node-local: no consensus rule and no on-disk format reads it.
