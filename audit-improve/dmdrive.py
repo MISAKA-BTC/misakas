@@ -803,7 +803,7 @@ class Drive:
         if self.daa < cur.get("daa", 0) + 3:
             return
         lack = first_lacking_fence()
-        pat_new = r"Block \S+: \S+ was dropped by name below palw_improvement_v1, and the block stands \(RFC-0004\)"
+        pat_new = r"Block \S+: .+? was dropped by name below palw_improvement_v1, and the block stands \(RFC-0004\)"
         pat_old = r"\[palw-lifecycle\] carrier .* produced no object"
         got_new = self.log_after("new0", cur.get("cur_new", 0), pat_new)
         got_old = self.log_after("old", cur.get("cur_old", 0), pat_old)
