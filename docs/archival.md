@@ -14,9 +14,19 @@ An **archive node** stores the complete blockchain history, including all pruned
 
 Normal Kaspa nodes are **pruned** and only keep recent blocks (determined by pruning depth).
 
+**Network flags.** The full command lines below run testnet-12 (`--testnet --netsuffix=12`, wRPC
+Borsh 27210, wRPC JSON 28210, P2P 26311). The short snippets that only tune RocksDB leave the
+network flags out; add them. Binding RPC to `0.0.0.0` logs a security warning unless
+`--allow-public-rpc` is also passed; firewall it either way. For running a node in general, see
+[`node-operator.md`](node-operator.md).
+
 ## Storage Requirements
 
 ### Minimum Requirements
+
+The sizing and performance figures in this guide were measured on upstream Kaspa (10 BPS) and have
+not been re-measured on MISAKA's 120-second chain. Treat them as an upper bound.
+
 - **Storage:** 500GB HDD minimum (2TB+ recommended)
 - **RAM:** 4GB minimum (8GB+ recommended with `--rocksdb-preset=hdd`)
 - **CPU:** 4 cores
@@ -68,19 +78,19 @@ kaspad --archival --rocksdb-preset=hdd
 ### Basic Archive Node (SSD/NVMe)
 ```bash
 # Default preset, suitable for SSD
-kaspad --archival \
-  --rpclisten-borsh=0.0.0.0:17110 \
-  --rpclisten-json=0.0.0.0:18110
+kaspad --testnet --netsuffix=12 --archival \
+  --rpclisten-borsh=0.0.0.0:27210 \
+  --rpclisten-json=0.0.0.0:28210
 ```
 
 ### HDD-Optimized Archive Node
 ```bash
 # HDD preset with HDD optimizations
-kaspad --archival \
+kaspad --testnet --netsuffix=12 --archival \
   --rocksdb-preset=hdd \
   --ram-scale=1.0 \
-  --rpclisten-borsh=0.0.0.0:17110 \
-  --rpclisten-json=0.0.0.0:18110
+  --rpclisten-borsh=0.0.0.0:27210 \
+  --rpclisten-json=0.0.0.0:28210
 ```
 
 ## Performance Tuning
@@ -159,14 +169,14 @@ kaspad --archival --rocksdb-preset=hdd --rocksdb-cache-size=2048  # 2GB cache
 
 ### Check Archive Status
 ```bash
-# Using kaspa-cli (if installed)
-kaspa-cli getinfo
+# Using the misaka CLI
+misaka --network testnet-12 doctor
 
 # Check logs
 journalctl -u kaspad -f
 
 # Check disk usage
-du -sh ~/.kaspa/kaspa-mainnet/datadir/
+du -sh ~/.rusty-kaspa/misaka-testnet-12/datadir/   # or <appdir>/misaka-testnet-12/datadir/
 ```
 
 ### Performance Metrics
@@ -186,6 +196,11 @@ iotop -o
 
 ## Docker Deployment
 
+There is no published MISAKA image. Build one from the repository root with
+`docker build -f docker/Dockerfile.kaspad -t misaka-kaspad .`. The image's entrypoint is `tini` and
+its default command is `/app/kaspad`, so a command line passed to the container must start with
+`/app/kaspad`.
+
 ### Docker Compose Example
 
 **docker-compose.yml:**
@@ -194,22 +209,25 @@ version: '3.8'
 
 services:
   kaspad-archive:
-    image: kaspanet/kaspad:latest
+    image: misaka-kaspad
     container_name: kaspad-archive
     restart: unless-stopped
     command:
+      - /app/kaspad
+      - --testnet
+      - --netsuffix=12
       - --archival
       - --rocksdb-preset=hdd
       - --ram-scale=1.0
-      - --rpclisten-borsh=0.0.0.0:17110
-      - --rpclisten-json=0.0.0.0:18110
+      - --rpclisten-borsh=0.0.0.0:27210
+      - --rpclisten-json=0.0.0.0:28210
       - --utxoindex
     volumes:
       - /mnt/hdd/kaspa-archive:/app/data
     ports:
-      - "16111:16111"  # P2P
-      - "17110:17110"  # RPC Borsh
-      - "18110:18110"  # RPC JSON
+      - "26311:26311"  # P2P
+      - "27210:27210"  # RPC Borsh
+      - "28210:28210"  # RPC JSON
     environment:
       - KASPAD_APPDIR=/app/data
 ```
@@ -237,15 +255,17 @@ docker run -d \
   --name kaspad-archive \
   --restart unless-stopped \
   -v /mnt/hdd/kaspa-archive:/app/data \
-  -p 16111:16111 \
-  -p 17110:17110 \
-  -p 18110:18110 \
-  kaspanet/kaspad:latest \
+  -p 26311:26311 \
+  -p 27210:27210 \
+  -p 28210:28210 \
+  misaka-kaspad \
+    /app/kaspad \
+    --testnet --netsuffix=12 \
     --archival \
     --rocksdb-preset=hdd \
     --ram-scale=1.0 \
-    --rpclisten-borsh=0.0.0.0:17110 \
-    --rpclisten-json=0.0.0.0:18110 \
+    --rpclisten-borsh=0.0.0.0:27210 \
+    --rpclisten-json=0.0.0.0:28210 \
     --appdir=/app/data
 ```
 
@@ -264,12 +284,13 @@ Type=simple
 User=kaspa
 Group=kaspa
 ExecStart=/usr/local/bin/kaspad \
+  --testnet --netsuffix=12 \
   --archival \
   --rocksdb-preset=hdd \
   --ram-scale=1.0 \
   --appdir=/mnt/hdd/kaspa-archive \
-  --rpclisten-borsh=0.0.0.0:17110 \
-  --rpclisten-json=0.0.0.0:18110 \
+  --rpclisten-borsh=0.0.0.0:27210 \
+  --rpclisten-json=0.0.0.0:28210 \
   --utxoindex
 Restart=always
 RestartSec=10
@@ -296,7 +317,7 @@ sudo systemctl status kaspad-archive
 1. Verify HDD preset is active:
    ```bash
    journalctl -u kaspad-archive | grep "RocksDB preset"
-   # Should show: "Using RocksDB preset: hdd"
+   # Should show: "Using RocksDB preset: hdd - …"
    ```
 2. Check I/O scheduler: `cat /sys/block/sda/queue/scheduler` (should be `mq-deadline`)
 3. Verify kernel tuning: `sysctl vm.dirty_ratio vm.swappiness`
@@ -413,4 +434,4 @@ For **SSD/NVMe**, the default preset is optimal.
 ---
 
 **Last updated:** January 2026
-**Applies to:** Kaspad v1.0.0+
+**Applies to:** `kaspad` builds that have `--rocksdb-preset` (`kaspad --help`)

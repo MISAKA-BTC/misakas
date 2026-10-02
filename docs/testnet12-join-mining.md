@@ -1,9 +1,10 @@
 # Joining Testnet-12 as a PALW producer
 
-**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
-`main`). The identity values below were checked against that release. Read
-[`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
-known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
+**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`). Its
+post-launch flag days are at DAA 750, 1,300, 1,700, 2,000 and 3,600. The current consensus
+identity is the one in [`release.json`](../release.json) at the repository root; the startup-log
+sample in §3 matches it. Read [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists
+what the release contains, the post-launch releases, the known issues and when a payment may be
 treated as final.
 
 The collateral and bond sections (§5 onwards) were written for `5a559459` (2026-09-23), before R-core+
@@ -18,13 +19,14 @@ Blocks are produced by PALW ConsensusV2 at a fixed 120-second cadence. On testne
 one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-miner` and
 `misaminer` cannot build the attempt envelope. Production runs inside `kaspad --palw-produce`.
 
-## 0. What is different from testnet-11
+## 0. Before you start
 
-* **A new chain.** The genesis is `a27f8f44…`. A testnet-11 bond does not exist here. A key file
-  can be reused, but its bond has to be registered again on testnet-12.
+* **Its own chain.** The genesis is `a27f8f44…`. A bond on any other chain does not exist here. A key
+  file can be reused, but its bond has to be registered on testnet-12.
 * **Its genesis outputs have their own txid.** The premine sits on `5e0d5f1b…` (not the
   `misaka-premine` sentinel every other network and the private testnet-12 instances use), so no
-  spend signed on another chain is valid here. The indices are the usual ones (genesis bonds 0–7,
+  spend signed on another chain is valid here. The full genesis values are in the
+  [deployment record](testnet-12-regenesis-2026-09-23.md#新-genesis2026-09-24-の-replay-分離以降). The indices are the usual ones (genesis bonds 0–7,
   fee floats 41–48); a command line that named `<sentinel>:<index>` must name the new txid.
 * **Collateral backs the whole fraud gain.** Every claim reserves its escrow plus its weight against
   the bond, and at the current subsidy that is about 3,200.85 MSK per claim (§5). One bond holds only
@@ -43,8 +45,10 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use the testnet-12 release commit `0e8ec984e` (current `main`). The public fleet runs the x86_64 Linux
-release build of that commit (kaspad sha256 `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`).
+Build a checkout whose [`release.json`](../release.json) names `testnet-12` with the fingerprint and
+schedule id shown in §3. Builds from before a flag day (`0e8ec984e`, `8a0810992`, `c3dbaee3c`,
+`587cab2b0`, …) are refused by upgraded peers once the chain passes that height; the release history
+and the published binary hashes are in [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md).
 
 ```bash
 cargo build --release -p kaspad -p misaka-cli
@@ -78,6 +82,8 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
 ```
 
 The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresses, not hostnames.
+For a node's first sync from genesis, the launch note recommends syncing from an operator's public
+node (see [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) §0 item 2 and §00).
 
 | purpose | port |
 |---|---:|
@@ -90,7 +96,7 @@ Check the startup log for these lines:
 
 ```text
 Consensus params fingerprint: 254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1 (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300, 1700, 2000 (schedule id 1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600 (schedule id 1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a
@@ -109,13 +115,13 @@ The examples below still pass `--network testnet-12` explicitly.
 ## 4. Funds
 
 **Faucet: TBD.** A testnet-12 faucet needs funding from the testnet-12 premine, and that is the
-operator's decision. The setup wizard has a faucet hint for testnet-11 only, so on testnet-12 it
-prints none. Once someone has funds, `misaka --network testnet-12 wallet send --key-file <k> --to
+operator's decision. The setup wizard prints no faucet hint on testnet-12. Once someone has funds, `misaka --network testnet-12 wallet send --key-file <k> --to
 <addr> --amount <MSK> --yes` moves them.
 
 **testnet-12 runs the mainnet-assumed bonds** (decided 2026-09-24): a producer bond needs at least
 **13,000 MSK** (the producer floor), a panel seat at least **130,000 MSK** (ten producer floors), and
-a DNS-finality validator bond at least **20,000,000 MSK** (below).
+a DNS-finality validator bond at least **20,000,000 MSK** (below). The decision and its derivation
+are recorded in the [deployment record](testnet-12-regenesis-2026-09-23.md#mainnet-想定の-bond2026-09-24ユーザー決定).
 
 What each role needs, from §5:
 
@@ -300,7 +306,7 @@ the same round permit over two different blocks, and the chain slashes the whole
 * a standby node or a copy of the node on another host;
 * a `kaspad --palw-register-class …` run started next to the running node. It does not exit once
   the class lands. Register through the running node instead: use `misaka model add`, or restart
-  that node with the flag (see `docs/palw-add-a-model-runbook.md` §5);
+  that node with the flag (see [`palw-add-a-model-runbook.md`](palw-add-a-model-runbook.md) §5);
 * the same node started again in a fresh app dir while the old one still runs.
 
 The app dir also holds the record of the last round this bond signed (`palw-round-last-signed`).
@@ -339,8 +345,7 @@ ONE process …`). It prints it as a warning on a `--palw-register-class` run.
    Serving a class that was registered permissionlessly and that this build has never heard of needs
    the chain-registered-class arm. On testnet-12 it is **always on** (the permissionless model registry
    is in force from genesis there), so pass no flag for it. `--palw-chain-classes` is deprecated on
-   testnet-12, and `=false` no longer turns it off. testnet-11 keeps the arm off unless the operator
-   passes `--palw-chain-classes`. With the arm, the node executes from the registered profile, and the
+   testnet-12, and `=false` no longer turns it off. With the arm, the node executes from the registered profile, and the
    panel's readiness proofs resolve through the chain's registration. A class is served only if its
    artifact is loaded.
 
@@ -474,6 +479,6 @@ collateral can move.
 ## 10. Epoch budgets
 
 testnet-12 arms ADR-0123's `palw_epoch_budget_release` from DAA 0. A class whose epoch budget is spent
-borrows the epoch slots that other classes are not filling. On testnet-11 this is still dormant. A
+borrows the epoch slots that other classes are not filling. A
 class registered mid-epoch has budget 0 until the next boundary. `kaspad --palw-dump-classes` logs
 every class's share and budget.

@@ -1,5 +1,10 @@
 # ADR-0160 stage 4 (rcore/cap-s1) — status: gate PASS
 
+> **Status (2026-10-02).** "Nothing armed" is the state of the branch at the time. This stage's fences
+> ride the capacity package that testnet-12 arms at DAA 1,700 (`PALW_T12_POST_LAUNCH_FENCE_V3_DAA`; see
+> [`FLAG-DAY-1500-INTEGRATION.md`](FLAG-DAY-1500-INTEGRATION.md)). The pins quoted here are the values at
+> the time; the current identity is in [`release.json`](../../release.json).
+
 Same branch and base (`rcore/cap-s1` off `c3dbaee3c`; nothing armed; the t12 pins `dbbc9104…` /
 `5de80e64…` / `7c652212…` unmoved). Commit `042053712` (lane N, F-R past F-N, lane S's burst).
 

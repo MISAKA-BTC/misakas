@@ -1,9 +1,8 @@
 # Node liveness probe
 
-`systemctl is-active` and `Restart=` watch whether the PROCESS exists. On 2026-09-02 the
-testnet-11 public node on .113 hung four minutes after its 5d start — every runtime worker
-blocked, no epoll thread, every socket CLOSE-WAIT with unread bytes, 0% CPU — and stayed
-"active" for 46 minutes while the explorer, the faucet and the public P2P entry were dead. Nothing
+`systemctl is-active` and `Restart=` watch whether the PROCESS exists. On 2026-09-02 a
+public node hung four minutes after start — every runtime worker blocked, no epoll thread, every
+socket CLOSE-WAIT with unread bytes, 0% CPU — and stayed "active" for 46 minutes while the explorer, the faucet and the public P2P entry were dead. Nothing
 inside a wedged process can report that it is wedged; the check has to come from outside.
 
 ## What the probe measures
@@ -37,8 +36,9 @@ Description=MISAKA node liveness probe for %i
 
 [Service]
 Type=oneshot
-Environment=NETWORK=testnet-11
+Environment=NETWORK=testnet-12
 Environment=UNIT=%i
+# NETWORK and UNIT must be set here: the script's own defaults are testnet-11 / misaka-t11-node
 Environment=STATE_DIR=/var/lib/misaka/%i
 # Environment=RESTART_ON_STALL=0   # planned pause/recovery: warn on STALLED, restart on WEDGED
 # RPC=127.0.0.1:27210   # set when the unit's wRPC Borsh port is not the network default
@@ -62,7 +62,7 @@ WantedBy=timers.target
 
 ```bash
 systemctl daemon-reload
-systemctl enable --now misaka-liveness@misaka-t11-node.timer
+systemctl enable --now misaka-liveness@<node-unit>.timer
 journalctl -t misaka-liveness -f
 ```
 
@@ -70,13 +70,13 @@ journalctl -t misaka-liveness -f
 during planned production pauses or initial recovery, then remove it once normal chain progress
 has resumed.
 
-Tune `STALL_SECS` to several block intervals of the network (testnet-11 at 120 s: 900 s), and
+Tune `STALL_SECS` to several block intervals of the network (testnet-12 at 120 s: 900 s, the
+default), and
 `TIMEOUT` above the node's normal RPC latency under load (15 s). A node that is syncing (IBD)
 advances its DAA and reads as alive.
 
 ## What it does not do
 
-It does not diagnose the hang. Keep an unstripped copy of every deployed binary
-(`[profile.release] debug = 1`, `strip = false`) so the next thread dump has symbols, and read
-`docs/adr/0075-certification-is-a-consensus-object.md` §7 for why the public entry node should
-carry no PALW duties.
+It does not diagnose the hang. Keep an unstripped copy of every deployed binary so the next thread dump
+has symbols: the workspace `[profile.release]` sets `strip = true`, so build the kept copy with
+`debug = 1` and `strip = false` overridden.

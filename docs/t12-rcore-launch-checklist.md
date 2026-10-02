@@ -9,7 +9,7 @@ T37・T66・T18m を「一部」に直し、監査 branch の snapshot を local
 **更新 3（同日 15:10 頃）**: `rcore/int-3` が `f7350af91`（15:01、A-held node `2f92228f` の merge — `1ee0e08d4` と shard court の
 `8be0f661` を含む）に進んだので、本 lane に merge し（`rcore/gate-evidence` の merge commit）、本 lane の test を merge 後の tree で回し直した
 （§1b）。item 7・8・9-8 の「merge」の条件は満たされた — 判定は §1.0。
-ADR 本体は `docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md` v3.1（§8.3 が gate、§8.4 が公開後の観測）。
+ADR 本体は ADR-0152 v3.1（§8.3 が gate、§8.4 が公開後の観測。本文はまだこの repo に commit されていない — [`adr/README.md`](adr/README.md)）。
 配備の手順と kit は `contrib/t12-deploy-kit/PLAN.md`、explorer は `contrib/misakascan-t12/DEPLOY.md`、公開後の drill は
 `contrib/t12-drill-kit/README.md`。
 
@@ -381,14 +381,15 @@ gate 全体は未達**: item 1（T57 の規則欠と一部の cell）、2、4、
 `REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
 再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
 tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
-release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
+release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。fingerprint・schedule id・genesis は repo root の
+[`release.json`](../release.json) と同じ値であること（join 手順書の起動ログ例と regenesis 記録の表は §5 の tool が同じ値に保つ。公開ノートは日付ごとの値だけを持ち、現在値は `release.json` を参照する）。
 
 ```
 # re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was c5e9fd82…, 686f65ea…)
 EXPECT_FP=254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id 1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593（fence schedule "750, 1000"）
+# schedule id 1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593（fence schedule "750, 1000, 1300, 1700, 2000, 3600"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 
@@ -663,11 +664,11 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 
 ## 7. 運用者・監査に残っている判断
 
-- **ユーザー（公開前）: 1,620 s の tolerance による DAA の burst**（2026-09-25 の mainnet 値 review の HIGH）。1 producer が他の block を
+- **ユーザー（公開前）: 1,620 s の tolerance による DAA の burst**（2026-09-25 の mainnet 値 review の HIGH）。*決着: (a) の beat の先行時刻の上限（受信側の時計 + 132 s）が公開リリースに入った — [公開ノート](t12-launch-2026-09-25.md) §1、`consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs`。以下は記録時点の内容。*1 producer が他の block を
   挟まずに DAA を 14 進められ（132 s では 2）、readiness row が失効して model class が HELD → Probation{0} に戻る。int-3 の horizon 24 でも
   閉じない（`consensus/core/tests/t12_run_ahead_burst_vs_readiness.rs` が fold 上で測定）。案: (a) clock を進める beat の stamp だけを受信側
   時計 + 1 interval で上限にする consensus 規則、(b) node の再証明を row の年齢 > horizon − 16 に早める（24 なら 9 DAA ごと、proof 約 1.4 倍）、
-  (c) t12 だけ 132 s に戻す。詳細は `docs/testnet-12-regenesis-2026-09-23.md` の「open」。
+  (c) t12 だけ 132 s に戻す。詳細は [`testnet-12-regenesis-2026-09-23.md`](testnet-12-regenesis-2026-09-23.md) の「open」。
 - **ユーザー（公開前）: λ = 5 の DoS の強さ**。junk floor claim 1,200 本の flood で honest 担保の上限の 99.70 % が拘束され、公開時に開いている
   floor lane が 6 DAA、2M lane が 970 / 3,650 DAA 止まる（λ = 2 ではどちらも 0）。攻撃者は拘束額以上を没収される（`dos_l5_6_composite`）。
 - **運用者**: `HB_ADDR` の確認（card 0 の payout address を全桁で入れた。旧 kit の `qf6hf5v0…` と同じ。PLAN R3）／公開後の drill ホスト 4 台以上（PLAN R4）／

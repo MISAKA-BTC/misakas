@@ -1,5 +1,12 @@
 # ADR-0160 stage 3 (rcore/cap-s1) — status: gate PASS
 
+> **Status (2026-10-02).** The DAA-1,500 release was never rolled out. The same eight-entry package
+> (`PALW_T12_CAPACITY_RHO10_FENCES_V1`) is testnet-12's third post-launch list, armed at **DAA 1,700**
+> (`PALW_T12_POST_LAUNCH_FENCE_V3_DAA` in `consensus/core/src/config/params.rs`), and the dormant-package
+> test is now `palw_capacity_stage3_rho10.rs::testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release`.
+> Read "1,500" below as that flag day. Fingerprints quoted below are the values at the time; the current
+> identity is in [`release.json`](../../release.json).
+
 Branch `rcore/cap-s1` (off `c3dbaee3c`, rcore/int-5 merged at `afb2be54d`). Commit `b21791934`. Nothing
 armed: testnet-12 as shipped is the DAA-1,300 release to the id — params `24e1aec3…`, identity
 `5de80e64…`, schedule `d263d7f2…`.

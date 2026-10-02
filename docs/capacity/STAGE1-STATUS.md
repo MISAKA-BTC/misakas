@@ -1,5 +1,10 @@
 # ADR-0160 stage 1 (rcore/cap-s1) — status: gate PASS
 
+> **Status (2026-10-02).** "Nothing armed" is the state of the branch at the time. This stage's fences
+> ride the capacity package that testnet-12 arms at DAA 1,700 (`PALW_T12_POST_LAUNCH_FENCE_V3_DAA`; see
+> [`FLAG-DAY-1500-INTEGRATION.md`](FLAG-DAY-1500-INTEGRATION.md)). The pins quoted here are the values at
+> the time; the current identity is in [`release.json`](../../release.json).
+
 Branch `rcore/cap-s1` off the shipped DAA-750 release `c3dbaee3c` (worktree `~/Downloads/MISAKA-wt-b/wt-cap-s1`,
 shared target `wt-int4-target`, `nice -n 15`, `-j 4`). Nothing armed anywhere; t12 as shipped pins
 `dbbc9104…` / `5de80e64…` / `7c652212…` (every `*_is_t12_only` pin green).
