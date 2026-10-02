@@ -241,7 +241,13 @@ fn every_rule_is_in_force_from_genesis() {
     assert!(p.palw_inactivity_leak.is_none(), "validate_palw_v2 refuses the retired leak");
     assert!(p.palw_frontier_provenance.is_none(), "ADR-0065 D2 is unimplementable inside the state fold");
     assert!(p.palw_beacon_fold.is_none(), "PALW block production has no beacon to fold");
-    assert!(p.palw_fp_decode_rules.is_none(), "this build carries neither half of ADR-0082 D10/D11");
+    // ADR-0082 D10/D11 are not a genesis rule: they arm with the int-11 flag day's list, at its one height (RFC-0003 / RFC-0004's
+    // prerequisite), so a chain that launched without them crosses it. Asserted so "armed at the release's height" and "forgotten" differ.
+    assert_eq!(
+        p.palw_fp_decode_rules,
+        kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new),
+        "the decode rules are the int-11 flag day's, at its height"
+    );
     assert!(p.palw_fp_decode_constraint.is_none(), "this build carries no constraint automaton");
     assert!(p.palw_shard_licensing.is_none(), "refused beside palw_admission_independence (ADR-0147)");
     // MSK-26A (2026-09 pre-freeze security review): the slashing-evidence UTXO genuineness fence is

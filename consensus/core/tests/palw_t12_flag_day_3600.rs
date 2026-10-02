@@ -9,8 +9,10 @@
 //!   ruleset, `4ca695b98`, the fleet's: its params id is the fingerprint the fleet prints today
 //!   (`3db42ea6…`), pinned here by value, so the fork-id comparison and the "only this fence moved it" twin
 //!   keep a baseline that cannot drift with this release's re-pin;
-//! * **the release** — testnet-12 as shipped IS that baseline with fence2 armed at 3,600: the params and
-//!   schedule ids move, the identity does not, and no other fence moves (the court window stays `None`);
+//! * **the release** — testnet-12 as the DAA-3,600 release ships it ([`palw_t12_release_v5_params`]: since int-11 the
+//!   shipped ruleset also arms the int-11 list at 5,300, which `palw_t12_flag_day_int11.rs` holds) IS that baseline with fence2
+//!   armed at 3,600: the params and schedule ids move, the identity does not, and no other fence moves (the court window
+//!   stays `None`);
 //! * **the fork id** — an int-8 node is kept below 3,600 in both directions and refused from 3,600;
 //! * **the prerequisites** — `palw_tir_v1` at or below `palw_tir_fence2`; and, for a ruleset that arms the dormant
 //!   window, `palw_kary_court` at or below it, each refused by name otherwise;
@@ -25,7 +27,8 @@
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1,
-    PALW_T12_TIR_FLAG_DAY_DAA, Params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_shipped_params,
+    PALW_T12_TIR_FLAG_DAY_DAA, Params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
+    palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -69,7 +72,7 @@ fn the_flag_day_is_fence2_alone_at_3600_a_height_no_other_fence_uses() {
     for f in PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
         assert!(f.name != "palw_tir_fence2" && f.name != "palw_model_court_window", "{} is on an earlier list", f.name);
     }
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v5_params();
     assert_eq!(fence_at(&shipped, "palw_model_court_window"), None, "armed nowhere on the shipped ruleset");
     for (name, fence) in shipped.palw_fences_v1() {
         if name != "palw_tir_fence2" {
@@ -103,14 +106,18 @@ fn the_release_v4_baseline_is_int8s_ruleset_to_the_id() {
 #[test]
 fn testnet12_ships_the_flag_day_armed_at_3600_over_the_int8_release() {
     let baseline = palw_t12_release_v4_params();
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v5_params();
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
     assert_eq!(
         ids(&shipped),
         ids(&with_list(baseline.clone(), Some(FLAG_DAY))),
         "testnet-12 as shipped arms fence2 at 3,600 over int-8"
     );
-    assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
+    assert_eq!(
+        ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+        ids(&palw_t12_shipped_params()),
+        "the node's door is testnet-12 as shipped (with the int-11 flag day armed on top of this release)"
+    );
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, bp, "the ruleset names the fence");
@@ -145,7 +152,7 @@ fn testnet12_ships_the_flag_day_armed_at_3600_over_the_int8_release() {
 #[test]
 fn the_fork_id_keeps_an_int8_node_below_3600_and_refuses_it_from_3600() {
     let old = palw_t12_release_v4_params();
-    let new = palw_t12_shipped_params();
+    let new = palw_t12_release_v5_params();
     for daa in [2_000, 3_000, FLAG_DAY - 1] {
         let o = fork_id_v1(&old, daa);
         let n = fork_id_v1(&new, daa);
@@ -163,7 +170,7 @@ fn the_fork_id_keeps_an_int8_node_below_3600_and_refuses_it_from_3600() {
 
 #[test]
 fn the_flag_day_holds_its_prerequisites_by_name() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v5_params();
     let refused_by = |p: &Params, needle: &str, why: &str| {
         let e = p.validate_palw_v2().expect_err(why);
         assert!(format!("{e:?}").contains(needle), "{why}: {e:?}");
@@ -237,7 +244,7 @@ fn the_flag_day_holds_its_prerequisites_by_name() {
 fn a_models_window_is_finite_floored_at_the_network_window_and_bounded_by_the_courts_structure() {
     use kaspa_consensus_core::palw_class_admission_v2::palw_court_window_for_history_v1;
     use kaspa_consensus_core::palw_court_v2::palw_court_params_held_at_v2;
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v5_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
     let network = bundle.state.window_court();
     // The held fence is armed on testnet-12 from genesis, and admission charges the NETWORK's regime: no class's

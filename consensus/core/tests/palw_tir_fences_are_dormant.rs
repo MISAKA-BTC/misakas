@@ -26,11 +26,12 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
     PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     TESTNET11_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
-    palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_shipped_params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
+    palw_t12_shipped_params,
 };
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
@@ -59,9 +60,11 @@ fn slug(name: &str) -> String {
 }
 
 /// `p` with testnet-12's IR flag day set back to dormant (its one list, through each entry's `set`) — and the
-/// DAA-3,600 flag day's list with it (`palw_tir_fence2`, plus the court window, which is dormant everywhere),
-/// which builds on the IR fence and which int-7, the pins' release, did not carry either.
+/// DAA-3,600 flag day's list with it (`palw_tir_fence2`, plus the court window, which is dormant everywhere) and the int-11 flag
+/// day's (the generative and improvement lists need the IR fence below them), which build on the IR fence and which int-7, the
+/// pins' release, did not carry either.
 fn without_the_ir_flag_day(mut p: Params) -> Params {
+    palw_t12_arm_int11_flag_day_at_v1(&mut p, None);
     for f in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1).chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1) {
         (f.set)(&mut p, None);
     }
@@ -283,7 +286,13 @@ fn every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000() {
         for f in PALW_T12_TIR_FENCE2_FENCES_V1 {
             (f.set)(&mut rearmed, Some(ForkActivation::new(day)));
         }
-        assert_eq!(ids(&armed), ids(&rearmed), "{name}: the pinned row with the IR flag day at {at} and the DAA-3,600 flag day at {day}");
+        // …and the int-11 flag day, which builds on both and arms on every testnet-12 row at its own height.
+        palw_t12_arm_int11_flag_day_at_v1(&mut rearmed, PALW_T12_INT11_FLAG_DAY_DAA);
+        assert_eq!(
+            ids(&armed),
+            ids(&rearmed),
+            "{name}: the pinned row with the IR flag day at {at}, the DAA-3,600 flag day at {day} and the int-11 flag day"
+        );
         assert_ne!(ids(&armed).0, ids(&dormant).0, "{name}: the flag day moves the params id");
         assert_ne!(ids(&armed).2, ids(&dormant).2, "{name}: and the schedule id");
         assert_eq!(ids(&armed).1, ids(&dormant).1, "{name}: not the identity");

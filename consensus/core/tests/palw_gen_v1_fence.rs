@@ -1,4 +1,5 @@
-//! **RFC-0003: the `palw_gen_v1` fence** — dormant on every network, fingerprinted with its value
+//! **RFC-0003: the `palw_gen_v1` fence** — dormant on every network but testnet-12's int-11 release (which arms it at H with the
+//! rest of `PALW_T12_INT11_FENCES_V1`: `palw_t12_flag_day_int11.rs`), fingerprinted with its value
 //! where armed, invisible to the identity until it fires, named by the fork id, armed by the drill
 //! mover alone, and refused by `validate_palw_v2` when it names another build's primitive,
 //! randomness or output set, another program or court version, ceilings past the format's caps, or
@@ -11,22 +12,23 @@
 //! and this change leaves those pins green. This file adds no pin (a quoted id here would be one
 //! `t12-repin.sh` does not know); it checks the field itself.
 //!
-//! The armed cases below run over testnet-12 as shipped (`palw_t12_shipped_params`: `palw_tir_v1` at
-//! DAA 2,000, the generative fence's prerequisite) at a height no fence uses.
+//! The armed cases below run over testnet-12 as the DAA-3,600 release ships it (`palw_t12_release_v5_params`: the int-11 list
+//! dormant, `palw_tir_v1` at DAA 2,000, the generative fence's prerequisite) at a height no fence uses.
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_gen_fence_at_v1};
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
-    Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
-    palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params,
-    palw_t12_release_v3_params, palw_t12_shipped_params,
+    PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1,
+    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
+    palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_gen_v1::{
-    PALW_DRILL_GEN_CEILINGS_V1, PALW_DRILL_GEN_FENCES_V1, PALW_DRILL_GEN_V1_ENTRY, PALW_GEN_COURT_VERSION_V1,
-    PALW_GEN_PROGRAM_VERSION_V1, PalwGenFenceV1, PalwGenProfileCeilingsV1, PalwGenProfileV1, palw_gen_court_root_v1,
+    PALW_DRILL_GEN_FENCES_V1, PALW_DRILL_GEN_V1_ENTRY, PALW_GEN_COURT_VERSION_V1, PALW_GEN_PROGRAM_VERSION_V1, PALW_T12_GEN_CEILINGS_V1,
+    PalwGenFenceV1, PalwGenProfileCeilingsV1, PalwGenProfileV1, palw_gen_court_root_v1,
     palw_gen_output_set_id_v1, palw_gen_rand_set_id_v1,
 };
 use kaspa_consensus_core::palw_tir_v1::{PALW_TIR_COURT_VERSION_V1, palw_tir_court_root_v1, palw_tir_prim_set_id_v1};
@@ -42,7 +44,23 @@ fn salt() -> PalwDrillSaltV1 {
     PalwDrillSaltV1::from_bytes([0x3c; PALW_DRILL_SALT_LEN_V1]).expect("a legal salt")
 }
 
-/// Every ruleset a node can run, as it ships.
+/// A salted drill ruleset with the int-11 list back to dormant (what the drill mover's own tests move from).
+fn dormant_drill() -> Params {
+    let mut drill = palw_t12_drill_params_v1(&salt());
+    palw_t12_arm_int11_flag_day_at_v1(&mut drill, None);
+    drill
+}
+
+/// The rows testnet-12's int-11 release arms (public, the node's door and every salted drill): the generative fence at H.
+fn armed_rows() -> Vec<(&'static str, Params)> {
+    vec![
+        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_drill_params_v1", palw_t12_drill_params_v1(&salt())),
+    ]
+}
+
+/// Every ruleset a node can run, as it ships — those that leave the generative fence dormant (the armed rows are [`armed_rows`]).
 fn rulesets() -> Vec<(&'static str, Params)> {
     vec![
         ("MAINNET_PARAMS", MAINNET_PARAMS),
@@ -53,37 +71,42 @@ fn rulesets() -> Vec<(&'static str, Params)> {
         ("from(mainnet)", Params::from(NetworkId::new(NetworkType::Mainnet))),
         ("from(testnet-10)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10))),
         ("from(testnet-11)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
-        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
         ("from(devnet)", Params::from(NetworkId::new(NetworkType::Devnet))),
         ("from(simnet)", Params::from(NetworkId::new(NetworkType::Simnet))),
         ("mainnet_shipped_params", mainnet_shipped_params()),
         ("devnet_shipped_params", devnet_shipped_params()),
         ("palw_rc_shipped_params", palw_rc_shipped_params()),
-        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_release_v5_params", palw_t12_release_v5_params()),
         ("palw_t12_launch_params_v1", palw_t12_launch_params_v1()),
         ("palw_t12_release_v1_params", palw_t12_release_v1_params()),
         ("palw_t12_release_v2_params", palw_t12_release_v2_params()),
         ("palw_t12_release_v3_params", palw_t12_release_v3_params()),
-        ("palw_t12_drill_params_v1", palw_t12_drill_params_v1(&salt())),
+        ("palw_t12_drill_params_v1 − int-11", dormant_drill()),
     ]
 }
 
 fn t12_armed(at: ForkActivation) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v5_params();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(at));
     p.sync_palw_gen_v1();
     p
 }
 
 #[test]
-fn every_shipped_ruleset_leaves_it_dormant_and_no_release_lists_it() {
+fn every_ruleset_leaves_it_dormant_but_testnet12s_int11_release_which_arms_it_at_h() {
+    for (name, p) in armed_rows() {
+        let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
+        assert_eq!(p.palw_gen_v1, Some(PalwGenFenceV1::testnet12_v1(ForkActivation::new(h))), "{name}: armed at H with testnet-12's value");
+        assert!(p.palw_gen_v1_fence().is_some() && !p.palw_gen_v1_active_at(h - 1) && p.palw_gen_v1_active_at(h), "{name}: live from H");
+        assert!(p.validate_palw_gen_v1().is_ok(), "{name}: and it validates");
+    }
     for (name, p) in rulesets() {
         assert!(p.palw_gen_v1.is_none(), "{name}: dormant");
         assert!(p.palw_gen_v1_fence().is_none() && !p.palw_gen_v1_active_at(u64::MAX), "{name}: the accessor agrees");
         assert!(p.palw_fences_v1().contains(&("palw_gen_v1", None)), "{name}: the exhaustive fence list names it");
         assert!(p.validate_palw_gen_v1().is_ok(), "{name}: nothing to refuse");
     }
-    // No testnet-12 flag day carries it: the only list naming it is the drill's.
+    // No earlier testnet-12 flag day carries it: the int-11 list does, and the drill's one-entry list is the same entry.
     for list in [
         PALW_T12_POST_LAUNCH_FENCES_V1,
         PALW_T12_POST_LAUNCH_FENCES_V2,
@@ -92,15 +115,16 @@ fn every_shipped_ruleset_leaves_it_dormant_and_no_release_lists_it() {
         PALW_T12_CAPACITY_RHO10_FENCES_V1,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| f.name != "palw_gen_v1"), "no testnet-12 release arms the generative fence");
+        assert!(list.iter().all(|f| f.name != "palw_gen_v1"), "no earlier testnet-12 release arms the generative fence");
     }
+    assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == "palw_gen_v1"), "the int-11 flag day arms it");
     let names: Vec<&str> = PALW_DRILL_GEN_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_gen_v1"]);
 }
 
 #[test]
 fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity() {
-    let base = ids(&palw_t12_shipped_params());
+    let base = ids(&palw_t12_release_v5_params());
     let armed = t12_armed(ForkActivation::new(AT));
     armed.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-12 past its IR flag day can arm it: {e}"));
     let moved = ids(&armed);
@@ -112,7 +136,7 @@ fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity()
 
 #[test]
 fn never_is_absence_for_the_identity_and_genesis_is_a_rule() {
-    let base = palw_t12_shipped_params();
+    let base = palw_t12_release_v5_params();
     let never = t12_armed(ForkActivation::never());
     assert_eq!(never.consensus_identity_id(), base.consensus_identity_id(), "Some(never()) collapses whole in the normaliser");
     never.validate_palw_v2().unwrap_or_else(|e| panic!("a dormant value validates: {e}"));
@@ -263,17 +287,18 @@ fn the_ids_are_keyed_hashes_of_what_they_name() {
 
 #[test]
 fn the_drill_entry_sets_the_field_it_names() {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v5_params();
     (PALW_DRILL_GEN_V1_ENTRY.set)(&mut p, Some(ForkActivation::new(AT)));
-    assert_eq!(p.palw_gen_v1, Some(PalwGenFenceV1::this_build_v1(ForkActivation::new(AT), PALW_DRILL_GEN_CEILINGS_V1)));
+    assert_eq!(p.palw_gen_v1, Some(PalwGenFenceV1::this_build_v1(ForkActivation::new(AT), PALW_T12_GEN_CEILINGS_V1)));
+    assert_eq!(p.palw_gen_v1, Some(PalwGenFenceV1::testnet12_v1(ForkActivation::new(AT))), "a drill arms testnet-12's value");
     assert!(p.palw_fences_v1().iter().any(|(name, _)| *name == PALW_DRILL_GEN_V1_ENTRY.name), "the entry's name is a fence's");
     (PALW_DRILL_GEN_V1_ENTRY.set)(&mut p, None);
-    assert_eq!(ids(&p), ids(&palw_t12_shipped_params()), "setting it back is the release, byte for byte");
+    assert_eq!(ids(&p), ids(&palw_t12_release_v5_params()), "setting it back is the release, byte for byte");
 }
 
 #[test]
 fn the_drill_mover_arms_it_on_a_salted_drill_and_nowhere_else() {
-    let drill = palw_t12_drill_params_v1(&salt());
+    let drill = dormant_drill();
     // Above the drill's IR flag day (2,000): armed, the one fence, and the result validates.
     let mut moved = drill.clone();
     let moves = palw_drill_gen_fence_at_v1(&mut moved, 2_345).expect("a salted drill arms it above palw_tir_v1");

@@ -168,3 +168,23 @@ fn the_deploy_kit_and_the_explorer_name_this_builds_classes_and_premine_layout()
     println!("CLASSES floor {} · 8k {class_8k} · 2M {two_m}", bundle.base_class_id);
     println!("GENESIS {genesis} (not in FORBIDDEN_GENESIS: {} entries)", forbidden.len());
 }
+
+/// **The kit's copy of the int-11 flag day's height is the core's** (the user's decision of 2026-10-01: H one named constant,
+/// shared by the drill and the preset): `fleet.env.example` names H and ρ = 100's offset, and the preset arms exactly those.
+#[test]
+fn the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms() {
+    const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
+    let fleet = repo_file(FLEET);
+    let at = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
+    assert_eq!(shell_value(FLEET, &fleet, "INT11_FLAG_DAY_DAA"), at.to_string(), "{FLEET}: INT11_FLAG_DAY_DAA is the preset's H");
+    assert_eq!(
+        shell_value(FLEET, &fleet, "INT11_RHO100_OFFSET_DAA"),
+        PALW_T12_INT11_RHO100_OFFSET_DAA.to_string(),
+        "{FLEET}: INT11_RHO100_OFFSET_DAA is the preset's"
+    );
+    assert_eq!(PALW_T12_INT11_RHO100_DAA, Some(at + PALW_T12_INT11_RHO100_OFFSET_DAA), "ρ = 100 arms H + 95");
+    // And the public ruleset arms the list at H and ρ = 100 at H + 95: the schedule the kit's drill rehearses names both.
+    let p = Params::from(t12());
+    let schedule = p.fence_schedule_v1();
+    assert!(schedule.contains(&at) && schedule.contains(&(at + PALW_T12_INT11_RHO100_OFFSET_DAA)), "{schedule:?}");
+}

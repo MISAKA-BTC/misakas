@@ -19,9 +19,9 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
-    PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET11_PARAMS, mainnet_shipped_params, palw_t12_release_v3_params,
-    palw_t12_shipped_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS,
+    TESTNET11_PARAMS, mainnet_shipped_params, palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -310,10 +310,10 @@ fn ids(p: &Params) -> (String, String, String) {
     (p.consensus_params_id().to_string(), p.consensus_identity_id().to_string(), p.consensus_schedule_id().to_string())
 }
 
-/// testnet-12 as shipped with the generative fence and FP Job V4's decode rules armed below `at`:
-/// the prerequisites V5 names.
+/// testnet-12 as the DAA-3,600 release ships it (the int-11 list dormant) with the generative fence and FP Job V4's decode
+/// rules armed below `at`: the prerequisites V5 names.
 fn t12_with_prerequisites(at: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v5_params();
     p.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(at - 10)));
     p.sync_palw_gen_v1();
     p.palw_fp_decode_rules = Some(ForkActivation::new(at - 20));
@@ -328,13 +328,22 @@ fn the_v5_fence_is_dormant_everywhere_and_fingerprinted_only_when_armed() {
         ("TESTNET11_PARAMS", TESTNET11_PARAMS),
         ("SIMNET_PARAMS", SIMNET_PARAMS),
         ("mainnet_shipped_params", mainnet_shipped_params()),
-        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_release_v5_params", palw_t12_release_v5_params()),
         ("palw_t12_release_v3_params", palw_t12_release_v3_params()),
-        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
     ] {
         assert!(p.palw_fp_job_v5.is_none() && p.palw_fp_job_v5_fence().is_none(), "{name}: dormant");
         assert!(p.palw_fences_v1().contains(&("palw_fp_job_v5", None)), "{name}: named");
         assert!(p.validate_palw_fp_job_v5_v1().is_ok(), "{name}");
+    }
+    // Testnet-12's int-11 release arms it at H, with the generative fence and the decode rules it names.
+    for (name, p) in [
+        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("from(testnet-12)", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+    ] {
+        let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
+        assert_eq!(p.palw_fp_job_v5, Some(ForkActivation::new(h)), "{name}: armed at H");
+        assert!(p.palw_fp_job_v5_active_at(h) && !p.palw_fp_job_v5_active_at(h - 1), "{name}: live from H");
+        assert!(p.validate_palw_fp_job_v5_v1().is_ok(), "{name}: with its prerequisites at H");
     }
     for list in [
         PALW_T12_POST_LAUNCH_FENCES_V1,
@@ -342,8 +351,9 @@ fn the_v5_fence_is_dormant_everywhere_and_fingerprinted_only_when_armed() {
         PALW_T12_POST_LAUNCH_FENCES_V3,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| f.name != "palw_fp_job_v5"), "no testnet-12 release arms it");
+        assert!(list.iter().all(|f| f.name != "palw_fp_job_v5"), "no earlier testnet-12 release arms it");
     }
+    assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == "palw_fp_job_v5"), "the int-11 flag day arms it");
     const AT: u64 = 9_999_995;
     let base = t12_with_prerequisites(AT);
     base.validate_palw_v2().unwrap_or_else(|e| panic!("the prerequisites validate: {e}"));

@@ -23,7 +23,7 @@ use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV
 use kaspa_consensus_core::config::params::{
     PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA,
     PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_drill_params_v1, palw_t12_release_v3_params,
-    palw_t12_release_v4_params, palw_t12_shipped_params,
+    palw_t12_release_v4_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
@@ -63,7 +63,8 @@ fn the_ir_flag_day_is_palw_tir_v1_alone_at_2000_a_height_no_other_fence_uses() {
     for f in PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
         assert_ne!(f.name, "palw_tir_v1", "on no earlier list");
     }
-    let shipped = palw_t12_shipped_params();
+    // The DAA-3,600 release (int-10): the shipped ruleset arms the int-11 list on top of it (`palw_t12_flag_day_int11.rs`).
+    let shipped = palw_t12_release_v5_params();
     for (name, fence) in shipped.palw_fences_v1() {
         if name != "palw_tir_v1" {
             assert_ne!(fence.map(|f| f.daa_score()), Some(FLAG_DAY), "{name}: 2,000 is the IR flag day's alone");
