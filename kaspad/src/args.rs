@@ -451,6 +451,12 @@ pub struct Args {
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
     pub palw_tir_fused_kernels: bool,
+    /// **Do not run the executor self-test before a seat's first possession proof** (RFC-0002 Part II §II.7.5 Proposal B, node
+    /// software, no fence). By default a seat runs, once per (class, artifact root), its own executor against the class's reference
+    /// evaluator on a few positions — the reference streamed from the artifact — and posts a proof only if they agree; a failure
+    /// is shown by `getPalwPanelStatus` as `EXECUTOR_NOT_CONFORMANT`. A seat that skips it harms only itself: the court convicts it on
+    /// its first wrong tile.
+    pub palw_no_seat_conformance: bool,
     /// **DRILL ONLY: cross testnet-12's FOURTH post-launch flag day at this DAA** (P0a, the live GDN
     /// key-head fix) — with the salt, every fence of `PALW_T12_POST_LAUNCH_FENCES_V4` is armed at this
     /// height on the drill chain, after the first three flag days' moves and at a height of its own
@@ -717,6 +723,7 @@ impl Default for Args {
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
+            palw_no_seat_conformance: false,
             palw_drill_fence4_at: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
@@ -1938,6 +1945,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-no-seat-conformance")
+                .long("palw-no-seat-conformance")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 Part II Proposal B): do not run the executor self-test (this node's executor against the class's \
+                     reference evaluator on a few positions, streamed) before a seat's first possession proof of a class. Node software, \
+                     no consensus object; a seat that skips it harms only itself.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-fence4-at")
                 .long("palw-drill-fence4-at")
                 .require_equals(true)
@@ -2976,6 +2993,7 @@ impl Args {
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
+            palw_no_seat_conformance: m.get_one::<bool>("palw-no-seat-conformance").copied().unwrap_or(defaults.palw_no_seat_conformance),
             palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),

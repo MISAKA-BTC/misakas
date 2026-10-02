@@ -2234,6 +2234,17 @@ message RpcPalwClassBlocking {
   string next = 8;
 }
 
+// RFC-0002 Part II §II.7.5 Proposal A: a class's seating as `palw_class_seating` reads it now.
+message RpcPalwClassSeating {
+  string classId = 1;
+  uint32 readyOperators = 2;
+  uint32 neededOperators = 3;
+  uint32 independentOperators = 4;
+  uint32 neededIndependent = 5;
+  uint32 baseOperators = 6;
+  uint32 licensableSharePermille = 7;
+}
+
 message GetPalwModelRegistryResponseMessage {
   bool available = 1;
   uint64 tipDaa = 2;
@@ -2277,6 +2288,8 @@ message GetPalwModelRegistryResponseMessage {
   uint64 finalWorkEpochs = 36;
   // RFC-0002 Part II §II.7.4: what blocks each class that has something blocking it.
   repeated RpcPalwClassBlocking blocking = 39;
+  // RFC-0002 Part II §II.7.5 Proposal A: the seating of every class the fence reads.
+  repeated RpcPalwClassSeating seating = 40;
   RPCError error = 1000;
 }
 

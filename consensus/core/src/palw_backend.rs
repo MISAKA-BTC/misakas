@@ -464,6 +464,17 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         false
     }
 
+    /// **RFC-0002 Part II §II.7.5 Proposal B (node software, no fence): the executor's own conformance test, as a job** — a seat runs it
+    /// once per `(class, artifact root)` before it first proves readiness for the class, and posts no proof when it fails. The job
+    /// runs this backend's executor against the class's reference evaluator on a few positions, streamed (the reference reads one
+    /// tensor at a time), and says in a sentence what it compared (`Ok`) or what differs (`Err`). `None` where the backend has no
+    /// reference of its own to be tested against — the legacy families' kernels ARE the consensus reference. The job owns what it
+    /// needs (`'static`), so a node runs it on a thread of its own: a large class's reference is slow and must not hold a tick.
+    /// A dishonest seat can skip the test and harms only itself: the court convicts it on its first wrong tile.
+    fn executor_conformance_job_v1(&self) -> Option<Box<dyn FnOnce() -> Result<String, String> + Send + 'static>> {
+        None
+    }
+
     /// **ADR-0093 Decision 1, as built: everything this capture yields about the fused site at
     /// `narrowed`** — the binding, the opened output tile and query row, the site's registered
     /// narrowings opened against the class root, the site's INPUTS (the disputed head's query

@@ -563,6 +563,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
+    /// `Params::palw_tir_only_v1` (RFC-0002 Phase H): is a new class admitted only as an IR program or pipeline. Resolved in ONE place,
+    /// [`Self::palw_tir_only_at`], at the block the registration is judged in. `None` on every shipped preset.
+    pub(super) palw_tir_only_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gdn_key_heads` (P0a): may a registration carry a version-3 profile. Resolved in
     /// ONE place, [`Self::palw_gdn_key_heads_at`], at the block the registration is judged in.
     pub(super) palw_gdn_key_heads: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1144,6 +1147,7 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_gen_v1: params.palw_gen_v1_fence(),
+            palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
@@ -10294,6 +10298,14 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
+                    // **RFC-0002 Phase H (`palw_tir_only_v1`): past it a new class is an IR program or an IR pipeline** — a legacy-family
+                    // registration (an admission carriage of hand-written kernels) is refused by name, before the graph walk. Dormant
+                    // everywhere: no preset arms it.
+                    if self.palw_tir_only_at(point.daa_score) {
+                        return Err(format!(
+                            "class {class_id} is a legacy-family registration and palw_tir_only_v1 admits only IR programs and pipelines (RFC-0002 Phase H)"
+                        ));
+                    }
                     kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(
                         bundle,
                         &carriage.profile,
@@ -13738,6 +13750,11 @@ impl VirtualStateProcessor {
     /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
     fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
+    }
+
+    /// **RFC-0002 Phase H, resolved in exactly one place.**
+    fn palw_tir_only_at(&self, daa_score: u64) -> bool {
+        self.palw_tir_only_v1.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **P0a, resolved in exactly one place.**

@@ -1623,6 +1623,10 @@ pub struct PalwStateParamsV2 {
     /// read ask the seating rule through it). `None` on every shipped preset.
     #[borsh(skip)]
     class_seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingMirrorV1>,
+    /// **RFC-0002 Phase H: `Params::palw_tir_only_v1`'s height**, mirrored by `Params::sync_palw_tir_only_v1` (the fold's second lock on a
+    /// legacy-family registration reads it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_only_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1840,6 +1844,7 @@ impl PalwStateParamsV2 {
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
             class_seating: None,
+            tir_only_from_daa: None,
         })
     }
 
@@ -2167,6 +2172,22 @@ impl PalwStateParamsV2 {
     pub fn with_class_seating(mut self, seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingMirrorV1>) -> Self {
         self.class_seating = seating;
         self
+    }
+
+    /// **RFC-0002 Phase H: the IR-only fence's mirror** — written by `Params::sync_palw_tir_only_v1` and by nothing else (and by fixtures).
+    pub fn with_tir_only_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_only_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_only_v1`'s height, if the network arms it (the mirror).
+    pub fn tir_only_from_daa(&self) -> Option<u64> {
+        self.tir_only_from_daa
+    }
+
+    /// **Is a new class admitted only as an IR program (or pipeline) at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_only_active_at(&self, daa_score: u64) -> bool {
+        self.tir_only_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_class_seating`'s height, floor and raise, if the network arms it (the mirror).
@@ -32069,6 +32090,14 @@ fn apply_object(
     }
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
+    }
+    // **RFC-0002 Phase H (`palw_tir_only_v1`): past it a post-genesis legacy-family registration is refused by name** — the carriage
+    // is what makes it a permissionless registration of hand-written kernels; the card's own (no carriage) are genesis and stay. The
+    // acceptance walk refuses it first; this is the second lock.
+    if matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }) && builder.params.tir_only_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirRegistrationRefused(
+            "a legacy-family class registration past palw_tir_only_v1: a new class is an IR program or an IR pipeline (RFC-0002 Phase H)",
+        ));
     }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.

@@ -509,6 +509,8 @@ pub mod palw_gen_one_move_v1;
 pub mod palw_held_close_v1;
 /// RFC-0002 Part II §II.7.5 Proposal A: the class-seating fence (`palw_class_seating`) — its terms, value, entry and refusals; dormant.
 pub mod palw_class_seating_fence_v1;
+/// RFC-0002 Phase H (mainnet): `palw_tir_only_v1` — the IR is the admission path for new classes; implemented, dormant, armed nowhere.
+pub mod palw_tir_only_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

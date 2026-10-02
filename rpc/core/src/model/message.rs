@@ -5927,6 +5927,53 @@ impl Deserializer for RpcPalwClassBlocking {
     }
 }
 
+/// **A class's seating, as `palw_class_seating` reads it now** (RFC-0002 Part II §II.7.5 Proposal A; wire version 3 of the registry
+/// response): executor-less, so nothing is excluded. Served only past the fence and only for a class that has a row.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassSeating {
+    pub class_id: String,
+    /// Distinct operators holding the class with a fresh possession proof (condition 1, have) and the panel's size (need).
+    pub ready_operators: u32,
+    pub needed_operators: u32,
+    /// Ready operators in the network's base population other than the registrant's (condition 2, have) and the fence's floor.
+    pub independent_operators: u32,
+    pub needed_independent: u32,
+    /// Operators of the base population other than the registrant's: the licensable share's denominator.
+    pub base_operators: u32,
+    /// `independent_operators × 1000 / base_operators`: the share of the class's claims whose outsider holds it.
+    pub licensable_share_permille: u16,
+}
+
+impl Serializer for RpcPalwClassSeating {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(u32, &self.ready_operators, writer)?;
+        store!(u32, &self.needed_operators, writer)?;
+        store!(u32, &self.independent_operators, writer)?;
+        store!(u32, &self.needed_independent, writer)?;
+        store!(u32, &self.base_operators, writer)?;
+        store!(u16, &self.licensable_share_permille, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassSeating {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            ready_operators: load!(u32, reader)?,
+            needed_operators: load!(u32, reader)?,
+            independent_operators: load!(u32, reader)?,
+            needed_independent: load!(u32, reader)?,
+            base_operators: load!(u32, reader)?,
+            licensable_share_permille: load!(u16, reader)?,
+        })
+    }
+}
+
 /// `fence_daa` is 0 where no registry is scheduled (`scheduled` false); `active` is whether the
 /// fence is in force at the tip; the reference constants are the globals every class is derived
 /// against.
@@ -5987,12 +6034,16 @@ pub struct GetPalwModelRegistryResponse {
     /// reading from `classes` with [`crate::model::palw_registry_blockings`].
     #[serde(default)]
     pub blocking: Vec<RpcPalwClassBlocking>,
+    /// **Version 3** (RFC-0002 Part II §II.7.5 Proposal A): the seating of every class `palw_class_seating` reads, past the fence.
+    /// Appended after `blocking`: a reader of version 2 stops before it. Empty on a node of version 2 and below the fence.
+    #[serde(default)]
+    pub seating: Vec<RpcPalwClassSeating>,
 }
 
 impl Serializer for GetPalwModelRegistryResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2 appends `blocking` (the class's stage and what is missing).
-        store!(u16, &2, writer)?;
+        // Version 2 appends `blocking` (the class's stage and what is missing); version 3 appends `seating`.
+        store!(u16, &3, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         store!(bool, &self.scheduled, writer)?;
@@ -6032,6 +6083,7 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(u64, &self.panel_horizon_spans, writer)?;
         store!(u64, &self.final_work_epochs, writer)?;
         serialize!(Vec<RpcPalwClassBlocking>, &self.blocking, writer)?;
+        serialize!(Vec<RpcPalwClassSeating>, &self.seating, writer)?;
         Ok(())
     }
 }
@@ -6080,6 +6132,8 @@ impl Deserializer for GetPalwModelRegistryResponse {
             final_work_epochs: load!(u64, reader)?,
             // Version 1 (a node before RFC-0002 Part II §II.7.4) serves no blocking readings.
             blocking: if version >= 2 { deserialize!(Vec<RpcPalwClassBlocking>, reader)? } else { Vec::new() },
+            // Versions 1 and 2 serve no seating.
+            seating: if version >= 3 { deserialize!(Vec<RpcPalwClassSeating>, reader)? } else { Vec::new() },
         })
     }
 }

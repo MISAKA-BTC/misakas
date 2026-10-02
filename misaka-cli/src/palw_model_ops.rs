@@ -577,6 +577,13 @@ pub(crate) async fn status(ctx: &Ctx, profile: Profile, class_id: String) -> Cli
             }
             None => println!("stage                 nothing blocks this class (the registry reads it as admitted, or has no row for it)"),
         }
+        // Proposal A (`palw_class_seating`): the class's seating and the share of its claims a producer can license.
+        if let Some(s) = registry.seating.iter().find(|s| s.class_id.eq_ignore_ascii_case(&resp.class_id)) {
+            println!(
+                "seating               {} / {} ready operators · {} / {} independent · licensable share {} ‰ ({} base operators)",
+                s.ready_operators, s.needed_operators, s.independent_operators, s.needed_independent, s.licensable_share_permille, s.base_operators
+            );
+        }
     }
     Ok(())
 }

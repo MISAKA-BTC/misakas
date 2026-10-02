@@ -2926,6 +2926,11 @@ pub struct Params {
     /// (`PalwStateParamsV2::class_seating`, [`Self::sync_palw_class_seating`]); [`Self::validate_palw_class_seating`] holds its
     /// refusals.
     pub palw_class_seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingFenceV1>,
+    /// **RFC-0002 Phase H (mainnet): the IR is the admission path for new classes** ([`crate::palw_tir_only_v1`]) — past it a post-genesis
+    /// registration of a legacy-family class (an admission carriage of hand-written kernels) is refused by name. A bare height; `None` on
+    /// every preset and in no flag-day list: implemented and tested, **armed nowhere**. Hashed Some-only, mirrored on the bundle
+    /// (`tir_only_from_daa`, [`Self::sync_palw_tir_only_v1`]); [`Self::validate_palw_tir_only_v1`] refuses arming without `palw_tir_v1`.
+    pub palw_tir_only_v1: Option<ForkActivation>,
 
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
@@ -3944,6 +3949,8 @@ impl Params {
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0002 Part II §II.7.5: the class-seating fence's refusals** (`crate::palw_class_seating_fence_v1`).
         self.validate_palw_class_seating()?;
+        // **RFC-0002 Phase H: the IR-only fence's refusals** (`crate::palw_tir_only_v1`).
+        self.validate_palw_tir_only_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6198,6 +6205,10 @@ impl Params {
         // RFC-0002 Part II's class-seating fence, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_class_seating.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_class_seating = None;
+        }
+        // RFC-0002 Phase H's IR-only fence, likewise.
+        if self.palw_tir_only_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_only_v1 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9479,6 +9490,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_class_seating,
+            palw_tir_only_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9720,6 +9732,7 @@ impl Params {
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_class_seating", palw_class_seating.map(|fence| fence.activation)),
+            ("palw_tir_only_v1", *palw_tir_only_v1),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9994,6 +10007,11 @@ impl Params {
             h.write(b"palw_class_seating");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
+        }
+        // RFC-0002 Phase H's IR-only fence, NAMED likewise: it changes which classes may register.
+        if let Some(activation) = self.palw_tir_only_v1 {
+            h.write(b"palw_tir_only_v1");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10512,6 +10530,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_class_seating,
+            palw_tir_only_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11229,6 +11248,10 @@ impl Params {
                 fork(&mut raise.activation, visit);
             }
         }
+        // RFC-0002 Phase H's IR-only fence. Some-only, a bare height.
+        if let Some(activation) = palw_tir_only_v1.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11666,6 +11689,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_class_seating,
+            palw_tir_only_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -12433,6 +12457,11 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // RFC-0002 Phase H's IR-only fence, NAMED likewise: it changes which classes may register.
+        if let Some(activation) = palw_tir_only_v1 {
+            h.write(b"palw_tir_only_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -13089,6 +13118,7 @@ impl Params {
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_class_seating: self.palw_class_seating,
+            palw_tir_only_v1: self.palw_tir_only_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -14154,6 +14184,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_class_seating: None,
+    palw_tir_only_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14415,6 +14446,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_class_seating: None,
+    palw_tir_only_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14658,6 +14690,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_class_seating: None,
+    palw_tir_only_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21722,6 +21755,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_held_close_chunks_v1();
     // RFC-0002 Part II's class-seating fence, likewise.
     params.sync_palw_class_seating();
+    // RFC-0002 Phase H's IR-only fence, likewise.
+    params.sync_palw_tir_only_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21981,6 +22016,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_class_seating: None,
+    palw_tir_only_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

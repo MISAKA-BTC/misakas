@@ -734,6 +734,8 @@ mod tests {
             // RFC-0003 decision 22: a bare height.
             "palw_held_close_chunks_v1" => params.palw_held_close_chunks_v1 = Some(at),
             // RFC-0002 Part II Proposal A, likewise: the drill's value (the fence is in no network's release).
+            // RFC-0002 Phase H: a bare height.
+            "palw_tir_only_v1" => params.palw_tir_only_v1 = Some(at),
             "palw_class_seating" => {
                 params.palw_class_seating = Some(crate::palw_class_seating_fence_v1::PalwClassSeatingFenceV1::drill_v1(at))
             }

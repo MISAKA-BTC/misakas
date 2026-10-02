@@ -1719,6 +1719,8 @@ Do you confirm? (y/n)";
     if args.palw_tir_fused_kernels {
         info!("PALW: IR fused kernels ON (--palw-tir-fused-kernels): byte-identical to the generic kernels, node software only");
     }
+    // RFC-0002 Part II Proposal B: the seat's executor self-test before its first possession proof (on unless `--palw-no-seat-conformance`).
+    crate::palw_panel::set_seat_conformance_v1(!args.palw_no_seat_conformance);
     // Kept for the PALW panel service below — `rpc_core_service` consumes the originals.
     let flow_context_for_palw_panel = flow_context.clone();
     let config_for_palw_panel = config.clone();

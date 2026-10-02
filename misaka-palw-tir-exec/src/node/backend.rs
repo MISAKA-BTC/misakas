@@ -1077,6 +1077,18 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         true
     }
 
+    /// **Proposal B**: this backend's executor against the reference evaluator on a few positions, the reference streamed from the
+    /// container ([`super::conformance`]). A composite candidate is tested as its parent is, so it has no job of its own.
+    fn executor_conformance_job_v1(&self) -> Option<Box<dyn FnOnce() -> Result<String, String> + Send + 'static>> {
+        if self.artifact.composite_ref().is_some() {
+            return None;
+        }
+        let artifact = self.artifact.clone();
+        Some(Box::new(move || {
+            super::conformance::tir_executor_conformance_v1(&artifact, super::conformance::TIR_CONFORMANCE_POSITIONS_V1).map(|c| c.summary())
+        }))
+    }
+
     fn artifact_root_and_leaf_count(&self) -> Result<(Hash64, u32), String> {
         if self.artifact.composite_ref().is_some() {
             // A composite candidate's root is the composite root over its two sections, not its tree's.
