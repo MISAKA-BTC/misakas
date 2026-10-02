@@ -1232,13 +1232,14 @@ impl PalwGenEvidenceV1<'_> {
         let text = self.binding.text().ok_or("a decode close is a text claim's")?;
         let pos = text.job.v4.prompt_tokens.saturating_sub(1) + t;
         let leaves = v.space.stages[out].leaves();
-        let mut row = Vec::new();
-        for (i, leaf) in leaves.iter().enumerate() {
-            if leaf.coord.pos == pos && leaf.coord.kind == kind {
-                let opened = self.execution.open(out as u8, i as u64).ok_or("a row tile does not open")?;
-                row.push(PalwGenLeafOpeningV1::of(&v.space, &opened).ok_or("a row tile does not ride")?);
-            }
-        }
+        // The row's tiles, opened from one build of the stage's tree.
+        let picks: Vec<u64> =
+            (0..leaves.len()).filter(|i| leaves[*i].coord.pos == pos && leaves[*i].coord.kind == kind).map(|i| i as u64).collect();
+        let opened = self.execution.open_many(out as u8, &picks).ok_or("a row tile does not open")?;
+        let row = opened
+            .iter()
+            .map(|o| PalwGenLeafOpeningV1::of(&v.space, o).ok_or("a row tile does not ride"))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PalwGenDecodeCloseV1 { version: PALW_GEN_CLOSE_VERSION_V1, binding: text.clone(), t, row })
     }
 
