@@ -1909,6 +1909,7 @@ Do you confirm? (y/n)";
                         },
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
+                        tir_shard_mirror: args.palw_tir_shard_mirror.as_ref().map(std::path::PathBuf::from),
                         tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),

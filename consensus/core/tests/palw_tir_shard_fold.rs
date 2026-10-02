@@ -872,3 +872,36 @@ fn the_tags_of_the_family_are_pinned() {
     assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardClaim { key: h64(1), old: None, new: None }).unwrap()[0], 102);
     let _ = std::mem::size_of::<PalwSeatReadinessRowV1>();
 }
+
+#[test]
+fn a_sharded_claim_whose_panel_says_nothing_is_redrawn_once_and_then_voided_and_its_record_goes_with_it() {
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    let anchor = h64(77);
+    run.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: panel_of(2, true) }]);
+    assert!(run.s.tir_shard_claim(&claim_id).is_some());
+    // Nobody answers: the receipt window passes. Whatever the sweep does (a redraw, a void), the state stays consistent, the delta
+    // reverts, the carriage reloads (`Run::at` asserts all three) — and a claim that is no longer bound keeps no shard record.
+    let mut phases = Vec::new();
+    for step in 1..=6u64 {
+        run.at(run.daa + 700 * step, &[], None);
+        phases.push(format!("{:?}", run.s.claim(&claim_id).map(|c| c.phase.clone())));
+        if matches!(run.s.claim(&claim_id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::PanelBound { .. })) {
+            continue;
+        }
+        break;
+    }
+    eprintln!("phases after silence: {phases:?}");
+    match run.s.claim(&claim_id).map(|c| c.phase.clone()) {
+        Some(PalwClaimPhaseV2::PanelBound { .. }) => panic!("a panel that says nothing cannot stay bound: {phases:?}"),
+        Some(phase) => {
+            assert!(
+                run.s.tir_shard_claim(&claim_id).is_none(),
+                "a claim in {phase:?} keeps no per-shard record (the panel it describes is gone)"
+            );
+        }
+        None => assert!(run.s.tir_shard_claim(&claim_id).is_none()),
+    }
+}

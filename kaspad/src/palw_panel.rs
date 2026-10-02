@@ -3612,6 +3612,10 @@ pub struct PalwPanelConfig {
     pub tir_shard_shadow: bool,
     /// **RFC-0006: demand the runs a cell reads on chain** when no capture reaches the seat (`--palw-tir-shard-demand-runs`).
     pub tir_shard_demand_runs: bool,
+    /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
+    /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
+    /// inventory root the chain registered.
+    pub tir_shard_mirror: Option<PathBuf>,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
@@ -21502,7 +21506,12 @@ mod p2_6_da_accusation_policy {
             4,
             "the canonical claim, an evaluation claim (RFC-0004 A10), the class registration, the possession proofs"
         );
-        assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
+        assert_eq!(
+            gate("Licences"),
+            4,
+            "the collector's licences; the supplementary collector's entry and each offer (F4 part 2); RFC-0006's carriage of a layer-shard part, \
+             plan declaration or shard possession proof"
+        );
         let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
         let priority_after = sites.find("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);").expect("the priority lane after");

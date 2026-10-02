@@ -116,6 +116,12 @@ impl PalwBackendRegistry {
         &self.sdk
     }
 
+    /// **Load a class container from `path` through the registry's SDK** (RFC-0006: an outsider's fetch from a mirror) — not added
+    /// to the registry's holdings; the caller decides what it keeps.
+    pub fn load_mirror_v1(&self, path: &std::path::Path) -> Result<PalwLoadedArtifactV1, String> {
+        self.sdk.load_artifact(path)
+    }
+
     pub fn holdings(&self) -> &[PalwLoadedArtifactV1] {
         &self.holdings
     }

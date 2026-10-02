@@ -473,6 +473,9 @@ pub struct Args {
     /// RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (`DefaultAccusedTirStep`, unit
     /// `TirStepRun`) before it abstains. Off by default.
     pub palw_tir_shard_demand_runs: bool,
+    /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
+    /// the chain's registered root before it is used.
+    pub palw_tir_shard_mirror: Option<String>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
@@ -738,6 +741,7 @@ impl Default for Args {
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
+            palw_tir_shard_mirror: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
@@ -2017,6 +2021,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-shard-mirror")
+                .long("palw-tir-shard-mirror")
+                .require_equals(true)
+                .help(
+                    "RFC-0006: where an outsider fetches a class container it does not hold (a path on this host; a mirror's copy). Loaded on \
+                     the first sharded duty of such a class and used only if it derives exactly the class and the inventory root the chain \
+                     registered.",
+                ),
+        )
+        .arg(
             Arg::new("palw-tir-shard-demand-runs")
                 .long("palw-tir-shard-demand-runs")
                 .action(clap::ArgAction::SetTrue)
@@ -3048,6 +3062,7 @@ impl Args {
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
+            palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")

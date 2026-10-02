@@ -223,6 +223,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     pub demands: Vec<(Hash64, PalwConsensusObjectV2, u64)>,
     /// Claims this seat has demanded the runs of (once).
     demanded: HashSet<Hash64>,
+    /// Classes the mirror was tried for (once each).
+    mirror_tried: HashSet<Hash64>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
     /// `(claim)` → the DAA a part was last carried.
@@ -411,6 +413,33 @@ impl super::PalwPanelService {
             let key = seat_duty_panel_key_v1(duty);
             if books.answered.iter().any(|k| *k == key) || books.refuted.contains(&duty.claim_id) || current_daa > duty.receipt_deadline {
                 continue;
+            }
+            // **An outsider that holds no copy of the class fetches it from the mirror** (RFC-0006 §4.2, D-S6), once per class, and keeps
+            // it only if it derives exactly the class and inventory root the chain registered.
+            if self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root).is_none()
+                && let Some(path) = self.config.tir_shard_mirror.as_ref()
+                && books.mirror_tried.insert(duty.class_id)
+            {
+                match self.backends().load_mirror_v1(path) {
+                    Ok(loaded) => {
+                        let ours = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&loaded))
+                            .iter()
+                            .any(|e| e.class_id() == duty.class_id && e.artifact_root == duty.artifact_root);
+                        if ours {
+                            info!(
+                                "[{PALW_PANEL}] class {}: fetched from the mirror {} and verified against the registered inventory root \
+                                 {} — this seat now holds the class for its sharded duties (RFC-0006)",
+                                duty.class_id,
+                                path.display(),
+                                duty.artifact_root
+                            );
+                            self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").push(loaded);
+                        } else {
+                            warn!("[{PALW_PANEL}] the mirror {} does not derive class {} under root {}: not used", path.display(), duty.class_id, duty.artifact_root);
+                        }
+                    }
+                    Err(why) => warn!("[{PALW_PANEL}] the mirror {} does not load: {why}", path.display()),
+                }
             }
             let tir = match self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
                 None => continue,
@@ -777,7 +806,9 @@ impl super::PalwPanelService {
                 }
                 let ready = palw_tir_shard_ready_class_v1(&class_id, plan.s_l, shard);
                 let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == ready).map(|r| r.row);
-                if row.is_some_and(|r| r.proved_span >= span_now) {
+                // A standing row is renewed at half its age, as the flat proofs are (a proof every span would be a carrier a
+                // span per shard per seat).
+                if row.is_some_and(|r| span_now.saturating_sub(r.proved_span).saturating_mul(read.span_daa) < read.readiness_max_age_daa / 2) {
                     continue;
                 }
                 let Some(Ok(tir)) = self.backends().resolve_tir_v1(class_id, class.artifact_root) else { continue };
