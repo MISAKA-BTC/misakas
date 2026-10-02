@@ -875,3 +875,18 @@ decides.
   `max_context`), and stored; a claim's `(P, G)` is not in the fold.
 - The signing contexts (`palw_receipt_message_v4`, the plan's and the readiness proof's) are not in testnet-12's committed set (V5); like
   the batch licence's they are covered by the Some-only fence and live in `PALW_TIR_SHARD_V1_ALL_DOMAINS`.
+- **The node** (spec 18 §18.12): a sharded duty is answered by the cell pass (`kaspad/src/palw_panel/tir_shard.rs`) — the cells over
+  the claim's dense capture through the CPU executor's `step_cell`, a V4 receipt or the accusation the finding builds (the same
+  `TirShardCourtAccused` the whole-job replay builds, from the leaf the cell found). The cell verifier is one function over a
+  *stepper* (`TirCellStepperV1`): the CPU executor's, or a device's through `TirDeviceV1`. The GPU executor implements it
+  (`misaka-palw-tir-gpu/src/cell.rs`; `tests/cell.rs` holds 22 cells and 109 positions byte-equal to the CPU on Metal); a device
+  runs only cells of a segment starting at position 0 and the node falls back to the CPU on any refusal. `misaka-palw-tir-gpu` is an
+  isolated workspace whose wgpu 30 (`js-sys ^0.3.104`) has no common lock with the consensus stack (`js-sys =0.3.77`), so a node
+  binary carries a device through a plug-in boundary, not a cargo dependency.
+- **Where the receipt pool lives.** A V4 receipt has its own queue, pool (one place per `(claim, shard, bond)`) and re-send; it is not a
+  member of the V2/V3 pools, whose per-bond caps and flat-panel assumptions it does not share.
+- **A part is assembled by consensus** (`palw_v2_tir_shard_part_assemble`): the next shard whose pooled receipts the acceptance
+  validator itself licenses.
+- **Drill faults.** `--palw-drill-tamper-boundary=<position>:<occurrence>` commits a CONSISTENT lie at the shard boundary (the
+  producer changes the first carry-out before that occurrence, commits it, and computes everything after it honestly from it): the
+  upstream shard's cells find it and the downstream shard's verify — the detection lemma's first consequence, on a live chain.
