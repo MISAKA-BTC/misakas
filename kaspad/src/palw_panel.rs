@@ -14730,6 +14730,21 @@ impl PalwPanelService {
                         return None;
                     }
                 }
+                // RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) names the K/V state its
+                // prefix reached; the seat derives that state from the claim's own prompt ids (from its cache or
+                // by recomputation) and a disagreement is a fault in the claim, filed as the court's question.
+                if let Some(job) = fp_job.filter(|job| job.is_prefix_state()).cloned() {
+                    let ids = prompt_ids.to_vec();
+                    let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+                        return None;
+                    };
+                    backend = returned;
+                    if let Err(why) = checked {
+                        warn!("[{PALW_PANEL}] claim {}: its named prefix state does not hold ({why}) — filing nothing", duty.claim_id);
+                        self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                        return None;
+                    }
+                }
                 let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
                 let work_leaves = duty.work_leaves;
                 let interval = *index;
