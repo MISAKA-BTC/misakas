@@ -35,12 +35,14 @@ misaka-palw-base0 = { workspace = true, optional = true }
 
 [features]
 # The fused unit-row kernels on the GPU (macOS): bit-identical to the CPU kernels, behind a node flag.
-metal = ["dep:cc"]
+metal = []
 node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
-[build-dependencies]
-cc = { workspace = true, optional = true }
+# The Metal bridge is compiled by the build script on macOS (feature `metal`); a build script cannot be feature-gated, so the compiler
+# crate is a macOS build dependency.
+[target.'cfg(target_os = "macos")'.build-dependencies]
+cc.workspace = true
 
 [dev-dependencies]
 # The golden vectors carry each primitive as its canonical Borsh encoding.

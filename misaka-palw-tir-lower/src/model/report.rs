@@ -9,7 +9,7 @@
 use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, sd3_features, vae_features, vision_features};
 use crate::hf_schema::{
     AdapterSource, DiffusersRoute, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_diffusers, is_encoder_decoder, is_vision_tower, read_cnn, read_diffusers, read_encdec,
-    read_model, read_vision,
+    read_vision,
 };
 use serde::Serialize;
 use serde_json::Value;

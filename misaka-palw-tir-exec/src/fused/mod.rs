@@ -51,6 +51,8 @@ pub enum Bound {
     L2UnitQ15,
     /// [`rowops::RmsUnitQ24`].
     RmsUnitQ24,
+    /// [`rowops::RmsNormWideQ36`] (`exact`: the live kernel's own caps for `ε`).
+    RmsNormWideQ36 { exact: bool },
 }
 
 /// One variant of a pattern: the attributes it is emitted under, the probe types its skeleton is
@@ -111,7 +113,7 @@ pub trait FusedKernelV1: Sync {
 ///
 /// None of the three has a fused form.
 pub fn kernels_v1() -> &'static [&'static dyn FusedKernelV1] {
-    &[&gdn_step::GdnStep, &rowops::L2UnitQ15, &rowops::RmsUnitQ24]
+    &[&gdn_step::GdnStep, &rowops::L2UnitQ15, &rowops::RmsUnitQ24, &rowops::RmsNormWideQ36]
 }
 
 /// A matched region of one block.

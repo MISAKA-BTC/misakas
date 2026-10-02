@@ -54,6 +54,19 @@ pub enum ArchVerdictV1 {
     /// A check needs something not given (the artifact, a verified reference).
     Unverified(String),
     NeedsKernel(String),
+    /// **`ADMISSIBLE_GENERIC`** (RFC-0002 §8): registrable as data, and some wide patterns have no fused kernel in this build, so a
+    /// node runs them on the generic kernels. `slowdown_permille` is the estimate ([`generic_slowdown_v1`]) of the generic-kernel
+    /// position time over the fully fused one, in thousandths (1,300 = 1.3x); `patterns` names what runs generic. Speed only: nothing
+    /// of it reaches a consensus object (F-3).
+    AdmissibleGeneric {
+        slowdown_permille: u32,
+        patterns: Vec<String>,
+    },
+    /// **`LOWERABLE_UNVERIFIED`** (RFC-0002 §8): lowered from an architecture whose float reference is remote code this tool cannot run
+    /// offline, so the fidelity column is empty; `inner` is the verdict the program itself earned, which holds.
+    LowerableUnverified {
+        inner: Box<ArchVerdictV1>,
+    },
 }
 
 impl std::fmt::Display for ArchVerdictV1 {
@@ -67,13 +80,25 @@ impl std::fmt::Display for ArchVerdictV1 {
             Self::Refused(r) => write!(f, "REFUSED({r})"),
             Self::Unverified(r) => write!(f, "UNVERIFIED({r})"),
             Self::NeedsKernel(k) => write!(f, "NEEDS_KERNEL({k})"),
+            Self::AdmissibleGeneric { slowdown_permille, patterns } => write!(
+                f,
+                "ADMISSIBLE_GENERIC (estimated slowdown {}.{:02}x on generic kernels: {})",
+                slowdown_permille / 1000,
+                (slowdown_permille % 1000) / 10,
+                patterns.join("; ")
+            ),
+            Self::LowerableUnverified { inner } => write!(f, "LOWERABLE_UNVERIFIED (the program's own verdict: {inner})"),
         }
     }
 }
 
 impl ArchVerdictV1 {
     pub fn is_admissible(&self) -> bool {
-        matches!(self, Self::Admissible { .. })
+        match self {
+            Self::Admissible { .. } | Self::AdmissibleGeneric { .. } => true,
+            Self::LowerableUnverified { inner } => inner.is_admissible(),
+            _ => false,
+        }
     }
 }
 
@@ -264,6 +289,7 @@ pub fn check_ir_config_shaped_v1(
     if matches!(spec.reference, misaka_palw_tir_lower::spec::Reference::RemoteCode { .. }) {
         r.unverified
             .push("the architecture is remote code: the lowering follows its source, no installed transformers reference".into());
+        r.verdict = ArchVerdictV1::LowerableUnverified { inner: Box::new(r.verdict.clone()) };
     }
     r
 }
@@ -320,7 +346,21 @@ fn check_ir_encdec_v1(
         Err(e) => return refuse(arch, not_lowerable(e)),
     };
     let (re, rd) = (check_ir_program_at_v1(params, &enc.program, tile_len, h_chunk), check_ir_program_at_v1(params, &dec.program, tile_len, h_chunk));
-    let verdict = if !re.verdict.is_admissible() { re.verdict.clone() } else { rd.verdict.clone() };
+    let verdict = if !re.verdict.is_admissible() {
+        re.verdict.clone()
+    } else if !rd.verdict.is_admissible() {
+        rd.verdict.clone()
+    } else {
+        // Both stages admissible: the model is as slow as its slower stage's estimate says.
+        match (&re.verdict, &rd.verdict) {
+            (ArchVerdictV1::AdmissibleGeneric { slowdown_permille: a, patterns: pa }, ArchVerdictV1::AdmissibleGeneric { slowdown_permille: b, patterns: pb }) => {
+                ArchVerdictV1::AdmissibleGeneric { slowdown_permille: (*a).max(*b), patterns: pa.iter().chain(pb).cloned().collect() }
+            }
+            (g @ ArchVerdictV1::AdmissibleGeneric { .. }, _) => g.clone(),
+            (_, g @ ArchVerdictV1::AdmissibleGeneric { .. }) => g.clone(),
+            _ => rd.verdict.clone(),
+        }
+    };
     let mut unverified = re.unverified.clone();
     unverified.push(format!("stage 0 (encoder, {lmax} source rows): {}", re.verdict));
     unverified.push(format!("stage 1 (decoder, {wmax} target positions): {}", rd.verdict));
@@ -433,12 +473,82 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
             return r;
         }
     }
-    r.verdict = ArchVerdictV1::Admissible {
-        pending: vec![
-            "admission v10's layout checks (declared tiles, C ≤ min C_j, the canonical job, close bytes, the window court) need a declared layout".into(),
-        ],
+    let pending = vec![
+        "admission v10's layout checks (declared tiles, C ≤ min C_j, the canonical job, close bytes, the window court) need a declared layout".into(),
+    ];
+    r.verdict = match generic_slowdown_v1(program) {
+        Some((slowdown_permille, patterns)) => ArchVerdictV1::AdmissibleGeneric { slowdown_permille, patterns },
+        None => ArchVerdictV1::Admissible { pending },
     };
     r
+}
+
+/// **The weight of a generic wide node beyond a fused pass** in [`generic_slowdown_v1`]: the generic backend runs a node whose working
+/// type is `i128` as its own pass over `i128` lanes (two machine words, a table gather or a division per element), where a fused kernel
+/// visits each element once in machine words. An assumed weight, not a measurement (`tir-exec-bench --fused-kernels` measures a
+/// kernel against its generic form on a given machine; this constant is only the ratio's order); the verdict calls it an estimate.
+pub const GENERIC_WIDE_PASS_FACTOR_V1: u64 = 3;
+
+/// Below this share of a position's estimated work the generic wide passes do not change the verdict (`ADMISSIBLE` stays).
+pub const GENERIC_SHARE_FLOOR_PERMILLE_V1: u64 = 20;
+
+/// **`ADMISSIBLE_GENERIC`'s estimate** (RFC-0002 §8): `Some((slowdown in thousandths, the patterns that run generic))` when more than
+/// [`GENERIC_SHARE_FLOOR_PERMILLE_V1`] of the position's estimated work is in wide (`i128`-working) nodes no fused kernel of this build
+/// matches; `None` when the fused kernels cover every such pattern (the verdict stays `ADMISSIBLE`).
+///
+/// The model, over the program as it stands (before any params exist): the work of a node is its output's element count (a `MatMul`
+/// is `m·k·n / 8` — the dot product is one vectorised kernel on either backend, so it is never a fusion target), summed over the
+/// position's occurrences with an `H` dimension counted as one row; a node outside every matched region ([`misaka_palw_tir_exec::fused::match_program`],
+/// structural, so optimistic: whether a region runs fused on a node also needs its operands' ranges, which an artifact decides) whose
+/// working type is `i128` costs [`GENERIC_WIDE_PASS_FACTOR_V1`] times a fused pass. The slowdown is total / (total − extra) over the
+/// generic run — i.e. what generic costs against all wide patterns fused.
+pub fn generic_slowdown_v1(program: &TirProgramV1) -> Option<(u32, Vec<String>)> {
+    use misaka_palw_tir::{DType, Dim, Prim};
+    let plan = misaka_palw_tir_exec::TirPlan::compile(program).ok()?;
+    let regions = misaka_palw_tir_exec::fused::match_program(program);
+    let numel = |t: &misaka_palw_tir::TensorType| -> u64 {
+        t.shape.iter().map(|d| if let Dim::Fixed(n) = d { u64::from(*n) } else { 1 }).product::<u64>().max(1)
+    };
+    let (mut total, mut extra) = (0u64, 0u64);
+    let mut by_pattern: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    for bi in plan.occurrences.iter().map(|(b, _)| *b as usize) {
+        let Some(block) = plan.blocks.get(bi) else { continue };
+        let inside: std::collections::BTreeSet<u16> = regions.get(bi).into_iter().flatten().flat_map(|r| r.nodes.iter().copied()).collect();
+        for (i, n) in block.nodes.iter().enumerate() {
+            let work = match &n.prim {
+                Prim::MatMul => {
+                    let k = n.in_types.first().and_then(|t| t.shape.last()).map_or(1, |d| if let Dim::Fixed(k) = d { u64::from(*k) } else { 1 });
+                    (numel(&n.out) * k / 8).max(1)
+                }
+                _ => numel(&n.out),
+            };
+            total += work;
+            let wide = n.work == misaka_palw_tir_exec::plan::Work::I128 || n.out.dtype == DType::I128;
+            let computed = !matches!(n.prim, Prim::MatMul | Prim::Reshape | Prim::Gather { .. } | Prim::StateWrite { .. });
+            if wide && computed && !inside.contains(&(i as u16)) {
+                let e = work * (GENERIC_WIDE_PASS_FACTOR_V1 - 1);
+                extra += e;
+                let slot = by_pattern.entry(prim_name(&n.prim)).or_default();
+                slot.0 += 1;
+                slot.1 += work;
+            }
+        }
+    }
+    let total_generic = total + extra;
+    if total == 0 || extra * 1000 < total_generic * GENERIC_SHARE_FLOOR_PERMILLE_V1 {
+        return None;
+    }
+    let slowdown = (total_generic * 1000 / total).min(u64::from(u32::MAX)) as u32;
+    let mut patterns: Vec<(String, (u64, u64))> = by_pattern.into_iter().collect();
+    patterns.sort_by_key(|(_, (_, w))| std::cmp::Reverse(*w));
+    let patterns = patterns.into_iter().take(6).map(|(k, (n, w))| format!("{k} x{n} ({w} element-ops)")).collect();
+    Some((slowdown, patterns))
+}
+
+/// A primitive's name without its attributes.
+fn prim_name(p: &misaka_palw_tir::Prim) -> String {
+    let d = format!("{p:?}");
+    d.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_string()
 }
 
 // ───────────────────────────── legacy mode ─────────────────────────────

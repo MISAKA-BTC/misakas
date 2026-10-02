@@ -149,3 +149,73 @@ impl FusedKernelV1 for RmsUnitQ24 {
         Ok(())
     }
 }
+
+// ---- rms_norm_wide_q36 --------------------------------------------------------------------------
+
+/// `rms_norm_wide_q36` / `rms_norm_wide_q36_exact` (the 39-node form with `ε = eps_zero · 2^eps_shift`): `i16`/`i32` codes, the two
+/// `ε` scalars in, `i32` Q24 out. The two forms differ only in the caps of the mantissa and of the shift (`2^30` and 96, or `i64::MAX`
+/// and 62), so they are two variants of one kernel and the exact re-emission at the program's own operands tells which one a region is.
+pub struct RmsNormWideQ36;
+
+fn wide_caps(exact: bool) -> (i128, i128) {
+    if exact { (i64::MAX as i128, 62) } else { (1 << 30, 96) }
+}
+
+impl FusedKernelV1 for RmsNormWideQ36 {
+    fn name(&self) -> &'static str {
+        "rms_norm_wide_q36"
+    }
+
+    fn variants(&self) -> Vec<Variant> {
+        let probe = || {
+            vec![TensorType::fixed(DType::I32, &[2, 4]), TensorType::fixed(DType::I64, &[1]), TensorType::fixed(DType::I32, &[1])]
+        };
+        [false, true].map(|exact| Variant { bound: Bound::RmsNormWideQ36 { exact }, probe: probe(), states: Vec::new() }).into()
+    }
+
+    fn derive(&self, variant: &Bound, holes: &[TensorType], _output: &Node) -> Option<Bound> {
+        let shape = static_shape(holes.first()?)?;
+        let scalar = |i: usize| static_shape(holes.get(i)?).map(|s| s.iter().product::<usize>() == 1);
+        (holes.len() == 3 && rows_of(&shape).is_some() && scalar(1)? && scalar(2)?).then(|| variant.clone())
+    }
+
+    fn emit(&self, b: &mut BlockBuilder<'_>, holes: &[Ref], bound: &Bound) -> Ref {
+        match bound {
+            Bound::RmsNormWideQ36 { exact: true } => b.rms_norm_wide_q36_exact(holes[0], holes[1], holes[2]),
+            _ => b.rms_norm_wide_q36(holes[0], holes[1], holes[2]),
+        }
+    }
+
+    fn domain(&self, _bound: &Bound, holes: &[TensorType], out: &TensorType) -> bool {
+        matches!(holes[0].dtype, DType::I16 | DType::I32) && out.dtype == DType::I32
+    }
+
+    fn run(&self, bound: &Bound, io: &mut FusedIo<'_, '_>) -> TirResult<()> {
+        let exact = matches!(bound, Bound::RmsNormWideQ36 { exact: true });
+        let (zero_max, shift_max) = wide_caps(exact);
+        let x = values(&io.holes[0]);
+        let ez = values(&io.holes[1]).first().copied().unwrap_or(0).clamp(0, zero_max);
+        let es = values(&io.holes[2]).first().copied().unwrap_or(0).clamp(0, shift_max);
+        let eps = ez << es;
+        let n = *io.out_shape.last().unwrap_or(&1);
+        let mut out = vec![0i128; x.len()];
+        run_rows(&x, n, &mut out, |x, o| {
+            let sum: i128 = x.iter().map(|v| v * v).sum();
+            let mean = (sum * arith::ONE).div_euclid(n as i128) + eps;
+            if mean <= 0 {
+                return; // a zero mean is a zero row
+            }
+            let h = (arith::log2_floor(mean) - K).div_euclid(2);
+            let two_h = 2 * h;
+            let m = if two_h >= 0 { mean >> two_h.clamp(0, 126) } else { mean.clamp(0, arith::ONE) << (-two_h).clamp(0, 24) };
+            let r = int_rsqrt_i64(m.clamp(0, i64::MAX as i128) as i64) as i128;
+            for (o, v) in o.iter_mut().zip(x) {
+                let prod = v * r;
+                let y = if h >= 0 { prod >> h.clamp(0, 126) } else { prod << (-h).clamp(0, 12) };
+                *o = y.clamp(i32::MIN as i128, i32::MAX as i128);
+            }
+        });
+        store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+        Ok(())
+    }
+}

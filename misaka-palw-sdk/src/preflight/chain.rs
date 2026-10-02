@@ -581,8 +581,14 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
 
     // `tir_admit_v1`'s verdict as blockers.
     let mut stop = false;
-    match &ir.verdict {
-        ArchVerdictV1::Admissible { .. } => {}
+    // A remote-code reference leaves the fidelity column empty, not the program's own verdict (`LOWERABLE_UNVERIFIED` wraps it).
+    let mut judged = &ir.verdict;
+    while let ArchVerdictV1::LowerableUnverified { inner } = judged {
+        judged = inner;
+    }
+    match judged {
+        // `ADMISSIBLE_GENERIC` is speed only: the registration is not blocked.
+        ArchVerdictV1::Admissible { .. } | ArchVerdictV1::AdmissibleGeneric { .. } | ArchVerdictV1::LowerableUnverified { .. } => {}
         ArchVerdictV1::Exceeds { limit, value, cap } => {
             register.push(
                 Blocker::new(Stage::Register, "ADMISSION_EXCEEDS", format!("{limit}: {value} against a cap of {cap}"))
