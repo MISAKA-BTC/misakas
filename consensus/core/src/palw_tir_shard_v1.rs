@@ -852,15 +852,20 @@ pub fn palw_tir_shard_inventory_ranges_v1(p: &TirProgramV1, layers: Range<usize>
         let per = leaves_of(j);
         for (k, layer) in inst.iter().enumerate() {
             if wanted.contains(&(j as u16, *layer)) {
-                let start = (before + (k as u64) * per) as u32;
-                let end = start + per as u32;
+                // Checked: a program whose inventory outgrows the u32 leaf index is no class the registry admits, and a hostile
+                // one must not wrap a range (an overflow panic halts block processing).
+                let Some(start) = (k as u64).checked_mul(per).and_then(|x| x.checked_add(before)).and_then(|x| u32::try_from(x).ok())
+                else {
+                    return Vec::new();
+                };
+                let Some(end) = u32::try_from(per).ok().and_then(|p| start.checked_add(p)) else { return Vec::new() };
                 match out.last_mut() {
                     Some(last) if last.end == start => last.end = end,
                     _ => out.push(start..end),
                 }
             }
         }
-        before += per * inst.len() as u64;
+        before = per.saturating_mul(inst.len() as u64).saturating_add(before);
     }
     out
 }
