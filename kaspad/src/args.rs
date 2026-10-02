@@ -398,6 +398,22 @@ pub struct Args {
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_fp_v5_at: Option<u64>,
+    /// **DRILL ONLY: arm the prefix-state receipt (palw_fp_prefix_state) at this DAA** (`config::drill::palw_drill_fp_prefix_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_prefix_at: Option<u64>,
+    /// **DRILL ONLY: arm the tokenizer-match rule (palw_fp_tokenizer_match) at this DAA** (`config::drill::palw_drill_fp_tokenizer_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_tokenizer_at: Option<u64>,
+    /// **DRILL ONLY: arm the second constraint subset (palw_fp_constraint_v2) at this DAA** (`config::drill::palw_drill_fp_constraint2_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_constraint2_at: Option<u64>,
+    /// **DRILL ONLY: arm the adapter class listing (palw_adapter_class_v1) at this DAA** (`config::drill::palw_drill_adapter_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_adapter_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0003's held leaf challenge (`palw_held_close_chunks_v1`, object tag 90) at this DAA**
     /// (`config::drill::palw_drill_held_close_chunks_at_v1`): a named-leaf challenge that carries the declaration of its
     /// close, so a lie at a leaf whose close exceeds one carrier is convictable on a chain that plays no bisection. It
@@ -696,6 +712,10 @@ impl Default for Args {
             palw_drill_gen_at: None,
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
+            palw_drill_fp_prefix_at: None,
+            palw_drill_fp_tokenizer_at: None,
+            palw_drill_fp_constraint2_at: None,
+            palw_drill_adapter_at: None,
             palw_drill_held_chunks_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
@@ -1819,6 +1839,46 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-fp-prefix-at")
+                .long("palw-drill-fp-prefix-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the prefix-state receipt (palw_fp_prefix_state) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless palw_fp_derived_work and palw_fp_decode_rules are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fp-tokenizer-at")
+                .long("palw-drill-fp-tokenizer-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the tokenizer-match rule (palw_fp_tokenizer_match) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless palw_tir_v1 and palw_fp_decode_rules are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fp-constraint2-at")
+                .long("palw-drill-fp-constraint2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the second constraint subset (palw_fp_constraint_v2) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless palw_fp_decode_constraint and palw_fp_decode_rules are in force at or below it (this build cannot arm the first).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-adapter-at")
+                .long("palw-drill-adapter-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the adapter class listing (palw_adapter_class_v1) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless palw_tir_v1 and palw_improvement_v1 are in force at or below it.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-held-chunks-at")
                 .long("palw-drill-held-chunks-at")
                 .require_equals(true)
@@ -2931,6 +2991,10 @@ impl Args {
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
+            palw_drill_fp_prefix_at: m.get_one::<u64>("palw-drill-fp-prefix-at").copied(),
+            palw_drill_fp_tokenizer_at: m.get_one::<u64>("palw-drill-fp-tokenizer-at").copied(),
+            palw_drill_fp_constraint2_at: m.get_one::<u64>("palw-drill-fp-constraint2-at").copied(),
+            palw_drill_adapter_at: m.get_one::<u64>("palw-drill-adapter-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),

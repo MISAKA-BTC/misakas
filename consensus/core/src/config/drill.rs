@@ -703,6 +703,34 @@ pub fn palw_drill_improve_fence_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_IMPROVE_V1)
 }
 
+/// **A drill arms the prefix-state receipt (palw_fp_prefix_state) at a low height** (RFC-0001; `--palw-drill-fp-prefix-at`) — the same machinery for the one-entry drill
+/// list [`crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_FENCES_V1`]: ARMS `palw_fp_prefix_state` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless palw_fp_derived_work and palw_fp_decode_rules are in force at or below it.
+pub fn palw_drill_fp_prefix_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_PREFIX_V1)
+}
+
+/// **A drill arms the tokenizer-match rule (palw_fp_tokenizer_match) at a low height** (RFC-0001; `--palw-drill-fp-tokenizer-at`) — the same machinery for the one-entry drill
+/// list [`crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1`]: ARMS `palw_fp_tokenizer_match` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless palw_tir_v1 and palw_fp_decode_rules are in force at or below it.
+pub fn palw_drill_fp_tokenizer_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_TOKENIZER_V1)
+}
+
+/// **A drill arms the second constraint subset (palw_fp_constraint_v2) at a low height** (RFC-0001; `--palw-drill-fp-constraint2-at`) — the same machinery for the one-entry drill
+/// list [`crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_FENCES_V1`]: ARMS `palw_fp_constraint_v2` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless palw_fp_decode_constraint and palw_fp_decode_rules are in force at or below it (this build cannot arm the first).
+pub fn palw_drill_fp_constraint2_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1)
+}
+
+/// **A drill arms the adapter class listing (palw_adapter_class_v1) at a low height** (RFC-0001; `--palw-drill-adapter-at`) — the same machinery for the one-entry drill
+/// list [`crate::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_FENCES_V1`]: ARMS `palw_adapter_class_v1` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless palw_tir_v1 and palw_improvement_v1 are in force at or below it.
+pub fn palw_drill_adapter_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_ADAPTER_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -750,6 +778,18 @@ const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
 /// The improvement fence alone (`--palw-drill-improve-at`, RFC-0004): a drill-only list.
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1, flag: "--palw-drill-improve-at" };
+/// The prefix-state receipt (palw_fp_prefix_state) alone (`--palw-drill-fp-prefix-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_PREFIX_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_FENCES_V1, flag: "--palw-drill-fp-prefix-at" };
+/// The tokenizer-match rule (palw_fp_tokenizer_match) alone (`--palw-drill-fp-tokenizer-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_TOKENIZER_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1, flag: "--palw-drill-fp-tokenizer-at" };
+/// The second constraint subset (palw_fp_constraint_v2) alone (`--palw-drill-fp-constraint2-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_FENCES_V1, flag: "--palw-drill-fp-constraint2-at" };
+/// The adapter class listing (palw_adapter_class_v1) alone (`--palw-drill-adapter-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_ADAPTER_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_FENCES_V1, flag: "--palw-drill-adapter-at" };
 /// **The int-11 flag day's whole list** (`--palw-drill-int11-at`): decode rules, gen, FP Job V5, the held leaf challenge, improvement,
 /// F-N's verification term and ρ = 25 — at one height, as the release arms them.
 const PALW_DRILL_FLAG_DAY_INT11_V1: PalwDrillFlagDayV1 =
