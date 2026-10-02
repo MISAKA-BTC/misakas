@@ -158,6 +158,18 @@ fn count_of(binding: &PalwTirStepBindingV1) -> u64 {
     binding.step_leaf_count
 }
 
+/// **DRILL ONLY (RFC-0006, D-S3): the consistent boundary lie a producer commits** — process-wide, set once at start-up by
+/// `--palw-drill-tamper-boundary` and consulted by [`TirBackendV1`]'s injected-fault runs (a node that sets none never lies).
+static TIR_BOUNDARY_LIE_V1: std::sync::Mutex<Option<super::run::TirBoundaryLieV1>> = std::sync::Mutex::new(None);
+
+pub fn set_tir_drill_boundary_lie_v1(lie: Option<super::run::TirBoundaryLieV1>) {
+    *TIR_BOUNDARY_LIE_V1.lock().unwrap_or_else(|p| p.into_inner()) = lie;
+}
+
+fn tir_drill_boundary_lie_v1() -> Option<super::run::TirBoundaryLieV1> {
+    *TIR_BOUNDARY_LIE_V1.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// One IR class served from a mapped artifact.
 pub struct TirBackendV1 {
     model_id: String,
@@ -312,12 +324,15 @@ impl TirBackendV1 {
         }
         let (mut dense, mut bytes) = (true, 0usize);
         let mut leaves = Vec::new();
-        let run = self.runner().run(job, prompt, self.ladder, false, &mut |l| {
+        // The drill's consistent boundary lie replaces the single-leaf fault: the lie is committed AND computed on.
+        let boundary = fault.and_then(|_| tir_drill_boundary_lie_v1());
+        let fault = if boundary.is_some() { None } else { fault };
+        let run = self.runner().with_boundary_lie(boundary).run(job, prompt, self.ladder, false, &mut |l| {
             if !dense {
                 return;
             }
             bytes += l.preimage.values_le.len();
-            if bytes > self.dense_capture_bytes && fault.is_none() {
+            if bytes > self.dense_capture_bytes && fault.is_none() && boundary.is_none() {
                 (dense, leaves) = (false, Vec::new());
                 return;
             }

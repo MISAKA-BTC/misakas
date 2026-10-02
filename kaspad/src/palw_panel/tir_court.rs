@@ -1516,7 +1516,7 @@ impl super::PalwPanelService {
     /// **A demand, rehearsed on the tip and queued** (option C) — node policy's "never pay a carrier
     /// for what the fold refuses": the acceptance layer and the fold's own arm
     /// (`palw_object_rehearsal_v1`), then the court queue under the demand's own key.
-    fn file_tir_demand_v1(
+    pub(super) fn file_tir_demand_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         object: &PalwConsensusObjectV2,

@@ -500,3 +500,78 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
     eprintln!("{classes} classes, {cells_run} cells verified through the backend");
     assert!(classes >= 5);
 }
+
+/// **The drill's consistent boundary lie, through the producer's own fault door** (`set_tir_drill_boundary_lie_v1`, D-S3): the
+/// capture a lying producer commits — its first carry-out of the boundary occurrence changed at one position, everything after
+/// computed honestly from it — is found by the UPSTREAM shard's cells and passes the DOWNSTREAM shard's (RFC §2.1).
+#[test]
+fn the_drills_boundary_lie_is_found_upstream_and_passes_downstream() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use misaka_palw_tir::interval::analyze_ranges;
+    use misaka_palw_tir_exec::node::{
+        TirArtifactV1, TirBackendV1, TirBoundaryLieV1, set_tir_drill_boundary_lie_v1, tir_shard_cells_v1, tir_verify_capture_cells_v1,
+    };
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!("tir-exec-lie-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut lied_classes, mut honest_classes) = (0usize, 0usize);
+    for (k, (name, program, params)) in programs().into_iter().enumerate() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() || program.schedule.layers.len() != 2 {
+            continue;
+        }
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let form = if k % 2 == 0 { PalwPromptIdsFormV1::Flat } else { PalwPromptIdsFormV1::MerkleV1 };
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
+        let honest = backend.execute(&job, &prompt).unwrap();
+        let positions = backend.space().job_shape(&job).unwrap().positions;
+        // The first occurrence of shard 1 under a 2-shard plan: pre + layer 0 are shard 0.
+        set_tir_drill_boundary_lie_v1(Some(TirBoundaryLieV1 { position: 3, boundary: 2 }));
+        let lied = backend.execute_with_injected_fault(&job, &prompt, 0);
+        set_tir_drill_boundary_lie_v1(None);
+        let Ok(lied) = lied else { continue };
+        if lied.execution_root == honest.execution_root {
+            continue; // the carry the lie flips is not committed by this program at that position
+        }
+        let verdict = |shard: u16| {
+            let cells = tir_shard_cells_v1(&backend, positions, shard, 2, 1, PalwSegmentMaskV2::full(1)).unwrap();
+            tir_verify_capture_cells_v1(&backend, &lied.material, &cells, &mut CpuKernelBackendV1).unwrap()
+        };
+        match (verdict(0), verdict(1)) {
+            (TirCellVerdictV1::Faulted { position, .. }, TirCellVerdictV1::Verified { .. }) => {
+                assert_eq!(position, 3, "{name}: the upstream cell finds it at the lied position");
+                lied_classes += 1;
+            }
+            // A lie that moves nothing downstream of the boundary row's own leaf (a clamp) is still found upstream; both shards
+            // faulting means the program's later leaves were not recomputed from the lie — a defect of the injector.
+            other => panic!("{name}: shard 0 must fault and shard 1 verify, got {other:?}"),
+        }
+        // The honest capture still verifies after the lie is switched off.
+        assert!(matches!(
+            tir_verify_capture_cells_v1(
+                &backend,
+                &honest.material,
+                &tir_shard_cells_v1(&backend, positions, 0, 2, 1, PalwSegmentMaskV2::full(1)).unwrap(),
+                &mut CpuKernelBackendV1
+            )
+            .unwrap(),
+            TirCellVerdictV1::Verified { .. }
+        ));
+        honest_classes += 1;
+    }
+    eprintln!("{lied_classes} classes lied at a boundary and were found upstream");
+    assert!(lied_classes >= 2 && honest_classes >= 2);
+}

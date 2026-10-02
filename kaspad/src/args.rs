@@ -465,6 +465,14 @@ pub struct Args {
     pub palw_tir_fused_kernels: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
+    /// DRILL ONLY (RFC-0006, D-S3): commit a CONSISTENT lie at a layer-shard boundary — `<position>:<occurrence>`: at that position the
+    /// first carry-out of the occurrence before `<occurrence>` (the first occurrence of the next shard) is changed, committed, and
+    /// every later occurrence is computed honestly from it. Replaces the single-leaf fault of `--palw-drill-tamper-leaf` (which
+    /// it implies). REFUSED on mainnet.
+    pub palw_drill_tamper_boundary: Option<String>,
+    /// RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (`DefaultAccusedTirStep`, unit
+    /// `TirStepRun`) before it abstains. Off by default.
+    pub palw_tir_shard_demand_runs: bool,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
@@ -728,6 +736,8 @@ impl Default for Args {
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
+            palw_drill_tamper_boundary: None,
+            palw_tir_shard_demand_runs: false,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
@@ -1997,6 +2007,25 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-tamper-boundary")
+                .long("palw-drill-tamper-boundary")
+                .require_equals(true)
+                .help(
+                    "PALW DRILL ONLY (RFC-0006, D-S3): <position>:<occurrence> — commit a consistent lie at the layer-shard boundary before \
+                     that occurrence at that position, computing everything after it honestly from the lie (the upstream shard's seats \
+                     find it; the downstream shard's verify). Implies --palw-drill-tamper-leaf. REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-demand-runs")
+                .long("palw-tir-shard-demand-runs")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (DefaultAccusedTirStep, unit \
+                     TirStepRun) before it abstains; the executor answers inside the disclosure window or its claim defaults.",
+                ),
+        )
+        .arg(
             Arg::new("palw-challenge")
                 .long("palw-challenge")
                 .env("KASPAD_PALW_CHALLENGE")
@@ -3017,6 +3046,8 @@ impl Args {
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
+            palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
+            palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")
@@ -3785,4 +3816,15 @@ pub fn parse_palw_tir_shard_declare_v1(spec: &str) -> Result<(kaspa_hashes::Hash
     let s_l: u16 = s_l.parse().map_err(|_| "S_L is not a number".to_string())?;
     let s_p: u16 = s_p.parse().map_err(|_| "S_P is not a number".to_string())?;
     Ok((class, s_l, s_p))
+}
+
+/// **`--palw-drill-tamper-boundary=<position>:<occurrence>`, parsed** (RFC-0006, D-S3).
+pub fn parse_palw_drill_tamper_boundary_v1(spec: &str) -> Result<(u32, usize), String> {
+    let (position, occurrence) = spec.split_once(':').ok_or("expected <position>:<occurrence>")?;
+    let position: u32 = position.parse().map_err(|_| "the position is not a number".to_string())?;
+    let occurrence: usize = occurrence.parse().map_err(|_| "the occurrence is not a number".to_string())?;
+    if occurrence == 0 {
+        return Err("the boundary is before an occurrence of at least 1".to_string());
+    }
+    Ok((position, occurrence))
 }

@@ -22,6 +22,7 @@ pub use annex::{
 };
 pub use artifact::TirArtifactV1;
 pub use backend::{
+    set_tir_drill_boundary_lie_v1,
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
     tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
 };
@@ -47,5 +48,5 @@ pub use residency::{
     TirHeldBytesV1, TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1, TirStoreOpenV1, TirWeightStoreV1,
     tir_stream_leaves_v1, tir_weight_store_for_root_v1,
 };
-pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
+pub use run::{TirBoundaryLieV1, TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;

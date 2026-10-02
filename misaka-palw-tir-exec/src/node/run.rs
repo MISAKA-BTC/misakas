@@ -79,6 +79,15 @@ pub struct TirResumePointV1 {
     pub generated: Vec<u32>,
 }
 
+/// **A drill's consistent lie at a shard boundary** (RFC-0006, D-S3): at `position` the producer changes the first carry-out of
+/// occurrence `boundary − 1` (its least significant bit), commits the changed row, and computes every occurrence from `boundary` on
+/// honestly from it. A fault injector for the drill; never reached by a node that did not ask for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TirBoundaryLieV1 {
+    pub position: u32,
+    pub boundary: usize,
+}
+
 /// Runs jobs of one IR class over one artifact's params.
 pub struct TirClassRunnerV1<'a> {
     pub space: &'a PalwTirStepSpaceV1,
@@ -89,6 +98,8 @@ pub struct TirClassRunnerV1<'a> {
     tiles: Vec<Vec<u32>>,
     /// Run the fused kernels (RFC-0002 §7, `TirExecutor::set_fused`): byte-identical, off by default.
     fused: bool,
+    /// The drill's lie at a shard boundary, if one is asked for.
+    boundary_lie: Option<TirBoundaryLieV1>,
 }
 
 /// The leaf lanes of values of `dtype` (PALW-TIR-5): `i8`/`i16`/`i32` as little-endian `i32`,
@@ -133,7 +144,13 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             tiles.push(row);
         }
-        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false })
+        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None })
+    }
+
+    /// **Run with a consistent lie at a shard boundary** (the drill's D-S3; see [`TirBoundaryLieV1`]).
+    pub fn with_boundary_lie(mut self, lie: Option<TirBoundaryLieV1>) -> Self {
+        self.boundary_lie = lie;
+        self
     }
 
     /// **With the fused kernels on (or off)** — every executor this runner drives runs the regions
@@ -309,7 +326,16 @@ impl<'a> TirClassRunnerV1<'a> {
             let run_post = job.runs_post(a);
             {
                 let mut sink = CommitSink { runner: self, emit: &mut emit, on_leaf };
-                exec.step_opt(token, &mut sink, run_post).map_err(|e| format!("position {a}: {e}"))?;
+                match self.boundary_lie {
+                    Some(lie) if lie.position == a => exec
+                        .step_with_boundary_lie(token, &mut sink, run_post, lie.boundary, &|lanes: &mut [i128]| {
+                            if let Some(first) = lanes.first_mut() {
+                                *first ^= 1;
+                            }
+                        })
+                        .map_err(|e| format!("position {a}: {e}"))?,
+                    _ => exec.step_opt(token, &mut sink, run_post).map_err(|e| format!("position {a}: {e}"))?,
+                }
             }
             if let Some(e) = emit.error.take() {
                 return Err(e);

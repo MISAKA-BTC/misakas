@@ -36,7 +36,7 @@ use kaspa_consensus_core::palw_tir_shard_v1::{
 };
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{
-    KernelBackendV1, TirBackendV1, TirCellVerdictV1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
+    KernelBackendV1, TirBackendV1, TirCellVerdictV1, cell_runs_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
     tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
 };
 
@@ -219,6 +219,10 @@ pub(crate) struct PalwTirShardBooksV1 {
     first_wanted: HashMap<Hash64, u64>,
     /// Findings waiting to ride the court's carrier path.
     pub findings: Vec<PalwTirShardFindingV1>,
+    /// `TirStepRun` demands (`DefaultAccusedTirStep`) waiting for the court's carrier path, with their messages and due DAAs.
+    pub demands: Vec<(Hash64, PalwConsensusObjectV2, u64)>,
+    /// Claims this seat has demanded the runs of (once).
+    demanded: HashSet<Hash64>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
     /// `(claim)` → the DAA a part was last carried.
@@ -428,10 +432,24 @@ impl super::PalwPanelService {
                 })
                 .cloned();
             let first = *books.first_wanted.entry(duty.claim_id).or_insert(current_daa);
+            let shadow_now = self.config.tir_shard_shadow;
             let Some(material) = material else {
                 // Ask the network (signed), and abstain honestly once half the window has passed with nothing served.
                 self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
                 let window = duty.receipt_deadline.saturating_sub(duty.bound_daa);
+                // **Past a quarter of the window, with `--palw-tir-shard-demand-runs`: demand the runs the cell reads on chain** (RFC-0006
+                // §3, D-S4) — one `TirStepRun` unit, the first run of the seat's first cell; the executor answers inside the
+                // disclosure window or its claim defaults. Once a claim.
+                if self.config.tir_shard_demand_runs
+                    && !shadow_now
+                    && !books.demanded.contains(&duty.claim_id)
+                    && current_daa >= duty.bound_daa.saturating_add(window / 4)
+                {
+                    books.demanded.insert(duty.claim_id);
+                    if let Some((message, object, due)) = self.tir_shard_run_demand_v1(session, bond_key, network_domain, current_daa, duty, &tir).await {
+                        books.demands.push((message, object, due));
+                    }
+                }
                 if current_daa >= duty.bound_daa.saturating_add(window / 2) {
                     let verdict = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: first.max(duty.bound_daa) };
                     self.tir_shard_file_receipt_v1(bond_key, network_domain, current_daa, duty, verdict, books).await;
@@ -565,6 +583,45 @@ impl super::PalwPanelService {
         let _ = session;
     }
 
+    /// **The demand of the first run a cell reads** (`DefaultAccusedTirStep`, unit `TirStepRun`), built over the job the claim's block
+    /// asked for (the cell's runs are a function of the class, the plan and the job — no capture is needed to list them).
+    async fn tir_shard_run_demand_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        bond_key: PalwBondKeyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        duty: &PalwSeatDutyV2,
+        tir: &std::sync::Arc<TirBackendV1>,
+    ) -> Option<(Hash64, PalwConsensusObjectV2, u64)> {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaUnitV1, palw_tir_step_accusation_message_v1, palw_tir_step_accusation_object_v1};
+        use kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
+        let place = duty.tir_shard?;
+        let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root).ok()?;
+        let (ctx, _) =
+            self.attempt_job_for_claim(session, backend.as_ref(), network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)?;
+        let positions = tir.space().job_shape(&ctx).ok()?.positions;
+        let cells = tir_shard_cells_v1(tir, positions, place.shard, place.s_l, place.s_p, place.segments).ok()?;
+        let cell = cells.first()?;
+        let runs = cell_runs_v1(tir.space(), &ctx, cell).ok()?;
+        let (first, count, _) = *runs.first()?;
+        let unit = PalwDaUnitV1::TirStepRun { first, count: count.min(PALW_TIR_STEP_RUN_MAX_LEAVES_V1) };
+        let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
+        let message = palw_tir_step_accusation_message_v1(network_domain, &duty.claim_id, &unit, &bond_key);
+        let object = palw_tir_step_accusation_object_v1(&network_domain, duty.claim_id, unit, bond_key, ladder, |m, c| self.sign(m, c))
+            .map_err(|why| warn!("[{PALW_PANEL}] claim {}: the run demand does not build ({why})", duty.claim_id))
+            .ok()?;
+        let earliest_final = super::palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+        let due = super::palw_seat_court_filing_due_v1(duty.receipt_deadline, earliest_final, current_daa);
+        info!(
+            "[{PALW_PANEL}] claim {}: no capture reaches this seat — demanding the run [{first}, +{}) its shard {} cell reads on chain (RFC-0006)",
+            duty.claim_id,
+            count.min(PALW_TIR_STEP_RUN_MAX_LEAVES_V1),
+            place.shard
+        );
+        Some((message, object, due))
+    }
+
     /// Sign and send one cell-masked receipt for `duty`: pooled as this node's own (never evictable), broadcast, and kept for the
     /// re-send while the duty stands.
     async fn tir_shard_file_receipt_v1(
@@ -633,8 +690,25 @@ impl super::PalwPanelService {
         books.filed.retain(|k, _| standing.contains(k));
     }
 
-    /// **Hand the accusations the cells found to the court's carrier path** (the one-move pass's `file_tir_one_move_v1`).
-    pub(super) fn tir_shard_file_findings_v1(&self, books: &mut PalwTirShardBooksV1, one_move: &mut super::tir_court::PalwTirOneMoveBooksV1<'_>) {
+    /// **Hand the accusations the cells found, and the run demands, to the court's carrier path** (the one-move pass's
+    /// `file_tir_one_move_v1`; the demand's rehearsal on the tip).
+    pub(super) fn tir_shard_file_findings_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        books: &mut PalwTirShardBooksV1,
+        one_move: &mut super::tir_court::PalwTirOneMoveBooksV1<'_>,
+    ) {
+        for (message, object, due) in std::mem::take(&mut books.demands) {
+            let key = super::tir_court::palw_tir_demand_queue_key_v1(message);
+            match self.file_tir_demand_v1(session, &object, key, due, one_move) {
+                super::tir_court::PalwTirDemandFiledV1::Filed => {}
+                super::tir_court::PalwTirDemandFiledV1::Wait(why) => {
+                    info!("[{PALW_PANEL}] a run demand waits: {why}");
+                    books.demands.push((message, object, due));
+                }
+                super::tir_court::PalwTirDemandFiledV1::Refused(why) => warn!("[{PALW_PANEL}] a run demand is refused by the chain: {why}"),
+            }
+        }
         for finding in std::mem::take(&mut books.findings) {
             if one_move.accused.contains(&finding.target.claim_id) {
                 continue;

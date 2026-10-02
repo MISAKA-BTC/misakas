@@ -769,6 +769,61 @@ impl<'a> TirExecutor<'a> {
         self.end_step(r)
     }
 
+    /// **One position whose carry at a shard boundary is a LIE the producer commits and computes on** (RFC-0006, the drill's
+    /// consistent lie): occurrences `[0, boundary)` run honestly; the first carry-out of occurrence `boundary − 1` is changed by
+    /// `lie` — in the carry the next occurrences read AND in the committed value the sink receives — and occurrences
+    /// `[boundary, to)` run honestly FROM it. The result is the execution of a producer who lied once at the boundary and
+    /// computed everything after correctly: the upstream cell finds it, the downstream cell verifies it (RFC §2.1). A drill
+    /// fault injector, never a rule.
+    pub fn step_with_boundary_lie(
+        &mut self,
+        token: u32,
+        sink: &mut dyn StepSink,
+        run_post: bool,
+        boundary: usize,
+        lie: &dyn Fn(&mut [i128]),
+    ) -> TirResult<()> {
+        let to = self.begin_step(token, run_post)?;
+        if boundary == 0 || boundary >= to {
+            return Err(TirError::new(TirErrorKind::Operand, format!("a boundary at occurrence {boundary} of a step of {to}")));
+        }
+        let (block, _) = self.plan.occurrences[boundary - 1];
+        let Some(&node) = self.plan.program.blocks[block as usize].carry_out.first() else {
+            return Err(TirError::new(TirErrorKind::Operand, "the occurrence before the boundary has no carry-out"));
+        };
+        let slot = self.plan.slot_bases[boundary - 1] + u32::from(node);
+        struct LyingSink<'s> {
+            inner: &'s mut dyn StepSink,
+            slot: u32,
+            lie: &'s dyn Fn(&mut [i128]),
+        }
+        impl StepSink for LyingSink<'_> {
+            fn every_node(&self) -> bool {
+                self.inner.every_node()
+            }
+            fn node(&mut self, v: &NodeValue<'_>) {
+                if v.slot == self.slot {
+                    let mut lanes = v.data.to_i128s();
+                    (self.lie)(&mut lanes);
+                    let buf = Buf::from_i128s(v.dtype, &lanes);
+                    self.inner.node(&NodeValue { data: buf.slice(), ..*v });
+                } else {
+                    self.inner.node(v);
+                }
+            }
+        }
+        let r = (|| {
+            self.run_occurrences(0, boundary, &mut LyingSink { inner: &mut *sink, slot, lie })?;
+            let first = self.work.carry.first().ok_or_else(|| TirError::new(TirErrorKind::Missing, "no carry at the boundary"))?;
+            let mut lanes = first.to_i128s();
+            lie(&mut lanes);
+            let lied = Buf::from_i128s(first.dtype(), &lanes);
+            self.work.carry[0] = lied;
+            self.run_occurrences(boundary, to, sink)
+        })();
+        self.end_step(r)
+    }
+
     /// **A position's start**: its inputs checked (the position bound, the token bound — before
     /// anything runs) and set, the carry cleared, and the logits cleared when `post` will not run.
     /// Returns how many occurrences the position runs. [`Self::step_opt`] is this, every occurrence

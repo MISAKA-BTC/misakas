@@ -3610,6 +3610,8 @@ pub struct PalwPanelConfig {
     pub tir_shard_gpu: bool,
     /// **RFC-0006: shadow mode** (`--palw-tir-shard-shadow`): verify the cells and log the verdicts, file nothing.
     pub tir_shard_shadow: bool,
+    /// **RFC-0006: demand the runs a cell reads on chain** when no capture reaches the seat (`--palw-tir-shard-demand-runs`).
+    pub tir_shard_demand_runs: bool,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
@@ -8248,8 +8250,9 @@ impl PalwPanelService {
 
             // **RFC-0006: the accusations a sharded seat's cells found**, last tick, ride the court's carrier path as the IR
             // one-move accusations they are (`TirShardCourtAccused`).
-            if !shard_books.findings.is_empty() {
+            if !shard_books.findings.is_empty() || !shard_books.demands.is_empty() {
                 self.tir_shard_file_findings_v1(
+                    &session,
                     &mut shard_books,
                     &mut tir_court::PalwTirOneMoveBooksV1 {
                         challenged: &mut challenged,
