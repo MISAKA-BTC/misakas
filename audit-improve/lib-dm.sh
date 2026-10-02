@@ -45,6 +45,20 @@ MODEL_COURT_AT=${MODEL_COURT_AT:-36}; FPV5_AT=${FPV5_AT:-104}; HELD_AT=${HELD_AT
 LATE_AT=${LATE_AT:-103}           # lane D's DG-2: the embedding class is registered late, at this DAA (one below the fp-v5 fence)
 GEN_DIR=${GEN_DIR:-$WORK_DIR/gen} # lane D's Plan B class artifacts (drill-classes.json and the .class.palwtir2 files)
 CAP2_AT=${CAP2_AT:-560}; CAP3_AT=${CAP3_AT:-655}
+# INT11=1 (the default since the release layer): the int-11 flag day as the release arms it — ONE flag, --palw-drill-int11-at=H', moves the whole
+# list (decode rules, gen, FP Job V5, held leaf challenge, improvement, L_ver, rho 25) to H' and rho 100 to H' + 95; the per-fence flags of
+# rows 8-17 are refused with it, and the model-court window is armed nowhere on the release, so the drill does not arm it either. Every height
+# the scenarios name for those fences is therefore H' (GEN_AT = DECODE_AT = IMPROVE_AT = FPV5_AT = HELD_AT = CAP2_AT = H'; LATE_AT = H' + 1;
+# CAP3_AT = H' + 95). H' sits before the first evaluation grid (255) and after the head's registration, and ahead of the capacity windows
+# (H' + 10 .. + 90 at rho 25, H' + 105 .. + 185 at rho 100). INT11=0 keeps the pre-release per-fence layout. Lane F's class seating has
+# no flag in this tree: the `seat` scenarios are skipped.
+INT11=${INT11:-1}
+if [ "$INT11" = 1 ]; then
+    INT11_AT=${INT11_AT:-150}
+    GEN_AT=$INT11_AT; DECODE_AT=$INT11_AT; IMPROVE_AT=$INT11_AT; FPV5_AT=$INT11_AT; HELD_AT=$INT11_AT
+    CAP2_AT=$INT11_AT; CAP3_AT=$((INT11_AT + 95)); LATE_AT=$((INT11_AT + 1))   # LATE_AT: the embedding class is registered right after the gen fence (a registration below it is dropped) and a claim follows at once: not yet ready
+    XB_FROM_DAA=${XB_FROM_DAA:-$((INT11_AT + 4))}
+fi
 DECODE_FLAG=${DECODE_FLAG:-}     # e.g. --palw-drill-decode-at; empty = look for one in kaspad --help
 
 # The head: the tiny HF llama at 32 positions — D-F's small class (class eaabaff9…) — and the model ids of the candidates.
@@ -137,6 +151,17 @@ model_id() { tr -d ' \n' < "$MODEL_DIR/ids/$1.${2:-class}" 2>/dev/null || true; 
 
 # The fences a drill arms, `name|flag|height`, in the order the node applies them.
 fence_rows() {
+    if [ "${INT11:-1}" = 1 ]; then
+        cat <<EOF
+fence1|--palw-drill-fence-at|$FENCE_AT
+fence2|--palw-drill-fence2-at|$FENCE2_AT
+fence3|--palw-drill-fence3-at|$FENCE3_AT
+tir|--palw-drill-tir-at|$TIR_AT
+tir2|--palw-drill-tir2-at|$TIR2_AT
+int11|--palw-drill-int11-at|$INT11_AT
+EOF
+        return 0
+    fi
     cat <<EOF
 fence1|--palw-drill-fence-at|$FENCE_AT
 fence2|--palw-drill-fence2-at|$FENCE2_AT
@@ -149,7 +174,6 @@ improve|--palw-drill-improve-at|$IMPROVE_AT
 model_court|--palw-drill-model-court-at|$MODEL_COURT_AT
 fp_v5|--palw-drill-fp-v5-at|$FPV5_AT
 held_chunks|--palw-drill-held-chunks-at|$HELD_AT
-class_seating|--palw-drill-class-seating-at|$SEAT_AT
 capacity_step2|--palw-drill-capacity-step2-at|$CAP2_AT
 capacity_step3|--palw-drill-capacity-step3-at|$CAP3_AT
 EOF
@@ -244,6 +268,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }
