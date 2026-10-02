@@ -208,6 +208,8 @@ where
             derived_work: PalwFpDerivedWorkCapV1::Declared,
             logits_q24: true,
             prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
         },
         ruleset_caps_armed,
@@ -241,6 +243,12 @@ pub struct PalwFpClassCapsV1<'a> {
     /// **RFC-0001 §2.6 stage 2: whether `Params::palw_fp_prefix_state` is in force at the accepting block** — a
     /// prefix-state claim (FP job version 11) is skipped by name where it is not.
     pub prefix_state_armed: bool,
+    /// **ADR-0096 Decision 8: whether `Params::palw_fp_decode_constraint` is in force at the accepting block** — a
+    /// constrained claim (FP job version 6) is skipped by name where it is not.
+    pub constraint_armed: bool,
+    /// **RFC-0001 §2.5: whether `Params::palw_fp_constraint_v2` is in force at the accepting block** — a constraint of
+    /// the second form is skipped by name where it is not.
+    pub constraint_v2_armed: bool,
     /// **RFC-0001 §2.9: the class's tokenizer listing under `Params::palw_fp_tokenizer_match`**
     /// ([`crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1`]).
     pub tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1,
@@ -329,6 +337,20 @@ where
                 continue;
             }
         };
+        // **ADR-0096 Decision 7: a constrained claim (FP job version 6) is judged on its V3 stand-in** — a constrained job
+        // is a V3 job, so its view meets the V3 rule whatever the decode-rules fence says.
+        let constrained = payload.commitment.job.is_constraint();
+        let view = if constrained {
+            match crate::palw_fp_constraint_job_v1::palw_fp_constraint_walk_view_v1(&payload, caps.constraint_armed, caps.constraint_v2_armed) {
+                Ok(v) => v,
+                Err(why) => {
+                    out.skipped.push((id, why));
+                    continue;
+                }
+            }
+        } else {
+            view
+        };
         // **RFC-0001 §2.9: the job's tokenizer is its class's listed one** (a class that lists none is not asked).
         if let Err(why) = caps.tokenizer.check(&payload.commitment.job.tokenizer_id) {
             out.skipped.push((id, why));
@@ -343,7 +365,7 @@ where
                 caps.step_ladder,
                 ruleset_caps,
                 prompt_ids_form,
-                decode_rules,
+                if constrained { crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant } else { decode_rules },
             )
             .is_err()
         {
@@ -673,6 +695,8 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
             prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
@@ -740,6 +764,8 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24,
             prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
@@ -860,6 +886,8 @@ mod tests {
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
                         logits_q24: true,
                         prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
                         tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                     }
                 },
@@ -1360,7 +1388,7 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
                 },
                 false,
                 true,

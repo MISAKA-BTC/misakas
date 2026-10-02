@@ -1,5 +1,5 @@
-//! **RFC-0001's four dormant fences** — `palw_fp_prefix_state` (§2.6 stage 2), `palw_fp_tokenizer_match` (§2.9),
-//! `palw_fp_constraint_v2` (§2.5) and `palw_adapter_class_v1` (§2.10).
+//! **RFC-0001's five dormant fences** — `palw_fp_decode_constraint` (ADR-0096 D6-8, built here), `palw_fp_prefix_state`
+//! (§2.6 stage 2), `palw_fp_tokenizer_match` (§2.9), `palw_fp_constraint_v2` (§2.5) and `palw_adapter_class_v1` (§2.10).
 //!
 //! Each is written in four places (the field, `for_each_fence`, the Some-only writes of both ids, the `never()`
 //! collapse), `None` on every shipped preset, named by `palw_fences_v1` and the fork id's probe, refused by
@@ -17,6 +17,11 @@ type Entry = kaspa_consensus_core::config::params::PalwPostLaunchFenceV1;
 /// `(name, drill entry, the prerequisites validate_palw_v2 must name)`.
 fn fences() -> Vec<(&'static str, Entry, Vec<&'static str>)> {
     vec![
+        (
+            "palw_fp_decode_constraint",
+            kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY,
+            vec![],
+        ),
         (
             "palw_fp_prefix_state",
             kaspa_consensus_core::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_ENTRY,
@@ -42,6 +47,7 @@ fn fences() -> Vec<(&'static str, Entry, Vec<&'static str>)> {
 
 fn get(p: &Params, name: &str) -> Option<ForkActivation> {
     match name {
+        "palw_fp_decode_constraint" => p.palw_fp_decode_constraint,
         "palw_fp_prefix_state" => p.palw_fp_prefix_state,
         "palw_fp_tokenizer_match" => p.palw_fp_tokenizer_match,
         "palw_fp_constraint_v2" => p.palw_fp_constraint_v2,
@@ -52,6 +58,7 @@ fn get(p: &Params, name: &str) -> Option<ForkActivation> {
 
 fn validate_one(p: &Params, name: &str) -> Result<(), String> {
     match name {
+        "palw_fp_decode_constraint" => p.validate_palw_v2().map(|_| ()),
         "palw_fp_prefix_state" => p.validate_palw_fp_prefix_state_v1(),
         "palw_fp_tokenizer_match" => p.validate_palw_fp_tokenizer_match_v1(),
         "palw_fp_constraint_v2" => p.validate_palw_fp_constraint_v2_v1(),
@@ -123,14 +130,8 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
         let mut armed = base.clone();
         (entry.set)(&mut armed, Some(ForkActivation::new(at)));
         if fence == "palw_fp_constraint_v2" {
-            // Over `palw_fp_decode_constraint`, which this build cannot arm: the fence is refused naming it.
-            let why = validate_one(&armed, fence).expect_err("without the constraint fence");
-            assert!(why.contains("palw_fp_decode_constraint"), "{why}");
-            let mut both = armed.clone();
-            both.palw_fp_decode_constraint = Some(ForkActivation::new(at - 1));
-            let why = both.validate_palw_v2().expect_err("the constraint fence cannot be armed by this build").to_string();
-            assert!(why.contains("palw_fp_decode_constraint"), "{why}");
-            continue;
+            // The second form rides the first fence, which this build can now arm.
+            armed.palw_fp_decode_constraint = Some(ForkActivation::new(at - 1));
         }
         armed.validate_palw_v2().unwrap_or_else(|e| panic!("{fence} over testnet-12's prerequisites: {e}"));
         // Below a prerequisite, by name.
@@ -144,6 +145,7 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
                         f.activation = ForkActivation::new(at + 1);
                     }
                 }
+                "palw_fp_decode_constraint" => early.palw_fp_decode_constraint = Some(ForkActivation::new(at + 1)),
                 "palw_improvement_v1" => {
                     if let Some(f) = early.palw_improvement_v1.as_mut() {
                         f.activation = ForkActivation::new(at + 1);
@@ -154,7 +156,11 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
             let why = validate_one(&early, fence).expect_err(&format!("{fence} below {prereq}"));
             assert!(why.contains(fence) && why.contains(prereq), "{why}");
         }
-        // Off a ConsensusV2 network.
+        // Off a ConsensusV2 network (the constraint fence has no validate of its own: its refusal is inside `validate_palw_v2`,
+        // which meets the other fences' mirrors first on a ruleset with no bundle).
+        if fence == "palw_fp_decode_constraint" {
+            continue;
+        }
         let mut v1 = armed.clone();
         v1.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::Disabled;
         let why = validate_one(&v1, fence).expect_err("not ConsensusV2");

@@ -1377,8 +1377,16 @@ fn prepare_request(
     // **RFC-0001 §A: past the decode-rules fence every job is FP Job V4** — its controls in the one
     // canonical form `admit_request` normalized (the no-op when nothing was asked), its stop strings
     // for the worker to spell with the class's tokenizer; below it, a V3 job exactly as before.
-    let request_version =
-        if admitted.decode.is_some() { kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION } else { PALW_FP_V3_VERSION };
+    // **ADR-0096 Decisions 7–8: where the network has armed `palw_fp_decode_constraint`, a `response_format` is COMMITTED** — the
+    // job is FP job version 6 carrying the compiled constraint, and the answer is the argmax over the lanes it admits.
+    let constraint = committed_constraint_v1(admitted, facts, sampling)?;
+    let request_version = if constraint.is_some() {
+        kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
+    } else if admitted.decode.is_some() {
+        kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+    } else {
+        PALW_FP_V3_VERSION
+    };
     let request = PalwFpWorkerRequestV3 {
         version: request_version,
         network_domain: identity.network_domain,
@@ -1401,10 +1409,46 @@ fn prepare_request(
         runtime_class_id: manifest.runtime_class_id,
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
-        decode: admitted.decode.clone(),
-        stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
+        decode: if constraint.is_some() { None } else { admitted.decode.clone() },
+        stop_texts: if constraint.is_some() { Vec::new() } else { admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect() },
+        constraint,
     };
     Ok(PreparedJob { plan, decode_limit, request, anchor_daa })
+}
+
+/// **The decode constraint a request commits, if the network commits formats** (ADR-0096 Decisions 7–8): `Ok(None)` where
+/// the fence is dormant or no format was asked (the advisory path, unchanged); otherwise the canonical bytes of the
+/// `response_format`'s automaton — `json_object` the pinned any-object form, `json_schema` its compiled schema (the first
+/// subset, `misaka-palw-constraint::compile`). A committed job is a V3 job under a mask: it is greedy, and carries no sampler
+/// controls or stop strings — a request that asks for them beside a committed format is refused by name rather than
+/// answered under a rule it did not choose. A schema outside the first subset is refused by name.
+fn committed_constraint_v1(
+    admitted: &AdmittedRequest,
+    facts: &chain::ChainFacts,
+    sampling: ([u8; 32], u32),
+) -> Result<Option<Vec<u8>>, String> {
+    use surface::FormatKind;
+    if !facts.fp_decode_constraint_armed {
+        return Ok(None);
+    }
+    let Some(format) = &admitted.format else { return Ok(None) };
+    let automaton = match (&format.kind, &format.schema) {
+        (FormatKind::JsonObject, _) => misaka_palw_constraint::compile::compile_json_object_v1(),
+        (FormatKind::JsonSchema, Some(schema)) => misaka_palw_constraint::compile::compile_v1(schema)
+            .map_err(|e| format!("this response_format's schema is outside the first constraint subset and cannot be committed: {e}"))?,
+        (FormatKind::JsonSchema, None) => return Err("a json_schema format without its schema".to_string()),
+    };
+    if sampling.1 != kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY {
+        return Err("a committed response_format is a greedy job under a mask: a temperature beside it is refused by name".to_string());
+    }
+    if admitted.decode.as_ref().is_some_and(|d| !d.is_noop()) || !admitted.stop_texts.is_empty() {
+        return Err(
+            "a committed response_format carries no sampler controls or stop strings (penalties, logit_bias, stop): the job is a V3 job under \
+             a mask, and a control beside it would be answered under a rule the request did not choose"
+                .to_string(),
+        );
+    }
+    Ok(Some(automaton.to_bytes()))
 }
 
 #[allow(clippy::too_many_arguments)]

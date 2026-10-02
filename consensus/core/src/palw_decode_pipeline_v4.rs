@@ -747,18 +747,31 @@ pub struct PalwFpDecoderV1 {
     limit: u32,
     generated: Vec<u32>,
     stop: Option<PalwFpDecodeStopV1>,
+    /// **ADR-0096 Decision 7: the constraint's mask and where the committed prefix has taken its automaton** — `Some` for a
+    /// constrained job (version 6) whose host opened a constraint scope. The state is `None` once a committed id left the
+    /// automaton (a dead prefix, which an honest run never reaches).
+    constraint: Option<(std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>, Option<crate::palw_decode_constraint_v1::PalwConstraintStateV1>)>,
 }
 
 impl PalwFpDecoderV1 {
     /// The V3 rule: `decode_token_select_v2` under the job's sampling pair (the plain argmax at
     /// the greedy temperature), to the budget. EOG is a display stop on this rule.
     pub fn v3(sampling: PalwDecodeSamplingV2, limit: u32) -> Self {
-        Self { config: None, sampling, limit, generated: Vec::new(), stop: None }
+        Self { config: None, sampling, limit, generated: Vec::new(), stop: None, constraint: None }
+    }
+
+    /// This decoder under a constraint's mask (ADR-0096 Decision 7); `None` leaves it as it is.
+    pub fn with_constraint(mut self, mask: Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>>) -> Self {
+        self.constraint = mask.map(|mask| {
+            let start = crate::palw_decode_constraint_v1::constraint_start_state_v1(&mask.constraint);
+            (mask, Some(start))
+        });
+        self
     }
 
     /// The §A.3 pipeline under `config` (which the caller has validated as canonical).
     pub fn v4(config: DecodeConfigV4, sampling: PalwDecodeSamplingV2, limit: u32) -> Self {
-        Self { config: Some(config), sampling, limit, generated: Vec::new(), stop: None }
+        Self { config: Some(config), sampling, limit, generated: Vec::new(), stop: None, constraint: None }
     }
 
     /// **Resume after a committed prefix** — a replay that starts at position `history.len()`
@@ -797,6 +810,18 @@ impl PalwFpDecoderV1 {
         if self.stop.is_some() {
             return raw();
         }
+        if let Some((mask, state)) = &self.constraint {
+            // ADR-0096 Decision 7: the argmax over the admitted lanes; none admitted commits the class's lowest
+            // end-of-generation id and ends the run there.
+            let (lane, ends) = mask.select(state.as_ref(), row, position, &sampling);
+            self.commit(lane);
+            if ends && self.stop.is_none() {
+                self.stop = Some(PalwFpDecodeStopV1 { executed: self.generated.len() as u32, reason: PalwFpDecodeStopReasonV1::NoAdmissibleLane });
+            } else if ends {
+                // The budget ended the run at this very token; the budget is the reason, the end-of-generation id is the answer's tail.
+            }
+            return lane;
+        }
         let Some(config) = &self.config else {
             let lane = raw();
             self.commit(lane);
@@ -817,6 +842,9 @@ impl PalwFpDecoderV1 {
 
     fn commit(&mut self, lane: u32) {
         self.generated.push(lane);
+        if let Some((mask, state)) = &mut self.constraint {
+            *state = state.take().and_then(|s| mask.admit(&s, lane));
+        }
         if let Some(config) = &self.config
             && let Some(index) = decode_stop_match_v4(&config.stop_sequences, &self.generated)
         {
@@ -1088,6 +1116,8 @@ pub fn palw_fp_decode_run_v1<R>(
     {
         return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
     }
+    // ADR-0096 Decision 7: a constrained job runs only on a host that holds its token table.
+    crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_ready_v1(job)?;
     let limit = job.decode_token_limit;
     let decoder = std::cell::RefCell::new(job.decoder_v1());
     let streamed = std::cell::Cell::new(0usize);
@@ -1154,6 +1184,8 @@ pub struct PalwFpReplayRuleV1 {
 enum PalwFpReplayKindV1 {
     /// A seat's check: the claim's pipeline over its committed answer.
     Pipeline { config: DecodeConfigV4, sampling: PalwDecodeSamplingV2, committed: Vec<u32> },
+    /// A seat's check of a constrained claim (ADR-0096 Decision 7): the mask over the committed prefix, then the key.
+    Constraint { mask: std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>, sampling: PalwDecodeSamplingV2, committed: Vec<u32> },
     /// The executor's own replay: the committed ids, fed back.
     Forced(Vec<u32>),
 }
@@ -1162,6 +1194,11 @@ impl PalwFpReplayRuleV1 {
     /// The rule of a V4 job over its committed answer; `None` for a V3 job, whose replay keeps the
     /// shipped rule (the V3 verifier) byte for byte.
     pub fn of_job(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, committed: &[u32]) -> Option<Self> {
+        if job.is_constraint() {
+            // The scope the seat opened holds the mask; a host without one has nothing to judge the claim by.
+            let mask = crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1()?;
+            return Some(Self { kind: PalwFpReplayKindV1::Constraint { mask, sampling: job.sampling_v2(), committed: committed.to_vec() } });
+        }
         let config = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())?.clone();
         Some(Self { kind: PalwFpReplayKindV1::Pipeline { config, sampling: job.sampling_v2(), committed: committed.to_vec() } })
     }
@@ -1179,6 +1216,10 @@ impl PalwFpReplayRuleV1 {
                 .get(row_index as usize)
                 .copied()
                 .unwrap_or_else(|| crate::palw_step_refute::base0_decode_token_select_v1(row) as u32),
+            PalwFpReplayKindV1::Constraint { mask, sampling, committed } => {
+                let before = &committed[..(row_index as usize).min(committed.len())];
+                mask.select(mask.state_after(before).as_ref(), row, row_index, sampling).0
+            }
             PalwFpReplayKindV1::Pipeline { config, sampling, committed } => {
                 let before = &committed[..(row_index as usize).min(committed.len())];
                 match decode_select_v4(config, sampling, before, row, &|_| true) {

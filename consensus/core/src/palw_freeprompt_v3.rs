@@ -364,6 +364,9 @@ pub enum PalwFpJobTailV1 {
     /// **A prefix-state job (version 11, RFC-0001 §2.6 stage 2)**: the KV prefix state the run consumed — a V4 job
     /// whose credit is the new positions only ([`crate::palw_fp_prefix_v1`]).
     Prefix(PalwFpPrefixStateV1),
+    /// **A constrained job (version 6, ADR-0096 Decision 7, RFC-0001 §2.5)**: the constraint's canonical bytes
+    /// ([`crate::palw_fp_constraint_job_v1`]) — a V3 job (no decode rules) whose committed token is the admitted argmax.
+    Constraint(Vec<u8>),
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -404,6 +407,7 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
             Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
             Some(PalwFpJobTailV1::Prefix(state)) => borsh::BorshSerialize::serialize(state, writer)?,
+            Some(PalwFpJobTailV1::Constraint(bytes)) => borsh::BorshSerialize::serialize(bytes, writer)?,
             None => {}
         }
         Ok(())
@@ -448,6 +452,9 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         if version == prefix {
             job.tail = Some(PalwFpJobTailV1::Prefix(borsh::BorshDeserialize::deserialize_reader(reader)?));
         }
+        if version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            job.tail = Some(PalwFpJobTailV1::Constraint(borsh::BorshDeserialize::deserialize_reader(reader)?));
+        }
         if version == v5 {
             job.tail = Some(PalwFpJobTailV1::V5(borsh::BorshDeserialize::deserialize_reader(reader)?));
         }
@@ -491,6 +498,12 @@ impl PalwFreePromptJobV3 {
         self.is_v4() || self.is_prefix_state()
     }
 
+    /// Is this a constrained job (ADR-0096 Decision 7: version 6, a V3 job whose committed token is the argmax over the
+    /// lanes its constraint admits)?
+    pub fn is_constraint(&self) -> bool {
+        self.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
+    }
+
     /// Is this a prefix-state job (RFC-0001 §2.6 stage 2: version 11, a V4 job naming the KV prefix it consumed)?
     pub fn is_prefix_state(&self) -> bool {
         self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
@@ -516,6 +529,10 @@ impl PalwFreePromptJobV3 {
             (Some(decode), true) => {
                 crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
             }
+            // A constrained job (ADR-0096 Decision 7) is the V3 rule under its mask, which a host holding the class's
+            // token table opens as a scope around the run ([`crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`]).
+            _ if self.is_constraint() => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit)
+                .with_constraint(crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1()),
             _ => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit),
         }
     }
@@ -540,6 +557,10 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     // RFC-0001 §2.6 stage 2: a prefix-state job, under its own domain.
     if job.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION {
         return crate::palw_fp_prefix_v1::fp_job_id_prefix_v1(job);
+    }
+    // ADR-0096 Decision 7: a constrained job, under its own.
+    if job.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+        return crate::palw_fp_constraint_job_v1::fp_job_id_constraint_v1(job);
     }
     // RFC-0003 §I.4: a tensor job is named by the generative job's own id.
     if job.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION {
@@ -1581,6 +1602,9 @@ pub enum PalwFpV3Error {
     /// A prefix-state claim (version 11) the lane's rules refuse, by name ([`crate::palw_fp_prefix_v1`]).
     #[error("prefix-state claim: {0}")]
     PrefixStateClaim(String),
+    /// **ADR-0096 Decision 7: a constrained job (version 6) the lane refuses**, by the rule's own reason.
+    #[error("a constrained job (FP job version 6) is refused: {0}")]
+    ConstraintClaim(String),
     /// **RFC-0003 §I.4: a tensor claim the generative lane refuses**, by the lane's own reason
     /// (`palw_gen_claim_v1`).
     #[error("the tensor claim is refused: {0}")]
@@ -2249,6 +2273,9 @@ pub struct PalwFpWorkerRequestV3 {
     /// sequence of the job's decode config, refusing a string that encodes to nothing or past the
     /// 16-token bound. Local to the gateway ↔ worker frame; never on chain: the job carries ids only.
     pub stop_texts: Vec<Vec<u8>>,
+    /// **ADR-0096 Decision 7: the decode constraint's canonical bytes** — `Some` exactly on a constrained request (version
+    /// [`crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION`]), copied onto the job's tail verbatim.
+    pub constraint: Option<Vec<u8>>,
 }
 
 impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
@@ -2277,6 +2304,9 @@ impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
             borsh::BorshSerialize::serialize(&self.stop_texts, writer)?;
+        }
+        if self.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            borsh::BorshSerialize::serialize(self.constraint.as_deref().unwrap_or_default(), writer)?;
         }
         Ok(())
     }
@@ -2309,10 +2339,14 @@ impl borsh::BorshDeserialize for PalwFpWorkerRequestV3 {
             trace_scheme_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         };
         if version == PALW_FP_V4_VERSION {
             request.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
             request.stop_texts = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        }
+        if version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            request.constraint = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
         Ok(request)
     }
@@ -2383,7 +2417,11 @@ impl PalwFpWorkerResultV3 {
         // The job is the request's version (V3 or V4, RFC-0001 §A.4), with the request's decode
         // tail and sampler inputs verbatim: a worker that ran another decode config, seed or
         // temperature bound its trace to a job id the caller never asked for.
-        if (self.job.version != PALW_FP_V3_VERSION && self.job.version != PALW_FP_V4_VERSION) || self.job.version != request.version {
+        if (self.job.version != PALW_FP_V3_VERSION
+            && self.job.version != PALW_FP_V4_VERSION
+            && self.job.version != crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION)
+            || self.job.version != request.version
+        {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.job.version, expected: request.version });
         }
         // The decode config is the request's, except that the worker spelled `stop_texts` into
@@ -2402,7 +2440,14 @@ impl PalwFpWorkerResultV3 {
             }
             _ => false,
         };
+        // ADR-0096: a constrained job's constraint is the request's, verbatim.
+        let constraint_is_the_requests = match (&self.job.tail, &request.constraint) {
+            (Some(PalwFpJobTailV1::Constraint(job)), Some(asked)) => job == asked && self.job.is_constraint(),
+            (None, None) => !self.job.is_constraint(),
+            _ => false,
+        };
         if !decode_is_the_requests
+            || !constraint_is_the_requests
             || self.job.sampling_seed != request.sampling_seed
             || self.job.temperature_q != request.temperature_q
             || self.job.prompt_mode != request.prompt_mode
@@ -3422,6 +3467,7 @@ mod tests {
             trace_scheme_id: Hash64::from_u64_word(0x5),
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         };
         let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
         let result = PalwFpWorkerResultV3 {
@@ -4646,6 +4692,7 @@ mod job_v4_tests {
             trace_scheme_id: Hash64::from_u64_word(14),
             stop_texts: if decode.is_some() { vec![b"\n\n".to_vec()] } else { Vec::new() },
             decode,
+            constraint: None,
         };
         let old = request(PALW_FP_V3_VERSION, None);
         let new = request(PALW_FP_V4_VERSION, Some(rich()));

@@ -423,9 +423,40 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     /// form the CHAIN reports for the class, so a worker started for the wrong network produces
     /// jobs the gateway refuses rather than jobs the chain refuses.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **ADR-0096 Decision 8: this class's token-to-bytes table**, derived from the tokenizer this worker checked against
+    /// the class's `tokenizer_id` — built on the first constrained job (a 150k-entry table is not a boot cost every worker
+    /// should pay).
+    token_table: std::sync::OnceLock<std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1>>,
 }
 
 impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
+    /// **The class's token table** (ADR-0096 Decision 8): the byte rendering of every id of the class's vocabulary, as this
+    /// worker's tokenizer spells it, and the manifest's end-of-generation ids, under the manifest's `tokenizer_id`.
+    pub fn token_table_v1(&self) -> std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
+        self.token_table
+            .get_or_init(|| {
+                std::sync::Arc::new(kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+                    entries: (0..self.manifest.vocab).map(|id| self.tokenizer.token_bytes(id)).collect(),
+                    eog_token_ids: self.manifest.eog_token_ids.clone(),
+                    tokenizer_id: self.manifest.tokenizer_id,
+                })
+            })
+            .clone()
+    }
+
+    /// **The mask a constrained job runs under on this worker**, or why it cannot (`Ok(None)` for every other job): the
+    /// scope [`kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`] opens around the run.
+    fn constraint_mask_v1(
+        &self,
+        job: &PalwFreePromptJobV3,
+    ) -> Result<Option<std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwConstraintMaskV1>>, String> {
+        if !job.is_constraint() {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, Some(self.token_table_v1()))
+            .map_err(|e| format!("a constrained job this worker cannot mask: {e}"))
+    }
+
     /// Assemble the runtime, deriving the manifest from the class's registered profile.
     ///
     /// Fails closed and by name on the two things a family can get wrong at construction: a
@@ -524,6 +555,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             artifact: family.artifact,
             load_ms,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile),
+            token_table: std::sync::OnceLock::new(),
         })
     }
 
@@ -593,13 +625,25 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     // **V3 or V4** (RFC-0001 §A.4): the version decides whether the request carries a decode
     // config, and the job this worker builds is the request's version with the request's config.
     let v4 = request.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
-    if request.version != PALW_FP_V3_VERSION && !v4 {
+    // ADR-0096 Decision 7: a constrained request (version 6) is a V3 request with its constraint beside it.
+    let constrained = request.version == kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+    if request.version != PALW_FP_V3_VERSION && !v4 && !constrained {
         return Err(format!(
-            "request version {} is neither {} (V3) nor {} (V4)",
+            "request version {} is neither {} (V3), {} (V4) nor {} (constrained)",
             request.version,
             PALW_FP_V3_VERSION,
-            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION,
+            kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
         ));
+    }
+    match (&request.constraint, constrained) {
+        (Some(bytes), true) => {
+            kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(bytes)
+                .map_err(|e| format!("the request's decode constraint is not admitted: {e}"))?;
+        }
+        (None, false) => {}
+        (Some(_), false) => return Err("only a constrained request carries a decode constraint".to_string()),
+        (None, true) => return Err("a constrained request carries its constraint".to_string()),
     }
     match (&request.decode, v4) {
         (Some(decode), true) => {
@@ -867,7 +911,7 @@ fn prepare_job_v1<B: PalwExecutionBackendV1>(
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
         decode,
-        tail: None,
+        tail: request.constraint.clone().map(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint),
     };
     Ok((job, prompt_ids))
 }
@@ -1011,9 +1055,11 @@ pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
             streamed.push(id);
             on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
         };
-        rt.backend
-            .answer_free_prompt_v1(&job, &prompt_usize, &rt.manifest.eog_token_ids, &mut sink)
-            .map_err(|e| format!("execution refused: {e}"))?
+        let mask = rt.constraint_mask_v1(&job)?;
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            rt.backend.answer_free_prompt_v1(&job, &prompt_usize, &rt.manifest.eog_token_ids, &mut sink)
+        })
+        .map_err(|e| format!("execution refused: {e}"))?
     };
     if streamed != answer.output_token_ids {
         return Err("the streamed ids are not the answered ids".to_string());
@@ -1069,12 +1115,17 @@ pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
         .iter()
         .map(|(job, _, usize_ids)| kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1 { job, prompt_tokens: usize_ids })
         .collect();
-    let answers = rt
-        .backend
-        .answer_batch_free_prompt_v1(&jobs, &rt.manifest.eog_token_ids, &mut |i, id| {
+    // ADR-0096: the candidates of one request share one constraint, so one mask serves the batch.
+    let mask = rt.constraint_mask_v1(&prepared[0].0)?;
+    if prepared.iter().any(|(job, _, _)| job.tail != prepared[0].0.tail) {
+        return Err("a batch of jobs under different constraints".to_string());
+    }
+    let answers = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+        rt.backend.answer_batch_free_prompt_v1(&jobs, &rt.manifest.eog_token_ids, &mut |i, id| {
             on_token(i, id, &rt.tokenizer.token_bytes(id).unwrap_or_default())
         })
-        .map_err(|e| format!("execution refused: {e}"))?;
+    })
+    .map_err(|e| format!("execution refused: {e}"))?;
     let execute_ms = started.elapsed().as_millis() as u64;
     eprintln!("[{}] answer-batch: {} jobs in {execute_ms}ms", rt.retention_family, answers.len());
     Ok(prepared
@@ -1192,7 +1243,11 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
             // desynchronise it from the ids it will be asked to check the stream against.
             on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
         };
-        rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink).map_err(|e| format!("execution refused: {e}"))?
+        let mask = rt.constraint_mask_v1(job)?;
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink)
+        })
+        .map_err(|e| format!("execution refused: {e}"))?
     };
     Ok((run, streamed))
 }
@@ -1723,6 +1778,7 @@ mod tests {
             trace_scheme_id: manifest.trace_scheme_id,
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         }
     }
 

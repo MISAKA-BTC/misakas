@@ -731,6 +731,13 @@ pub fn palw_drill_adapter_at_v1(params: &mut crate::config::params::Params, at: 
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_ADAPTER_V1)
 }
 
+/// **A drill arms the decode constraint (palw_fp_decode_constraint, FP job version 6) at a low height** (RFC-0001; `--palw-drill-fp-constraint-at`) — the same machinery for the one-entry drill
+/// list [`crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1`]: ARMS `palw_fp_decode_constraint` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless the network is ConsensusV2.
+pub fn palw_drill_fp_constraint_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_CONSTRAINT_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -790,6 +797,9 @@ const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1: PalwDrillFlagDayV1 =
 /// The adapter class listing (palw_adapter_class_v1) alone (`--palw-drill-adapter-at`): a drill-only list.
 const PALW_DRILL_FLAG_DAY_ADAPTER_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_FENCES_V1, flag: "--palw-drill-adapter-at" };
+/// The decode constraint (palw_fp_decode_constraint, FP job version 6) alone (`--palw-drill-fp-constraint-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1, flag: "--palw-drill-fp-constraint-at" };
 /// **The int-11 flag day's whole list** (`--palw-drill-int11-at`): decode rules, gen, FP Job V5, the held leaf challenge, improvement,
 /// F-N's verification term and ρ = 25 — at one height, as the release arms them.
 const PALW_DRILL_FLAG_DAY_INT11_V1: PalwDrillFlagDayV1 =

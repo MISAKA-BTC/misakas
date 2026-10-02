@@ -161,6 +161,18 @@ fn walk_with(
     rules: PalwFpDecodeRulesV1,
     prefix_state_armed: bool,
 ) -> Vec<PalwConsensusObjectV2> {
+    walk_all(p, s, payload, rules, prefix_state_armed, false, false)
+}
+
+fn walk_all(
+    p: &Params,
+    s: &PalwChainStateV2,
+    payload: &PalwFpCommitmentTxPayloadV3,
+    rules: PalwFpDecodeRulesV1,
+    prefix_state_armed: bool,
+    constraint_armed: bool,
+    constraint_v2_armed: bool,
+) -> Vec<PalwConsensusObjectV2> {
     let tx = kaspa_consensus_core::tx::Transaction::new(
         0,
         vec![],
@@ -187,6 +199,8 @@ fn walk_with(
             },
             logits_q24: s.class_commits_q24_logits_v1(class_id),
             prefix_state_armed,
+            constraint_armed,
+            constraint_v2_armed,
             tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
         },
         true,
@@ -462,6 +476,189 @@ fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_
     }
 
     // license.
+    let bonds = genesis_bonds(&p);
+    let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
+    let s3 = fold_at(&p, &s2, &ctx(4, 113, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats }])
+        .expect("the panel binds");
+    let receipts: Vec<PalwSeatReceiptV2> = bonds[0..3]
+        .iter()
+        .map(|(k, _, _)| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 114, signature: Vec::new() })
+        .collect();
+    let s4 = fold_at(&p, &s3, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
+        .expect("the Valid quorum licenses");
+    assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+}
+
+/// **ADR-0096 Decisions 6–8 end to end on a copy of testnet-12 with `palw_fp_decode_constraint` (and the second form's
+/// `palw_fp_constraint_v2`) ARMED**: a JSON-Schema constraint compiled by `misaka-palw-constraint`, the job at version 6, the
+/// floor's real engine masked by the class's token table, carried only past the fence, replayed by the floor's seats through
+/// the same mask, licensed by a `Valid` quorum — and a seat without the table, a wrong table, and a lying answer refused.
+#[test]
+fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_armed() {
+    use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY};
+    use kaspa_consensus_core::palw_fp_constraint_job_v1::{
+        PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY, PALW_FP_CONSTRAINT_VERSION, PalwConstraintMaskV1, PalwTokenTableV1,
+        palw_fp_with_constraint_scope_v1,
+    };
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, fp_job_id_v3};
+    use std::sync::Arc;
+
+    const CONSTRAINT_FENCE: u64 = 111;
+    const SECOND_FORM_FENCE: u64 = 113;
+    let mut p = t12_with_v4();
+    (PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY.set)(&mut p, Some(ForkActivation::new(CONSTRAINT_FENCE)));
+    (kaspa_consensus_core::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_ENTRY.set)(&mut p, Some(ForkActivation::new(SECOND_FORM_FENCE)));
+    p.validate_palw_v2().expect("testnet-12 with the constraint fences armed assembles (the refusal is lifted)");
+    let (s, floor) = chain(&p);
+    let backend = common::floor_backend(PalwPromptIdsFormV1::MerkleV1);
+    let vocab = backend.profile().vocab_size;
+
+    // The class's token table: every id renders one printable byte; the top id is end-of-generation.
+    let mut table = PalwTokenTableV1 {
+        entries: (0..vocab).map(|i| Some(vec![0x20 + (i % 95) as u8])).collect(),
+        eog_token_ids: vec![vocab - 1],
+        tokenizer_id: Hash64::default(),
+    };
+    // A table with no tokenizer file behind it names its own digest as the tokenizer it was derived under.
+    table.tokenizer_id = table.digest();
+    let table = Arc::new(table);
+    // The constraint: a JSON string that is "abc" or "cab".
+    let schema = misaka_palw_constraint::schema::parse(&serde_json::json!({ "type": "string", "enum": ["abc", "cab"] })).expect("in the subset");
+    let automaton = misaka_palw_constraint::compile::compile_v1(&schema).expect("compiles");
+    let bytes = automaton.to_bytes();
+
+    let prompt: Vec<usize> = vec![17, 3, 91, 4];
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    let limit = 8u32;
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_CONSTRAINT_VERSION,
+        network_domain: domain,
+        class_id: floor,
+        executor_bond: bond_key(1).0,
+        executor_pubkey: pubkey_of(1),
+        operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey_of(1)),
+        anchor_block: h(0xA0),
+        anchor_daa: 100,
+        job_nonce: [0x7C; 32],
+        tokenizer_id: table.tokenizer_id,
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
+            .expect("the ids commit"),
+        prompt_tokens: ids.len() as u32,
+        decode_token_limit: limit,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: PALW_DECODE_SEED_GREEDY,
+        temperature_q: PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        tail: Some(PalwFpJobTailV1::Constraint(bytes.clone())),
+    };
+    assert!(job.is_constraint() && !job.decodes_under_v4_rules());
+    let mask = PalwConstraintMaskV1::for_job(&job, table.clone()).expect("the host's table is the job's");
+    let wrong_table = Arc::new(PalwTokenTableV1 {
+        entries: table.entries.iter().rev().cloned().collect(),
+        eog_token_ids: vec![vocab - 1],
+        tokenizer_id: Hash64::from_u64_word(0xBAD),
+    });
+    assert!(PalwConstraintMaskV1::for_job(&job, wrong_table).is_err(), "a table that is not the job's tokenizer_id is refused");
+
+    // ---- produce: only with the table ---------------------------------------------------------
+    let refused = match backend.execute_free_prompt(&job, &prompt) {
+        Err(why) => why,
+        Ok(_) => panic!("a host without the table cannot run a constrained job"),
+    };
+    assert!(refused.contains("token table"), "{refused}");
+    let run = palw_fp_with_constraint_scope_v1(Some(mask.clone()), || backend.execute_free_prompt(&job, &prompt)).expect("the masked run");
+    let rendered: Vec<u8> =
+        run.output_token_ids.iter().take_while(|id| **id != vocab - 1).map(|id| table.entries[*id as usize].clone().unwrap()[0]).collect();
+    assert!(rendered == b"\"abc\"" || rendered == b"\"cab\"", "the committed answer is in the schema: {:?}", String::from_utf8_lossy(&rendered));
+    assert_eq!(*run.output_token_ids.last().unwrap(), vocab - 1, "the stop rule commits the lowest end-of-generation id");
+    assert_eq!(run.output_token_ids.len(), rendered.len() + 1);
+    assert!(run.facts.decode_tokens_executed < limit && run.facts.stop_reason == PalwFpStopReasonV3::EndOfGeneration);
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: floor,
+        cu_ruleset_id: Hash64::default(),
+    };
+    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 9_999_999).expect("the run commits");
+    let payload = PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment,
+        prompt_token_ids: ids.clone(),
+        signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+    };
+    let claim_id = payload.claim_id();
+    assert_eq!(borsh::from_slice::<PalwFpCommitmentTxPayloadV3>(&borsh::to_vec(&payload).unwrap()).unwrap(), payload, "the wire round-trips");
+    // The job id is its own domain: the same fields as a V3 job are another claim.
+    let plain = PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, tail: None, ..job.clone() };
+    assert_ne!(fp_job_id_v3(&job), fp_job_id_v3(&plain));
+
+    // ---- carry: not below the fence, not unarmed, and the second form only past its own ------------
+    let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
+    assert!(walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE - 1), false, false, false).is_empty(), "no constrained claim below the fence");
+    let objects = walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE + 1), false, true, false);
+    assert_eq!(objects.len(), 1, "armed, the constrained claim opens (a first-form constraint needs no second fence)");
+    // A second-form constraint (a union with a `$ref`) is carried only where `palw_fp_constraint_v2` is.
+    let second = {
+        let schema = misaka_palw_constraint::schema::parse_v2(&serde_json::json!({
+            "$defs": { "p": { "const": "p" } },
+            "anyOf": [
+                { "type": "object", "properties": { "kind": { "$ref": "#/$defs/p" } }, "required": ["kind"], "additionalProperties": false },
+                { "type": "object", "properties": { "kind": { "const": "q" } }, "required": ["kind"], "additionalProperties": false }
+            ]
+        }))
+        .expect("the second subset");
+        misaka_palw_constraint::compile_v2::compile_v2(&schema).expect("compiles").to_bytes()
+    };
+    let second_payload = {
+        let mut j = job.clone();
+        j.tail = Some(PalwFpJobTailV1::Constraint(second));
+        let mut pl = payload.clone();
+        pl.commitment.job = j;
+        pl
+    };
+    assert!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE - 1), false, true, false).is_empty(), "the second form below its fence");
+    assert_eq!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE), false, true, true).len(), 1, "and from it");
+
+    // ---- price and fold -----------------------------------------------------------------------
+    let s2 = fold_at(&p, &s, &ctx(3, 112, 3, 0), &objects).expect("the real fold opens the constrained claim");
+    assert!(s2.claim(&claim_id).is_some(), "the claim exists");
+
+    // ---- verify: every interval through the same mask, and a lying answer is a Fault -----------------
+    let roots = PalwClaimRootsV1 {
+        execution_root: run.outcome.execution_root,
+        trace_root: run.outcome.trace_root,
+        anchor: fp_job_id_v3(&job),
+        attempt_draw: None,
+        output_root: None,
+        job_pin: None,
+    };
+    let count = backend.fp_interval_count_for(job.prompt_tokens, run.facts.decode_tokens_executed).expect("intervals");
+    let verify = |scope: Option<Arc<PalwConstraintMaskV1>>, answer: &[u32], index: u32| {
+        let opening = backend.open_fp_interval(&run.outcome.material, index, &ids).expect("the executor opens it");
+        backend.fp_forget_seat_state_v1();
+        if let Some((_, covered, _)) = misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
+            let c = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
+            backend.checkpoint_root_for_context_v1(&c, &ids, &run.output_token_ids, covered).expect("the seat recomputes");
+        }
+        palw_fp_with_constraint_scope_v1(scope, || {
+            backend.verify_fp_interval_opening_under_job_v1(&opening, roots, index, &ids, run.facts.step_leaf_count, &job, answer)
+        })
+    };
+    for index in 0..count {
+        assert_eq!(verify(Some(mask.clone()), &run.output_token_ids, index), PalwFpIntervalVerdictV1::Valid, "interval {index}");
+    }
+
+    // A committed answer that is not what the mask selects does not replay (the first id swapped for one the schema forbids).
+    let mut lying = run.output_token_ids.clone();
+    lying[1] = (lying[1] + 1) % (vocab - 1);
+    let verdicts: Vec<_> = (0..count).map(|i| verify(Some(mask.clone()), &lying, i)).collect();
+    assert!(verdicts.iter().any(|v| *v != PalwFpIntervalVerdictV1::Valid), "a lying answer replays as Valid everywhere: {verdicts:?}");
+
+    // ---- license ------------------------------------------------------------------------------
     let bonds = genesis_bonds(&p);
     let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
     let s3 = fold_at(&p, &s2, &ctx(4, 113, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats }])

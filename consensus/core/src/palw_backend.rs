@@ -895,6 +895,13 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this backend serves no answer-only path".to_string())
     }
 
+    /// **ADR-0096 Decision 8: this class's token-to-bytes table** (the served material a constrained job's mask is read
+    /// through, [`crate::palw_fp_constraint_job_v1::PalwTokenTableV1`]), if this host holds one. A host that holds none files
+    /// `Incapable` for a constrained claim and cannot produce one. The default holds none.
+    fn token_table_v1(&self) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
+        None
+    }
+
     /// **RFC-0001 §2.6 stage 2: the prefix STATE of a prompt's first `prefix_ids.len()` ids** — the object a
     /// prefix-state claim (FP job version 11) names ([`crate::palw_fp_prefix_v1`]): the family's digest of the K/V state
     /// after the prefix, under the class's id and the prefix's length. Deterministic in the ids, so a producer that holds
@@ -1045,9 +1052,17 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         committed_output_ids: &[u32],
     ) -> PalwFpIntervalVerdictV1 {
-        let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
-        crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
-            self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+        // ADR-0096 Decision 8: a constrained claim is replayed through its mask, which needs this class's token table; a
+        // host without it (or with another class's) cannot judge the claim — `Unverifiable`, an abstention, not a fault.
+        let mask = match crate::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, self.token_table_v1()) {
+            Ok(mask) => mask,
+            Err(_) => return PalwFpIntervalVerdictV1::Unverifiable,
+        };
+        crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
+            crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
+                self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+            })
         })
     }
 

@@ -2776,15 +2776,12 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_rules`
     /// shape directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**, exactly as the
-    /// decode-rules fence above is refused: none of the three halves exists on the path that
-    /// would apply it — consensus-core carries no constraint automaton and no version-6 job, the
-    /// court has no v3 refutation arm, and no engine masks a decode. Arming it changes exactly
-    /// one observable thing today — `GetPalwProducerFactsResponse::fp_decode_constraint_armed`,
-    /// which an entrance would read as "serve `response_format` committed" — so the fence's only
-    /// reachable effect would be a format the seat does not replay, which is a claim no seat can
-    /// reproduce. The refusal lifts when the build carries all three halves (ADR-0096 §6 steps
-    /// 3–4).
+    /// **BUILT (RFC-0001 §2.5, lane U, 2026-10-03) and still dormant** — `None` on every preset and in no testnet-12 flag-day
+    /// list. Armed, a free-prompt job may be FP job version 6 carrying a decode constraint
+    /// ([`crate::palw_fp_constraint_job_v1`]): the committed token is the argmax over the lanes the constraint admits, the
+    /// seat replays it through the same mask, and `palw_fp_constraint_v2` may ride it. What this build does NOT yet carry is
+    /// the court's third arm as a proof kind on the wire (the pure check, `check_tiled_decode_token_refutation_v3`, exists):
+    /// a lying constrained claim is stopped by the seat quorum. [`Self::validate_palw_v2`] refuses it off ConsensusV2.
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
     /// **ADR-0099 Decision 5's fence: a court opened at a NAMED leaf, decided in one move.**
@@ -4939,20 +4936,18 @@ impl Params {
         // work over the derived graph, every free-prompt engine and seat selects through
         // `PalwFpDecoderV1`, and the doors admit one job version per height. What arming still
         // requires is `validate_palw_fp_decode_rules_v1`'s, asked on both paths above.
-        // **ADR-0096 Decisions 6–8 cannot be armed by this build either, and the fence says so**
-        // — the same shape as the refusal directly above, for the same reason: a configuration
-        // that reads as "armed" while no job may carry a constraint, no court can try one and no
-        // engine masks one would tell every entrance to serve a committed format that no seat
-        // replays. `never()` is absence and is exempt.
+        // **ADR-0096 Decisions 6–8: the refusal is LIFTED** (RFC-0001 §2.5, lane U, 2026-10-03). It stood because no job could
+        // carry a constraint, no engine masked a decode and no seat replayed one. This build carries the constrained job
+        // (FP job version 6, `crate::palw_fp_constraint_job_v1`), the mask in every producer's driver and every seat's
+        // replay rule, and the court's third arm as a pure check (`check_tiled_decode_token_refutation_v3`). What arming
+        // still requires is the fence's own prerequisites below. (The court arm is not yet a proof kind on the wire: a
+        // lying constrained claim is stopped by the seat quorum, and convicted only where a challenger files the existing
+        // decode-token refutation — see ADR-0096 and the lane report.)
         if let Some(activation) = self.palw_fp_decode_constraint
             && activation != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
         {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_fp_decode_constraint is armed and this build cannot carry ADR-0096 Decisions 6-8: consensus-core has no \
-                 constraint automaton and no version-6 free-prompt job (no job may carry a constraint_id), the court has no \
-                 v3 refutation arm, and no engine masks a decode — the fence may only be armed by a build that carries all \
-                 three",
-            ));
+            return Err(PalwModeV2Error::Invalid("palw_fp_decode_constraint is armed on a network that is not ConsensusV2"));
         }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
         // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).

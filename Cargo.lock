@@ -6010,6 +6010,7 @@ dependencies = [
  "kaspa-txscript",
  "libc",
  "misaka-palw",
+ "misaka-palw-constraint",
  "misaka-palw-gen",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",

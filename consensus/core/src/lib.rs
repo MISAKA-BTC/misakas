@@ -485,6 +485,7 @@ pub mod palw_fp_tokenizer_v1;
 pub mod palw_fp_constraint_v2;
 /// RFC-0001 §2.10 (ADR-0163): the adapter class listing; dormant behind `palw_adapter_class_v1`.
 pub mod palw_adapter_class_v1;
+pub mod palw_fp_constraint_job_v1;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
 pub mod palw_tir_fence2_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.

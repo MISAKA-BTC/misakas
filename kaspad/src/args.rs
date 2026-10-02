@@ -398,6 +398,10 @@ pub struct Args {
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_fp_v5_at: Option<u64>,
+    /// **DRILL ONLY: arm the decode constraint (palw_fp_decode_constraint, FP job version 6) at this DAA** (`config::drill::palw_drill_fp_constraint_at_v1`).
+    /// Command line only.
+    #[serde(skip)]
+    pub palw_drill_fp_constraint_at: Option<u64>,
     /// **DRILL ONLY: arm the prefix-state receipt (palw_fp_prefix_state) at this DAA** (`config::drill::palw_drill_fp_prefix_at_v1`).
     /// Command line only.
     #[serde(skip)]
@@ -712,6 +716,7 @@ impl Default for Args {
             palw_drill_gen_at: None,
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
+            palw_drill_fp_constraint_at: None,
             palw_drill_fp_prefix_at: None,
             palw_drill_fp_tokenizer_at: None,
             palw_drill_fp_constraint2_at: None,
@@ -1879,6 +1884,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-fp-constraint-at")
+                .long("palw-drill-fp-constraint-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the decode constraint (palw_fp_decode_constraint, FP job version 6) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless the network is ConsensusV2.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-held-chunks-at")
                 .long("palw-drill-held-chunks-at")
                 .require_equals(true)
@@ -2991,6 +3006,7 @@ impl Args {
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
+            palw_drill_fp_constraint_at: m.get_one::<u64>("palw-drill-fp-constraint-at").copied(),
             palw_drill_fp_prefix_at: m.get_one::<u64>("palw-drill-fp-prefix-at").copied(),
             palw_drill_fp_tokenizer_at: m.get_one::<u64>("palw-drill-fp-tokenizer-at").copied(),
             palw_drill_fp_constraint2_at: m.get_one::<u64>("palw-drill-fp-constraint2-at").copied(),

@@ -408,6 +408,8 @@ mod tests {
                 derived_work: PalwFpDerivedWorkCapV1::Declared,
                 logits_q24: true,
                 prefix_state_armed: armed,
+                constraint_armed: false,
+                constraint_v2_armed: false,
                 tokenizer,
             },
             false,

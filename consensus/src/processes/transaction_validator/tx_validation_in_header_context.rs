@@ -57,7 +57,8 @@ impl TransactionValidator {
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_constraint_in_context(tx, ctx_daa_score)
     }
 
     /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation
@@ -116,6 +117,27 @@ impl TransactionValidator {
             &tx.payload,
             fence.is_active(ctx_daa_score),
             matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+        ) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **ADR-0096 Decision 8, the height-indexed half of the constrained claim's door.** Isolation admits a version-6
+    /// commitment's stateless rules wherever the ruleset carries `Params::palw_fp_decode_constraint` at all; here, at the
+    /// containing block's DAA, one below the fence — or one carrying a second-form constraint below
+    /// `Params::palw_fp_constraint_v2` — is refused by name. Inert on every preset without the fence.
+    fn check_palw_fp_constraint_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_decode_constraint_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            self.palw_fp_constraint_v2_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
         ) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
             None => Ok(()),
