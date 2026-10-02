@@ -2670,6 +2670,43 @@ pub fn validate_panel_bound_v2_with_policy(
     policy: PalwPanelDrawPolicyV1,
     stratified: Option<u32>,
 ) -> Result<(), PalwPanelV2Error> {
+    validate_panel_bound_v2_with_tir_shard_v1(
+        state,
+        params,
+        state_params,
+        ctx,
+        claim_id,
+        anchor,
+        proposed_anchor,
+        proposed_seats,
+        bond_maturity_daa,
+        capability_proof,
+        policy,
+        stratified,
+        None,
+    )
+}
+
+/// [`validate_panel_bound_v2_with_policy`] for a class that may declare a layer-shard plan (RFC-0006): `tir_shard` is
+/// `Some(S_L)` exactly when the caller's one-place decision says this claim's panel is drawn per layer shard, and the
+/// recomputation is then [`derive_tir_shard_panel_v1`]'s — the same function the binding came from.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_panel_bound_v2_with_tir_shard_v1(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    anchor: &PalwAnchorFactV2,
+    proposed_anchor: Hash64,
+    proposed_seats: &[PalwPanelSeatV2],
+    bond_maturity_daa: Option<u64>,
+    capability_proof: bool,
+    policy: PalwPanelDrawPolicyV1,
+    stratified: Option<u32>,
+    // RFC-0006: `Some(S_L)` exactly when the claim's class declared a layer-shard plan and the fence is in force at the anchor.
+    tir_shard: Option<u16>,
+) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
@@ -2740,7 +2777,20 @@ pub fn validate_panel_bound_v2_with_policy(
     }
 
     let registered_by_daa = palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa);
-    let derived = match stratified {
+    let derived = match tir_shard {
+        // **RFC-0006: the per-shard draw of an IR claim**, the same function the binding came from.
+        Some(s_l) => derive_tir_shard_panel_v1(
+            state,
+            params,
+            claim_id,
+            seed,
+            state_params.min_collateral_sompi(),
+            registered_by_daa,
+            capability_proof,
+            policy,
+            s_l,
+        )?,
+        None => match stratified {
         // **The stratified (shard) draw is not stake-weighted yet.** It is dormant on every network
         // (`palw_shard_court` / `palw_kary_court` are `None` everywhere, so `stratified` is always
         // `None` here), so C-02's weighting rides the flat draw below. When the shard court is armed,
@@ -2766,6 +2816,7 @@ pub fn validate_panel_bound_v2_with_policy(
             capability_proof,
             policy,
         )?,
+        },
     };
     if derived != proposed_seats {
         return Err(PalwPanelV2Error::PanelMismatch);

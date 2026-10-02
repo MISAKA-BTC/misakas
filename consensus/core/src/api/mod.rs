@@ -803,6 +803,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0006: assemble one licensing part of a claim drawn per layer shard** — the next shard (lowest index first) whose
+    /// cell-masked receipts in `candidates` the acceptance validator itself accepts as a licence of that shard, as the
+    /// `TirShardReceiptLicensed` object a block would take, or `None` while the fence is dormant, the claim was not drawn per
+    /// shard, or no shard's receipts license it yet. Garbage candidates are dropped, never fatal.
+    fn palw_v2_tir_shard_part_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
     /// **ADR-0160 F-B: assemble a batch licence** of the `due` claims (oldest bind first) over the
     /// pooled seats' signed `windows`, within `max_bytes`, or `None` while the fence is dormant or
     /// nothing licenses (node policy: which licences a collector carries, never what a block accepts).

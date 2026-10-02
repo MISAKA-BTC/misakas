@@ -432,6 +432,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_receipt_coverage_assemble(claim, candidates)
     }
 
+    /// RFC-0006: one licensing part of a claim drawn per layer shard, as the acceptance validator takes it.
+    pub fn palw_v2_tir_shard_part_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.consensus.palw_v2_tir_shard_part_assemble(claim, candidates)
+    }
+
     pub fn palw_v2_optimistic_assemble(
         &self,
         claim: kaspa_consensus_core::Hash64,

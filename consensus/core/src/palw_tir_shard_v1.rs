@@ -890,7 +890,7 @@ pub fn palw_tir_shard_readiness_message_v1(
     s_l: u16,
     shard: u16,
     span: u64,
-    opened_leaf_hashes: &[Hash64],
+    opened: &[(u32, Hash64)],
 ) -> Hash64 {
     let mut s = keyed(PALW_TIR_SHARD_READINESS_DOMAIN_MESSAGE_V1);
     s.update(network_domain.as_byte_slice());
@@ -899,9 +899,10 @@ pub fn palw_tir_shard_readiness_message_v1(
     s.update(&s_l.to_le_bytes());
     s.update(&shard.to_le_bytes());
     s.update(&span.to_le_bytes());
-    s.update(&(opened_leaf_hashes.len() as u32).to_le_bytes());
-    for h in opened_leaf_hashes {
-        s.update(h.as_byte_slice());
+    s.update(&(opened.len() as u32).to_le_bytes());
+    for (index, leaf) in opened {
+        s.update(&index.to_le_bytes());
+        s.update(leaf.as_byte_slice());
     }
     finish(s)
 }

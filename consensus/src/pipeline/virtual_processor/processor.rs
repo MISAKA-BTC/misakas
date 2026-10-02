@@ -7382,6 +7382,13 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a pipeline-claim DA object was dropped by name below palw_improvement_v1, and the block stands (RFC-0004 Phase F)");
                 continue;
             }
+            // **RFC-0006, likewise**: below `palw_tir_shard_v1` the layer-sharded panels' objects (a plan, a part, a shard
+            // possession proof) and the `TirStepRun` unit and its answer are payloads an older build cannot decode and
+            // skips (A-2), so they are dropped here, first, and charged nothing; the fold refuses them too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_shard_v1(&object) && !self.palw_tir_shard_at(point.daa_score) {
+                info!("Block {block}: a layer-sharded-panel object was dropped by name below palw_tir_shard_v1, and the block stands (RFC-0006)");
+                continue;
+            }
             // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
             // parameter carriage's appended tag 2) is dropped by name below `palw_improvement_v1` —
             // an older build cannot decode the carriage and skips the object (A-2) — first, and
@@ -8804,6 +8811,79 @@ impl VirtualStateProcessor {
         (door_takes(&subset) && self.palw_v2_offered_licence_licenses_v1(state, state_params, point, &subset)).then_some(subset)
     }
 
+    /// **RFC-0006: the next ready licensing part of a claim drawn per layer shard**, from the cell-masked receipts a node pooled,
+    /// at virtual's point. Shards are tried lowest first; each is built greedily — a candidate joins the part if the set stays
+    /// sound (`validate_tir_shard_part_v1`), and the part is returned the moment the acceptance validator itself says it
+    /// licenses its shard. The set the node offers is the set a block takes.
+    pub fn palw_v2_tir_shard_part_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        self.palw_v2_tir_shard_part_assemble_on_v1(&state, state_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_tir_shard_part_assemble_impl`] on a given state and point (the tests fold their own).
+    pub(crate) fn palw_v2_tir_shard_part_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error as E;
+        use kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPartV1;
+        if !state_params.tir_shard_active_at(point.daa_score) {
+            return None;
+        }
+        let record = state.tir_shard_claim(&claim)?;
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        for shard in 0..record.s_l {
+            if record.progress.is_licensed(u32::from(shard)) {
+                continue;
+            }
+            let mut kept: Vec<kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4> = Vec::new();
+            for candidate in candidates.iter().filter(|c| c.shard == shard) {
+                if kept.iter().any(|k| k.receipt.seat_bond == candidate.receipt.seat_bond) {
+                    continue;
+                }
+                let mut attempt = kept.clone();
+                attempt.push(candidate.clone());
+                let part = PalwTirShardPartV1 { claim, shard, receipts: attempt.clone() };
+                match kaspa_consensus_core::palw_panel_v2::validate_tir_shard_part_v1(
+                    state,
+                    state_params,
+                    point,
+                    network_domain,
+                    &part,
+                    Self::verify_mldsa87_with_context_bool,
+                ) {
+                    Ok(_) => {
+                        return Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirShardReceiptLicensed { part });
+                    }
+                    // A sound set that is not a licence yet: keep the receipt, keep collecting.
+                    Err(E::TirShardPartShort(_)) => kept = attempt,
+                    // A receipt that poisons any set it is in is dropped.
+                    Err(_) => {}
+                }
+            }
+        }
+        None
+    }
+
     /// ADR-0133 S2: assemble an `OptimisticLicensed` from V3 receipts when the full-replay seat's
     /// `Valid` is present, past the fence.
     ///
@@ -9219,6 +9299,11 @@ impl VirtualStateProcessor {
                             "claim {claim}: a pipeline answer is refused: palw_improvement_v1 is not in force at this block (RFC-0004 Phase F)"
                         ));
                     }
+                    if (answer.is_tir_shard_v1() || unit.is_tir_shard_v1()) && !self.palw_tir_shard_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: a step-run answer is refused: palw_tir_shard_v1 is not in force at this block (RFC-0006)"
+                        ));
+                    }
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
@@ -9273,7 +9358,7 @@ impl VirtualStateProcessor {
                     // `point.daa_score` would make the derived panel change from block to block
                     // around the fence height, and a `PanelBound` that missed the block it was
                     // built for would be refused as a mismatch rather than accepted late.
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_policy(
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_tir_shard_v1(
                         state,
                         panel_params,
                         state_params,
@@ -9306,6 +9391,8 @@ impl VirtualStateProcessor {
                         },
                         // ADR-0100 Decision 4: the same one-place decision the binding made.
                         self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
+                        // RFC-0006: and the IR class's layer-shard plan, decided at the same anchor.
+                        self.palw_tir_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -11751,6 +11838,94 @@ impl VirtualStateProcessor {
                         return Err(format!("class {class_id}'s shard plan is not signed by its registrant"));
                     }
                 }
+                // **RFC-0006: layer-sharded panels' three objects** (tags 91-93). The fence first, the doubled-fence doctrine of
+                // every court move; then each object's authority: the class's registrant over a plan, the seats' own cell-masked
+                // receipts over a part (checked exactly as a whole licence checks theirs, over that shard's slice, by
+                // `validate_tir_shard_part_v1`), the bond over a shard possession proof.
+                Obj::TirShardPlanDeclared { class_id, s_l, s_p, signature } => {
+                    if !self.palw_tir_shard_at(point.daa_score) {
+                        return Err(format!("class {class_id}: layer-sharded panels are not armed on this network (RFC-0006)"));
+                    }
+                    let class = state
+                        .class(class_id)
+                        .ok_or_else(|| format!("a layer-shard plan names class {class_id} this chain does not have"))?;
+                    let registrant = class
+                        .registrant_bond
+                        .ok_or_else(|| format!("class {class_id} was registered at genesis and has no registrant"))?;
+                    let record = state.bond(&registrant).ok_or_else(|| format!("class {class_id}'s registrant bond is gone"))?;
+                    let message = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_plan_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        class_id,
+                        *s_l,
+                        *s_p,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_tir_shard_v1::PALW_TIR_SHARD_PLAN_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("class {class_id}'s layer-shard plan is not signed by its registrant"));
+                    }
+                }
+                Obj::TirShardReceiptLicensed { part } => {
+                    if !self.palw_tir_shard_at(point.daa_score) {
+                        return Err(format!("claim {}: layer-sharded panels are not armed on this network (RFC-0006)", part.claim));
+                    }
+                    kaspa_consensus_core::palw_panel_v2::validate_tir_shard_part_v1(
+                        state,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        part,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| format!("claim {} shard {}: the part does not license its shard: {e}", part.claim, part.shard))?;
+                }
+                Obj::TirSeatReadinessProved { bond, class_id, shard, span, proof, signature } => {
+                    if !self.palw_tir_shard_at(point.daa_score) {
+                        return Err(format!("a shard possession proof for class {class_id} below layer-sharded panels' fence (RFC-0006)"));
+                    }
+                    if !self.palw_model_registry_at(point.daa_score) || !self.palw_readiness_v2_at(point.daa_score) {
+                        return Err(format!("a shard possession proof for class {class_id} below the registry's readiness V2 (ADR-0133)"));
+                    }
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a shard possession proof names bond {bond:?} this chain does not have"))?;
+                    let plan = state
+                        .tir_shard_plan(class_id)
+                        .ok_or_else(|| format!("class {class_id} declared no layer-shard plan"))?;
+                    let opened_leaf_hashes: Vec<(u32, kaspa_hashes::Hash64)> = proof
+                        .opened
+                        .iter()
+                        .map(|(index, operand)| (*index, kaspa_consensus_core::palw_artifact::artifact_leaf_v1(operand)))
+                        .collect();
+                    let message = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_readiness_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        bond,
+                        class_id,
+                        plan.s_l,
+                        *shard,
+                        *span,
+                        &opened_leaf_hashes,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_tir_shard_v1::PALW_TIR_SHARD_READINESS_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s shard possession proof is not signed by the key it registered"));
+                    }
+                }
                 Obj::BondShardsDeclared { bond, class_id, shard_count, shards, signature } => {
                     if !self.palw_shard_licensing_at(point.daa_score) {
                         return Err(format!("bond {bond:?}: per-shard licensing is not armed on this network (ADR-0100)"));
@@ -13697,6 +13872,27 @@ impl VirtualStateProcessor {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_fence2_active_at(daa_score))
     }
 
+    /// **RFC-0006's layer-sharded panels, read off the bundle's mirror** (`tir_shard_from_daa`, which `validate_palw_v2` holds
+    /// equal to `Params::palw_tir_shard_v1`).
+    fn palw_tir_shard_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.tir_shard_active_at(daa_score))
+    }
+
+    /// **Whether a claim's panel is drawn per LAYER shard, and into how many** (RFC-0006) — the ONE decision the binding and its
+    /// validation share, beside [`Self::palw_stratified_shard_count`]: the fence at the claim's ANCHOR (the panel is a pure
+    /// function of the claim) and a plan its IR class declared.
+    fn palw_tir_shard_count(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        class_id: &kaspa_hashes::Hash64,
+        anchor_daa: u64,
+    ) -> Option<u16> {
+        if !self.palw_tir_shard_at(anchor_daa) {
+            return None;
+        }
+        state.tir_shard_plan(class_id).map(|plan| plan.s_l)
+    }
+
     /// **RFC-0004's improvement fence, read off the bundle's mirror** (`improve_from_daa`, which
     /// `validate_palw_v2` holds equal to `Params::palw_improvement_v1`).
     fn palw_improvement_at(&self, daa_score: u64) -> bool {
@@ -15190,8 +15386,21 @@ impl VirtualStateProcessor {
         // `H(anchor attempt's execution ‖ claim)`, below it the anchor block — the one value the gate
         // recomputes and the fold stores.
         let seed = anchor.panel_seed(claim_id);
-        let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
-            Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
+        let drawn = match (self.palw_tir_shard_count(state, &claim.class_id, anchor.anchor_daa), self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa)) {
+            // RFC-0006: an IR class with a layer-shard plan draws per shard, with the whole draw policy (stake race, readiness,
+            // route-matrix lock) the flat draw reads — the same function the acceptance layer recomputes it with.
+            (Some(s_l), _) => kaspa_consensus_core::palw_panel_v2::derive_tir_shard_panel_v1(
+                state,
+                panel_params,
+                claim_id,
+                seed,
+                min_collateral,
+                maturity_floor,
+                capability_bound,
+                policy,
+                s_l,
+            ),
+            (None, Some(shard_count)) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
                 state,
                 panel_params,
                 claim_id,
@@ -15201,7 +15410,7 @@ impl VirtualStateProcessor {
                 capability_bound,
                 shard_count,
             ),
-            None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_policy(
+            (None, None) => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_policy(
                 state,
                 panel_params,
                 claim_id,

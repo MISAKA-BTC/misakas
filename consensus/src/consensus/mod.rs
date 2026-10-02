@@ -2524,6 +2524,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_batch_licence_assemble_impl(&windows, &due, max_bytes)
     }
 
+    fn palw_v2_tir_shard_part_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_tir_shard_part_assemble_impl(claim, &candidates)
+    }
+
     fn palw_v2_optimistic_assemble(
         &self,
         claim: kaspa_hashes::Hash64,
