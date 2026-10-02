@@ -400,3 +400,37 @@ fn a_per_fence_drill_flag_moves_its_entry_and_keeps_the_rest_of_the_release_arme
     assert_eq!((fence_at(&q, "palw_capacity_aggregate_liability_step_2"), fence_at(&q, "palw_capacity_aggregate_liability_step_3")), (Some(560), Some(655)));
     q.validate_palw_v2().expect("validates");
 }
+
+/// **The release's fence table, printed for the review and the report** (`--nocapture`): every testnet-12 fence with a height past genesis,
+/// by height, the three ids of the shipped ruleset and of the int-10 baseline, and the fork id's schedule. Asserts nothing the tests above
+/// do not: it is the table the release is announced with.
+#[test]
+fn print_the_release_fence_table() {
+    let shipped = palw_t12_shipped_params();
+    let baseline = palw_t12_release_v5_params();
+    let mut rows: Vec<(u64, &str)> = shipped
+        .palw_fences_v1()
+        .into_iter()
+        .filter_map(|(name, f)| f.map(|f| (f.daa_score(), name)))
+        .filter(|(at, _)| *at != 0 && *at != u64::MAX)
+        .collect();
+    rows.sort();
+    println!("FENCE TABLE (testnet-12 as shipped; heights past genesis):");
+    for (at, name) in &rows {
+        let note = if baseline.palw_fences_v1().iter().any(|(n, f)| n == name && f.map(|f| f.daa_score()) == Some(*at)) { "" } else { "  <- int-11" };
+        println!("  {at:>6}  {name}{note}");
+    }
+    let (sp, si, ss) = ids(&shipped);
+    let (bp, bi, bs) = ids(&baseline);
+    println!("SHIPPED  params {sp}\n         identity {si}\n         schedule {ss}");
+    println!("INT-10   params {bp}\n         identity {bi}\n         schedule {bs}");
+    println!("SCHEDULE {:?}", shipped.fence_schedule_v1());
+    println!(
+        "CEILINGS gen: macs/position 2^{} cone work 2^{}; improve: {} candidates, {} items",
+        PALW_T12_GEN_CEILINGS_V1.image.max_position_macs.trailing_zeros(),
+        PALW_T12_GEN_CEILINGS_V1.image.max_job_cone_work.trailing_zeros(),
+        PALW_T12_IMPROVE_CEILINGS_V1.max_candidates_per_epoch,
+        PALW_T12_IMPROVE_CEILINGS_V1.max_items_per_epoch
+    );
+    assert!(rows.iter().any(|(at, name)| *at == H && *name == "palw_gen_v1"));
+}
