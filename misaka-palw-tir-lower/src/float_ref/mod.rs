@@ -21,9 +21,47 @@ use crate::weights::{Binding, Resolver, Src, Tensor, TensorSource, eval_qsrc, ev
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::ops::{Deref, Range};
+use std::sync::{Arc, Mutex};
 
 pub mod stream;
+
+/// **A param instance read from its source when it is asked for** (RFC-0002 Part II §II.9 L1: the float reference's calibration, row-streamed).
+///
+/// A layer-major run holds one layer's weights resident; a model whose single layer does not fit a host's memory — a stack of 128 experts,
+/// a 150k-row projection — needs the weights themselves read on demand. A lazy param is the source's expression behind two reads: the
+/// whole tensor ([`load`](Self::load)) for an op that reads all of it, and a block of rows ([`rows`](Self::rows), every axis but the last
+/// flattened) for an op that reads a few (the experts a router selected). The value is the one a resident param holds, element for element.
+pub trait LazyParam: Send + Sync {
+    fn shape(&self) -> &[usize];
+    fn load(&self) -> Result<Tensor>;
+    fn rows(&self, rows: Range<usize>) -> Result<Tensor>;
+}
+
+/// What a lazy param's cache may hold, and what it holds.
+#[derive(Default)]
+struct LazyCache {
+    budget_bytes: usize,
+    held_bytes: usize,
+    held: BTreeMap<(u32, Option<usize>), Arc<Tensor>>,
+}
+
+/// **A param as an op reads it**: borrowed from the store, or read from its source and handed over (kept in the lazy cache while its
+/// budget has room, dropped with the op otherwise).
+pub enum PView<'a> {
+    Ref(&'a Tensor),
+    Owned(Arc<Tensor>),
+}
+
+impl Deref for PView<'_> {
+    type Target = Tensor;
+    fn deref(&self) -> &Tensor {
+        match self {
+            PView::Ref(t) => t,
+            PView::Owned(t) => t,
+        }
+    }
+}
 
 /// Bound params: globals, and per-layer params by `(param, layer)`.
 #[derive(Default, Clone)]
@@ -33,6 +71,10 @@ pub struct ParamStore {
     /// A pre-quantised param's stored integers (its float tensor above is their dequantisation);
     /// one per expert for a stack of experts.
     quant: BTreeMap<(u32, Option<usize>), Arc<Vec<QWeight>>>,
+    /// Params read from their source when an op asks (L1), by `(param, occurrence layer)`; a lazy instance has no tensor above.
+    lazy: BTreeMap<(u32, Option<usize>), Arc<dyn LazyParam>>,
+    /// The tensors the lazy params keep between asks, within a budget (shared by every clone and every session of the store).
+    lazy_cache: Arc<Mutex<LazyCache>>,
 }
 
 /// One param instance from its source: the float tensor, and the stored integers when the param
@@ -58,6 +100,72 @@ pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<
 }
 
 impl ParamStore {
+    /// Bind a param instance LAZILY: the source is read when an op asks (the whole tensor, or the rows it needs).
+    pub fn insert_lazy(&mut self, p: u32, layer: Option<usize>, lazy: Arc<dyn LazyParam>) {
+        self.lazy.insert((p, layer), lazy);
+    }
+
+    /// The bytes the lazy params may keep resident between asks (0: none — every ask reads the source again).
+    pub fn set_lazy_cache_bytes(&mut self, bytes: usize) {
+        self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner()).budget_bytes = bytes;
+    }
+
+    fn lazy_entry(&self, p: u32, layer: Option<usize>) -> Option<&Arc<dyn LazyParam>> {
+        match layer {
+            Some(l) => self.lazy.get(&(p, Some(l))).or_else(|| self.lazy.get(&(p, None))),
+            None => self.lazy.get(&(p, None)),
+        }
+    }
+
+    /// The param as an op reads it: the resident tensor, or the lazy one read now.
+    pub fn view(&self, p: u32, layer: Option<usize>) -> Result<PView<'_>> {
+        if let Ok(t) = self.get(p, layer) {
+            return Ok(PView::Ref(t));
+        }
+        let Some(lazy) = self.lazy_entry(p, layer) else {
+            return Err(LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")));
+        };
+        let key = (p, layer);
+        {
+            let c = self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(t) = c.held.get(&key) {
+                return Ok(PView::Owned(t.clone()));
+            }
+        }
+        let t = Arc::new(lazy.load()?);
+        let bytes = t.data.len() * std::mem::size_of::<f32>();
+        let mut c = self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if c.held_bytes + bytes <= c.budget_bytes {
+            c.held_bytes += bytes;
+            c.held.insert(key, t.clone());
+        }
+        Ok(PView::Owned(t))
+    }
+
+    /// The shape of a param instance, resident or lazy, without reading it.
+    pub fn shape_of(&self, p: u32, layer: Option<usize>) -> Result<Vec<usize>> {
+        if let Ok(t) = self.get(p, layer) {
+            return Ok(t.shape.clone());
+        }
+        self.lazy_entry(p, layer)
+            .map(|l| l.shape().to_vec())
+            .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))
+    }
+
+    /// Rows `rows` of a param instance (every axis but the last flattened): sliced from a resident tensor, read from the source for a lazy one.
+    pub fn rows_of(&self, p: u32, layer: Option<usize>, rows: Range<usize>) -> Result<Tensor> {
+        if let Ok(t) = self.get(p, layer) {
+            return crate::weights::slice_rows(t, rows);
+        }
+        let key = (p, layer);
+        if let Some(t) = self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner()).held.get(&key) {
+            return crate::weights::slice_rows(t, rows);
+        }
+        self.lazy_entry(p, layer)
+            .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))?
+            .rows(rows)
+    }
+
     pub fn get(&self, p: u32, layer: Option<usize>) -> Result<&Tensor> {
         match layer {
             Some(l) => self.layered.get(&(p, l)).or_else(|| self.global.get(&p)),
@@ -372,9 +480,25 @@ impl<'a> Session<'a> {
         }
     }
 
-    fn param(&self, r: Ref, layer: Option<usize>) -> Result<&'a Tensor> {
+    fn param(&self, r: Ref, layer: Option<usize>) -> Result<PView<'a>> {
         match r {
-            Ref::Param(p) => self.params.get(p, layer),
+            Ref::Param(p) => self.params.view(p, layer),
+            other => Err(LowerError::eval(format!("expected a param, got {other:?}"))),
+        }
+    }
+
+    /// The shape of a param operand, without reading a lazy one.
+    fn param_shape(&self, r: Ref, layer: Option<usize>) -> Result<Vec<usize>> {
+        match r {
+            Ref::Param(p) => self.params.shape_of(p, layer),
+            other => Err(LowerError::eval(format!("expected a param, got {other:?}"))),
+        }
+    }
+
+    /// Rows of a param operand (a stack of experts' expert `e` is rows `e·out .. (e+1)·out` of the flattened `[E·out, in]`).
+    fn param_rows(&self, r: Ref, layer: Option<usize>, rows: Range<usize>) -> Result<Tensor> {
+        match r {
+            Ref::Param(p) => self.params.rows_of(p, layer, rows),
             other => Err(LowerError::eval(format!("expected a param, got {other:?}"))),
         }
     }
@@ -421,14 +545,14 @@ impl<'a> Session<'a> {
             Op::Linear { bias, lora } => {
                 let w = self.param(ins[1], layer)?;
                 let b = if *bias { Some(self.param(ins[2], layer)?) } else { None };
-                let mut y = linear(x(0)?, w, b.map(|t| t.data.as_slice()));
+                let mut y = linear(x(0)?, &w, b.as_ref().map(|t| t.data.as_slice()));
                 if let Some(l) = lora {
                     // Unmerged: y += (num/den)·B·(A·x), in f64 over the f32 operands.
                     let at = if *bias { 3 } else { 2 };
                     let (a, bm) = (self.param(ins[at], layer)?, self.param(ins[at + 1], layer)?);
-                    let ax = linear(x(0)?, a, None);
+                    let ax = linear(x(0)?, &a, None);
                     self.sub_site(prefix, &node.site, "lora_a", &ax);
-                    let bax = linear(&ax, bm, None);
+                    let bax = linear(&ax, &bm, None);
                     let s = l.num as f64 / l.den as f64;
                     for (yo, d) in y.iter_mut().zip(&bax) {
                         *yo = (*yo as f64 + s * *d as f64) as f32;
@@ -474,7 +598,7 @@ impl<'a> Session<'a> {
             Op::Norm { spec, groups } => {
                 let gain = if ins.len() > 1 { Some(self.param(ins[1], layer)?) } else { None };
                 let bias = if ins.len() > 2 { Some(self.param(ins[2], layer)?) } else { None };
-                one(norm(x(0)?, spec.kind, spec.eps, spec.gain, gain, bias, *groups))
+                one(norm(x(0)?, spec.kind, spec.eps, spec.gain, gain.as_deref(), bias.as_deref(), *groups))
             }
             Op::GatedRmsNorm { eps, groups, gate_first, act: gate_act } => {
                 let w = self.param(ins[2], layer)?;
@@ -803,31 +927,27 @@ impl<'a> Session<'a> {
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
                 // A gated expert: gate, up, down (inputs 3, 4, 5); a plain one (`MOE_EXPERTS_PLAIN_V1`): up, down (3, 4).
-                let (g, u, d) = if *gated {
-                    (Some(self.param(ins[3], layer)?), self.param(ins[4], layer)?, self.param(ins[5], layer)?)
-                } else {
-                    (None, self.param(ins[3], layer)?, self.param(ins[4], layer)?)
-                };
-                let biases = if *bias {
-                    Some((self.param(ins[6], layer)?, self.param(ins[7], layer)?, self.param(ins[8], layer)?))
-                } else {
-                    None
-                };
-                let (e_i, e_d) = (u.shape[1], u.shape[2]);
+                let (g, u, d) = if *gated { (Some(ins[3]), ins[4], ins[5]) } else { (None, ins[3], ins[4]) };
+                let biases = if *bias { Some((ins[6], ins[7], ins[8])) } else { None };
+                // The stacks are read by EXPERT (the rows a router selected), never whole: a lazy stack (L1) is a few rows from its source.
+                let u_shape = self.param_shape(u, layer)?;
+                let (e_i, e_d) = (u_shape[1], u_shape[2]);
                 let mut y = vec![0f64; e_d];
                 // Sub-sites over the selected experts: what a lowering scales each stage by.
                 let (mut gate_all, mut up_all, mut act_all, mut hidden_all, mut out_all) =
                     (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 for (j, &e) in idx.iter().enumerate().take(*top_k) {
-                    let slice = |t: &Tensor, e: usize| -> Vec<f32> {
-                        let per: usize = t.shape[1..].iter().product();
-                        t.data[e * per..(e + 1) * per].to_vec()
+                    let slice = |t: Ref, e: usize| -> Result<Vec<f32>> {
+                        // Expert `e` of a `[E, a.., last]` stack is rows `e·rpe .. (e+1)·rpe` of its every-axis-but-the-last flattening.
+                        let shape = self.param_shape(t, layer)?;
+                        let rpe: usize = shape[1..shape.len() - 1].iter().product();
+                        Ok(self.param_rows(t, layer, e * rpe..(e + 1) * rpe)?.data)
                     };
-                    let (uw, dw) = (slice(u, e), slice(d, e));
-                    let gw = g.map(|g| slice(g, e));
-                    let gb = biases.map(|(a, _, _)| slice(a, e));
-                    let ub = biases.map(|(_, b, _)| slice(b, e));
-                    let db = biases.map(|(_, _, c)| slice(c, e));
+                    let (uw, dw) = (slice(u, e)?, slice(d, e)?);
+                    let gw = g.map(|g| slice(g, e)).transpose()?;
+                    let gb = biases.map(|(a, _, _)| slice(a, e)).transpose()?;
+                    let ub = biases.map(|(_, b, _)| slice(b, e)).transpose()?;
+                    let db = biases.map(|(_, _, c)| slice(c, e)).transpose()?;
                     // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
                     let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
                     let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());

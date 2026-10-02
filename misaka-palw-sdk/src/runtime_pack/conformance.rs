@@ -278,3 +278,137 @@ pub fn jobs(vocab: usize, prompts: usize, prefill: usize, decode: usize, seed: u
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------------------------
+// The streamed form (RFC-0002 Part II §II.9 L2)
+// ---------------------------------------------------------------------------------------------
+
+/// **An artifact over this many bytes is conformed streamed unless told otherwise**: [`run`] holds the artifact whole once per executor
+/// form (the reference's tensors are `i128`), which a 33 GiB class cannot afford; [`run_streamed`] reads each tensor for the reference
+/// when it is asked and drops it, and runs the typed backend over the mapped file.
+pub const STREAM_ABOVE_BYTES_V1: u64 = 2 << 30;
+
+/// **The independent implementation runs in a streamed conformance only over an artifact up to this size**: `misaka-palw-tir-ref2` reads a
+/// whole parameter map (written from the specification alone, it has no lazy source), so a larger artifact is checked on the reference and
+/// the typed backend and the report says the independent implementation was not run.
+pub const STREAM_REF2_UP_TO_BYTES_V1: u64 = 512 << 20;
+
+/// What a streamed run did and did not do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamedNote {
+    /// The executors that ran (`reference`, `typed-backend`, `independent`).
+    pub ran: Vec<String>,
+    /// Why the independent implementation did not run, when it was asked and did not.
+    pub ref2_skipped: Option<String>,
+    /// The largest tensor the reference held at once, in bytes of its `i128` form.
+    pub reference_peak_tensor_bytes: u64,
+}
+
+/// **[`run`], streamed**: the artifact at `path` is opened as a node opens it (mapped), the reference evaluator reads each param through a
+/// lazy source over the container (one tensor decoded per ask and dropped), the typed backend runs over the mapping, and the independent
+/// implementation runs only up to [`STREAM_REF2_UP_TO_BYTES_V1`]. The vectors are the same bytes [`run`] gives (the digests are over the
+/// reference's outputs), so a pack built either way verifies either way.
+pub fn run_streamed(
+    path: &Path,
+    jobs: &[ConformanceJob],
+    impls: ImplSet,
+    progress: &dyn Fn(usize),
+) -> Result<(Vec<ConformanceVector>, StreamedNote), String> {
+    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(path)?;
+    let container = artifact.container();
+    let p = &container.program;
+    let file_bytes = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    let lazy = misaka_palw_tir_exec::node::LazyContainerParams::new(container);
+    let interp = Interpreter::new(p).map_err(|e| e.to_string())?;
+    // ref2 over a small artifact: its own decoding and its own (whole) parameter map.
+    let mut ref2_skipped = None;
+    let (p2, params2) = if impls.ref2 && file_bytes <= STREAM_REF2_UP_TO_BYTES_V1 {
+        let p2 = misaka_palw_tir_ref2::codec::decode_canonical(&p.encode()).map_err(|e| format!("ref2 refuses the program: {e:?}"))?;
+        let mut params2 = misaka_palw_tir_ref2::eval::Params::new();
+        for e in &container.header.tensors {
+            let b = container.read_tensor_bytes(e.param, e.layer).map_err(|x| format!("param {}: {x}", e.param))?;
+            let d = &p2.params[e.param as usize];
+            let shape = d.shape.iter().map(|x| *x as u64).collect();
+            let t2 = misaka_palw_tir_ref2::Tensor::from_le_bytes(d.dtype, shape, &b).map_err(|e| format!("ref2 tensor: {e:?}"))?;
+            params2.insert((e.param, e.layer.map(u32::from)), t2);
+        }
+        (Some(p2), Some(params2))
+    } else {
+        if impls.ref2 {
+            ref2_skipped = Some(format!(
+                "the artifact is {:.1} MiB, over the {} MiB the independent implementation's whole parameter map is run for: checked on the reference evaluator and the typed backend",
+                file_bytes as f64 / (1 << 20) as f64,
+                STREAM_REF2_UP_TO_BYTES_V1 >> 20
+            ));
+        }
+        (None, None)
+    };
+    let mut ran = vec!["reference".to_string()];
+    if impls.exec {
+        ran.push("typed-backend".into());
+    }
+    if p2.is_some() {
+        ran.push("independent".into());
+    }
+    let mut out = Vec::with_capacity(jobs.len());
+    for (ji, job) in jobs.iter().enumerate() {
+        let vocab = p.token_bound as usize;
+        if job.prompt.is_empty() || job.prompt.iter().any(|t| *t >= vocab) {
+            return Err(format!("{}: the prompt is empty or has a token outside the vocabulary of {vocab}", job.label));
+        }
+        let mut st1 = RunState::default();
+        let mut st2 = p2.as_ref().map(misaka_palw_tir_ref2::eval::initial_state);
+        let mut exec = if impls.exec { Some(TirExecutor::new(artifact.plan(), artifact.params()).map_err(|e| e.to_string())?) } else { None };
+        let total = job.prompt.len() + job.decode;
+        let (mut logit_chunks, mut commit_chunks, mut tokens) = (Vec::new(), Vec::new(), Vec::new());
+        let mut tok = job.prompt[0];
+        for pos in 0..total {
+            let o1 = interp.step(&lazy, &mut st1, tok as u32).map_err(|e| format!("{}: reference at {pos}: {e}", job.label))?;
+            let c1: Vec<Commit> = o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
+            if let (Some(p2), Some(params2), Some(st)) = (&p2, &params2, st2.as_mut()) {
+                let (o2, next) = misaka_palw_tir_ref2::eval::step(p2, params2, &*st, tok as u64).map_err(|e| format!("{}: ref2 at {pos}: {e:?}", job.label))?;
+                *st = next;
+                let c2: Vec<Commit> = o2.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.data.clone())).collect();
+                if o1.logits.data != o2.logits.data {
+                    return Err(format!("{}: position {pos}: the logits differ between the reference evaluator and the independent implementation", job.label));
+                }
+                if c1 != c2 {
+                    return Err(format!("{}: position {pos}: the reference evaluator and the independent implementation commit differently ({} vs {} commits)", job.label, c1.len(), c2.len()));
+                }
+            }
+            if let Some(ex) = exec.as_mut() {
+                let mut sink = Collect(Vec::new());
+                ex.step(tok as u32, &mut sink).map_err(|e| format!("{}: exec at {pos}: {e}", job.label))?;
+                let (_, xl) = ex.logits();
+                let mut c3 = sink.0;
+                c3.sort_by_key(|c| c.0);
+                if o1.logits.data != xl.to_i128s() {
+                    return Err(format!("{}: position {pos}: the logits differ between the reference evaluator and the typed backend", job.label));
+                }
+                if c1 != c3 {
+                    return Err(format!("{}: position {pos}: the reference evaluator and the typed backend commit differently ({} vs {} commits)", job.label, c1.len(), c3.len()));
+                }
+            }
+            logit_chunks.push(logits_chunk(&o1.logits.data));
+            commit_chunks.extend(c1.iter().map(commit_chunk));
+            tok = if pos + 1 < job.prompt.len() {
+                job.prompt[pos + 1]
+            } else {
+                let t = argmax(&o1.logits.data);
+                tokens.push(t);
+                t
+            };
+        }
+        out.push(ConformanceVector {
+            label: job.label.clone(),
+            prompt: job.prompt.clone(),
+            decode: job.decode,
+            tokens: tokens.into_iter().take(job.decode).collect(),
+            positions: total,
+            logits_digest: digest(LOGITS_DIGEST_KEY, logit_chunks.into_iter()),
+            commits_digest: digest(COMMITS_DIGEST_KEY, commit_chunks.into_iter()),
+        });
+        progress(ji);
+    }
+    Ok((out, StreamedNote { ran, ref2_skipped, reference_peak_tensor_bytes: lazy.peak_tensor_bytes() }))
+}

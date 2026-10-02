@@ -50,6 +50,9 @@ pub struct BuildOpts {
     pub declare: Vec<DeclareOpts>,
     /// Write the pack although the program is outside its tolerance.
     pub allow_out_of_tolerance: bool,
+    /// **Streamed conformance** (RFC-0002 Part II §II.9 L2), as [`super::verify::VerifyOpts::streamed`]: `None` — automatically, for an
+    /// artifact over [`conformance::STREAM_ABOVE_BYTES_V1`].
+    pub streamed: Option<bool>,
 }
 
 impl BuildOpts {
@@ -69,6 +72,7 @@ impl BuildOpts {
             impls: ImplSet::default(),
             declare: Vec::new(),
             allow_out_of_tolerance: false,
+            streamed: None,
         }
     }
 }
@@ -236,17 +240,39 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
     log(format!("artifact {} inventory root {}", &result.artifact_digest[..16], &result.inventory_root[..16]));
 
     // 4. Conformance on every executor.
-    log("loading the artifact for conformance".into());
-    let loaded = conformance::LoadedArtifact::open(artifact)?;
-    let vocab = loaded.program.token_bound as usize;
+    let artifact_bytes = std::fs::metadata(artifact).map(|m| m.len()).unwrap_or(0);
+    let streamed = opts.streamed.unwrap_or(artifact_bytes > conformance::STREAM_ABOVE_BYTES_V1);
+    let loaded = if streamed {
+        log("conformance streamed: the reference reads one tensor at a time, the typed backend runs over the mapped artifact".into());
+        None
+    } else {
+        log("loading the artifact for conformance".into());
+        Some(conformance::LoadedArtifact::open(artifact)?)
+    };
+    let vocab = match &loaded {
+        Some(l) => l.program.token_bound as usize,
+        None => misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| format!("{}: {e}", artifact.display()))?.program.token_bound as usize,
+    };
     let jobs = conformance::jobs(vocab, opts.prompts, opts.prefill, opts.decode, opts.seed);
-    let vectors = conformance::run(&loaded, &jobs, opts.impls, &|j| log(format!("conformance vector {} of {}", j + 1, jobs.len())))?;
+    let vectors = match &loaded {
+        Some(l) => conformance::run(l, &jobs, opts.impls, &|j| log(format!("conformance vector {} of {}", j + 1, jobs.len())))?,
+        None => {
+            let (v, note) = conformance::run_streamed(artifact, &jobs, opts.impls, &|j| log(format!("conformance vector {} of {}", j + 1, jobs.len())))?;
+            if let Some(why) = &note.ref2_skipped {
+                log(format!("the independent implementation did not run: {why}"));
+            }
+            v
+        }
+    };
 
     // 5. The Hugging Face reference.
     let mut hf_section = None;
     if let Some(path) = &opts.hf_reference {
         let hf = HfReference::load(path)?;
-        let fit = hfref::measure(&loaded, logits_scale, &hf)?;
+        let fit = match &loaded {
+            Some(l) => hfref::measure(l, logits_scale, &hf)?,
+            None => hfref::measure_streamed(&misaka_palw_tir_exec::node::TirArtifactV1::open(artifact)?, logits_scale, &hf)?,
+        };
         log(format!("against the reference: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5}, max |Δ| {:.3}", fit.slope, fit.corr, fit.top1, fit.kl_mean, fit.max_abs));
         let bad = hfref::check(&fit, &opts.tolerance);
         if !bad.is_empty() && !opts.allow_out_of_tolerance {

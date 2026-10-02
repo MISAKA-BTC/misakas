@@ -78,11 +78,15 @@ pub struct VerifyOpts {
     pub impls: ImplSet,
     /// Re-declare the pack's declared classes (needs the artifact).
     pub declared: bool,
+    /// **Streamed conformance** (RFC-0002 Part II §II.9 L2): the reference reads each tensor when asked, the typed backend runs over the
+    /// mapped file, and the Hugging Face fit runs on the mapped backend — no executor holds the artifact whole. `None`: automatically,
+    /// for an artifact over [`conformance::STREAM_ABOVE_BYTES_V1`].
+    pub streamed: Option<bool>,
 }
 
 impl VerifyOpts {
     pub fn new(pack_dir: impl Into<PathBuf>) -> Self {
-        VerifyOpts { pack_dir: pack_dir.into(), model: None, artifact: None, rebuild: false, impls: ImplSet::default(), declared: true }
+        VerifyOpts { pack_dir: pack_dir.into(), model: None, artifact: None, rebuild: false, impls: ImplSet::default(), declared: true, streamed: None }
     }
 }
 
@@ -234,16 +238,25 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
     } else if !pack.declared.is_empty() {
         acc.skip("declared", "not asked");
     }
-    let loaded = match conformance::LoadedArtifact::open(&art) {
-        Ok(l) => Some(l),
-        Err(e) => {
-            acc.fail("conformance", format!("the artifact does not load: {e}"));
-            None
+    let art_bytes = std::fs::metadata(&art).map(|m| m.len()).unwrap_or(0);
+    let streamed = opts.streamed.unwrap_or(art_bytes > conformance::STREAM_ABOVE_BYTES_V1);
+    if streamed {
+        // Neither the reference nor the typed backend holds the artifact whole: the reference reads one tensor at a time, the typed backend
+        // runs over the mapping, and the fit to the Hugging Face reference is measured on the mapped backend.
+        conformance_check_streamed(&mut acc, &pack, &art, opts.impls);
+        hf_check_streamed(&mut acc, &pack, &art, dir);
+    } else {
+        let loaded = match conformance::LoadedArtifact::open(&art) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                acc.fail("conformance", format!("the artifact does not load: {e}"));
+                None
+            }
+        };
+        if let Some(loaded) = &loaded {
+            conformance_check(&mut acc, &pack, loaded, opts.impls);
+            hf_check(&mut acc, &pack, loaded, dir);
         }
-    };
-    if let Some(loaded) = &loaded {
-        conformance_check(&mut acc, &pack, loaded, opts.impls);
-        hf_check(&mut acc, &pack, loaded, dir);
     }
     if let Some(d) = cleanup {
         let _ = std::fs::remove_dir_all(d);
@@ -466,6 +479,88 @@ fn conformance_check(acc: &mut Acc, pack: &RuntimePackV1, a: &conformance::Loade
                 acc.pass("conformance", format!("{} vector(s), {} positions, equal on {}", got.len(), got.iter().map(|v| v.positions).sum::<usize>(), names.join(", ")));
             } else {
                 acc.fail("conformance", bad.join("; "));
+            }
+        }
+    }
+}
+
+/// [`conformance_check`] streamed (L2): the same vectors, the same digests, the artifact never held whole.
+fn conformance_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, impls: ImplSet) {
+    let jobs: Vec<ConformanceJob> = pack.conformance.vectors.iter().map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode }).collect();
+    match conformance::run_streamed(art, &jobs, impls, &|_| {}) {
+        Err(e) => acc.fail("conformance", e),
+        Ok((got, note)) => {
+            let bad: Vec<String> = got
+                .iter()
+                .zip(&pack.conformance.vectors)
+                .filter(|(g, w)| g != w)
+                .map(|(g, w)| {
+                    if g.tokens != w.tokens {
+                        format!("{}: decoded {:?}, the pack says {:?}", g.label, g.tokens, w.tokens)
+                    } else if g.logits_digest != w.logits_digest {
+                        format!("{}: the logits differ", g.label)
+                    } else {
+                        format!("{}: the commit points differ", g.label)
+                    }
+                })
+                .collect();
+            if !bad.is_empty() {
+                acc.fail("conformance", bad.join("; "));
+            } else if let Some(why) = &note.ref2_skipped {
+                // Nothing failed, but a check that was asked was not made: SKIPPED, with the reason, never PASS.
+                acc.skip(
+                    "conformance",
+                    format!(
+                        "streamed: {} vector(s), {} positions, equal on {}; the independent implementation did not run — {why}",
+                        got.len(),
+                        got.iter().map(|v| v.positions).sum::<usize>(),
+                        note.ran.join(", ")
+                    ),
+                );
+            } else {
+                acc.pass(
+                    "conformance",
+                    format!(
+                        "streamed: {} vector(s), {} positions, equal on {} (the reference held at most {:.1} MiB at once)",
+                        got.len(),
+                        got.iter().map(|v| v.positions).sum::<usize>(),
+                        note.ran.join(", "),
+                        note.reference_peak_tensor_bytes as f64 / (1 << 20) as f64
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// [`hf_check`] streamed: the fit measured on the typed backend over the mapped artifact.
+fn hf_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, dir: &Path) {
+    let Some(h) = &pack.hf_reference else {
+        acc.skip("hf-reference", "the pack carries no Hugging Face reference");
+        return;
+    };
+    let hf = match HfReference::load(&dir.join(&h.file)) {
+        Ok(x) => x,
+        Err(e) => {
+            acc.fail("hf-reference", e);
+            return;
+        }
+    };
+    let artifact = match misaka_palw_tir_exec::node::TirArtifactV1::open(art) {
+        Ok(a) => a,
+        Err(e) => {
+            acc.fail("hf-reference", format!("the artifact does not open: {e}"));
+            return;
+        }
+    };
+    match hfref::measure_streamed(&artifact, pack.logits.scale, &hf) {
+        Err(e) => acc.fail("hf-reference", e),
+        Ok(fit) => {
+            let bad = hfref::check(&fit, &pack.logits.tolerance);
+            if bad.is_empty() {
+                acc.pass("hf-reference", format!("streamed: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5} over {} positions", fit.slope, fit.corr, fit.top1, fit.kl_mean, hf.positions()));
+            } else {
+                acc.fail("hf-reference", bad.join("; "));
             }
         }
     }

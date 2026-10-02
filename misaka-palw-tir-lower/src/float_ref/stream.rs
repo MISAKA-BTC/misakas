@@ -10,7 +10,7 @@
 //! exactly what a step-by-step run would hold for that layer — so the result is the step-by-step
 //! result, value for value.
 
-use super::{ParamStore, Session, SiteStat, bind_one, check_shape};
+use super::{LazyParam, ParamStore, Session, SiteStat, bind_one, check_shape};
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
 use crate::weights::stream::{eval_src_rows, src_row_space};
@@ -63,11 +63,27 @@ pub struct Streamed<'a> {
     pub source: &'a (dyn TensorSource + Sync),
     /// The checkpoint's tensor names, listed once (a resolver per row block would list them again).
     names: OnceLock<Arc<BTreeSet<String>>>,
+    /// **L1 (row-streamed calibration)**: a param of at least this many elements (and a source that serves row ranges) is bound LAZILY —
+    /// read when an op asks, never resident with its layer. `0`: off (every param of the occurrence is loaded whole, as before).
+    lazy_min_elems: usize,
+    /// What the lazy params may keep resident between asks, in bytes (see [`ParamStore::set_lazy_cache_bytes`]).
+    lazy_cache_bytes: usize,
 }
 
 impl<'a> Streamed<'a> {
     pub fn new(prog: &'a HlProgram, binding: &'a Binding, source: &'a (dyn TensorSource + Sync)) -> Self {
-        Streamed { prog, binding, source, names: OnceLock::new() }
+        Streamed { prog, binding, source, names: OnceLock::new(), lazy_min_elems: 0, lazy_cache_bytes: 0 }
+    }
+
+    /// **Bind the large params lazily** (RFC-0002 Part II §II.9 L1): a param of `min_elems` elements or more is read from the checkpoint when
+    /// an op asks for it (the whole tensor, or — for a stack of experts — the rows of the experts a router selected), and kept between
+    /// asks only within `cache_bytes`. The float reference then needs the largest single tensor (or one expert) resident, not a layer.
+    /// The stores this loader returns borrow the checkpoint, the program and the binding, so they live only inside the run that asked for
+    /// them (`run_layer_major` drops each occurrence's store before the next).
+    pub fn with_lazy(mut self, min_elems: usize, cache_bytes: usize) -> Self {
+        self.lazy_min_elems = min_elems;
+        self.lazy_cache_bytes = cache_bytes;
+        self
     }
 
     fn resolver(&self) -> Resolver<'a> {
@@ -118,15 +134,86 @@ impl OccParams for Streamed<'_> {
     }
 }
 
+/// A param read from the checkpoint when asked (L1). It holds the loader's borrows with their lifetime extended: see the SAFETY note on
+/// [`Streamed::lazy_param`].
+struct StreamedLazy {
+    prog: &'static HlProgram,
+    binding: &'static Binding,
+    source: &'static (dyn TensorSource + Sync),
+    names: Arc<BTreeSet<String>>,
+    p: u32,
+    ml: Option<usize>,
+    shape: Vec<usize>,
+}
+
+impl StreamedLazy {
+    fn resolver(&self) -> Resolver<'static> {
+        Resolver::shared(self.source, &self.binding.aliases, self.names.clone()).with_ignored(&self.binding.ignored_prefixes)
+    }
+}
+
+impl LazyParam for StreamedLazy {
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+    fn load(&self) -> Result<Tensor> {
+        let r = self.resolver();
+        let d = &self.prog.params[self.p as usize];
+        let (t, _) = bind_one(&self.binding.srcs[self.p as usize], &r, self.ml)
+            .map_err(|e| LowerError::weights(format!("param `{}`{}: {e}", d.name, self.ml.map(|l| format!(" layer {l}")).unwrap_or_default())))?;
+        check_shape(&d.name, &t, &d.shape)?;
+        Ok(t)
+    }
+    fn rows(&self, rows: Range<usize>) -> Result<Tensor> {
+        let r = self.resolver();
+        eval_src_rows(&self.binding.srcs[self.p as usize], &r, self.ml, &BTreeMap::new(), rows)
+    }
+}
+
 impl Streamed<'_> {
+    /// The lazy form of HL param `pi` at occurrence `layer`, when this loader binds it lazily: the option is on, the param is large enough, its
+    /// source serves row ranges and is not pre-quantised (a quantised param's integers are read whole with it).
+    ///
+    /// SAFETY of the lifetime extension: the returned value borrows `self.prog`, `self.binding` and `self.source`, which the caller of
+    /// [`OccParams::load`] holds for as long as it uses the store it gets back — every caller in this crate (`run_layer_major`,
+    /// `run_to_post`, `calibrate`, the fidelity harness) drops an occurrence's store before the loader it came from, and none keeps one.
+    /// Nothing here is reachable from the store after the loader is gone because nothing outside those runs holds the store.
+    fn lazy_param(&self, pi: u32, layer: Option<usize>) -> Result<Option<Arc<dyn LazyParam>>> {
+        if self.lazy_min_elems == 0 || !self.source.serves_row_ranges() || self.binding.srcs[pi as usize].is_quant() {
+            return Ok(None);
+        }
+        let ml = self.model_layer_of(pi, layer)?;
+        let r = self.resolver();
+        let Some((rows, cols)) = src_row_space(&self.binding.srcs[pi as usize], &r, ml, &BTreeMap::new())? else { return Ok(None) };
+        if rows.saturating_mul(cols) < self.lazy_min_elems {
+            return Ok(None);
+        }
+        let names = self.names.get_or_init(|| Arc::new(self.source.names().into_iter().collect())).clone();
+        // SAFETY: see above.
+        let (prog, binding, source) = unsafe {
+            (
+                std::mem::transmute::<&HlProgram, &'static HlProgram>(self.prog),
+                std::mem::transmute::<&Binding, &'static Binding>(self.binding),
+                std::mem::transmute::<&(dyn TensorSource + Sync), &'static (dyn TensorSource + Sync)>(self.source),
+            )
+        };
+        let shape = self.prog.params[pi as usize].shape.clone();
+        Ok(Some(Arc::new(StreamedLazy { prog, binding, source, names, p: pi, ml, shape })))
+    }
+
     fn load_except(&self, bi: usize, layer: Option<usize>, skip: &BTreeSet<u32>) -> Result<Arc<ParamStore>> {
         let r = self.resolver();
         let mut st = ParamStore::default();
+        st.set_lazy_cache_bytes(self.lazy_cache_bytes);
         for pi in self.prog.block_params(bi) {
             if skip.contains(&pi) {
                 continue;
             }
             let d = &self.prog.params[pi as usize];
+            if let Some(lazy) = self.lazy_param(pi, if d.per_layer { layer } else { None })? {
+                st.insert_lazy(pi, if d.per_layer { layer } else { None }, lazy);
+                continue;
+            }
             if d.per_layer {
                 let l = layer.ok_or_else(|| LowerError::eval(format!("per-layer param `{}` outside a layer", d.name)))?;
                 // Keyed by the occurrence, read at the model layer it belongs to.

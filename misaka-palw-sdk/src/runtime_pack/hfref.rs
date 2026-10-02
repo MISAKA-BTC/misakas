@@ -153,12 +153,34 @@ fn softmax(v: &[f64]) -> Vec<f64> {
     e.into_iter().map(|x| x / z).collect()
 }
 
+/// The program's logit rows for `tokens` on the typed backend over a MAPPED artifact (a node's own [`TirArtifactV1`]): the weights are
+/// the file's pages, not a copy — the streamed form of [`program_logits`] (RFC-0002 Part II §II.9 L2).
+pub fn program_logits_streamed(a: &misaka_palw_tir_exec::node::TirArtifactV1, tokens: &[usize], scale: f64) -> Result<Vec<Vec<f64>>, String> {
+    let mut ex = TirExecutor::new(a.plan(), a.params()).map_err(|e| e.to_string())?;
+    let mut rows = Vec::with_capacity(tokens.len());
+    for (pos, t) in tokens.iter().enumerate() {
+        ex.step(*t as u32, &mut Quiet).map_err(|e| format!("exec at {pos}: {e}"))?;
+        let (_, l) = ex.logits();
+        rows.push(l.to_i128s().into_iter().map(|c| c as f64 * scale).collect());
+    }
+    Ok(rows)
+}
+
 /// **The fit of the program's logits to the reference's.**
 pub fn measure(a: &LoadedArtifact, scale: f64, hf: &HfReference) -> Result<FitRec, String> {
+    measure_rows(&mut |tokens| program_logits(a, tokens, scale), hf)
+}
+
+/// [`measure`] over a mapped artifact: the same fit, the weights never copied.
+pub fn measure_streamed(a: &misaka_palw_tir_exec::node::TirArtifactV1, scale: f64, hf: &HfReference) -> Result<FitRec, String> {
+    measure_rows(&mut |tokens| program_logits_streamed(a, tokens, scale), hf)
+}
+
+fn measure_rows(rows_of: &mut dyn FnMut(&[usize]) -> Result<Vec<Vec<f64>>, String>, hf: &HfReference) -> Result<FitRec, String> {
     let (mut n, mut sx, mut sy, mut sxx, mut syy, mut sxy) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
     let (mut max_abs, mut sq, mut agree, mut positions, mut kl) = (0f64, 0f64, 0usize, 0usize, 0f64);
     for s in &hf.sequences {
-        let rows = program_logits(a, &s.tokens, scale)?;
+        let rows = rows_of(&s.tokens)?;
         for (pos, row) in rows.iter().enumerate() {
             let want = &s.logits[pos * hf.vocab..(pos + 1) * hf.vocab];
             if row.len() != hf.vocab {

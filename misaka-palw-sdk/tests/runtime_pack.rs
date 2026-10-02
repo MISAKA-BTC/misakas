@@ -123,7 +123,9 @@ fn every_claim_of_a_pack_fails_when_it_is_tampered_with() {
     // The artifact's identity.
     let d = edit("root", &|v| {
         let s = v["result"]["inventory_root"].as_str().expect("root").to_string();
-        v["result"]["inventory_root"] = format!("{}0", &s[..s.len() - 1]).into();
+        // A different last digit (the root itself moves with the lowering: it may end in 0).
+        let last = if s.ends_with('0') { '1' } else { '0' };
+        v["result"]["inventory_root"] = format!("{}{last}", &s[..s.len() - 1]).into();
     });
     assert!(failing(&verify_with(&d, None)).contains(&"artifact".to_string()));
     // A conformance vector: the decoded tokens, then the logits digest.
@@ -175,7 +177,11 @@ fn every_claim_of_a_pack_fails_when_it_is_tampered_with() {
     assert_eq!(hf.status, Status::Fail, "{}", r.render());
     assert!(hf.detail.contains("slope"), "{}", hf.detail);
     // …and a pack that claims q24-natural units must say a scale of exactly 2^-24.
-    let d = edit("q24", &|v| v["logits"]["convention"] = "q24-natural-v1".into());
+    let d = edit("q24", &|v| {
+        v["logits"]["convention"] = "q24-natural-v1".into();
+        // The lowerer writes q24 natural-log units by default now (LOGITS_Q24_V1: scale exactly 2^-24): the claim is made false by the scale.
+        v["logits"]["scale_bits"] = format!("{:016x}", 0.5f64.to_bits()).into();
+    });
     let text = std::fs::read_to_string(d.join(PACK_FILE)).expect("manifest");
     assert!(RuntimePackV1::parse(&text).unwrap_err().contains("2^-24"));
     let _ = pack;
@@ -301,4 +307,59 @@ fn an_mxfp4_pack_serves_the_packed_experts_as_the_float_export_and_rebuilds() {
     let r = verify_pack(&o, &|_| {}).expect("verifies");
     assert!(r.verified(), "{}", r.render());
     let _ = std::fs::remove_dir_all(work);
+}
+
+/// **L2: a streamed conformance gives the vectors a loaded one gives** (RFC-0002 Part II §II.9): built streamed or loaded, the pack's
+/// conformance vectors, their digests and the fit to the Hugging Face reference are the same bytes, and either verifies either's pack.
+/// The reference reads each tensor when it is asked, never holding more than the largest one; the independent implementation is run up
+/// to its size cap and a larger artifact is SKIPPED by name, never passed.
+#[test]
+fn a_streamed_conformance_is_the_loaded_ones_and_never_holds_the_artifact_whole() {
+    use misaka_palw_sdk::runtime_pack::conformance;
+    let work_loaded = scratch("stream-loaded");
+    let work_streamed = scratch("stream-streamed");
+    let src = fixture("hf/llama");
+    let build_with = |work: &Path, streamed: bool| {
+        let pack_dir = work.join("pack");
+        let mut req = ConvertRequest::new(&src, work.join("artifact.palwtir"));
+        req.calib = Some(calibration(work, 64, 3, 12));
+        let mut o = BuildOpts::new(req, &pack_dir, "fixture");
+        o.prompts = 2;
+        o.prefill = 5;
+        o.decode = 2;
+        o.hf_reference = Some(src.join("logits.json"));
+        o.streamed = Some(streamed);
+        let b = build_pack(&o, &|_| {}).unwrap_or_else(|e| panic!("build (streamed {streamed}): {e}"));
+        (b.pack, pack_dir)
+    };
+    let (loaded, loaded_dir) = build_with(&work_loaded, false);
+    let (streamed, streamed_dir) = build_with(&work_streamed, true);
+    assert_eq!(loaded.conformance, streamed.conformance, "the vectors and their digests are the same bytes");
+    assert_eq!(loaded.result, streamed.result, "and so is the artifact");
+    assert_eq!(loaded.hf_reference.as_ref().map(|h| h.measured.clone()), streamed.hf_reference.as_ref().map(|h| h.measured.clone()), "the fit too");
+    // Either verifies either's pack, both ways.
+    for (dir, art) in [(&loaded_dir, work_loaded.join("artifact.palwtir")), (&streamed_dir, work_streamed.join("artifact.palwtir"))] {
+        for streamed_verify in [false, true] {
+            let mut v = VerifyOpts::new(dir);
+            v.artifact = Some(art.clone());
+            v.model = Some(src.clone());
+            v.streamed = Some(streamed_verify);
+            let r = verify_pack(&v, &|_| {}).expect("verifies");
+            assert!(r.ok(), "streamed {streamed_verify}: {}", r.render());
+            let c = r.checks.iter().find(|c| c.name == "conformance").expect("a conformance check");
+            assert_eq!(c.status, Status::Pass, "{}", c.detail);
+            assert_eq!(c.detail.contains("streamed"), streamed_verify, "{}", c.detail);
+        }
+    }
+    // The streamed run's own report: the reference never held more than its largest tensor, and the independent implementation ran.
+    let jobs = conformance::jobs(64, 1, 4, 1, 3);
+    let (_, note) = conformance::run_streamed(&work_streamed.join("artifact.palwtir"), &jobs, conformance::ImplSet::default(), &|_| {}).expect("streams");
+    assert!(note.ran.contains(&"independent".to_string()) && note.ref2_skipped.is_none(), "{note:?}");
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(&work_streamed.join("artifact.palwtir")).expect("opens");
+    let largest = container.header.tensors.iter().map(|e| container.program.params[e.param as usize].shape.iter().product::<u32>() as u64 * 16).max().unwrap_or(0);
+    assert!(note.reference_peak_tensor_bytes <= largest, "{} > {largest}", note.reference_peak_tensor_bytes);
+    // Over the independent implementation's cap it is SKIPPED by name (nothing failed, a check that was asked was not made).
+    assert_eq!(conformance::STREAM_REF2_UP_TO_BYTES_V1, 512 << 20);
+    let _ = std::fs::remove_dir_all(work_loaded);
+    let _ = std::fs::remove_dir_all(work_streamed);
 }

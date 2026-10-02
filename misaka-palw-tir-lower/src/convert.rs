@@ -153,6 +153,12 @@ pub struct ConvertRequest {
     /// MiB of `f32` per block of rows, and the size from which a row-wise tensor is made by blocks.
     pub block_mib: usize,
     pub defer_min_mib: usize,
+    /// **Row-streamed calibration** (RFC-0002 Part II §II.9 L1): a param of at least this many MiB of `f32` is bound LAZILY in the float
+    /// reference — read when an op asks (a stack of experts by the rows of the experts a router selected) — so calibration holds the
+    /// largest single tensor, not a layer. `0` (the default): off, as before. The statistics are the resident run's, bit for bit.
+    pub calib_lazy_mib: usize,
+    /// What the lazy params may keep resident between asks, in MiB (default 512).
+    pub calib_lazy_cache_mib: usize,
     /// The tokenizer the class binds (default `<model>/tokenizer.json`, zero when absent).
     pub tokenizer: Option<std::path::PathBuf>,
     pub math: MathMode,
@@ -179,6 +185,8 @@ impl ConvertRequest {
             keep_chunks: false,
             block_mib: 16,
             defer_min_mib: 16,
+            calib_lazy_mib: 0,
+            calib_lazy_cache_mib: 512,
             tokenizer: None,
             math: MathMode::LibmV1,
             quant_formats: Vec::new(),
@@ -251,7 +259,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     log(scope.headline());
     let features = prep.spec.features();
 
-    let loader = Streamed::new(&prep.hl, &prep.binding, ck);
+    let loader = Streamed::new(&prep.hl, &prep.binding, ck).with_lazy(req.calib_lazy_mib << 18, req.calib_lazy_cache_mib << 20);
     let progress = |what: &'static str| {
         move |d: usize, n: usize| {
             if d == n || d.is_multiple_of(8) {

@@ -20,11 +20,11 @@ USAGE:
                            [--math libm-v1|std] [--quant-format <file>]... [--adapter <file>] [--tokenizer <file>]
                            [--hf-reference <audit dir | logits.json | hf-reference.json>]
                            [--slope-min F] [--slope-max F] [--corr-min F] [--top1-min F] [--kl-max F] [--allow-out-of-tolerance]
-                           [--prompts N] [--prefill N] [--decode N] [--seed N] [--no-ref2] [--no-exec]
+                           [--prompts N] [--prefill N] [--decode N] [--seed N] [--no-ref2] [--no-exec] [--stream|--no-stream]
                            [--declare <network>[:max-context=N][:tile=N][:h-chunk=N]]...
                            [--chunk-store <dir>] [--keep-chunks] [--block-mib N] [--defer-min-mib N]
     palw-class pack verify <pack dir> [--model <dir | .gguf>] [--artifact <file>] [--rebuild]
-                           [--no-ref2] [--no-exec] [--no-declared] [--strict] [--json]
+                           [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
 
 `build` converts the model (the streaming converter, libm-v1 math by default), writes the artifact to --out and
@@ -166,6 +166,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                 o.seed = v;
             }
             o.impls = ImplSet { exec: !take_bool(&mut args, "--no-exec"), ref2: !take_bool(&mut args, "--no-ref2") };
+            o.streamed = if take_bool(&mut args, "--stream") { Some(true) } else if take_bool(&mut args, "--no-stream") { Some(false) } else { None };
             for d in take_all(&mut args, "--declare") {
                 o.declare.push(parse_declare(&d)?);
             }
@@ -184,6 +185,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             o.artifact = take_flag(&mut args, "--artifact").map(PathBuf::from);
             o.rebuild = take_bool(&mut args, "--rebuild");
             o.impls = ImplSet { exec: !take_bool(&mut args, "--no-exec"), ref2: !take_bool(&mut args, "--no-ref2") };
+            o.streamed = if take_bool(&mut args, "--stream") { Some(true) } else if take_bool(&mut args, "--no-stream") { Some(false) } else { None };
             o.declared = !take_bool(&mut args, "--no-declared");
             o.pack_dir = PathBuf::from(args.first().ok_or(PACK_USAGE)?);
             let r = verify(&o, &log)?;

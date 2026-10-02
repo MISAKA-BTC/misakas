@@ -65,6 +65,13 @@ struct Args {
     /// A row-wise tensor of at least this many MiB as `f32` is made by blocks (default 16).
     #[arg(long, default_value_t = 16)]
     defer_min_mib: usize,
+    /// Row-streamed calibration (RFC-0002 Part II §II.9 L1): a param of at least this many MiB as `f32` is read when an op asks, never
+    /// resident with its layer (a stack of experts by the experts a router selected). 0: off (default). The statistics are the same.
+    #[arg(long, default_value_t = 0)]
+    calib_lazy_mib: usize,
+    /// What the lazy params may keep resident between asks, in MiB (default 512).
+    #[arg(long, default_value_t = 512)]
+    calib_lazy_cache_mib: usize,
     /// The tokenizer the class binds (default: `<model>/tokenizer.json`, zero when absent).
     #[arg(long)]
     tokenizer: Option<PathBuf>,
@@ -107,6 +114,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     req.keep_chunks = a.keep_chunks;
     req.block_mib = a.block_mib;
     req.defer_min_mib = a.defer_min_mib;
+    req.calib_lazy_mib = a.calib_lazy_mib;
+    req.calib_lazy_cache_mib = a.calib_lazy_cache_mib;
     req.tokenizer = a.tokenizer.clone();
     req.math = math;
     req.quant_formats = a.quant_format.clone();
