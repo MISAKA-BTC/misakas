@@ -665,3 +665,210 @@ fn the_draw_seats_each_shard_from_the_bonds_that_proved_it_with_an_outsider_per_
         "{short:?}"
     );
 }
+
+#[test]
+fn a_shards_possession_proof_opens_its_own_rows_and_writes_the_derived_class_row() {
+    use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, palw_artifact_multiproof_v1};
+    use kaspa_consensus_core::palw_model_registry_v1::{PALW_READINESS_V2_CHUNKS_V1, PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1};
+    use kaspa_consensus_core::palw_tir_shard_v1::{
+        palw_tir_shard_inventory_ranges_v1, palw_tir_shard_partition_v1, palw_tir_shard_readiness_leaves_v1,
+        palw_tir_shard_ready_class_v1, palw_tir_shard_weights_v1,
+    };
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, _claim) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    // The registry's fold on: possession proofs are taken (ADR-0133's readiness V2), spans of 10 DAA.
+    run.extras.model_registry = Some(PalwModelRegistryFoldV1 {
+        globals: PALW_REGISTRY_GLOBALS_V1,
+        span_daa: 10,
+        genesis_works: Default::default(),
+        grace_until_daa: 0,
+        admission_audit_period_daa: None,
+        readiness_v2_active: true,
+        bond_maturity: None,
+    });
+    run.extras.readiness_v2_active = true;
+    let bond = bond_key(12);
+    let span = (run.daa + 1) / 10;
+    // The geometry the fold derives: the class's weights, its 2-shard partition, the shard's own inventory rows.
+    let program = f.space.program.clone();
+    let weights = palw_tir_shard_weights_v1(&program, f.class.layout.max_context);
+    let parts = palw_tir_shard_partition_v1(&weights, 2).expect("two shards");
+    let leaves: Vec<Hash64> = f.ops.iter().map(artifact_leaf_v1).collect();
+    let proof_for = |shard: u16, bond: &PalwBondKeyV2, span: u64| {
+        let ranges = palw_tir_shard_inventory_ranges_v1(&program, parts[usize::from(shard)].clone(), shard == 0, shard == 1);
+        let draw = palw_tir_shard_readiness_leaves_v1(&f.class_id, 2, shard, bond, span, &ranges, PALW_READINESS_V2_CHUNKS_V1 as usize);
+        assert!(!draw.is_empty());
+        let opened: Vec<(u32, PalwArtifactOperandV1)> = draw.iter().map(|i| (*i, f.ops[*i as usize].clone())).collect();
+        (draw, palw_artifact_multiproof_v1(&leaves, &opened).expect("a multiproof of the drawn leaves"))
+    };
+    let object = |shard: u16, bond: PalwBondKeyV2, span: u64, proof| PalwConsensusObjectV2::TirSeatReadinessProved {
+        bond,
+        class_id: f.class_id,
+        shard,
+        span,
+        proof: Box::new(proof),
+        signature: vec![0; 8],
+    };
+    // The proof of shard 1's rows lands under shard 1's derived class, and under no other.
+    let (draw1, proof1) = proof_for(1, &bond, span);
+    run.step(&[object(1, bond, span, proof1.clone())]);
+    let class1 = palw_tir_shard_ready_class_v1(&f.class_id, 2, 1);
+    let class0 = palw_tir_shard_ready_class_v1(&f.class_id, 2, 0);
+    let row = run.s.seat_readiness(&bond, &class1).expect("the shard's row");
+    assert_eq!((row.proved_span, row.proof_version), (span, 2));
+    assert!(run.s.seat_readiness(&bond, &class0).is_none(), "shard 0 is not proved by shard 1's rows");
+    assert!(run.s.seat_readiness(&bond, &f.class_id).is_none(), "nor is the whole class");
+    // The same proof under the other shard's name opens leaves that are not that shard's draw: refused by name.
+    assert!(matches!(run.refused(&[object(0, bond, span, proof1)]), PalwStateV2Error::ReadinessProofRefused(_)));
+    // Another bond's draw is its own (the bond is in the challenge).
+    let (draw_other, _) = proof_for(1, &bond_key(13), span);
+    assert_ne!(draw1, draw_other, "the draw names (class, shard, bond, span)");
+    // A shard of a plan that has no such shard, and a class with no plan, are refused.
+    let (_, proof_any) = proof_for(1, &bond, span);
+    assert!(matches!(run.refused(&[object(2, bond, span, proof_any.clone())]), PalwStateV2Error::ReadinessProofRefused(_)));
+    let mut no_plan = object(1, bond, span, proof_any);
+    if let PalwConsensusObjectV2::TirSeatReadinessProved { class_id, .. } = &mut no_plan {
+        *class_id = h64(1);
+    }
+    assert!(run.try_at(run.daa + 1, &[no_plan], None).is_err(), "a class that declared no plan has no shard rows");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The acceptance layer: `validate_tir_shard_part_v1`, with a keyed-hash stand-in for ML-DSA-87 (the real verifier is the
+// node's; what is under test is WHAT is signed and what the validator reads around the signature)
+// ---------------------------------------------------------------------------------------------
+
+fn fake_sig(key: &[u8], context: &[u8], message: &[u8]) -> Vec<u8> {
+    let mut s = blake2b_simd::Params::new().hash_length(64).to_state();
+    s.update(key);
+    s.update(&(context.len() as u64).to_le_bytes());
+    s.update(context);
+    s.update(message);
+    s.finalize().as_bytes().to_vec()
+}
+
+fn fake_verify(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    fake_sig(key, context, message) == signature
+}
+
+/// A receipt of seat `n` signed as the node signs it: over `palw_receipt_message_v4` under the V4 context.
+fn signed(domain: Hash64, claim: Hash64, n: u64, shard: u16, verdict: PalwReceiptVerdictV2, segments: PalwSegmentMaskV2, daa: u64) -> PalwSeatReceiptV4 {
+    use kaspa_consensus_core::palw_tir_shard_v1::{PALW_RECEIPT_V4_MLDSA87_CONTEXT, palw_receipt_message_v4};
+    let message = palw_receipt_message_v4(domain, claim, verdict, daa, shard, segments);
+    PalwSeatReceiptV4 {
+        receipt: PalwSeatReceiptV2 {
+            claim,
+            verdict,
+            seat_bond: bond_key(n),
+            signed_daa: daa,
+            signature: fake_sig(&pubkey(n), PALW_RECEIPT_V4_MLDSA87_CONTEXT, message.as_byte_slice()),
+        },
+        shard,
+        segments,
+    }
+}
+
+#[test]
+fn the_acceptance_validator_reads_what_is_signed_and_who_may_sign_it() {
+    use kaspa_consensus_core::palw_panel_v2::{PalwPanelV2Error as E, validate_tir_shard_part_v1};
+    use kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPartVerdictV1 as V;
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    let (anchor, domain) = (h64(77), h64(4242));
+    run.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: panel_of(2, true) }]);
+    let bound = run.daa;
+    let now = bound + 3;
+    let full = PalwSegmentMaskV2::full(1);
+    let valid = PalwReceiptVerdictV2::Valid;
+    let (state0, params0) = (run.s.clone(), run.p.clone());
+    let check = |receipts: Vec<PalwSeatReceiptV4>, shard: u16, at: u64| {
+        validate_tir_shard_part_v1(&state0, &params0, &Run::ctx(at), domain, &PalwTirShardPartV1 { claim: claim_id, shard, receipts }, fake_verify)
+    };
+    let honest = |shard: u16| -> Vec<PalwSeatReceiptV4> {
+        let first = 10 + u64::from(shard) * 4;
+        (0..4u64).map(|i| signed(domain, claim_id, first + i, shard, valid, full, bound + 1)).collect()
+    };
+    // The honest set licenses its shard, naming its counted signers.
+    match check(honest(0), 0, now).expect("an honest part") {
+        V::Licensed { cell_counts, signers } => {
+            assert_eq!(cell_counts, vec![3], "four distinct signers cover the shard's one cell, counted to the cap of three");
+            assert_eq!(signers.len(), 4);
+        }
+        other => panic!("{other:?}"),
+    }
+    // A set whose outsider is missing is sound but short (an assembler keeps collecting).
+    assert!(matches!(check(honest(0)[1..].to_vec(), 0, now), Err(E::TirShardPartShort(why)) if why.contains("outsider")));
+    // A receipt moved to another shard's part: the part's shard is not its signed shard.
+    assert!(matches!(check(honest(1), 0, now), Err(E::TirShardPartRefused(_))));
+    // A signature that covers another shard or another mask is no signature of this receipt: a relayer cannot move or widen it.
+    let mut moved = honest(0);
+    moved[1].segments = PalwSegmentMaskV2::full(2);
+    assert!(matches!(check(moved, 0, now), Err(E::ReceiptSignatureInvalid)), "a widened mask");
+    let mut retagged = honest(0);
+    retagged[1].shard = 1;
+    assert!(matches!(check(retagged, 0, now), Err(E::TirShardPartRefused(_))), "a retagged shard");
+    // The signature is checked under the V4 context: one made under another context is refused.
+    let mut wrong_context = honest(0);
+    wrong_context[2].receipt.signature = fake_sig(&pubkey(12), b"misaka-palw/receipt-v3/mldsa87/v1", &[1, 2, 3]);
+    assert!(matches!(check(wrong_context, 0, now), Err(E::ReceiptSignatureInvalid)));
+    // A mask that is not the seat's assigned one (here: the empty mask) is refused after the signature checks.
+    let mut mask = honest(0);
+    mask[2] = signed(domain, claim_id, 12, 0, valid, PalwSegmentMaskV2::NONE, bound + 1);
+    assert!(matches!(check(mask, 0, now), Err(E::MaskNotAssigned { .. })));
+    // A seat of another shard, a duplicated seat, a Sampled receipt and the window's edges.
+    let mut stranger = honest(0);
+    stranger[3] = signed(domain, claim_id, 14, 0, valid, full, bound + 1);
+    assert!(matches!(check(stranger, 0, now), Err(E::NotASeat(_))), "shard 1's outsider is no seat of shard 0");
+    let mut twice = honest(0);
+    twice[3] = twice[1].clone();
+    assert!(matches!(check(twice.clone(), 0, now), Err(E::DuplicateSeat(_))));
+    twice.push(twice[0].clone());
+    assert!(matches!(check(twice, 0, now), Err(E::TirShardPartRefused(why)) if why.contains("receipts in a part")), "more receipts than seats");
+    let mut sampled = honest(0);
+    sampled[3] = signed(domain, claim_id, 13, 0, PalwReceiptVerdictV2::Sampled, full, bound + 1);
+    assert!(matches!(check(sampled, 0, now), Err(E::TirShardPartRefused(why)) if why.contains("Sampled")));
+    let early: Vec<PalwSeatReceiptV4> = (0..4u64).map(|i| signed(domain, claim_id, 10 + i, 0, valid, full, bound - 1)).collect();
+    assert!(matches!(check(early, 0, now), Err(E::ReceiptOutsideWindow { why, .. }) if why.contains("before")));
+    let future: Vec<PalwSeatReceiptV4> = (0..4u64).map(|i| signed(domain, claim_id, 10 + i, 0, valid, full, now + 5)).collect();
+    assert!(matches!(check(future, 0, now), Err(E::ReceiptOutsideWindow { why, .. }) if why.contains("after the block")));
+    // Nothing, and a part of a shard that does not exist.
+    assert!(matches!(check(Vec::new(), 0, now), Err(E::TirShardPartRefused(_))));
+    assert!(matches!(check(honest(0), 2, now), Err(E::ShardOutOfRange { shard: 2, count: 2 })));
+    // Below the fence the validator refuses by name too.
+    assert!(matches!(
+        validate_tir_shard_part_v1(&run.s, &run.p, &Run::ctx(SHARD_AT - 1), domain, &PalwTirShardPartV1 { claim: claim_id, shard: 0, receipts: honest(0) }, fake_verify),
+        Err(E::TirShardPartRefused(why)) if why.contains("not in force")
+    ));
+    // Once the shard has landed, a second part of it is refused.
+    let landed = honest(0);
+    run.step(&[part(claim_id, 0, landed.clone())]);
+    let again = validate_tir_shard_part_v1(&run.s, &run.p, &Run::ctx(run.daa + 1), domain, &PalwTirShardPartV1 { claim: claim_id, shard: 0, receipts: landed }, fake_verify);
+    assert!(matches!(again, Err(E::ShardAlreadyLicensed { shard: 0 })));
+}
+
+#[test]
+fn the_tags_of_the_family_are_pinned() {
+    use kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1;
+    use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
+    use kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1;
+    let tag = |object: &PalwConsensusObjectV2| borsh::to_vec(object).unwrap()[0];
+    let f = fixture();
+    // Objects 91, 92 and 93: explicit discriminants (an allocation, not a position).
+    assert_eq!(tag(&plan(f.class_id, 2, 1)), 91);
+    assert_eq!(tag(&part(h64(1), 0, Vec::new())), 92);
+    let proof = kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1 { leaf_count: 1, opened: Vec::new(), siblings: Vec::new() };
+    assert_eq!(
+        tag(&PalwConsensusObjectV2::TirSeatReadinessProved { bond: bond_key(1), class_id: h64(1), shard: 0, span: 0, proof: Box::new(proof), signature: Vec::new() }),
+        93
+    );
+    // The DA unit 7 and the delta entries 101 and 102.
+    assert_eq!(borsh::to_vec(&PalwDaUnitV1::TirStepRun { first: 0, count: 1 }).unwrap()[0], 7);
+    let plan_row = PalwTirShardPlanV1 { s_l: 2, s_p: 1, declared_daa: 5, cell_permille: vec![500, 500] };
+    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardPlan { key: h64(1), old: None, new: Some(plan_row) }).unwrap()[0], 101);
+    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardClaim { key: h64(1), old: None, new: None }).unwrap()[0], 102);
+    let _ = std::mem::size_of::<PalwSeatReadinessRowV1>();
+}
