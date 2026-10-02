@@ -15150,7 +15150,18 @@ impl PalwPanelService {
                 // and every floor replay and audit behind it waits on the ledger. Held back only while lighter
                 // work is waiting, only on a seat that has found the class slow, and never within
                 // `PALW_SEAT_BIG_URGENT_DAA_V1` of the claim's deadline.
-                if replays.big_replay_deferred(&duty.class_id, need.total_bytes(), seat_r_duty.deadline, current_daa) {
+                //
+                // **int-10.3: the class's weight is judged UNPINNED** (`total + pinned`). Pinning (int-10.2 A1) took the
+                // 8k's 1.68 GiB file off the reservation (3.37 → 1.70 GiB) but not off the CPU, and the gate is about how
+                // long a replay holds a slow seat — measured on 10-02, 5.104's seats stopped deferring the 8k, took it at
+                // 15–30 minutes a replay on 8 shared vCPUs and filed 1–8 receipts an hour. The unpinned figure is the one
+                // F2's threshold was set against.
+                if replays.big_replay_deferred(
+                    &duty.class_id,
+                    need.total_bytes().saturating_add(need.pinned_bytes),
+                    seat_r_duty.deadline,
+                    current_daa,
+                ) {
                     crate::palw_backends::note_throttled_v1("panel-replay-big", || {
                         format!(
                             "[{PALW_PANEL}] replay of claim {} held back: it needs {} and this seat's last replay of the class took \
@@ -18540,6 +18551,14 @@ mod seat_r_tests {
         assert!(replays.is_slow_class(&class));
         assert!(replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, far, now), "slow, big, lighter work waits, far from the deadline: held");
         assert!(!replays.big_replay_deferred(&class, GIB / 2, far, now), "a small replay is never held");
+        // int-10.3: the caller passes the unpinned weight — a pinned 8k (1.70 GiB reserved + 1.68 GiB pinned) is still big.
+        let pinned_8k_total = GIB + GIB * 7 / 10;
+        let pinned_8k_file = GIB + GIB * 68 / 100;
+        assert!(
+            replays.big_replay_deferred(&class, pinned_8k_total + pinned_8k_file, far, now),
+            "a pinned 8k is held back on a slow seat by its unpinned weight"
+        );
+        assert!(!replays.big_replay_deferred(&class, pinned_8k_total, far, now), "the pinned figure alone would not be");
         assert!(!replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, near, now), "within 120 DAA of the deadline it is urgent");
         assert!(replays.big_replay_deferred(&class, 3 * GIB + GIB / 3, now + 121, now), "121 DAA out: still held");
         replays.set_big_gate(false);
