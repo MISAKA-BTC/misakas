@@ -169,9 +169,25 @@ impl PalwImprovementCeilingsV1 {
     }
 }
 
-/// **The drill's ceilings** — generous for the tiny classes a drill governs. Used by the drill mover
-/// and the fork id's probe; no network's release carries them.
+/// **The drill's ceilings** — generous for the tiny classes a drill governs, and, by value, testnet-12's
+/// ([`PALW_T12_IMPROVE_CEILINGS_V1`]): int-11 ships them. The name is the vectors' (`palw_improve_vectors`).
 pub const PALW_DRILL_IMPROVE_CEILINGS_V1: PalwImprovementCeilingsV1 = PalwImprovementCeilingsV1 {
+    max_candidates_per_epoch: 8,
+    max_items_per_epoch: 1_024,
+    max_eval_positions_per_epoch: 1 << 32,
+    max_eval_budget_permille: 500,
+    max_governed_lines: 64,
+    max_policy_bytes: 16_384,
+    max_open_epochs: 8,
+    max_live_results: 1 << 14,
+    max_eval_seat_permille: 500,
+};
+
+/// **testnet-12's improvement ceilings — PROVISIONAL until the first corpus is measured** (the coordinator's decision of
+/// 2026-10-02, the int-11 flag day): the drill's values, by value (8 candidates, 1,024 items, 2^32 positions, 500 ‰ budget,
+/// 64 lines, 16 KiB policy, 8 open epochs, 2^14 live results, 500 ‰ seat share). Hashed into the ids: changing one later is one
+/// constant and a repin, at a later flag day.
+pub const PALW_T12_IMPROVE_CEILINGS_V1: PalwImprovementCeilingsV1 = PalwImprovementCeilingsV1 {
     max_candidates_per_epoch: 8,
     max_items_per_epoch: 1_024,
     max_eval_positions_per_epoch: 1 << 32,
@@ -205,9 +221,14 @@ impl PalwImprovementFenceV1 {
         }
     }
 
-    /// A drill's value at a height: this build's ids and [`PALW_DRILL_IMPROVE_CEILINGS_V1`].
+    /// testnet-12's value at a height: this build's ids and [`PALW_T12_IMPROVE_CEILINGS_V1`] (provisional).
+    pub fn testnet12_v1(activation: ForkActivation) -> Self {
+        Self::this_build_v1(activation, PALW_T12_IMPROVE_CEILINGS_V1)
+    }
+
+    /// A drill's value at a height — testnet-12's: a drill drills what ships.
     pub fn drill_v1(activation: ForkActivation) -> Self {
-        Self::this_build_v1(activation, PALW_DRILL_IMPROVE_CEILINGS_V1)
+        Self::testnet12_v1(activation)
     }
 
     /// What the fence adds to a fingerprint beside its height. `consensus_params_id` and
@@ -220,13 +241,14 @@ impl PalwImprovementFenceV1 {
     }
 }
 
-/// **The entry a drill arms the improvement fence with** (`--palw-drill-improve-at`,
-/// [`crate::config::drill::palw_drill_improve_fence_at_v1`]). It is in NO testnet-12 flag-day list:
-/// the fence is dormant on every network.
+/// **The entry that arms the improvement fence** — a drill's (`--palw-drill-improve-at`,
+/// [`crate::config::drill::palw_drill_improve_fence_at_v1`]) and testnet-12's int-11 flag day's
+/// (`config::params::PALW_T12_INT11_FENCES_V1`), the same entry: it writes testnet-12's value
+/// ([`PalwImprovementFenceV1::testnet12_v1`]) and the bundle's mirror, so a drill drills what ships.
 pub const PALW_DRILL_IMPROVE_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_improvement_v1",
     set: |params, at| {
-        params.palw_improvement_v1 = at.map(PalwImprovementFenceV1::drill_v1);
+        params.palw_improvement_v1 = at.map(PalwImprovementFenceV1::testnet12_v1);
         params.sync_palw_improvement_v1();
     },
 };

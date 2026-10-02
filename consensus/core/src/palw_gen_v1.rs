@@ -269,9 +269,9 @@ impl PalwGenCeilingsV1 {
     }
 }
 
-/// **The drill's generative ceilings** — generous for the fixtures a drill registers (tiny
-/// pipelines), provisional until the first profile's corpus is measured. Used by the drill mover and
-/// the fork id's probe; no network's release carries them.
+/// **The generous generative ceilings the first drills used** — superseded by testnet-12's
+/// ([`PALW_T12_GEN_CEILINGS_V1`], which a drill now arms too: `drill_v1` IS `testnet12_v1`). Kept as the
+/// reference for what the first drills registered under; no code path arms them any more.
 pub const PALW_DRILL_GEN_PROFILE_CEILINGS_V1: PalwGenProfileCeilingsV1 = PalwGenProfileCeilingsV1 {
     max_position_macs: 1 << 40,
     max_position_step_leaves: 1 << 22,
@@ -291,6 +291,34 @@ pub const PALW_DRILL_GEN_CEILINGS_V1: PalwGenCeilingsV1 = PalwGenCeilingsV1 {
     audio: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
     video: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
     text: PALW_DRILL_GEN_PROFILE_CEILINGS_V1,
+};
+
+/// **testnet-12's generative ceilings — PROVISIONAL until the first profile's corpus is measured** (the coordinator's
+/// decision of 2026-10-02, the int-11 flag day): no looser than the IR's own where the IR bounds the same dimension, and
+/// the first drills' everywhere else. `max_position_macs` is the IR's 2^37
+/// (`PALW_T12_TIR_CEILINGS_V1.max_macs_per_position`; the drills had 2^40) and `max_job_cone_work` its 2^16 (`max_cone_work`;
+/// the drills had 2^22). The ceilings are hashed into `consensus_params_id` and `consensus_schedule_id`: changing one later
+/// is one constant and a repin, at a later flag day.
+pub const PALW_T12_GEN_PROFILE_CEILINGS_V1: PalwGenProfileCeilingsV1 = PalwGenProfileCeilingsV1 {
+    max_position_macs: 1 << 37,
+    max_position_step_leaves: 1 << 22,
+    max_state_bytes: 1 << 34,
+    max_job_macs: 1 << 46,
+    max_job_transcendentals: 1 << 40,
+    max_job_step_leaves: 1 << 30,
+    max_job_cone_work: 1 << 16,
+    max_stages: 16,
+    max_class_bytes: 1 << 21,
+    max_inflight_claims: 16,
+};
+
+/// The same ceilings for every profile, as the drills had them (per-profile ceilings are a field, not yet a decision).
+pub const PALW_T12_GEN_CEILINGS_V1: PalwGenCeilingsV1 = PalwGenCeilingsV1 {
+    image: PALW_T12_GEN_PROFILE_CEILINGS_V1,
+    embedding: PALW_T12_GEN_PROFILE_CEILINGS_V1,
+    audio: PALW_T12_GEN_PROFILE_CEILINGS_V1,
+    video: PALW_T12_GEN_PROFILE_CEILINGS_V1,
+    text: PALW_T12_GEN_PROFILE_CEILINGS_V1,
 };
 
 /// **`Params::palw_gen_v1`'s value**: the fence and what it carries.
@@ -319,9 +347,14 @@ impl PalwGenFenceV1 {
         }
     }
 
-    /// A drill's value at a height: this build's ids and [`PALW_DRILL_GEN_CEILINGS_V1`].
+    /// testnet-12's value at a height: this build's ids and [`PALW_T12_GEN_CEILINGS_V1`] (provisional).
+    pub fn testnet12_v1(activation: ForkActivation) -> Self {
+        Self::this_build_v1(activation, PALW_T12_GEN_CEILINGS_V1)
+    }
+
+    /// A drill's value at a height — testnet-12's: a drill drills what ships.
     pub fn drill_v1(activation: ForkActivation) -> Self {
-        Self::this_build_v1(activation, PALW_DRILL_GEN_CEILINGS_V1)
+        Self::testnet12_v1(activation)
     }
 
     /// What the fence adds to a fingerprint beside its height. `consensus_params_id` and
@@ -346,13 +379,14 @@ impl PalwGenFenceV1 {
     }
 }
 
-/// **The entry a drill arms the generative fence with** (`--palw-drill-gen-at`,
-/// [`crate::config::drill::palw_drill_gen_fence_at_v1`]). It is in NO testnet-12 flag-day list: the
-/// fence is dormant on every network (the coordinator's rule for this step).
+/// **The entry that arms the generative fence** — a drill's (`--palw-drill-gen-at`,
+/// [`crate::config::drill::palw_drill_gen_fence_at_v1`]) and testnet-12's int-11 flag day's
+/// (`config::params::PALW_T12_INT11_FENCES_V1`), the same entry: it writes testnet-12's value
+/// ([`PalwGenFenceV1::testnet12_v1`]) and the bundle's mirror, so a drill drills what ships.
 pub const PALW_DRILL_GEN_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_gen_v1",
     set: |params, at| {
-        params.palw_gen_v1 = at.map(PalwGenFenceV1::drill_v1);
+        params.palw_gen_v1 = at.map(PalwGenFenceV1::testnet12_v1);
         params.sync_palw_gen_v1();
     },
 };
