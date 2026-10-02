@@ -1974,6 +1974,41 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
         "{{\"rfc7_vertex_equivocation\":1,\"collateral_before\":{},\"collateral_after\":{},\"penalty_permille\":100,\"status\":\"{:?}\"}}",
         before.collateral, after.collateral, after.status
     ));
+
+    // ---- the chain is chain data: below the fence an armed node IS a released node, and a second armed node reaches the same root ---------------
+    let armed_blocks = s.inserted.clone();
+    let released = {
+        let (config, bundle, premine, floats) = t12_with_harness_cards();
+        t12_genesis_chain(&config, &bundle, &premine, &floats)
+    };
+    let mut compared = 0;
+    for block in &armed_blocks {
+        if block.header.daa_score >= H {
+            break;
+        }
+        released
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("the released node refuses an armed block below H: {e}"));
+        let tip = block.header.hash;
+        let armed_root = s.vp().palw_state_v2_store.read().state_root_of(tip).expect("the armed node's root of the block");
+        let released_root = released.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
+        assert_eq!(released_root, armed_root, "block {tip} at DAA {}: one root below the fence", block.header.daa_score);
+        compared += 1;
+    }
+    assert!(compared > 30, "{compared} blocks compared below the fence");
+    let second = {
+        let (config, bundle, premine, floats) = vertex_ruleset(H);
+        t12_genesis_chain(&config, &bundle, &premine, &floats)
+    };
+    for block in &armed_blocks {
+        second.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a second armed node takes the chain");
+    }
+    assert_eq!(second.sink(), s.chain.sink(), "the same sink");
+    assert_eq!(second.tip_state().1.state_root(), s.root(), "the same PALW root on a second armed node: the vertex rules are chain data");
 }
 
 /// The signing context of a vertex (the test forges a signature under it).
