@@ -6014,6 +6014,7 @@ dependencies = [
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "rayon",
+ "serde",
  "serde_json",
  "unicode-normalization",
  "unicode-properties",

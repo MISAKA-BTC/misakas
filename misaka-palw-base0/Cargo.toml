@@ -23,6 +23,7 @@ kaspa-addresses.workspace = true
 faster-hex.workspace = true
 kaspa-hashes.workspace = true
 blake2b_simd.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # RFC-0002 Phase F: the A16 engine written as a PALW-TIR program (the IR's builder and
 # templates), and its artifacts converted into the PALWTIR1 container.

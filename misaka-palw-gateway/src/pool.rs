@@ -88,11 +88,6 @@ impl<T> SlotPool<T> {
 }
 
 impl<T> SlotGuard<'_, T> {
-    #[cfg(test)]
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
     pub fn get_mut(&mut self) -> &mut T {
         self.worker.as_mut().expect("a guard holds its worker until it drops")
     }
@@ -222,9 +217,9 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut handles = Vec::new();
         for i in 0..4u32 {
-            let (pool, order) = (Arc::clone(&pool), Arc::clone(&order));
+            let (worker_pool, order) = (Arc::clone(&pool), Arc::clone(&order));
             handles.push(std::thread::spawn(move || {
-                let _g = pool.acquire();
+                let _g = worker_pool.acquire();
                 order.lock().unwrap().push(i);
             }));
             // Each thread must be queued before the next starts, so arrival order is `i`.

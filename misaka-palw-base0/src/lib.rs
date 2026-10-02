@@ -84,6 +84,8 @@ pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
+/// RFC-0001 §2.9: the artifact sidecar v2 (tokenizer.json, chat template spec, generation defaults), read side.
+pub mod sidecar;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
 /// the claim before one step runs.
 pub mod segment_opening;

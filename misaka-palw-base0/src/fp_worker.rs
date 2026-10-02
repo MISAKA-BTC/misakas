@@ -1110,6 +1110,48 @@ fn answer_stop_len_v1(job: &PalwFreePromptJobV3, ids: &[u32]) -> Option<u32> {
     })
 }
 
+/// **RFC-0001 §2.8: one embedding request** — the class pins held to the manifest, the input to ids
+/// by the same function a job's input goes through, the prompt bound by the class's width, then the
+/// backend's pooled hidden state. Never a claim.
+pub fn run_embed_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1,
+    request_hash: Hash64,
+) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1, String> {
+    use kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1;
+    if request.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1 {
+        return Err(format!("embed request version {} is not {}", request.version, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1));
+    }
+    if request.class_id != rt.manifest.class_id || request.shape_profile_id != rt.manifest.shape_profile_id {
+        return Err("the embed request names a class this worker does not serve".to_string());
+    }
+    let pool = PalwEmbeddingPoolV1::from_tag(request.pool).ok_or_else(|| format!("pool tag {} is neither mean (0) nor last (1)", request.pool))?;
+    let ids = prompt_ids_for_input_v1(&rt.tokenizer, &rt.manifest, &request.input)?;
+    if let Some(at) = ids.iter().position(|t| *t >= rt.manifest.vocab) {
+        return Err(format!("the prompt token at position {at} is outside the model's vocab ({})", rt.manifest.vocab));
+    }
+    if ids.len() as u64 > rt.manifest.n_ctx as u64 {
+        return Err(format!("the input is {} tokens and the class's context is {}", ids.len(), rt.manifest.n_ctx));
+    }
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let usize_ids: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+    let embedding = rt
+        .backend
+        .embed_prompt_v1(&usize_ids, rt.manifest.class_id, rt.manifest.tokenizer_id, pool)
+        .map_err(|e| format!("execution refused: {e}"))?;
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1 {
+        request_hash,
+        prompt_token_ids: ids,
+        pool: request.pool,
+        raw: embedding.raw,
+        cached_prefix_tokens: embedding.cached_prefix_tokens,
+        execute_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
 /// **The answer's bytes: every token's bytes, concatenated** (ADR-0077 Decision 2).
 ///
 /// Never fails, and that is the point. [`QwenTokenizer::decode`] refuses a whole run for one id it
@@ -1267,6 +1309,23 @@ where
             Some(payload) => payload,
             None => return Ok(()),
         };
+        // **RFC-0001 §2.8: an embedding request** — local serving, one frame back.
+        if payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1) {
+            let body = payload[4..].to_vec();
+            let hash = fp_worker_request_hash_v3(&body);
+            let frame = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1>(&body)
+                .map_err(|e| format!("the frame is not an embed request: {e}"))
+                .and_then(|request| run_embed_v1(rt, &request, hash))
+                .map(|e| PalwFpWorkerFrameV1::Embedded(Box::new(e)));
+            match frame {
+                Ok(frame) => write_frame_v1(output, &frame)?,
+                Err(reason) => {
+                    eprintln!("[{}] v3-serve refused an embedding: {reason}", rt.retention_family);
+                    write_frame_v1(output, &PalwFpWorkerFrameV1::Refused { reason })?;
+                }
+            }
+            continue;
+        }
         // **RFC-0001 §2.7 stage 2: a batch of answer-only requests** — decoded together.
         if payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1) {
             let frame = (|| -> Result<PalwFpWorkerFrameV1, String> {
@@ -2070,6 +2129,67 @@ mod tests {
         assert!(refusals[0].contains("not a list of requests"), "{}", refusals[0]);
         assert!(refusals[1].contains("a batch carries 1..=16 requests, not 17"), "{}", refusals[1]);
         assert_eq!(singles.len(), 5, "the worker kept serving after both refusals");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    fn embed_framed(request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Vec<u8> {
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(request).expect("an embed request serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    /// **RFC-0001 §2.8, through the worker's frames**: an embedding comes back bound to its request,
+    /// pooled as asked, deterministic; and a wrong class, an unknown pool, an empty or over-long
+    /// input is one `Refused` while the worker keeps serving.
+    #[test]
+    fn an_embed_frame_returns_the_pooled_state_and_refuses_by_name() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_EMBED_REQUEST_VERSION_V1, PalwFpEmbedRequestV1};
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-embed-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let ok = |pool: u8, ids: Vec<u32>| PalwFpEmbedRequestV1 {
+            version: PALW_FP_EMBED_REQUEST_VERSION_V1,
+            class_id: manifest.class_id,
+            shape_profile_id: manifest.shape_profile_id,
+            input: PalwFpWorkerInputV3::TokenIds(ids),
+            pool,
+        };
+        let mut wrong_class = ok(0, vec![3, 5]);
+        wrong_class.class_id = Hash64::from_u64_word(0xBAD);
+        let requests = [
+            ok(0, vec![3, 5, 8, 13]),
+            ok(1, vec![3, 5, 8, 13]),
+            ok(0, vec![3, 5, 8, 13]),
+            wrong_class,
+            ok(9, vec![3, 5]),
+            ok(0, (0..40).map(|i| i % 8 + 2).collect()),
+            PalwFpEmbedRequestV1 { input: PalwFpWorkerInputV3::TokenIds(vec![]), ..ok(0, vec![1]) },
+        ];
+        let input: Vec<u8> = requests.iter().flat_map(embed_framed).collect();
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let embedded: Vec<_> = frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Embedded(e) = f { Some(e.clone()) } else { None }).collect();
+        let refused: Vec<String> =
+            frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Refused { reason } = f { Some(reason.clone()) } else { None }).collect();
+        assert_eq!(embedded.len(), 3);
+        assert_eq!(embedded[0].raw.len(), 8, "the fixture's hidden width");
+        assert_eq!(
+            (embedded[0].request_hash, &embedded[0].raw, &embedded[0].prompt_token_ids),
+            (embedded[2].request_hash, &embedded[2].raw, &embedded[2].prompt_token_ids),
+            "the same request is the same embedding"
+        );
+        assert_ne!(embedded[0].raw, embedded[1].raw, "mean and last-token differ");
+        assert_eq!(embedded[0].request_hash, fp_worker_request_hash_v3(&borsh::to_vec(&requests[0]).unwrap()));
+        assert_eq!(embedded[0].prompt_token_ids, vec![3, 5, 8, 13]);
+        assert_eq!(refused.len(), 4, "{refused:?}");
+        assert!(refused[0].contains("names a class this worker does not serve"));
+        assert!(refused[1].contains("pool tag 9"));
+        assert!(refused[2].contains("the class's context is 32"));
+        assert!(refused[3].contains("carries no tokens"));
+        assert!(refused.iter().all(|r| !r.contains("3, 5")), "a refusal never quotes the input");
         let _ = std::fs::remove_dir_all(&temp);
     }
 

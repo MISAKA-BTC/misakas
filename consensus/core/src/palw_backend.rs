@@ -185,6 +185,15 @@ pub struct PalwFpAnswerV1 {
     pub ended_on_stop_id: bool,
 }
 
+/// A pooled embedding: the raw pooled hidden codes, the number of positions pooled, and how many
+/// leading positions came from the prefix cache (last-token pooling only; a node-local fact).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpEmbeddingV1 {
+    pub raw: Vec<i32>,
+    pub positions: u32,
+    pub cached_prefix_tokens: u32,
+}
+
 /// One job of an answer batch ([`PalwExecutionBackendV1::answer_batch_free_prompt_v1`]).
 #[derive(Clone, Copy)]
 pub struct PalwFpAnswerJobV1<'a> {
@@ -884,6 +893,19 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _on_token: &mut dyn FnMut(u32),
     ) -> Result<PalwFpAnswerV1, String> {
         Err("this backend serves no answer-only path".to_string())
+    }
+
+    /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt** — the local embeddings
+    /// service. Node-only and never a claim; the pooling and the normalization are
+    /// [`crate::palw_embedding_pool_v1`]'s. The default serves nothing.
+    fn embed_prompt_v1(
+        &self,
+        _prompt_tokens: &[usize],
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _pool: crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    ) -> Result<PalwFpEmbeddingV1, String> {
+        Err("this backend serves no embedding path".to_string())
     }
 
     /// **RFC-0001 §2.7 stage 2: several answers at once.** A backend with a batch-invariant decode

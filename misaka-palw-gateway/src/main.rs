@@ -262,6 +262,113 @@ struct Config {
     /// Per-source open connections and in-flight jobs (RFC-0001 §2.7: connection limits).
     max_connections_per_source: u32,
     max_jobs_per_source: u32,
+    /// **RFC-0001 §2.9: the artifact sidecar this gateway reads** (`--sidecar`): its chat template
+    /// (preferred over the built-in one) and its generation defaults (gateway defaults, applied
+    /// through the entrance's own admission).
+    sidecar: Option<SidecarRuntime>,
+}
+
+/// A loaded, verified sidecar and the two template ids it runs under (leaked once at boot: the
+/// prompt plan's id is a `&'static str` and a boot-time constant is the honest lifetime).
+struct SidecarRuntime {
+    digest: String,
+    path: PathBuf,
+    template: Option<misaka_palw_base0::sidecar::ChatTemplateSpecV1>,
+    template_ids: Option<(&'static str, &'static str)>,
+    generation: Option<misaka_palw_base0::sidecar::GenerationConfigV1>,
+}
+
+impl SidecarRuntime {
+    fn load(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let side = misaka_palw_base0::sidecar::parse_sidecar_v2(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let template_ids = side.template_id().map(|id| {
+            let plain: &'static str = Box::leak(id.clone().into_boxed_str());
+            let tools: &'static str = Box::leak(format!("{id}+tools").into_boxed_str());
+            (plain, tools)
+        });
+        Ok(Self {
+            digest: faster_hex::hex_string(side.digest().as_byte_slice()),
+            path: path.to_path_buf(),
+            template: side.chat_template,
+            template_ids,
+            generation: side.generation_config,
+        })
+    }
+
+    /// Fill what the request omitted from the sidecar's generation defaults — through the same
+    /// admission as anything else: the sampler's defaults only where the chain has armed it, the
+    /// knobs this lane has no rule for never. Returns the report the response carries.
+    fn apply_defaults(&self, chat: &mut ChatRequest, facts: &chain::ChainFacts) -> serde_json::Value {
+        let mut applied: Vec<String> = Vec::new();
+        let mut not_applied: Vec<serde_json::Value> = Vec::new();
+        if let Some(g) = &self.generation {
+            if chat.max_tokens.is_none() && chat.max_completion_tokens.is_none()
+                && let Some(n) = g.max_new_tokens
+            {
+                chat.max_tokens = Some(n);
+                applied.push("max_new_tokens".to_string());
+            }
+            let sampler = facts.fp_decode_rules_armed;
+            let reason = "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): a sampler default would be refused";
+            macro_rules! fill {
+                ($field:ident, $name:literal) => {
+                    if let Some(v) = g.$field
+                        && chat.$field.is_none()
+                    {
+                        if sampler {
+                            chat.$field = Some(v);
+                            applied.push($name.to_string());
+                        } else {
+                            not_applied.push(serde_json::json!({ "field": $name, "reason": reason }));
+                        }
+                    }
+                };
+            }
+            fill!(temperature, "temperature");
+            fill!(repeat_penalty, "repeat_penalty");
+            fill!(frequency_penalty, "frequency_penalty");
+            fill!(presence_penalty, "presence_penalty");
+            if let Some(n) = g.repeat_last_n
+                && chat.repeat_last_n.is_none()
+            {
+                if sampler {
+                    chat.repeat_last_n = Some(n);
+                    applied.push("repeat_last_n".to_string());
+                } else {
+                    not_applied.push(serde_json::json!({ "field": "repeat_last_n", "reason": reason }));
+                }
+            }
+            if !g.stop.is_empty() && chat.stop.as_ref().is_none_or(|v| v.is_null()) {
+                if sampler {
+                    chat.stop = Some(serde_json::json!(g.stop));
+                    applied.push("stop".to_string());
+                } else {
+                    not_applied.push(serde_json::json!({ "field": "stop", "reason": reason }));
+                }
+            }
+            for (name, present) in [("top_p", g.top_p.is_some()), ("top_k", g.top_k.is_some())] {
+                if present {
+                    not_applied.push(serde_json::json!({ "field": name, "reason": "this lane has no rule for it (ADR-0096 Decision 4)" }));
+                }
+            }
+        }
+        serde_json::json!({
+            "digest": self.digest,
+            "template_id": self.template_ids.map(|(plain, _)| plain),
+            "defaults_applied": applied,
+            "defaults_not_applied": not_applied,
+        })
+    }
+}
+
+/// The template id the gateway advertises: the sidecar's when it has a chat template, the model's
+/// own selection otherwise.
+fn advertised_template_id(config: &Config, manifest: &PalwFpWorkerManifestV1) -> String {
+    match config.sidecar.as_ref().and_then(|s| s.template_ids) {
+        Some((plain, _)) => plain.to_string(),
+        None => wire::template_id_for(manifest).to_string(),
+    }
 }
 
 /// The exposure numbers actually in force for one job: the operator's declaration where they made
@@ -587,7 +694,10 @@ impl ResidentWorker {
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
                 }
-                PalwFpWorkerFrameV1::Answered(_) | PalwFpWorkerFrameV1::AnsweredBatch(_) | PalwFpWorkerFrameV1::BatchToken { .. } => {
+                PalwFpWorkerFrameV1::Answered(_)
+                | PalwFpWorkerFrameV1::AnsweredBatch(_)
+                | PalwFpWorkerFrameV1::BatchToken { .. }
+                | PalwFpWorkerFrameV1::Embedded(_) => {
                     return Err("the worker answered a committed job with an answer-only frame".to_string());
                 }
             }
@@ -629,13 +739,46 @@ impl ResidentWorker {
                         Err(format!("the worker refused the job: {reason}"))
                     };
                 }
-                PalwFpWorkerFrameV1::Result(_) | PalwFpWorkerFrameV1::AnsweredBatch(_) | PalwFpWorkerFrameV1::BatchToken { .. } => {
+                PalwFpWorkerFrameV1::Result(_)
+                | PalwFpWorkerFrameV1::AnsweredBatch(_)
+                | PalwFpWorkerFrameV1::BatchToken { .. }
+                | PalwFpWorkerFrameV1::Embedded(_) => {
                     return Err("the worker answered an answer-only request with a frame of another kind".to_string());
                 }
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
                 }
             }
+        }
+    }
+
+    /// **RFC-0001 §2.8: one embedding.** Bound to the request's bytes; `Unsupported` is a worker that
+    /// serves no embedding path (the route answers 501 and the worker is untouched).
+    fn run_embed(&mut self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String> {
+        let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the embed request: {e}"))?;
+        let request_hash = fp_worker_request_hash_v3(&payload);
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&payload);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the embed frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the embed frame: {e}"))?;
+        let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+            return Err("the worker stream ended before a terminator frame".to_string());
+        };
+        match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+            PalwFpWorkerFrameV1::Embedded(e) => {
+                if e.request_hash != request_hash {
+                    return Err("the worker's embedding does not bind the request it was asked".to_string());
+                }
+                Ok(EmbedRun::Embedded(*e))
+            }
+            PalwFpWorkerFrameV1::Refused { reason } => {
+                if reason.contains("serves no embedding path") || reason.contains("not a v3 request") {
+                    Ok(EmbedRun::Unsupported)
+                } else {
+                    Err(format!("the worker refused the job: {reason}"))
+                }
+            }
+            _ => Err("the worker answered an embed request with a frame of another kind".to_string()),
         }
     }
 
@@ -684,6 +827,12 @@ impl ResidentWorker {
             }
         }
     }
+}
+
+/// What an embedding request came to.
+enum EmbedRun {
+    Embedded(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1),
+    Unsupported,
 }
 
 /// What a batch request came to.
@@ -843,6 +992,25 @@ impl WorkerSupervisor {
                 eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
             }
             _ => {}
+        }
+        outcome
+    }
+}
+
+impl WorkerSupervisor {
+    /// RFC-0001 §2.8: an embedding on the next idle worker.
+    fn run_embed(&self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_embed(request);
+        if let Err(e) = &outcome
+            && !e.starts_with("the worker refused the job")
+        {
+            *slot = None;
+            eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
         }
         outcome
     }
@@ -1148,7 +1316,6 @@ struct PreparedJob {
     plan: PromptPlan,
     decode_limit: u32,
     request: PalwFpWorkerRequestV3,
-    anchor_block: Hash64,
     anchor_daa: u64,
 }
 
@@ -1167,7 +1334,12 @@ fn prepare_request(
     if let Some(format) = &admitted.format {
         wire::append_to_system_turn(&mut tool_turns.turns, &format.instruction());
     }
-    let plan: PromptPlan = wire::build_prompt_with_tools(manifest, &tool_turns)?;
+    // RFC-0001 §2.9: the sidecar's chat template wins over the built-in one; absent, the model's own
+    // selection (`wire::build_prompt`) is what it always was.
+    let plan: PromptPlan = match config.sidecar.as_ref().and_then(|s| s.template.as_ref().zip(s.template_ids)) {
+        Some((spec, ids)) => wire::build_prompt_with_sidecar_spec(manifest, spec, ids, &tool_turns)?,
+        None => wire::build_prompt_with_tools(manifest, &tool_turns)?,
+    };
     // ADR-0079 Decision 10: every bound is mandatory, and exceeding one is a 4xx rather than a
     // queue. Checked BEFORE the job is sent, which is the point of having it here.
     if plan.displayed_len() > config.max_prompt_bytes {
@@ -1221,7 +1393,7 @@ fn prepare_request(
         decode: admitted.decode.clone(),
         stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
     };
-    Ok(PreparedJob { plan, decode_limit, request, anchor_block, anchor_daa })
+    Ok(PreparedJob { plan, decode_limit, request, anchor_daa })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1240,7 +1412,7 @@ fn handle_chat(
     sink: &mut dyn ChatSink,
 ) -> Result<serde_json::Value, String> {
     let manifest = worker.manifest();
-    let PreparedJob { plan, decode_limit, request, anchor_daa, .. } =
+    let PreparedJob { plan, decode_limit, request, anchor_daa } =
         prepare_request(config, identity, manifest, facts, admitted, sampling)?;
     expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
 
@@ -1641,6 +1813,7 @@ fn handle_chat(
         // ADR-0096 Decisions 1 and 4.
         "sampling": sampling,
         "ignored_fields": admitted.ignored_fields,
+        "sidecar": admitted.sidecar_report,
         // ADR-0097 Decision 2: what was asked for the answer's length, beside what ran. The cap
         // is the operator's and the window is the class's; a request past either is clamped, and
         // a clamp nobody is told about is a downgrade nobody agreed to.
@@ -1798,6 +1971,7 @@ fn answer_only_body(
             "format": format_json,
             "tool_calls_unparsed": parsed.unparsed_blocks,
             "ignored_fields": admitted.ignored_fields,
+            "sidecar": admitted.sidecar_report,
             // RFC-0001 §2.6/§2.7, I-3: a node-local fact about HOW the answer was served — never an
             // input to any claim, because there is none.
             "serving": {
@@ -1950,6 +2124,68 @@ fn handle_chat_candidates(
     Ok(merged)
 }
 
+/// **RFC-0001 §2.8: `POST /v1/embeddings`** — the pooled final-layer hidden state of each input, as
+/// OpenAI's list shape. Local serving: no job, no claim, no reward, nothing committed; the response
+/// says so (`misaka.committed: false`). Each input is one worker forward pass, run on the pool.
+/// `Ok(None)` means the worker serves no embedding path (the route answers 501).
+fn handle_embeddings(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    request: &surface::EmbeddingsRequest,
+    admitted: &surface::AdmittedEmbeddings,
+) -> Result<Option<serde_json::Value>, String> {
+    use kaspa_consensus_core::palw_embedding_pool_v1::palw_embedding_l2_q24_v1;
+    let manifest = worker.manifest();
+    let mut data = Vec::with_capacity(admitted.inputs.len());
+    let mut prompt_tokens = 0u64;
+    let mut cached = 0u64;
+    let mut dims = 0usize;
+    for (index, text) in admitted.inputs.iter().enumerate() {
+        let embed = kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1,
+            class_id: manifest.class_id,
+            shape_profile_id: manifest.shape_profile_id,
+            input: PalwFpWorkerInputV3::Text(text.as_bytes().to_vec()),
+            pool: admitted.pool as u8,
+        };
+        let answer = match worker.run_embed(&embed)? {
+            EmbedRun::Embedded(answer) => answer,
+            EmbedRun::Unsupported => return Ok(None),
+        };
+        prompt_tokens += answer.prompt_token_ids.len() as u64;
+        cached += u64::from(answer.cached_prefix_tokens);
+        dims = answer.raw.len();
+        let q24 = if admitted.normalize { palw_embedding_l2_q24_v1(&answer.raw) } else { answer.raw.clone() };
+        let scale = if admitted.normalize { (1u64 << 24) as f64 } else { 1.0 };
+        data.push(serde_json::json!({
+            "object": "embedding",
+            "index": index,
+            "embedding": q24.iter().map(|v| *v as f64 / scale).collect::<Vec<f64>>(),
+            // The exact integers the floats are made of (Q24 when normalized, the pooled A16 codes
+            // when not): what a client that compares embeddings bit for bit reads.
+            "embedding_integers": q24,
+        }));
+    }
+    let _ = config;
+    Ok(Some(serde_json::json!({
+        "object": "list",
+        "data": data,
+        "model": request.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
+        "usage": { "prompt_tokens": prompt_tokens, "total_tokens": prompt_tokens },
+        "misaka": {
+            // RFC-0001 §2.8 / I-3: a local service. There is no job, no claim and no reward here.
+            "committed": false,
+            "not_committed_because": "embeddings are served locally (RFC-0001 §2.8): the claim form is RFC-0003's embedding profile, not this route",
+            "pool": admitted.pool.name(),
+            "normalized": admitted.normalize,
+            "scale": if admitted.normalize { "q24_unit_vector" } else { "a16_hidden_code" },
+            "dimensions": dims,
+            "cached_prefix_tokens": cached,
+            "ignored_fields": admitted.ignored_fields,
+        },
+    })))
+}
+
 fn main() {
     let mut args: VecDeque<String> = std::env::args().skip(1).collect();
     let mut listen = "127.0.0.1:8790".to_string();
@@ -1977,6 +2213,7 @@ fn main() {
     let mut answer_fast_path = true;
     let mut max_connections_per_source = DEFAULT_MAX_CONNECTIONS_PER_SOURCE;
     let mut max_jobs_per_source = DEFAULT_MAX_JOBS_PER_SOURCE;
+    let mut sidecar_path: Option<PathBuf> = None;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -2029,6 +2266,13 @@ fn main() {
                 worker_args.extend(["--kv-cache-verify-every".to_string(), n.to_string()]);
             }
             "--no-answer-fast-path" => answer_fast_path = false,
+            // RFC-0001 §2.9: the artifact sidecar — read here for its chat template and defaults,
+            // and forwarded to every worker for its tokenizer.
+            "--sidecar" => {
+                let path = PathBuf::from(value("--sidecar"));
+                worker_args.extend(["--sidecar".to_string(), path.display().to_string()]);
+                sidecar_path = Some(path);
+            }
             "--max-connections-per-source" => {
                 max_connections_per_source = value("--max-connections-per-source").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
@@ -2037,7 +2281,7 @@ fn main() {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -2075,6 +2319,7 @@ fn main() {
         answer_fast_path,
         max_connections_per_source: max_connections_per_source.max(1),
         max_jobs_per_source: max_jobs_per_source.max(1),
+        sidecar: sidecar_path.as_deref().map(|p| SidecarRuntime::load(p).unwrap_or_else(|e| die(e))),
     };
 
     // -----------------------------------------------------------------------------------------
@@ -2172,7 +2417,7 @@ fn main() {
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,
-        wire::template_id_for(worker.manifest()),
+        advertised_template_id(&config, worker.manifest()),
     );
     // ADR-0077 Decision 16's disclosure, verbatim, on every boot that files private commitments:
     // the operator is the one who reads it, and it says what "private" buys and does not.
@@ -2305,7 +2550,8 @@ fn serve_connection(
                 &serde_json::json!({
                     "status": "ok",
                     "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
-                    "template_id": wire::template_id_for(worker.manifest()),
+                    "template_id": advertised_template_id(config, worker.manifest()),
+                    "sidecar": config.sidecar.as_ref().map(|s| serde_json::json!({ "digest": s.digest, "path": s.path.display().to_string() })),
                     "n_ctx": worker.manifest().n_ctx,
                     // ADR-0097 Decision 2: the same limits object `GET /v1/models` serves.
                     "limits": surface::limits_body(worker.manifest(), &surface_limits(config), &facts),
@@ -2381,8 +2627,15 @@ fn serve_connection(
             // request that was admitted. The chain is read once, for this job; `handle_chat`
             // prices and anchors against the same facts the sampler and the format were gated on.
             let facts = chain_source.read();
-            let (chat, admitted) = match surface::parse_and_admit(&request.body, &facts) {
-                Ok(parsed) => parsed,
+            let (chat, admitted) = match surface::parse_and_admit_with(&request.body, &facts, |chat| {
+                // RFC-0001 §2.9: the sidecar's defaults fill what the request omitted, BEFORE the
+                // entrance admits — so a default is held to every rule an explicit field is.
+                config.sidecar.as_ref().map(|s| s.apply_defaults(chat, &facts))
+            }) {
+                Ok((chat, mut admitted, report)) => {
+                    admitted.sidecar_report = report;
+                    (chat, admitted)
+                }
                 Err(e) => {
                     respond(stream, "400 Bad Request", &error_body(&e));
                     return;
@@ -2482,6 +2735,57 @@ fn serve_connection(
                 }
             }
         }
+        // **RFC-0001 §2.8 (P1): the local embeddings route.** The same entrance bounds as a chat job
+        // (the in-flight cap, the per-source share, the source's hourly rate); one request is one
+        // job whatever its input count, and its inputs run in order on the worker pool.
+        ("POST", "/v1/embeddings") => {
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit(source, config.per_source_jobs_per_window)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source job rate exceeded"));
+                return;
+            }
+            if request.body.len() > MAX_REQUEST_BODY_BYTES {
+                respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
+                return;
+            }
+            let parsed: surface::EmbeddingsRequest = match serde_json::from_slice(&request.body) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    respond(stream, "400 Bad Request", &error_body(&format!("request body is not an embeddings request: {e}")));
+                    return;
+                }
+            };
+            let admitted = match surface::admit_embeddings(&parsed, config.max_prompt_bytes) {
+                Ok(admitted) => admitted,
+                Err(e) => {
+                    respond(stream, "400 Bad Request", &error_body(&e));
+                    return;
+                }
+            };
+            if in_flight.fetch_add(1, Ordering::AcqRel) + 1 > in_flight_cap(worker.processes()) {
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                respond(stream, "503 Service Unavailable", &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"));
+                return;
+            }
+            if let Some(source) = source
+                && gate.start_jobs(source, 1).is_err()
+            {
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                return;
+            }
+            let outcome = handle_embeddings(config, worker, &parsed, &admitted);
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+            if let Some(source) = source {
+                gate.finish_jobs(source, 1);
+            }
+            match outcome {
+                Ok(Some(body)) => respond(stream, "200 OK", &body),
+                Ok(None) => respond(stream, "501 Not Implemented", &error_body("this class's worker serves no embeddings path")),
+                Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
+            }
+        }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
         // served by its derived id. A GET with no side effects, so it needs neither the job slot
         // nor the in-flight reservation — but it is dispatched HERE, inside the bounded accept
@@ -2512,7 +2816,7 @@ fn serve_connection(
             &surface::models_body(
                 &hex(identity.class_id),
                 worker.manifest(),
-                wire::template_id_for(worker.manifest()),
+                &advertised_template_id(config, worker.manifest()),
                 config.booted_at_unix,
                 surface::limits_body(worker.manifest(), &surface_limits(config), &chain_source.read()),
             ),
@@ -2521,7 +2825,7 @@ fn serve_connection(
             stream,
             "404 Not Found",
             &error_body(
-                "this gateway serves POST /v1/chat/completions, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
+                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
             ),
         ),
     }
@@ -2605,6 +2909,12 @@ mod tests {
             derive_seed: None,
             artifact_inline_max: 4 << 20,
             booted_at_unix: 0,
+            worker_processes: 1,
+            worker_args: Vec::new(),
+            answer_fast_path: true,
+            max_connections_per_source: DEFAULT_MAX_CONNECTIONS_PER_SOURCE,
+            max_jobs_per_source: DEFAULT_MAX_JOBS_PER_SOURCE,
+            sidecar: None,
         }
     }
 
@@ -2997,5 +3307,74 @@ mod tests {
 
         let stream: ChatRequest = serde_json::from_str(r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#).unwrap();
         assert_eq!(stream.stream, Some(true));
+    }
+
+    fn sidecar_with(generation: misaka_palw_base0::sidecar::GenerationConfigV1) -> SidecarRuntime {
+        SidecarRuntime {
+            digest: "00".repeat(64),
+            path: PathBuf::from("/nonexistent/sidecar"),
+            template: None,
+            template_ids: None,
+            generation: Some(generation),
+        }
+    }
+
+    fn bare_chat() -> ChatRequest {
+        serde_json::from_value(serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap()
+    }
+
+    /// **RFC-0001 §2.9: the sidecar's generation defaults fill what a request omitted, through the
+    /// entrance's own admission** — an explicit field always wins; the sampler's defaults only where
+    /// the chain armed it (and are reported as not applied where it did not); the knobs this lane has
+    /// no rule for are never applied.
+    #[test]
+    fn a_sidecars_generation_defaults_fill_the_gaps_and_never_override_or_outrun_the_chain() {
+        let generation = misaka_palw_base0::sidecar::GenerationConfigV1 {
+            max_new_tokens: Some(77),
+            temperature: Some(0.7),
+            repeat_penalty: Some(1.2),
+            repeat_last_n: Some(32),
+            stop: vec!["###".into()],
+            top_p: Some(0.8),
+            ..Default::default()
+        };
+        let side = sidecar_with(generation);
+        // Dormant network: only the length default applies; the sampler's are reported, not applied.
+        let dormant = chain::ChainFacts::default();
+        let mut chat = bare_chat();
+        let report = side.apply_defaults(&mut chat, &dormant);
+        assert_eq!(chat.max_tokens, Some(77));
+        assert!(chat.temperature.is_none() && chat.repeat_penalty.is_none() && chat.stop.is_none());
+        let not_applied: Vec<String> =
+            report["defaults_not_applied"].as_array().unwrap().iter().map(|r| r["field"].as_str().unwrap().to_string()).collect();
+        for field in ["temperature", "repeat_penalty", "repeat_last_n", "stop", "top_p"] {
+            assert!(not_applied.contains(&field.to_string()), "{field} is reported as not applied: {not_applied:?}");
+        }
+        assert_eq!(report["defaults_applied"], serde_json::json!(["max_new_tokens"]));
+        assert!(surface::admit_request(&chat, &dormant).is_ok(), "the request with the defaults the network allows is admissible");
+        // Armed network: the sampler's defaults apply, and the request is admitted with them.
+        let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let mut chat = bare_chat();
+        let report = side.apply_defaults(&mut chat, &armed);
+        assert_eq!((chat.temperature, chat.repeat_penalty, chat.repeat_last_n), (Some(0.7), Some(1.2), Some(32)));
+        assert_eq!(chat.stop, Some(serde_json::json!(["###"])));
+        assert!(surface::admit_request(&chat, &armed).is_ok());
+        assert!(report["defaults_applied"].as_array().unwrap().len() >= 5);
+        // An explicit field always wins.
+        let mut explicit = bare_chat();
+        explicit.max_tokens = Some(5);
+        explicit.temperature = Some(0.1);
+        side.apply_defaults(&mut explicit, &armed);
+        assert_eq!((explicit.max_tokens, explicit.temperature), (Some(5), Some(0.1)));
+        let mut aliased = bare_chat();
+        aliased.max_completion_tokens = Some(9);
+        side.apply_defaults(&mut aliased, &armed);
+        assert_eq!(aliased.max_tokens, None, "an alias counts as the request having named a length");
+    }
+
+    #[test]
+    fn the_pool_sizes_and_the_in_flight_cap_keep_the_single_worker_numbers() {
+        assert_eq!(in_flight_cap(1), MAX_IN_FLIGHT_JOBS, "one process: one running and seven waiting, as it always was");
+        assert_eq!(in_flight_cap(4), 4 + 7);
     }
 }

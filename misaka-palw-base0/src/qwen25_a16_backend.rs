@@ -2988,6 +2988,70 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         })
     }
 
+    /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt.** The residual stream after
+    /// the last layer, per position (the layer table's last row — the same rows the committed walk
+    /// feeds the post table), pooled by `pool`. **Mean** pooling needs every position's row, so it
+    /// walks the whole prompt; **last-token** pooling needs only the final position's, so it resumes
+    /// from the KV prefix cache like an answer does and fills it for the next request.
+    fn embed_prompt_v1(
+        &self,
+        prompt_tokens: &[usize],
+        class_id: Hash64,
+        tokenizer_id: Hash64,
+        pool: kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpEmbeddingV1, String> {
+        use kaspa_consensus_core::palw_embedding_pool_v1::{PalwEmbeddingPoolV1, palw_embedding_pool_v1};
+        self.artifact_read_probe_v1()?;
+        if prompt_tokens.is_empty() {
+            return Err("a prompt of no tokens has no embedding".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        let plan = self.plan.as_ref().filter(|plan| plan.one_pass_prefill_supported()).ok_or("this class's plan serves no embedding path")?;
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let last_layer = self.artifact.shape.n_layers.checked_sub(1).ok_or("a class with no layers")?;
+        // Mean pooling walks everything; last-token resumes from the cache when it can.
+        let (mut kv, start) = match (pool, &self.prefix_cache) {
+            (PalwEmbeddingPoolV1::LastToken, Some(lock)) => {
+                match lock.lock().unwrap_or_else(|e| e.into_inner()).lookup_v1(class_id, tokenizer_id, &ids) {
+                    Some(hit) => (hit.cache, hit.positions as usize),
+                    None => (A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile), 0),
+                }
+            }
+            _ => (A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile), 0),
+        };
+        kv.reserve_positions(prompt_tokens.len(), self.artifact.shape.kv_dim());
+        let mut hidden: Vec<Vec<i32>> = Vec::new();
+        let mut at = start;
+        while at < prompt_tokens.len() {
+            let end = (at + self.prefill_run_positions.max(1)).min(prompt_tokens.len());
+            let (_, traces) = engine
+                .forward_prefill_planned(plan, &mut kv, &prompt_tokens[at..end], at, false)
+                .map_err(|e| format!("the embedding run at {at}: {e:?}"))?;
+            for trace in traces {
+                let row = trace
+                    .attn
+                    .get(last_layer)
+                    .and_then(|layer| layer.last())
+                    .ok_or("a position's trace has no last-layer row")?;
+                hidden.push(row.clone());
+            }
+            at = end;
+        }
+        if let (PalwEmbeddingPoolV1::LastToken, Some(lock)) = (pool, &self.prefix_cache) {
+            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &ids, &kv);
+        }
+        let raw = palw_embedding_pool_v1(&hidden, pool).map_err(|e| e.to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpEmbeddingV1 {
+            raw,
+            positions: prompt_tokens.len() as u32,
+            cached_prefix_tokens: start as u32,
+        })
+    }
+
     /// **RFC-0001 §2.7 stage 2: several answers in ONE decode loop.** Each job prefills (resuming
     /// from the prefix cache where it can) and joins a [`crate::decode_scheduler::DecodeSchedulerV1`];
     /// their decode steps then run batched, the weights read once for the batch. Every answer is
@@ -9342,5 +9406,48 @@ mod prefix_cache_serving {
         }
         let (steps, rows) = sched.counters();
         assert!(rows > steps, "the steps were batched: {rows} rows in {steps} steps");
+    }
+
+    /// **RFC-0001 §2.8: the embedding is the pooled last-layer hidden state, deterministic, and the
+    /// last-token form resumes from the prefix cache to the same bits.**
+    #[test]
+    fn an_embedding_is_the_pooled_last_layer_state_and_the_cache_does_not_change_it() {
+        use kaspa_consensus_core::palw_embedding_pool_v1::{PalwEmbeddingPoolV1, palw_embedding_pool_v1};
+        let (artifact, profile) = fixture();
+        let plain = backend(&artifact, &profile);
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let (class, tok) = (profile.shape_profile_id(), Hash64::from_u64_word(0x70));
+        let p = prompt(15, 4);
+        // Reference: the engine's own per-position last-layer rows, walked one position at a time.
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = plain.plan.as_ref().unwrap();
+        let mut c = A16Cache::with_storage(artifact.shape.n_layers, plain.runtime_profile);
+        let mut rows = Vec::new();
+        for (i, t) in p.iter().enumerate() {
+            let (_, trace) = engine.forward_token_planned(plan, &mut c, *t, i).unwrap();
+            rows.push(trace.attn.last().unwrap().last().unwrap().clone());
+        }
+        for pool in [PalwEmbeddingPoolV1::Mean, PalwEmbeddingPoolV1::LastToken] {
+            let want = palw_embedding_pool_v1(&rows, pool).unwrap();
+            let got = plain.embed_prompt_v1(&p, class, tok, pool).unwrap();
+            assert_eq!(got.raw, want, "{pool:?}: the pooled one-pass prefill rows are the stepped walk's");
+            assert_eq!(got.raw.len(), artifact.shape.d_model());
+            assert_eq!(got.positions as usize, p.len());
+            assert_eq!(plain.embed_prompt_v1(&p, class, tok, pool).unwrap(), got, "{pool:?}: deterministic");
+        }
+        // Last-token with a cache: the first call fills it, the second extends the prompt and resumes.
+        let first = cached.embed_prompt_v1(&p, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap();
+        assert_eq!(first.cached_prefix_tokens, 0);
+        let mut longer = p.clone();
+        longer.extend(prompt(6, 90));
+        let resumed = cached.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap();
+        assert_eq!(resumed.cached_prefix_tokens as usize, p.len(), "the longer prompt resumed from the shorter one");
+        assert_eq!(resumed.raw, plain.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap().raw, "resumed == fresh");
+        // Mean pooling never reads the cache (it needs every position's row).
+        let mean = cached.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::Mean).unwrap();
+        assert_eq!(mean.cached_prefix_tokens, 0);
+        // Refusals, by name.
+        assert!(plain.embed_prompt_v1(&[], class, tok, PalwEmbeddingPoolV1::Mean).unwrap_err().contains("no tokens"));
+        assert!(plain.embed_prompt_v1(&[9_999], class, tok, PalwEmbeddingPoolV1::Mean).unwrap_err().contains("outside this class's vocabulary"));
     }
 }

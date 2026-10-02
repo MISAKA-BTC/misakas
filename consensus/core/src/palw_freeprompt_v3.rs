@@ -2539,6 +2539,39 @@ pub enum PalwFpWorkerFrameV1 {
     /// One id of one request of a batch, as it is selected (`index` is the request's place in the
     /// batch frame) — what lets the gateway run each candidate's own display rule over its own ids.
     BatchToken { index: u32, token_id: u32, rendered: Vec<u8> } = 6,
+    /// **RFC-0001 §2.8 — the answer to an embedding request** ([`PALW_FP_WORKER_EMBED_MAGIC_V1`]).
+    Embedded(Box<PalwFpWorkerEmbeddingV1>) = 7,
+}
+
+/// A `v3-serve` frame that asks for the POOLED HIDDEN STATE of a prompt (RFC-0001 §2.8): this magic,
+/// then a Borsh [`PalwFpEmbedRequestV1`]. Answered by one [`PalwFpWorkerFrameV1::Embedded`]. Local
+/// serving only — no claim, no commitment, nothing a consensus rule reads.
+pub const PALW_FP_WORKER_EMBED_MAGIC_V1: [u8; 4] = *b"MPEM";
+
+/// The embedding request: the class pins the worker checks against its manifest, the input (text
+/// bytes — an embedding is of the text, not of a chat template — or ids) and the pooling.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpEmbedRequestV1 {
+    pub version: u16,
+    pub class_id: Hash64,
+    pub shape_profile_id: Hash64,
+    pub input: PalwFpWorkerInputV3,
+    /// [`crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1`] as its tag.
+    pub pool: u8,
+}
+
+pub const PALW_FP_EMBED_REQUEST_VERSION_V1: u16 = 1;
+
+/// What an embedding request returns: the raw pooled hidden codes (`i32` per dimension) — the
+/// gateway derives the Q24 unit vector from them with the one shared function.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerEmbeddingV1 {
+    pub request_hash: Hash64,
+    pub prompt_token_ids: Vec<u32>,
+    pub pool: u8,
+    pub raw: Vec<i32>,
+    pub cached_prefix_tokens: u32,
+    pub execute_ms: u64,
 }
 
 /// A `v3-serve` frame that asks for SEVERAL answers decoded together (RFC-0001 §2.7 stage 2): this

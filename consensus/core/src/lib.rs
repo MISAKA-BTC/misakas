@@ -240,6 +240,7 @@ pub mod palw_credit;
 pub mod palw_credit_batch;
 pub mod palw_decode_constraint_v1;
 pub mod palw_decode_pipeline_v4;
+pub mod palw_embedding_pool_v1;
 pub mod palw_decode_select_v2;
 pub mod palw_derived_v1;
 pub mod palw_dispute;
