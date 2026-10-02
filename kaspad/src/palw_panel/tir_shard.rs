@@ -230,6 +230,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     /// `(class, shard)` → the span a possession proof was last carried; the plan declaration's DAA by class.
     carried_proof: HashMap<(Hash64, u16), (u64, u64)>,
     carried_plan: HashMap<Hash64, u64>,
+    /// When the registry was last read for the shard proofs (a read is a state walk: once every thirty seconds, as the flat proofs).
+    registry_read_at: Option<std::time::Instant>,
     /// The device was asked for and none was registered: said once.
     said_no_device: bool,
     /// Cells verified and leaves recomputed since start, for the node's status line.
@@ -750,9 +752,13 @@ impl super::PalwPanelService {
             }
         }
         // ---- the held shards' possession proofs ----
-        if plans.is_empty() || !self.flow_context.is_nearly_synced(session).await {
+        if plans.is_empty() || books.registry_read_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30)) {
             return out;
         }
+        if !self.flow_context.is_nearly_synced(session).await {
+            return out;
+        }
+        books.registry_read_at = Some(std::time::Instant::now());
         let Some(read) = session.palw_model_registry_v1() else { return out };
         if !read.active || read.span_daa == 0 {
             return out;
