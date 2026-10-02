@@ -1,21 +1,34 @@
 # Connecting Ethereum tooling to MISAKA (Foundry / Hardhat / ethers / viem / MetaMask)
 
-Status 2026‑06‑27. The MISAKA node exposes an Ethereum JSON‑RPC endpoint (the `kaspa-eth-rpc`
-adapter) on `--evm-rpc-listen` (default `:8545`). Unmodified Ethereum tooling connects to it. See
-`ethereum-rpc-compat-matrix.md` for per‑method status and `evm-differences-from-ethereum.md` for the
-compat profile.
+Status 2026‑10‑02 (current network testnet‑12). The MISAKA node exposes an Ethereum JSON‑RPC
+endpoint (the `kaspa-eth-rpc` adapter). Unmodified Ethereum tooling connects to it. See
+[`ethereum-rpc-compat-matrix.md`](ethereum-rpc-compat-matrix.md) for per‑method status and
+[`evm-differences-from-ethereum.md`](evm-differences-from-ethereum.md) for the compat profile
+(chain id, EVM spec, tx types, units).
 
 ```
 EVM chain id : 0x4D534B (5067595)
 EVM spec     : Shanghai
 Native unit  : 18 decimals, symbol MSK
 RPC URL      : http://<node-host>:8545   (HTTP JSON-RPC)
-WebSocket    : ws://<node-host>:8545      (same listener; eth_subscribe: newHeads / newPendingTransactions / logs)
+WebSocket    : ws://<node-host>:8545      (same listener; eth_subscribe)
 ```
 
-> `eth_sendRawTransaction` admits the tx to the receiving node's EVM mempool **and broadcasts it
-> over P2P** to EVM‑relay peers (§14.2), so it reaches mining nodes and is included even if the node
-> you're connected to does not mine. You can point your tooling at any synced MISAKA node.
+## Enabling the endpoint on a node
+
+The adapter is **off** unless a listener is configured (`kaspad/src/args.rs`):
+
+- `--evm-rpc-listen=127.0.0.1:8545` (alias `--evm-rpc-http-listen`, env `KASPAD_EVM_RPC_LISTEN`;
+  default port 8545), or a profile that sets it: `--profile=local-full` (loopback) /
+  `--profile=public-evm-rpc` (`0.0.0.0`). An explicit `--evm-rpc-listen` overrides the profile.
+- The adapter is unauthenticated and CORS‑open, so a **non‑loopback bind refuses to start** unless
+  `MISAKA_ALLOW_PUBLIC_EVM_RPC=1` is set (`kaspad/src/daemon.rs`). Prefer a loopback bind behind a
+  TLS + auth + rate‑limiting reverse proxy.
+- The sync‑only `--node-profile`s (`bootstrap-pruned`, `recovery-sync`) reject
+  `--evm-rpc-listen`.
+
+`eth_sendRawTransaction` also P2P‑broadcasts to EVM‑relay peers, so you can point your tooling at
+any synced MISAKA node, mining or not (see the matrix).
 
 ## MetaMask — add a custom network
 
@@ -29,10 +42,8 @@ Settings → Networks → Add network → Add manually:
 | Currency symbol | `MSK` |
 | Block explorer URL | (optional) |
 
-Then balance display, send, and contract interaction work. MetaMask polls `eth_chainId`,
-`net_version`, `eth_blockNumber`, `eth_getBalance`, `eth_gasPrice`, `eth_maxPriorityFeePerGas`,
-`eth_feeHistory`, `eth_estimateGas`, `eth_call`, `eth_sendRawTransaction`, `eth_getTransactionReceipt`,
-`eth_getTransactionByHash`, `eth_getBlockByNumber` — all implemented.
+Then balance display, send, and contract interaction work; every method MetaMask polls is in the
+compat matrix.
 
 ## Foundry (`cast` / `forge`)
 
@@ -87,13 +98,6 @@ await pub.getChainId(); await pub.readContract({ address: c, abi, functionName: 
 
 ## Solidity rule
 
-Compile with `evmVersion = "shanghai"` and a pinned compiler. Use OpenZeppelin / ERC‑20/721/1155
-unmodified. Do **not** use `block.timestamp`/`blockhash`/`prevrandao` for randomness on a BlockDAG —
-use commit‑reveal, a VRF, or an oracle (see `evm-differences-from-ethereum.md`).
-
-## Verified (testnet, unmodified tooling)
-
-- **Foundry**: `forge create` deployed `Counter`; `cast call number()` → 0 → `cast send setNumber(123)`
-  (receipt status 1 + the `NumberSet` event) → `cast call number()` → 123; `cast logs` returned the event.
-- **ethers v6 / viem 2.52**: `getChainId`/`getBlockNumber`/`getBalance`/`getCode` + `readContract`
-  (`number()` → 123) + `getLogs` against the deployed contract — no patches.
+Compile with `evmVersion = "shanghai"` and a pinned compiler; OpenZeppelin / ERC‑20/721/1155 work
+unmodified. Read the on‑chain‑randomness caveat in
+[`evm-differences-from-ethereum.md`](evm-differences-from-ethereum.md) before using block fields.
