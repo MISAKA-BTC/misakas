@@ -183,6 +183,26 @@ pub struct Forecast {
     pub span_ms: u64,
     pub path: Vec<String>,
     pub note: String,
+    /// **How many independent operators the network has against the seating floor** (RFC-0002 §II.7.5): present when a node was
+    /// asked (`--node`) or the network arms `palw_class_seating`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub independence: Option<ForecastIndependence>,
+}
+
+/// The seating floor against the operators the network has.
+#[derive(Clone, Debug, Serialize)]
+pub struct ForecastIndependence {
+    /// `palw_class_seating` is in force on the network at the judged height (its floor is then asked of every claim).
+    pub fence_in_force: bool,
+    /// The floor in force at the height, or the default a flag day would arm it with (the jury's strict majority of a panel).
+    pub independent_floor: u32,
+    /// The panel's size: the possession floor (`seat_count` distinct operators besides the executor).
+    pub seat_count: u32,
+    /// Operators of the network's base population the node reports (the outsider seat's draw), when a node was asked.
+    pub base_operators: Option<u32>,
+    /// The share of a class's claims whose outsider would hold it once exactly the floor of operators do, `floor × 1000 / base`.
+    pub licensable_share_at_floor_permille: Option<u16>,
+    pub note: String,
 }
 
 #[derive(Default)]
@@ -425,9 +445,10 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
 
     // ---- the height --------------------------------------------------------------------------------------------------------------
     let schedule_end = params.fence_schedule_v1().last().copied().unwrap_or(0);
-    let (height, daa_choice) = match opts.height {
-        Some(h) => (h, "given (--height)".to_string()),
-        None => (
+    let (height, daa_choice) = match (opts.height, opts.node.as_ref()) {
+        (Some(h), _) => (h, "given (--height)".to_string()),
+        (None, Some(node)) => (node.tip_daa, format!("the node's tip (--node, {})", node.network)),
+        (None, None) => (
             schedule_end,
             if schedule_end == 0 {
                 "the network schedules no fence: DAA 0".to_string()
@@ -632,8 +653,29 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
         } else {
             None
         };
-        let window_at = |ctx: u32| -> Option<(u64, bool)> {
+        // **The window the class is judged against** (the class-specific window of release int-10): past `palw_model_court_window` the
+        // class carries its OWN finite window, the greater of the network's and the exact minimum its court shape needs
+        // (`palw_court_window_for_history_v1`, the very function admission v10 derives it with); below it, or on a network that never
+        // armed it (testnet-12 arms it nowhere), the network's `window_court`.
+        let model_window_active = rules.as_ref().is_some_and(|r| r.model_court_window_active);
+        let limit_at = |ctx: u32, class_specific: bool| -> Option<u64> {
             let (played, window, held) = window_model.as_ref()?;
+            if class_specific {
+                kaspa_consensus_core::palw_class_admission_v2::palw_court_window_for_history_v1(
+                    *window,
+                    true,
+                    *held,
+                    played,
+                    u64::from(ctx),
+                    opts.h_chunk.max(1),
+                )
+                .ok()
+            } else {
+                Some(*window)
+            }
+        };
+        let needed_at = |ctx: u32| -> Option<u64> {
+            let (played, _, held) = window_model.as_ref()?;
             let tile = opts.h_chunk.max(1);
             let reserve = kaspa_consensus_core::palw_context_ladder::palw_close_assembly_daa_v1(played.max_close_chunks());
             let worst = if *held {
@@ -641,8 +683,12 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
             } else {
                 played.worst_case_duration_with_history_daa(u64::from(ctx), tile)
             }?;
-            let needed = worst.checked_add(reserve)?;
-            Some((needed, needed < *window))
+            worst.checked_add(reserve)
+        };
+        let window_at = |ctx: u32| -> Option<(u64, bool)> {
+            let needed = needed_at(ctx)?;
+            let limit = limit_at(ctx, model_window_active)?;
+            Some((needed, needed < limit))
         };
         let (max_context, searched) = match opts.max_context {
             Some(c) => (c, false),
@@ -724,15 +770,32 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                 if has_history_cone {
                     match (&window_model, window_at(max_context)) {
                         (Some((_, window, _)), Some((needed, fits))) => {
+                            let limit = limit_at(max_context, model_window_active).unwrap_or(*window);
                             conditions.push(cond(
                                 "court_window",
-                                "DAA the court needs to adjudicate the history dissection at the declared context (strictly below the window)",
+                                if model_window_active {
+                                    "DAA the court needs to adjudicate the history dissection at the declared context (strictly below the class's own window)"
+                                } else {
+                                    "DAA the court needs to adjudicate the history dissection at the declared context (strictly below the window)"
+                                },
                                 Some(needed),
-                                Some(*window),
+                                Some(limit),
                                 "DAA",
                                 Some(fits),
-                                "palw_attn_court_admits_row_v1 (ADR-0082 Z4); the global rule: this build has no class-specific window (release int-10 adds it)",
+                                if model_window_active {
+                                    "palw_court_window_for_history_v1 (the class-specific window: palw_model_court_window is in force at this height)"
+                                } else {
+                                    "palw_attn_court_admits_row_v1 (ADR-0082 Z4); the network's window: palw_model_court_window is not in force at this height"
+                                },
                             ));
+                            // What the class's own window would be, said where the fence is dormant (it is armed nowhere today).
+                            if !model_window_active && let Some(own) = limit_at(max_context, true) {
+                                notes.push(format!(
+                                    "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of {} DAA (the network's is {} DAA)",
+                                    n(own),
+                                    n(*window)
+                                ));
+                            }
                             if !fits {
                                 let widest_fit = widest_context(max_context, &|c| window_at(c).is_some_and(|(_, ok)| ok));
                                 window_hint = match widest_fit {
@@ -742,7 +805,11 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                                     )],
                                     None => vec!["no context fits the court's window on this network".to_string()],
                                 };
-                                window_hint.push("the class-specific court window of release int-10 may give more".to_string());
+                                if !model_window_active {
+                                    window_hint.push(
+                                        "the class-specific court window (palw_model_court_window), where a network arms it, gives the class its own finite window".to_string(),
+                                    );
+                                }
                             }
                         }
                         _ => conditions.push(cond(
@@ -1061,6 +1128,35 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                 span_ms,
                 path,
                 note: "informational: the registry derives this profile from the class's work (palw_tir_model_work_v2, palw_derive_profile_v1); the chain decides, and how many independent operators the network has against the seating floor is a chain fact (RFC-0002 §II.7.5)".into(),
+                independence: {
+                    let terms = params.palw_class_seating_terms_at(judge_daa);
+                    let floor = terms.map(|t| u32::from(t.independent_floor)).unwrap_or_else(|| {
+                        u32::from(kaspa_consensus_core::palw_class_seating_fence_v1::PALW_CLASS_SEATING_T12_INDEPENDENT_FLOOR_V1)
+                    });
+                    let base = opts.node.as_ref().and_then(|n| n.base_operators());
+                    if terms.is_some() || opts.node.is_some() {
+                        Some(ForecastIndependence {
+                            fence_in_force: terms.is_some(),
+                            independent_floor: floor,
+                            seat_count: g.seat_count as u32,
+                            base_operators: base,
+                            licensable_share_at_floor_permille: base.filter(|b| *b > 0).map(|b| ((u64::from(floor) * 1000) / u64::from(b)).min(1000) as u16),
+                            note: if terms.is_some() {
+                                format!(
+                                    "palw_class_seating is in force: a claim is admitted only with {} distinct ready operators besides its executor, {floor} of them independent of the registrant and the executor",
+                                    g.seat_count
+                                )
+                            } else {
+                                format!(
+                                    "palw_class_seating is not in force on this network at this height; when a flag day arms it, {floor} independent operators (the admission jury's strict majority of a panel) will be needed beside {} ready operators",
+                                    g.seat_count
+                                )
+                            },
+                        })
+                    } else {
+                        None
+                    }
+                },
             });
         }
     }

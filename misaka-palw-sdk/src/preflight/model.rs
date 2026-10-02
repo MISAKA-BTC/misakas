@@ -13,7 +13,7 @@ use misaka_palw_tir_lower::gguf::GgufFile;
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, MissingItem, ReadOptions, TensorIndex, read_model_with};
 use misaka_palw_tir_lower::lower::LowerOpts;
 use misaka_palw_tir_lower::model::{
-    ArchitectureReport, FeatureReport, FeatureScope, FeatureStatus, ReportResult, analyze_with, spec_digest,
+    ArchitectureReport, FeatureReport, FeatureScope, FeatureStatus, ReportResult, analyze_headers_with, spec_digest,
 };
 use misaka_palw_tir_lower::quantfmt::{QuantRegistry, known_undescribed_method};
 use misaka_palw_tir_lower::weights::{check_names, check_weights};
@@ -197,7 +197,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     let tindex: Option<TensorIndex> = src.tensor_index();
     match (&src.config, &src.config_error) {
         (Some(config), _) => {
-            let r = analyze_with(config, tindex.as_ref(), &read_opts, reg, &src.file_names());
+            let r = analyze_headers_with(config, tindex.as_ref(), &read_opts, reg, &src.file_names());
             lowerable = r.result == ReportResult::Lowerable;
             scope = Some(r.scope.clone());
             report = Some(r);

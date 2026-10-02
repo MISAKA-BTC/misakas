@@ -169,7 +169,7 @@ fn a_gguf_of_custom_types_with_an_mmproj_is_refused_by_name_and_the_projector_is
 
 #[test]
 fn a_tiny_hybrid_with_sparse_attention_and_hashed_embeddings_is_read_as_features_not_as_a_qwen4_parser() {
-    let dir = copy_fixture(&fixture("hf-q4/qwen4_exp"), "qwen4-exp", true);
+    let dir = copy_fixture(&fixture("hf/qwen4_exp"), "qwen4-exp", true);
     let r = run(&dir, &opts(Depth::Shape)).expect("preflight");
     let m = r.model.as_ref().expect("model");
     // Read by a data adapter into registry features: the report names the combination, whether or not every lowering exists yet.
@@ -373,11 +373,14 @@ fn the_seat_is_judged_against_each_tier_and_a_tier_that_cannot_hold_the_class_is
 }
 
 #[test]
-fn the_full_depth_says_what_it_needs() {
+fn the_full_depth_without_a_pack_names_what_it_needs_as_a_blocker() {
     let dir = copy_fixture(&fixture("hf/llama"), "full", false);
     let r = run(&dir, &opts(Depth::Full)).expect("preflight");
-    assert_eq!(r.depth.reached, Depth::Shape);
-    assert!(r.depth.stopped_at.as_deref().is_some_and(|s| s.contains("pack verify")), "{:?}", r.depth.stopped_at);
+    assert_eq!(r.depth.reached, Depth::Full);
+    let b = r.blockers().into_iter().find(|b| b.code == "PACK_NOT_VERIFIED").expect("PACK_NOT_VERIFIED");
+    assert_eq!(b.stage, misaka_palw_sdk::preflight::Stage::Mine);
+    assert!(b.safe_paths.iter().any(|p| p.contains("pack build")), "{:?}", b.safe_paths);
+    assert_eq!(r.full.as_ref().map(|f| f.pack.as_str()), Some("NO_PACK"));
     let _ = std::fs::remove_dir_all(dir);
 }
 

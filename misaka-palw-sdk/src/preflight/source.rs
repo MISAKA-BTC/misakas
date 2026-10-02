@@ -31,6 +31,8 @@ pub enum InputKind {
     ConfigFile,
     Gguf,
     Artifact,
+    /// A model repository read by HTTP ranges ([`super::remote`]): `config.json`, the index and the shard headers.
+    Remote,
 }
 
 impl InputKind {
@@ -40,6 +42,7 @@ impl InputKind {
             InputKind::ConfigFile => "config.json",
             InputKind::Gguf => "GGUF file",
             InputKind::Artifact => ".palwtir artifact",
+            InputKind::Remote => "model repository (HTTP ranges)",
         }
     }
 }
@@ -323,6 +326,8 @@ pub fn open(path: &Path, kind: InputKind, headers: Option<&Path>, reg: &QuantReg
             open_hf(path, dir, headers.unwrap_or(dir), kind)
         }
         InputKind::Artifact => Err("an artifact is not a model source".into()),
+        // A repository was materialised as a local snapshot of headers first ([`super::remote::materialize_headers`]).
+        InputKind::Remote => open_hf(&path.join("config.json"), path, headers.unwrap_or(path), kind),
     }
 }
 

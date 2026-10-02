@@ -134,6 +134,12 @@ fn label_of(level: Level, confirmed: bool) -> String {
 /// return `(tensors no param reads, binding errors)` (FR-26: this is the check that caught Arcee's gated MLP
 /// and BitNet's sub-norms). An HL graph that cannot be built is the lowering's finding, not this one's.
 fn weights_check(spec: &crate::spec::ModelSpec, t: &TensorIndex) -> (Vec<String>, Vec<String>) {
+    // A pre-quantised checkpoint's shapes come from small role tensors whose DATA the tensor index does not carry (a descriptor reads
+    // `qzeros`, `g_idx`, … for the shape of a packed weight): this check has names and shapes only, so it leaves such a model to the
+    // caller that holds the files (`palw-class preflight` reads them through its header source, `read_slice` and all).
+    if spec.hf.quant.is_some() {
+        return (Vec::new(), Vec::new());
+    }
     let Ok(prog) = crate::hl::build_program(spec) else { return (Vec::new(), Vec::new()) };
     let binding = match crate::hf_weights::bind(spec, &prog) {
         Ok(b) => b,
@@ -474,6 +480,31 @@ pub fn analyze_with(
     reg: &crate::quantfmt::QuantRegistry,
     files: &[String],
 ) -> ArchitectureReport {
+    analyze_impl(config, tensors, opts, reg, files, true)
+}
+
+/// [`analyze_with`] **without the frontend's own weight check** (FR-26): for a caller that runs the same binding over the headers it
+/// holds and reports each finding by its own stable code — `palw-class preflight`'s `TENSOR_MISSING`, `TENSOR_SHAPE` and its unread
+/// tensors — so a tensor the program cannot find is a finding of that check and does not also make the whole report `NotLowerable`
+/// (which would stop the shape-only lowering the preflight judges the chain's conditions from).
+pub fn analyze_headers_with(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+    files: &[String],
+) -> ArchitectureReport {
+    analyze_impl(config, tensors, opts, reg, files, false)
+}
+
+fn analyze_impl(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+    files: &[String],
+    check_weights: bool,
+) -> ArchitectureReport {
     if is_diffusers(config) {
         return analyze_diffusers(config, tensors, opts);
     }
@@ -512,7 +543,7 @@ pub fn analyze_with(
             // The checkpoint, when its tensor index was given: every tensor must be read by some param, every
             // param must find its tensor with the shape the graph needs (FR-26).
             let (unread_tensors, weight_errors) = match tensors {
-                Some(t) if missing.is_empty() => weights_check(&read.spec, t),
+                Some(t) if missing.is_empty() && check_weights => weights_check(&read.spec, t),
                 _ => (Vec::new(), Vec::new()),
             };
             if !unread_tensors.is_empty() {

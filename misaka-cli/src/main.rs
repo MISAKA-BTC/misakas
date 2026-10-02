@@ -2675,7 +2675,7 @@ async fn main() -> std::process::ExitCode {
         Command::Model(ModelCmd::Preflight { artifact, model, profile: args }) => {
             if model_preflight::is_model(&artifact) {
                 // A model is judged from its headers, locally: no node, no profile.
-                model_preflight::model_preflight(&ctx, &artifact, &model)
+                model_preflight::model_preflight(&ctx, &artifact, &model).await
             } else {
                 match profile(&args) {
                     Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,

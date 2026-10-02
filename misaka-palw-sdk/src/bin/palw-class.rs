@@ -92,6 +92,11 @@ court window, the canonical job, the fences, the seat's memory (--seat-share [na
 --max-context N / --tile-len N / --h-chunk N the layout it is judged at, --held the held history bound,
 --json the machine form (misaka.palw.preflight.v1: no timestamp, no path). Exits 0 when nothing blocks, 2 when
 something does. Given a .palwtir artifact, `preflight` runs the artifact admission below instead.
+A repository id is read by HTTP ranges, the headers only: `hf://org/name[@revision]` (with --hf-endpoint <url>, default
+https://huggingface.co) or an `http(s)://` base URL of a mirror. --node-facts <file> judges against what a node said (the tip is the
+default height; a class already on the chain is read by its seats and independent operators; `misaka model preflight --node` writes
+the file). --depth full with --pack <dir> [--artifact <file>] verifies the runtime pack (PACK_NOT_VERIFIED) and reads the artifact
+root against the chain (ARTIFACT_ROOT_KNOWN).
 
 `drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
 prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
@@ -274,8 +279,12 @@ fn run(args: &[String]) -> Result<(), String> {
             // A model (a directory, a config.json, a .gguf) is judged from its headers; a PALWTIR1 artifact by the
             // artifact admission, as before.
             let first = args.iter().find(|a| !a.starts_with("--") && std::path::Path::new(a.as_str()).exists()).cloned();
-            if let Some(p) = &first
-                && !matches!(misaka_palw_sdk::preflight::detect(std::path::Path::new(p)), Ok(misaka_palw_sdk::preflight::InputKind::Artifact))
+            // A repository read by HTTP ranges (`http(s)://…`, `hf://org/name[@revision]`) is a model too.
+            let remote = args.iter().any(|a| a.starts_with("http://") || a.starts_with("https://") || a.starts_with("hf://"));
+            if remote
+                || first.as_ref().is_some_and(|p| {
+                    !matches!(misaka_palw_sdk::preflight::detect(std::path::Path::new(p)), Ok(misaka_palw_sdk::preflight::InputKind::Artifact))
+                })
             {
                 return match model_preflight(network.as_deref(), &mut args)? {
                     true => Ok(()),
@@ -487,10 +496,23 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
     while let Some(f) = take_flag(args, "--quant-format") {
         quant_formats.push(PathBuf::from(f));
     }
+    // `--node-facts <file>`: what a node said (`misaka model preflight --node` writes the same facts); `--pack <dir>` / `--artifact <file>`:
+    // the `full` depth's inputs; `--hf-endpoint <url>`: the endpoint a repository id (`hf://org/name[@revision]`) is read from.
+    let node = match take_flag(args, "--node-facts") {
+        Some(f) => Some(
+            misaka_palw_sdk::preflight::node::NodeFacts::parse(&std::fs::read_to_string(&f).map_err(|e| format!("--node-facts {f}: {e}"))?)?,
+        ),
+        None => None,
+    };
+    let full = misaka_palw_sdk::preflight::full::FullInputs {
+        pack: take_flag(args, "--pack").map(PathBuf::from),
+        artifact: take_flag(args, "--artifact").map(PathBuf::from),
+    };
+    let hf_endpoint = take_flag(args, "--hf-endpoint").unwrap_or_else(|| "https://huggingface.co".to_string());
     let held = args.iter().any(|a| a == "--held");
     let json = args.iter().any(|a| a == "--json");
     args.retain(|a| a != "--held" && a != "--json");
-    let path = PathBuf::from(args.first().ok_or(USAGE)?);
+    let input = args.first().ok_or(USAGE)?.clone();
     let defaults = Options::default();
     let opts = Options {
         depth,
@@ -505,8 +527,25 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         held,
         seat_shares,
         residency_pin_below_bytes: defaults.residency_pin_below_bytes,
+        node,
+        full,
     };
-    let report = misaka_palw_sdk::preflight::run(&path, &opts)?;
+    // A repository: `http(s)://…/<base>` (a mirror, a fixture server) or `hf://org/name[@revision]`, read by ranges.
+    let remote_base = if let Some(rest) = input.strip_prefix("hf://") {
+        let (repo, revision) = rest.split_once('@').unwrap_or((rest, "main"));
+        Some(misaka_palw_sdk::preflight::remote::hf_base_url(&hf_endpoint, repo, revision))
+    } else if input.starts_with("http://") || input.starts_with("https://") {
+        Some(input.clone())
+    } else {
+        None
+    };
+    let report = match remote_base {
+        Some(base) if base.starts_with("http://") => {
+            misaka_palw_sdk::preflight::run_remote(&base, &misaka_palw_sdk::preflight::remote::HttpRangeFetcher::default(), &opts)?
+        }
+        Some(base) => misaka_palw_sdk::preflight::run_remote(&base, &misaka_palw_tir_lower::weights::CurlFetcher::new(), &opts)?,
+        None => misaka_palw_sdk::preflight::run(&PathBuf::from(&input), &opts)?,
+    };
     if json {
         println!("{}", report.to_json());
     } else {
