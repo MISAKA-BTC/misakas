@@ -46,6 +46,20 @@ different fingerprint or fence schedule from the one in
 [`testnet12-join-mining.md`](testnet12-join-mining.md) §3 is a ruleset mismatch, not a connectivity
 problem: rebuild from the release rather than copying a value from an older runbook.
 
+### More than one node on a host
+
+Give each node its own `--appdir` and its own ports. `misaka` cannot tell which node a command means
+when several `kaspad` processes of one network run on the host; name one with
+`--appdir <the node's --appdir>` or `[advanced] appdir` in `~/.misaka/mining.toml`. One bond is
+one process: never run the same producer key and bond on two nodes.
+
+### If your node says quarantined
+
+A node that has closed its chain-participation gate reports `participation_allowed=false`, and
+`misaka mining status` shows `E-NET-PARTICIPATION`. If the node log says `quarantined`, restart once
+with `--clear-quarantine` and then remove the flag again: it clears the persisted state on every boot
+it is present for (ADR-0025).
+
 ## Producing blocks
 
 An external hash miner cannot produce testnet-12 blocks. Production runs inside

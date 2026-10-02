@@ -11,5 +11,7 @@ For the current system use the [documentation map](../README.md), the [ADRs](../
 | plans and status ledgers that have been overtaken | `palw-road-to-mainnet-*`, `palw-two-class-plan-*`, `palw-practical-runtime-plan-*`, `palw-class-activation-gate-status.md`, `palw-rc-launch-blockers-*`, `palw-rc-t12-seat-deadlock-*`, `palw-qwen25-*`, `palw-private-prompts-design-*`, `palw-position-benefits-consumer-*`, `palw-economic-parameters-*`, `palw-economy-studio-drill-*`, `palw-stage0-shadow-drill-runbook.md` |
 | completed migrations and old test fixtures | `hash64-migration-inventory.md`, `kaspa-pq-mldsa87-verification-runbook.md`, `mtp-epoch2-partition-policy.md`, `vps-regression-fixture.md`, `rc7-evidence.txt` |
 | security audit response (2026-06-23) | `security/` |
+| the testnet-11-era explorer patches and job exporter (2026-09) | `explorer/` |
+| free-prompt wiring status notes, now landed | `palw-fp-on-registered-classes.md`, `palw-fp-wiring-atomicity.md` |
 
 testnet-10 and testnet-11 documents were removed rather than archived; they remain in git history.

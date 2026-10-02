@@ -1658,7 +1658,7 @@ impl<'a> Wizard<'a> {
                     .reason("a retiring bond takes no new work, and the registry refuses a second bond from any key it has held (DuplicateBondKey)")
                     .current(format!("{} · retiring since DAA {}", b.outpoint, status::group(since)))
                     .fix("misaka key gen --out <a NEW seed file>, fund it, and re-run setup with --key-file <it>")
-                    .docs("docs/testnet11-join-mining.md#3-register-a-bond"),
+                    .docs("docs/testnet12-join-mining.md#5-register-a-bond"),
             ));
         }
         let role = BondRole::of(self.purpose);
@@ -2492,7 +2492,7 @@ impl<'a> Wizard<'a> {
                 Finding::error("E-MODEL-ARTIFACT-MISSING", exit::MODEL, format!("{} needs its artifact, and none is here", class.label()))
                     .reason("a node mines and judges a model class by running it, from the class's .palwart file")
                     .current("no --artifact, no [advanced] artifact, no MISAKA_PALW_ARTIFACT, and no artifact in the configured search directories")
-                    .fix("get the class's artifact (docs/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere)")
+                    .fix("get the class's artifact (docs/palw-freeprompt-gateway.md#the-artifact-bound-and-the-same-file-everywhere)")
                     .fix("then: set MISAKA_PALW_ARTIFACT=/path/to/file or pass --artifact <file>")
             } else {
                 Finding::error("E-MODEL-ARTIFACT-ROOT", exit::MODEL, format!("No artifact here is {}'s", class.label()))

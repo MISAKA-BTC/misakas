@@ -3064,7 +3064,7 @@ async function pageAdd(arg) {
         <div class="step-h"><span class="n">1</span><b>Register the class</b> ${stepTag(...s.reg)}</div>
         <div class="step-b">
           <p class="small">A class is a registered model graph: its artifact's shape profile and canonical job ride in a <code>ClassRegistered</code> carrier signed by an <b>active bond</b> (ML-DSA-87), with a fee. <b>This step cannot be done from a browser</b>: the node that holds the artifact builds and submits it. The commands, from the runbooks in <code>docs/</code>:</p>
-          <pre class="cmd"># 0. a bonded key with funds (docs/testnet11-join-mining.md, section 3); keep the outpoint the node prints
+          <pre class="cmd"># 0. a bonded key with funds (docs/testnet12-join-mining.md, section 5); keep the outpoint the node prints
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-register-bond --palw-producer-key=~/.misaka/miner.seed
 
 # 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/palw-model-onboarding-sdk.md)
@@ -3076,7 +3076,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
   --palw-class-artifact /path/to/artifact.palwart --palw-register-class "&lt;model id&gt;" \\
   --palw-producer-key=~/.misaka/miner.seed --palw-producer-bond=&lt;txid&gt;:&lt;index&gt; --palw-fee-outpoint=&lt;txid&gt;:&lt;index&gt;</pre>
           <p class="small">The class registers <b>weightless</b> (<code>Registered</code>) at a share of 1 ‰ pending, with an activation DAA (ADR-0056 D6); the class id the node prints is the founding line's id. Its share then follows its own production (ADR-0054). A new architecture, one whose graph reaches a kernel no shipped family drills, needs a build whose court serves it; a new checkpoint of a known lineage is a table row plus the conversion (the onboarding SDK).</p>
-          <p class="small dim">Runbooks: <a href="${docs}/palw-model-onboarding-sdk.md" target="_blank" rel="noopener">the model-onboarding SDK</a> · <a href="${docs}/testnet11-join-mining.md" target="_blank" rel="noopener">joining testnet-11 (bond, key, funds)</a> · <a href="${docs}/palw-certify-a-new-model.md" target="_blank" rel="noopener">certifying a new model (ADR-0075)</a> · <a href="${adr}/0056-palw-permissionless-class-admission-and-share-economy.md" target="_blank" rel="noopener">ADR-0056</a> · <a href="${adr}/0054-palw-share-follows-production.md" target="_blank" rel="noopener">ADR-0054</a>.</p>
+          <p class="small dim">Runbooks: <a href="${docs}/palw-model-onboarding-sdk.md" target="_blank" rel="noopener">the model-onboarding SDK</a> · <a href="${docs}/testnet12-join-mining.md" target="_blank" rel="noopener">joining testnet-12 (bond, key, funds)</a> · <a href="${docs}/palw-certify-a-new-model.md" target="_blank" rel="noopener">certifying a new model (ADR-0075)</a> · <a href="${adr}/0056-palw-permissionless-class-admission-and-share-economy.md" target="_blank" rel="noopener">ADR-0056</a> · <a href="${adr}/0054-palw-share-follows-production.md" target="_blank" rel="noopener">ADR-0054</a>.</p>
           <dl class="kv small">
             <dt>Class on this chain</dt><dd>${f == null ? (st.id ? 'checking' : '—') : f.exists === false ? 'no' : f.exists ? 'yes' : '—'}${f && f.source && f.source.length ? raw(' <span class="dim">(' + esc(f.source.join(', ')) + ')</span>') : ''}</dd>
             <dt>Status</dt><dd>${cs ? cs.head : '—'}</dd>

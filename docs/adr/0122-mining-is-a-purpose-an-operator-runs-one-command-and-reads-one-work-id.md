@@ -10,7 +10,7 @@
 * Builds on: the `misaka palw claim` reader (its `state`/`meaning`/`next` rows are §3's chain half),
   `getPalwProducerFacts` (ADR-0042 D6, and its `not_ready_reason`), the retention janitor
   (`kaspad/src/palw_retention.rs`), the fleet's roll procedure (readiness gates and the stop grace,
-  §6), and the free-prompt lane's documented onboarding (`docs/testnet11-free-prompt-mining.md`).
+  §6), and the free-prompt lane's documented onboarding (`docs/palw-freeprompt-gateway.md`).
 * Amends nothing. Supersedes the stale `misaka setup` web flow for mining (testnet-10, `misaminer`)
   as the documented path. That flow stays in the tree for testnet-10's DNS validator hosts.
 

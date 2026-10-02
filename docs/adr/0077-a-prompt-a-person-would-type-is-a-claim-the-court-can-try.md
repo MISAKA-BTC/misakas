@@ -40,7 +40,7 @@ The three classes testnet-11 registers, read off `canonical_classes_v1` /
 | PALW-QWEN36 `5bd9ae3d…` | Qwen3.6-35B-A3B, graph-v3 | 8 | `palw-qwen36-fp-worker` | (7, 2) | 2,685,360 |
 
 Against those widths, the gateway's frozen plain-marker template costs ~9 tokens by itself
-(`docs/palw-fp-on-registered-classes.md`, measured on the A16 tokenizer). On the hybrid the
+(`docs/archive/palw-fp-on-registered-classes.md`, measured on the A16 tokenizer). On the hybrid the
 template alone does not fit and `palw-qwen36-fp-worker` refuses the job at its own length check;
 on the dense tier a browser prompt is "a few tokens each way — the pipeline proof, not the product
 width". The worker binaries map the artifact **per job** (`load()` inside `run_job`; ~8 minutes

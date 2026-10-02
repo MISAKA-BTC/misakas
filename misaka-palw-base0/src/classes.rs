@@ -237,7 +237,7 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     // **The corrected A16 graph rides here too, as a class of its own.**
     //
     // The v1 rows carry `qwen25_a16_profile_v1`, which two measurements show does not describe the
-    // engine it runs (`docs/palw-fp-on-registered-classes.md`): its pre table omits the embed-lift
+    // engine it runs (`docs/archive/palw-fp-on-registered-classes.md`): its pre table omits the embed-lift
     // requant the engine performs, and its state chunk map is one byte per element over an `i32`
     // cache. Either defect alone makes a step leg uncommittable, so no v1 class can serve the
     // free-prompt lane.

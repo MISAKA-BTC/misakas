@@ -15243,7 +15243,7 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// Measured on the artifact converted from
 /// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers,
 /// GGUF SHA-256 `1dc49461…`, default flags). The conversion is deterministic — see
-/// `docs/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
+/// `docs/palw-classes-runbook.md` for the recipe — so an operator may either
 /// rebuild this file from the published GGUF or download it and let their node verify the root;
 /// both routes end at this constant.
 ///

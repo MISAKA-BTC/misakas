@@ -1946,7 +1946,7 @@ async fn palw_v2_a_template_commits_the_selected_parent_root_even_when_the_tip_d
 /// different starting points on ONE chain yields the same fact, and the fact names a block the
 /// walk found rather than one anybody supplied. The end-to-end spend path additionally needs a
 /// certified free-prompt claim on chain, which needs the FP worker's legs capture (see
-/// `docs/palw-fp-wiring-atomicity.md`) — until then the pipeline's arm is exercised by the
+/// `docs/archive/palw-fp-wiring-atomicity.md`) — until then the pipeline's arm is exercised by the
 /// derivation it calls, and by every V2 block going through it with no receipt lane in play.
 #[tokio::test]
 async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
