@@ -254,7 +254,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                         calib.len(),
                         calib.iter().map(Vec::len).sum::<usize>()
                     ));
-                    let parent_loader = Streamed { prog: &c.parent.hl, binding: &c.parent.binding, source: ck };
+                    let parent_loader = Streamed::new(&c.parent.hl, &c.parent.binding, ck);
                     fidelity::calibrate(&c.parent.hl, &parent_loader, &calib, &progress("parent calibration"))
                         .map_err(|e| e.to_string())?
                 }
