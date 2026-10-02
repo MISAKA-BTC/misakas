@@ -92,5 +92,11 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
   the gate's verdict grid; the cap), `palw_gen_one_move` 6/6,
   `palw_gen_dissect` 3/3, `palw_gen_tensor` 14/14, `palw_gen_vlm_admission` 4/4 (asking the carried bound: the HF activation tables are
   four pieces), `palw_held_close_chunks` 7/7, `palw_tir_close_size` 1/1 (the IR twin unchanged).
+* **A text-only class is refused by name** (`PalwGenClassErrorV1::TextOnly`, the preflight's, so the gate's first step, under the gen fence):
+  a `Text`-profile class that offers no image slot and no source takes FP Job V4 — the text lane's — and the generative court binds FP Job
+  V5 alone, so it could be registered and never claimed. The refusal points the registrant at the text lane (an IR class,
+  `misaka palw tir-registration`). None of the drill's classes is text-only (`toy-image`, `toy-embed`, `wide-embed`, `sd3-tiny`); tests:
+  `palw_gen_class_registration` (the preflight), `palw_gen_vlm_admission` (the gate: dropped below the fence, refused from it whatever the
+  court and the carrier allow, the same model behind an image slot admitted).
 * NOT exercised: `gen-claim --plant`/`--list-leaves` against a node, the filer's chunk delivery against a live chain, the
   capture fetch of a 1 MB sd3 claim. Those are what the drill is for.

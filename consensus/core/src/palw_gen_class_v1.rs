@@ -44,7 +44,9 @@
 //! half: the class's structure against the fence — versions, the profile and its ceilings, the strict
 //! decoding of every program and of the pipeline (NF-P1…P9), the layouts' shape, the output header
 //! against the output stage (PALW-OUT-2), the offers against the bindings — and the IR's admission of
-//! the pipeline (spec 04b §15.9) under the profile's ceilings. Its step-leaf count is a NECESSARY
+//! the pipeline (spec 04b §15.9) under the profile's ceilings; and a `Text` class takes FP Job V5, so it offers an image slot or a
+//! source — one that offers neither is a text-only model, refused by name ([`PalwGenClassErrorV1::TextOnly`]) and pointed at the text
+//! lane (FP Job V4), where it belongs. Its step-leaf count is a NECESSARY
 //! condition only (each stage admitted at its widest commit tile, so the true count is at least the
 //! one checked); the one step tree that counts leaves exactly is the pipeline admission's.
 
@@ -393,6 +395,17 @@ pub enum PalwGenClassErrorV1 {
     Output(String),
     #[error("the offers: {0}")]
     Offers(String),
+    /// **A generative text class takes FP Job V5, which carries images or a source — never neither** (RFC-0003 §II.2.1, PALW-GEN-13,
+    /// open question 14). A text class that offers no image slot and no source is a text-only model: its jobs are FP Job V4, the text
+    /// lane's, and no generative claim carries one — it could be registered and never claimed, a dead registration that costs its
+    /// registrant for nothing. Refused by name, with the lane it belongs on.
+    #[error(
+        "a text class with no image slot and no source is a text-only model, not a generative class: its jobs are FP Job V4 (the text \
+         lane), which no generative claim carries, so it could never be claimed. Register it on the text lane (FP Job V4: an IR class, \
+         `misaka palw tir-registration`); a generative text class takes FP Job V5 and offers at least one image slot or a source \
+         (RFC-0003 §II.2.1, PALW-GEN-13)"
+    )]
+    TextOnly,
 }
 
 /// What the preflight learned.
@@ -807,6 +820,11 @@ pub fn palw_gen_class_preflight_v1(
         }
         check_offers(&pipeline, &programs, &class.offers)?;
         check_profile_offers(class, profile)?;
+        // **A generative text class takes FP Job V5** (PALW-GEN-13, open question 14: one encoding per behaviour) — which carries
+        // images or a source, never neither. A text class that offers neither takes FP Job V4 only, the text lane's, and the generative
+        // court binds V5 jobs alone: no claim of it could ever be made. Asked before the IR's admission, the costly step: a dead
+        // registration is refused cheaply.
+        crate::palw_fp_job_v5::palw_fp_job_version_offered_v1(&class.offers, true).map_err(|_| PalwGenClassErrorV1::TextOnly)?;
         let admission = admit_class(class, ceilings)?;
         let floors = palw_gen_input_token_floors_v1(&pipeline, &admission, class.offers.images.len())?;
         let image_token_floor = floors.images;
