@@ -974,6 +974,9 @@ mod tests {
             .with_tir_from_daa(Some(ACTIVE))
             .with_improve_from_daa(Some(ACTIVE))
             .with_improve_ceilings(Some(PALW_DRILL_IMPROVE_CEILINGS_V1))
+            // The fold's mechanics, not Λ: the release arms testnet-12's fast-path check (rows 19-20), which its own test asks with an
+            // explicit base (a_policys_windows_are_held_to_the_fast_honest_claim_path_at_the_daa_it_is_applied).
+            .with_improve_lifecycle_base(None)
     }
 
     /// One ExactMatch stage, eight items, a four-id budget and no stops.

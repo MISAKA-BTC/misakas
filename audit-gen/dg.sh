@@ -115,7 +115,29 @@ leaf_of() {
     python3 -c "import json,sys; L=json.load(open('$f'))['leaves']; print(next(l['global'] for l in L if l['stage']==int(sys.argv[1]) and l['kind'].startswith(sys.argv[2]) and l['lanes']>0))" "$stage" "$kind"
 }
 
+# INT11=1 (the combined drill, the release layer): the three fences are ONE height H' = GEN_AT = FPV5_AT = HELD_AT, so the three crossings are one
+# crossing: below H' a gen registration (image class), a wide-embed registration (the held-chunk class) and a v10 claim are each dropped / refused by name;
+# from H' the two classes register and a v10 claim is taken (dg2/dg3 show it). Each fence alone was drilled on the per-fence layout (INT11=0).
+dg1_int11() {
+    classes_manifest
+    local s; s=$(seat_of "$IMAGE_EXEC")
+    say "DG-1 (int-11): below H'=$GEN_AT the gen registration, the wide class and a v10 claim are dropped / refused"
+    at_daa $((GEN_AT - 4)); gen_register "$IMAGE_CLASS" "$IMAGE_EXEC"; gen_register wide-embed "$IMAGE_EXEC"
+    local early; early=$(gen_claim "$IMAGE_EXEC" "$IMAGE_CLASS" "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" dg1-early) \
+        && note_early=taken-by-the-tool || note_early="refused-by-the-tool(class unknown below the fence)"
+    at_daa $((GEN_AT + 3))
+    dgw class --class "$(class_field "$IMAGE_CLASS" class_id)" >/dev/null && bad "the registration below the fence was taken" || ok "image class dropped by name below $GEN_AT"
+    dgw class --class "$(class_field wide-embed class_id)" >/dev/null && bad "the wide class was registered below $GEN_AT" || ok "wide class refused below $GEN_AT"
+    dgw claims --bond "$(seat_field "$s" bond_outpoint)" --class "$(class_field "$IMAGE_CLASS" class_id)" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if not d['claims'] else 1)" \
+        && ok "no v10 claim taken below $GEN_AT ($note_early)" || bad "a v10 claim was taken below $GEN_AT"
+    gen_register "$IMAGE_CLASS" "$IMAGE_EXEC"; gen_register wide-embed "$IMAGE_EXEC"; at_daa $((GEN_AT + 14))
+    dgw class --class "$(class_field "$IMAGE_CLASS" class_id)" >/dev/null && ok "image class accepted from $GEN_AT" || bad "image class not listed from $GEN_AT"
+    dgw class --class "$(class_field wide-embed class_id)" >/dev/null && ok "wide class accepted from $GEN_AT" || bad "the wide class is not listed after $GEN_AT"
+    [ "$FAILED" = 0 ] && echo "DG-1 PASS" || { echo "DG-1 FAIL"; return 1; }
+}
+
 dg1() {
+    [ "${INT11:-0}" = 1 ] && { dg1_int11; return; }
     classes_manifest
     say "DG-1: below GEN_AT=$GEN_AT the gen registration is dropped by name"
     at_daa $((GEN_AT - 4)); gen_register "$IMAGE_CLASS" "$IMAGE_EXEC"
@@ -144,6 +166,7 @@ dg2() {
     at_daa "$LATE_AT"; gen_register toy-embed "$EMBED_EXEC"
     local s; s=$(seat_of "$EMBED_EXEC")
     at_daa "$FPV5_AT"
+    [ "${INT11:-0}" = 1 ] && at_daa $((LATE_AT + 4))   # one height for every fence: the registration is in, five ready operators are tens of DAA away
     local id; id=$(gen_claim "$EMBED_EXEC" toy-embed "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" dg2-early)
     at_daa $((FPV5_AT + 6))
     grep -qh "GenClassNotReady" "$WORK_DIR"/new*/kaspad.out 2>/dev/null && ok "refused: GenClassNotReady" || bad "no GenClassNotReady in the nodes' logs (the claim $id)"
