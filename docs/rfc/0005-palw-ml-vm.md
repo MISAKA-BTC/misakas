@@ -2,13 +2,13 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-09-29 — design only. **Nothing here starts before RFC-0004 (Phase A) is fully implemented** (the user's order of 2026-09-29). Part I is built only if its gate (§I.1.4) opens. Part II's rung A is built when contracts ask for model calls; its rung B only after PALW-TIR is mainnet-safe and workflow demand (M4, §I.1.2) is measured |
+| Status | Draft, 2026-09-29 — design only. **Nothing here starts before RFC-0004 (Phase A) is fully implemented** (the user's order of 2026-09-29). Part I is built only if its gate (§I.1.4) opens. Part II's rung A is built when contracts ask for model calls; its rung B only after PALW-TIR is mainnet-safe and workflow demand (M4, §I.1.2) is measured. **Revised 2026-10-02** (the user's direction): Part II is built on VMs that already run on mainnets rather than designed from first principles (§*Design principle*, §II.2.4) |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 (as RFC-0004 and RFC-0005); merged 2026-09-29 |
 | Normative dependencies | **RFC-0004** (the Model Improvement Protocol, which this RFC automates and extends), RFC-0002, RFC-0003 |
 | Affects | spec/palw 03 (registry: the program kinds `Bvm` and `Gvm`), new chapters 04d (bounded control) and 04e (the general VM), 05 (canonical work: credited per executed call), 07/08/09 (claims, verification, court: control traces, the bisection game, one-step proofs), 11 (free-prompt lane: workflow jobs), 16 (fences), 17 (RFC-0004's chapter: the EXEC, CRITIC and PROOF verification types); spec/evm (a job precompile and a settlement op) · all networks (dormant until armed) · `consensus/core`, new crates `misaka-palw-bvm` and `misaka-palw-gvm`, `kaspa-evm` (rung A), `misaka-palw-sdk`, a guest toolchain |
 | Branch | `rfc/0004-0005-vm` (text only) |
-| Related | ADR-0135 D7 (a new operation is a protocol upgrade), ADR-0020 (the selected-parent EVM lane), ADR-0089 (the fold is the truth, the EVM is its window and its hand), ADR-0139 (the lanes' gas budget), ADR-0023 (the three-lane proposal), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0082 and ADR-0103 (dissection, the held regime), ADR-0072 |
+| Related | ADR-0135 D7 (a new operation is a protocol upgrade), ADR-0020 (the selected-parent EVM lane), ADR-0089 (the fold is the truth, the EVM is its window and its hand), ADR-0139 (the lanes' gas budget), ADR-0023 (the three-lane proposal), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0082 and ADR-0103 (dissection, the held regime), ADR-0072 · external precedents (§*Design principle*): Nervos CKB-VM, the Cartesi Machine and its PRT dispute protocol, the EVM, FuelVM, the RISC-V Sail model |
 
 ## 概要(日本語)
 
@@ -21,6 +21,32 @@
 - **RFC-0004 の規則は変えない。** 候補モデルが VM で作られたことを要求してはならない(RFC-0004 PALW-MIP-1)。VM プログラムが
   作った候補も、VM を使わずに作った候補も、同じ評価と promotion を受ける。この RFC が足すのは、候補と dataset の新しい作り手
   (Phase B・C)と、実行を要する検証の型(Phase C の EXEC・CRITIC・PROOF)だけ。
+
+**設計方針:ゼロから作らず、mainnet で動いている VM を真似る(2026-10-02 追加、ユーザーの指示)**
+
+- **VM を発明しない。** Part II の Turing 完全 VM は、命令セット・メモリモデル・gas・例外処理・dispute をゼロから設計しない。
+  mainnet で実績のある設計を土台にして、MISAKA にしかない部分だけを書く。これで rung B は「VM を作る研究課題」から、
+  「実績ある RISC-V VM を MISAKA の決定性・metering・court・PALW-TIR に接続する工学課題」に変わる。
+- **何をどこから借りるか。**
+  - ISA と VM の核 → **Nervos CKB-VM**(PoW の L1 mainnet で RISC-V を実運用)。その RV64IM と bit 操作(Zba・Zbb・Zbs)の
+    部分集合、命令の意味、テスト corpus、そして差分テストの相手としての実装。
+  - 命令の意味の正本 → **ratified な RISC-V 仕様と Sail モデル**。CKB-VM は参考実装で、正本ではない。
+  - metering → **EVM**(gas で停止を保証、out-of-gas は定義された終状態、refund は入れない)、**FuelVM**(gas を状態の
+    register として持つ、固定長命令、UTXO で状態を最小化)、CKB-VM の cycles。EVM 自体は fork せず、教訓だけ借りる。
+  - dispute → **Cartesi**(再現可能な RISC-V machine。Ethereum mainnet 上の permissionless dispute(PRT)で、正直な参加者
+    1 人で正しい結果を強制できる)。first divergent VM step まで絞る形をそのまま使う。
+  - テンソル計算 → **PALW-TIR**(MISAKA 独自、既存)。
+- **二重の裁判がつながる。** 通常の命令(ADD・LD・SD・BRANCH)は 1 命令の one-step 証明で裁く。その 1 命令が
+  `TIR_CALL`(CALL_TIR)なら、既存の PALW court(node → cone → chunk / tile)へ降りる。Cartesi / Truebit 型の「1 命令まで
+  絞る」と、MISAKA の「巨大なテンソル計算を tile まで絞る」を `TIR_CALL` で接続する。
+- **MISAKA が自分で書くのは六つだけ。** 決定的な profile、資源会計(VM gas と TIR budget の 2 次元)、状態の commitment、
+  `TIR_CALL` の ABI、court の commitment、PALW との統合。
+- **順位は RISC-V > WASM > 独自 VM。** court が「命令 #8129、register x3、address 0x…」まで落とせることが決め手。
+- **v1 は借り元より狭い。** 浮動小数点・ネットワーク・ファイルシステム・wall clock・ホストの乱数・スレッド・動的な syscall は
+  全部禁止。VM = 制御・メモリ・プログラムの論理、TIR = テンソル演算。Linux は v1 に入れない(Cartesi 型の Linux profile は
+  将来の任意の拡張)。借り元との違いは §II.2.4 の departure register に理由つきで全部書く。
+- **コードの流用はライセンスを個別に確認してから。** CKB-VM は MIT。Cartesi の machine emulator は LGPL-3.0 なので、設計だけ
+  借りて node のバイナリには入れない。
 
 **Part I — Phase B:有界 VM(PALW-BVM)と有界な改良ワークフロー**
 
@@ -44,17 +70,19 @@
   テストで評価する、実行した反例、証明 checker)。誰でも研究プログラムを登録して走らせ、その成果物を RFC-0004 に候補や
   dataset として出せる。
 - **二つの段。** rung A = 既存 EVM レーンを非同期の呼び出し役に使う(PALW job を依頼し、`Final` の後に callback。fee-only)。
-  rung B = off-chain の **RISC-V RV32IM** VM と TIR precompile。checkpoint + k-ary 二分探索 + 1 命令の one-step 証明 +
-  呼び出し先の TIR court への下降の 4 段で裁く。EVM レーンに同期の TIR precompile を足す案は不可能(全ノードが推論を再実行
-  することになる)。WASM は次点。
+  rung B = off-chain の **RISC-V VM(RV64IM + Zba・Zbb・Zbs、CKB-VM の ISA の部分集合)** と TIR precompile。Cartesi 型の
+  checkpoint + k-ary 二分探索 + 1 命令の one-step 証明に、呼び出し先の TIR court への下降を足した 4 段で裁く。
+  EVM レーンに同期の TIR precompile を足す案は不可能(全ノードが推論を再実行することになる)。WASM は次点。
 - **gas と報酬。** gas は状態の一部で、one-step 証明が毎命令検査する。報酬は実行された TIR 呼び出しの仕事量だけで、VM 命令は
   0。外部の応答は oracle transcript として入力になり、真偽は裁かない(P2)。
 
 **工数と推奨**
 
 - **工数。** Part I:約 17〜25 EM、agent 実装 2〜4 週、mainnet-safe 9〜12 か月。Part II:rung A 約 3〜4 EM(mainnet-safe
-  6〜9 か月、mainnet の EVM レーン有効化が別に要る)、rung B 約 36〜52 EM(agent 実装 1〜2 か月、**mainnet-safe 24〜30 か月**)、
+  6〜9 か月、mainnet の EVM レーン有効化が別に要る)、rung B 約 32〜45 EM(agent 実装 1〜2 か月、**mainnet-safe 22〜28 か月**)、
   RFC-0004 のための EXEC checker が rung B の後に 10〜16 engineer-weeks。どれも RFC-0004 の完了後、PALW-TIR の mainnet-safe 後。
+  既存 VM を土台にした分、仕様・参照実装・第二実装・形式検証は軽くなる(旧見積もり 36〜52 EM、24〜30 か月)。監査・soak・
+  bounty は縮まない。one-step prover が真偽を決めることは、ISA を誰が設計したかに関係ないから。
 - **推奨。** まず RFC-0004 を完成させる。その後、Part I は gate が開いたときだけ(Part II と両方は作らない)。rung A は
   コントラクト側の需要が出たら。rung B は PALW-TIR が mainnet-safe になり、M4 がワークフロー需要を示してから。
 
@@ -76,12 +104,17 @@ only adds producers of candidates and datasets, and scoring kinds.
   descent into the TIR court. It also keeps the measurement gate: bounded control adds no expressiveness
   over TIR, only cost savings.
 - **Part II** keeps the two rungs. Rung A uses the EVM lane as an asynchronous orchestrator of PALW jobs.
-  Rung B is an off-chain RISC-V RV32IM VM with TIR precompiles, adjudicated by a checkpointed trace, an
-  interactive bisection to one instruction, a one-step proof and a descent into the TIR court. The
-  substrate evaluation (custom VM, WASM, RISC-V, MIPS, the EVM lane) stands.
+  Rung B is an off-chain RISC-V VM with TIR precompiles — a pinned RV64IM subset of Nervos CKB-VM's
+  instruction set — adjudicated in Cartesi's shape: a checkpointed trace, an interactive bisection to
+  one instruction and a one-step proof, plus a descent into the TIR court. The substrate evaluation
+  (custom VM, WASM, RISC-V, MIPS, the EVM lane, and now CKB-VM, the Cartesi Machine and FuelVM) stands.
+- **Part II is borrowed, not invented** (revised 2026-10-02, §*Design principle*). Its ISA, its
+  semantics, its metering lessons and its dispute shape come from VMs that already run on mainnets.
+  MISAKA writes only the deterministic profile, the resource accounting, the commitments, the
+  `TIR_CALL` ABI, the court objects and the PALW integration.
 
 Both parts are optional and expensive. Part I costs 17–25 engineer-months and 9–12 months to
-mainnet-safe use. Part II's rung B costs 36–52 engineer-months and 24–30 months. **None of it starts
+mainnet-safe use. Part II's rung B costs 32–45 engineer-months and 22–28 months. **None of it starts
 before RFC-0004 is fully implemented.**
 
 ## How this RFC relates to RFC-0004
@@ -98,6 +131,75 @@ Rules that hold throughout:
 - A VM program never promotes a head. Only RFC-0004's rule does.
 - A VM-produced candidate pays the same fees and faces the same hold-out as any other.
 - Removing this RFC, or never arming it, leaves RFC-0004 whole.
+
+## Design principle: build on mainnet-proven VMs, do not invent one
+
+*Added 2026-10-02, at the user's direction.* This RFC does not design a VM from first principles. Its
+Turing-complete part (Part II, rung B) takes its instruction set, its machine semantics, its metering
+and its dispute game from VMs that already run on mainnets, and writes only what MISAKA alone needs.
+That turns rung B from a research problem — design an ISA, a memory model, traps, gas and a dispute
+game, then a toolchain for them — into an engineering one: **connect a mainnet-proven RISC-V VM to
+MISAKA's determinism, metering, court and PALW-TIR.**
+
+| Layer | Built on | What is taken | Where |
+| --- | --- | --- | --- |
+| ISA and VM core | **Nervos CKB-VM**: the RISC-V VM that runs every script of a proof-of-work L1 mainnet (RV64IMC since 2019, plus the bit-manipulation extension since the CKB2021 hard fork); MIT licence | the RV64IM base and the ratified Zba, Zbb and Zbs subset; the `ECALL` convention; its test corpus; its implementation, as an independent second implementation and a differential oracle | §II.2.4, §II.4.1 |
+| Instruction semantics | **the ratified RISC-V specification and its Sail model**; the `riscv-tests` and `riscv-arch-test` suites | the normative meaning of every instruction | §II.4.1, PALW-GVM-1 |
+| Metering | **the EVM** (gas), **FuelVM** (gas held in registers, fixed-width instructions, a UTXO model), **CKB-VM** (cycles) | every step metered; out-of-gas a defined end state; the meters in the committed state; memory priced; no refunds; one dimension per resource | §II.4.6, §II.7.1 |
+| Dispute | **Cartesi**: a reproducible RISC-V machine and a permissionless dispute protocol (PRT) on Ethereum mainnet, under which one honest participant enforces the correct result. Also Asterisc (OP Stack) and Arbitrum BoLD | a Merkleized machine state; the computation committed as state roots at fixed strides; bisection to the first divergent step; one-step recomputation from an agreed state; the 1-honest-party guarantee | §II.5, §II.6 |
+| Tensor execution | **PALW-TIR** (MISAKA's own, RFC-0002) | — | `TIR_CALL`, §II.4.3 |
+
+**Two courts, joined at one instruction.** Cartesi and Truebit narrow a computation to one instruction.
+MISAKA's court narrows a tensor computation to a tile. `TIR_CALL` is where the first hands over to the
+second, and the tensor court never learns that a VM exists (GC2):
+
+```
+VM court (Cartesi's shape)                                          tensor court (PALW, unchanged)
+claim ─► first divergent outer leaf ─┬─ a checkpoint interval ─► bisection ─► one VM step (ADD, LD, SD, BEQ, ECALL, …)
+                                     │                                         ─► GvmOneStep recomputes it
+                                     └─ a TIR_CALL (its CallRecord) ─► GvmCall ─► descent ─► ladder over the callee
+                                                                                            ─► node ─► cone ─► chunk / tile
+                                                                                               (Phase F; RFC-0006 cells; RFC-0007's checks)
+```
+
+Checkpoints sit on both sides of every `TIR_CALL` (§II.5), so a call whose result differs is found by the
+outer ladder without a bisection, and the dispute moves from the VM court to the tensor court at once.
+
+**What MISAKA writes itself, and nothing else:**
+
+1. the deterministic profile: which instructions and system calls exist, and that nothing is
+   implementation-defined (§II.4.1, §II.4.2);
+2. resource accounting: VM gas and the TIR budget (§II.4.6);
+3. state and memory commitments: `GvmStateV1` and the memory tree (§II.4.4);
+4. the `TIR_CALL` ABI and tensor handles (§II.4.3);
+5. the court's commitments and objects: checkpoints, bisection moves, one-step proofs, the descent
+   (§II.5, §II.6);
+6. the integration with PALW: fences, lanes, credited work, RFC-0004's verification types (§II.8,
+   §II.11).
+
+**The ranking is RISC-V, then WASM, then a custom VM.** WASM runs in production (CosmWasm chains;
+Arbitrum proves a WASM-derived format) and has excellent toolchains, but a larger machine state. A
+court that must name "instruction 8,129, register `x3`, address `0x…`" and recompute it is simplest on
+RISC-V. A custom VM would have to define all of it, and write the compiler. **The EVM is not forked**:
+its gas model is borrowed; its machine — a 256-bit stack, storage-heavy and built for contracts — is not
+(§II.2.2).
+
+**Rules for borrowing.**
+
+- **The normative base is the pinned RISC-V subset, not an implementation.** The ratified
+  specification, as the pinned Sail model defines it, decides every instruction. A disagreement between
+  CKB-VM and Sail is a finding: Sail decides, and the disagreement is reported upstream.
+- **Every departure from a borrowed design is listed, with its reason**, in §II.2.4's departure register.
+  A difference from a source that the register does not list is a defect of this text.
+- **Code is reused only after a licence check per repository.** Reused code is pinned and recorded in
+  `third_party_manifest.toml` — as an unmodified upstream dependency where it is one, the way the EVM
+  lane takes revm, and as audited code where it is patched. CKB-VM is MIT. The Cartesi Machine emulator
+  is LGPL-3.0, so its design is borrowed and its code is not built into node binaries; at most it runs
+  as a separate differential-testing tool.
+- **Part I stays small and bespoke.** The bounded control VM has no memory and about forty
+  instructions; it is not a general VM, and nothing mainnet-proven fits it better. Its court already has
+  the same shape (one-step proofs, then a descent), and `bvm_to_gvm_v1` translates its programs into the
+  borrowed machine (§I.8).
 
 ---
 
@@ -833,7 +935,10 @@ transition (§*Effort*).
 - **EXEC, CRITIC and PROOF for RFC-0004.** Rung B brings the verification types that need execution:
   code evaluated by tests, executed counterexamples, and proof checkers (§II.11).
 - **The two rungs** are unchanged from the draft of 2026-09-28: rung A, the EVM lane as an asynchronous
-  orchestrator (§II.3); rung B, the fraud-proven RV32IM VM (§II.4–§II.7).
+  orchestrator (§II.3); rung B, the fraud-proven RISC-V VM (§II.4–§II.7).
+- **Rung B is borrowed, not invented** (2026-10-02): CKB-VM's RISC-V subset as the machine, Cartesi's
+  shape as the dispute game, the EVM's and FuelVM's lessons as the metering, PALW-TIR behind `TIR_CALL`
+  (§*Design principle*). Every departure from those sources is in §II.2.4's register.
 
 Section numbers in Part II carry the prefix `II.`.
 
@@ -907,11 +1012,16 @@ reads is the one the chain rewards. So:
 - GC6. Composition with the EVM lane, asynchronously, with results delivered only after `Final`.
 - GC7. Versioned program kinds: Part I's classes, if any exist, are untouched.
 - GC8. Reuse of PALW's court machinery: clocks, bonds, carriers, the ladder and the held regime.
+- GC9. Borrow before inventing: the ISA, its semantics, the metering lessons and the dispute shape come
+  from mainnet-proven VMs (§*Design principle*). MISAKA writes only the profile, the accounting, the
+  commitments, the `TIR_CALL` ABI, the court objects and the PALW integration, and lists every
+  departure from its sources (§II.2.4).
 
 **Non-goals.** Floating point. Parallel or nondeterministic execution. Network or filesystem access
-from inside the VM. zk proofs in v1 (§II.2 keeps the door open). Running ML inside the L1 EVM. Replacing
-the EVM lane. A remote GPU marketplace as a reward path (ADR-0144 P1). Synchronous TIR precompiles in
-the L1 EVM (§II.2).
+from inside the VM. A wall clock, host randomness, threads, or system calls registered at run time.
+Linux, an MMU or the privileged architecture in v1 (a later, optional profile: §II.2.4). zk proofs in v1
+(§II.2 keeps the door open). Running ML inside the L1 EVM. Replacing the EVM lane. A remote GPU
+marketplace as a reward path (ADR-0144 P1). Synchronous TIR precompiles in the L1 EVM (§II.2).
 
 ## II.1 Two execution sites
 
@@ -937,7 +1047,8 @@ the EXEC checkers it gains in Phase C — tests, graders and tool-trace replays 
 ### II.2.1 The criteria
 
 For Site B the substrate must be adjudicable by a **one-step prover that lives in consensus**. Five
-criteria follow from that, and two more from who will write the programs:
+criteria follow from that, two more from who will write the programs, and one from the design
+principle:
 
 1. **The machine state and one step must be small.** The prover recomputes one step from a Merkleized
    state. Every register, stack, frame or table the machine has is something a proof must open.
@@ -948,6 +1059,9 @@ criteria follow from that, and two more from who will write the programs:
 6. **Toolchains**: workflows are written in Rust, C or anything that compiles to the target —
    including interpreters for other languages, run as guests.
 7. **A path to validity proofs** for the control part later, since ML itself will stay optimistic.
+8. **Mainnet precedent as a running VM**, not only as a proof target: an implementation that has run a
+   production chain, with its test corpus, so that MISAKA borrows rather than invents (§*Design
+   principle*).
 
 ### II.2.2 The options
 
@@ -957,17 +1071,26 @@ criteria follow from that, and two more from who will write the programs:
 | **Off-chain EVM + an EVM one-step prover** | large: 256-bit stack, memory expansion, call frames, the storage trie, precompiles, gas rules | good (Shanghai is pinned) | revm, other clients; formal models exist but are partial | Optimism abandoned its EVM-level fraud-proof design in favour of a MIPS VM running the node's own code | Solidity, Vyper | **no**: the largest prover of all, and a gas schedule built for L1 storage, not for glue |
 | **EVM lane, asynchronous** (rung A) | none new: every node re-executes | pinned | revm | — (no fraud proof needed) | Solidity | **yes, for Site A** (§II.3) |
 | **Custom VM** (Part I plus `while`, memory and gas) | the smallest possible, tailored to handles | by construction | none: we would write both implementations | none | none: a DSL and a compiler to build and to trust | **no**: every bug is ours, and nobody can write programs for it |
-| **WASM** (core, integer subset) | medium-large: value stack, control stack, locals, globals, tables, memory | good once floats are refused and stack limits pinned | the spec interpreter; mechanised semantics exist | Arbitrum compiles WASM into a WASM-derived format designed for one-step proofs | excellent | **second choice** |
+| **WASM** (core, integer subset) | medium-large: value stack, control stack, locals, globals, tables, memory | good once floats are refused and stack limits pinned | the spec interpreter; mechanised semantics exist | Arbitrum compiles WASM into a WASM-derived format designed for one-step proofs; CosmWasm runs on several production chains | excellent | **second choice** |
 | **MIPS32** (Cannon-style) | small: registers, `pc`, memory | good | vendor manuals only | production (OP Stack) | legacy (delay slots, a shrinking ecosystem) | **no**: precedent without a future |
-| **RISC-V RV32IM** | small: 32 registers, `pc`, memory; fixed 32-bit instructions | by construction (division by zero and overflow have defined results; no floats; no CSRs in the profile) | **Sail**, RISC-V International's formal golden model, as an oracle | RISC-V fault-proof VMs (Asterisc in the OP Stack ecosystem, Cartesi) and most zkVMs (RISC Zero, SP1, Jolt) | excellent (`riscv32im-unknown-none-elf` in Rust; C, Zig; interpreters as guests) | **recommended** |
+| **FuelVM** | medium: 64 registers of 64 bits, gas registers, fixed 32-bit instructions | a pinned specification | its own clients | — | Sway only | **no, as a substrate**: an ISA and a toolchain bespoke to one chain. Its metering is borrowed (§II.2.4) |
+| **CKB-VM, unchanged** | small core; around it, CKB's machine: system calls over transaction cells, 4 MiB of memory with W^X page flags, ELF loaded at run time, the C extension | pinned by CKB's hard forks | its own implementation; Sail for the ISA | none needed: every CKB node re-executes every script | Rust, C (`ckb-std`, `ckb-c-stdlib`) | **no, as a whole**: its instruction core is taken; the machine around it is built for CKB's cells and for re-execution by every node (§II.2.4) |
+| **The Cartesi Machine with Linux** (RV64GC, privileged architecture, MMU, devices) | large: CSRs, an MMU, interrupts, floating point | deterministic, including software floating point | its own emulator, and a Solidity step verifier | production: PRT on Ethereum mainnet | everything Linux runs: Python, Rust, C++ | **not in v1**: its dispute shape is taken now; Linux becomes a later, optional profile (§II.2.4) |
+| **RISC-V RV32IM** (the draft of 2026-09-28) | small: 32 registers of 32 bits, `pc`, memory; fixed 32-bit instructions | by construction | **Sail** | most zkVMs (RISC Zero, SP1, Jolt) | excellent (`riscv32im-unknown-none-elf`) | **superseded**: the implementation, corpus and dispute precedents being borrowed (CKB-VM, Cartesi, Asterisc) are all 64-bit |
+| **RISC-V RV64IM + Zba, Zbb, Zbs** (CKB-VM's ISA without C and Zbc) | small: 32 registers of 64 bits, `pc`, memory; fixed 32-bit instructions | by construction (division by zero and overflow have defined results; no floats; no CSRs in the profile) | **Sail**, RISC-V International's formal golden model, as the normative reference; **CKB-VM**, an independent implementation proven on a mainnet, as a second oracle | an L1 mainnet VM (CKB) and RISC-V fault-proof VMs (Cartesi's PRT on Ethereum mainnet, Asterisc in the OP Stack ecosystem) | excellent (Rust's `riscv64` targets with C and A turned off, as a target specification; C, Zig; `ckb-std`'s conventions; interpreters as guests) | **recommended** |
 
-### II.2.3 The recommendation: the PALW-RV32IM profile for Site B, the EVM lane for Site A
+### II.2.3 The recommendation: the PALW-RV64 profile for Site B, the EVM lane for Site A
 
-- **RISC-V RV32IM wins on the criteria that decide consensus risk.** Fewer than fifty instructions
-  (RV32I's forty and M's eight), fixed-width decoding, defined results for every input, a state of 32
-  registers and a program counter, and an official formal model that serves as an independent
-  reference. Its prover is the smallest of the realistic options, and the ecosystem's zkVMs keep open
-  a later move of the *control* part to validity proofs.
+- **RISC-V, at CKB-VM's width, wins on the criteria that decide consensus risk.** The profile is RV64IM
+  plus the ratified Zba, Zbb and Zbs: about a hundred instructions, every one with a Sail definition and
+  a CKB-VM implementation that has run on a proof-of-work mainnet. Decoding has one width, every input
+  has a defined result, and the state is 32 registers and a program counter. Its prover is the smallest
+  of the realistic options. zkVMs exist for RISC-V, which keeps open a later move of the *control* part
+  to validity proofs (most target RV32IM today, so that move may need a 64-bit zkVM or a translation).
+- **Why 64-bit, not the earlier draft's RV32IM.** What is borrowed — CKB-VM's implementation and corpus,
+  Cartesi's and Asterisc's dispute precedents — is 64-bit. Native 64-bit arithmetic also suits the
+  hashing and bookkeeping a workflow does over 64-byte digests and 64-bit counters. The cost is a larger
+  state (about 530 bytes rather than 400) and the `W` instructions. Open question 12.
 - **WASM is the honest second.** Its toolchains are as good and its structured control is friendlier to
   analysis, but its machine state (value and control stacks, frames, tables) makes every one-step proof
   larger. Arbitrum's experience is that WASM must first be transformed for provability.
@@ -977,6 +1100,41 @@ criteria follow from that, and two more from who will write the programs:
 - **EVM semantics inside Site B, if wanted, come as a guest.** revm compiles to RISC-V — zkVMs run it
   that way to prove Ethereum blocks — so a Solidity workflow can run inside PALW-GVM at an interpreter's
   slowdown. The converse is not possible.
+
+### II.2.4 What is borrowed, and the departure register
+
+The *Design principle* says where each layer comes from. This register lists every place where PALW-GVM
+v1 departs from a source, and why. Whatever it does not list is taken as the source has it.
+
+| Source | Taken | Departure | Why |
+| --- | --- | --- | --- |
+| CKB-VM's ISA (RV64IMC and the B extension) | RV64IM, Zba, Zbb, Zbs, with their ratified semantics | no C extension | fixed 4-byte fetch: an instruction never straddles a memory leaf, and decoding has one width |
+| CKB-VM's B extension | Zba, Zbb, Zbs | no Zbc (carry-less multiplication) in v1 | it serves a few hash and MAC constructions; it is added only if a checker needs it (open question 25) |
+| CKB-VM's memory (4 MiB, W^X page flags) | flat little-endian memory in 4 KiB pages | 4 GiB addressable (an address at or above `2^32` faults); no page permissions | CKB's 4 MiB holds because every node re-executes every script; a GVM job runs off chain and pays for memory by first-touch gas. Page flags would be one more table that every one-step proof opens. Self-modifying code is just data under the memory tree |
+| CKB-VM's ELF loading at run time | ELF as the toolchain's output | the chain sees a canonical image (`GvmImageV1`, §II.4.5); the ELF-to-image step is tooling | admission stays linear in the bytes, and no loader enters consensus |
+| CKB-VM's system call convention | the number in `a7`, arguments in `a0`–`a5`, the result in `a0`; `exit` at 93 | MISAKA's own table (§II.4.2) in place of CKB's calls that read transaction cells | a GVM job's inputs are a job, an oracle transcript and tensor handles, not cells. Keeping `exit` at 93 lets a runtime ported from `ckb-std`, or a bare-metal libc, keep its exit path |
+| CKB-VM's cycles | a cost per instruction class (multiply, divide, memory access and control transfer weigh more) | MISAKA's own calibration; a first-touch page charge; a second dimension, the TIR budget | the costs bounded here are off-chain re-execution, memory and the dispute game, not every node's block time |
+| The EVM's gas | termination by gas; out-of-gas as a defined end state; gas left readable (`GAS`) | no refunds; no 256-bit words; no storage pricing | refunds have been a source of complexity and bugs on Ethereum; a GVM job has no persistent storage |
+| FuelVM | the meters as part of the committed state; fixed-width instructions; a minimised state (the UTXO lesson) | not FuelVM's ISA or toolchain | a GVM job keeps no global mutable state — it is a pure function of committed inputs — so jobs are independent and run in parallel, and its outputs reach RFC-0004 through the fold, not through VM storage |
+| The Cartesi Machine | a Merkleized machine state; state roots at fixed strides; bisection to the first divergent step; one-step recomputation from an agreed state | no microarchitecture: one GVM instruction is proven directly | Cartesi's verifier runs on the EVM, so it proves one step of a tiny RV64I machine that interprets the full one. MISAKA's prover is consensus Rust and can execute one profile instruction itself (§II.6.3) |
+| Cartesi's PRT | the guarantee that one honest participant enforces the correct result | the bisection runs inside MISAKA's existing bonded court and session rules, not inside PRT's tournaments | the court is already 1-of-N with bonded, permissionless accusers (RFC-0007 Part III). PRT's tournament bracket is the reference design if many Sybil defenders are shown to delay a dispute beyond the window (open question 26) |
+| Cartesi's Linux machine (RV64GC, privileged architecture, MMU, devices) | — | not in v1 | a kernel, an MMU, interrupts, floating point and a libc runtime would all join the consensus surface. A Linux profile — Python, Rust and C++ unchanged — is a later, optional kind version `Gvm(2)` on measured demand (§II.9, open question 24) |
+| All sources | — | v1 refuses floating point, network access, a filesystem, a wall clock, host randomness, threads and system calls registered at run time | GC4. The VM is control, memory and program logic; tensor arithmetic is PALW-TIR's |
+
+**How much code is reused.**
+
+- **The consensus step function stays MISAKA's own**, a small Rust function shared by the emulator and
+  the prover (§II.6.3). It must run over Merkle proofs, and the prover defines the truth, so it is the
+  one piece that is written here and audited as such.
+- **CKB-VM** (MIT), pinned, serves two roles: the independent implementation of the instruction core in
+  the differential tests (step C of the activation plan), and an option for the executor's fast
+  interpreter. Whether its pinned version takes a 4 GiB space and no page flags through its memory
+  abstraction without a patch is checked in step B. If it needs a patch, it is recorded and audited as
+  modified code.
+- **The test corpora** — `riscv-tests`, `riscv-arch-test` and CKB-VM's test suite — run against the
+  profile's subset from step B onwards.
+- **Cartesi's code is not linked** (the emulator is LGPL-3.0). Its design, its specification of the step
+  function and the published analysis of PRT are references.
 
 ## II.3 Rung A: the EVM lane as an asynchronous orchestrator
 
@@ -1036,21 +1194,24 @@ for results. **Mainnet caveat:** the EVM lane is inert on mainnet (`evm_activati
 and ADR-0023's precondition — an authoritative incremental EVM state backend before the EVM's load
 grows — stands. Rung A on mainnet waits for both.
 
-## II.4 Rung B: the VM — PALW-GVM v1 on the PALW-RV32IM profile
+## II.4 Rung B: the VM — PALW-GVM v1 on the PALW-RV64 profile
 
 ### II.4.1 The machine
 
-- **ISA.** RV32I plus M, at a ratified version named by `isa_id` (the keyed hash of a descriptor, as
-  `prim_set_id` is). Nothing else: no C, A, F, D or V extension, and no Zicsr. `FENCE` executes as a
-  no-op (one hart, no cache). `FENCE.I`, the CSR instructions, `EBREAK`, `WFI` and every privileged
-  instruction end the job in `Faulted(Illegal)`.
-- **Registers.** `x0` is hard-wired to 0; `x1`–`x31` are 32-bit; `pc`.
-- **Memory.** 2^32 bytes, little-endian, zero except where the image places bytes. Instructions are
-  4-byte aligned. A misaligned load or store ends the job in `Faulted(Misaligned)`, so every access
-  touches exactly one memory leaf.
-- **Defined arithmetic.** RV32M already defines every case: division by zero gives −1 (`DIVU`: 2^32 − 1)
-  and a remainder equal to the dividend; `−2^31 / −1` gives `−2^31`, remainder 0. There is no trap and
-  no implementation-defined result.
+- **ISA.** RV64I plus M, Zba, Zbb and Zbs — CKB-VM's instruction set without C and Zbc (§II.2.4) — at
+  ratified versions named by `isa_id` (the keyed hash of a descriptor that also pins the Sail model, as
+  `prim_set_id` pins the primitives). Nothing else: no C, A, F, D or V extension, no Zbc, and no Zicsr.
+  `FENCE` executes as a no-op (one hart, no cache). `FENCE.I`, the CSR instructions, `EBREAK`, `WFI` and
+  every privileged instruction end the job in `Faulted(Illegal)`.
+- **Registers.** `x0` is hard-wired to 0; `x1`–`x31` are 64-bit; `pc` is 64-bit.
+- **Memory.** 2^32 bytes at addresses `[0, 2^32)`, little-endian, zero except where the image places
+  bytes. A fetch, load or store at or above `2^32` ends the job in `Faulted(Access)`. Instructions are
+  4-byte aligned. A load or store that is not naturally aligned ends the job in `Faulted(Misaligned)`,
+  so every access touches exactly one memory leaf.
+- **Defined arithmetic.** RV64M already defines every case: division by zero gives −1 (`DIVU`: 2^64 − 1)
+  and a remainder equal to the dividend; `−2^63 / −1` gives `−2^63`, remainder 0; the `W` forms do the
+  same at 32 bits and sign-extend the result. Zba, Zbb and Zbs are total functions of their operands.
+  There is no trap and no implementation-defined result.
 - **Start.** Memory holds the image; `pc` is its entry; `sp` is its stack top; every other register is 0;
   the handle table holds the job's input handles; gas and TIR budget are unused.
 - **Ends.** `Halted(code)`, `Faulted(class)`, `OutOfGas`, `OutOfTirBudget`. Every end is a committed,
@@ -1060,17 +1221,21 @@ grows — stands. Rung A on mainnet waits for both.
 
 | # | Call | Effect | Gas | One-step evidence |
 | --- | --- | --- | --- | --- |
-| 0 | `HALT(code)` | ends the job | 0 | — |
-| 1 | `INPUT_READ(off, len, dst)` | copies job input bytes (≤ 4,096 per call) | 64 + len | input tiles opened under `input_root`; the destination range's memory proof |
-| 2 | `ORACLE_READ(off, len, dst)` | copies bytes of the claim's **oracle transcript** (below) | 64 + len | tiles opened under `oracle_root`; memory proof |
-| 3 | `OUTPUT_WRITE(src, len)` | appends bytes to the output stream | 64 + len | the source range's memory proof |
-| 4 | `OUTPUT_TENSOR(h, kind)` | emits a handle as a canonical output (RFC-0003 §I.3) | 64 | the handle's table entry |
-| 5 | `TIR_CALL(desc)` | runs a segment (§II.4.3); appends its output handles | 256; the segment's static cost is debited from the TIR budget | the descriptor's memory proof; the `CallRecord` |
-| 6 | `TENSOR_READ(h, i)` | `a0` = lane `i` of handle `h` | 64 | the element opened under the handle's root, checked against its proven interval (PALW-TIR-33) |
-| 7 | `TENSOR_FROM_MEM(src, dtype, shape)` | a new handle over at most 64 KiB of memory | 64 + len | the source range and its proof; the court re-derives the root |
-| 8 | `RAND(coords, dst)` | one digest of R (RFC-0003) in the domain `GVM_UNIFORM_V1`, keyed by the job's seed | 128 | none: the court recomputes it |
-| 9 | `GAS_LEFT`, `TIR_BUDGET_LEFT` | the meters | 16 | — |
+| 93 | `HALT(code)` | ends the job | 0 | — |
+| 4,097 | `INPUT_READ(off, len, dst)` | copies job input bytes (≤ 4,096 per call) | 64 + len | input tiles opened under `input_root`; the destination range's memory proof |
+| 4,098 | `ORACLE_READ(off, len, dst)` | copies bytes of the claim's **oracle transcript** (below) | 64 + len | tiles opened under `oracle_root`; memory proof |
+| 4,099 | `OUTPUT_WRITE(src, len)` | appends bytes to the output stream | 64 + len | the source range's memory proof |
+| 4,100 | `OUTPUT_TENSOR(h, kind)` | emits a handle as a canonical output (RFC-0003 §I.3) | 64 | the handle's table entry |
+| 4,101 | `TIR_CALL(desc)` | runs a segment (§II.4.3); appends its output handles | 256; the segment's static cost is debited from the TIR budget | the descriptor's memory proof; the `CallRecord` |
+| 4,102 | `TENSOR_READ(h, i)` | `a0` = lane `i` of handle `h` | 64 | the element opened under the handle's root, checked against its proven interval (PALW-TIR-33) |
+| 4,103 | `TENSOR_FROM_MEM(src, dtype, shape)` | a new handle over at most 64 KiB of memory | 64 + len | the source range and its proof; the court re-derives the root |
+| 4,104 | `RAND(coords, dst)` | one digest of R (RFC-0003) in the domain `GVM_UNIFORM_V1`, keyed by the job's seed | 128 | none: the court recomputes it |
+| 4,105, 4,106 | `GAS_LEFT`, `TIR_BUDGET_LEFT` | the meters | 16 | — |
 
+- **Numbering follows CKB-VM's convention** (§II.2.4): the number in `a7`, arguments in `a0`–`a5`, the
+  result in `a0`, and `HALT` at 93, the `exit` of Linux and of CKB. MISAKA's own calls sit at 4,096 and
+  above. Any other number ends the job in `Faulted(Illegal)`: the set is fixed by `syscall_set_id`, and
+  nothing is registered at run time.
 - **The oracle transcript** is how agents use tools without IO. Everything an agent learns from outside
   — a web page, a tool's answer, a user's reply — is appended by the executor to a transcript, committed
   in the claim as `oracle_root`, and read by offset. The court never judges whether a transcript is
@@ -1108,10 +1273,10 @@ called as a one-node segment.
 - **The state** is small enough to open whole:
 
   ```
-  GvmStateV1 { status, pc: u32, regs: [u32; 32], mem_root: Hash64, instret: u64,
+  GvmStateV1 { status, pc: u64, regs: [u64; 32], mem_root: Hash64, instret: u64,
                gas_used: u64, gas_limit: u64, tir_used: TirBudgetV1, tir_limit: TirBudgetV1,
                handle_root: Hash64, handle_count: u32, tcalls: u32,
-               output_acc: Hash64, output_len: u64 }                     // about 400 bytes
+               output_acc: Hash64, output_len: u64 }                     // about 530 bytes
   gvm_state_root_v1(s) = H64(key "misaka-palw/gvm/state/v1", borsh(s))
   ```
 
@@ -1140,12 +1305,15 @@ called as a one-node segment.
 
 ### II.4.6 The gas schedule (v1, calibrated before the fence)
 
+The schedule's shape is borrowed (§II.2.4); its numbers are MISAKA's.
+
 | Item | Gas |
 | --- | --- |
-| every instruction | 1 |
+| every instruction | at least 1, weighted by instruction class in the shape of CKB-VM's cost model (multiply, divide, memory access and control transfer weigh more); the weights are calibrated before the fence |
 | the first touch of a 4 KiB page | 4,096 — so a job touches at most `gas_limit / 4,096` pages: 4 GiB at the v1 ceiling |
 | system calls | the table of §II.4.2 |
-| refunds | none |
+| the meters | in the committed state (`gas_used`, `gas_limit`, the TIR budget), as FuelVM keeps gas in registers; readable by `GAS_LEFT`, as the EVM's `GAS` |
+| refunds | none (the EVM's lesson) |
 
 v1 ceilings, proposed: `max_gas_per_job = 2^32`; `c_vm = 2^20`; at most `2^14` `TIR_CALL`s per job; the
 TIR budget per job within RFC-0003's per-profile ceilings.
@@ -1187,7 +1355,10 @@ claim ─ ladder over outer leaves ─┬─ Checkpoint ─► VM bisection (≤
                                   └─ End ─► GvmEnd
 ```
 
-Everything below the descent is Phase F, unchanged. Everything above it is new.
+Everything below the descent is Phase F, unchanged. Everything above it is new to MISAKA but not to
+the field: levels 1–3 take Cartesi's shape (§*Design principle*) — a Merkleized machine state, state
+roots at fixed strides, bisection to the first divergent step and a one-step recomputation from an
+agreed state. Level 4, the descent into the tensor court, is MISAKA's own.
 
 ### II.6.1 Level 1: the ladder over the outer leaves
 
@@ -1240,14 +1411,16 @@ GvmOneStepV1 { binding, s,
 4. `gvm_state_root_v1(post)` is compared with the claimed `S_{s+1}`: different → `ExecutorGuilty`; equal →
    `ChallengerDefeated`.
 
-- **Size.** About 400 bytes of state, two proofs of about 1.8 KB, and at most about 70 KB of evidence
+- **Size.** About 530 bytes of state, two proofs of about 1.8 KB, and at most about 70 KB of evidence
   (`TENSOR_FROM_MEM`'s 64 KiB range): always one carrier (PALW-TIR-38).
 - **Either party may file it.** The root `S_s` is agreed, so the challenger can supply the preimage and
   the proofs from its own honest memory.
 - **One step function.** The emulator and the prover are one Rust function over a memory trait (full
   memory, or proofs). Cannon and Arbitrum wrote the emulator and the prover in different languages;
-  here both are Rust in consensus, which removes that class of divergence. The independent second
-  implementation and the Sail oracle guard the shared function itself (§*Effort*).
+  Cartesi closes the same gap with a microarchitecture, because its verifier must run on the EVM. Here
+  both are Rust in consensus, which removes that class of divergence and the need for a
+  microarchitecture (§II.2.4). CKB-VM's instruction core, an independently written MISAKA layer and
+  the Sail oracle guard the shared function itself (§*Effort*).
 
 ### II.6.4 Level 4: the descent into the tensor court
 
@@ -1364,6 +1537,10 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
 ## II.9 Program kinds, and Part I
 
 - `Gvm(1)` joins the program kinds of §I.2.1. No other kind's class changes.
+- **A Linux profile later** (§II.2.4) would be `Gvm(2)`, a new version of the kind beside `Gvm(1)`: the
+  privileged architecture, an MMU and Cartesi-style deterministic floating point, so that unmodified
+  Linux software runs as a guest. No `Gvm(1)` class changes meaning, and it is built only on measured
+  demand (open question 24).
 - **If PALW-BVM exists**, `palw_gvm_v1`'s value carries a height after which new `Bvm(1)` registrations are
   refused. Existing BVM classes keep the BVM court. `bvm_to_gvm_v1` translates a BVM program into a GVM
   image with a small runtime (the register file in memory, `TCALL` as `TIR_CALL`, `READ` as
@@ -1377,7 +1554,7 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
 - **Control: anything computable, within gas.** Agents, planners, search, tool use, program execution,
   routers and cascades are all programs.
 - **Missing tensor arithmetic gets a slow path, not a fast one.** A guest can read lanes with
-  `TENSOR_READ`, compute in RV32IM and write back with `TENSOR_FROM_MEM` (64 KiB per call). That serves
+  `TENSOR_READ`, compute in RV64IM and write back with `TENSOR_FROM_MEM` (64 KiB per call). That serves
   small operations: a new activation over a 4,096-wide row costs on the order of 10^5 instructions per
   token. It does not serve heavy ones: a new attention variant over 10^4 positions and 32 heads is
   10^9 instructions or more per token. **Heavy new operations still need a TIR prim-set revision.**
@@ -1385,6 +1562,9 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
   trace per position. Guarded TIR (*Alternatives*) remains the better tool for it.
 - **Future proof systems.** The RISC-V choice leaves open proving the control part with a zkVM later,
   while the ML stays under the optimistic TIR court.
+- **Unmodified software.** v1 runs what compiles to a small bare-metal RISC-V userspace: Rust, C, Zig,
+  and interpreters built for it. Cartesi shows that a reproducible RISC-V machine can boot Linux and run
+  Python, Rust and C++ unchanged; that is the later, optional `Gvm(2)` profile (§II.9), not v1.
 
 ---
 
@@ -1434,7 +1614,7 @@ With them RFC-0004 gains:
 About **10–16 engineer-weeks** once rung B exists: checker runtimes as GVM guests (a WASM interpreter, a
 scripting-language interpreter, a test harness), the `Tests` scoring kind, the five artifact kinds, and
 the pinned-toolchain path for compiled languages. Agents: about 1–2 weeks. Mainnet-safe: rung B's
-24–30 months, then about 2–3 months for an audit of the checkers and at least two epochs of code
+22–28 months, then about 2–3 months for an audit of the checkers and at least two epochs of code
 contests.
 
 ---
@@ -1493,10 +1673,14 @@ TIR programs.
 ### Part II — new chapter `spec/palw/04e-general-vm.md` (applies past `palw_gvm_v1`)
 
 - **PALW-GVM-1 (the machine).** A GVM class's control MUST be the execution of its image on the
-  PALW-RV32IM profile named by `isa_id`. No other instruction has consensus meaning.
-- **PALW-GVM-2 (defined results).** Every instruction MUST have the profile's result. An illegal instruction
-  and a misaligned access MUST end the job in `Faulted(class)`.
-- **PALW-GVM-3 (system calls).** Only the system calls of §II.4.2, under `syscall_set_id`, MAY exist.
+  PALW-RV64 profile named by `isa_id`: RV64I, M, Zba, Zbb and Zbs, each instruction with the result the
+  ratified RISC-V specification gives it, as the Sail model pinned by `isa_id` defines. No other
+  instruction has consensus meaning. A borrowed implementation (CKB-VM) is informative, never normative.
+- **PALW-GVM-2 (defined results).** Every instruction MUST have the profile's result. An illegal
+  instruction, a misaligned access and an access at or above `2^32` MUST end the job in
+  `Faulted(class)`.
+- **PALW-GVM-3 (system calls).** Only the system calls of §II.4.2, under `syscall_set_id`, MAY exist. Any
+  other number in `a7` MUST end the job in `Faulted(Illegal)`.
 - **PALW-GVM-4 (tensor arithmetic is TIR).** The VM MUST NOT compute on a tensor except through
   `TENSOR_READ` and `TENSOR_FROM_MEM`. Every `TIR_CALL` MUST be a Phase F execution under its `seg_ctx`.
 - **PALW-GVM-5 (gas).** Every instruction MUST cost at least 1 gas under `gas_schedule_id`. There MUST be
@@ -1603,9 +1787,9 @@ at or below it and the ruleset has the A-2 tolerance.
 | Step | Work | Consensus change | Exit gate |
 | --- | --- | --- | --- |
 | 0 | M4 (§I.1.2): workflow demand | none | the decision to build, by the user |
-| A | Spec chapter 04e | none | reviewed text |
-| B | Reference emulator with checkpointing (`misaka-palw-gvm`) | none | golden vectors `consensus-vectors/gvm-v1/`: every instruction on edge operands, every system call, gas, every fault |
-| C | Independent second implementation; differential against Sail | none | at least 10^9 instruction-level steps against Sail with no disagreement; the vectors |
+| A | Spec chapter 04e, with §II.2.4's departure register; a licence check of every repository reused | none | reviewed text |
+| B | Reference emulator with checkpointing (`misaka-palw-gvm`); the RISC-V suites and CKB-VM's test suite ported to the profile's subset; whether CKB-VM's pinned version takes the profile's memory unpatched | none | golden vectors `consensus-vectors/gvm-v1/`: every instruction on edge operands, every system call, gas, every fault; `riscv-tests`, `riscv-arch-test` and CKB-VM's suite pass on the profile's subset |
+| C | Second implementation: CKB-VM's instruction core (pinned) under an independently written MISAKA layer (system calls, gas, commitments); differential three ways, against Sail and the reference | none | at least 10^9 instruction-level steps with no disagreement among the reference, CKB-VM and Sail; the vectors |
 | D | One-step prover and proof formats | none | the prover equals the emulator on every step of fuzzed programs; hostile proofs refused totally |
 | E | Admission, objects, the game, the descent | dormant fence | a court battery: a planted lie at every instruction class, every system call, every call field, every end case and inside callees; delay and silence cases; honest runs acquitted |
 | F | Node side and guest SDK | node release | executor equals the reference; the responder answers every move within its rung window |
@@ -1691,20 +1875,25 @@ at or below it and the ruleset has the A-2 tolerance.
 
 | Phase | Work | Engineer-months (2–4 experienced people) | Calendar | With agents | Compresses? |
 | --- | --- | --- | --- | --- | --- |
-| Spec | ISA profile, system calls, memory, state, gas, the game, the image, the precompile bridge | 3–4 | 2–3 months | 2–4 days to draft | review does not |
-| Reference emulator | with checkpointing and snapshots | 2–3 | 6–8 weeks | 2–4 days | yes |
-| Independent second implementation | from the text; differential against Sail | 2–3 | 2–3 months | 3–5 days | the writing does; triage does not |
+| Spec | the ISA profile by reference to the ratified specification and CKB-VM's subset; system calls, memory, state, gas, the game in Cartesi's shape, the image, the precompile bridge, the departure register | 2–3 | 6–8 weeks | 2–3 days to draft | review does not |
+| Reference emulator | with checkpointing and snapshots | 1.5–2 | 4–6 weeks | 2–3 days | yes |
+| Second implementation | CKB-VM's instruction core plus an independently written MISAKA layer; differential against Sail | 1–1.5 | 4–6 weeks | 2–3 days | the writing does; triage does not |
 | Program verifier | image and class admission; gas calibration | 1–1.5 | 4–6 weeks | 2–3 days | yes |
 | One-step prover | the shared step function over proofs; proof formats | 3–4 | 2–3 months | 3–5 days | yes |
 | Court arms | game objects and clocks, checkpoint leaves, descent, held regime, window, bonds | 5–7 | 3–4 months | 1–2 weeks | yes |
-| Node side | executor, snapshots, responder, memory cache, guest SDK, the Rust target, TIR bindings, the tool | 6–8 | 3–4 months | 2–3 weeks | yes |
-| Fuzzing and differential testing | instruction level against Sail; random programs; proof round trips; adversarial game simulation | 3–4 | 4–6 months, then continuous | about a week of harness, months of CPU | the CPU does; triage does not |
-| Formal methods | the step function against the ISA semantics, mechanised against Sail; soundness of memory proofs; termination and liveness of the game | 4–8 | 4–6 months | assists only | mostly not |
+| Node side | executor, snapshots, responder, memory cache, guest SDK (on `ckb-std`'s conventions), the Rust target, TIR bindings, the tool | 5–7 | 3–4 months | 2–3 weeks | yes |
+| Fuzzing and differential testing | instruction level against Sail and CKB-VM; the RISC-V and CKB-VM suites; random programs; proof round trips; adversarial game simulation | 3–4 | 4–6 months, then continuous | about a week of harness, months of CPU | the CPU does; triage does not |
+| Formal methods | the step function against the ISA semantics, mechanised against the Sail model it borrows; soundness of memory proofs; termination and liveness of the game, with Cartesi's published analysis as a reference | 3–6 | 3–5 months | assists only | mostly not |
 | External audits | three or four engagements: emulator and prover; game and court; integration and economics; guest SDK | 3–4 (fixes) | 6–9 months | — | no |
 | Testnet soak with staged caps and drills | D-G1…D-G5, the staged ceilings of step H | 2–3 | 6–9 months or more | — | no |
 | Bug bounty | large, before and after activation | 1 | at least 6 months before activation | — | no |
 | Mainnet activation | staged caps | 1 | 2–3 months | — | no |
-| **Total** | | **≈ 36–52 engineer-months** | human-only ≈ 30–40 months | implementation ≈ 40–70 agent-days | |
+| **Total** | | **≈ 32–45 engineer-months** (36–52 before the 2026-10-02 revision) | human-only ≈ 27–37 months | implementation ≈ 35–65 agent-days | |
+
+Borrowing shortens the specification, the reference emulator, the second implementation and the formal
+work: the ISA's semantics, a mainnet-run implementation, test corpora and a dispute design already exist.
+It does not shorten the audits, the soak or the bounty, which are the critical path: the prover still
+defines the truth, whoever designed the ISA.
 
 ### Part II — the two figures
 
@@ -1712,9 +1901,10 @@ at or below it and the ruleset has the A-2 tolerance.
   1–2 calendar months to a GVM class passing D-G1…D-G5 on a salted testnet-12 chain, with three or four
   agents and a lead who reviews and integrates.
 - **Mainnet-safe.** Rung A: about 6–9 months, and only once the EVM lane is active on mainnet. Rung B:
-  **about 24–30 months** from its start, whatever the implementation speed, and only after PALW-TIR is
-  mainnet-safe. The critical path is: implementation (1–2 months), differential and formal work (4–6
-  months), three or four audits with fixes (6–9 months, overlapping a staged soak of at least 6–9
+  **about 22–28 months** from its start (24–30 before the 2026-10-02 revision), whatever the
+  implementation speed, and only after PALW-TIR is mainnet-safe. The critical path is: implementation
+  (1–2 months), differential and formal work (3–5 months, with Sail, the RISC-V suites and CKB-VM as
+  ready oracles), three or four audits with fixes (6–9 months, overlapping a staged soak of at least 6–9
   months), a bounty window of at least 6 months before activation, and a staged activation (2–3 months).
 
 ### Part II — EXEC checkers for RFC-0004
@@ -1730,9 +1920,9 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 | Coverage | RFC-0002 alone: ≈ 64 % of text-generation repositories, ≈ 9 % of all hub models (repository counts, 2026-09-28); 100 % of the 54 modelled architectures; the rest are format, lowerer and primitive gaps | + the `NEEDS_VM` share: **0 today**; in future, routing between whole models (C13) and very long loops | + everything computable within gas: agents, tool use, planners, search; a slow path for small missing operations |
 | Workflows | static pipelines (RFC-0003) | bounded and data-dependent, between whole model calls | unbounded under gas, with memory and recursion |
 | Consensus surface (index; TIR = 1.0 ≈ 14k lines of consensus-path code plus 04b's 1,800 lines) | 1.0 | ≈ 1.3 (+ 4–5k lines, chapter 04d) | ≈ 2.2–2.5 (+ 15–20k lines and a second dispute game) |
-| Court complexity | ladder → cone or H dissection (2 levels) | + an outer control trace of one-step transitions over ≤ 8 KiB states, and a descent (3 levels) | + interactive bisection inside checkpoints, one-step RV32IM proofs with memory proofs, syscall and precompile descent (4 levels) |
+| Court complexity | ladder → cone or H dissection (2 levels) | + an outer control trace of one-step transitions over ≤ 8 KiB states, and a descent (3 levels) | + interactive bisection inside checkpoints, one-step RV64IM proofs with memory proofs, syscall and precompile descent (4 levels), in Cartesi's shape |
 | Attack surface | interpreter, admission, dissection | + VM interpreter, the bounds program, the ladder's agreement, the step space | + prover ≡ emulator, memory proofs, the gas schedule, game liveness, oracles, EVM callbacks |
-| Effort to mainnet-safe, after TIR | TIR's own path; RFC-0004 then adds 8–11 months | + 9–12 months (agents: 2–4 weeks to drill-passing code) | + 24–30 months (agents: 1–2 months); the asynchronous EVM rung alone ≈ 6–9 months |
+| Effort to mainnet-safe, after TIR | TIR's own path; RFC-0004 then adds 8–11 months | + 9–12 months (agents: 2–4 weeks to drill-passing code) | + 22–28 months on a borrowed base (agents: 1–2 months); the asynchronous EVM rung alone ≈ 6–9 months |
 | Recommendation | build and ship (under way), then RFC-0004 in full | keep this design; build it only if the §I.1 gate opens; never build both BVM and GVM | the asynchronous EVM rung when contracts ask for it; the fraud-proven VM only after TIR is mainnet-safe and M4 shows the demand |
 
 ## Alternatives
@@ -1759,8 +1949,12 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 | **Stop at pipelines and, if its gate opens, Part I** | Right if M4 shows no demand for agents and workflows. Nothing in this RFC should be built on speculation |
 | **Synchronous TIR precompiles in the L1 EVM** | Impossible: every node re-executes the lane, so every node would run every inference |
 | **Off-chain EVM with an EVM one-step prover** | The largest prover of all (256-bit stack, memory expansion, frames, the storage trie, precompiles), and a gas schedule built for L1 storage. Optimism abandoned this path |
-| **WASM** | The second choice (§II.2): as good a toolchain, a larger machine state and heavier one-step proofs |
-| **A custom VM** | No toolchain, no reference model, and every bug is ours |
+| **WASM** | The second choice (§II.2): as good a toolchain and production use (CosmWasm chains; Arbitrum's WASM-derived prover), but a larger machine state and heavier one-step proofs |
+| **A custom VM** | No toolchain, no reference model, and every bug is ours — the opposite of the *Design principle* |
+| **RV32IM** (the draft of 2026-09-28) | A smaller state and the commonest zkVM width, but none of the sources borrowed here runs at that width: CKB-VM, Cartesi and Asterisc are 64-bit (open question 12) |
+| **CKB-VM unchanged** | Its machine is built for CKB: system calls over cells, 4 MiB of memory with W^X pages, ELF loading, cycles priced for every node's re-execution. Its ISA, semantics and corpus are taken; the rest is listed in §II.2.4 |
+| **The Cartesi Machine with Linux in v1** | Python, Rust and C++ unchanged, at the price of a kernel, an MMU, interrupts and floating point in the consensus surface. The dispute shape is taken now; Linux is a later, optional `Gvm(2)` |
+| **FuelVM** | A mainnet register VM with explicit gas and parallel execution, but an ISA and a toolchain bespoke to one chain. Its metering lessons are taken |
 | **MIPS (Cannon-style)** | Production precedent, but a legacy ISA without RISC-V's toolchains, formal model or zkVM future |
 | **Validity proofs (zkVM) for the whole job** | Proving ML is orders of magnitude costlier than re-executing it (RFC-0002, RFC-0003). The control part alone could move to a zkVM later, and the RISC-V choice keeps that open |
 | **Committing every instruction** | About 10^10 hashes for a 10^9-instruction run (§II.5) |
@@ -1810,9 +2004,14 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 
 - **The prover is the truth.** A defect in the step function, the memory proofs or the game convicts
   honest executors or acquits liars. Mitigations: a minimal profile; one step function shared by the
-  emulator and the prover; an independent second implementation; differential testing against Sail at
-  instruction level; a mechanised proof of the step function against the ISA semantics; three or four
-  audits; a staged soak with value caps; a large bounty.
+  emulator and the prover; an independent second implementation; differential testing against Sail and
+  CKB-VM at instruction level; a mechanised proof of the step function against the ISA semantics; three
+  or four audits; a staged soak with value caps; a large bounty.
+- **Borrowed code brings borrowed bugs.** Mitigations: Sail, not CKB-VM, is normative (PALW-GVM-1); the
+  consensus step function is MISAKA's own and small; CKB-VM is pinned and licence-checked, its upstream
+  advisories are tracked, and a patched version is audited as code; the differential is three-way, so
+  a defect shared by two implementations still meets the third. Cartesi's emulator (LGPL-3.0) is never
+  built into node binaries.
 - **Emulator and prover divergence** would convict honest executors (unfair) or strand disputes (a
   liveness failure). Sharing the step function removes the cross-language class of divergence; the
   vectors and the Sail differential cover the rest.
@@ -1879,8 +2078,9 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 
 11. **Build order and evidence**: rung A when contracts ask for it; rung B only after PALW-TIR is
    mainnet-safe and M4 shows workflow demand (recommended).
-12. **The ISA**: RV32IM (recommended), or RV64IM — native 64-bit arithmetic, but a larger state, the `W`
-   instructions, and a mostly 32-bit zkVM ecosystem.
+12. **The ISA**: RV64IM + Zba, Zbb, Zbs (recommended since 2026-10-02: CKB-VM's ISA without C and Zbc,
+   and the width of Cartesi and Asterisc), or RV32IM (the earlier recommendation) — a smaller state and
+   the commonest zkVM width, but none of the borrowed sources runs at that width.
 13. **The checkpoint interval and the arity**: `c_vm = 2^20` and `k = 8` (recommended), to be measured.
 14. **Verification cost of the VM part**: a per-job cap on gas relative to TIR work, or a fee to seats.
 15. **Oracle transcripts**: free-prompt lane only (recommended), or never.
@@ -1894,6 +2094,17 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 21. **Superseding Part I**, if it was built: close BVM admissions at `palw_gvm_v1` and ship
     `bvm_to_gvm_v1`.
 22. **Value at risk in rung A**: the declared-cap rule (recommended), or a network-wide cap per request.
+23. **How much CKB-VM code to reuse**: (a) none — semantics and corpus only; (b) pinned, as the
+   independent instruction core in the differential tests and as an option for the executor's fast
+   interpreter (recommended); (c) as the consensus step function itself — no: that function must run
+   over Merkle proofs and stay small enough to audit and mechanise.
+24. **A Linux profile** (`Gvm(2)`, Cartesi-style: the privileged architecture, an MMU, deterministic
+   floating point): only on measured demand for unmodified software (recommended), or never.
+25. **Zbc** (carry-less multiplication), which CKB-VM has: left out of v1 (recommended) until a checker
+   needs it.
+26. **PRT's tournaments**: keep the bisection inside MISAKA's existing session rules (recommended), and
+   adopt Cartesi's tournament bracket only if many Sybil defenders are shown to delay a dispute beyond
+   the window.
 
 ## Decision
 
@@ -1905,6 +2116,10 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 - **Part II (Phase C), rung A**: build it when a contract use case asks for model calls. It is small,
   reuses ADR-0089's machinery, and adds no fraud proof.
 - **Part II (Phase C), rung B**: do not start it before PALW-TIR is mainnet-safe and M4 shows the demand.
-  When it starts, budget 24–30 months to mainnet-safe use, whatever the implementation speed. Then add
+  When it starts, budget 22–28 months to mainnet-safe use, whatever the implementation speed. Then add
   RFC-0004's EXEC checkers (§II.11).
+- **Borrow, do not invent** (2026-10-02): rung B is CKB-VM's RISC-V subset as the machine, Cartesi's
+  shape as the dispute game, the EVM's and FuelVM's lessons as the metering, and PALW-TIR behind
+  `TIR_CALL`. Every departure from those sources is in §II.2.4's register, and code is reused only after
+  a licence check.
 - **Never both Part I and rung B.** If the workflow case is proven, rung B subsumes the bounded layer.
