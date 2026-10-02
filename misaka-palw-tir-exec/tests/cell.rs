@@ -21,14 +21,16 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_step_leg::{PalwStepRangeOpeningV1, PalwStepTileLeafV1, step_merkle_range_siblings_v1, step_merkle_root_v1, step_tile_leaf_hash_v1};
+use kaspa_consensus_core::palw_step_leg::{
+    PalwStepRangeOpeningV1, PalwStepTileLeafV1, step_merkle_range_siblings_v1, step_merkle_root_v1, step_tile_leaf_hash_v1,
+};
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, PalwTirStepSpaceV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::{MapParams, Prim, TirProgramV1};
 use misaka_palw_tir_exec::node::{
-    CpuKernelBackendV1, KernelBackendV1, TirCaptureInputsV1, TirCellRequestV1, TirCellV1, TirCellVerdictV1, TirClassRunnerV1, TirRunInputsV1,
-    cell_runs_v1,
+    CpuKernelBackendV1, KernelBackendV1, TirCaptureInputsV1, TirCellRequestV1, TirCellV1, TirCellVerdictV1, TirClassRunnerV1,
+    TirRunInputsV1, cell_runs_v1,
 };
 use misaka_palw_tir_exec::{NoSink, StepSink, TirExecutor, TirParams, TirPlan};
 use node_common::{job, layout, programs};
@@ -58,7 +60,8 @@ fn setup(name: &str, program: &TirProgramV1, params: &MapParams, seed: u32, c: u
     let tparams = TirParams::from_map(&plan, params).unwrap();
     let runner = TirClassRunnerV1::new(&space, &plan, &tparams, class_id).unwrap();
     let mut leaves = Vec::new();
-    let run = runner.run(&ctx, &prompt, u64::MAX, false, &mut |l| leaves.push(l.preimage.clone())).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let run =
+        runner.run(&ctx, &prompt, u64::MAX, false, &mut |l| leaves.push(l.preimage.clone())).unwrap_or_else(|e| panic!("{name}: {e}"));
     let mut tokens = prompt.clone();
     tokens.extend(run.generated.iter().copied());
     Setup { n_occ: space.occurrences().len(), space, class_id, ctx, tokens, root: run.step_merkle_root, leaves }
@@ -116,7 +119,17 @@ fn verify(
 ) -> TirCellVerdictV1 {
     let inputs = TirCaptureInputsV1::new(leaves, &s.ctx, &s.class_id, root, u64::MAX).expect("an authenticated capture");
     let sp = shard_params(plan, params, program, &cell.occ);
-    let req = TirCellRequestV1 { space: &s.space, plan, params: &sp, class_id: s.class_id, ctx: &s.ctx, cell, tokens, inputs: &inputs, fused: false };
+    let req = TirCellRequestV1 {
+        space: &s.space,
+        plan,
+        params: &sp,
+        class_id: s.class_id,
+        ctx: &s.ctx,
+        cell,
+        tokens,
+        inputs: &inputs,
+        fused: false,
+    };
     CpuKernelBackendV1.verify_cell(&req).expect("the CPU backend runs every cell")
 }
 
@@ -154,7 +167,14 @@ fn every_cell_of_every_partition_verifies_from_its_boundary_rows_and_its_shards_
 
 /// The pipelined producer: one executor per shard (each holding only its params), the carry handed on at the boundaries, an
 /// optional lie injected in the carry handed to shard `lie.0` at position `lie.1`. Returns every leaf's preimage in step order.
-fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapParams, cuts: &[Range<usize>], lie: Option<(usize, u32)>) -> Vec<PalwStepTileLeafV1> {
+fn pipelined(
+    s: &Setup,
+    plan: &TirPlan,
+    program: &TirProgramV1,
+    params: &MapParams,
+    cuts: &[Range<usize>],
+    lie: Option<(usize, u32)>,
+) -> Vec<PalwStepTileLeafV1> {
     use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
     let job = s.space.job_shape(&s.ctx).unwrap();
     let ctx_hash = s.ctx.context_hash();
@@ -184,7 +204,9 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
                     let count = t.min(n - from);
                     let lanes: Vec<u8> = v.data.to_i128s()[from..from + count]
                         .iter()
-                        .flat_map(|x| if v.dtype == misaka_palw_tir::DType::Idx { (*x as u32).to_le_bytes() } else { (*x as i32).to_le_bytes() })
+                        .flat_map(|x| {
+                            if v.dtype == misaka_palw_tir::DType::Idx { (*x as u32).to_le_bytes() } else { (*x as i32).to_le_bytes() }
+                        })
                         .collect();
                     self.tiles.insert((v.slot, tile as u32), (count as u32, lanes));
                 }
@@ -194,7 +216,10 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
         for (o, (block, _)) in s.space.occurrences().iter().enumerate() {
             for (ni, node) in program.blocks[*block as usize].nodes.iter().enumerate() {
                 if node.commit {
-                    tile_len.insert(s.space.node_slot(o, ni as u16).unwrap(), s.space.commit_tile_len(*block, ni as u16).unwrap() as usize);
+                    tile_len.insert(
+                        s.space.node_slot(o, ni as u16).unwrap(),
+                        s.space.commit_tile_len(*block, ni as u16).unwrap() as usize,
+                    );
                 }
             }
         }
@@ -227,7 +252,9 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
         let h_t = s.space.layout.h_tile as usize;
         for leaf in &listed {
             let (values_le, count) = match leaf.kind {
-                PalwTirLeafKindV1::Commit { .. } => by_slot.get(&(leaf.coord.node_slot, leaf.coord.tile_index)).cloned().map(|(c, l)| (l, c)).expect("a commit tile"),
+                PalwTirLeafKindV1::Commit { .. } => {
+                    by_slot.get(&(leaf.coord.node_slot, leaf.coord.tile_index)).cloned().map(|(c, l)| (l, c)).expect("a commit tile")
+                }
                 PalwTirLeafKindV1::State { instance, first_element, .. } => {
                     assert!((a + 1) % c_int == 0);
                     let inst = &s.space.fixed_instances()[instance as usize];
@@ -236,7 +263,13 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
                     let vals = v.to_i128s();
                     let lanes: Vec<u8> = vals[first_element as usize..first_element as usize + leaf.value_count as usize]
                         .iter()
-                        .flat_map(|x| if inst.dtype == misaka_palw_tir::DType::Idx { (*x as u32).to_le_bytes() } else { (*x as i32).to_le_bytes() })
+                        .flat_map(|x| {
+                            if inst.dtype == misaka_palw_tir::DType::Idx {
+                                (*x as u32).to_le_bytes()
+                            } else {
+                                (*x as i32).to_le_bytes()
+                            }
+                        })
                         .collect();
                     (lanes, leaf.value_count)
                 }
@@ -255,7 +288,12 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
             };
             out.push(PalwStepTileLeafV1 {
                 version: 1,
-                coord: PalwStepCoordinateV1 { call_index: call, node_slot: leaf.coord.node_slot, position, tile_index: leaf.coord.tile_index },
+                coord: PalwStepCoordinateV1 {
+                    call_index: call,
+                    node_slot: leaf.coord.node_slot,
+                    position,
+                    tile_index: leaf.coord.tile_index,
+                },
                 value_count: count,
                 values_le,
             });
@@ -268,7 +306,10 @@ fn pipelined(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapPara
 fn shard_writes(space: &PalwTirStepSpaceV1, occ: &Range<usize>, state: u16, layer: Option<u16>) -> bool {
     occ.clone().any(|o| {
         let (block, ol) = space.occurrences()[o];
-        space.program.blocks[block as usize].nodes.iter().any(|n| matches!(n.prim, Prim::StateWrite { state: s } | Prim::HistAppend { state: s } if s == state))
+        space.program.blocks[block as usize]
+            .nodes
+            .iter()
+            .any(|n| matches!(n.prim, Prim::StateWrite { state: s } | Prim::HistAppend { state: s } if s == state))
             && (layer.is_none() || layer == ol)
     })
 }
@@ -290,7 +331,12 @@ fn a_pipelined_producer_commits_what_the_whole_schedule_producer_commits() {
     assert!(programs_run >= 10);
 }
 
-fn first_cell_with_a_boundary(s: &Setup, plan: &TirPlan, program: &TirProgramV1, params: &MapParams) -> Option<(Vec<Range<usize>>, u32)> {
+fn first_cell_with_a_boundary(
+    s: &Setup,
+    plan: &TirPlan,
+    program: &TirProgramV1,
+    params: &MapParams,
+) -> Option<(Vec<Range<usize>>, u32)> {
     let _ = (plan, program, params);
     let cuts = shards(s.n_occ, 2);
     (cuts.len() == 2).then_some((cuts, 0))
@@ -330,7 +376,11 @@ fn a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_bound
             let root = step_merkle_root_v1(&hashes).unwrap();
             // The cell that holds the leaf finds it; the leaf is a commit point no later leaf reads, so shard 0 is untouched.
             let v1 = verify(&s, &plan, &program, &params, &cell_of(1), &lie, &root, &s.tokens);
-            assert!(matches!(v1, TirCellVerdictV1::Faulted { leaf, .. } if leaf == target.index), "{name}: {v1:?} (leaf {})", target.index);
+            assert!(
+                matches!(v1, TirCellVerdictV1::Faulted { leaf, .. } if leaf == target.index),
+                "{name}: {v1:?} (leaf {})",
+                target.index
+            );
             let v0 = verify(&s, &plan, &program, &params, &cell_of(0), &lie, &root, &s.tokens);
             assert!(matches!(v0, TirCellVerdictV1::Verified { .. }), "{name}: shard 0 is not the lie's: {v0:?}");
             inside += 1;
@@ -344,7 +394,10 @@ fn a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_bound
         let root = step_merkle_root_v1(&hashes).unwrap();
         // The downstream cell's inputs and outputs agree: it verifies.
         let down = verify(&s, &plan, &program, &params, &cell_of(1), &lying, &root, &s.tokens);
-        assert!(matches!(down, TirCellVerdictV1::Verified { .. }), "{name}: the downstream cell is fed the lie and verifies: {down:?}");
+        assert!(
+            matches!(down, TirCellVerdictV1::Verified { .. }),
+            "{name}: the downstream cell is fed the lie and verifies: {down:?}"
+        );
         // The upstream cell finds it at the boundary row it computed.
         let up = verify(&s, &plan, &program, &params, &cell_of(0), &lying, &root, &s.tokens);
         match up {
@@ -389,26 +442,56 @@ fn a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_
             leaf_hashes: hashes[first..first + count].to_vec(),
             siblings: step_merkle_range_siblings_v1(&hashes, first, count).unwrap(),
         };
-        inputs.add_run(hashes.len() as u64, &s.root, &opening, &s.leaves[first..first + *pre], &s.ctx, &s.class_id, u64::MAX).expect("a run that reaches the root");
+        inputs
+            .add_run(hashes.len() as u64, &s.root, &opening, &s.leaves[first..first + *pre], &s.ctx, &s.class_id, u64::MAX)
+            .expect("a run that reaches the root");
     }
     let sp = shard_params(&plan, &params, &program, &cell.occ);
-    let req = TirCellRequestV1 { space: &s.space, plan: &plan, params: &sp, class_id: s.class_id, ctx: &s.ctx, cell: &cell, tokens: &s.tokens, inputs: &inputs, fused: false };
+    let req = TirCellRequestV1 {
+        space: &s.space,
+        plan: &plan,
+        params: &sp,
+        class_id: s.class_id,
+        ctx: &s.ctx,
+        cell: &cell,
+        tokens: &s.tokens,
+        inputs: &inputs,
+        fused: false,
+    };
     let by_runs = CpuKernelBackendV1.verify_cell(&req).unwrap();
     let by_capture = verify(&s, &plan, &program, &params, &cell, &s.leaves, &s.root, &s.tokens);
     assert_eq!(by_runs, by_capture, "a cell over the runs it reads is the cell over the whole capture");
     assert!(matches!(by_runs, TirCellVerdictV1::Verified { .. }));
     assert!(inputs.leaves() < hashes.len(), "the runs are a part of the claim's tree ({} of {})", inputs.leaves(), hashes.len());
     // A run that does not reach the claim's root is refused whole.
-    let mut bad = PalwStepRangeOpeningV1 { first_leaf_index: 0, leaf_hashes: hashes[0..4].to_vec(), siblings: step_merkle_range_siblings_v1(&hashes, 0, 4).unwrap() };
+    let mut bad = PalwStepRangeOpeningV1 {
+        first_leaf_index: 0,
+        leaf_hashes: hashes[0..4].to_vec(),
+        siblings: step_merkle_range_siblings_v1(&hashes, 0, 4).unwrap(),
+    };
     bad.leaf_hashes[1] = Hash64::from_bytes([9; 64]);
     assert!(TirRunInputsV1::default().add_run(hashes.len() as u64, &s.root, &bad, &[], &s.ctx, &s.class_id, u64::MAX).is_err());
     // A cell handed fewer runs than it reads is `Unavailable` at the first leaf it lacks.
     let mut partial = TirRunInputsV1::default();
     let (first, count, pre) = runs[0];
     let (f, c) = (first as usize, count as usize);
-    let opening = PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes: hashes[f..f + c].to_vec(), siblings: step_merkle_range_siblings_v1(&hashes, f, c).unwrap() };
+    let opening = PalwStepRangeOpeningV1 {
+        first_leaf_index: first,
+        leaf_hashes: hashes[f..f + c].to_vec(),
+        siblings: step_merkle_range_siblings_v1(&hashes, f, c).unwrap(),
+    };
     partial.add_run(hashes.len() as u64, &s.root, &opening, &s.leaves[f..f + pre], &s.ctx, &s.class_id, u64::MAX).unwrap();
-    let req = TirCellRequestV1 { space: &s.space, plan: &plan, params: &sp, class_id: s.class_id, ctx: &s.ctx, cell: &cell, tokens: &s.tokens, inputs: &partial, fused: false };
+    let req = TirCellRequestV1 {
+        space: &s.space,
+        plan: &plan,
+        params: &sp,
+        class_id: s.class_id,
+        ctx: &s.ctx,
+        cell: &cell,
+        tokens: &s.tokens,
+        inputs: &partial,
+        fused: false,
+    };
     assert!(matches!(CpuKernelBackendV1.verify_cell(&req).unwrap(), TirCellVerdictV1::Unavailable { .. }));
     let _ = NoSink;
 }
@@ -437,15 +520,23 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap_or_else(|e| panic!("{name}: {e}")));
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();
         let canonical =
             kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
         let form = if k % 2 == 0 { PalwPromptIdsFormV1::Flat } else { PalwPromptIdsFormV1::MerkleV1 };
-        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let backend =
+            TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
         let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
         let outcome = backend.execute(&job, &prompt).unwrap();
         let positions = backend.space().job_shape(&job).unwrap().positions;
@@ -462,7 +553,8 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
                 for c in &full {
                     assert_eq!(c.positions.start, cut, "{name}: segments are contiguous");
                     cut = c.positions.end;
-                    let v = tir_verify_capture_cells_v1(&backend, &outcome.material, std::slice::from_ref(c), &mut CpuKernelBackendV1).unwrap();
+                    let v = tir_verify_capture_cells_v1(&backend, &outcome.material, std::slice::from_ref(c), &mut CpuKernelBackendV1)
+                        .unwrap();
                     assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name} S_L {s_l} S_P {s_p} shard {shard}: {v:?}");
                     cells_run += 1;
                 }
@@ -526,8 +618,15 @@ fn the_drills_boundary_lie_is_found_upstream_and_passes_downstream() {
         let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
             params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
         };
-        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&lay).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
         let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
         let (root, _) = artifact.inventory_root().unwrap();
         let class = artifact.class().unwrap();

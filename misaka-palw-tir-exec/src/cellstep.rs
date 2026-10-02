@@ -110,7 +110,6 @@ impl TirCellStepperV1 for CpuCellStepperV1<'_> {
     }
 }
 
-
 /// **A device a node may run cells on**: one place values live and kernels run. It builds the stepper of one cell from the cell's
 /// occurrences' params (a shard seat's own layers, and nothing else) or refuses; a refusal is always correct (`gpu-integer-backend.md` B-1).
 pub trait TirDeviceV1: Send + Sync {

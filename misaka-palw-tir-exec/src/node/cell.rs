@@ -283,8 +283,12 @@ pub fn verify_cell_stepping_v1(req: &TirCellRequestV1<'_>, exec: &mut dyn TirCel
                 PalwTirLeafKindV1::Commit { occurrence, .. } if cell.occ.contains(&(occurrence as usize)) => {
                     own.insert((leaf.coord.node_slot, leaf.coord.tile_index), (leaf.index, leaf.value_count));
                 }
-                PalwTirLeafKindV1::State { instance, .. } if owned_fixed.contains(&(instance as usize)) => own_state.push((*leaf, false)),
-                PalwTirLeafKindV1::HistTile { instance, .. } if owned_hist.contains(&(instance as usize)) => own_state.push((*leaf, true)),
+                PalwTirLeafKindV1::State { instance, .. } if owned_fixed.contains(&(instance as usize)) => {
+                    own_state.push((*leaf, false))
+                }
+                PalwTirLeafKindV1::HistTile { instance, .. } if owned_hist.contains(&(instance as usize)) => {
+                    own_state.push((*leaf, true))
+                }
                 _ => {}
             }
         }
@@ -316,7 +320,9 @@ pub fn verify_cell_stepping_v1(req: &TirCellRequestV1<'_>, exec: &mut dyn TirCel
             // Every committed tile the cell recomputed, against the committed hash of the same leaf.
             for ((slot, tile), (count, lanes)) in &collected.tiles {
                 let Some(&(index, expected_count)) = own.get(&(*slot, *tile)) else {
-                    return TirCellVerdictV1::Refused(format!("position {a}: a tile (slot {slot}, tile {tile}) the step space does not list"));
+                    return TirCellVerdictV1::Refused(format!(
+                        "position {a}: a tile (slot {slot}, tile {tile}) the step space does not list"
+                    ));
                 };
                 if *count != expected_count {
                     note(index);
@@ -361,7 +367,9 @@ pub fn verify_cell_stepping_v1(req: &TirCellRequestV1<'_>, exec: &mut dyn TirCel
                 (false, PalwTirLeafKindV1::State { instance, first_element, .. }) => {
                     let inst = &space.fixed_instances()[instance as usize];
                     let mut lanes = Vec::new();
-                    if let Err(e) = exec.fixed_lanes(inst.state, inst.layer, first_element as usize, leaf.value_count as usize, &mut lanes) {
+                    if let Err(e) =
+                        exec.fixed_lanes(inst.state, inst.layer, first_element as usize, leaf.value_count as usize, &mut lanes)
+                    {
                         return TirCellVerdictV1::Refused(e);
                     }
                     lanes
@@ -604,11 +612,7 @@ impl TirCellInputsV1 for TirRunInputsV1 {
 /// ranges `(first, count, carry_in_preimages)` — one run over `[the previous occurrence's carry-out tiles ‖ the cell's own
 /// leaves]` where they are adjacent, plus the checkpoint and history runs of the instances the cell writes. A seat builds its
 /// `TirStepRun` demands from these; a producer builds the answers.
-pub fn cell_runs_v1(
-    space: &PalwTirStepSpaceV1,
-    ctx: &PalwJobContextV2,
-    cell: &TirCellV1,
-) -> Result<Vec<(u64, u32, usize)>, String> {
+pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1) -> Result<Vec<(u64, u32, usize)>, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
     let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
     let n_occ = space.occurrences().len();
@@ -632,8 +636,12 @@ pub fn cell_runs_v1(
                         wanted.push((leaf.index, true));
                     }
                 }
-                PalwTirLeafKindV1::State { instance, .. } if owned_fixed.contains(&(instance as usize)) => wanted.push((leaf.index, false)),
-                PalwTirLeafKindV1::HistTile { instance, .. } if owned_hist.contains(&(instance as usize)) => wanted.push((leaf.index, false)),
+                PalwTirLeafKindV1::State { instance, .. } if owned_fixed.contains(&(instance as usize)) => {
+                    wanted.push((leaf.index, false))
+                }
+                PalwTirLeafKindV1::HistTile { instance, .. } if owned_hist.contains(&(instance as usize)) => {
+                    wanted.push((leaf.index, false))
+                }
                 _ => {}
             }
         }
@@ -854,4 +862,3 @@ pub fn tir_kernel_backend_v1(want_device: bool) -> (Box<dyn KernelBackendV1 + Se
 pub fn tir_kernel_backend_registered_v1() -> bool {
     DEVICE_V1.get().is_some()
 }
-

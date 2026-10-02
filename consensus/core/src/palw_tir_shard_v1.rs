@@ -463,7 +463,8 @@ pub fn palw_largest_remainder_permille_v1(raw: &[u128]) -> Vec<u16> {
         }
         return out;
     }
-    let mut floors: Vec<(usize, u128, u128)> = raw.iter().enumerate().map(|(i, r)| (i, r.saturating_mul(1_000) / total, r.saturating_mul(1_000) % total)).collect();
+    let mut floors: Vec<(usize, u128, u128)> =
+        raw.iter().enumerate().map(|(i, r)| (i, r.saturating_mul(1_000) / total, r.saturating_mul(1_000) % total)).collect();
     let mut given: u128 = floors.iter().map(|(_, f, _)| *f).sum();
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|a, b| floors[*b].2.cmp(&floors[*a].2).then(a.cmp(b)));
@@ -478,7 +479,10 @@ pub fn palw_largest_remainder_permille_v1(raw: &[u128]) -> Vec<u16> {
 
 /// The share (permille of the claim's work) of the cells of shard `shard` named by `mask`.
 pub fn palw_tir_cells_share_permille_v1(cell_permille: &[u16], s_p: u16, shard: u16, mask: PalwSegmentMaskV2) -> u32 {
-    (0..s_p).filter(|j| mask.covers(*j)).map(|j| u32::from(cell_permille.get(usize::from(shard) * usize::from(s_p) + usize::from(j)).copied().unwrap_or(0))).sum()
+    (0..s_p)
+        .filter(|j| mask.covers(*j))
+        .map(|j| u32::from(cell_permille.get(usize::from(shard) * usize::from(s_p) + usize::from(j)).copied().unwrap_or(0)))
+        .sum()
 }
 
 /// **A seat's lock** (decision 6): `lock × max(share, floor) / 1,000`, never above `lock`, never 0 for a nonzero lock.
@@ -506,11 +510,8 @@ pub fn palw_tir_shard_split_v1(reward: u64, pool_permille: u16, drawn: &[u32], c
     let producer = reward - pool;
     let weights: Vec<u128> = drawn.iter().map(|s| u128::from((*s).clamp(PALW_TIR_SHARD_SEAT_FLOOR_PERMILLE_V1, 1_000))).collect();
     let total: u128 = weights.iter().sum();
-    let paid: Vec<u64> = weights
-        .iter()
-        .zip(credited)
-        .map(|(w, c)| if *c && total > 0 { ((pool as u128) * w / total) as u64 } else { 0 })
-        .collect();
+    let paid: Vec<u64> =
+        weights.iter().zip(credited).map(|(w, c)| if *c && total > 0 { ((pool as u128) * w / total) as u64 } else { 0 }).collect();
     let spent: u64 = paid.iter().sum();
     PalwTirShardSplitV1 { producer, paid, reserve: pool - spent }
 }
@@ -704,7 +705,6 @@ pub fn palw_tir_shard_part_verdict_v1(
     PalwTirShardPartVerdictV1::Licensed { cell_counts: palw_tir_shard_cell_counts_v1(s_p, &all_masks), signers }
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // The claim's record (RFC §4.4, §4.5, §6)
 // ---------------------------------------------------------------------------------------------
@@ -761,7 +761,12 @@ pub fn palw_tir_shard_drawn_permille_v1(plan: &PalwTirShardPlanV1, seed: &Hash64
     for shard in 0..plan.s_l {
         let masks = palw_tir_shard_assignment_v1(seed, claim_id, shard, plan.s_p);
         if outsider {
-            out.push(palw_tir_cells_share_permille_v1(&plan.cell_permille, plan.s_p, shard, palw_tir_shard_outsider_mask_v1(plan.s_p)));
+            out.push(palw_tir_cells_share_permille_v1(
+                &plan.cell_permille,
+                plan.s_p,
+                shard,
+                palw_tir_shard_outsider_mask_v1(plan.s_p),
+            ));
         }
         for mask in masks {
             out.push(palw_tir_cells_share_permille_v1(&plan.cell_permille, plan.s_p, shard, mask));
@@ -783,7 +788,13 @@ pub fn palw_tir_shard_drawn_permille_v1(plan: &PalwTirShardPlanV1, seed: &Hash64
 /// `ready_eff[i]` is the ready seats of shard `i`, `shard_permille[i]` its share `w_i / w` of the claim's work
 /// (permille). A shard with a zero share costs nothing and is not binding; a class with no shard costing anything has no
 /// room.
-pub fn palw_tir_shard_room_v1(ready_eff: &[u128], shard_permille: &[u32], per_seat_per_span: u128, window_spans: u64, eccu: u128) -> u64 {
+pub fn palw_tir_shard_room_v1(
+    ready_eff: &[u128],
+    shard_permille: &[u32],
+    per_seat_per_span: u128,
+    window_spans: u64,
+    eccu: u128,
+) -> u64 {
     let attesters = u128::from(PALW_TIR_SHARD_ATTESTERS_PER_CELL_V1);
     let mut room: Option<u64> = None;
     for (ready, permille) in ready_eff.iter().zip(shard_permille) {
@@ -948,12 +959,11 @@ pub fn palw_tir_shard_readiness_message_v1(
     finish(s)
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // The fence (RFC-0006 §10): dormant everywhere, four writes, a mirror, a drill entry
 // ---------------------------------------------------------------------------------------------
 
-use crate::config::params::{ForkActivation, Params, PalwPostLaunchFenceV1};
+use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
 /// **The entry a drill arms layer-sharded panels with** (`--palw-drill-tir-shard-at`,
@@ -1032,7 +1042,9 @@ impl Params {
             ));
         }
         if !at_or_below(self.palw_verification_v2) {
-            return Err(PalwModeV2Error::Invalid("palw_tir_shard_v1 needs palw_verification_v2 in force at or below it: the S1 segments and masks"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_shard_v1 needs palw_verification_v2 in force at or below it: the S1 segments and masks",
+            ));
         }
         if !at_or_below(self.palw_rcore_plus) {
             return Err(PalwModeV2Error::Invalid(
@@ -1060,14 +1072,23 @@ mod tests {
         PalwPanelSeatV2 { bond: bond(v), operator_id: Hash64::from_u64_word(u64::from(v)) }
     }
     fn weights(layers: &[u128], global: u128, pre: u128, post: u128) -> PalwTirShardWeightsV1 {
-        PalwTirShardWeightsV1 { layer_bytes: layers.to_vec(), layers_global_bytes: global, pre_extra_bytes: pre, post_extra_bytes: post }
+        PalwTirShardWeightsV1 {
+            layer_bytes: layers.to_vec(),
+            layers_global_bytes: global,
+            pre_extra_bytes: pre,
+            post_extra_bytes: post,
+        }
     }
 
     #[test]
     fn the_plan_shape_is_two_shards_up_to_twice_the_budget_minimum_and_one_of_two_position_cuts() {
         assert!(palw_tir_shard_plan_shape_v1(2, 1, 8, 1).is_ok());
         assert!(palw_tir_shard_plan_shape_v1(2, 2, 8, 1).is_ok(), "S1 inside the shard");
-        assert_eq!(palw_tir_shard_plan_shape_v1(1, 1, 8, 1), Err(PalwTirShardError::ShardCountOutOfRange(1)), "one shard is the flat panel");
+        assert_eq!(
+            palw_tir_shard_plan_shape_v1(1, 1, 8, 1),
+            Err(PalwTirShardError::ShardCountOutOfRange(1)),
+            "one shard is the flat panel"
+        );
         assert_eq!(palw_tir_shard_plan_shape_v1(65, 1, 128, 1), Err(PalwTirShardError::ShardCountOutOfRange(65)));
         assert_eq!(palw_tir_shard_plan_shape_v1(4, 3, 8, 2), Err(PalwTirShardError::PositionSegmentsNotOffered(3)));
         assert_eq!(palw_tir_shard_plan_shape_v1(4, 0, 8, 2), Err(PalwTirShardError::PositionSegmentsNotOffered(0)));
@@ -1076,7 +1097,11 @@ mod tests {
         assert_eq!(palw_tir_shard_plan_shape_v1(3, 1, 64, 4), Err(PalwTirShardError::UnderSharded { declared: 3, min: 4 }));
         assert!(palw_tir_shard_plan_shape_v1(4, 1, 64, 4).is_ok());
         assert!(palw_tir_shard_plan_shape_v1(8, 1, 64, 4).is_ok());
-        assert_eq!(palw_tir_shard_plan_shape_v1(9, 1, 64, 4), Err(PalwTirShardError::OverSharded { declared: 9, min: 4 }), "a class cannot thin its own panels");
+        assert_eq!(
+            palw_tir_shard_plan_shape_v1(9, 1, 64, 4),
+            Err(PalwTirShardError::OverSharded { declared: 9, min: 4 }),
+            "a class cannot thin its own panels"
+        );
         // A class that fits one seat may still declare exactly two shards.
         assert!(palw_tir_shard_plan_shape_v1(2, 1, 8, 1).is_ok());
         assert!(palw_tir_shard_plan_shape_v1(3, 1, 8, 1).is_err());
@@ -1181,7 +1206,11 @@ mod tests {
             for credited in [[true; 5], [false; 5], [true, false, true, false, true]] {
                 let s = palw_tir_shard_split_v1(reward, 200, &[250, 250, 250, 125, 1_000], &credited);
                 assert_eq!(s.producer as u128 + s.paid.iter().map(|p| *p as u128).sum::<u128>() + s.reserve as u128, reward as u128);
-                assert_eq!(s.producer, reward - ((reward as u128) * 200 / 1000) as u64, "the producer's share is a function of the reward alone");
+                assert_eq!(
+                    s.producer,
+                    reward - ((reward as u128) * 200 / 1000) as u64,
+                    "the producer's share is a function of the reward alone"
+                );
                 for (p, c) in s.paid.iter().zip(credited) {
                     assert!(c || *p == 0, "an uncredited seat is paid nothing");
                 }
@@ -1225,7 +1254,11 @@ mod tests {
             assert_eq!(masks.len(), 3);
             assert_eq!(masks.iter().filter(|m| m.is_full(2)).count(), 1, "one full-shard seat");
             for segment in 0..2 {
-                assert_eq!(masks.iter().filter(|m| m.covers(segment)).count(), 2, "shard {shard} segment {segment}: the full seat and one partial");
+                assert_eq!(
+                    masks.iter().filter(|m| m.covers(segment)).count(),
+                    2,
+                    "shard {shard} segment {segment}: the full seat and one partial"
+                );
             }
         }
         // The shards draw independently: not every shard picks the same full seat.
@@ -1248,7 +1281,8 @@ mod tests {
         let slice: Vec<PalwPanelSeatV2> = vec![seat(10), seat(11), seat(12), seat(13)]; // outsider, then three class seats
         let full1 = PalwSegmentMaskV2::full(1);
         // Layers only (S_P = 1).
-        let ok = palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 0, 1, true, &[valid(10, full1), valid(11, full1), valid(12, full1)]);
+        let ok =
+            palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 0, 1, true, &[valid(10, full1), valid(11, full1), valid(12, full1)]);
         match ok {
             PalwTirShardPartVerdictV1::Licensed { signers, cell_counts } => {
                 assert_eq!(signers.len(), 3);
@@ -1268,13 +1302,29 @@ mod tests {
         ));
         // A mask that is not the assignment counts for nothing (Q-6).
         assert!(matches!(
-            palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 0, 1, true, &[valid(10, full1), valid(11, PalwSegmentMaskV2::full(2)), valid(12, full1)]),
+            palw_tir_shard_part_verdict_v1(
+                &slice,
+                &seed,
+                &claim,
+                0,
+                1,
+                true,
+                &[valid(10, full1), valid(11, PalwSegmentMaskV2::full(2)), valid(12, full1)]
+            ),
             PalwTirShardPartVerdictV1::Short(_)
         ));
         // A stranger's receipt, an abstention and a duplicate count for nothing.
         let abstain = (bond(13), PalwReceiptVerdictV2::Incapable, full1);
         assert!(matches!(
-            palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 0, 1, true, &[valid(10, full1), valid(99, full1), valid(11, full1), valid(11, full1), abstain]),
+            palw_tir_shard_part_verdict_v1(
+                &slice,
+                &seed,
+                &claim,
+                0,
+                1,
+                true,
+                &[valid(10, full1), valid(99, full1), valid(11, full1), valid(11, full1), abstain]
+            ),
             PalwTirShardPartVerdictV1::Short(_)
         ));
         // No outsider on the claim (a flat-population claim): two class seats suffice.
@@ -1300,8 +1350,12 @@ mod tests {
         }
         // Drop the full seat: each segment keeps one partial plus the outsider, but only ONE class seat.
         let full = masks.iter().position(|m| m.is_full(2)).unwrap();
-        let without_full: Vec<_> = std::iter::once(outsider).chain(all.iter().enumerate().filter(|(i, _)| *i != full).map(|(_, r)| r.clone())).collect();
-        assert!(matches!(palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 3, 2, true, &without_full), PalwTirShardPartVerdictV1::Short(_)));
+        let without_full: Vec<_> =
+            std::iter::once(outsider).chain(all.iter().enumerate().filter(|(i, _)| *i != full).map(|(_, r)| r.clone())).collect();
+        assert!(matches!(
+            palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 3, 2, true, &without_full),
+            PalwTirShardPartVerdictV1::Short(_)
+        ));
     }
 
     #[test]
@@ -1310,7 +1364,8 @@ mod tests {
         assert_eq!(palw_tir_shard_basis_k_v1(&[3, 2, 3, 3]), 2);
         assert_eq!(palw_tir_shard_basis_k_v1(&[3, 0]), 0);
         assert_eq!(palw_tir_shard_basis_k_v1(&[]), 0, "no cell, no recount");
-        let masks = [PalwSegmentMaskV2::full(2), PalwSegmentMaskV2::single(0), PalwSegmentMaskV2::single(1), PalwSegmentMaskV2::full(2)];
+        let masks =
+            [PalwSegmentMaskV2::full(2), PalwSegmentMaskV2::single(0), PalwSegmentMaskV2::single(1), PalwSegmentMaskV2::full(2)];
         assert_eq!(palw_tir_shard_cell_counts_v1(2, &masks), vec![3, 3], "capped at three");
         assert_eq!(palw_tir_shard_cell_counts_v1(2, &masks[..2]), vec![2, 1]);
     }
@@ -1318,7 +1373,9 @@ mod tests {
     #[test]
     fn the_v4_message_binds_the_shard_and_the_mask() {
         let (net, claim) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2));
-        let m = |shard: u16, mask: PalwSegmentMaskV2, daa: u64| palw_receipt_message_v4(net, claim, PalwReceiptVerdictV2::Valid, daa, shard, mask);
+        let m = |shard: u16, mask: PalwSegmentMaskV2, daa: u64| {
+            palw_receipt_message_v4(net, claim, PalwReceiptVerdictV2::Valid, daa, shard, mask)
+        };
         let base = m(0, PalwSegmentMaskV2::single(0), 10);
         assert_ne!(base, m(1, PalwSegmentMaskV2::single(0), 10), "another shard");
         assert_ne!(base, m(0, PalwSegmentMaskV2::full(2), 10), "a widened mask");

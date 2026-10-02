@@ -36,8 +36,8 @@ use kaspa_consensus_core::palw_tir_shard_v1::{
 };
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{
-    KernelBackendV1, TirBackendV1, TirCellVerdictV1, cell_runs_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
-    tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
+    KernelBackendV1, TirBackendV1, TirCellVerdictV1, cell_runs_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
+    tir_shard_cells_v1, tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
 };
 
 use super::tir_court::{
@@ -98,7 +98,8 @@ pub(crate) fn palw_tir_shard_outcome_v1(
         TirCellVerdictV1::Faulted { leaf, position } => PalwTirShardOutcomeV1::Fault { leaf: Some(leaf), row: None, position },
         TirCellVerdictV1::TokenFault { position } => {
             // Position `a` selects row `a + 1 − prefill` of the decode trace.
-            let row = (u64::from(position) + 1).checked_sub(u64::from(ctx.declared_prefill_tokens)).and_then(|r| u32::try_from(r).ok());
+            let row =
+                (u64::from(position) + 1).checked_sub(u64::from(ctx.declared_prefill_tokens)).and_then(|r| u32::try_from(r).ok());
             PalwTirShardOutcomeV1::Fault { leaf: None, row, position }
         }
         TirCellVerdictV1::Unavailable { leaf } => {
@@ -319,8 +320,12 @@ impl PalwTirShardBooksV1 {
             receipt.shard,
             receipt.segments,
         );
-        if !super::verify_receipt_signature_v1(&key, message.as_byte_slice(), &receipt.receipt.signature, PALW_RECEIPT_V4_MLDSA87_CONTEXT)
-        {
+        if !super::verify_receipt_signature_v1(
+            &key,
+            message.as_byte_slice(),
+            &receipt.receipt.signature,
+            PALW_RECEIPT_V4_MLDSA87_CONTEXT,
+        ) {
             return A::BadSignature;
         }
         self.pool.entry((claim, receipt.shard)).or_default().insert(bond, receipt);
@@ -363,7 +368,12 @@ impl PalwTirShardBooksV1 {
     }
 
     /// Own receipts due for a re-send now, longest-waiting first, at most `limit`: those whose duty still stands.
-    pub(crate) fn own_due(&self, standing: &HashSet<(Hash64, u16, u8)>, now: std::time::Instant, limit: usize) -> Vec<(Hash64, u16, u8)> {
+    pub(crate) fn own_due(
+        &self,
+        standing: &HashSet<(Hash64, u16, u8)>,
+        now: std::time::Instant,
+        limit: usize,
+    ) -> Vec<(Hash64, u16, u8)> {
         let mut due: Vec<(Hash64, u16, u8)> =
             self.filed.iter().filter(|(k, f)| standing.contains(k) && f.schedule.due(now)).map(|(k, _)| *k).collect();
         due.sort_unstable();
@@ -411,7 +421,10 @@ impl super::PalwPanelService {
                 continue;
             }
             let key = seat_duty_panel_key_v1(duty);
-            if books.answered.iter().any(|k| *k == key) || books.refuted.contains(&duty.claim_id) || current_daa > duty.receipt_deadline {
+            if books.answered.iter().any(|k| *k == key)
+                || books.refuted.contains(&duty.claim_id)
+                || current_daa > duty.receipt_deadline
+            {
                 continue;
             }
             // **An outsider that holds no copy of the class fetches it from the mirror** (RFC-0006 §4.2, D-S6), once per class, and keeps
@@ -435,7 +448,12 @@ impl super::PalwPanelService {
                             );
                             self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").push(loaded);
                         } else {
-                            warn!("[{PALW_PANEL}] the mirror {} does not derive class {} under root {}: not used", path.display(), duty.class_id, duty.artifact_root);
+                            warn!(
+                                "[{PALW_PANEL}] the mirror {} does not derive class {} under root {}: not used",
+                                path.display(),
+                                duty.class_id,
+                                duty.artifact_root
+                            );
                         }
                     }
                     Err(why) => warn!("[{PALW_PANEL}] the mirror {} does not load: {why}", path.display()),
@@ -457,7 +475,8 @@ impl super::PalwPanelService {
                 .and_then(|pool| {
                     pool.iter().find(|m| {
                         tir.decode_capture(m).is_ok_and(|c| {
-                            c.binding.committed_execution_root == duty.execution_root && c.binding.full_logits_trace_root == duty.trace_root
+                            c.binding.committed_execution_root == duty.execution_root
+                                && c.binding.full_logits_trace_root == duty.trace_root
                         })
                     })
                 })
@@ -477,7 +496,9 @@ impl super::PalwPanelService {
                     && current_daa >= duty.bound_daa.saturating_add(window / 4)
                 {
                     books.demanded.insert(duty.claim_id);
-                    if let Some((message, object, due)) = self.tir_shard_run_demand_v1(session, bond_key, network_domain, current_daa, duty, &tir).await {
+                    if let Some((message, object, due)) =
+                        self.tir_shard_run_demand_v1(session, bond_key, network_domain, current_daa, duty, &tir).await
+                    {
                         books.demands.push((message, object, due));
                     }
                 }
@@ -507,7 +528,10 @@ impl super::PalwPanelService {
                     job: task_duty.claim_id,
                 };
                 let _host = crate::palw_memory_ledger::host_ledger_v1()
-                    .reserve(key.clone(), (task_material.len() as u64).saturating_mul(3).saturating_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1))
+                    .reserve(
+                        key.clone(),
+                        (task_material.len() as u64).saturating_mul(3).saturating_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1),
+                    )
                     .map_err(|refusal| format!("the cells' scratch is not free ({refusal})"))?;
                 let (mut device, mut on_device) = tir_kernel_backend_v1(want_device);
                 let mut _device_hold = None;
@@ -517,7 +541,9 @@ impl super::PalwPanelService {
                     }
                     let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
                     let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
-                    match crate::palw_memory_ledger::device_ledger_v1(0).map(|l| l.reserve(key, u64::try_from(shard_bytes).unwrap_or(u64::MAX))) {
+                    match crate::palw_memory_ledger::device_ledger_v1(0)
+                        .map(|l| l.reserve(key, u64::try_from(shard_bytes).unwrap_or(u64::MAX)))
+                    {
                         Some(Ok(held)) => _device_hold = Some(held),
                         _ => {
                             on_device = false;
@@ -553,7 +579,15 @@ impl super::PalwPanelService {
                         if shadow { " — shadow: nothing filed" } else { "" }
                     );
                     if !shadow {
-                        self.tir_shard_file_receipt_v1(bond_key, network_domain, current_daa, duty, PalwReceiptVerdictV2::Valid, books).await;
+                        self.tir_shard_file_receipt_v1(
+                            bond_key,
+                            network_domain,
+                            current_daa,
+                            duty,
+                            PalwReceiptVerdictV2::Valid,
+                            books,
+                        )
+                        .await;
                     }
                     books.answered.insert(key);
                 }
@@ -599,7 +633,10 @@ impl super::PalwPanelService {
                             duty.claim_id
                         ),
                         Ok(Err(why)) => {
-                            warn!("[{PALW_PANEL}] claim {}: the cell's accusation does not build ({why}); recorded, not filed", duty.claim_id)
+                            warn!(
+                                "[{PALW_PANEL}] claim {}: the cell's accusation does not build ({why}); recorded, not filed",
+                                duty.claim_id
+                            )
                         }
                         Err(_) => {}
                     }
@@ -625,12 +662,20 @@ impl super::PalwPanelService {
         duty: &PalwSeatDutyV2,
         tir: &std::sync::Arc<TirBackendV1>,
     ) -> Option<(Hash64, PalwConsensusObjectV2, u64)> {
-        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaUnitV1, palw_tir_step_accusation_message_v1, palw_tir_step_accusation_object_v1};
+        use kaspa_consensus_core::palw_da_rcore_v1::{
+            PalwDaUnitV1, palw_tir_step_accusation_message_v1, palw_tir_step_accusation_object_v1,
+        };
         use kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
         let place = duty.tir_shard?;
         let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root).ok()?;
-        let (ctx, _) =
-            self.attempt_job_for_claim(session, backend.as_ref(), network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)?;
+        let (ctx, _) = self.attempt_job_for_claim(
+            session,
+            backend.as_ref(),
+            network_domain,
+            duty.accepted_block,
+            duty.class_id,
+            &duty.executor_bond,
+        )?;
         let positions = tir.space().job_shape(&ctx).ok()?.positions;
         let cells = tir_shard_cells_v1(tir, positions, place.shard, place.s_l, place.s_p, place.segments).ok()?;
         let cell = cells.first()?;
@@ -639,9 +684,10 @@ impl super::PalwPanelService {
         let unit = PalwDaUnitV1::TirStepRun { first, count: count.min(PALW_TIR_STEP_RUN_MAX_LEAVES_V1) };
         let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
         let message = palw_tir_step_accusation_message_v1(network_domain, &duty.claim_id, &unit, &bond_key);
-        let object = palw_tir_step_accusation_object_v1(&network_domain, duty.claim_id, unit, bond_key, ladder, |m, c| self.sign(m, c))
-            .map_err(|why| warn!("[{PALW_PANEL}] claim {}: the run demand does not build ({why})", duty.claim_id))
-            .ok()?;
+        let object =
+            palw_tir_step_accusation_object_v1(&network_domain, duty.claim_id, unit, bond_key, ladder, |m, c| self.sign(m, c))
+                .map_err(|why| warn!("[{PALW_PANEL}] claim {}: the run demand does not build ({why})", duty.claim_id))
+                .ok()?;
         let earliest_final = super::palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
         let due = super::palw_seat_court_filing_due_v1(duty.receipt_deadline, earliest_final, current_daa);
         info!(
@@ -709,7 +755,13 @@ impl super::PalwPanelService {
                 continue;
             };
             let receipt = PalwSeatReceiptV4 {
-                receipt: PalwSeatReceiptV2 { claim: key.0, verdict: own.verdict, seat_bond: bond_key, signed_daa: own.signed_daa, signature },
+                receipt: PalwSeatReceiptV2 {
+                    claim: key.0,
+                    verdict: own.verdict,
+                    seat_bond: bond_key,
+                    signed_daa: own.signed_daa,
+                    signature,
+                },
                 shard: own.shard,
                 segments: own.segments,
             };
@@ -737,7 +789,9 @@ impl super::PalwPanelService {
                     info!("[{PALW_PANEL}] a run demand waits: {why}");
                     books.demands.push((message, object, due));
                 }
-                super::tir_court::PalwTirDemandFiledV1::Refused(why) => warn!("[{PALW_PANEL}] a run demand is refused by the chain: {why}"),
+                super::tir_court::PalwTirDemandFiledV1::Refused(why) => {
+                    warn!("[{PALW_PANEL}] a run demand is refused by the chain: {why}")
+                }
             }
         }
         for finding in std::mem::take(&mut books.findings) {
@@ -745,7 +799,15 @@ impl super::PalwPanelService {
                 continue;
             }
             one_move.accused.insert(finding.target.claim_id);
-            self.file_tir_one_move_v1(&finding.target, finding.due, finding.label, finding.leaf, finding.row, finding.accusation, one_move);
+            self.file_tir_one_move_v1(
+                &finding.target,
+                finding.due,
+                finding.label,
+                finding.leaf,
+                finding.row,
+                finding.accusation,
+                one_move,
+            );
         }
     }
 
@@ -799,20 +861,26 @@ impl super::PalwPanelService {
                 if !self.config.tir_shard_hold.is_empty() && !self.config.tir_shard_hold.contains(&shard) {
                     continue;
                 }
-                if books.carried_proof.get(&(class_id, shard)).is_some_and(|(span, at)| {
-                    *span == span_now || current_daa < at.saturating_add(PALW_TIR_SHARD_CARRY_REPLAN_DAA_V1)
-                }) {
+                if books
+                    .carried_proof
+                    .get(&(class_id, shard))
+                    .is_some_and(|(span, at)| *span == span_now || current_daa < at.saturating_add(PALW_TIR_SHARD_CARRY_REPLAN_DAA_V1))
+                {
                     continue;
                 }
                 let ready = palw_tir_shard_ready_class_v1(&class_id, plan.s_l, shard);
                 let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == ready).map(|r| r.row);
                 // A standing row is renewed at half its age, as the flat proofs are (a proof every span would be a carrier a
                 // span per shard per seat).
-                if row.is_some_and(|r| span_now.saturating_sub(r.proved_span).saturating_mul(read.span_daa) < read.readiness_max_age_daa / 2) {
+                if row.is_some_and(|r| {
+                    span_now.saturating_sub(r.proved_span).saturating_mul(read.span_daa) < read.readiness_max_age_daa / 2
+                }) {
                     continue;
                 }
                 let Some(Ok(tir)) = self.backends().resolve_tir_v1(class_id, class.artifact_root) else { continue };
-                match tir_shard_readiness_object_v1(&tir, bond_key, network_domain, class_id, plan.s_l, shard, span_now, |m, c| self.sign(m, c)) {
+                match tir_shard_readiness_object_v1(&tir, bond_key, network_domain, class_id, plan.s_l, shard, span_now, |m, c| {
+                    self.sign(m, c)
+                }) {
                     Ok(object) => {
                         books.carried_proof.insert((class_id, shard), (span_now, current_daa));
                         out.push((format!("the possession proof of class {class_id} shard {shard} (span {span_now})"), object));
@@ -858,7 +926,8 @@ pub(crate) fn tir_shard_readiness_object_v1(
     if draw.is_empty() {
         return Err("the shard has no inventory leaves".into());
     }
-    let (_root, leaves, drawn) = tir.artifact_readiness_material(&draw).map_err(|e| format!("the drawn leaves cannot be opened: {e}"))?;
+    let (_root, leaves, drawn) =
+        tir.artifact_readiness_material(&draw).map_err(|e| format!("the drawn leaves cannot be opened: {e}"))?;
     let mut opened: Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)> = Vec::with_capacity(drawn.len());
     let mut bytes = 0usize;
     for (index, operand) in drawn {
@@ -871,9 +940,13 @@ pub(crate) fn tir_shard_readiness_object_v1(
         bytes += operand.bytes.len();
         opened.push((index, operand));
     }
-    registry::palw_readiness_v2_opening_is_the_challenge_v1(&draw, &opened.iter().map(|(i, o)| (*i, o.bytes.len())).collect::<Vec<_>>())?;
+    registry::palw_readiness_v2_opening_is_the_challenge_v1(
+        &draw,
+        &opened.iter().map(|(i, o)| (*i, o.bytes.len())).collect::<Vec<_>>(),
+    )?;
     opened.sort_by_key(|(index, _)| *index);
-    let proof = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened).ok_or("the opened leaves are not the inventory's")?;
+    let proof = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened)
+        .ok_or("the opened leaves are not the inventory's")?;
     kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, tir.artifact_root()).map_err(|e| format!("{e}"))?;
     let opened_hashes: Vec<(u32, Hash64)> =
         proof.opened.iter().map(|(index, operand)| (*index, kaspa_consensus_core::palw_artifact::artifact_leaf_v1(operand))).collect();

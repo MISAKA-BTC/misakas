@@ -15,9 +15,7 @@ use std::path::PathBuf;
 
 use misaka_palw_tir::program::{StateKind, TirProgramV1};
 use misaka_palw_tir::{MapParams, Tensor};
-use misaka_palw_tir_exec::{
-    CpuCellStepperV1, NodeValue, StepSink, TirCellStepperV1, TirDeviceV1, TirExecutor, TirParams, TirPlan,
-};
+use misaka_palw_tir_exec::{CpuCellStepperV1, NodeValue, StepSink, TirCellStepperV1, TirDeviceV1, TirExecutor, TirParams, TirPlan};
 use misaka_palw_tir_gpu::GpuDeviceV1;
 use serde_json::Value;
 
@@ -112,7 +110,10 @@ fn a_device_cell_is_the_cpu_cell_value_for_value() {
                                 if let StateKind::Fixed { .. } = inst.kind {
                                     let n: usize = inst.shape.iter().product::<usize>().max(1);
                                     let (mut lc, mut lg) = (Vec::new(), Vec::new());
-                                    let (ec, eg) = (cpu.fixed_lanes(inst.state, inst.layer, 0, n, &mut lc), gpu.fixed_lanes(inst.state, inst.layer, 0, n, &mut lg));
+                                    let (ec, eg) = (
+                                        cpu.fixed_lanes(inst.state, inst.layer, 0, n, &mut lc),
+                                        gpu.fixed_lanes(inst.state, inst.layer, 0, n, &mut lg),
+                                    );
                                     // An instance no occurrence of the cell touched is initial on both (or absent): compare when both answer.
                                     if ec.is_ok() && eg.is_ok() {
                                         assert_eq!(lc, lg, "{name} {occ:?} position {a}: Fixed {:?}", (inst.state, inst.layer));

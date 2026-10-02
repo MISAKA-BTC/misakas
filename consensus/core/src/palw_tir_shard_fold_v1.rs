@@ -26,7 +26,8 @@ fn geometry_v1(
 ) -> Result<(misaka_palw_tir::TirProgramV1, u32, Vec<std::ops::Range<usize>>), PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::TirShardRefused(why);
     let record = state.tir_classes.get(class_id).ok_or_else(|| refused(format!("class {class_id} is not an IR class")))?;
-    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|e| refused(format!("the class's program: {e}")))?;
+    let program =
+        misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|e| refused(format!("the class's program: {e}")))?;
     let max_context = record.facts.max_context;
     let weights = rules::palw_tir_shard_weights_v1(&program, max_context);
     let parts = rules::palw_tir_shard_partition_v1(&weights, s_l)
@@ -56,7 +57,8 @@ pub(super) fn apply_plan_declared_v1(
         return Err(PalwStateV2Error::ShardPlanAlreadyDeclared(*class_id));
     }
     let tir = builder.state.tir_classes.get(class_id).ok_or_else(|| refused(format!("class {class_id} is not an IR class")))?;
-    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| refused(format!("the class's program: {e}")))?;
+    let program =
+        misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| refused(format!("the class's program: {e}")))?;
     let max_context = tir.facts.max_context;
     let weights = rules::palw_tir_shard_weights_v1(&program, max_context);
     let min = rules::palw_tir_shard_min_shards_v1(&weights, rules::PALW_TIR_SHARD_SEAT_BUDGET_BYTES_V1);
@@ -166,10 +168,13 @@ pub(super) fn apply_part_v1(
         }
         counted.push((receipt.seat_bond, receipt.verdict, signed.segments));
     }
-    let verdict = rules::palw_tir_shard_part_verdict_v1(&slice, &panel.anchor, &claim_id, shard, record.s_p, record.outsider, &counted);
+    let verdict =
+        rules::palw_tir_shard_part_verdict_v1(&slice, &panel.anchor, &claim_id, shard, record.s_p, record.outsider, &counted);
     let (signers, cell_counts) = match verdict {
         rules::PalwTirShardPartVerdictV1::Licensed { signers, cell_counts } => (signers, cell_counts),
-        rules::PalwTirShardPartVerdictV1::Short(why) => return Err(PalwStateV2Error::TirShardPartShort { claim: claim_id, shard: u32::from(shard), why }),
+        rules::PalwTirShardPartVerdictV1::Short(why) => {
+            return Err(PalwStateV2Error::TirShardPartShort { claim: claim_id, shard: u32::from(shard), why });
+        }
     };
     let receipts_v2: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = part.receipts.iter().map(|r| r.receipt.clone()).collect();
     // The price a counted signer posts: `lock_{k'}` of the claim, `k' = max(2, this shard's weakest cell)`, scaled by the
@@ -234,10 +239,8 @@ pub(super) fn apply_part_v1(
         }
     }
     next.counted.extend(signers.iter().map(|(bond, mask)| (*bond, shard, *mask)));
-    next.unserved_seen |= part
-        .receipts
-        .iter()
-        .any(|r| !matches!(r.receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid));
+    next.unserved_seen |=
+        part.receipts.iter().any(|r| !matches!(r.receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid));
     next.progress.mark(u32::from(shard)).map_err(|e| refused(e.to_string()))?;
     if !next.progress.is_complete() {
         builder.write_tir_shard_claim(claim_id, Some(next));
@@ -288,11 +291,18 @@ pub(super) fn apply_readiness_v1(
         return Err(PalwStateV2Error::BondNotActive(*bond));
     }
     let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
-    let plan = builder.state.tir_shard_plans.get(class_id).ok_or_else(|| refused(format!("class {class_id} declared no shard plan")))?.clone();
+    let plan = builder
+        .state
+        .tir_shard_plans
+        .get(class_id)
+        .ok_or_else(|| refused(format!("class {class_id} declared no shard plan")))?
+        .clone();
     if shard >= plan.s_l {
         return Err(refused(format!("shard {shard} of a plan of {}", plan.s_l)));
     }
-    if proof.opened.len() > registry::PALW_READINESS_V2_CHUNKS_V1 as usize || proof.operand_bytes() > registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+    if proof.opened.len() > registry::PALW_READINESS_V2_CHUNKS_V1 as usize
+        || proof.operand_bytes() > registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
+    {
         return Err(refused("the proof opens more than one carrier holds".into()));
     }
     crate::palw_artifact::verify_artifact_multiproof_v1(proof, class.artifact_root).map_err(|e| refused(format!("{e}")))?;
@@ -307,8 +317,15 @@ pub(super) fn apply_readiness_v1(
     let (program, _, parts) = geometry_v1(&builder.state, class_id, plan.s_l)?;
     let layers = parts.get(usize::from(shard)).cloned().ok_or_else(|| refused("a shard of the partition".into()))?;
     let ranges = rules::palw_tir_shard_inventory_ranges_v1(&program, layers, shard == 0, shard + 1 == plan.s_l);
-    let draw =
-        rules::palw_tir_shard_readiness_leaves_v1(class_id, plan.s_l, shard, bond, span, &ranges, registry::PALW_READINESS_V2_CHUNKS_V1 as usize);
+    let draw = rules::palw_tir_shard_readiness_leaves_v1(
+        class_id,
+        plan.s_l,
+        shard,
+        bond,
+        span,
+        &ranges,
+        registry::PALW_READINESS_V2_CHUNKS_V1 as usize,
+    );
     let opened: Vec<(u32, usize)> = proof.opened.iter().map(|(index, operand)| (*index, operand.bytes.len())).collect();
     registry::palw_readiness_v2_opening_is_the_challenge_v1(&draw, &opened).map_err(refused)?;
     builder.write_seat_readiness(
@@ -353,6 +370,7 @@ pub(super) fn final_legs_v1(
         })
         .collect();
     let split = rules::palw_tir_shard_split_v1(reward, pool_permille, &drawn, &flags);
-    let legs = panel.seats.iter().zip(&split.paid).filter(|(_, amount)| **amount > 0).map(|(seat, amount)| (seat.bond, *amount)).collect();
+    let legs =
+        panel.seats.iter().zip(&split.paid).filter(|(_, amount)| **amount > 0).map(|(seat, amount)| (seat.bond, *amount)).collect();
     Some((split.producer, legs, split.reserve))
 }

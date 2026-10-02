@@ -151,7 +151,10 @@ fn every_duty_of_an_honest_claim_verifies_for_class_seats_and_the_outsider() {
     let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
     let honest = tir.execute(&job, &prompt).unwrap();
     let mut verified = 0;
-    for (s_p, masks) in [(1u16, vec![PalwSegmentMaskV2::full(1)]), (2, vec![PalwSegmentMaskV2::single(0), PalwSegmentMaskV2::single(1), PalwSegmentMaskV2::full(2)])] {
+    for (s_p, masks) in [
+        (1u16, vec![PalwSegmentMaskV2::full(1)]),
+        (2, vec![PalwSegmentMaskV2::single(0), PalwSegmentMaskV2::single(1), PalwSegmentMaskV2::full(2)]),
+    ] {
         for shard in 0..2 {
             for (i, mask) in masks.iter().enumerate() {
                 let d = duty(&ir, shard, 2, s_p, *mask, i == masks.len() - 1);
@@ -230,16 +233,10 @@ fn a_fold_abstains_by_name_and_a_flat_duty_is_no_shard_duty() {
     let ir = shard_class("fold");
     let tir = ir.tir();
     let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
-    let folding = TirBackendV1::new(
-        "fold".into(),
-        tir.artifact().clone(),
-        ir.root,
-        tir.canonical().clone(),
-        PalwPromptIdsFormV1::Flat,
-        LADDER,
-    )
-    .unwrap()
-    .with_dense_capture_bytes(0);
+    let folding =
+        TirBackendV1::new("fold".into(), tir.artifact().clone(), ir.root, tir.canonical().clone(), PalwPromptIdsFormV1::Flat, LADDER)
+            .unwrap()
+            .with_dense_capture_bytes(0);
     let fold = folding.execute(&job, &prompt).unwrap();
     let d = duty(&ir, 0, 2, 1, PalwSegmentMaskV2::full(1), false);
     assert!(matches!(run(&folding, &fold.material, &d), PalwTirShardOutcomeV1::Abstain(why) if why.contains("fold")));
