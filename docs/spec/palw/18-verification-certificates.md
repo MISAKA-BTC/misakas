@@ -372,8 +372,10 @@ for `N` claims licensed in a round:
 | vertices, whole ids: bytes a licence | 7,500 | 1,060 | 410 | 340 |
 | vertices, compact: carriage a DAA | 38.5 KB | 44.5 KB | 100 KB | 636 KB |
 
-(At ×1000 the 5,300 leaves a seat holds more than 1,024: a seat signs several vertices a round only through the next round's — a seat whose round
-exceeds the leaf cap carries the excess into its next round, so at that rate `round_daa` = 1 and the cap bind and the headers repeat per 1,024 leaves.)
+**The leaf cap bounds licensing, not carriage.** A seat signs one vertex a round and a vertex holds at most 1,024 leaves, so the chain licenses at most
+`seats × 1,024 / 5` claims a DAA at `round_daa` = 1 — 1,638 with testnet-12's eight seats, 40,960 with the 200 the RFC assumes; a seat whose round holds more
+leaves carries the excess into its next round (the node's book does exactly that, `a_round_past_the_leaf_cap_carries_the_rest_to_the_next`). So ×1000 (5,300 a
+DAA) needs more than eight seats or a longer round; ×100 (530) fits eight.
 
 **The drill's row** (RFC-0007 activation table): licences by receipts below the fence and by tally above it, the cross-fence claim on the old path,
 the equivocating seat slashed, and the carriage per licence — `t12_capacity_verify::rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally`
