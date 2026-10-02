@@ -9,9 +9,9 @@
 * Builds on: [0131](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) (economic
   compute, the three bases, op 185), [0124](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
   (the panel split and the work price), [0130](0130-bps1-is-hardened-before-it-is-widened.md) (shadow first),
-  [0072](0072-the-attempt-is-a-function-of-the-execution.md) (one execution, two lotteries),
-  [0071](0071-hash-coupling-and-the-remainder.md) SA-3 (`palw_capability_bound`), [0117](0117-a-draw-is-one-forward.md),
-  [0098](0098-a-panels-coverage-of-one-claim-is-a-number.md), [0107](0107-share-growth-is-counted-at-final.md).
+  [0072](0072-the-ticket-is-the-execution.md) (one execution, two lotteries),
+  [0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) SA-3 (`palw_capability_bound`), [0117](0117-a-draw-is-one-forward.md),
+  [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md), [0107](0107-a-share-grows-on-work-that-reached-final.md).
 
 ## 0. The sentence this ADR is
 

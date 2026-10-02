@@ -39,7 +39,7 @@ The current network is **testnet-12**. Its identity (network, consensus fingerpr
 - [Model adjudicability guide (JA)](misaka-palw-model-adjudicability-guide-v0.1-ja.md)
 - [Registry map](palw-registry-map.md), [extension envelope](palw-extension-envelope.md) (example manifests in [`extension-manifests/`](extension-manifests/)), [derived artifacts](palw-derived-artifacts.md), [components manifest](components-manifest.md)
 - Held-context artifacts: [Qwen2.5 A16 2M](qwen25-a16-2m-held-artifact.md), [Qwen3.6 2M](qwen36-2m-held-artifact.md)
-- Engineering notes: [step-space deployment](palw-step-space-deployment-notes.md), [court round-trip drill](palw-court-round-trip-drill.md), [BASE-0 PTQ pipeline scope](palw-base0-ptq-pipeline-scope.md), [threat model and red-test register](palw-rc-threat-model.md)
+- Engineering notes: [court round-trip drill](palw-court-round-trip-drill.md), [BASE-0 PTQ pipeline scope](palw-base0-ptq-pipeline-scope.md), [threat model and red-test register](palw-rc-threat-model.md)
 
 ## EVM and Ethereum tooling
 

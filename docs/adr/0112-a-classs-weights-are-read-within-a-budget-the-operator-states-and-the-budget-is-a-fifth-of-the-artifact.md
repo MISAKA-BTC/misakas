@@ -10,7 +10,7 @@
   its host can spare it (Decision 2, amended the same day).
 * Builds on: [0052](0052-palw-qwen36-hybrid-class.md) (the mapped container: a 33 GiB file the
   runtime maps rather than reads, and the note that residency was left to the page cache),
-  [0067](0067-a-registered-class-is-served-by-any-node-that-holds-its-artifact.md) (a node holds
+  [0067](0067-classes-are-chain-data-kernels-are-the-build.md) (a node holds
   what it chooses; `--palw-class-cache-bytes` bounds which artifacts load — this ADR bounds what
   of one artifact is in memory), [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (every chain term at 2M is constant or logarithmic; the model's cost is the host's), and

@@ -4,7 +4,7 @@
 > testnet-11 and are kept because ADR-0069 cites them as the record of the operator decisions it
 > made. Nothing below is a procedure for testnet-12, which was minted with trace format 3
 > (`PALW_V2_TRACE_FORMAT_VERSION` in `consensus/core/src/palw_mode_v2.rs`) and registers its own
-> classes at genesis ([palw-classes-runbook.md](palw-classes-runbook.md)). The class ids and
+> classes at genesis ([palw-classes-runbook.md](../palw-classes-runbook.md)). The class ids and
 > catalog rows named here are testnet-11's.
 
 Branch: `palw-step-space-e2e`. Fingerprints after this train: testnet-11 `923fe103…`,
