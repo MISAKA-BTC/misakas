@@ -6,7 +6,7 @@
 //! Run: cargo test -p kaspa-consensus-core --test audit_a4_multicount -- --nocapture
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::config::params::{Params, PalwEconomicPayoutV1};
+use kaspa_consensus_core::config::params::{PalwEconomicPayoutV1, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_economic_compute_v1::{
     PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempted_compute_per_claim_v1, palw_expected_attempts_q32_v1,
@@ -102,10 +102,9 @@ fn basis(rows: &[Row], base: &Hash64) -> (u64, u64) {
     let floor = rows.iter().find(|r| r.class_id == *base).expect("the floor row");
     // The floor carries no admission carriage in the bundle, so its work comes from the build's
     // canonical class table. Derive it here from the same pub builder the table uses.
-    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("floor profile");
+    let profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("floor profile");
     let (p, d) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, p, d);
     let work = kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1(&profile, &canonical)
@@ -189,7 +188,10 @@ fn q4_the_execution_quantum_divides_a_mac_eq_credit_by_a_leaf_sized_constant() {
     let dense = rs.iter().max_by_key(|r| r.u2_draw_ccu()).expect("a row");
     let raw = u128::from(dense.u2_draw_ccu()) / u128::from(PALW_EXECUTION_QUANTUM_V1);
     println!("  {} credit {} / {PALW_EXECUTION_QUANTUM_V1} = {raw} unclamped", dense.name, dense.u2_draw_ccu());
-    println!("  returned as u32:                  {}", palw_execution_quantum_count_v1(u128::from(dense.u2_draw_ccu()), u128::from(PALW_EXECUTION_QUANTUM_V1), seed, fid));
+    println!(
+        "  returned as u32:                  {}",
+        palw_execution_quantum_count_v1(u128::from(dense.u2_draw_ccu()), u128::from(PALW_EXECUTION_QUANTUM_V1), seed, fid)
+    );
     assert!(raw > u32::MAX as u128, "the dense row's live credit overflows the u32 the count returns");
 }
 
@@ -222,9 +224,10 @@ fn q4b_the_mint_cost_scales_quadratically_in_the_ticket_count() {
     for n in [1_000u64, 4_000, 16_000, 64_000, 96_000, 128_000, 200_000] {
         let credit = n * PALW_EXECUTION_QUANTUM_V1;
         let t0 = std::time::Instant::now();
-        let issued = palw_execution_mint_quanta_v1(&[final_of(credit)], Hash64::from_u64_word(9), u128::from(PALW_EXECUTION_QUANTUM_V1), 0);
+        let issued =
+            palw_execution_mint_quanta_v1(&[final_of(credit)], Hash64::from_u64_word(9), u128::from(PALW_EXECUTION_QUANTUM_V1), 0);
         let dt = t0.elapsed().as_secs_f64();
-        let scaling = last.map(|(pn, pt)| (dt / pt) / ((n as f64 / pn as f64))).unwrap_or(f64::NAN);
+        let scaling = last.map(|(pn, pt)| (dt / pt) / (n as f64 / pn as f64)).unwrap_or(f64::NAN);
         println!("  n={n:>8} tickets  minted={:>8}  {:>9.3} s   (dt ratio / n ratio = {scaling:.2})", issued.len(), dt);
         last = Some((n, dt));
     }
@@ -274,17 +277,31 @@ fn q1_every_primitive_one_accepted_inference_mints() {
         // `palw_network_draws_q32_from_bits_v1` gives for whatever `bits` the block carried.
         block_bits: 0,
     };
-    println!("  network draws Q32 at bits=0  {} (= {:.4} draws)", palw_network_draws_q32_from_bits_v1(0), palw_network_draws_q32_from_bits_v1(0) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64);
+    println!(
+        "  network draws Q32 at bits=0  {} (= {:.4} draws)",
+        palw_network_draws_q32_from_bits_v1(0),
+        palw_network_draws_q32_from_bits_v1(0) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64
+    );
 
     // testnet-12's stated maturity (user decision 2026-09-25): 120, the challenge window it applies.
     let maturity = params.palw_exec_quantum_maturity_v1();
-    assert_eq!(palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()), 1_200);
+    assert_eq!(
+        palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()),
+        1_200
+    );
     let rounds_per_daa = palw_rounds_per_daa_v1(params.target_time_per_block_history().after());
     let gap = bundle_state(&params).window_court().saturating_sub(maturity);
     println!("\n=== the permit window ===");
-    println!("  window_challenge {} DAA, window_court {} DAA", bundle_state(&params).window_challenge(), bundle_state(&params).window_court());
+    println!(
+        "  window_challenge {} DAA, window_court {} DAA",
+        bundle_state(&params).window_challenge(),
+        bundle_state(&params).window_court()
+    );
     println!("  maturity {maturity} DAA, gap {gap} DAA, rounds/DAA {rounds_per_daa}, rounds in gap {}", gap * rounds_per_daa);
-    println!("  PALW_T12_PERMIT_FEE_CEILING_SOMPI {PALW_T12_PERMIT_FEE_CEILING_SOMPI} ({:.4} MSK)", PALW_T12_PERMIT_FEE_CEILING_SOMPI as f64 / 1e8);
+    println!(
+        "  PALW_T12_PERMIT_FEE_CEILING_SOMPI {PALW_T12_PERMIT_FEE_CEILING_SOMPI} ({:.4} MSK)",
+        PALW_T12_PERMIT_FEE_CEILING_SOMPI as f64 / 1e8
+    );
 
     println!("\n=== per class: every primitive one Final mints ===");
     for r in &rs {
@@ -304,7 +321,12 @@ fn q1_every_primitive_one_accepted_inference_mints() {
         let attempted = snap.attempted_ccu();
         let priced = snap.priced_reward(escrow);
         let cap = palw_cap_utilization_permille_v1(attempted, payout.rate_sompi_per_giga, escrow);
-        let quanta = palw_execution_quantum_count_v1(u128::from(u2), u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
+        let quanta = palw_execution_quantum_count_v1(
+            u128::from(u2),
+            u128::from(PALW_EXECUTION_QUANTUM_V1),
+            Hash64::default(),
+            Hash64::default(),
+        );
         let realizable = palw_realizable_before_maturity_v1(
             quanta.saturating_add(1),
             maturity,
@@ -319,21 +341,34 @@ fn q1_every_primitive_one_accepted_inference_mints() {
 
         println!("\n  --- {} ({:.16}…) ---", r.name, r.class_id.to_string());
         println!("    initial_target             {}", r.initial_target);
-        println!("    expected_attempts (int)    {attempts}   Q32 {:.6}", attempts_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64);
+        println!(
+            "    expected_attempts (int)    {attempts}   Q32 {:.6}",
+            attempts_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64
+        );
         println!("    U1 declared leaves/draw    {}", r.declared_leaves);
         println!("    U2 derived MAC-eq/draw     {u2}");
         println!("    U3 exposure pwu            {u3}");
-        println!("    claim.pwu (= attempts*U2)  {claim_pwu}{}", if claim_pwu == u64::MAX { "   <-- SATURATED at u64::MAX" } else { "" });
+        println!(
+            "    claim.pwu (= attempts*U2)  {claim_pwu}{}",
+            if claim_pwu == u64::MAX { "   <-- SATURATED at u64::MAX" } else { "" }
+        );
         println!("    [P1] escrow priced reward  {priced} sompi = {:.2} MSK  (cap util {cap} permille)", priced as f64 / 1e8);
         println!("         attempted_ccu (C_P)   {attempted}");
         println!("         panel share permille  {}", snap.panel_share_permille);
-        println!("    [P2] fork weight           claim.pwu = {claim_pwu} (MAC-eq) -> x slash {} = {fork_weight_sompi} sompi = {:.2} MSK", r.slash_value_per_pwu, fork_weight_sompi as f64 / 1e8);
+        println!(
+            "    [P2] fork weight           claim.pwu = {claim_pwu} (MAC-eq) -> x slash {} = {fork_weight_sompi} sompi = {:.2} MSK",
+            r.slash_value_per_pwu,
+            fork_weight_sompi as f64 / 1e8
+        );
         println!("    [P3] exposure reserved     {reserved} sompi = {:.2} MSK (released at Final)", reserved as f64 / 1e8);
         println!("    [P4] execution quanta      {quanta} permits  (credit = U2, quantum = {PALW_EXECUTION_QUANTUM_V1})");
         println!("         realizable value      {realizable} sompi = {:.2} MSK", realizable as f64 / 1e8);
         println!("    == max_fraud_gain          {gain} sompi = {:.2} MSK", gain as f64 / 1e8);
         println!("    == seat lock required      {seat_lock} sompi = {:.2} MSK  (per Valid seat)", seat_lock as f64 / 1e8);
-        println!("    real compute of one claim  {} MAC-eq (= attempts x U2, unsaturated)", (attempts as u128).saturating_mul(u2 as u128));
+        println!(
+            "    real compute of one claim  {} MAC-eq (= attempts x U2, unsaturated)",
+            (attempts as u128).saturating_mul(u2 as u128)
+        );
     }
 
     println!("\n=== posted genesis collateral per seat ===");
@@ -356,11 +391,7 @@ fn q2_per_draw_versus_per_claim_and_the_two_attempted_spellings() {
         let q32 = palw_expected_attempts_q32_v1(r.initial_target);
         let a = palw_attempted_compute_per_claim_v1(attempts, u128::from(u2));
         let b = palw_attempted_ccu_v1(q32, palw_network_draws_q32_from_bits_v1(0), u128::from(u2));
-        println!(
-            "  {:<22} per_claim_v1={a:<26} attempted_ccu_v1={b:<26} ratio={:.6}",
-            r.name,
-            b as f64 / a.max(1) as f64
-        );
+        println!("  {:<22} per_claim_v1={a:<26} attempted_ccu_v1={b:<26} ratio={:.6}", r.name, b as f64 / a.max(1) as f64);
     }
 
     println!("\n=== the field NAMED per-claim that holds a per-DRAW value ===");
@@ -373,7 +404,10 @@ fn q2_per_draw_versus_per_claim_and_the_two_attempted_spellings() {
     println!("\n=== fee x rounds x permits ===");
     // testnet-12's stated maturity (user decision 2026-09-25): 120, the challenge window it applies.
     let maturity = params.palw_exec_quantum_maturity_v1();
-    assert_eq!(palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()), 1_200);
+    assert_eq!(
+        palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()),
+        1_200
+    );
     let gap = bundle_state(&params).window_court().saturating_sub(maturity);
     let rpd = palw_rounds_per_daa_v1(params.target_time_per_block_history().after());
     println!("  rounds in the conviction gap = {gap} DAA x {rpd} rounds/DAA = {}", gap * rpd);

@@ -20,8 +20,9 @@
 //! * it is an entry of `PALW_T12_CAPACITY_FENCES_V1`, never of the DAA-750 list (rcore/cap-s1).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params,
-    SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
+    Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 
@@ -50,7 +51,10 @@ fn base_at(height: u64) -> Params {
     let mut p = palw_t12_release_v2_params();
     if height < PALW_T12_POST_LAUNCH_FENCE_DAA {
         for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
-            (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(&mut p, Some(ForkActivation::new(height)));
+            (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(
+                &mut p,
+                Some(ForkActivation::new(height)),
+            );
         }
     }
     p.palw_capacity_weight_cap = Some(ForkActivation::new(height));
@@ -136,7 +140,10 @@ fn arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity() {
     assert_eq!(never.consensus_identity_id().to_string(), identity_id, "Some(never()) is absence in the identity");
     let mut genesis = armed_at(0);
     for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
-        (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(&mut genesis, Some(ForkActivation::new(0)));
+        (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(
+            &mut genesis,
+            Some(ForkActivation::new(0)),
+        );
     }
     genesis.validate_palw_v2().expect("a network may be born with the rule");
     assert_ne!(genesis.consensus_identity_id().to_string(), identity_id, "in force at genesis separates identities");

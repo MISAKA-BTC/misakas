@@ -232,7 +232,11 @@ impl PalwMemoryReservationV1 {
 
 impl std::fmt::Debug for PalwMemoryReservationV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PalwMemoryReservationV1").field("pool", &self.ledger.pool).field("id", &self.id).field("bytes", &self.bytes).finish()
+        f.debug_struct("PalwMemoryReservationV1")
+            .field("pool", &self.ledger.pool)
+            .field("id", &self.id)
+            .field("bytes", &self.bytes)
+            .finish()
     }
 }
 
@@ -400,7 +404,11 @@ impl PalwMemoryLedgerV1 {
     /// **Reserve `need_bytes` for `key`, or be told exactly why not.** Atomic under the ledger's
     /// lock: two duties that race for the last bytes are serialised, the first is granted, the
     /// second is refused naming the first.
-    pub fn reserve(self: &Arc<Self>, key: PalwMemoryReservationKeyV1, need_bytes: u64) -> Result<PalwMemoryReservationV1, PalwMemoryRefusalV1> {
+    pub fn reserve(
+        self: &Arc<Self>,
+        key: PalwMemoryReservationKeyV1,
+        need_bytes: u64,
+    ) -> Result<PalwMemoryReservationV1, PalwMemoryRefusalV1> {
         let mut state = self.lock();
         let (share, live, reserved, available) = self.available_for(&state, key.role);
         if let Some(available) = available

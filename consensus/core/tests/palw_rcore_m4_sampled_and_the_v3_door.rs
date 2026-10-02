@@ -15,6 +15,7 @@
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2,
 };
+use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_full_seat_bond_v2;
 use kaspa_consensus_core::palw_panel_v2::{
     PalwPanelV2Error, PalwReceiptQuorumV2, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3,
@@ -29,7 +30,6 @@ use kaspa_consensus_core::palw_state_v2::{
 };
 use kaspa_consensus_core::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_assignment_v2};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
-use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use kaspa_hashes::Hash64;
 
 const L: u64 = 103;
@@ -264,7 +264,11 @@ fn the_door_on_a_real_s2_licence() {
     let (s4, d4) = apply(&s3, &p, &ctx(5, L + 1), &[door(claim_id, rest)], None).expect("the door");
     let claim = s4.claim(&claim_id).unwrap().clone();
     assert_eq!(claim.rcore.basis_k, 2, "full + p0 + p1..p3: every segment twice");
-    assert_eq!(claim.rcore.licence_door, Some(PalwLicenceDoorTagV1::Coverage), "the first crossing upgrades: a counted mask is partial");
+    assert_eq!(
+        claim.rcore.licence_door,
+        Some(PalwLicenceDoorTagV1::Coverage),
+        "the first crossing upgrades: a counted mask is partial"
+    );
     assert_eq!(s4.settled_attempt_finals(), s3.settled_attempt_finals() + 1, "and ticks the anchor once");
     let panel = bonds().iter().take(5).fold(0u32, |a, seat| a | bit(seat));
     assert_eq!(claim.rcore.served_mask, panel, "the licence's bits and the door's: the whole panel");

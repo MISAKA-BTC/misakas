@@ -115,8 +115,11 @@ pub struct PalwIssuanceReadV1 {
 impl PalwIssuanceReadV1 {
     pub fn of_v1(collateral_sompi: u64, rho: u32, outstanding: u64, bucket: Option<&PalwIssuanceBucketV1>, now_daa: u64) -> Self {
         let units = palw_issuance_units_v1(collateral_sompi);
-        let (cap, burst_milli, rate_milli) =
-            (palw_issuance_outstanding_cap_v1(units, rho), palw_issuance_burst_milli_v1(units, rho), palw_issuance_rate_milli_v1(units, rho));
+        let (cap, burst_milli, rate_milli) = (
+            palw_issuance_outstanding_cap_v1(units, rho),
+            palw_issuance_burst_milli_v1(units, rho),
+            palw_issuance_rate_milli_v1(units, rho),
+        );
         Self {
             units,
             rho,
@@ -177,7 +180,8 @@ pub fn palw_issuance_read_at_v1(
     if !params.capacity_slots_active_at(now_daa) {
         return None;
     }
-    let outstanding = state.claims_iter().filter(|(_, claim)| claim.bond == *bond && palw_issuance_holds_slot_v1(params, claim, now_daa)).count();
+    let outstanding =
+        state.claims_iter().filter(|(_, claim)| claim.bond == *bond && palw_issuance_holds_slot_v1(params, claim, now_daa)).count();
     let rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, now_daa);
     Some(PalwIssuanceReadV1::of_v1(collateral_sompi, rho, outstanding as u64, state.issuance_bucket_of_v1(bond), now_daa))
 }

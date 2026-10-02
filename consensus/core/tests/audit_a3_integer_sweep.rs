@@ -5,7 +5,6 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test audit_a3_integer_sweep -- --nocapture
 
-
 use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;
@@ -25,7 +24,9 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{
 };
 use kaspa_consensus_core::palw_panel_economy_v1::palw_work_priced_reward_v1;
 use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -67,7 +68,8 @@ fn t12_rows() -> Vec<(&'static str, u128, u64)> {
     )
     .expect("floor draw");
     let (hp, hd) = qwen36_held_canonical_v1(512);
-    let h = palw_attempt_economic_compute_v1(&hybrid, &job_of(&hybrid, hp, hd), true, &PALW_ECONOMIC_COST_TABLE_V1).expect("hybrid draw");
+    let h =
+        palw_attempt_economic_compute_v1(&hybrid, &job_of(&hybrid, hp, hd), true, &PALW_ECONOMIC_COST_TABLE_V1).expect("hybrid draw");
     let (dp, dd) = qwen25_a16_held_canonical_v1(2_097_152);
     let d = palw_attempt_economic_compute_v1(&dense, &job_of(&dense, dp, dd), true, &PALW_ECONOMIC_COST_TABLE_V1).expect("dense draw");
     vec![("BASE-0 floor", f, 7_708), ("Qwen3.6 @512", h, 20_717_968), ("Qwen2.5 A16 @2M", d, 27_002_967_184)]
@@ -80,7 +82,15 @@ fn bondk(v: u64) -> PalwBondKeyV2 {
     PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 0 })
 }
 fn final_of(claim: u64, root: u64, credit: u64) -> PalwExecFinalV1 {
-    PalwExecFinalV1 { domain: hh(1), bond: bondk(1), operator_id: hh(2), claim_id: hh(claim), execution_root: hh(root), credit, accepted_blue_score: 0 }
+    PalwExecFinalV1 {
+        domain: hh(1),
+        bond: bondk(1),
+        operator_id: hh(2),
+        claim_id: hh(claim),
+        execution_root: hh(root),
+        credit,
+        accepted_blue_score: 0,
+    }
 }
 
 // t12 runtime constants, all re-derived below from the recon brief's measured values.
@@ -94,7 +104,10 @@ const T12_RATE_SOMPI_PER_GIGA: u64 = 900_000_000;
 #[test]
 fn a3_1_execution_quantum_count_on_the_real_t12_credits() {
     println!("\n=== A3-1: PALW_EXECUTION_QUANTUM_V1 = {PALW_EXECUTION_QUANTUM_V1} (declared unit: exposure pwu) ===");
-    println!("{:<20} {:>22} {:>18} {:>16} {:>16}", "class", "derived MAC-eq/draw", "declared leaves", "quanta(MAC-eq)", "quanta(leaves)");
+    println!(
+        "{:<20} {:>22} {:>18} {:>16} {:>16}",
+        "class", "derived MAC-eq/draw", "declared leaves", "quanta(MAC-eq)", "quanta(leaves)"
+    );
     let seed = hh(0xABCD);
     let id = hh(0x1234);
     for (name, draw_mac_eq, declared) in t12_rows() {

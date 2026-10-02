@@ -205,9 +205,7 @@ impl PalwModelRegistrationCodeV1 {
             PalwClassAdmissionError::CoverageGap => Self::CourtKernelUncovered,
             PalwClassAdmissionError::NotEndToEndCertified { .. } => Self::NotEndToEndCertified,
             PalwClassAdmissionError::KimiFamilyNeedsItsFence => Self::KimiFamilyNeedsItsFence,
-            PalwClassAdmissionError::TokenLiftNeedsItsFence | PalwClassAdmissionError::HeldMapNeedsItsFence => {
-                Self::FamilyFenceClosed
-            }
+            PalwClassAdmissionError::TokenLiftNeedsItsFence | PalwClassAdmissionError::HeldMapNeedsItsFence => Self::FamilyFenceClosed,
             PalwClassAdmissionError::Profile(s) if s.contains("enumeration past the work ceiling") => Self::GlobalWindowExceeded,
             _ => Self::FamilyFenceClosed,
         }
@@ -456,10 +454,7 @@ mod tests {
     #[test]
     fn submit_text_maps_onto_the_2m_window_refusal() {
         let text = "class abc is not admissible: the profile is not well-formed: the declared shape drives an enumeration past the work ceiling";
-        assert_eq!(
-            palw_model_reject_from_submit_text_v1(text),
-            Some(PalwModelRegistrationCodeV1::GlobalWindowExceeded)
-        );
+        assert_eq!(palw_model_reject_from_submit_text_v1(text), Some(PalwModelRegistrationCodeV1::GlobalWindowExceeded));
     }
 
     #[test]

@@ -29,8 +29,8 @@ use stage1::*;
 use kaspa_consensus_core::config::params::{
     PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO10_V1, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1,
-    PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
-    PALW_T12_POST_LAUNCH_FENCES_V3, PalwPostLaunchFenceV1, palw_t12_shipped_params,
+    PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PalwPostLaunchFenceV1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1;

@@ -244,17 +244,31 @@ pub enum Refusal {
     /// Step 2 or a round's shape.
     Shape(&'static str),
     /// Step 3 or a round value outside its reduction's bound.
-    OutsideBound { reduction: usize, element: usize, value: i128 },
+    OutsideBound {
+        reduction: usize,
+        element: usize,
+        value: i128,
+    },
     /// Step 4: the finalize fails, or does not reproduce the committed tile at `index`.
     Finalize(DemandError),
-    NotTheTile { index: usize },
+    NotTheTile {
+        index: usize,
+    },
     /// Step 5: the closure fails, or differs from the claimed lists.
     Closure(DemandError),
-    ClosureDiffers { reduction: usize },
+    ClosureDiffers {
+        reduction: usize,
+    },
     /// A round's children do not fold to the claim under dispute.
-    DoesNotFold { reduction: usize, element: usize },
+    DoesNotFold {
+        reduction: usize,
+        element: usize,
+    },
     /// A round with the wrong number of children.
-    ChildCount { got: usize, expected: usize },
+    ChildCount {
+        got: usize,
+        expected: usize,
+    },
 }
 
 /// Step 2's shape of a claim: the site's reductions, strictly ascending lists below each count, one value per element, at most 4096 values.
@@ -469,7 +483,10 @@ pub fn obligations(p: &Program, b: usize, n: u16) -> Vec<Obligation> {
     for &i in &nodes {
         let node = &block.nodes[i as usize];
         let d = reds.contains(&i)
-            || node.inputs.iter().any(|r| matches!(*r, Ref::Node(k) if in_cone.contains(&k) && depends.get(&k).copied().unwrap_or(false)));
+            || node
+                .inputs
+                .iter()
+                .any(|r| matches!(*r, Ref::Node(k) if in_cone.contains(&k) && depends.get(&k).copied().unwrap_or(false)));
         depends.insert(i, d);
     }
     let dep = |r: &Ref| matches!(*r, Ref::Node(k) if in_cone.contains(&k) && depends[&k]);
@@ -528,7 +545,11 @@ pub fn value_bound(p: &Program, b: usize, n: u16, tile_len: u64) -> u64 {
             *v = v.saturating_add(raw.min(e(x))).min(e(x));
         }
     }
-    nodes.iter().filter(|&&i| reduces_over_h(p, b, i as usize)).map(|i| d.get(i).copied().unwrap_or(0)).fold(0u64, |a, v| a.saturating_add(v))
+    nodes
+        .iter()
+        .filter(|&&i| reduces_over_h(p, b, i as usize))
+        .map(|i| d.get(i).copied().unwrap_or(0))
+        .fold(0u64, |a, v| a.saturating_add(v))
 }
 
 /// §9.5.6 O-5: a round's bytes at arity `k` with `m` reductions and `V` values, without the move's

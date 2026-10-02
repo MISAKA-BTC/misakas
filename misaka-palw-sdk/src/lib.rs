@@ -43,12 +43,12 @@ pub mod lineages {
     pub mod tir;
 }
 pub mod sdk;
-/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
-pub mod tir_equiv;
-pub mod tir_manifest;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
 pub mod tir_certification;
+/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
+pub mod tir_equiv;
 pub mod tir_layout;
+pub mod tir_manifest;
 pub mod tir_registration;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
@@ -494,11 +494,7 @@ mod tests {
         // fence that arms it and had been failing ever since the height last moved. A fence height
         // written into a test goes stale every time an operator moves it, and the failure it produces
         // looks like a defect in the thing under test rather than in the pin.
-        let armed_at = params
-            .palw_held_context
-            .expect("testnet-11 schedules the held regime")
-            .daa_score()
-            .max(1);
+        let armed_at = params.palw_held_context.expect("testnet-11 schedules the held regime").daa_score().max(1);
         let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, armed_at).expect("the armed t11 shape derives");
         assert!(shape.held.armed, "the 2M row is only admitted from the held fence at DAA {armed_at}");
         // And the other side of the fence, so "armed" is a statement about the height and not a

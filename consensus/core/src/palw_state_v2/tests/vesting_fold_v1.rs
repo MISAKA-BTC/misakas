@@ -1355,7 +1355,6 @@ fn the_payee_index_answers_b3_as_the_walk_does() {
     assert!(legs.iter().all(|(_, leg)| leg.kind == PalwVestingLegKindV1::Seat && leg.payee_bond == Some(bond_key(9))));
 }
 
-
 /// **The Activation Pool's review P3, the pool's fix round F5: scheduled pool payouts never stall a
 /// 6-key vesting move, and the market keeps its two slots.** Three latched rows of six keys (a
 /// producer and five credited seats — t12's panel), a hundred market rows waiting, and five pool

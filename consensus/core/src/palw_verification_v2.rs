@@ -40,19 +40,11 @@ impl PalwSegmentMaskV2 {
 
     /// Every segment of a `k`-segment cut.
     pub fn full(k: u16) -> Self {
-        if k >= 32 {
-            Self(u32::MAX)
-        } else {
-            Self((1u32 << k) - 1)
-        }
+        if k >= 32 { Self(u32::MAX) } else { Self((1u32 << k) - 1) }
     }
 
     pub fn single(index: u16) -> Self {
-        if index >= 32 {
-            Self::NONE
-        } else {
-            Self(1u32 << index)
-        }
+        if index >= 32 { Self::NONE } else { Self(1u32 << index) }
     }
 
     pub fn covers(self, index: u16) -> bool {
@@ -146,6 +138,9 @@ pub fn palw_segment_assignment_v2(anchor: Hash64, claim_id: Hash64, seat_count: 
         }
         let first = (ordinal + rotation) % k;
         let mut mask = PalwSegmentMaskV2::single(first);
+        // Empty while a partial seat holds exactly one segment; kept so that raising
+        // `PALW_VERIFICATION_V2_SEGMENTS_PER_PARTIAL_SEAT` needs no other edit.
+        #[allow(clippy::reversed_empty_ranges)]
         for extra in 1..PALW_VERIFICATION_V2_SEGMENTS_PER_PARTIAL_SEAT {
             mask = mask.union(PalwSegmentMaskV2::single((first + extra) % k));
         }

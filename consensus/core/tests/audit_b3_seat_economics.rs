@@ -25,9 +25,7 @@ fn audit_b3_seat_lock_at_quorum_three_versus_one() {
     println!("escrow per claim = {escrow} sompi = {:.2} MSK", escrow as f64 / MSK);
 
     for object in bundle.genesis_objects.iter() {
-        let PalwConsensusObjectV2::ClassRegistered {
-            class_id, admission, pwu_rule, initial_target, slash_value_per_pwu, ..
-        } = object
+        let PalwConsensusObjectV2::ClassRegistered { class_id, admission, pwu_rule, initial_target, slash_value_per_pwu, .. } = object
         else {
             continue;
         };

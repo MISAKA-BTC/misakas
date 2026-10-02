@@ -333,9 +333,21 @@ mod tests {
         );
         // It must not become a veto on legitimate syncs: a strict win on ANY economic key — frontier,
         // then safe weight, then live total — still commits, even with a LOWER hash.
-        assert_eq!(palw_ibd_commit_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwIbdCommitV2::Commit, "a deeper frontier commits");
-        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwIbdCommitV2::Commit, "more safe weight commits");
-        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwIbdCommitV2::Commit, "more live total commits");
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)),
+            PalwIbdCommitV2::Commit,
+            "a deeper frontier commits"
+        );
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)),
+            PalwIbdCommitV2::Commit,
+            "more safe weight commits"
+        );
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)),
+            PalwIbdCommitV2::Commit,
+            "more live total commits"
+        );
         // A challenger economically WORSE is kept out by both.
         assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwIbdCommitV2::KeepIncumbent);
         // The fenced rule never commits a chain the unfenced rule would not: it only ever converts a
@@ -456,8 +468,16 @@ mod tests {
         // And it must not become a veto on legitimate reorgs: a strict win on ANY economic key —
         // frontier, then safe weight, then live total — is still allowed, even with a LOWER hash.
         assert_eq!(palw_deep_reorg_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwDeepReorgV2::Allow, "deeper frontier wins");
-        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwDeepReorgV2::Allow, "more safe weight wins");
-        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwDeepReorgV2::Allow, "more live total wins");
+        assert_eq!(
+            palw_deep_reorg_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)),
+            PalwDeepReorgV2::Allow,
+            "more safe weight wins"
+        );
+        assert_eq!(
+            palw_deep_reorg_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)),
+            PalwDeepReorgV2::Allow,
+            "more live total wins"
+        );
         // A challenger economically WORSE is refused by both.
         assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwDeepReorgV2::Refuse);
         // The fenced rule never adopts a chain the unfenced rule would not: it only ever converts

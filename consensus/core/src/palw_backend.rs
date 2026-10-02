@@ -794,10 +794,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<(crate::Hash64, Vec<crate::Hash64>, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String> {
         let digest = self.artifact_inventory_digest()?;
         let leaves: Vec<crate::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
-        let opened = draw
-            .iter()
-            .map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let opened = draw.iter().map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand))).collect::<Result<Vec<_>, _>>()?;
         Ok((digest.root(), leaves, opened))
     }
 

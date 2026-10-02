@@ -126,7 +126,8 @@ const OP_AT: u64 = F1_AT;
 fn t12_f1_op() -> Params {
     let mut p = t12_f1();
     assert_eq!(p.palw_operator_anchor, None, "the release ships lane A dormant");
-    p.palw_operator_anchor = p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(OP_AT));
+    p.palw_operator_anchor =
+        p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(OP_AT));
     p.validate_palw_v2().expect("testnet-12 with lanes F1 and A armed is a runnable ruleset");
     assert_eq!(p.palw_operator_anchor.as_ref().map(|v| v.operators.len()), Some(8), "the eight genesis cards");
     p
@@ -1058,9 +1059,15 @@ fn t3c_past_the_operator_fence_a_non_operator_s_junk_wins_anchor_nothing() {
     let base_op = pre_object_base(&run.c, run.s(), h(0x0B_0001), op_daa);
     let seed = chain_seed(h(0x0B_0001), op_daa, &op, &own);
     let seats = derive_at(&run.c, &base_op, op_daa, seed, &own).expect("the operator's anchor draws");
-    let skips = run.push(h(0x0B_0001), op_daa, vec![bound_obj(own, seed, &seats)], Some(op), T12_BLOCK_SUBSIDY_SOMPI, Some(ad)).expect("folds");
+    let skips = run
+        .push(h(0x0B_0001), op_daa, vec![bound_obj(own, seed, &seats)], Some(op), T12_BLOCK_SUBSIDY_SOMPI, Some(ad))
+        .expect("folds");
     assert!(skips.is_empty(), "{skips:?}");
-    assert_eq!(run.s().panel(&own).map(|x| (x.anchor, x.seats.clone())), Some((seed, seats.clone())), "bound at the operator's anchor");
+    assert_eq!(
+        run.s().panel(&own).map(|x| (x.anchor, x.seats.clone())),
+        Some((seed, seats.clone())),
+        "bound at the operator's anchor"
+    );
 
     println!("=== T3c (lane A): a non-operator's junk wins against the operator-anchor fence ===");
     println!(

@@ -349,7 +349,10 @@ fn w_t1_claims_times_n_is_not_fork_power_times_n() {
                 assert!(stage <= fcw(2), "W-I1: {class:#x} × {n} stays ≤ 2 FCW");
             }
             let total: u128 = armed.reserved.iter().sum();
-            assert!(armed.reserved.iter().all(|r| *r == w_of(class)), "W-I4 (stage 1): {class:#x} × {n}, every claim reserves w at ρ = 1");
+            assert!(
+                armed.reserved.iter().all(|r| *r == w_of(class)),
+                "W-I4 (stage 1): {class:#x} × {n}, every claim reserves w at ρ = 1"
+            );
             assert_eq!(armed.state.capacity_weight_index().bond(&bond_key(0x21)).reserved_w, total);
             println!(
                 "W-T1 {:>5} × {n:>4} on 13k: provisional weight {:>10.2} FCW armed vs {:>14.2} FCW dormant; weight reservation {:.6} MSK armed vs {:.2} MSK dormant",

@@ -28,10 +28,10 @@ pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;
-/// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
-pub mod palw_readiness_escalation;
 #[cfg(test)]
 mod palw_producer_t12_tests;
+/// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
+pub mod palw_readiness_escalation;
 pub mod palw_receipt_pool;
 pub mod palw_retention;
 pub mod palw_round_producer;

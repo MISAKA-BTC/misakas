@@ -345,7 +345,14 @@ fn sr7_the_stake_draw_seats_only_what_the_bind_binds() {
 
     // Two loaded: 6 of 8 < 875‰, and the base keeps both.
     let seat4 = genesis[4].0;
-    let two = Chain { s: loaded(&c.sp, &c.s, seat4, h(0x57C4)), p: c.p.clone(), sp: c.sp.clone(), daa: c.daa, room: false, attribution: c.attribution };
+    let two = Chain {
+        s: loaded(&c.sp, &c.s, seat4, h(0x57C4)),
+        p: c.p.clone(),
+        sp: c.sp.clone(),
+        daa: c.daa,
+        room: false,
+        attribution: c.attribution,
+    };
     let policy = draw_policy(&two, &id, &claim, daa);
     let raced =
         derive_panel_v2_with_policy(&two.s, &panel, &id, h(0x57_A000), floor, None, two.p.palw_capability_bound_at(daa), policy);
@@ -496,7 +503,11 @@ fn t77_duty_bind_per_class_and_the_amplification_bound() {
         assert_eq!(duty, prices.duty_bind, "{name}: the row stores duty_bind");
         assert!(5 * duty <= prices.commitment, "{name}: n·duty ≤ commitment");
         assert!(PALW_RCORE_VESTING_ROWS_LANDED_V1, "the vesting rows are on this line");
-        assert_eq!(prices.lock_2, palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, 2), "{name}: lock_2 at the cap");
+        assert_eq!(
+            prices.lock_2,
+            palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, 2),
+            "{name}: lock_2 at the cap"
+        );
         let binds_now = match name {
             // λ = 5: the λ-term binds the 8k row too (it was `lock_2` at λ = 2).
             "floor" | "8k" => prices.lambda_term,
@@ -642,7 +653,10 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
         let at = c.daa + 1;
         let committed = palw_bond_committed_v1(&c.s, &victim, at, raw_depth(&p, at), c.sp.window_court());
         c.s = with_collateral(&c.sp, &c.s, victim, u64::try_from(2 * committed - 2).unwrap());
-        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+            claim: id,
+            receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+        }]);
         let after = c.claim(&id);
         assert!(matches!(after.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{name}: five Valids license");
         assert_eq!(after.rcore.served_mask.count_ones(), 5, "{name}: every seat served, the squeezed one included");

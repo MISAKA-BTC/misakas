@@ -61,8 +61,8 @@ fn to_audit_with(
     newcomer_proves: bool,
 ) -> (PalwChainStateV2, PalwChainStateV2) {
     let p = params();
-    let (s1, _) = fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &contested_network(root, false), None, &armed(None))
-        .unwrap();
+    let (s1, _) =
+        fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &contested_network(root, false), None, &armed(None)).unwrap();
     let mut objects = vec![serving(NEWCOMER, h64(0x9A00 + NEWCOMER), true)];
     let provers: Vec<u64> = holders.iter().copied().chain(newcomer_proves.then_some(NEWCOMER)).collect();
     objects.extend(provers.iter().map(|n| proof(operands, bond_key(*n), 98)));
@@ -125,14 +125,7 @@ fn the_window_bars_the_jury_and_the_ready_count_at_the_audit_blocks_daa() {
     );
     let newcomer_row = before_m.seat_readiness(&bond_key(NEWCOMER), &kimi_id()).expect("the newcomer proved");
     assert_eq!(
-        crate::palw_model_registry_v1::palw_seat_not_ready_reason_v1(
-            &before_m,
-            &p,
-            &bond_key(NEWCOMER),
-            newcomer_row,
-            AUDIT_DAA,
-            &fm
-        ),
+        crate::palw_model_registry_v1::palw_seat_not_ready_reason_v1(&before_m, &p, &bond_key(NEWCOMER), newcomer_row, AUDIT_DAA, &fm),
         Some(crate::palw_model_registry_v1::PALW_SEAT_NOT_READY_IMMATURE_V1),
         "the newcomer is named immature"
     );

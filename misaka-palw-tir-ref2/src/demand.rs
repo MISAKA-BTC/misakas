@@ -114,9 +114,7 @@ impl Question {
             Question::Node { ctx, node, i } => (Question::Node { ctx, node, i: 0 }, Some(i)),
             Question::Param { param, layer, i } => (Question::Param { param, layer, i: 0 }, Some(i)),
             Question::State { pos, state, layer, i } => (Question::State { pos, state, layer, i: 0 }, Some(i)),
-            Question::HistRow { pos, state, layer, row_pos, i } => {
-                (Question::HistRow { pos, state, layer, row_pos, i: 0 }, Some(i))
-            }
+            Question::HistRow { pos, state, layer, row_pos, i } => (Question::HistRow { pos, state, layer, row_pos, i: 0 }, Some(i)),
             Question::Token { pos } => (Question::Token { pos }, None),
         }
     }
@@ -742,11 +740,8 @@ impl<'p, 's> Ev<'p, 's> {
         let out = node.out.extents(h);
         f.o = vec![0u64; out.len()];
         unravel(f.key.e, &out, &mut f.o);
-        f.shapes = node
-            .inputs
-            .iter()
-            .map(|r| ref_type(p, b, f.key.node as usize, r).expect("an existing ref (NF-14)").extents(h))
-            .collect();
+        f.shapes =
+            node.inputs.iter().map(|r| ref_type(p, b, f.key.node as usize, r).expect("an existing ref (NF-14)").extents(h)).collect();
     }
 
     /// The next read of frame `f` (§9.4 "Index maps", in the table's order).
@@ -870,8 +865,7 @@ impl<'p, 's> Ev<'p, 's> {
                 let map = |sh: &[u64], last: [u64; 2]| -> u64 {
                     let bsh = &sh[..sh.len() - 2];
                     let off = beta.len() - bsh.len();
-                    let mut idx: Vec<u64> =
-                        bsh.iter().enumerate().map(|(d, &ext)| if ext == 1 { 0 } else { beta[d + off] }).collect();
+                    let mut idx: Vec<u64> = bsh.iter().enumerate().map(|(d, &ext)| if ext == 1 { 0 } else { beta[d + off] }).collect();
                     idx.extend_from_slice(&last);
                     ravel(&idx, sh)
                 };
@@ -894,11 +888,7 @@ impl<'p, 's> Ev<'p, 's> {
                 let rr = count(&f.shapes[0]);
                 let (t, w) = (f.key.e / rr, f.key.e % rr);
                 let h = self.g.h(f.key.ctx);
-                if t == h - 1 {
-                    rd(0, w)
-                } else {
-                    Next::Read(Read::Hist { row_pos: f.key.ctx.pos + 1 - h + t, w })
-                }
+                if t == h - 1 { rd(0, w) } else { Next::Read(Read::Hist { row_pos: f.key.ctx.pos + 1 - h + t, w }) }
             }
         }
     }
@@ -1169,7 +1159,14 @@ pub fn demand_outcomes(
 /// then — reading: a supplied index that is the target or no node of the block is `Malformed`, as
 /// §9.2's environment malformations are — and, with a range, the target must reduce over `H` and
 /// `0 ≤ from < to ≤ H` (else `Malformed`).
-pub fn range_refusals(p: &Program, ctx: Ctx, target: u16, elements: &[u64], supplied: &[u16], range: Option<(u64, u64)>) -> BTreeSet<Class> {
+pub fn range_refusals(
+    p: &Program,
+    ctx: Ctx,
+    target: u16,
+    elements: &[u64],
+    supplied: &[u16],
+    range: Option<(u64, u64)>,
+) -> BTreeSet<Class> {
     let mut out = request_refusals(p, &Target::Node { ctx, node: target }, elements);
     if ctx.occ as usize >= p.schedule.layers.len() + 2 {
         return out;

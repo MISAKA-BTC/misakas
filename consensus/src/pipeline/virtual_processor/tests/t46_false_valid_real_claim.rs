@@ -4201,7 +4201,8 @@ mod m3_da_court {
         let again = answer(&h, id, full, PalwDaUnitV1::Event { row: 0, tile: 0 }, flat(&claim));
         assert!(matches!(fold_refuses(&h, &walk, &again), PalwStateV2Error::DaUnitAlreadyAnswered(_)));
         // Row 7 is past the one-row run: OutOfRange, from the binding alone.
-        let full_before = (walk.state.bond(&h.cards[full]).unwrap().collateral, *walk.state.slashable_lock(h.cards[full], id).unwrap());
+        let full_before =
+            (walk.state.bond(&h.cards[full]).unwrap().collateral, *walk.state.slashable_lock(h.cards[full], id).unwrap());
         h.carry(&mut walk, vec![answer(&h, id, full, PalwDaUnitV1::Event { row: 7, tile: 0 }, out_of_range(&claim))]);
         let answered_at = walk.daa;
         assert!(walk.state.da_session(&id, &h.cards[accuser]).is_none(), "every unit answered: refuted");
@@ -4255,7 +4256,10 @@ mod m3_da_court {
             ],
         );
         assert_eq!(open.state.da_sessions_of(&id).count(), 2, "two sessions, no DefaultDisputed");
-        assert!(matches!(open.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the phase is untouched (DA-1)");
+        assert!(
+            matches!(open.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "the phase is untouched (DA-1)"
+        );
         let held_card = licence.partials()[1];
         open.state = h.rebuilt(&open.state, |carriage| {
             carriage.da_claims.get_mut(&id).unwrap().refuted_held.push((h.cards[held_card], 777));
@@ -4264,7 +4268,10 @@ mod m3_da_court {
             let mut w = open.clone();
             let before = w.state.clone();
             h.carry(&mut w, vec![object]);
-            assert!(matches!(w.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+            assert!(matches!(
+                w.state.claim(&id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+            ));
             assert_eq!(w.state.da_sessions_of(&id).count(), 0, "the conviction closes every session (N13)");
             assert!(w.state.da_claim(&id).unwrap().refuted_held.is_empty(), "and refunds the refuted exposure (DA-6)");
             for card in [BYSTANDER, seat, held_card] {
@@ -4304,12 +4311,18 @@ mod m3_da_court {
         let accuser_before = walk.state.bond(&h.cards[BYSTANDER]).unwrap().collateral;
         run_out(&h, &mut walk, c1.claim_id, BYSTANDER);
         assert!(
-            matches!(walk.state.claim(&c1.claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }),
+            matches!(
+                walk.state.claim(&c1.claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+            ),
             "silence voids the borrower for withholding: {:?}",
             walk.state.claim(&c1.claim_id).unwrap().phase
         );
         assert_eq!(walk.state.bond(&h.cards[BYSTANDER]).unwrap().collateral, accuser_before, "the accuser is not charged");
-        assert!(walk.state.consumed_offence(&palw_da_offence_id_v1(&h.cards[EXECUTOR].0, &c1.claim_id)).is_some(), "a DaDefault record");
+        assert!(
+            walk.state.consumed_offence(&palw_da_offence_id_v1(&h.cards[EXECUTOR].0, &c1.claim_id)).is_some(),
+            "a DaDefault record"
+        );
     }
 
     /// **T18c (ii)-R: a root with no preimage defaults under M3's court.**

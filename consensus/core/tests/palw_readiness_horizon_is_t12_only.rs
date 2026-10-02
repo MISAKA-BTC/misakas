@@ -12,7 +12,7 @@
 //! beside every other testnet-12-only fence, unchanged.
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, Params, PalwReadinessV2MaxAgeParamsV1, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    ForkActivation, PalwReadinessV2MaxAgeParamsV1, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -170,7 +170,8 @@ fn the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did() {
     assert_ne!(t12.consensus_params_id(), other.consensus_params_id(), "the spans are in the params id");
     assert_ne!(t12.consensus_schedule_id(), other.consensus_schedule_id(), "and reported beside the height");
     let mut never = twin.clone();
-    never.palw_readiness_v2_max_age_spans = Some(PalwReadinessV2MaxAgeParamsV1 { activation: ForkActivation::never(), max_age_spans: 24 });
+    never.palw_readiness_v2_max_age_spans =
+        Some(PalwReadinessV2MaxAgeParamsV1 { activation: ForkActivation::never(), max_age_spans: 24 });
     assert_eq!(never.palw_readiness_v2_max_age_spans_v1(), 8, "a never-armed fence arms nothing");
     assert_eq!(never.consensus_identity_id(), twin.consensus_identity_id(), "Some(never()) is absence");
     never.validate_palw_v2().expect("a never-armed fence is no fence");
@@ -207,10 +208,7 @@ fn the_horizon_is_genesis_only_bounded_and_mirrored() {
             }
         }
     }
-    refused(
-        &|p| p.palw_readiness_v2_max_age_spans = horizon(ForkActivation::always(), 16),
-        "disagrees with the V2 bundle's mirror",
-    );
+    refused(&|p| p.palw_readiness_v2_max_age_spans = horizon(ForkActivation::always(), 16), "disagrees with the V2 bundle's mirror");
     refused(&|p| p.palw_readiness_v2_max_age_spans = None, "the V2 bundle carries a readiness-V2 horizon without");
     // Its prerequisites: readiness V2 at a height instead of genesis. The pool (asked first) needs it
     // at genesis too, so it is taken away here — the refusal under test is the horizon's.
@@ -265,7 +263,13 @@ fn on_testnet12_a_row_at_age_24_is_fresh_and_at_25_it_is_not() {
         bond_maturity: None,
     };
     let now = 10_000u64;
-    let row = |age: u64| PalwSeatReadinessRowV1 { proved_daa: now - age, proved_span: now - age, leaf_index: 0, proof_version: 2, chunks: 16 };
+    let row = |age: u64| PalwSeatReadinessRowV1 {
+        proved_daa: now - age,
+        proved_span: now - age,
+        leaf_index: 0,
+        proof_version: 2,
+        chunks: 16,
+    };
     let policy = PalwReadinessPolicyV1::at(&fold, now, Hash64::from_u64_word(1), true);
     assert_eq!((palw_readiness_max_age_daa_v1(span_daa, &g, true), policy.max_age_daa), (24, 24));
     for (age, fresh) in [(0, true), (12, true), (24, true), (25, false), (30, false)] {

@@ -13,7 +13,13 @@ use misaka_palw_base0::classes::{QWEN36_GRAPH_V7_2M_MODEL_ID, QWEN36_GRAPH_V7_51
 fn t12_genesis_class_ids() -> Vec<kaspa_consensus_core::Hash64> {
     let p = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!("t12 is ConsensusV2") };
-    b.genesis_objects.iter().filter_map(|o| match o { PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id), _ => None }).collect()
+    b.genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
+            _ => None,
+        })
+        .collect()
 }
 
 /// **The held 512 row is the class the first t12 fleet registered at genesis — and, since the
@@ -42,7 +48,11 @@ fn the_held_2m_row_is_a_distinct_class_the_registry_can_add() {
     // carries the form a registration pins — the A16 lesson, checked here before it can recur.
     for r in [r512, r2m] {
         let profile = r.profile().unwrap();
-        assert!(misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1(&profile), "{}: a held row registers the inventory root", r.model_id);
+        assert!(
+            misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1(&profile),
+            "{}: a held row registers the inventory root",
+            r.model_id
+        );
     }
     // Ids are stable across the table's own two derivations.
     assert_eq!(rows.iter().filter(|r| r.graph_version == 7).count(), 2, "exactly the two held rows");

@@ -159,7 +159,8 @@ impl PalwRoundProducerService {
             polled_round = now_round;
             // The current round always; where permits are tickets, every earlier ticket of this bond
             // the anchor span's schedule shows (route-matrix re-audit #1) — oldest first.
-            let rounds = rounds_to_sign_v1(status.tickets_only.then_some(status.schedule.as_ref()).flatten(), &bond, last_round, now_round);
+            let rounds =
+                rounds_to_sign_v1(status.tickets_only.then_some(status.schedule.as_ref()).flatten(), &bond, last_round, now_round);
             for round in rounds {
                 let view = if round == now_round {
                     status.view.clone()

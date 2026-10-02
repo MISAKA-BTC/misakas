@@ -99,17 +99,9 @@ fn arming_moves_the_params_id_and_the_schedule_id_but_not_the_identity_id() {
     armed.validate_palw_v2().expect("arming the fence alone is a runnable ruleset");
 
     // The params id (the full fingerprint) MOVES — the Some-only write fires.
-    assert_ne!(
-        dormant.consensus_params_id(),
-        armed.consensus_params_id(),
-        "arming the fence moves the params fingerprint"
-    );
+    assert_ne!(dormant.consensus_params_id(), armed.consensus_params_id(), "arming the fence moves the params fingerprint");
     // The schedule id MOVES — for_each_fence writes the armed height.
-    assert_ne!(
-        dormant.consensus_schedule_id(),
-        armed.consensus_schedule_id(),
-        "arming the fence moves the schedule id"
-    );
+    assert_ne!(dormant.consensus_schedule_id(), armed.consensus_schedule_id(), "arming the fence moves the schedule id");
     // The identity id does NOT move — a scheduled (future) fence is normalised to never() and the
     // never()-collapse drops it, so a build that merely schedules it is a peer of an un-upgraded
     // one. This is the whole point of the fence machinery, and the property the 2026-09-18 partition
@@ -160,9 +152,5 @@ fn armed_at_genesis_is_a_real_rule_difference_that_separates_identities() {
     let dormant = t12();
     let mut at_genesis = t12();
     at_genesis.palw_reorg_strict_economic_win = Some(ForkActivation::always());
-    assert_ne!(
-        dormant.consensus_identity_id(),
-        at_genesis.consensus_identity_id(),
-        "a fence active at genesis separates identities"
-    );
+    assert_ne!(dormant.consensus_identity_id(), at_genesis.consensus_identity_id(), "a fence active at genesis separates identities");
 }

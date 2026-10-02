@@ -2701,11 +2701,13 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
             palw_panel::readiness_prove(&ctx, &class, &bond).await
-        },
+        }
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => {
+            palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ())
+        }
         Command::Palw(PalwCmd::TirRegistration { key, artifact, bond, out, model_id }) => {
             palw_model_ops::tir_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
         }
@@ -2716,7 +2718,8 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             palw_extension::preflight(&ctx, &manifest, json).await
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve() {
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve()
+        {
             Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
             Err(e) => Err(e),
         },

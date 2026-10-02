@@ -811,7 +811,8 @@ fn authenticate_params(
         last = Some(*index);
         let (param, layer, start, len) = inventory.piece_of(*index).ok_or(bad("the artifact multiproof names no leaf"))?;
         let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
-        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
+        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize
+        {
             return Err(bad("an opened operand is not its leaf's canonical piece"));
         }
     }
@@ -3070,8 +3071,11 @@ pub(crate) mod test_support {
     /// leaves read, and is priced to the byte by `palw_tir_param_carriage_bytes_v1`.
     #[test]
     fn the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none() {
-        let rules =
-            PalwTirCourtRulesV1 { max_step_leaf_count: 1 << 26, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: 1 << 26,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
         let x = tiny_execution(None);
         let program = x.binding.class.decode_program().expect("decodes");
         let hashes: Vec<Hash64> = x.ops.iter().map(crate::palw_artifact::artifact_leaf_v1).collect();
@@ -3108,11 +3112,8 @@ pub(crate) mod test_support {
     fn a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context() {
         use crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1;
         const MAX: u64 = 1 << 26;
-        let rules = PalwTirCourtRulesV1 {
-            max_step_leaf_count: MAX,
-            prompt_form: PalwPromptIdsFormV1::Flat,
-            limits: DemandLimits::UNLIMITED,
-        };
+        let rules =
+            PalwTirCourtRulesV1 { max_step_leaf_count: MAX, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
         let canonical = |class: &PalwTirClassV1, class_id: Hash64, prompt: &[u32]| {
             let mut ctx = palw_tir_canonical_context_v1(class, class_id, (PREFILL, DECODE)).expect("the tiny program decodes");
             ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
@@ -3230,7 +3231,11 @@ mod step_leaf_da_tests {
             d.binding.full_logits_trace_root = Hash64::from_bytes([9; 64]);
             edits.push(("another trace root", d));
             let mut d = honest.clone();
-            d.row_pin = if index == logits { None } else { crate::palw_step_refute::tiled_decode_pin_v1(&x.binding.job_context, &x.rows, &x.generated, 0, 0) };
+            d.row_pin = if index == logits {
+                None
+            } else {
+                crate::palw_step_refute::tiled_decode_pin_v1(&x.binding.job_context, &x.rows, &x.generated, 0, 0)
+            };
             edits.push(("the row pin where it does not belong, or missing", d));
             if index == logits {
                 let mut d = honest.clone();

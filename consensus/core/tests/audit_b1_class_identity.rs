@@ -153,7 +153,11 @@ fn no_consensus_boundary_names_the_typed_identities() {
     );
     // And the genesis-card entrypoint takes three interchangeable `Hash64` positions.
     let src = std::fs::read_to_string(root.join("config/params.rs")).expect("params.rs");
-    for decl in ["base0_artifact_root: crate::Hash64,", "qwen36_artifact_root: crate::Hash64,", "qwen25_a16_artifact_root: Option<crate::Hash64>,"] {
+    for decl in [
+        "base0_artifact_root: crate::Hash64,",
+        "qwen36_artifact_root: crate::Hash64,",
+        "qwen25_a16_artifact_root: Option<crate::Hash64>,",
+    ] {
         assert!(src.contains(decl), "the card still declares `{decl}`");
     }
 }
@@ -177,8 +181,7 @@ fn which_root_form_does_the_t12_hybrid_row_owe() {
             if *artifact_root != PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT {
                 continue;
             }
-            let owes_inventory =
-                admission.as_ref().map(|c| c.profile.pre_nodes.iter().any(|n| n.kernel_semantics_id == by_token));
+            let owes_inventory = admission.as_ref().map(|c| c.profile.pre_nodes.iter().any(|n| n.kernel_semantics_id == by_token));
             println!("t11 hybrid class {class_id}\n  same root, owes_inventory_root = {owes_inventory:?}");
         }
     }
@@ -192,12 +195,7 @@ fn which_root_form_does_the_t12_hybrid_row_owe() {
         let registers_inventory_root = c.profile.pre_nodes.iter().any(|n| n.kernel_semantics_id == by_token);
         println!(
             "class {}\n  root  {}\n  n_ctx {}  layers {}  gdn_heads {}\n  qwen36_registers_inventory_root_v1 = {}",
-            class_id,
-            artifact_root,
-            c.profile.n_ctx,
-            c.profile.layer_count,
-            c.profile.gdn_heads,
-            registers_inventory_root
+            class_id, artifact_root, c.profile.n_ctx, c.profile.layer_count, c.profile.gdn_heads, registers_inventory_root
         );
         if *artifact_root == PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT {
             println!("  ^ this row pins PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, documented as the COMPUTED root");
@@ -215,10 +213,9 @@ fn what_one_claim_of_each_t12_class_reserves() {
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("ConsensusV2") };
 
     // The floor's basis: declared leaves and derived work per draw.
-    let floor_profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("the floor projects");
+    let floor_profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor projects");
     let (fp, fd) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let floor_job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor_profile, fp, fd);
     let floor_desc = PalwCanonicalClassDescriptorV1::of(&floor_profile, Hash64::default()).expect("descriptor");
@@ -258,5 +255,9 @@ fn what_one_claim_of_each_t12_class_reserves() {
             reserved as f64 / 1e8
         );
     }
-    println!("escrow per claim (720 permille of 444_562_014_000) = {} sompi = {:.5} MSK", 444_562_014_000u64 * 720 / 1000, (444_562_014_000u64 * 720 / 1000) as f64 / 1e8);
+    println!(
+        "escrow per claim (720 permille of 444_562_014_000) = {} sompi = {:.5} MSK",
+        444_562_014_000u64 * 720 / 1000,
+        (444_562_014_000u64 * 720 / 1000) as f64 / 1e8
+    );
 }

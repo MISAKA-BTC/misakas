@@ -133,7 +133,9 @@ impl PalwPanelService {
                     if let Some(candidate) = duty.candidates.iter().find(|c| c.claim_id == claim).cloned() {
                         match super::palw_operator_da::palw_operator_da_verdict_v1(&result, &candidate.job) {
                             Some(super::palw_operator_da::PalwOperatorDaVerdictV1::Reproduces) => {
-                                info!("[{PALW_PANEL}] claim {claim}: this operator's audit reproduces the credited claim — receipt owed (ADR-0160 F-Q)");
+                                info!(
+                                    "[{PALW_PANEL}] claim {claim}: this operator's audit reproduces the credited claim — receipt owed (ADR-0160 F-Q)"
+                                );
                                 duty.verdicts.insert(claim, true);
                                 duty.owed.insert(claim, (candidate.job.execution_root, None));
                             }
@@ -186,7 +188,12 @@ impl PalwPanelService {
             }
         }
         court_due.insert(key, current_daa);
-        court_pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::AuditReceiptBatchV1 { auditor: bond_key, entries, signature }));
+        court_pending.push((
+            key.0,
+            key.1,
+            key.2,
+            PalwConsensusObjectV2::AuditReceiptBatchV1 { auditor: bond_key, entries, signature },
+        ));
     }
 
     /// **Start this node's audit replay of `candidate`** — lane B's replay of the anchor's job, off the loop,
@@ -204,7 +211,9 @@ impl PalwPanelService {
         let claim = candidate.claim_id;
         let job = &candidate.job;
         let unjudged = |duty: &mut PalwAuditDutyV1, why: &str| {
-            warn!("[{PALW_PANEL}] claim {claim}: this operator is in the credited claim's audit pool and cannot replay it — {why} (ADR-0160 F-Q)");
+            warn!(
+                "[{PALW_PANEL}] claim {claim}: this operator is in the credited claim's audit pool and cannot replay it — {why} (ADR-0160 F-Q)"
+            );
             duty.verdicts.insert(claim, false);
         };
         let Some(artifact_root) = job.artifact_root.filter(|_| super::palw_operator_da::palw_operator_da_replayable_v1(job)) else {
@@ -214,9 +223,14 @@ impl PalwPanelService {
             Ok(backend) => backend,
             Err(why) => return unjudged(duty, &format!("its class does not resolve on this host ({why})")),
         };
-        let Some((ctx, prompt)) =
-            self.attempt_job_for_claim(session, backend.as_ref(), network_domain, job.accepted_block, job.class_id, &candidate.producer)
-        else {
+        let Some((ctx, prompt)) = self.attempt_job_for_claim(
+            session,
+            backend.as_ref(),
+            network_domain,
+            job.accepted_block,
+            job.class_id,
+            &candidate.producer,
+        ) else {
             return unjudged(duty, "its block's header is not held here");
         };
         let key = (claim, ctx.job_id);
@@ -228,22 +242,24 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
             |id| self.chain_carriage_v1(session, id),
         );
-        let reserved = match self.reserve_replay_v1(super::palw_operator_da::PALW_OPERATOR_DA_REPLAY_ROLE_V1, &need, job.class_id, claim) {
-            Ok(reserved) => reserved,
-            Err(why) => {
-                crate::palw_backends::note_throttled_v1("panel-audit-duty-ledger", || {
-                    format!("[{PALW_PANEL}] claim {claim}: the audit replay waits: {why} (ADR-0160 F-Q)")
-                });
-                return;
-            }
-        };
+        let reserved =
+            match self.reserve_replay_v1(super::palw_operator_da::PALW_OPERATOR_DA_REPLAY_ROLE_V1, &need, job.class_id, claim) {
+                Ok(reserved) => reserved,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1("panel-audit-duty-ledger", || {
+                        format!("[{PALW_PANEL}] claim {claim}: the audit replay waits: {why} (ADR-0160 F-Q)")
+                    });
+                    return;
+                }
+            };
         info!(
             "[{PALW_PANEL}] claim {claim}: auditing the credited claim by replaying its job (ADR-0160 F-Q; pool rank {:?} of {}, k_aud {})",
             candidate.pool.iter().position(|bond| *bond == bond_key),
             candidate.pool.len(),
             candidate.k_aud
         );
-        duty.replays.start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
+        duty.replays
+            .start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
         duty.replaying = Some((claim, key));
     }
 }

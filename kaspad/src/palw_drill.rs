@@ -1278,12 +1278,14 @@ mod tests {
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-model-court-at=30"])).expect("the model window alone");
         // The keyring names it and the fingerprint the node on the same command line announces.
         let keys = tempfile::tempdir().unwrap();
-        let path = palw_drill_write_keyring_v5(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), None, Some(30)).expect("written");
+        let path =
+            palw_drill_write_keyring_v5(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), None, Some(30)).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["model_court_at"], serde_json::json!(30));
         assert_eq!(manifest["consensus_params_id"], model_only.params.consensus_params_id().to_string().as_str());
         let keys_without = tempfile::tempdir().unwrap();
-        let path = palw_drill_write_keyring_v5(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20), None, None).expect("written");
+        let path =
+            palw_drill_write_keyring_v5(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20), None, None).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["model_court_at"], serde_json::Value::Null);
         assert_eq!(manifest["consensus_params_id"], release.params.consensus_params_id().to_string().as_str());
@@ -1420,7 +1422,14 @@ mod tests {
             let why = refusal(&parse(&argv));
             assert!(why.contains("needs --palw-drill-genesis-salt"), "{argv:?}: {why}");
         }
-        let why = refusal(&parse(&["--testnet", "--netsuffix=10", "--nodnsseed", "--addpeer=10.0.0.2:26311", &flag, "--palw-drill-fence-at=40"]));
+        let why = refusal(&parse(&[
+            "--testnet",
+            "--netsuffix=10",
+            "--nodnsseed",
+            "--addpeer=10.0.0.2:26311",
+            &flag,
+            "--palw-drill-fence-at=40",
+        ]));
         assert!(why.contains("testnet-12 only"), "{why}");
         assert!(refusal(&with(&[&flag, "--palw-drill-fence-at=0"])).contains("not genesis"));
         let drill = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(&salt());
@@ -1459,8 +1468,7 @@ mod tests {
         let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
         let flag = format!("--palw-drill-genesis-salt={SALT}");
         let release_drill = config_of(&parse(&base.iter().copied().chain([flag.as_str()]).collect::<Vec<_>>()));
-        let crossing =
-            config_of(&parse(&base.iter().copied().chain([flag.as_str(), "--palw-drill-fence-at=40"]).collect::<Vec<_>>()));
+        let crossing = config_of(&parse(&base.iter().copied().chain([flag.as_str(), "--palw-drill-fence-at=40"]).collect::<Vec<_>>()));
         assert_eq!(crossing.params.genesis.hash, release_drill.params.genesis.hash, "the salt's genesis");
         assert_eq!(crossing.palw_drill_genesis_salt, Some(salt()));
         assert_eq!(crossing.palw_drill_fence_moves.len(), PALW_T12_POST_LAUNCH_FENCES_V1.len());

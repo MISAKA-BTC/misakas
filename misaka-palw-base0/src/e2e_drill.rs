@@ -1690,7 +1690,8 @@ mod certification_object_tests {
                         })
                         .min_by_key(|(_, missing)| missing.len())
                         .expect("at least one family is committed");
-                    uncovered.push((model_id.clone(), format!("{lane} lane, nearest family {nearest} is missing kernel(s) {missing:?}")));
+                    uncovered
+                        .push((model_id.clone(), format!("{lane} lane, nearest family {nearest} is missing kernel(s) {missing:?}")));
                 }
                 continue;
             }
@@ -2593,4 +2594,3 @@ mod candidate_probe {
         assert!(probe < walk, "the probe must cost less than the walk it replaced");
     }
 }
-

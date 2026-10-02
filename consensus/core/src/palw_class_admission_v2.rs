@@ -1292,7 +1292,9 @@ pub enum PalwClassAdmissionError {
     /// bounded by the row — an inequality against the QUERY ROW, which is architectural, and
     /// deliberately not `attn_heads x attn_head_dim == hidden_dim`, which is not
     /// (`PalwShapeProfileV3::validate_shape` says why).
-    #[error("the attention geometry the class is priced from is wider than the row it reads: {heads} x {head_dim} = {priced} elements against a row of {row} ({what})")]
+    #[error(
+        "the attention geometry the class is priced from is wider than the row it reads: {heads} x {head_dim} = {priced} elements against a row of {row} ({what})"
+    )]
     AttentionGeometryWiderThanQueryRow { heads: u64, head_dim: u64, priced: u64, row: u64, what: &'static str },
     /// **2026-09-23 audit, the recurrence twin of the above.** A `GatedDeltaNet` node is priced
     /// at `gdn_heads x gdn_head_k_dim x gdn_head_v_dim` state elements per position — three profile
@@ -1301,7 +1303,9 @@ pub enum PalwClassAdmissionError {
     /// priced fork weight and execution credit at 820x the legitimate band. A delta-net step emits
     /// one v-row per head and reads one k-row per head, so the heads it is priced over are bounded
     /// by the rows its graph names: `heads x v_dim <= out_len` and `heads x k_dim <= its widest input`.
-    #[error("the recurrence geometry the class is priced from is wider than its rows: {heads} heads x ({k_dim} k + {v_dim} v) against out {out} / widest input {input} ({what})")]
+    #[error(
+        "the recurrence geometry the class is priced from is wider than its rows: {heads} heads x ({k_dim} k + {v_dim} v) against out {out} / widest input {input} ({what})"
+    )]
     RecurrenceGeometryWiderThanItsRows { heads: u64, k_dim: u64, v_dim: u64, out: u64, input: u64, what: &'static str },
     /// **The price a class is admitted at has to be the price its challengers pay.**
     ///
@@ -1407,7 +1411,9 @@ pub enum PalwClassAdmissionError {
     TirCanonicalNotTheFormula(String),
     /// A commit point's cone reduces over the history and does not fit the court whole; its
     /// adjudication is the history dissection (step F7), which this build has not wired.
-    #[error("block {block} commit point {node} reduces over the history and does not fit the court whole, and no k-ary court dissects it here")]
+    #[error(
+        "block {block} commit point {node} reduces over the history and does not fit the court whole, and no k-ary court dissects it here"
+    )]
     TirNeedsDissection { block: u8, node: u16 },
     /// A dissected commit point's cone breaks an obligation of the history dissection (spec 04b
     /// §9.5.6), or a move of its dissection would not fit one carrier (RFC-0002 F7).
@@ -1654,7 +1660,13 @@ pub fn palw_attention_geometry_fits_its_query_row_v1(profile: &PalwShapeProfileV
     let heads = u64::from(profile.attn_heads);
     let head_dim = u64::from(profile.attn_head_dim);
     let priced = heads.saturating_mul(head_dim);
-    let refuse = |row: u64, what: &'static str| PalwClassAdmissionError::AttentionGeometryWiderThanQueryRow { heads, head_dim, priced, row, what };
+    let refuse = |row: u64, what: &'static str| PalwClassAdmissionError::AttentionGeometryWiderThanQueryRow {
+        heads,
+        head_dim,
+        priced,
+        row,
+        what,
+    };
     let table = &profile.attn_nodes;
     for node in table.iter().filter(|n| matches!(n.op_kind, PalwStepOpKindV1::MatMulQuant | PalwStepOpKindV1::MatMulF16)) {
         let reads_k = node.input_refs.contains(&PALW_STEP_INPUT_KV_K);
@@ -1720,7 +1732,8 @@ pub fn palw_gdn_geometry_fits_its_rows_v1(profile: &PalwShapeProfileV3) -> Resul
     // bounded above, the CI guard's search went straight here (`gdn_conv_kernel := 65,535`, 7x the
     // band on fork weight and 14x on permits). Every shipped SSM/delta-net conv is 4 taps; 64 is
     // sixteen times that and keeps the lever inside the guard's 2x tolerance.
-    if table.iter().any(|n| n.op_kind == PalwStepOpKindV1::SsmConv) && profile.gdn_conv_kernel > PALW_ADMISSION_MAX_GDN_CONV_KERNEL_V1 {
+    if table.iter().any(|n| n.op_kind == PalwStepOpKindV1::SsmConv) && profile.gdn_conv_kernel > PALW_ADMISSION_MAX_GDN_CONV_KERNEL_V1
+    {
         return Err(PalwClassAdmissionError::RecurrenceGeometryWiderThanItsRows {
             heads,
             k_dim,
@@ -1752,7 +1765,8 @@ pub fn palw_gdn_geometry_fits_its_rows_v1(profile: &PalwShapeProfileV3) -> Resul
             })
             .max()
             .unwrap_or(0);
-        let refuse = |what: &'static str| PalwClassAdmissionError::RecurrenceGeometryWiderThanItsRows { heads, k_dim, v_dim, out, input, what };
+        let refuse =
+            |what: &'static str| PalwClassAdmissionError::RecurrenceGeometryWiderThanItsRows { heads, k_dim, v_dim, out, input, what };
         if heads.saturating_mul(v_dim) > out {
             return Err(refuse("one v-row per head does not fit the node's output row"));
         }

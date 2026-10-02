@@ -147,7 +147,6 @@ pub enum PalwGenesisV2Error {
 /// position, because the operator fixing it is holding two artifacts and needs to know which one
 /// is wrong.
 
-
 pub fn verify_palw_genesis_v2(
     bundle: &PalwConsensusParamsV2,
     catalog: &PalwClassCatalogV2,

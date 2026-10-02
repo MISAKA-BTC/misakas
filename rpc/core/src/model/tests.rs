@@ -1980,14 +1980,21 @@ mod mockery {
 
     impl Mock for RpcPalwPanelHoldReason {
         fn mock() -> Self {
-            RpcPalwPanelHoldReason { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string() }
+            RpcPalwPanelHoldReason {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+            }
         }
     }
     test!(RpcPalwPanelHoldReason);
 
     impl Mock for RpcPalwPanelHoldReasonCount {
         fn mock() -> Self {
-            RpcPalwPanelHoldReasonCount { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string(), seats: mock() }
+            RpcPalwPanelHoldReasonCount {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+                seats: mock(),
+            }
         }
     }
     test!(RpcPalwPanelHoldReasonCount);

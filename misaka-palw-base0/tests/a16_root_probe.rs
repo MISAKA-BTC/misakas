@@ -393,7 +393,8 @@ fn print_a16_2m_root_forms() {
     // holding the model, not to rooting it.
     let rss = |label: &str| {
         if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
-            let get = |k: &str| s.lines().find(|l| l.starts_with(k)).unwrap_or("").split_whitespace().nth(1).unwrap_or("0").to_string();
+            let get =
+                |k: &str| s.lines().find(|l| l.starts_with(k)).unwrap_or("").split_whitespace().nth(1).unwrap_or("0").to_string();
             let kb: f64 = get("VmRSS:").parse().unwrap_or(0.0);
             let hwm: f64 = get("VmHWM:").parse().unwrap_or(0.0);
             println!("  [rss] {label:28} rss {:6.2} GiB   peak {:6.2} GiB", kb / 1048576.0, hwm / 1048576.0);

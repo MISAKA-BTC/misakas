@@ -196,10 +196,7 @@ impl Mempool {
 
     /// **The next market carriers to put to the market gate** at a new block (the V01 review's LOW 3;
     /// `TransactionsPool::next_palw_market_sweep`). Empty where the carrier flag is off.
-    pub(crate) fn next_palw_market_sweep(
-        &mut self,
-        limit: usize,
-    ) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
+    pub(crate) fn next_palw_market_sweep(&mut self, limit: usize) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
         self.transaction_pool.next_palw_market_sweep(limit)
     }
 

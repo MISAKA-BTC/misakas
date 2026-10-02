@@ -79,13 +79,17 @@ fn no_t12_lane_advances_the_daa_on_its_own() {
             ("receipt", POW_ALGO_ID_PALW_RECEIPT_V3),
             ("round", POW_ALGO_ID_PALW_ROUND_V1),
         ] {
-            assert!(!ticks(algo, daa), "the {name} lane must not be bits-priced at DAA {daa}: priced == 0 is what makes the beat the clock");
+            assert!(
+                !ticks(algo, daa),
+                "the {name} lane must not be bits-priced at DAA {daa}: priced == 0 is what makes the beat the clock"
+            );
         }
     }
     // The lanes that WOULD price a window, none of which testnet-12 activates. If one of these ever
     // becomes producible here, `priced == 0` stops holding, the stand-in stops firing, and the
     // structural clock — and with it ADR-0151 D3 — is gone.
-    for algo in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
+    for algo in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]
+    {
         assert!(ticks(algo, 8_000), "a bits-priced lane ticks on its own — testnet-12 activates none of them");
     }
 }
@@ -122,10 +126,7 @@ fn t12_collateral_is_the_liability_not_the_liveness_bound() {
     // mine is that the ceiling clears one claim at the full reservation with room for more.
     let ceiling = declared as u128 * 500 / 1000;
     let one_2m_claim = 5_974_294_206_820u128 + 320_084_650_080;
-    assert!(
-        ceiling > one_2m_claim,
-        "the first t12 card failed exactly here: ceiling {ceiling} against {one_2m_claim} for one claim"
-    );
+    assert!(ceiling > one_2m_claim, "the first t12 card failed exactly here: ceiling {ceiling} against {one_2m_claim} for one claim");
     assert_eq!(
         ceiling / one_2m_claim,
         7,

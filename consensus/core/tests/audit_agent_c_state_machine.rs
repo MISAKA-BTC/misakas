@@ -1,19 +1,18 @@
 //! AUDIT (agent C) — measurements only. Read-only probe of testnet-12 runtime values.
 
+use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_economic_safety_v1::{
-    PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_exec_quantum_maturity_daa_v1, palw_realizable_before_maturity_v1,
-    palw_rounds_per_daa_v1,
+    PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_exec_quantum_maturity_daa_v1, palw_realizable_before_maturity_v1, palw_rounds_per_daa_v1,
 };
+use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_span_v1};
 use kaspa_consensus_core::palw_execution_quanta_v1::{
     PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1, palw_execution_quantum_count_v1,
 };
-use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_span_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::tx::TransactionOutpoint;
-use kaspa_consensus_core::Hash64;
 
 fn t12() -> Params {
     palw_t12_shipped_params()
@@ -165,7 +164,11 @@ fn audit_c_genesis_bond_operators() {
         }
     }
     keys.sort();
-    let distinct = { let mut k = keys.clone(); k.dedup(); k.len() };
+    let distinct = {
+        let mut k = keys.clone();
+        k.dedup();
+        k.len()
+    };
     println!("genesis bonds={bonds} distinct operator pubkeys={distinct}");
 }
 
@@ -177,7 +180,6 @@ fn audit_c_span_arithmetic() {
         println!("daa={daa} span={}", palw_execution_span_v1(daa, lane.schedule_span_daa));
     }
 }
-
 
 /// The colluding-quorum inequality, re-derived from the t12 genesis card at runtime.
 #[test]
@@ -204,9 +206,7 @@ fn audit_c_colluding_quorum_inequality_from_the_card() {
     println!("worker_carve_permille(fence)={carve_fence} escrow={escrow_fence} = {} MSK", escrow_fence as f64 / 1e8);
 
     for o in &b.genesis_objects {
-        let PalwConsensusObjectV2::ClassRegistered {
-            class_id, slash_value_per_pwu, pwu_rule, initial_target, admission, ..
-        } = o
+        let PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, initial_target, admission, .. } = o
         else {
             continue;
         };

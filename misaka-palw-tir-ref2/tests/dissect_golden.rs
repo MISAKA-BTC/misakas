@@ -35,8 +35,9 @@ fn params_of(prog: &Program, v: &Value) -> Params {
         let j = int_of(&e["param"]) as u16;
         let layer = if e["layer"].is_null() { None } else { Some(int_of(&e["layer"]) as u32) };
         let d = &prog.params[j as usize];
-        let t = Tensor::from_le_bytes(d.dtype, d.shape.iter().map(|&x| x as u64).collect(), &hex_decode(e["le_hex"].as_str().unwrap()))
-            .unwrap();
+        let t =
+            Tensor::from_le_bytes(d.dtype, d.shape.iter().map(|&x| x as u64).collect(), &hex_decode(e["le_hex"].as_str().unwrap()))
+                .unwrap();
         params.insert((j, layer), t);
     }
     params
@@ -129,18 +130,19 @@ fn dissect_vectors() {
                 }
             };
             let l: Vec<Vec<u64>> = cl.iter().map(|s| s.iter().copied().collect()).collect();
-            let want_l: Vec<Vec<u64>> = c["elements"].as_array().unwrap().iter().map(|x| x.as_array().unwrap().iter().map(u64_of).collect()).collect();
+            let want_l: Vec<Vec<u64>> =
+                c["elements"].as_array().unwrap().iter().map(|x| x.as_array().unwrap().iter().map(u64_of).collect()).collect();
             if l != want_l {
                 bad.push(format!("elements {l:?} vs {want_l:?}"));
             }
-            let totals: Vec<Vec<i128>> = l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect();
+            let totals: Vec<Vec<i128>> =
+                l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect();
             if totals != lists(&c["totals"]) {
                 bad.push(format!("totals {totals:?} vs {}", c["totals"]));
             }
             let root = RootClaim { elements: l, totals };
             // The finalize reproduces the committed tile.
-            let committed: Vec<i128> =
-                tile.iter().map(|&e| m.nodes[&(ctx.pos, ctx.occ, n)][e as usize]).collect();
+            let committed: Vec<i128> = tile.iter().map(|&e| m.nodes[&(ctx.pos, ctx.occ, n)][e as usize]).collect();
             match finalize(&prog, &st, &tile, &root, &mut common::demsrc::Mine(&m), lim) {
                 Ok((v, _)) => {
                     if v != ints(&c["finalize"]) || v != committed {
@@ -183,7 +185,10 @@ fn dissect_vectors() {
                             || ints(&x["positions"]) != vec![pf as i128, pt as i128]
                             || lists(&x["partials"]) != claims[k]
                         {
-                            bad.push(format!("cut child {k}: ours tiles ({cf}, {cc}) positions ({pf}, {pt}) partials {:?} vs {x}", claims[k]));
+                            bad.push(format!(
+                                "cut child {k}: ours tiles ({cf}, {cc}) positions ({pf}, {pt}) partials {:?} vs {x}",
+                                claims[k]
+                            ));
                         }
                     }
                 }

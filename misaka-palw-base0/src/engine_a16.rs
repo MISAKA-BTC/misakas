@@ -92,12 +92,12 @@ fn a16_attn_fused_fast(
     history: usize,
 ) -> Result<Vec<i32>, PalwA16OpError> {
     match (k, v) {
-        (KvSeriesRef::I32(k), KvSeriesRef::I32(v)) => {
-            crate::kernels::a16_attn_fused_uniform_fast_within(q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history)
-        }
-        (KvSeriesRef::I16(k), KvSeriesRef::I16(v)) => {
-            crate::kernels::a16_attn_fused_uniform_fast_within(q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history)
-        }
+        (KvSeriesRef::I32(k), KvSeriesRef::I32(v)) => crate::kernels::a16_attn_fused_uniform_fast_within(
+            q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history,
+        ),
+        (KvSeriesRef::I16(k), KvSeriesRef::I16(v)) => crate::kernels::a16_attn_fused_uniform_fast_within(
+            q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history,
+        ),
         _ => Err(PalwA16OpError::Empty),
     }
 }
@@ -503,7 +503,10 @@ impl A16Cache {
     /// Every layer's K and V series decoded to `i32`: `(keys, values)`, per layer. Two caches with
     /// equal contents compute the same attention whatever their profiles.
     pub fn contents_as_i32(&self) -> (Vec<Vec<i32>>, Vec<Vec<i32>>) {
-        ((0..self.keys.len()).map(|li| self.keys_as_i32(li)).collect(), (0..self.values.len()).map(|li| self.values_as_i32(li)).collect())
+        (
+            (0..self.keys.len()).map(|li| self.keys_as_i32(li)).collect(),
+            (0..self.values.len()).map(|li| self.values_as_i32(li)).collect(),
+        )
     }
 
     /// Bytes the cache's buffers were allocated at — the measured twin of the resource profile's
@@ -706,7 +709,9 @@ impl KvSideV1 {
                 let slot = v.get_mut(offset..offset + row.len()).ok_or(A16EngineError::OpRefused("a chunk row past the state"))?;
                 for (s, value) in slot.iter_mut().zip(row) {
                     if value.unsigned_abs() > A16_CODE_MAX_U32 {
-                        return Err(A16EngineError::OpRefused("a served chunk holds a value outside the A16 code range under the i16 profile"));
+                        return Err(A16EngineError::OpRefused(
+                            "a served chunk holds a value outside the A16 code range under the i16 profile",
+                        ));
                     }
                     *s = *value as i16;
                 }
@@ -1349,8 +1354,16 @@ mod tests {
                     assert_eq!(got, expected, "logits: layers={layers} batch={batch} start={start}");
                     assert_eq!(batched.len(), sequential.len(), "cache depth: batch={batch} start={start}");
                     for li in 0..layers {
-                        assert_eq!(batched.keys_as_i32(li), sequential.keys_as_i32(li), "keys layer {li}: batch={batch} start={start}");
-                        assert_eq!(batched.values_as_i32(li), sequential.values_as_i32(li), "values layer {li}: batch={batch} start={start}");
+                        assert_eq!(
+                            batched.keys_as_i32(li),
+                            sequential.keys_as_i32(li),
+                            "keys layer {li}: batch={batch} start={start}"
+                        );
+                        assert_eq!(
+                            batched.values_as_i32(li),
+                            sequential.values_as_i32(li),
+                            "values layer {li}: batch={batch} start={start}"
+                        );
                     }
                 }
             }
@@ -1401,7 +1414,8 @@ mod tests {
     /// blocks whose absmax is ≤ 127, blocks)`. The block figure is what a lossless block-packed
     /// `i8` representation could store at one byte a code; every other block would stay at two.
     pub(crate) fn kv_code_range_v1(cache: &A16Cache, only_layer: Option<usize>) -> (i32, i32, u64, u64, u64, u64, u64) {
-        let (mut min, mut max, mut n, mut in_i8, mut in_i16, mut blocks_fit, mut blocks) = (i32::MAX, i32::MIN, 0u64, 0u64, 0u64, 0u64, 0u64);
+        let (mut min, mut max, mut n, mut in_i8, mut in_i16, mut blocks_fit, mut blocks) =
+            (i32::MAX, i32::MIN, 0u64, 0u64, 0u64, 0u64, 0u64);
         let (keys, values) = cache.contents_as_i32();
         for (li, layer) in keys.iter().chain(values.iter()).enumerate() {
             if only_layer.is_some_and(|only| li % keys.len() != only) {
@@ -2043,7 +2057,9 @@ impl<'a> A16Engine<'a> {
                     PlanInput::LayerIn => Ok(layer_in[i].clone()),
                     // The series are never rows: they are borrowed from the storage (`kv_for`), and
                     // the plan admits them only where the attention arms declare them.
-                    PlanInput::CachedK | PlanInput::CachedV => Err(A16EngineError::MalformedParams("a cache series is not a row input")),
+                    PlanInput::CachedK | PlanInput::CachedV => {
+                        Err(A16EngineError::MalformedParams("a cache series is not a row input"))
+                    }
                 }
             };
             // Position `i`'s view of the two series: the prefix that ends at its own write — a slice
@@ -2184,7 +2200,9 @@ impl<'a> A16Engine<'a> {
                     PlanInput::Row(i) => rows.get(*i).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
                     PlanInput::LayerIn => layer_in.cloned().ok_or(A16EngineError::MalformedParams("layer input outside a layer")),
                     // The series are borrowed from the storage below, never resolved as rows.
-                    PlanInput::CachedK | PlanInput::CachedV => Err(A16EngineError::MalformedParams("a cache series is not a row input")),
+                    PlanInput::CachedK | PlanInput::CachedV => {
+                        Err(A16EngineError::MalformedParams("a cache series is not a row input"))
+                    }
                 }
             };
 
@@ -2867,9 +2885,10 @@ mod kv_storage_tests {
                 ("v7", qwen25_a16_profile_v7(g).expect("v7")),
             ];
             let tokens: Vec<usize> = (0..9).map(|i| (i * 11 + 5) % artifact.shape.vocab).collect();
-            for (engine_name, engine) in
-                [("fast", A16Engine::new(&artifact).expect("fast")), ("reference", A16Engine::new_reference(&artifact).expect("reference"))]
-            {
+            for (engine_name, engine) in [
+                ("fast", A16Engine::new(&artifact).expect("fast")),
+                ("reference", A16Engine::new_reference(&artifact).expect("reference")),
+            ] {
                 for (name, profile) in &profiles {
                     let plan = engine.plan_from_profile(profile).expect("servable");
                     let at = format!("{name} on the {engine_name} engine, layers={layers}");
@@ -2898,7 +2917,8 @@ mod kv_storage_tests {
                             let first = 2 + chunk_index * 3;
                             let last = first + chunk.len() == 2 + tokens.len();
                             let (la, ta) = engine.forward_prefill_planned(&plan, &mut oracle, chunk, first, last).expect("oracle run");
-                            let (lb, tb) = engine.forward_prefill_planned(&plan, &mut compact, chunk, first, last).expect("compact run");
+                            let (lb, tb) =
+                                engine.forward_prefill_planned(&plan, &mut compact, chunk, first, last).expect("compact run");
                             assert_eq!(la, lb, "{at}: one-pass logits at run {chunk_index}");
                             assert_eq!(ta, tb, "{at}: one-pass rows at run {chunk_index}");
                         }
@@ -2918,7 +2938,11 @@ mod kv_storage_tests {
                 let la = engine.forward_prefill(&mut oracle, &tokens[5..], 5, 2).expect("batched");
                 let lb = engine.forward_prefill(&mut compact, &tokens[5..], 5, 2).expect("batched");
                 assert_eq!(la, lb, "{engine_name}: the batched prefill's logits");
-                assert_eq!(observed(&oracle, layers, kv_dim), observed(&compact, layers, kv_dim), "{engine_name}: the v2 program's cache");
+                assert_eq!(
+                    observed(&oracle, layers, kv_dim),
+                    observed(&compact, layers, kv_dim),
+                    "{engine_name}: the v2 program's cache"
+                );
             }
         }
         assert_eq!(checked, 2 * 2 * 3, "every fixture, engine and graph");
@@ -3055,14 +3079,14 @@ mod kv_storage_tests {
                 engine.forward_token_planned(&plan, &mut grown, (i * 7 + 3) % 64, i).expect("grown");
             }
             assert_eq!(reserved.resident_bytes_v1(), expected, "{}: an exact reservation is the profile's term", storage.name());
-            assert!(grown.resident_bytes_v1() >= expected && grown.resident_bytes_v1() <= 2 * expected, "{}: doubling holds at most twice", storage.name());
+            assert!(
+                grown.resident_bytes_v1() >= expected && grown.resident_bytes_v1() <= 2 * expected,
+                "{}: doubling holds at most twice",
+                storage.name()
+            );
             assert_eq!(reserved.contents_as_i32(), grown.contents_as_i32());
         }
-        assert_eq!(
-            A16Cache::with_storage(1, KvStorageProfileV1::A16KvI16).resident_bytes_v1(),
-            0,
-            "an empty cache reserved nothing"
-        );
+        assert_eq!(A16Cache::with_storage(1, KvStorageProfileV1::A16KvI16).resident_bytes_v1(), 0, "an empty cache reserved nothing");
         assert_eq!(KV_STORAGE_SHIPPED_V1, KvStorageProfileV1::A16KvI16, "the shipped representation is the compact one");
     }
 }

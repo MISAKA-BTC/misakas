@@ -37,7 +37,7 @@
 //! and the fold refuses it as the second lock. The fold learns the height through a `#[borsh(skip)]`
 //! mirror on the V2 state params (`tir_fence2_from_daa`), written by [`Params::sync_palw_tir_fence2`].
 
-use crate::config::params::{ForkActivation, Params, PalwPostLaunchFenceV1};
+use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
 /// **The entry a testnet-12 flag-day list takes to arm the second IR fence**, through its own `set`,

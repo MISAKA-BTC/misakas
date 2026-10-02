@@ -158,9 +158,8 @@ pub fn palw_tir_select_arm_regions_v1(block: &Block) -> Vec<(usize, [Vec<usize>;
         for (a, slot) in [1usize, 2].into_iter().enumerate() {
             let mut member = vec![false; n];
             for m in (0..s).rev() {
-                member[m] = !sink(m)
-                    && !uses[m].is_empty()
-                    && uses[m].iter().all(|(c, k)| (*c == s && *k == slot) || (*c < s && member[*c]));
+                member[m] =
+                    !sink(m) && !uses[m].is_empty() && uses[m].iter().all(|(c, k)| (*c == s && *k == slot) || (*c < s && member[*c]));
             }
             arms[a] = (0..s).filter(|m| member[*m]).collect();
         }

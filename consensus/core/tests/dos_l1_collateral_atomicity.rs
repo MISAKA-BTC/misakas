@@ -369,7 +369,8 @@ fn armed_with_escrow(p: &Params) -> PalwTransitionExtrasV1 {
     let mut x = armed();
     x.panel_reward_multiple_permille = p.palw_panel_exposure_floor_fence().map(|f| f.reward_multiple_permille).unwrap_or(0);
     x.escrow_carve = Some(
-        kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(p.palw_overlay_carve.expect("t12 carve").worker_carve_permille).expect("carve"),
+        kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(p.palw_overlay_carve.expect("t12 carve").worker_carve_permille)
+            .expect("carve"),
     );
     x
 }
@@ -388,12 +389,17 @@ fn probe_reservation(p: &Params, sp: &PalwStateParamsV2, a: &PalwAdmissionParams
     let f = Fold { p: sp, admission: a, extras: armed_with_escrow(p) };
     let (class_id, leaves, target, _) = class;
     let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
-    let (s1, _, _) = f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(class, &[(0, big)]), PalwBlockWorkV3::None, &[], Hash64::default());
+    let (s1, _, _) =
+        f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(class, &[(0, big)]), PalwBlockWorkV3::None, &[], Hash64::default());
     let env = attempt(class_id, palw_pwu_v1(target, leaves), 0, 1);
     let (s2, _, _) = f.go(&s1, &ctx_paid(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], h(0xE1));
     let claim = s2.claim(&attempt_id_v2(&env.attempt)).expect("claim");
     let reservation = s2.reserved_exposure(&bond_key(0));
-    assert_eq!(reservation, claim.reserved + sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward), "weight + escrow");
+    assert_eq!(
+        reservation,
+        claim.reserved + sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward),
+        "weight + escrow"
+    );
     let collateral = (reservation * 1000).div_ceil(u128::from(sp.fp_max_exposure_ratio_permille()));
     (reservation, u64::try_from(collateral).expect("a bond"))
 }
@@ -1273,16 +1279,31 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_covered_by_the_claimants_own_res
     let on_others: u128 = seats_n.iter().map(|n| s3.reserved_exposure(&bond_key(*n))).sum();
     let honest_ceiling = ceiling(big, b.admission.max_exposure_ratio_permille());
     println!("=== Q6b (FIXED: option A + #9): seat duty with the real escrow (carve {carve} permille, lambda {lambda}) ===");
-    println!("claim escrowed_reward                  : {} sompi = {:.2} MSK", claim.escrowed_reward, claim.escrowed_reward as f64 / 1e8);
-    println!("claimant posts (#9, one attempt)       : {claimant} sompi = {:.2} MSK (before: the 4,000,000-sompi registry minimum)", claimant as f64 / 1e8);
-    println!("claimant reserves on its own bond      : {own} sompi = {:.2} MSK (weight {} + escrow; before: weight only)", own as f64 / 1e8, claim.reserved);
+    println!(
+        "claim escrowed_reward                  : {} sompi = {:.2} MSK",
+        claim.escrowed_reward,
+        claim.escrowed_reward as f64 / 1e8
+    );
+    println!(
+        "claimant posts (#9, one attempt)       : {claimant} sompi = {:.2} MSK (before: the 4,000,000-sompi registry minimum)",
+        claimant as f64 / 1e8
+    );
+    println!(
+        "claimant reserves on its own bond      : {own} sompi = {:.2} MSK (weight {} + escrow; before: weight only)",
+        own as f64 / 1e8,
+        claim.reserved
+    );
     println!("each seat reserves                     : {per_seat} sompi = {:.2} MSK", per_seat as f64 / 1e8);
     println!(
         "sum on {seat_count} other bonds                : {on_others} = {:.2} MSK -> {:.4}x the claimant's own reservation (before: ~3.3e6x)",
         on_others as f64 / 1e8,
         on_others as f64 / own.max(1) as f64
     );
-    println!("one honest genesis bond (ceiling {:.0} MSK) is full after {} concurrent duties", honest_ceiling as f64 / 1e8, honest_ceiling / per_seat.max(1));
+    println!(
+        "one honest genesis bond (ceiling {:.0} MSK) is full after {} concurrent duties",
+        honest_ceiling as f64 / 1e8,
+        honest_ceiling / per_seat.max(1)
+    );
     assert_eq!(own, reservation, "the claimant's bond carries weight + escrow");
     assert!(per_seat > 3 * claim.reserved, "the ADR-0130 escrow floor, not 3 x weight, prices the duty");
     assert!(on_others <= own, "the duty on all seats together is covered by the claimant's own reservation");

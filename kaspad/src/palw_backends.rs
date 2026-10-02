@@ -195,7 +195,12 @@ impl PalwBackendRegistry {
     /// root, role) and none of those change for the life of this registry, so it is computed once.
     /// A partial seat's figure is a function of the claim as well and is not memoized here — the
     /// caller that holds the claim asks [`Self::role_memory_need_for_backend_v1`].
-    pub fn role_memory_need_v1(&self, class_id: Hash64, artifact_root: Hash64, role: PalwResourceRoleV1) -> Option<PalwRoleMemoryNeedV1> {
+    pub fn role_memory_need_v1(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        role: PalwResourceRoleV1,
+    ) -> Option<PalwRoleMemoryNeedV1> {
         let key = (
             self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
             class_id,
@@ -451,7 +456,6 @@ pub fn publish_memory_ledger_v1(runtime: &mut kaspa_p2p_flows::flow_context::Pal
 }
 
 impl PalwBackendRegistry {
-
     /// **Resolve through the tables, then — armed — through the chain's own registration**
     /// (ADR-0067 Decisions 1–2). `fetch` is the caller's session read
     /// (`palw_registered_class_carriage_v1`): it runs only when every table has passed, and its
@@ -1372,7 +1376,10 @@ pub fn palw_producer_attempt_reserve_v1(court: &PalwCourtParamsV2, producer_clas
     } else {
         job.declared_prefill_tokens.max(1)
     };
-    let limits = PalwRuntimeLimitsV1 { threads: std::thread::available_parallelism().map_or(1, |n| n.get() as u32), prefill_run_positions: run_positions };
+    let limits = PalwRuntimeLimitsV1 {
+        threads: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
+        prefill_run_positions: run_positions,
+    };
     palw_resource_profile_v1(profile, &job, leaf_count, runtime, PalwResourceRoleV1::Producer, limits, capture)
         .map(|p| p.working_set_bytes())
         .unwrap_or(0)
@@ -1441,8 +1448,6 @@ pub fn report_host_memory_budget_v1(budget: Option<u64>, node_count: u32, share:
         ),
     }
 }
-
-
 
 /// **The default, given what the host has available** (ADR-0112 Decision 2, amended 2026-09-11):
 /// a fifth of the weights within what is available less the node's own reserve — taken whole, in
@@ -2215,9 +2220,21 @@ mod tests {
             Residency::FifthWithin(6 << 30),
             "a 1 GiB attempt leaves 6 GiB for the weights"
         );
-        assert_eq!(palw_class_residency_beside_the_attempt_v1(None, Some(7 << 30), 9 << 30), Residency::FifthWithin(0), "an attempt past the share leaves none");
-        assert_eq!(palw_class_residency_beside_the_attempt_v1(Some(5 << 30), Some(7 << 30), 9 << 30), Residency::Bytes(5 << 30), "a stated figure is still the figure");
-        assert_eq!(palw_producer_attempt_reserve_v1(&PalwCourtParamsV2::new(1 << 26, 4, 2).unwrap(), None), 0, "no producer class, no reserve");
+        assert_eq!(
+            palw_class_residency_beside_the_attempt_v1(None, Some(7 << 30), 9 << 30),
+            Residency::FifthWithin(0),
+            "an attempt past the share leaves none"
+        );
+        assert_eq!(
+            palw_class_residency_beside_the_attempt_v1(Some(5 << 30), Some(7 << 30), 9 << 30),
+            Residency::Bytes(5 << 30),
+            "a stated figure is still the figure"
+        );
+        assert_eq!(
+            palw_producer_attempt_reserve_v1(&PalwCourtParamsV2::new(1 << 26, 4, 2).unwrap(), None),
+            0,
+            "no producer class, no reserve"
+        );
 
         let declined = load_class_holdings_v1("test-declined", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthWithin(0));
         assert_eq!(declined.len(), 1, "a default the host cannot spare still holds the class");

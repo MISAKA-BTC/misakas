@@ -196,13 +196,19 @@ impl PalwClassSdk {
     /// `CoreV1` the formula's (`palw_attempt_canonical_v1`), since admission past
     /// `palw_offence_attribution` refuses any other — registrants no longer choose it (addendum
     /// §4-bis.8(a), the operator's decision). A profile too narrow for the formula cannot register.
-    pub fn registration_canonical_v1(&self, entry: &PalwClassEntryV1) -> Result<kaspa_consensus_core::palw_v2::PalwJobContextV2, String> {
+    pub fn registration_canonical_v1(
+        &self,
+        entry: &PalwClassEntryV1,
+    ) -> Result<kaspa_consensus_core::palw_v2::PalwJobContextV2, String> {
         match self.attempt_rules {
             kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy => Ok(entry.canonical_context()),
             kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 => {
                 let (prefill, decode) = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&entry.profile, false)
                     .ok_or_else(|| {
-                        format!("{}'s context ({} tokens) is too narrow for the canonical job formula", entry.model_id, entry.profile.n_ctx)
+                        format!(
+                            "{}'s context ({} tokens) is too narrow for the canonical job formula",
+                            entry.model_id, entry.profile.n_ctx
+                        )
                     })?;
                 Ok(kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, prefill, decode))
             }
@@ -356,9 +362,9 @@ impl PalwClassSdk {
                     .iter()
                     .filter(|e| terms.registered_class_ids.contains(&e.class_id()))
                     .filter(|e| {
-                        wanted_model_id.filter(|s| !s.is_empty()).is_none_or(|w| {
-                            e.model_id == w || base_model_id(e.model_id) == base_model_id(w)
-                        })
+                        wanted_model_id
+                            .filter(|s| !s.is_empty())
+                            .is_none_or(|w| e.model_id == w || base_model_id(e.model_id) == base_model_id(w))
                     })
                     .filter(|e| lineage.pair(&self.court, e, artifact).is_ok())
                     .map(|e| base_model_id(e.model_id))

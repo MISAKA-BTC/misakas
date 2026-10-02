@@ -709,7 +709,11 @@ fn qwen36_execute_streaming_v1(
     // died on ibm printed nothing between its start and `dmesg`; this is what says.
     let started = std::time::Instant::now();
     let anon_at_start = crate::memory_phase::process_anon_bytes_v1();
-    let bracket = |at: &str, positions: usize, cache: &Qwen36Cache, capture: &crate::legs::Base0CaptureSinkV1, leg: &crate::legs::Base0CheckpointCaptureV1| {
+    let bracket = |at: &str,
+                   positions: usize,
+                   cache: &Qwen36Cache,
+                   capture: &crate::legs::Base0CaptureSinkV1,
+                   leg: &crate::legs::Base0CheckpointCaptureV1| {
         crate::memory_phase::execution_phase_v1(|| {
             let (filled, leaves) = capture.progress();
             let kind = match capture.kind() {
@@ -1198,52 +1202,53 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
     let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
     let declared = profile.state_chunk_map_id;
     let mut cache = Qwen36Cache::new(shape);
-    let apply_attn = |cache: &mut Qwen36Cache, geometry: &map::PalwStateChunkGeometryV1, attn_chunks: &[Vec<u8>]| -> Result<(), String> {
-        if attn_chunks.len() as u64 != geometry.chunk_count() {
-            return Err(format!(
-                "the attention half names {} chunks and the opening carried {}",
-                geometry.chunk_count(),
-                attn_chunks.len()
-            ));
-        }
-        let count = geometry.positions as usize;
-        for (li, kind) in shape.layer_types.iter().enumerate() {
-            if *kind == crate::qwen36::Qwen36LayerKind::FullAttention {
-                cache.keys[li].resize(count, Vec::new());
-                cache.values[li].resize(count, Vec::new());
+    let apply_attn =
+        |cache: &mut Qwen36Cache, geometry: &map::PalwStateChunkGeometryV1, attn_chunks: &[Vec<u8>]| -> Result<(), String> {
+            if attn_chunks.len() as u64 != geometry.chunk_count() {
+                return Err(format!(
+                    "the attention half names {} chunks and the opening carried {}",
+                    geometry.chunk_count(),
+                    attn_chunks.len()
+                ));
             }
-        }
-        for (index, bytes) in attn_chunks.iter().enumerate() {
-            let entry = map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
-                .ok_or_else(|| format!("the attention map has no entry for chunk {index}"))?;
-            let width = entry.row_bytes as usize;
-            for p in entry.position_start..entry.position_start + entry.position_count {
-                let row = map::integer_kv_state_row_v1(&entry, bytes, p)
-                    .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
-                let values: Vec<i32> = if row.len() == width {
-                    if width % 4 == 0 {
-                        row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+            let count = geometry.positions as usize;
+            for (li, kind) in shape.layer_types.iter().enumerate() {
+                if *kind == crate::qwen36::Qwen36LayerKind::FullAttention {
+                    cache.keys[li].resize(count, Vec::new());
+                    cache.values[li].resize(count, Vec::new());
+                }
+            }
+            for (index, bytes) in attn_chunks.iter().enumerate() {
+                let entry = map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
+                    .ok_or_else(|| format!("the attention map has no entry for chunk {index}"))?;
+                let width = entry.row_bytes as usize;
+                for p in entry.position_start..entry.position_start + entry.position_count {
+                    let row = map::integer_kv_state_row_v1(&entry, bytes, p)
+                        .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
+                    let values: Vec<i32> = if row.len() == width {
+                        if width % 4 == 0 {
+                            row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                        } else {
+                            row.iter().map(|b| *b as i8 as i32).collect()
+                        }
                     } else {
-                        row.iter().map(|b| *b as i8 as i32).collect()
-                    }
-                } else {
-                    return Err("the map describes a row this cache does not hold".into());
-                };
-                let side = match entry.kind {
-                    map::PalwStateChunkKindV1::Key => &mut cache.keys,
-                    map::PalwStateChunkKindV1::Value => &mut cache.values,
-                };
-                let layer = side
-                    .get_mut(entry.attn_layer as usize)
-                    .ok_or_else(|| format!("attention chunk {index} names layer {} this cache does not hold", entry.attn_layer))?;
-                let slot = layer
-                    .get_mut(p as usize)
-                    .ok_or_else(|| format!("attention chunk {index} names position {p} past the restored history"))?;
-                *slot = values;
+                        return Err("the map describes a row this cache does not hold".into());
+                    };
+                    let side = match entry.kind {
+                        map::PalwStateChunkKindV1::Key => &mut cache.keys,
+                        map::PalwStateChunkKindV1::Value => &mut cache.values,
+                    };
+                    let layer = side
+                        .get_mut(entry.attn_layer as usize)
+                        .ok_or_else(|| format!("attention chunk {index} names layer {} this cache does not hold", entry.attn_layer))?;
+                    let slot = layer
+                        .get_mut(p as usize)
+                        .ok_or_else(|| format!("attention chunk {index} names position {p} past the restored history"))?;
+                    *slot = values;
+                }
             }
-        }
-        Ok(())
-    };
+            Ok(())
+        };
     let apply_gdn = |cache: &mut Qwen36Cache, gdn_chunks: &[Vec<u8>]| -> Result<(), String> {
         let (layers, _) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
         let heads = shape.linear_v_heads as u32;
@@ -1409,7 +1414,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // **CoreV1 (ADR-0152 v3.1 J-5): the chain's job, over this class's registered profile** — as
         // the dense tier's (see there): the formula canonical, the core prompt, no artifact field.
         if self.attempt_rules == kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 {
-            let profile = self.profile.as_ref().ok_or_else(|| "CoreV1 derives a job from the class's registered profile, and this instance holds none".to_string())?;
+            let profile = self
+                .profile
+                .as_ref()
+                .ok_or_else(|| "CoreV1 derives a job from the class's registered profile, and this instance holds none".to_string())?;
             let formula = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(profile, false);
             if formula != Some(self.canonical_job) {
                 return Err(format!(
@@ -1565,18 +1573,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .global_node_slot(table, site.layer, 0)
             .ok_or_else(|| "this layer has no node to sample".to_string())?;
         let prefill = binding.job_context.declared_prefill_tokens;
-        let (call_index, position) = if site.position < prefill {
-            (0u32, site.position)
-        } else {
-            (site.position - prefill + 1, 0u32)
-        };
+        let (call_index, position) = if site.position < prefill { (0u32, site.position) } else { (site.position - prefill + 1, 0u32) };
         let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index, node_slot, position, tile_index: 0 };
         let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
             .ok_or_else(|| "the sampled site is not a main step of this job".to_string())?;
         let seats = seat_count.max(1);
         let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
-        let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
-            .unwrap_or(0);
+        let index =
+            kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf).unwrap_or(0);
         // The segment holding the site, from the capture's own authenticated opening (SEAT-S4).
         let (profile, kernels) = self.interval_kernels_v1()?;
         let replay = crate::segment_opening::base0_replay_capture_segment_v2(
@@ -1694,7 +1698,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let job = match job {
             Some(job) => job,
             None => {
-                canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, self.canonical_job.0, self.canonical_job.1);
+                canonical =
+                    kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, self.canonical_job.0, self.canonical_job.1);
                 &canonical
             }
         };
@@ -1835,7 +1840,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             // A held class's fold attempt is the honest producer's own material and stays
             // licensable here; its selecting row is the residual SEAT-R (a full-mask `Valid` only
             // from a replay) and F1c's rule 12 close at `palw_offence_attribution`.
-            if claim.attempt_draw.is_some() && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1) {
+            if claim.attempt_draw.is_some()
+                && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1)
+            {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             // **SEAT-S1: the whole job, here too** — a held class's attempt is a fold, and this
@@ -3922,7 +3929,9 @@ mod tests {
     /// a DENSE capture that the honest claim refuses, and the resource profile prices the fold.
     #[test]
     fn a_held_hybrid_classs_attempt_folds_and_stays_adjudicable() {
-        use kaspa_consensus_core::palw_resource_profile_v1::{PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1};
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1,
+        };
         let (artifact, v5) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
         let geometry = kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
             n_ctx: v5.n_ctx,
@@ -3979,10 +3988,17 @@ mod tests {
         // The drill tampers a DENSE capture even on the held class.
         let guilty = backend.execute_with_injected_fault(&job, &prompt, 3).expect("the drill's dense tamper commits");
         assert_ne!(guilty.execution_root, folded.execution_root, "the lie moved the commitment");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&guilty.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&guilty.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         assert_eq!(backend.verify_material(&guilty.material, claim), PalwMaterialVerdictV1::Mismatch, "a lie is not the honest claim");
         assert!(backend.refutation_for_index(&guilty.material, 3).is_ok(), "the tampered leaf opens from the retained tiles");
-        assert_eq!(backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root, folded.execution_root, "the replays stay honest");
+        assert_eq!(
+            backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root,
+            folded.execution_root,
+            "the replays stay honest"
+        );
 
         // The profile prices the fold, the recurrence state and the attention rows — and the
         // producer's figure the gate asks for is the same derivation.
@@ -3999,10 +4015,14 @@ mod tests {
         );
 
         // A class outside the regime keeps its tiles, priced as such.
-        let dense_backend = Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), v5, (3, 4)).expect("servable");
+        let dense_backend =
+            Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), v5, (3, 4)).expect("servable");
         let (job2, prompt2) = dense_backend.job_for_anchor(Hash64::from_u64_word(0x0151_DE45)).expect("a job");
         let outcome = dense_backend.execute(&job2, &prompt2).expect("executes");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&outcome.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&outcome.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         let dense_profile = dense_backend.resource_profile_v1(Some(&job2), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(dense_profile.capture, PalwCaptureRetentionV1::DenseTiles { .. }), "{:?}", dense_profile.capture);
         assert!(dense_profile.capture_retained_bytes >= dense_profile.leaves * (64 + 56));

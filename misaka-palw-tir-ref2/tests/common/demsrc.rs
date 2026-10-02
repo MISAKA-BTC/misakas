@@ -259,14 +259,7 @@ impl first::demand::DemandSource for Theirs<'_> {
             None => Err(refused()),
         }
     }
-    fn hist_row(
-        &mut self,
-        pos: u32,
-        state: u16,
-        layer: Option<u16>,
-        row_pos: u32,
-        index: usize,
-    ) -> first::error::TirResult<i128> {
+    fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> first::error::TirResult<i128> {
         self.val(Question::HistRow {
             pos: pos as u64,
             state,

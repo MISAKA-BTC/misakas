@@ -76,10 +76,8 @@ fn a_digest_converts_to_an_inventory_root_in_one_line_of_safe_public_api() {
 
     // The module's own forbidden list, read out of its source, does not mention the two names the
     // conversion above is built from.
-    let whole = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_class_identity_v1.rs"),
-    )
-    .expect("the module is readable");
+    let whole = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_class_identity_v1.rs"))
+        .expect("the module is readable");
     // Same cut the module's own guarantee test makes: its needles appear in its own test text.
     let src = &whole[..whole.find("#[cfg(test)]").expect("the module has tests")];
     for needle in ["impl From<Hash64>", "impl std::ops::Deref", "impl Deref"] {
@@ -122,7 +120,11 @@ fn the_three_genesis_root_slots_accept_each_others_values() {
             let v = p.validate_palw_v2();
             let roots = registered_roots(&p);
             let dup = roots.iter().filter(|(_, r)| *r == d8k).count();
-            println!("dense:=d8k    params id {}  validate {:?}  classes sharing that root: {dup}", p.consensus_params_id(), v.as_ref().err());
+            println!(
+                "dense:=d8k    params id {}  validate {:?}  classes sharing that root: {dup}",
+                p.consensus_params_id(),
+                v.as_ref().err()
+            );
             assert!(v.is_ok(), "two registered classes may pin the same artifact root at genesis");
             assert_eq!(dup, 2, "the 8k and the 2M row now name one root");
         }
@@ -150,18 +152,13 @@ fn the_three_genesis_root_slots_accept_each_others_values() {
 /// and `check_palw_attempt_admission_v2` asks only for membership in that set.
 #[test]
 fn the_only_consensus_check_on_a_root_is_membership_in_the_set_it_came_from() {
-    let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_admission_v2.rs"),
-    )
-    .expect("readable");
+    let src =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_admission_v2.rs")).expect("readable");
     assert!(
         src.contains("if !state.class_roots_in_force(&attempt.class_id, daa).contains(&attempt.artifact_root)"),
         "the admission gate is a set-membership test over values the chain itself stored"
     );
-    let st = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_state_v2.rs"),
-    )
-    .expect("readable");
+    let st = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_state_v2.rs")).expect("readable");
     let at = st.find("pub fn class_roots_in_force").expect("present");
     let body = &st[at..at + 900];
     assert!(body.contains("roots.push(class.artifact_root)"), "it returns the registration's own value");
@@ -301,10 +298,8 @@ fn the_typed_identities_cannot_be_borsh_fields() {
     assert_borsh::<PalwConsensusObjectV2>();
     assert_borsh::<Hash64>();
 
-    let whole = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_class_identity_v1.rs"),
-    )
-    .expect("readable");
+    let whole = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_class_identity_v1.rs"))
+        .expect("readable");
     let src = &whole[..whole.find("#[cfg(test)]").expect("has tests")];
     assert!(!src.contains("Borsh"), "the three types derive no borsh codec");
     assert!(!src.contains("serde"), "nor serde");

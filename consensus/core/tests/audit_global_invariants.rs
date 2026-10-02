@@ -284,7 +284,8 @@ fn i1_cheap_real_compute_cannot_claim_an_expensive_class() {
     // admitted price must equal the floor's.
     if inflated_admit.is_ok() {
         assert_eq!(
-            inflated_u2, honest_u2,
+            inflated_u2,
+            honest_u2,
             "I1 VIOLATED: the gate ADMITTED a profile whose node tables, dtypes, weight names, leaf \
              count ({honest_leaves}) and canonical job are byte-identical to the BASE-0 floor's, but \
              which is priced at {inflated_u2} MAC-eq/draw against the floor's {honest_u2} — a factor \
@@ -337,7 +338,10 @@ fn i2_reward_work_and_enforced_work_are_one_definition() {
         println!("  {name}");
         println!("    (a) enforced / priced  economic_ccu_per_claim = {enforced} MAC-eq");
         println!("    (b) fork weight        provisional_scalar_v1  = {weight} MAC-eq");
-        println!("    (c) panel replay       verification_ccu       = {verification} MAC-eq   ({:.6}x of (a))", verification as f64 / enforced as f64);
+        println!(
+            "    (c) panel replay       verification_ccu       = {verification} MAC-eq   ({:.6}x of (a))",
+            verification as f64 / enforced as f64
+        );
         assert_eq!(verification, direct, "verification_ccu is palw_job_economic_compute_v1 of the same job");
 
         if weight != enforced {
@@ -423,8 +427,10 @@ fn i3_reward_credit_collateral_and_weight_share_one_work_unit() {
         let fork_weight_sompi = (claim_pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU);
 
         // Execution credit (palw_state_v2:10975-10983): raw U2 divided by a U3-declared quantum.
-        let quanta_from_u2 = palw_execution_quantum_count_v1(u2, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
-        let quanta_from_u3 = palw_execution_quantum_count_v1(u3 as u128, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
+        let quanta_from_u2 =
+            palw_execution_quantum_count_v1(u2, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
+        let quanta_from_u3 =
+            palw_execution_quantum_count_v1(u3 as u128, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
 
         let ratio = fork_weight_sompi as f64 / reserved_sompi.max(1) as f64;
         println!("  {name}");
@@ -548,7 +554,10 @@ fn i4_representation_alone_buys_no_economic_value() {
         let admitted = admit(&p, &b, &twin, &job, PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT);
 
         // The executable content that the executor and the leaf enumeration read.
-        let same_widths = twin.attn_nodes.iter().map(|n| (n.out_len, n.kernel_semantics_id, n.weight_dtypes.clone()))
+        let same_widths = twin
+            .attn_nodes
+            .iter()
+            .map(|n| (n.out_len, n.kernel_semantics_id, n.weight_dtypes.clone()))
             .eq(honest.attn_nodes.iter().map(|n| (n.out_len, n.kernel_semantics_id, n.weight_dtypes.clone())));
 
         println!("  lever: {lever}");
@@ -558,7 +567,13 @@ fn i4_representation_alone_buys_no_economic_value() {
         println!("    identity split    = {}", twin_id != honest_id);
         println!("    ticket target     = {twin_target}  ({:.9} of MAX)", twin_target as f64 / u128::MAX as f64);
         println!("    reward (sompi)    = {twin_reward}  ({:.4} MSK)", msk(twin_reward));
-        println!("    gate verdict      = {}", match &admitted { Ok(l) => format!("ADMITTED (leaves {l})"), Err(e) => format!("REFUSED {e:?}") });
+        println!(
+            "    gate verdict      = {}",
+            match &admitted {
+                Ok(l) => format!("ADMITTED (leaves {l})"),
+                Err(e) => format!("REFUSED {e:?}"),
+            }
+        );
 
         if twin_u2 == honest_u2 {
             println!("    price: HOLDS — this lever buys no price");
@@ -691,11 +706,27 @@ fn i5_the_same_work_is_monetised_exactly_once() {
         },
         signature: vec![0; 8],
     };
-    let ctx = |block: u64, daa: u64, blue: u64, sub: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: sub };
+    let ctx = |block: u64, daa: u64, blue: u64, sub: u64| PalwBlockContextV2 {
+        block: h(block),
+        daa_score: daa,
+        blue_score: blue,
+        subsidy: sub,
+    };
 
     let (s1, _, _) = apply_palw_transition_v7(
-        &PalwChainStateV2::genesis(), &sp, None, &ctx(1, 100, 1, 0), &setup,
-        PalwBlockWorkV3::None, &[], Hash64::default(), false, false, false, false, &extras,
+        &PalwChainStateV2::genesis(),
+        &sp,
+        None,
+        &ctx(1, 100, 1, 0),
+        &setup,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &extras,
     )
     .expect("the registration folds");
 
@@ -707,14 +738,38 @@ fn i5_the_same_work_is_monetised_exactly_once() {
     let key_b = execution_commitment_v3(&bb.attempt, execution_anchor_v3(h(NET), h(PPH), h(CLASS), &bond, 8));
 
     let (s2, _, _) = apply_palw_transition_v7(
-        &s1, &sp, None, &ctx(2, 101, 2, subsidy), &[], PalwBlockWorkV3::Attempt(&a), &[], key_a, false, false, false, false, &extras,
+        &s1,
+        &sp,
+        None,
+        &ctx(2, 101, 2, subsidy),
+        &[],
+        PalwBlockWorkV3::Attempt(&a),
+        &[],
+        key_a,
+        false,
+        false,
+        false,
+        false,
+        &extras,
     )
     .expect("block 2 stands");
     // Past `palw_audit_2026_09_23` the second announcement of ONE execution is refused on sight —
     // its key is already in the rooted `work_ids` index — and that refusal IS the invariant. Below
     // the fence block 3 stood and minted a second claim; that is the defect this test recorded.
     let s3 = match apply_palw_transition_v7(
-        &s2, &sp, None, &ctx(3, 102, 3, subsidy), &[], PalwBlockWorkV3::Attempt(&bb), &[], key_b, false, false, false, false, &extras,
+        &s2,
+        &sp,
+        None,
+        &ctx(3, 102, 3, subsidy),
+        &[],
+        PalwBlockWorkV3::Attempt(&bb),
+        &[],
+        key_b,
+        false,
+        false,
+        false,
+        false,
+        &extras,
     ) {
         Ok((s3, _, _)) => s3,
         Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DuplicateWork { work_id, claim }) => {
@@ -733,7 +788,10 @@ fn i5_the_same_work_is_monetised_exactly_once() {
 
     println!("\n=== I5: one execution, how many payments? ===");
     println!("  deep fence armed (t12 runs this from DAA 0) = {}", extras.audit_2026_09_11_deep_active);
-    println!("  nonce bucket log2                            = {}", kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2);
+    println!(
+        "  nonce bucket log2                            = {}",
+        kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2
+    );
     println!("  sibling A attempt_id                         = {id_a}");
     println!("  sibling B attempt_id                         = {id_b}");
     println!("  sibling A execution key                      = {key_a}");
@@ -746,12 +804,16 @@ fn i5_the_same_work_is_monetised_exactly_once() {
     println!("  bond exposure reserved                       = {}", s3.reserved_exposure(&bond_key));
 
     assert_ne!(id_a, id_b, "precondition: the two announcements are distinct claim ids");
-    assert_eq!(key_a, key_b, "precondition: they are ONE execution — the commitment blanks the challenge and the anchor buckets the nonce");
+    assert_eq!(
+        key_a, key_b,
+        "precondition: they are ONE execution — the commitment blanks the challenge and the anchor buckets the nonce"
+    );
     assert!(escrow_a > 0, "precondition: the first announcement is paid");
 
     // THE INVARIANT.
     assert_eq!(
-        claims, 1,
+        claims,
+        1,
         "I5 VIOLATED: ONE inference (one trace_root, one output_root, one execution_root, one \
          execution key {key_a}) minted {claims} claims across {claims} chain blocks and \
          {total_escrow} sompi ({:.4} MSK) of escrow — {:.2}x the escrow of a single claim — for ZERO \
@@ -819,9 +881,15 @@ fn i6_a_new_class_cannot_pay_an_abnormal_rate() {
     let n_real = real_work_per_paid_claim(n_u2, honest_floor_u2, w0);
     let n_rate = msk(n_reward) / (n_real as f64 / 1e9);
     let n_admit = admit(&p, &b, &newcomer, &floor_job(), Hash64::from_u64_word(0xA271));
-    println!("  {:<26} {n_u2:>22} {n_real:>22} {:>16.4} {n_rate:>14.4}   <- NEWCOMER, gate: {}",
-        "newcomer (floor + 2 scalars)", msk(n_reward),
-        match &n_admit { Ok(l) => format!("ADMITTED (leaves {l})"), Err(e) => format!("REFUSED {e:?}") });
+    println!(
+        "  {:<26} {n_u2:>22} {n_real:>22} {:>16.4} {n_rate:>14.4}   <- NEWCOMER, gate: {}",
+        "newcomer (floor + 2 scalars)",
+        msk(n_reward),
+        match &n_admit {
+            Ok(l) => format!("ADMITTED (leaves {l})"),
+            Err(e) => format!("REFUSED {e:?}"),
+        }
+    );
     rows.push(("newcomer".to_string(), n_rate, true));
 
     let existing_max = rows.iter().filter(|r| !r.2).map(|r| r.1).fold(0.0f64, f64::max);
@@ -924,13 +992,19 @@ fn i7_consensus_identity_never_rests_on_a_hand_entered_hash() {
 
     assert_eq!(dense_root, PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT, "the card registers the constant");
     assert_eq!(dense_root, manifest_root, "the dense root IS the committed manifest's inventory root — derived, not transcribed");
-    assert_eq!(manifest_class, dense_2m().shape_profile_id(), "the positional manifest read is bound to the class this card registers");
+    assert_eq!(
+        manifest_class,
+        dense_2m().shape_profile_id(),
+        "the positional manifest read is bound to the class this card registers"
+    );
     assert_ne!(
         dense_root, manifest_digest,
         "I7: the dense root is a copy of the artifact DIGEST again — the substitution that shut the \
          dense tier of testnet-11 (c00faa48…) and testnet-12 (b5baca63…)"
     );
-    println!("  => dense root: DERIVED in this crate, and != the digest in the same file. The 2026-09-23 incident is currently CLOSED for this row.");
+    println!(
+        "  => dense root: DERIVED in this crate, and != the digest in the same file. The 2026-09-23 incident is currently CLOSED for this row."
+    );
 
     // --- the floor and hybrid roots: is there any derivation reachable from here? -----------------
     // The card's own constants are `Hash64::from_bytes([..])` literals. If a derivation existed in
@@ -960,11 +1034,12 @@ fn i7_consensus_identity_never_rests_on_a_hand_entered_hash() {
     assert_eq!(hybrid_root, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT);
     assert_eq!(ids_derived, 3, "all three class ids are derived");
 
-    let literals: Vec<&str> = [("PALW_RC_GENESIS_ARTIFACT_ROOT", floor_is_literal), ("PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT", hybrid_is_literal)]
-        .iter()
-        .filter(|(_, lit)| *lit)
-        .map(|(n, _)| *n)
-        .collect();
+    let literals: Vec<&str> =
+        [("PALW_RC_GENESIS_ARTIFACT_ROOT", floor_is_literal), ("PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT", hybrid_is_literal)]
+            .iter()
+            .filter(|(_, lit)| *lit)
+            .map(|(n, _)| *n)
+            .collect();
 
     // THE INVARIANT.
     assert!(

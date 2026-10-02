@@ -220,8 +220,9 @@ pub fn palw_escrow_m_star_v2(e_sompi: u128, q_permille: u16, tier_sompi: u128, p
     let k = u128::from(ceiling_permille.clamp(1, 1000));
     // Scaled by 10⁶·κ: (1−q)·P·E → (1000−q)·P·E·κ; (1−q)(1−P) + q·(1+f) = (1−q)(1−P) + q/κ.
     let gain = (1000 - q).saturating_mul(p).saturating_mul(e_sompi);
-    let m_free_half =
-        gain.saturating_mul(k).div_ceil((1000 - q).saturating_mul(1000 - p).saturating_mul(k).saturating_add(q.saturating_mul(1_000_000)));
+    let m_free_half = gain
+        .saturating_mul(k)
+        .div_ceil((1000 - q).saturating_mul(1000 - p).saturating_mul(k).saturating_add(q.saturating_mul(1_000_000)));
     if (1000 - k).saturating_mul(m_free_half) <= k.saturating_mul(tier_sompi) {
         return m_free_half;
     }
@@ -283,7 +284,8 @@ pub fn palw_monetary_prelicense_risk_v2(
 /// and 12 there; on this branch alone the floor is `Tier(0)` (see
 /// [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`]).
 pub fn palw_escrow_tier_at_min_bond_v1(min_collateral_sompi: u64, e_sompi: u128) -> u128 {
-    let share = u128::from(min_collateral_sompi).saturating_mul(u128::from(crate::palw_state_v2::PALW_RCORE_S1S2_ACTION_PERMILLE_V1)) / 1000;
+    let share =
+        u128::from(min_collateral_sompi).saturating_mul(u128::from(crate::palw_state_v2::PALW_RCORE_S1S2_ACTION_PERMILLE_V1)) / 1000;
     share.min(e_sompi.saturating_mul(PALW_ESCROW_CONVICTION_MULTIPLE_V1))
 }
 
@@ -666,7 +668,9 @@ mod tests {
     /// so the seat side is option A's too; at and past it the credit counts. Monotone in `q` and `ρ`.
     #[test]
     fn the_credit_counts_only_from_q_seat_and_never_rises() {
-        for floor in [PalwEscrowConvictionFloorV1::Tier(0), PalwEscrowConvictionFloorV1::Tier(TIER_13K), PalwEscrowConvictionFloorV1::WholeBond] {
+        for floor in
+            [PalwEscrowConvictionFloorV1::Tier(0), PalwEscrowConvictionFloorV1::Tier(TIER_13K), PalwEscrowConvictionFloorV1::WholeBond]
+        {
             for rho in [1u32, 10, 100, 1000] {
                 assert_eq!(m_c(rho, PALW_ESCROW_Q_SEAT_PERMILLE_V1 - 1, floor), E, "{floor:?} rho {rho}: below q_seat");
                 let mut last = u128::MAX;
@@ -692,7 +696,9 @@ mod tests {
     fn a_tier_route_campaign_is_unprofitable_at_the_priced_slot() {
         let (e, w) = (E as f64 / 1e8, W_FLOOR as f64 / 1e8);
         for c in [13_000.0f64, 100_000.0] {
-            for (tier, floor) in [(0.0f64, PalwEscrowConvictionFloorV1::Tier(0)), (1_300.0f64, PalwEscrowConvictionFloorV1::Tier(TIER_13K))] {
+            for (tier, floor) in
+                [(0.0f64, PalwEscrowConvictionFloorV1::Tier(0)), (1_300.0f64, PalwEscrowConvictionFloorV1::Tier(TIER_13K))]
+            {
                 for rho in [10u32, 25, 50, 100, 1000] {
                     for q in (0..=1000u16).step_by(25) {
                         let m = msk(m_c(rho, q, floor));
@@ -719,7 +725,8 @@ mod tests {
     #[test]
     fn the_bernoulli_and_the_naive_tier_price_are_profitable_on_a_tier_route() {
         let (e, w, c) = (E as f64 / 1e8, W_FLOOR as f64 / 1e8, 13_000.0f64);
-        let bernoulli = msk(palw_monetary_prelicense_risk_v1(E as u64, Some(PalwEscrowCreditV1 { rho: 10, q_credit_permille: 150 }), true));
+        let bernoulli =
+            msk(palw_monetary_prelicense_risk_v1(E as u64, Some(PalwEscrowCreditV1 { rho: 10, q_credit_permille: 150 }), true));
         assert!((bernoulli - 320.08).abs() < 0.01);
         let n = ((c / 2.0) / (w + bernoulli)).floor() as u64;
         assert_eq!(n, 20);

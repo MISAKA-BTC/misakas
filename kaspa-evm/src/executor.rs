@@ -332,8 +332,11 @@ pub fn execute_block_evm(
     // (burn, withdraw, or park in the market's escrow) — the backed supply less what is already
     // spoken for. Zero and unread below the fence.
     let bridge_ledger_active = input.daa_score >= input.bridge_ledger_activation_daa_score;
-    let mut ledger_headroom: u128 =
-        if bridge_ledger_active { bridge_ledger_opening(input.parent, &applied_claims, market_credited_wei, market_burned_wei)? } else { 0 };
+    let mut ledger_headroom: u128 = if bridge_ledger_active {
+        bridge_ledger_opening(input.parent, &applied_claims, market_credited_wei, market_burned_wei)?
+    } else {
+        0
+    };
 
     // audit R2-#1: the deposit claims above already consumed `gas_used` worth of
     // SYSTEM gas (≤ 256 × 25k = 6.4M). The user-tx prefix-take must take that out
@@ -1687,7 +1690,12 @@ mod tests {
         assert!(matches!(bridge_ledger_opening(None, &[], 0, 1), Err(EvmExecError::InvariantViolation(_))));
         let parent = EvmExecutionHeader { evm_total_native_balance: EvmU256::from(5 * scale), ..Default::default() };
         assert_eq!(bridge_ledger_opening(Some(&parent), &[], 0, 5 * scale).unwrap(), 0, "burning exactly the backed escrow");
-        let claim = DepositClaim { deposit_outpoint: Default::default(), evm_address: EvmAddress::from_bytes([1; 20]), amount_sompi: 3, claim_tip_sompi: 1 };
+        let claim = DepositClaim {
+            deposit_outpoint: Default::default(),
+            evm_address: EvmAddress::from_bytes([1; 20]),
+            amount_sompi: 3,
+            claim_tip_sompi: 1,
+        };
         assert_eq!(
             bridge_ledger_opening(Some(&parent), &[claim], 2 * scale, 4 * scale).unwrap(),
             (5 + 3 + 2 - 4) * scale,

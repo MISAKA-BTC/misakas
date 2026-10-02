@@ -186,7 +186,8 @@ fn unhex(s: &str) -> Vec<u8> {
 #[test]
 fn the_corpus_moves_by_its_arm_only_work_and_no_more() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v1/programs");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
     files.sort();
     let mut moved = 0;
     for path in files {

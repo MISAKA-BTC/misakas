@@ -507,7 +507,8 @@ fn every_drill_fault_is_convicted_by_its_contradiction() {
             Box::new(qwen36_backend(&q36, &held, qwen36_held_canonical_v1(32)).with_attempt_rules(PalwAttemptRulesV1::CoreV1)),
         ),
     ];
-    let rules = PalwIdentityRulesV1 { prompt_ids_form: PalwPromptIdsFormV1::MerkleV1, base_class_id: floor_id, da_signer_liability: false };
+    let rules =
+        PalwIdentityRulesV1 { prompt_ids_form: PalwPromptIdsFormV1::MerkleV1, base_class_id: floor_id, da_signer_liability: false };
     for (label, backend) in &families {
         let anchor = Hash64::from_u64_word(0xD1F7_0000);
         let (canonical, prompt) = backend.job_for_anchor(anchor).unwrap();

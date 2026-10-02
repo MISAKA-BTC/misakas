@@ -22,8 +22,8 @@ use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionParamsV2, PalwEpochBudgetFencesV1};
 use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_trace_manifest_root_v1,
-    challenge_v2,
+    PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2,
+    attempt_trace_manifest_root_v1, challenge_v2,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::{
@@ -222,11 +222,12 @@ fn fp_commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsen
     }
 }
 
-
 #[test]
 fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slot() {
     use kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1;
-    use kaspa_consensus_core::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1};
+    use kaspa_consensus_core::palw_model_registry_v1::{
+        PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1,
+    };
     let p = t12();
     let b = bundle(&p);
     let sp = &b.state;
@@ -276,7 +277,31 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
         admission: None,
     });
     let fold = |s: &PalwChainStateV2, daa: u64, objs: &[PalwConsensusObjectV2], own: PalwBlockWorkV3<'_>, audit: bool| {
-        apply_palw_transition_v7(s, sp, Some(&b.admission), &ctx(daa, if daa == 2 { 110 } else if daa == 1 { 101 } else { 108 + daa }, daa), objs, own, &[], h(0xE0 + daa), false, false, false, false, &with_registry(audit))
+        apply_palw_transition_v7(
+            s,
+            sp,
+            Some(&b.admission),
+            &ctx(
+                daa,
+                if daa == 2 {
+                    110
+                } else if daa == 1 {
+                    101
+                } else {
+                    108 + daa
+                },
+                daa,
+            ),
+            objs,
+            own,
+            &[],
+            h(0xE0 + daa),
+            false,
+            false,
+            false,
+            false,
+            &with_registry(audit),
+        )
     };
     let (s1, _, _) = fold(&PalwChainStateV2::genesis(), 1, &objects, PalwBlockWorkV3::None, true).expect("genesis");
     let (s2, _, _) = fold(&s1, 2, &[], PalwBlockWorkV3::None, true).expect("span boundary");
@@ -299,11 +324,16 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
     // The smallest commitment the lane prices: ONE quantum of the class's canonical job.
     let one = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(canonical, sp.fp_quanta_per_canonical_job());
     println!("canonical job {canonical} leaves; one quantum = {one} leaves ({} quanta per job)", sp.fp_quanta_per_canonical_job());
-    let (probe, _, _) = fold(&s, 3, &[fp_commitment(held_id, canonical, 1, 0x100)], PalwBlockWorkV3::None, true).expect("a whole-job commitment");
+    let (probe, _, _) =
+        fold(&s, 3, &[fp_commitment(held_id, canonical, 1, 0x100)], PalwBlockWorkV3::None, true).expect("a whole-job commitment");
     let whole = probe.claim(&h(0xF0_0100)).unwrap().reserved;
-    let (probe, _, _) = fold(&s, 3, &[fp_commitment(held_id, one, 1, 0x101)], PalwBlockWorkV3::None, true).expect("a one-quantum commitment");
+    let (probe, _, _) =
+        fold(&s, 3, &[fp_commitment(held_id, one, 1, 0x101)], PalwBlockWorkV3::None, true).expect("a one-quantum commitment");
     let tiny = probe.claim(&h(0xF0_0101)).unwrap().reserved;
-    println!("reserved: whole-job commitment {whole} sompi; one-quantum commitment {tiny} sompi ({:.0}x cheaper)", whole as f64 / tiny.max(1) as f64);
+    println!(
+        "reserved: whole-job commitment {whole} sompi; one-quantum commitment {tiny} sompi ({:.0}x cheaper)",
+        whole as f64 / tiny.max(1) as f64
+    );
 
     // Fill the cap with one-quantum commitments, one per block.
     let mut st = s.clone();
@@ -318,11 +348,11 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
     let env = attempt(held_id, kaspa_consensus_core::palw_pwu::palw_pwu_v1(target, canonical), 2, 0x77);
     let daa = 3 + cap as u64;
     let admitted = fold(&st, daa, &[], PalwBlockWorkV3::Attempt(&env), true);
-    println!("after {cap} one-quantum commitments ({spent} sompi reserved in total), an attempt on the class: {:?}", admitted.as_ref().map(|_| "accepted"));
-    assert!(
-        admitted.is_ok(),
-        "one-quantum commitments take an eighth of a slot each, so the attempt lane stays open: {admitted:?}"
+    println!(
+        "after {cap} one-quantum commitments ({spent} sompi reserved in total), an attempt on the class: {:?}",
+        admitted.as_ref().map(|_| "accepted")
     );
+    assert!(admitted.is_ok(), "one-quantum commitments take an eighth of a slot each, so the attempt lane stays open: {admitted:?}");
     // ...and the lane closes only when the commitments add up to the cap in whole jobs. A commitment
     // enters only while a whole slot is free, so the last one to enter is the one that starts the
     // cap's last job: `(cap − 1) × 8 + 1` one-quantum commitments count `cap` claims, the next one

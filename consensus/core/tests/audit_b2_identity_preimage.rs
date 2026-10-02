@@ -9,8 +9,12 @@ use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_
 use kaspa_consensus_core::palw_canonical_work_v1::PalwCanonicalClassDescriptorV1;
 use kaspa_consensus_core::palw_economic_compute_v1::{PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
-use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, PalwQwen36GeometryV1, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 
@@ -22,7 +26,8 @@ fn floor() -> PalwShapeProfileV3 {
     base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("floor")
 }
 fn hybrid() -> PalwShapeProfileV3 {
-    qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: PALW_T12_HYBRID_N_CTX, ..QWEN36_35B_A3B })).expect("hybrid")
+    qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: PALW_T12_HYBRID_N_CTX, ..QWEN36_35B_A3B }))
+        .expect("hybrid")
 }
 fn dense() -> PalwShapeProfileV3 {
     qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: PALW_T12_DENSE_N_CTX, ..QWEN25_1_5B }).expect("dense")
@@ -221,9 +226,7 @@ fn b2_02_field_sweep_committed_versus_priced() {
 fn b2_03_leaf_count_collision_reprices_the_class() {
     use kaspa_consensus_core::palw_step::step_leaf_count;
 
-    for (name, prof, n_ctx) in
-        [("BASE-0 floor", floor(), 12u32), ("Qwen3.6 v7@512", hybrid(), PALW_T12_HYBRID_N_CTX)]
-    {
+    for (name, prof, n_ctx) in [("BASE-0 floor", floor(), 12u32), ("Qwen3.6 v7@512", hybrid(), PALW_T12_HYBRID_N_CTX)] {
         let mut by_leaves: std::collections::BTreeMap<u64, Vec<((u32, u32), u128)>> = Default::default();
         for pf in 1..=n_ctx {
             for de in 1..=n_ctx {
@@ -424,8 +427,10 @@ fn b2_06_same_canonical_class_id_different_compute() {
     v1.validate_shape().expect("v1 is a legal shape");
     v2.validate_shape().expect("v2 is a legal shape");
 
-    let attn_v1 = (0..v1.layer_count).filter(|l| v1.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention).count();
-    let attn_v2 = (0..v2.layer_count).filter(|l| v2.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention).count();
+    let attn_v1 =
+        (0..v1.layer_count).filter(|l| v1.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention).count();
+    let attn_v2 =
+        (0..v2.layer_count).filter(|l| v2.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention).count();
 
     let p1 = draw_ccu(&v1, 11, 2);
     let p2 = draw_ccu(&v2, 11, 2);
@@ -467,8 +472,10 @@ fn b2_07_declared_dtype_prices_the_class_and_binds_to_no_artifact() {
         .flat_map(|t| t.iter())
         .flat_map(|n| n.weight_dtypes.iter().copied())
         .collect();
-    println!("t12 dense row declares weight dtypes {declared:?} (cost {:?} per MAC)",
-        declared.iter().map(|d| kaspa_consensus_core::palw_economic_compute_v1::palw_weight_dtype_cost_v1(*d)).collect::<Vec<_>>());
+    println!(
+        "t12 dense row declares weight dtypes {declared:?} (cost {:?} per MAC)",
+        declared.iter().map(|d| kaspa_consensus_core::palw_economic_compute_v1::palw_weight_dtype_cost_v1(*d)).collect::<Vec<_>>()
+    );
 
     for (name, code) in [("I8/Q* (as registered)", 24u8), ("F16", 1u8), ("I32", 26u8), ("F32", 0u8)] {
         let mut p = base.clone();
@@ -548,7 +555,10 @@ fn b2_09_the_dtype_lever_as_fork_weight() {
             }
         }
     }
-    println!("\n{:>10} {:>22} {:>22} {:>8} {:>22} {:>22} {:>8}", "prefill", "honest CCU", "lied CCU", "price x", "honest pwu", "lied pwu", "weight x");
+    println!(
+        "\n{:>10} {:>22} {:>22} {:>8} {:>22} {:>22} {:>8}",
+        "prefill", "honest CCU", "lied CCU", "price x", "honest pwu", "lied pwu", "weight x"
+    );
     for prefill in [64u32, 256, 1024, 4096, 16384, 65536, 262143] {
         let h = draw_ccu(&base, prefill, 2);
         let l = draw_ccu(&i32_row, prefill, 2);

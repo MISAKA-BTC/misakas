@@ -135,11 +135,25 @@ fn the_c7_own_attempt_reservation_counts_against_a_same_class_commitment() {
         let mut e = room_extras(&p, next);
         e.canonical_work_daa = None;
         e.own_attempt_class = own;
-        palw_v2_apply_one_object_v1(&s, &sp, &block, &commit, f.unavailable_abstains, f.capability_bound, f.uncertified_weightless, f.da_court, &e)
+        palw_v2_apply_one_object_v1(
+            &s,
+            &sp,
+            &block,
+            &commit,
+            f.unavailable_abstains,
+            f.capability_bound,
+            f.uncertified_weightless,
+            f.da_court,
+            &e,
+        )
     };
     let alone = run(None);
     let beside_own = run(Some(id2m));
-    println!("2M one-quantum commitment alone: {:?}; beside the own 2M attempt: {:?}", alone.as_ref().map(|_| "kept"), beside_own.as_ref().map(|_| "kept"));
+    println!(
+        "2M one-quantum commitment alone: {:?}; beside the own 2M attempt: {:?}",
+        alone.as_ref().map(|_| "kept"),
+        beside_own.as_ref().map(|_| "kept")
+    );
     assert!(alone.is_ok(), "control: alone it takes the one slot: {:?}", alone.err());
     assert!(
         matches!(beside_own, Err(PalwStateV2Error::ClassInflightCapped { inflight: 1, cap: 1, .. })),

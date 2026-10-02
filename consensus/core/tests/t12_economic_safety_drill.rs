@@ -13,8 +13,8 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_economic_safety_v1::{
-    PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_exec_quantum_maturity_daa_v1, palw_exec_rights_are_forfeit_v1,
-    palw_permit_value_sompi_v1, palw_realizable_before_maturity_v1, palw_rounds_per_daa_v1, palw_seat_lock_required_v2,
+    PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_exec_quantum_maturity_daa_v1, palw_exec_rights_are_forfeit_v1, palw_permit_value_sompi_v1,
+    palw_realizable_before_maturity_v1, palw_rounds_per_daa_v1, palw_seat_lock_required_v2,
 };
 use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
 use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1};
@@ -90,10 +90,17 @@ fn the_colluding_quorum_outvalues_the_lie_for_every_class() {
         );
         // And with a whole unpriced permit of drift, which the shipped one-sompi margin could not take.
         assert!(
-            seat.saturating_mul(u128::from(PALW_PANEL_COLLUDING_QUORUM_V1)) > gain.saturating_add(u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI)),
+            seat.saturating_mul(u128::from(PALW_PANEL_COLLUDING_QUORUM_V1))
+                > gain.saturating_add(u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI)),
             "class {class_id}: the margin must absorb one unpriced permit"
         );
-        println!("class {} quanta {quanta:>9} residual {:>14} gain {:>14} seat {:>14}", &format!("{class_id}")[..16], residual, gain, seat);
+        println!(
+            "class {} quanta {quanta:>9} residual {:>14} gain {:>14} seat {:>14}",
+            &format!("{class_id}")[..16],
+            residual,
+            gain,
+            seat
+        );
     }
 }
 

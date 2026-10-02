@@ -1624,8 +1624,7 @@ impl PalwConsensusParamsV2 {
         for entry in catalog.entries() {
             // One predicate with the SDK's conformance battery: `catalog_covered_kernels_v1`.
             let kernel_ids = crate::palw_catalog_coverage::catalog_covered_kernels_v1(&entry.reachable_kernels);
-            let reachable =
-                crate::palw_catalog_coverage::PalwReachableKernelSetV1 { execution_class_id: entry.class_id, kernel_ids };
+            let reachable = crate::palw_catalog_coverage::PalwReachableKernelSetV1 { execution_class_id: entry.class_id, kernel_ids };
             crate::palw_catalog_coverage::verify_catalog_coverage_v1(&reachable)
                 .map_err(|_| PalwModeV2Error::Invalid("a registered class reaches kernels this build cannot adjudicate"))?;
         }

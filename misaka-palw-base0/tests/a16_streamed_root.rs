@@ -86,8 +86,7 @@ fn widening_the_context_multiplies_the_leaves_and_not_the_groups() {
     let narrow = small();
     let wide = PalwQwen25GeometryV1 { n_ctx: narrow.n_ctx * 8, ..narrow };
     let (a_n, a_w) = (a16_fixture(narrow), a16_fixture(wide));
-    let (p_n, p_w) =
-        (qwen25_a16_profile_v5(narrow).expect("narrow v5"), qwen25_a16_profile_v5(wide).expect("wide v5"));
+    let (p_n, p_w) = (qwen25_a16_profile_v5(narrow).expect("narrow v5"), qwen25_a16_profile_v5(wide).expect("wide v5"));
 
     let leaves_n = a16_inventory_v1(&a_n, &p_n).expect("narrow inventory").operands().len();
     let leaves_w = a16_inventory_v1(&a_w, &p_w).expect("wide inventory").operands().len();
@@ -101,7 +100,6 @@ fn widening_the_context_multiplies_the_leaves_and_not_the_groups() {
     // Both roots still agree with the materialized build at each width.
     assert_eq!(a16_inventory_root_streamed_v1(&a_w, &p_w).expect("wide streams"), a16_inventory_v1(&a_w, &p_w).unwrap().root());
 }
-
 
 /// **Every streamed opening verifies against the streamed root, and carries the materialized
 /// build's bytes** — on every graph version, for a draw that includes the first, the last, a middle
@@ -132,18 +130,23 @@ fn streamed_readiness_openings_verify_against_the_streamed_root() {
             assert_eq!(o.leaf_index, *i, "{name}: draw order kept");
             verify_artifact_opening_v1(o, root).unwrap_or_else(|e| panic!("{name}: leaf {i} does not verify: {e:?}"));
             let m = &materialized.operands()[*i as usize];
-            assert_eq!((&o.operand.tensor_name, o.operand.layer, o.operand.row_start), (&m.tensor_name, m.layer, m.row_start), "{name}: leaf {i} identity");
+            assert_eq!(
+                (&o.operand.tensor_name, o.operand.layer, o.operand.row_start),
+                (&m.tensor_name, m.layer, m.row_start),
+                "{name}: leaf {i} identity"
+            );
             assert_eq!(o.operand.bytes, m.bytes, "{name}: leaf {i} bytes are the materialized bytes");
         }
         // A tampered path fails the same verifier, so the assertion above is not vacuous.
         let mut bad = openings[2].clone();
-        if let Some(h) = bad.path.first_mut() { *h = kaspa_consensus_core::Hash64::from_u64_word(0xBAD); }
+        if let Some(h) = bad.path.first_mut() {
+            *h = kaspa_consensus_core::Hash64::from_u64_word(0xBAD);
+        }
         assert!(verify_artifact_opening_v1(&bad, root).is_err(), "{name}: a wrong sibling is refused");
         // An index past the inventory is a named refusal, not a panic.
         assert!(a16_readiness_openings_streamed_v1(&artifact, &profile, &[n]).is_err(), "{name}: leaf {n} is outside");
     }
 }
-
 
 /// **The material the panel builds its multiproof from is the streamed material**, and the proof
 /// verifies with the chain's verifier — the exact call chain the readiness path now runs.

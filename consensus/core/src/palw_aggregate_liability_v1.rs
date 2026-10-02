@@ -459,12 +459,12 @@ pub fn palw_evidence_contradiction_offence_v1(
     use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
     use crate::palw_offence_v1::PalwOffenceKindV1;
     let tag = match kind {
-        PalwOffenceKindV1::PanelFalseValidV2 => {
-            borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|payload| palw_contradiction_tag_v1(&payload.contradiction))
-        }
-        PalwOffenceKindV1::ExecutorRefuted => {
-            borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|payload| palw_contradiction_tag_v1(&payload.contradiction))
-        }
+        PalwOffenceKindV1::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence)
+            .ok()
+            .map(|payload| palw_contradiction_tag_v1(&payload.contradiction)),
+        PalwOffenceKindV1::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence)
+            .ok()
+            .map(|payload| palw_contradiction_tag_v1(&payload.contradiction)),
         // RFC-0002 Phase F: kind 7 is an identity mismatch over an IR binding — the class of kind 4's
         // `IdentityMismatch` (9).
         PalwOffenceKindV1::TirIdentityMismatch => Some(PALW_CONTRADICTION_IDENTITY_MISMATCH_V1),
@@ -509,7 +509,9 @@ pub fn palw_producer_route_extra_collection_v1(offence: PalwConvictedOffenceV1, 
     }
     match offence {
         PalwConvictedOffenceV1::DaDefault | PalwConvictedOffenceV1::Equivocation | PalwConvictedOffenceV1::CoveringSigner => 0,
-        PalwConvictedOffenceV1::CourtFraud | PalwConvictedOffenceV1::CourtHeldVerdict | PalwConvictedOffenceV1::Contradiction { .. } => {
+        PalwConvictedOffenceV1::CourtFraud
+        | PalwConvictedOffenceV1::CourtHeldVerdict
+        | PalwConvictedOffenceV1::Contradiction { .. } => {
             crate::palw_escrow_funding_v2::palw_escrow_tier_at_min_bond_v1(min_collateral_sompi, e_sompi)
         }
     }
@@ -559,7 +561,8 @@ mod tests {
         assert_eq!(t12.steps, vec![step(1_234, 1, 0)]);
         assert_eq!(t12.refusal_v1(), None);
         // The refusals, each by name.
-        let bad = |steps: Vec<PalwCapacityStepV1>| PalwCapacityLiabilityV1 { activation: ForkActivation::new(500), steps }.refusal_v1();
+        let bad =
+            |steps: Vec<PalwCapacityStepV1>| PalwCapacityLiabilityV1 { activation: ForkActivation::new(500), steps }.refusal_v1();
         assert!(bad(vec![]).unwrap().contains("no step"));
         assert!(bad(vec![step(501, 10, 0)]).unwrap().contains("first step"));
         assert!(bad(vec![step(500, 10, 0), step(500, 25, 0)]).unwrap().contains("strictly increasing"));
@@ -590,7 +593,10 @@ mod tests {
             (7, 3, 2, 3),
         ];
         for &(lambda, lock_2, commitment, seats) in cases {
-            assert_eq!(palw_seat_duty_v2(lambda, lock_2, commitment, seats, None), palw_rcore_duty_bind_v1(lambda, lock_2, commitment, seats));
+            assert_eq!(
+                palw_seat_duty_v2(lambda, lock_2, commitment, seats, None),
+                palw_rcore_duty_bind_v1(lambda, lock_2, commitment, seats)
+            );
             assert_eq!(palw_seat_lock_v2(lock_2, None), lock_2, "no step: today's lock");
             for rho in [1u32, 2, 10, 25, 50, 100, 1_000, u32::MAX] {
                 for q in [0u16, 142, 249, 250, 500, 1_000] {
@@ -646,7 +652,9 @@ mod tests {
             let intent = palw_offence_is_intent_class_v1(O::Contradiction { tag });
             assert_eq!(intent, matches!(tag, 9 | 10 | 11 | 13), "tag {tag}");
         }
-        for tier in [O::CourtHeldVerdict, O::Equivocation, O::CoveringSigner, O::Contradiction { tag: 5 }, O::Contradiction { tag: 12 }] {
+        for tier in
+            [O::CourtHeldVerdict, O::Equivocation, O::CoveringSigner, O::Contradiction { tag: 5 }, O::Contradiction { tag: 12 }]
+        {
             assert!(!palw_offence_is_intent_class_v1(tier), "{tier:?} keeps the 3G tier");
         }
     }

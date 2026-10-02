@@ -48,7 +48,9 @@ use kaspa_consensus_core::palw_reward_v2::{PalwRewardParamsV2, palw_reward_carve
 use kaspa_consensus_core::palw_state_v2::{
     PalwClassStateV2, PalwClassStatusV2, PalwExposureBasisV1, PalwPwuRuleV2, palw_exposure_pwu_v3,
 };
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_deepest_job_capped_v1};
+use kaspa_consensus_core::palw_step::{
+    PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_deepest_job_capped_v1,
+};
 use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ticket_target_v1};
 
 /// `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` on the shipped card: 2^26.
@@ -105,7 +107,15 @@ fn class_state(declared_leaves: u64) -> PalwClassStateV2 {
 }
 
 /// Measure one admissible canonical split of `profile` exactly as the chain would price it.
-fn measure(profile: &PalwShapeProfileV3, label: &'static str, prefill: u32, decode: u32, w0: u128, worst: u64, basis: PalwExposureBasisV1) -> Row {
+fn measure(
+    profile: &PalwShapeProfileV3,
+    label: &'static str,
+    prefill: u32,
+    decode: u32,
+    w0: u128,
+    worst: u64,
+    basis: PalwExposureBasisV1,
+) -> Row {
     let job = rc_job_context(profile, prefill, decode);
 
     // ---- admission bound 1: the leaf count under the court ladder ----
@@ -194,13 +204,20 @@ fn the_registrants_canonical_split_moves_the_slashable_reservation_230x_at_equal
     let (escrow, rate, w0) = t12_w0();
 
     println!("\n=== t12 economic inputs, read from palw_t12_shipped_params() ===");
-    println!("  escrow per claim        {escrow} sompi = {:.2} MSK   (subsidy {T12_BLOCK_SUBSIDY_SOMPI} x carve)", escrow as f64 / 1e8);
+    println!(
+        "  escrow per claim        {escrow} sompi = {:.2} MSK   (subsidy {T12_BLOCK_SUBSIDY_SOMPI} x carve)",
+        escrow as f64 / 1e8
+    );
     println!("  rate_sompi_per_giga     {rate}");
     println!("  W0                      {w0} CCU");
-    println!("  exposure basis (floor)  base_declared {} leaves / base_canonical {} MAC-eq", basis.base_declared, basis.base_canonical);
+    println!(
+        "  exposure basis (floor)  base_declared {} leaves / base_canonical {} MAC-eq",
+        basis.base_declared, basis.base_canonical
+    );
     println!("  U2 -> U3 divisor        {:.4}x", basis.base_canonical as f64 / basis.base_declared as f64);
 
-    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 512, ..QWEN25_1_5B }).expect("A16 @ n_ctx 512 is expressible");
+    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 512, ..QWEN25_1_5B })
+        .expect("A16 @ n_ctx 512 is expressible");
     let worst = worst_case_step_leaf_count_deepest_job_capped_v1(&profile, LADDER).expect("deepest job fits the 2^26 ladder");
 
     println!("\n=== ONE profile: Qwen2.5-1.5B A16 graph-v7 @ n_ctx 512 ===");
@@ -261,10 +278,7 @@ fn the_registrants_canonical_split_moves_the_slashable_reservation_230x_at_equal
     println!("\n  A: {:.2} MAC-eq of fork weight per sompi at risk", a.weight_per_sompi_at_risk());
     println!("  B: {:.2} MAC-eq of fork weight per sompi at risk", b.weight_per_sompi_at_risk());
     println!("  COLLATERAL DISCOUNT B over A = {discount:.1}x");
-    assert!(
-        discount > 100.0,
-        "the registrant buys >100x the fork weight per sompi at risk by choosing B over A — got {discount}"
-    );
+    assert!(discount > 100.0, "the registrant buys >100x the fork weight per sompi at risk by choosing B over A — got {discount}");
 
     // ---------------------------------------------------------------------------------------
     // 7. The attacker's real cost. B is not paying for the discount — B is CHEAPER.
@@ -275,10 +289,7 @@ fn the_registrants_canonical_split_moves_the_slashable_reservation_230x_at_equal
     println!("  B executes {} MAC-eq per block of weight", b.honest_mac_eq_per_block);
     println!("  A / B honest work = {honest_ratio:.2}x  -> B is {honest_ratio:.2}x CHEAPER per block");
     println!("  the choice costs ONE registration transaction; no extra hardware, no extra inference");
-    assert!(
-        honest_ratio > 1.0,
-        "the discounted variant does not cost the attacker more real compute — got {honest_ratio}x"
-    );
+    assert!(honest_ratio > 1.0, "the discounted variant does not cost the attacker more real compute — got {honest_ratio}x");
 
     // ---------------------------------------------------------------------------------------
     // 8. The finding is not an artefact of one W0. Sweep the escrow term.
@@ -290,13 +301,7 @@ fn the_registrants_canonical_split_moves_the_slashable_reservation_230x_at_equal
         let ax = measure(&profile, "A", 510, 2, w0_x, worst, basis);
         let bx = measure(&profile, "B", 1, 511, w0_x, worst, basis);
         let d = bx.weight_per_sompi_at_risk() / ax.weight_per_sompi_at_risk();
-        println!(
-            "  {:>22}  {:>18.2}  {:>18.2}  {:>11.1}x",
-            w0_x,
-            ax.weight_per_sompi_at_risk(),
-            bx.weight_per_sompi_at_risk(),
-            d
-        );
+        println!("  {:>22}  {:>18.2}  {:>18.2}  {:>11.1}x", w0_x, ax.weight_per_sompi_at_risk(), bx.weight_per_sompi_at_risk(), d);
         assert!(d > 50.0, "the discount survives W0 x{mult} — got {d}");
     }
 
@@ -327,7 +332,8 @@ fn the_registrants_canonical_split_moves_the_slashable_reservation_230x_at_equal
 fn regression_the_collateral_at_risk_per_unit_of_fork_weight_is_not_registrant_chosen() {
     let basis = t12_floor_basis();
     let (_escrow, _rate, w0) = t12_w0();
-    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 512, ..QWEN25_1_5B }).expect("A16 @ n_ctx 512 is expressible");
+    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 512, ..QWEN25_1_5B })
+        .expect("A16 @ n_ctx 512 is expressible");
     let worst = worst_case_step_leaf_count_deepest_job_capped_v1(&profile, LADDER).expect("deepest job fits the 2^26 ladder");
 
     // Every admissible canonical split of ONE profile must buy fork weight at the same collateral

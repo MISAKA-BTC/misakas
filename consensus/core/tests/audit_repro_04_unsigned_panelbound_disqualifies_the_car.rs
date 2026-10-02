@@ -157,18 +157,18 @@ fn ctx(word: u64, daa: u64, blue: u64, subsidy: u64) -> PalwBlockContextV2 {
 /// testnet-12's real lattice windows, so the gap the realizable-rights term prices is t12's.
 fn state_params(class_id: u64) -> PalwStateParamsV2 {
     PalwStateParamsV2::new(
-        100,                 // beta_permille
-        600,                 // window_bind
-        600,                 // window_receipt
+        100, // beta_permille
+        600, // window_bind
+        600, // window_receipt
         T12_WINDOW_CHALLENGE,
         T12_WINDOW_COURT,
-        1_000,               // epoch_length
-        h(class_id),         // base_class_id
-        4,                   // class_daa_max_factor
-        1_000,               // budget_tolerance_permille
-        400_000,             // min_collateral_sompi (t12's)
-        900,                 // fp_attempt_share_permille
-        600,                 // fp_abandon_hold_daa
+        1_000,       // epoch_length
+        h(class_id), // base_class_id
+        4,           // class_daa_max_factor
+        1_000,       // budget_tolerance_permille
+        400_000,     // min_collateral_sompi (t12's)
+        900,         // fp_attempt_share_permille
+        600,         // fp_abandon_hold_daa
     )
     .expect("state params")
 }
@@ -183,8 +183,11 @@ fn t12_extras(lane_open: bool) -> PalwTransitionExtrasV1 {
             // testnet-12's maturity (user decision 2026-09-25): the short challenge window it applies.
             maturity_daa: kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1,
         }),
-        round_lane: lane_open
-            .then(|| PalwExecLaneFoldV1 { schedule_span_daa: 1, execution_quantum: PALW_EXECUTION_QUANTUM_V1, span_open_round: 0 }),
+        round_lane: lane_open.then(|| PalwExecLaneFoldV1 {
+            schedule_span_daa: 1,
+            execution_quantum: PALW_EXECUTION_QUANTUM_V1,
+            span_open_round: 0,
+        }),
         // t12 arms every fence from DAA 0, the 2026-09-23 seat-lock unit and inert-PanelBound fix included.
         audit_2026_09_23_active: true,
         ..Default::default()
@@ -201,22 +204,8 @@ fn step(
     work: PalwBlockWorkV3<'_>,
     extras: &PalwTransitionExtrasV1,
 ) -> FoldResult {
-    apply_palw_transition_v7(
-        parent,
-        p,
-        None,
-        c,
-        objects,
-        work,
-        &[],
-        Hash64::default(),
-        false,
-        false,
-        false,
-        false,
-        extras,
-    )
-    .map(|(state, _delta, _skips)| state)
+    apply_palw_transition_v7(parent, p, None, c, objects, work, &[], Hash64::default(), false, false, false, false, extras)
+        .map(|(state, _delta, _skips)| state)
 }
 
 fn registration(class: u64, pwu_per_inference: u64, slash: u64, initial_target: u128, share: u16) -> Obj {
@@ -395,8 +384,11 @@ fn an_unsigned_panelbound_on_the_t12_2m_row_makes_the_real_fold_reject_the_carry
     let dense_out = drive(dense_per_draw, dense.slash_value_per_pwu, card_collateral, false);
     println!("\n================ THE ATTACK: unsigned PanelBound on a held-2M claim ================");
     println!("claim.pwu           = {} [U7 = expected_attempts x U2 MAC-eq]", dense_out.claim_pwu);
-    println!("claim.reserved      = {} sompi = {:.2} MSK  [U3 x slash — the unit the collateral was posted in]",
-        dense_out.reserved_sompi, msk(dense_out.reserved_sompi));
+    println!(
+        "claim.reserved      = {} sompi = {:.2} MSK  [U3 x slash — the unit the collateral was posted in]",
+        dense_out.reserved_sompi,
+        msk(dense_out.reserved_sompi)
+    );
     println!("claim.escrowed_reward = {} sompi = {:.2} MSK", dense_out.escrowed_reward, msk(dense_out.escrowed_reward as u128));
 
     let (required, available, seat) = match &dense_out.result {
@@ -435,8 +427,11 @@ fn an_unsigned_panelbound_on_the_t12_2m_row_makes_the_real_fold_reject_the_carry
     println!("\n================ CONSERVATISM OF THE MEASURED `required` ================");
     println!("fixture claim.escrowed_reward = {} sompi (no carve folded)", dense_out.escrowed_reward);
     println!("t12's real escrow per claim   = {t12_escrow} sompi = {:.2} MSK  [subsidy x 720/1000]", msk(t12_escrow));
-    println!("adding it would raise required by ~{cash_adds} sompi = {:.2} MSK ({:.6}% of required)",
-        msk(cash_adds), cash_adds as f64 * 100.0 / required as f64);
+    println!(
+        "adding it would raise required by ~{cash_adds} sompi = {:.2} MSK ({:.6}% of required)",
+        msk(cash_adds),
+        cash_adds as f64 * 100.0 / required as f64
+    );
     println!("=> the measured `required` is a LOWER bound on t12's; the refusal is understated, never overstated");
 
     // ---- THE ECONOMICS ----
@@ -444,16 +439,19 @@ fn an_unsigned_panelbound_on_the_t12_2m_row_makes_the_real_fold_reject_the_carry
     println!("\n================ VALUE GAINED vs REAL WORK ================");
     println!("attacker's real work  = 1 carrier transaction (0x4b), no compute, no bond, no collateral at risk");
     println!("attacker's real cost  = {MIN_RELAY_FEE_SOMPI} sompi = {:.4} MSK (minimum relay fee)", msk(MIN_RELAY_FEE_SOMPI as u128));
-    println!("value destroyed       = {block_value} sompi = {:.2} MSK (one block's subsidy, removed from the virtual chain)", msk(block_value));
-    println!("leverage              = {:.0}x (block subsidy destroyed per sompi of relay fee spent)", block_value as f64 / MIN_RELAY_FEE_SOMPI as f64);
+    println!(
+        "value destroyed       = {block_value} sompi = {:.2} MSK (one block's subsidy, removed from the virtual chain)",
+        msk(block_value)
+    );
+    println!(
+        "leverage              = {:.0}x (block subsidy destroyed per sompi of relay fee spent)",
+        block_value as f64 / MIN_RELAY_FEE_SOMPI as f64
+    );
     println!("precondition cost     = one held-2M inference: {dense_per_draw} MAC-eq (2,097,152-token prefill)");
     println!("reusability           = the claim stays poisonous for window_bind = 600 DAA");
 
     // ---- THE ASSERTIONS THAT MAKE A PASS MEAN "THE EXPLOIT IS REAL" ----
-    assert!(
-        required > available,
-        "the gate must refuse: required {required} sompi must exceed available {available} sompi"
-    );
+    assert!(required > available, "the gate must refuse: required {required} sompi must exceed available {available} sompi");
     assert_eq!(
         available, T12_GENESIS_BOND_COLLATERAL_SOMPI as u128,
         "available is the FULL posted collateral — no lock is live yet, so this is not a race"
@@ -464,7 +462,9 @@ fn an_unsigned_panelbound_on_the_t12_2m_row_makes_the_real_fold_reject_the_carry
         msk(required),
         msk(available)
     );
-    println!("\nCONFIRMED: an unsigned, keyless PanelBound drives the real fold to Err, which processor.rs:2051 turns into StatusDisqualifiedFromChain.\n");
+    println!(
+        "\nCONFIRMED: an unsigned, keyless PanelBound drives the real fold to Err, which processor.rs:2051 turns into StatusDisqualifiedFromChain.\n"
+    );
 }
 
 /// **The same attack with the execution lane OPEN** — testnet-12's real configuration, where

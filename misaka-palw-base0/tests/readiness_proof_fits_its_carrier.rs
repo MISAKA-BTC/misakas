@@ -12,13 +12,13 @@
 //! not run is worth less than no measurement.
 
 use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, palw_artifact_multiproof_v1, verify_artifact_multiproof_v1};
+use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_model_registry_v1::{
     PALW_READINESS_V2_BUDGET_BYTES_V1, PALW_READINESS_V2_CHUNKS_V1, PALW_READINESS_V2_FRAME_BYTES_V1,
     PALW_READINESS_V2_LEAF_MAX_BYTES_V1, PALW_READINESS_V2_OPERAND_MAX_BYTES_V1, palw_readiness_v2_challenge_seed_v1,
     palw_readiness_v2_draw_v1, palw_readiness_v2_opening_is_the_challenge_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PalwBondKeyV2, PalwConsensusObjectV2};
-use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::classes::*;
@@ -75,9 +75,15 @@ fn the_shipped_artifacts_possession_proof_is_weighed_against_its_carrier() {
             }
             let r = &digest.rows()[*index as usize];
             budget += r.byte_len as usize;
-            let row_bytes = misaka_palw_base0::inventory::a16_inventory_row_bytes_v1(&artifact, &row.profile, &r.tensor_name, r.layer, r.row_start)
-                .unwrap_or_else(|e| panic!("leaf {index}: {e:?}"))
-                .unwrap_or_else(|| panic!("leaf {index} names a row the artifact does not emit"));
+            let row_bytes = misaka_palw_base0::inventory::a16_inventory_row_bytes_v1(
+                &artifact,
+                &row.profile,
+                &r.tensor_name,
+                r.layer,
+                r.row_start,
+            )
+            .unwrap_or_else(|e| panic!("leaf {index}: {e:?}"))
+            .unwrap_or_else(|| panic!("leaf {index} names a row the artifact does not emit"));
             opened.push((
                 *index,
                 PalwArtifactOperandV1 { tensor_name: r.tensor_name.clone(), layer: r.layer, row_start: r.row_start, bytes: row_bytes },

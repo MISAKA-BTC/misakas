@@ -73,7 +73,10 @@ fn module_imports(code: &str) -> Vec<((usize, usize), Result<Vec<String>, String
         let module_end = MODULES.iter().filter_map(|m| stmt.find(m).map(|i| i + m.len())).max().unwrap_or(0);
         let tail = &stmt[module_end..];
         if tail.contains('*') {
-            out.push((range, Err(format!("a glob import of a capacity module: `{}`", stmt.split_whitespace().collect::<Vec<_>>().join(" ")))));
+            out.push((
+                range,
+                Err(format!("a glob import of a capacity module: `{}`", stmt.split_whitespace().collect::<Vec<_>>().join(" "))),
+            ));
             continue;
         }
         let names: Vec<String> = tail
@@ -472,5 +475,9 @@ fn allowed_fold() -> u128 { cap(3) }
     let glob = code_only("use crate::palw_capacity_shadow_v1::*;\n");
     assert!(module_imports(&glob)[0].1.is_err(), "a glob import is refused");
     assert!(occurrences("palw_capacity_weight_cap", "palw_capacity_weight_cap_v1", false).is_empty());
-    assert_eq!(occurrences("x.palw_capacity_shadow_v1_impl()", MODULES[1], true).len(), 1, "the read impl's name is a module-path prefix");
+    assert_eq!(
+        occurrences("x.palw_capacity_shadow_v1_impl()", MODULES[1], true).len(),
+        1,
+        "the read impl's name is a module-path prefix"
+    );
 }

@@ -128,13 +128,8 @@ fn b2x_duplicate_artifact_root_only_fires_within_one_class_id() {
     c.try_step(&[registration(0xC0DE, ROOT, 1)]).expect("the first class over the root");
 
     // Same class id, a stranger's line over the class's founding root: refused.
-    let squat = Obj::ModelLineFounded {
-        class_id: h(0xC0DE),
-        name: b"COPY".to_vec(),
-        founder: bond(0xB1),
-        root: h(ROOT),
-        signature: vec![1],
-    };
+    let squat =
+        Obj::ModelLineFounded { class_id: h(0xC0DE), name: b"COPY".to_vec(), founder: bond(0xB1), root: h(ROOT), signature: vec![1] };
     let within = c.try_step(&[squat]);
     println!("same class id, second line over the same root => {within:?}");
     assert!(matches!(within, Err(PalwStateV2Error::DuplicateArtifactRoot { .. })), "the rule fires within one class id");
@@ -183,8 +178,7 @@ fn b2x_the_t12_rule_set_does_not_change_the_answer() {
     let mut ok = 0;
     for k in 0..8u64 {
         c.daa += 1;
-        let ctx =
-            PalwBlockContextV2 { block: h(c.daa | 0x1000_0000), daa_score: c.daa, blue_score: c.daa, subsidy: 1_000_000 };
+        let ctx = PalwBlockContextV2 { block: h(c.daa | 0x1000_0000), daa_score: c.daa, blue_score: c.daa, subsidy: 1_000_000 };
         match apply_palw_transition_v2_with_extras(
             &c.state,
             &c.params,

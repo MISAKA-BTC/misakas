@@ -31,10 +31,9 @@ fn the_steady_state_permit_yield_and_seat_lock_per_t12_class() {
     let works = palw_genesis_model_works_v1(&bundle.genesis_objects);
     let base = bundle.base_class_id;
 
-    let fp = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .unwrap();
+    let fp =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .unwrap();
     let (p, d) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let fj = kaspa_consensus_core::palw_base0_profile::rc_job_context(&fp, p, d);
     let fw = kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1(&fp, &fj).unwrap();
@@ -103,9 +102,22 @@ fn the_steady_state_permit_yield_and_seat_lock_per_t12_class() {
         println!("    claim.pwu (weight)       {claim_pwu}");
         println!("    [cash]   escrow          {escrow} sompi = {:.2} MSK (HARD CAP)", escrow as f64 / 1e8);
         println!("    [permit] quanta minted   {quanta}");
-        println!("             nominal value   {permit_value} sompi = {:.2} MSK  ({:.2}x the escrow, UNCAPPED)", permit_value as f64 / 1e8, permit_value as f64 / escrow as f64);
-        println!("    [weight] fork weight     {} sompi = {:.2} MSK", claim_pwu as u128 * *slash_value_per_pwu as u128, (claim_pwu as u128 * *slash_value_per_pwu as u128) as f64 / 1e8);
-        println!("    seat lock required       {lock} sompi = {:.2} MSK  ({:.2}x posted) -> {}", lock as f64 / 1e8, lock as f64 / POSTED_COLLATERAL_SOMPI as f64, if lock <= POSTED_COLLATERAL_SOMPI { "bindable" } else { "REFUSED" });
+        println!(
+            "             nominal value   {permit_value} sompi = {:.2} MSK  ({:.2}x the escrow, UNCAPPED)",
+            permit_value as f64 / 1e8,
+            permit_value as f64 / escrow as f64
+        );
+        println!(
+            "    [weight] fork weight     {} sompi = {:.2} MSK",
+            claim_pwu as u128 * *slash_value_per_pwu as u128,
+            (claim_pwu as u128 * *slash_value_per_pwu as u128) as f64 / 1e8
+        );
+        println!(
+            "    seat lock required       {lock} sompi = {:.2} MSK  ({:.2}x posted) -> {}",
+            lock as f64 / 1e8,
+            lock as f64 / POSTED_COLLATERAL_SOMPI as f64,
+            if lock <= POSTED_COLLATERAL_SOMPI { "bindable" } else { "REFUSED" }
+        );
         println!("    --- per unit of REAL work ---");
         println!("      permits per G MAC-eq   {:.6}", quanta as f64 / (real_work as f64 / 1e9));
         println!("      cash MSK per G MAC-eq  {:.6}", (escrow as f64 / 1e8) / (real_work as f64 / 1e9));

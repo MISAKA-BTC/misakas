@@ -305,10 +305,8 @@ fn the_fleets_premine_indices_are_unchanged_on_t12s_own_txid() {
     // The eight the fleet runs after the regenesis (bond 0 on ibm beside bond 1, the re-keyed bond 7
     // beside bonds 2–5), spelled out so the pairing is readable rather than derived.
     for (bond_index, fee_index) in [(0u32, 41u32), (1, 42), (2, 43), (3, 44), (4, 45), (5, 46), (6, 47), (7, 48)] {
-        let position = PALW_T12_GENESIS_BONDS
-            .iter()
-            .position(|c| c.premine_index == bond_index)
-            .expect("the fleet's bond is a genesis card");
+        let position =
+            PALW_T12_GENESIS_BONDS.iter().position(|c| c.premine_index == bond_index).expect("the fleet's bond is a genesis card");
         assert_eq!(
             MAIN_PREMINE_INDEX + 1 + position as u32,
             fee_index,
@@ -374,7 +372,6 @@ fn t12_genesis_reads_its_root_from_the_committed_manifest() {
     assert_ne!(PALW_T12_GENESIS_QWEN25_A16_8K_ARTIFACT_ROOT, PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT);
 }
 
-
 /// **Every fence testnet-11 armed, testnet-12 arms from genesis** — the operator's question of
 /// 2026-09-23, as a ledger that fails on the first regression.
 ///
@@ -422,7 +419,11 @@ fn t12_arms_every_fence_t11_armed() {
         }
     }
     assert!(armed_on_t11 >= 36, "the t11 ledger has {armed_on_t11} armed fences; the table this was written against had 36");
-    assert!(regressions.is_empty(), "fences testnet-11 armed that testnet-12 does not arm from genesis:\n  {}", regressions.join("\n  "));
+    assert!(
+        regressions.is_empty(),
+        "fences testnet-11 armed that testnet-12 does not arm from genesis:\n  {}",
+        regressions.join("\n  ")
+    );
 }
 
 /// **The genesis free-prompt gate names exactly the classes the card registers** (the mainnet rule,

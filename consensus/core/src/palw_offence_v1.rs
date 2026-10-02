@@ -607,9 +607,15 @@ where
         PalwOffenceKindV1::ExecutorEquivocation => {
             verify_palw_executor_equivocation_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, verify_signature)
         }
-        PalwOffenceKindV1::PanelFalseValid => {
-            verify_palw_panel_false_valid_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, max_step_leaf_count, verify_signature)
-        }
+        PalwOffenceKindV1::PanelFalseValid => verify_palw_panel_false_valid_v1(
+            accused,
+            evidence,
+            palw_pubkey,
+            palw_bond_active,
+            network_id,
+            max_step_leaf_count,
+            verify_signature,
+        ),
         PalwOffenceKindV1::CourtExecutorGuilty => Err(PalwOffenceVerifyError::CourtGuiltyIsNotStandalone),
         // Never through this gate: past `palw_offence_attribution` the processor sends kind 3 to
         // `palw_check_panel_false_valid_v2` and kind 4 to `palw_check_executor_refuted_v1`, and
@@ -947,8 +953,8 @@ mod tests {
                 &[7; 4],
                 true,
                 b"testnet-11",
-                    crate::palw_step::PALW_STEP_MAX_LEAVES,
-                    |_, _, _, _| true,
+                crate::palw_step::PALW_STEP_MAX_LEAVES,
+                |_, _, _, _| true,
             )
             .unwrap_err();
             assert_eq!(err, PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
@@ -1026,8 +1032,8 @@ mod tests {
                 &[7; 4],
                 true,
                 b"testnet-11",
-                    crate::palw_step::PALW_STEP_MAX_LEAVES,
-                    |_, _, _, _| true,
+                crate::palw_step::PALW_STEP_MAX_LEAVES,
+                |_, _, _, _| true,
             )
             .unwrap_err();
             assert_eq!(err, PalwOffenceVerifyError::PanelFalseValidNotValidVerdict);

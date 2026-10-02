@@ -118,17 +118,20 @@ pub(crate) fn dense_artifact_by_registered_root(
     // and `SIDECAR_DISAGREED` records it for the node to report, because a stale sidecar left
     // unmentioned is how the next reader inherits it.
     let class_id = kaspa_consensus_core::palw_class_identity_v1::PalwClassIdV1::of_this_graph(profile.shape_profile_id());
-    holdings.iter().find(|holding| {
-        let Some(a) = artifact_of(holding) else { return false };
-        match crate::class_manifest::inventory_root_from_sidecar(holding, class_id) {
-            Ok(Some(claimed)) => claimed.into_hash64() == root,
-            Ok(None) => misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root),
-            Err(why) => {
-                note_sidecar_disagreement(&why.to_string());
-                misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root)
+    holdings
+        .iter()
+        .find(|holding| {
+            let Some(a) = artifact_of(holding) else { return false };
+            match crate::class_manifest::inventory_root_from_sidecar(holding, class_id) {
+                Ok(Some(claimed)) => claimed.into_hash64() == root,
+                Ok(None) => misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root),
+                Err(why) => {
+                    note_sidecar_disagreement(&why.to_string());
+                    misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root)
+                }
             }
-        }
-    }).and_then(artifact_of)
+        })
+        .and_then(artifact_of)
 }
 
 /// **Sidecars that disagreed with their own file, for the node to report once.**

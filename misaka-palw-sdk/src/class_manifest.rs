@@ -60,17 +60,28 @@ pub struct PalwClassManifestFileV1 {
 #[derive(Debug, PartialEq, Eq)]
 pub enum PalwClassManifestErrorV1 {
     /// The manifest describes a different file. Never recoverable by retrying: regenerate it.
-    DigestMismatch { manifest: PalwArtifactDigestV1, artifact: PalwArtifactDigestV1 },
+    DigestMismatch {
+        manifest: PalwArtifactDigestV1,
+        artifact: PalwArtifactDigestV1,
+    },
     /// The manifest is well-formed and simply does not mention this class.
-    NoSuchClass { class_id: PalwClassIdV1 },
+    NoSuchClass {
+        class_id: PalwClassIdV1,
+    },
     /// The manifest says one root and a recomputation says another — the check
     /// `--palw-verify-class-manifest` exists for, and a refusal to start rather than a warning.
-    RootDisagrees { class_id: PalwClassIdV1, manifest: PalwInventoryRootV1, recomputed: PalwInventoryRootV1 },
+    RootDisagrees {
+        class_id: PalwClassIdV1,
+        manifest: PalwInventoryRootV1,
+        recomputed: PalwInventoryRootV1,
+    },
     Malformed(String),
     /// The file's lineage has no digest this build can bind a manifest to. A refusal, never a
     /// default: a manifest whose digest were the zero hash would "agree" with every file of that
     /// lineage — the first Qwen3.6 sidecar (2026-09-23) would have been exactly that.
-    NoDigestForLineage { lineage_id: String },
+    NoDigestForLineage {
+        lineage_id: String,
+    },
 }
 
 impl std::fmt::Display for PalwClassManifestErrorV1 {
@@ -92,10 +103,9 @@ impl std::fmt::Display for PalwClassManifestErrorV1 {
                  same file — one of the two is not the root a registration can pin, and a producer that guesses gets slashed"
             ),
             Self::Malformed(why) => write!(f, "this manifest cannot be read: {why}"),
-            Self::NoDigestForLineage { lineage_id } => write!(
-                f,
-                "no digest binds a manifest to a `{lineage_id}` artifact in this build, so none is written or believed"
-            ),
+            Self::NoDigestForLineage { lineage_id } => {
+                write!(f, "no digest binds a manifest to a `{lineage_id}` artifact in this build, so none is written or believed")
+            }
         }
     }
 }
@@ -361,11 +371,7 @@ mod tests {
     fn an_absent_class_is_named_rather_than_defaulted() {
         let m = manifest();
         let missing = PalwClassIdV1::of_this_graph(Hash64::from_u64_word(0xFFFF));
-        assert_eq!(
-            m.rows.iter().find(|r| r.class_id == missing).map(|r| r.inventory_root),
-            None,
-            "the class is genuinely absent"
-        );
+        assert_eq!(m.rows.iter().find(|r| r.class_id == missing).map(|r| r.inventory_root), None, "the class is genuinely absent");
         let said = PalwClassManifestErrorV1::NoSuchClass { class_id: missing }.to_string();
         assert!(said.contains("names no class"), "{said}");
         assert!(said.contains("regenerate it with the build you are running"), "{said}");

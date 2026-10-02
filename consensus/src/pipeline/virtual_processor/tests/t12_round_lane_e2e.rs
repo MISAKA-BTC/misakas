@@ -1167,12 +1167,8 @@ async fn t12_a_skipped_own_attempt_has_its_carve_withheld_from_the_child_coinbas
     // pays the attempt block's worker base less exactly that escrow — the figure the skipped state
     // now withholds as well.
     let child = chain.heartbeat(ttpb, Vec::new()).await;
-    let paid_to_card0: u64 = child.transactions[0]
-        .outputs
-        .iter()
-        .filter(|o| o.script_public_key == card_payout_spk(0))
-        .map(|o| o.value)
-        .sum();
+    let paid_to_card0: u64 =
+        child.transactions[0].outputs.iter().filter(|o| o.script_public_key == card_payout_spk(0)).map(|o| o.value).sum();
     let split = vp.fee_split_at(attempt_block.header.daa_score).expect("the overlay split");
     let parts = kaspa_consensus_core::dns_finality::split_block_subsidy(
         vp.coinbase_manager.calc_block_subsidy(attempt_block.header.daa_score),

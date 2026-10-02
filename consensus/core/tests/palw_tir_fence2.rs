@@ -9,8 +9,8 @@
 
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA,
-    Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v4_params, palw_t12_shipped_params,
+    Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_release_v4_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -116,11 +116,16 @@ fn admission_reads_h7_from_the_fence_and_the_release_below_it() {
     use kaspa_consensus_core::palw_tir_fence2_v1::{PalwTirDemandRulesV1, palw_tir_demand_rules_at_v1};
     let p = armed(ForkActivation::new(AT));
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
-    for (daa, want) in [(AT - 1, PalwTirDemandRulesV1::Release2000), (AT, PalwTirDemandRulesV1::H7), (AT + 9, PalwTirDemandRulesV1::H7)] {
+    for (daa, want) in
+        [(AT - 1, PalwTirDemandRulesV1::Release2000), (AT, PalwTirDemandRulesV1::H7), (AT + 9, PalwTirDemandRulesV1::H7)]
+    {
         assert_eq!(PalwTirAdmissionRulesV1::at(&p, daa).expect("past palw_tir_v1").demand, want, "{daa}");
         assert_eq!(palw_tir_demand_rules_at_v1(&bundle.state, daa), want, "the fold's copy at {daa}");
         assert_eq!(p.palw_tir_demand_rules_at(daa), want);
     }
     let shipped = palw_t12_release_v4_params();
-    assert_eq!(PalwTirAdmissionRulesV1::at(&shipped, u64::MAX - 1).expect("past palw_tir_v1").demand, PalwTirDemandRulesV1::Release2000);
+    assert_eq!(
+        PalwTirAdmissionRulesV1::at(&shipped, u64::MAX - 1).expect("past palw_tir_v1").demand,
+        PalwTirDemandRulesV1::Release2000
+    );
 }

@@ -863,8 +863,7 @@ async fn register(
     let pool_terms = walk.params.palw_activation_pool_at(walk.node.daa());
     let sponsor = walk.args.sponsor.filter(|_| pool_terms.is_some());
     if let (Some(terms), Some(amount)) = (pool_terms, sponsor) {
-        let recommended =
-            kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
+        let recommended = kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
         flow.ui.sub(&format!(
             "sponsor   {} into its Activation Pool once registered — a donation to its preparers, never refunded once \
              folded (recommended pool {}, non-binding; --sponsor <MSK> changes it, --no-sponsor skips it)",
@@ -896,10 +895,7 @@ async fn register(
                 .map(|c| c.code().to_string())
                 .unwrap_or_default();
             flow.ui.sub("submitted  ✅");
-            flow.ui.sub(&format!(
-                "accepted   ❌{}",
-                if code.is_empty() { String::new() } else { format!("  {code}") }
-            ));
+            flow.ui.sub(&format!("accepted   ❌{}", if code.is_empty() { String::new() } else { format!("  {code}") }));
             return Err(Halt::Blocked(finding));
         }
         Err(other) => return Err(other),
@@ -912,8 +908,7 @@ async fn register(
     crate::palw_model_ops::print_pipeline(&tracked);
     if !tracked.accepted && !tracked.reject_code.is_empty() {
         return Err(Halt::Blocked(
-            Finding::error("E-OBJECT-REFUSED", exit::FUNDS, "The registration was not accepted")
-                .current(tracked.reject_code),
+            Finding::error("E-OBJECT-REFUSED", exit::FUNDS, "The registration was not accepted").current(tracked.reject_code),
         ));
     }
     // **A mined carrier the processor dropped is a verdict, not a wait** (testnet-12 lifecycle audit
@@ -958,20 +953,24 @@ async fn register(
             format!("class {}… · share {share} ‰ · included DAA {}", &class_hex[..16], included.included_daa),
         );
     } else {
-        return Err(Halt::Blocked(
-            Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included")
-                .current(kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string()),
-        ));
+        return Err(Halt::Blocked(Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included").current(
+            kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string(),
+        )));
     }
     if let Some(amount) = sponsor {
         let class_id = entry.class_id();
         flow.ui.mark(Severity::Info, "sponsor", &format!("filing {} into its Activation Pool…", crate::palw_model::msk(amount)));
-        match crate::palw_activation_pool::sponsor_listing(&walk.submit_ctx(), &ks, class_id, amount, Duration::from_secs(20 * 60)).await
+        match crate::palw_activation_pool::sponsor_listing(&walk.submit_ctx(), &ks, class_id, amount, Duration::from_secs(20 * 60))
+            .await
         {
             Ok(txid) => flow.row(
                 Severity::Ok,
                 "sponsored",
-                format!("{} into its Activation Pool · tx {}", crate::palw_model::msk(amount), if txid.len() > 16 { &txid[..16] } else { &txid }),
+                format!(
+                    "{} into its Activation Pool · tx {}",
+                    crate::palw_model::msk(amount),
+                    if txid.len() > 16 { &txid[..16] } else { &txid }
+                ),
             ),
             // The registration stands: a sponsor not filed is a warning and a command, never a halt.
             Err(why) => flow.row(

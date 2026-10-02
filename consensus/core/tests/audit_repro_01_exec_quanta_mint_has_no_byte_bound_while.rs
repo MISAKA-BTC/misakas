@@ -81,10 +81,9 @@ fn t12_rows() -> Vec<Row> {
     // from the base-0 profile exactly as `PalwChainStateV2::base_known_draw` does it.
     let works = palw_genesis_model_works_v1(&bundle.genesis_objects);
     let base = bundle.base_class_id;
-    let floor_profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("the base-0 profile this build describes");
+    let floor_profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the base-0 profile this build describes");
     let (fp, fd) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let floor_job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor_profile, fp, fd);
     let floor_work = kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1(&floor_profile, &floor_job)
@@ -105,15 +104,19 @@ fn t12_rows() -> Vec<Row> {
         // replaced the hybrid @512 row), and a size heuristic silently put the old name on the new row.
         let name = if *class_id == base {
             "BASE-0 liveness floor"
-        } else if *class_id == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
-            kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_2M_MANIFEST_V1,
-            1,
-        ) {
+        } else if *class_id
+            == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
+                kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_2M_MANIFEST_V1,
+                1,
+            )
+        {
             "Qwen2.5-1.5B A16 graph-v7 @ n_ctx 2,097,152"
-        } else if *class_id == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
-            kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_8K_MANIFEST_V1,
-            1,
-        ) {
+        } else if *class_id
+            == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
+                kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_8K_MANIFEST_V1,
+                1,
+            )
+        {
             "Qwen2.5-1.5B A16 graph-v7 @ n_ctx 8,192"
         } else {
             panic!("a t12 genesis class this record does not name: {class_id}")
@@ -128,7 +131,14 @@ fn t12_rows() -> Vec<Row> {
             registrant_bond: None,
             fused_attention: false,
         };
-        out.push(Row { name, class_id: *class_id, declared_leaves, derived_mac_eq: derived, slash_value_per_pwu: *slash_value_per_pwu, class });
+        out.push(Row {
+            name,
+            class_id: *class_id,
+            declared_leaves,
+            derived_mac_eq: derived,
+            slash_value_per_pwu: *slash_value_per_pwu,
+            class,
+        });
     }
     out.sort_by_key(|r| r.declared_leaves);
     out
@@ -240,7 +250,10 @@ fn repro_01_the_mint_divides_derived_mac_eq_by_a_quantum_declared_in_exposure_pw
         narrow_raw_quanta > 1_500_000,
         "one honest Qwen2.5@8k Final must mint over 1.5 million quanta; measured {narrow_raw_quanta}"
     );
-    assert!(narrow_declared_quanta < 10_000, "the quantum's own declared unit gives a four-digit count; measured {narrow_declared_quanta}");
+    assert!(
+        narrow_declared_quanta < 10_000,
+        "the quantum's own declared unit gives a four-digit count; measured {narrow_declared_quanta}"
+    );
     assert!(
         narrow_raw_quanta as u64 / narrow_declared_quanta.max(1) as u64 > 2_800,
         "the unit mismatch is at least the floor's 2,810x; measured {}x",
@@ -622,7 +635,10 @@ fn repro_06_mirror_the_mint_is_bounded_and_credited_in_the_quantum_s_own_unit() 
     let credit_below_the_fence = palw_exposure_pwu_v2(&narrow.class, 1, Some(narrow.derived_mac_eq.min(u64::MAX as u128) as u64));
     println!("\n  credit in exposure pwu (U3, correct)        {correct_credit}");
     println!("  credit record_round_final writes, armed    {credit_the_fold_writes_past_the_fence}");
-    println!("  credit record_round_final wrote, pre-fence {credit_below_the_fence}  (raw U2, {:.1}x)", credit_below_the_fence as f64 / correct_credit as f64);
+    println!(
+        "  credit record_round_final wrote, pre-fence {credit_below_the_fence}  (raw U2, {:.1}x)",
+        credit_below_the_fence as f64 / correct_credit as f64
+    );
     assert_eq!(
         credit_the_fold_writes_past_the_fence, correct_credit,
         "record_round_final must credit the mint in the unit PALW_EXECUTION_QUANTUM_V1 is declared in"

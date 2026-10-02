@@ -17,7 +17,9 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, 
 use kaspa_consensus_core::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_colluding_quorum_covers_v1};
 use kaspa_consensus_core::palw_panel_var_v1::palw_fork_weight_sompi_v1;
 use kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -119,7 +121,10 @@ fn a3_11_pwu_saturation_via_the_work_target_ratchet() {
     let dense_ccu = t12_rows()[2].1;
     let max_factor = 4u32; // t12 class_daa_max_factor
     println!("\n=== A3-11: W ratchet (palw_work_target_step_v1, max_factor = {max_factor}, epoch = 1000 DAA) ===");
-    println!("{:>6} {:>26} {:>10} {:>24} {:>12} {:>26}", "epoch", "W", "attempts", "dense claim.pwu", "saturated?", "max_fraud_gain sompi");
+    println!(
+        "{:>6} {:>26} {:>10} {:>24} {:>12} {:>26}",
+        "epoch", "W", "attempts", "dense claim.pwu", "saturated?", "max_fraud_gain sompi"
+    );
     let mut w = w0;
     let mut first_sat: Option<u32> = None;
     for epoch in 0..=16u32 {
@@ -148,8 +153,9 @@ fn a3_11_pwu_saturation_via_the_work_target_ratchet() {
     // What saturation does to the seat lock.
     println!("\n  seat-lock consequence at each pwu (quorum {PALW_PANEL_COLLUDING_QUORUM_V1}, margin 10 %):");
     println!("{:>24} {:>26} {:>26} {:>10}", "claim.pwu", "max_fraud_gain sompi", "seat lock required sompi", "affordable");
-    let quanta = palw_execution_quantum_count_v1(dense_ccu, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default())
-        .saturating_add(1);
+    let quanta =
+        palw_execution_quantum_count_v1(dense_ccu, u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default())
+            .saturating_add(1);
     let rights = palw_realizable_before_maturity_v1(
         quanta,
         T12_WINDOW_CHALLENGE,
@@ -159,13 +165,14 @@ fn a3_11_pwu_saturation_via_the_work_target_ratchet() {
     );
     println!("  (quanta minted = {quanta}, realizable extra rights = {rights} sompi = {:.2} MSK)", rights as f64 / 1e8);
     for pwu in [dense_ccu.min(u64::MAX as u128) as u64, 5_494 * 3_357_281_757_221_376u64.min(u64::MAX), u64::MAX] {
-        let gain = (T12_ESCROW_SOMPI as u128)
-            .saturating_add(palw_fork_weight_sompi_v1(pwu, T12_SLASH_PER_PWU))
-            .saturating_add(rights);
+        let gain = (T12_ESCROW_SOMPI as u128).saturating_add(palw_fork_weight_sompi_v1(pwu, T12_SLASH_PER_PWU)).saturating_add(rights);
         let lock = palw_seat_lock_required_v2(gain, PALW_PANEL_COLLUDING_QUORUM_V1);
         let ok = lock <= T12_POSTED_COLLATERAL_SOMPI as u128;
         println!("{pwu:>24} {gain:>26} {lock:>26} {:>10}", if ok { "yes" } else { "NO" });
         let _ = palw_colluding_quorum_covers_v1(T12_POSTED_COLLATERAL_SOMPI as u128, PALW_PANEL_COLLUDING_QUORUM_V1, gain);
     }
-    println!("  posted collateral per genesis seat = {T12_POSTED_COLLATERAL_SOMPI} sompi = {:.2} MSK", T12_POSTED_COLLATERAL_SOMPI as f64 / 1e8);
+    println!(
+        "  posted collateral per genesis seat = {T12_POSTED_COLLATERAL_SOMPI} sompi = {:.2} MSK",
+        T12_POSTED_COLLATERAL_SOMPI as f64 / 1e8
+    );
 }

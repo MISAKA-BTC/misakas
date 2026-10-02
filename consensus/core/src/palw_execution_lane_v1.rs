@@ -1948,7 +1948,10 @@ mod tests {
         palw_execution_schedule_assign_quanta_windowed_v1(&mut minted, 100_000, 1_000, 120, &BTreeSet::new());
         assert_eq!(minted.quanta.len(), 5);
         for q in &minted.quanta {
-            assert_eq!(palw_execution_permits_v2(&minted, q.scheduled_round, 1, true), palw_execution_permits_v1(&minted, q.scheduled_round, 1));
+            assert_eq!(
+                palw_execution_permits_v2(&minted, q.scheduled_round, 1, true),
+                palw_execution_permits_v1(&minted, q.scheduled_round, 1)
+            );
         }
     }
 

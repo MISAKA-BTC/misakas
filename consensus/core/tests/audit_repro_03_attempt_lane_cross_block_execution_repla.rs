@@ -239,7 +239,8 @@ fn audit_repro_03_one_inference_wears_n_block_identities() {
     let mut digests = BTreeSet::new();
     let mut roots = BTreeSet::new();
 
-    for (nonce, ts) in [(7u64, 1_700_000_000u64), (8, 1_700_000_001), (lo, 1_700_000_120), (hi, 1_700_777_777), (hi - 3, 1_700_000_002)]
+    for (nonce, ts) in
+        [(7u64, 1_700_000_000u64), (8, 1_700_000_001), (lo, 1_700_000_120), (hi, 1_700_777_777), (hi - 3, 1_700_000_002)]
     {
         let env = sibling(class_id, pwu, nonce, ts);
         // Each sibling is an individually well-formed, position-bound attempt for ITS OWN header.
@@ -267,7 +268,10 @@ fn audit_repro_03_one_inference_wears_n_block_identities() {
     println!("distinct class_ticket_v3 (the draw)   = {}", tickets.len());
     println!("distinct Layer-0 digests              = {}", digests.len());
     println!("distinct execution_root               = {}", roots.len());
-    println!("THIS draw admits at the t12 floor target = {}  (a losing draw here; step 5 searches out a winner)", palw_ticket_admits_v1(ticket, target));
+    println!(
+        "THIS draw admits at the t12 floor target = {}  (a losing draw here; step 5 searches out a winner)",
+        palw_ticket_admits_v1(ticket, target)
+    );
 
     assert_eq!(ids.len(), 5, "five distinct claim ids — DuplicateClaim cannot see the replay");
     assert_eq!(keys.len(), 1, "ONE execution commitment: one inference");
@@ -684,8 +688,13 @@ fn audit_repro_03_one_winning_draw_admits_every_sibling_in_its_bucket() {
     let mut keys = BTreeSet::new();
     let bucket_hi = (1u64 << PALW_TICKET_NONCE_BUCKET_LOG2) - 1;
     let mut admitted = 0usize;
-    for (nonce, ts) in [(0u64, 1_700_000_000u64), (7, 1_700_000_001), (4095, 1_700_000_500), (bucket_hi - 1, 1_700_900_000), (bucket_hi, 1_777_777_777)]
-    {
+    for (nonce, ts) in [
+        (0u64, 1_700_000_000u64),
+        (7, 1_700_000_001),
+        (4095, 1_700_000_500),
+        (bucket_hi - 1, 1_700_900_000),
+        (bucket_hi, 1_777_777_777),
+    ] {
         let mut env = sibling(class_id, pwu, nonce, ts);
         env.attempt.execution_root = h(0x1703 ^ seed);
         env.attempt.trace_root = h(0x1701 ^ seed);
@@ -714,7 +723,10 @@ fn audit_repro_03_one_winning_draw_admits_every_sibling_in_its_bucket() {
     println!("distinct execution keys               = {}", keys.len());
     println!("distinct class tickets                = {}", tickets.len());
     println!("siblings the lottery ADMITS           = {admitted} of 5");
-    println!("=> one inference-search of {real_work_per_win} MAC-eq yields up to {} block-eligible", 1u64 << PALW_TICKET_NONCE_BUCKET_LOG2);
+    println!(
+        "=> one inference-search of {real_work_per_win} MAC-eq yields up to {} block-eligible",
+        1u64 << PALW_TICKET_NONCE_BUCKET_LOG2
+    );
     println!("   headers, each of which mints its own claim in its own chain block (step 2).");
 
     assert_eq!(keys.len(), 1, "the whole bucket is ONE execution");

@@ -139,8 +139,14 @@ fn an_armed_build_below_its_fence_handshakes_with_the_shipped_build() {
         assert!(!shipped_gate.contains(&height), "armed at {height}: an INDEPENDENT height, not one the release schedules");
         for daa in [0, 1, height / 2, height - 1] {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
-            assert!(!evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "armed at {height}, DAA {daa}");
-            assert!(!evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(), "armed at {height}, DAA {daa}");
+            assert!(
+                !evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
         }
         let s = fork_id_v1(&shipped, height);
         assert!(

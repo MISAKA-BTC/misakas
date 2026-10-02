@@ -350,7 +350,8 @@ fn e_t3_n_instant_at_13k_by_ramp_step() {
         let w_floor = 10_752_660u128;
         let budget = u128::from(bond_13k / 650_000_000_000) * w_floor;
         let sum_w = |k: u128| if fw { (k * w_floor).min(budget) } else { k * w_floor };
-        let formula = (0..=u128::from(bond_13k)).take_while(|k| k * m + sum_w(*k) <= u128::from(bond_13k) / 2).last().unwrap() as usize;
+        let formula =
+            (0..=u128::from(bond_13k)).take_while(|k| k * m + sum_w(*k) <= u128::from(bond_13k) / 2).last().unwrap() as usize;
         println!(
             "13k {label:<16}: N = {n:>5}  (w {:.4} + m {:.4} = {:.4} MSK a claim; held {:.2} of 6,500; formula {formula})",
             msk(w),
@@ -621,13 +622,12 @@ fn e_t4_t4_t5_a_hundred_redraw_cycles_are_bounded_by_the_held_capacity() {
         // X-I7: the ledger is the sum of the live and held claims' commitments. Each is `reserved + m_c`,
         // where rcore/cap-s1's F-W caps `reserved` per bond (`min(w, R_budget − held)`: the first two live
         // floor claims of a 13k bond hold `w`, the rest 0), so the sum is not `live_or_held × per_claim`.
-        let commitments: u128 = t
-            .c
-            .s
-            .claims_iter()
-            .filter(|(_, c)| c.bond == producer)
-            .map(|(_, c)| palw_claim_commitment_v1(&t.c.sp, c, daa).unwrap_or(0))
-            .sum();
+        let commitments: u128 =
+            t.c.s
+                .claims_iter()
+                .filter(|(_, c)| c.bond == producer)
+                .map(|(_, c)| palw_claim_commitment_v1(&t.c.sp, c, daa).unwrap_or(0))
+                .sum();
         assert_eq!(t.c.s.reserved_exposure(&producer), commitments, "X-I7 at DAA {daa}");
         assert!(commitments <= live_or_held as u128 * per_claim, "never above the uncapped w + m_c a claim");
         // Jump over DAA where nothing can be admitted, to keep the run short: the next hold's end.
@@ -1023,7 +1023,9 @@ fn x_i5_c7_keeps_the_whole_escrow_and_an_unlisted_long_window_class_is_refused()
 /// refusal (`n_instant`).
 #[test]
 fn e_t3_n_instant_at_13k_by_credited_q() {
-    use kaspa_consensus_core::palw_escrow_funding_v2::{PALW_ESCROW_P_STAR_PERMILLE_V1, PALW_ESCROW_Q_SEAT_PERMILLE_V1, palw_escrow_m_star_v2};
+    use kaspa_consensus_core::palw_escrow_funding_v2::{
+        PALW_ESCROW_P_STAR_PERMILLE_V1, PALW_ESCROW_Q_SEAT_PERMILLE_V1, palw_escrow_m_star_v2,
+    };
     let bond_13k = 13_000 * MSK;
     let mut rows = Vec::new();
     for (q, want) in [(150u16, 2usize), (249, 2), (250, 20), (500, 20), (818, 20), (819, 20), (1_000, 20)] {
@@ -1155,7 +1157,9 @@ fn v_t5_saturated_seats_never_charge_an_honest_producer() {
         runs.push((bound.len(), per_seat));
         restart_every(&t, 97);
     }
-    println!("bound by the seats, and what each seat reserved a claim (off, no credit, 150‰, 250‰, then rho 10 … 1000 at 1000‰): {runs:?}");
+    println!(
+        "bound by the seats, and what each seat reserved a claim (off, no credit, 150‰, 250‰, then rho 10 … 1000 at 1000‰): {runs:?}"
+    );
     assert_eq!(runs[1], runs[0], "without a credit (F-L at stage 1's ρ = 1) F-E binds and reserves exactly as option A");
     // ρ 10 below q_seat: uncredited, so (stage 2, v3 AS-1′) its seats are priced exactly as today.
     assert_eq!(runs[2], runs[0], "ρ 10 below q_seat: an uncredited claim's seats are today's: {runs:?}");

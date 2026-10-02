@@ -5,11 +5,15 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_economic_compute_v1::palw_expected_attempts_q32_v1;
-use kaspa_consensus_core::palw_economic_payout_v1::{palw_attempted_ccu_v1, palw_network_draws_q32_from_bits_v1, palw_panel_share_permille_v1};
+use kaspa_consensus_core::palw_economic_payout_v1::{
+    palw_attempted_ccu_v1, palw_network_draws_q32_from_bits_v1, palw_panel_share_permille_v1,
+};
 use kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1;
 use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_deepest_job_capped_v1};
+use kaspa_consensus_core::palw_step::{
+    PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_deepest_job_capped_v1,
+};
 use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ticket_target_v1};
 
 const T12_ESCROW_SOMPI: u64 = 320_084_650_080;
@@ -49,7 +53,11 @@ fn row(p: &PalwShapeProfileV3, label: &str, prefill: u32, decode: u32, w0: u128,
     println!("  {label:<22} (P={prefill}, D={decode})");
     println!("     U1 declared leaves  = counted = {counted}   (worst/deepest = {worst}; admissible: {})", counted <= worst);
     println!("     U2 derived draw CCU               {draw}");
-    println!("     verification_ccu (full job)       {}   ({:.2}x the draw)", work.verification_ccu, work.verification_ccu as f64 / draw as f64);
+    println!(
+        "     verification_ccu (full job)       {}   ({:.2}x the draw)",
+        work.verification_ccu,
+        work.verification_ccu as f64 / draw as f64
+    );
     println!("     U1/U2                             {:.4}", counted as f64 / draw as f64);
     println!("     work ticket target == MAX?        {}", target == u128::MAX);
     println!("     expected attempts / block         {attempts}");

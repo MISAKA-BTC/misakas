@@ -717,11 +717,10 @@ pub fn palw_lifecycle_step_resilient_v1(
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     let failed = memory.probation_failed();
     // The failed bonds survive a step only inside the probation, and never the reset they caused.
-    let keep_bonds = |next: PalwModelLifecycleV1, held: Option<u32>| PalwProbationMemoryV1 {
-        held_probes_passed: held,
-        failed_bonds: if failed { Vec::new() } else { memory.failed_bonds.clone() },
-    }
-    .with_state(next);
+    let keep_bonds = |next: PalwModelLifecycleV1, held: Option<u32>| {
+        PalwProbationMemoryV1 { held_probes_passed: held, failed_bonds: if failed { Vec::new() } else { memory.failed_bonds.clone() } }
+            .with_state(next)
+    };
     match state {
         Probation { probes_passed } => {
             if overloaded {
@@ -971,8 +970,12 @@ impl PalwBondMaturityFoldV1 {
     /// anchor: `now_daa − window`, the window widened so the floor is no later than the second
     /// clock's (`palw_settled_anchor_floor_daa_v1` at the escaped depth), saturating at 0.
     pub fn registered_by_daa(&self, state: &crate::palw_state_v2::PalwChainStateV2, window_court: u64, now_daa: u64) -> u64 {
-        let depth =
-            crate::palw_state_v2::palw_second_clock_depth_v1(self.settled_anchor_depth, state.recent_anchor_daas(), now_daa, window_court);
+        let depth = crate::palw_state_v2::palw_second_clock_depth_v1(
+            self.settled_anchor_depth,
+            state.recent_anchor_daas(),
+            now_daa,
+            window_court,
+        );
         let settled = depth.and_then(|depth| crate::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, now_daa, depth));
         let window = crate::palw_panel_v2::palw_bond_maturity_window_v2(now_daa, self.window_daa, settled);
         crate::palw_panel_v2::palw_seat_maturity_floor_v1(now_daa, Some(window)).unwrap_or(0)
@@ -1888,8 +1891,8 @@ pub fn palw_model_registry_read_v2(
     };
     // Stage 1 (rcore/cap-s1): past F-R the fold holds the measured room under ρ × the shipped room
     // (`panel_rate_v1`'s clamp), so the readout reads the shipped demand beside it.
-    let shipped_demand = (rate_rule && room_v2)
-        .then(|| crate::palw_state_v2::palw_panel_demand_read_v1(state, params, u32::from(g.seat_count)));
+    let shipped_demand =
+        (rate_rule && room_v2).then(|| crate::palw_state_v2::palw_panel_demand_read_v1(state, params, u32::from(g.seat_count)));
     let rho = u128::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, tip_daa));
     let (panel_inflight_replay, panel_horizon_spans) = if rate_rule {
         (terms.values().copied().fold(0u128, u128::saturating_add).div_ceil(wt::PALW_PANEL_DEMAND_SCALE_V1), 1)

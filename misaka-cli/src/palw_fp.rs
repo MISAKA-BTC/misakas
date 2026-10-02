@@ -281,7 +281,12 @@ pub async fn submit(
 /// chunked object goes out as one chained burst; every fee is sized from its carrier's own
 /// compute mass, because a drill's chunk is a hundred kilobytes and a send-sized fee would be
 /// refused by the mempool as insufficient.
-pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<Vec<String>, CliError> {
+pub async fn submit_objects(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    paths: &[std::path::PathBuf],
+    yes: bool,
+) -> Result<Vec<String>, CliError> {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::tx::UtxoEntry;
 

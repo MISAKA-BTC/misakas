@@ -16,19 +16,24 @@ use kaspa_consensus_core::palw_economic_safety_v1::{
 };
 use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1, palw_execution_permits_v1};
 use kaspa_consensus_core::palw_execution_quanta_v1::{
-    PALW_EXEC_MAX_QUANTA_PER_SPAN_V1, PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_bounded_v1, palw_execution_quantum_count_v1,
+    PALW_EXEC_MAX_QUANTA_PER_SPAN_V1, PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_bounded_v1,
+    palw_execution_quantum_count_v1,
 };
 use kaspa_consensus_core::palw_fp_devnet_v3::palw_exposure_unit_pwu_v1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
 use kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_licence_v2;
-use kaspa_consensus_core::palw_panel_var_v1::{PalwClaimFraudFactsV1, PalwPanelLiabilityRecordV1, PalwSlashableLockV1, palw_max_fraud_gain_v1};
+use kaspa_consensus_core::palw_panel_var_v1::{
+    PalwClaimFraudFactsV1, PalwPanelLiabilityRecordV1, PalwSlashableLockV1, palw_max_fraud_gain_v1,
+};
 use kaspa_consensus_core::palw_reward_v2::{PalwRewardParamsV2, palw_reward_carve_v2};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwVoidReasonV2};
 use kaspa_consensus_core::palw_verification_v2::{palw_coverage_v2, palw_segment_assignment_v2};
 use kaspa_consensus_core::palw_work_target_v1::palw_work_floor_v1;
 /// The fold's `mul_div_u128` is pub(crate); the operands here stay far below 2^128 (ccu < 2^50, x7,708).
-fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 { a * b / d }
+fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
+    a * b / d
+}
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
 /// `SUBSIDY_BY_MONTH_TABLE[0]` (consensus/src/processes/coinbase.rs:598), a per-SECOND reward; the
@@ -86,15 +91,20 @@ fn facts_t12() -> T12Facts {
             .unwrap();
     let floor_draw = draw(&floor_p, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
     let h_p = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(
-        kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
-            n_ctx: 512,
-            ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
-        }),
+        kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+                n_ctx: 512,
+                ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
+            },
+        ),
     )
     .unwrap();
     let h_draw = draw(&h_p, kaspa_consensus_core::palw_qwen36_profile::qwen36_held_canonical_v1(512));
     let d_p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
-        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B },
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx: 2_097_152,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
     )
     .unwrap();
     let d_draw = draw(&d_p, kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(2_097_152));
@@ -274,8 +284,17 @@ fn dos_l3_colluding_quorum_inequality_per_door_attempt_claims() {
     let f = facts_t12();
     let (v1, v2, s2, s2o_worst, s2o_mean) = min_valid_per_door(&f);
     println!("\n=== t12 constants (from Params) ===");
-    println!("  subsidy/block {:.2} MSK   escrow (720 permille) {:.2} MSK   panel {} seats quorum {}", msk(f.subsidy as u128), msk(f.escrow as u128), f.seats, f.quorum);
-    println!("  window_challenge() {}  window_court {}  ttpb {} ms   W0 = escrow/rate = {} MAC-eq", f.window_challenge, f.window_court, f.ttpb, f.w0);
+    println!(
+        "  subsidy/block {:.2} MSK   escrow (720 permille) {:.2} MSK   panel {} seats quorum {}",
+        msk(f.subsidy as u128),
+        msk(f.escrow as u128),
+        f.seats,
+        f.quorum
+    );
+    println!(
+        "  window_challenge() {}  window_court {}  ttpb {} ms   W0 = escrow/rate = {} MAC-eq",
+        f.window_challenge, f.window_court, f.ttpb, f.w0
+    );
     println!("\n=== minimum colluding Valid receipts per door (brute force, real predicates, 256 claims) ===");
     println!("  V1 ReceiptLicensed           {v1}");
     println!("  V2/S1 ReceiptLicensedV2       {v2}");
@@ -287,7 +306,9 @@ fn dos_l3_colluding_quorum_inequality_per_door_attempt_claims() {
     assert_eq!(s2, 1, "S2 licenses on the full-replay seat alone");
     assert_eq!(s2o_worst, 2);
 
-    println!("\n=== per class: G = palw_max_fraud_gain_v1 as panel_valid_lock_required builds it; lock = palw_seat_lock_required_v2(G, 3) ===");
+    println!(
+        "\n=== per class: G = palw_max_fraud_gain_v1 as panel_valid_lock_required builds it; lock = palw_seat_lock_required_v2(G, 3) ==="
+    );
     println!(
         "  {:14} {:>14} {:>12} {:>12} {:>12} | {:>7} {:>13} {:>7} {:>13} {:>13}",
         "class", "reserved MSK", "rights MSK", "G MSK", "lock MSK", "door", "slashable", "holds", "cash-slash", "G-slash"
@@ -336,7 +357,9 @@ fn dos_l3_colluding_quorum_inequality_per_door_attempt_claims() {
             }
         }
     }
-    println!("\n  floor class via S2: the producer+full-seat keep {s2_floor_net:.2} MSK CASH per Final even when convicted after Final");
+    println!(
+        "\n  floor class via S2: the producer+full-seat keep {s2_floor_net:.2} MSK CASH per Final even when convicted after Final"
+    );
     assert!(s2_floor_net > 2_000.0);
     // What finalize_claim actually NAMES the colluders on a floor claim (no economics snapshot, no
     // model line): the ADR-0124 split with only the full seat credited (S2 carries one receipt).
@@ -403,10 +426,12 @@ fn dos_l3_fp_final_mints_unpriced_unforfeitable_receipt_blocks() {
     let reserved_of = |ccu: u128| mul_div_u128(ccu, f.floor_declared as u128, f.floor_draw) * 5;
     let (v1, _v2, s2, _, _) = min_valid_per_door(&f);
     let q36 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(
-        kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
-            n_ctx: 512,
-            ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
-        }),
+        kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+                n_ctx: 512,
+                ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
+            },
+        ),
     )
     .unwrap();
     let runs: Vec<(&str, u128)> = vec![
@@ -486,8 +511,15 @@ fn dos_l3_forfeiture_reaches_a_minted_schedule() {
         accepted_blue_score: 0,
     };
     let seed = Hash64::from_u64_word(9);
-    let quanta =
-        palw_execution_mint_quanta_bounded_v1(&[fin], seed, u128::from(PALW_EXECUTION_QUANTUM_V1), 1_000, 0, &Default::default(), 1 << 16);
+    let quanta = palw_execution_mint_quanta_bounded_v1(
+        &[fin],
+        seed,
+        u128::from(PALW_EXECUTION_QUANTUM_V1),
+        1_000,
+        0,
+        &Default::default(),
+        1 << 16,
+    );
     assert_eq!(quanta.len(), 5);
     let schedule = PalwExecScheduleV1 { span_index: 3, seed, domains: vec![], finals: vec![fin], quanta: quanta.clone() };
     // The conviction lands AFTER the mint: the fold's only readers of the forfeiture set are the
@@ -505,7 +537,10 @@ fn dos_l3_forfeiture_reaches_a_minted_schedule() {
         .expect("the schedule holds the convicted work, so the conviction rewrites it");
     let after = quanta.iter().filter(|q| !palw_execution_permits_v1(&pruned, q.scheduled_round, 1).is_empty()).count();
     println!("\n=== forfeiture vs a minted schedule ===");
-    println!("  quanta minted before conviction {}; permits the minted schedule grants: {still}; after the #7 rewrite: {after}", quanta.len());
+    println!(
+        "  quanta minted before conviction {}; permits the minted schedule grants: {still}; after the #7 rewrite: {after}",
+        quanta.len()
+    );
     assert_eq!(after, 0, "no quantum of the convicted Final is a permit once the conviction reaches the schedule");
     assert!(pruned.quanta.is_empty() && pruned.domains.is_empty(), "and the emptied schedule does not reopen the lottery");
     assert!(
@@ -562,7 +597,11 @@ fn dos_l3_liability_and_lock_rows_are_never_pruned() {
     let per_year = per_claim_v1 as u128 * 720 * 365;
     println!("\n=== rooted, never-pruned bytes ===");
     println!("  lock entry {lock_bytes} B; liability row {row3} B (3 signers) / {row5} B (5 signers)");
-    println!("  per V1-licensed Final {per_claim_v1} B; at 720 Finals/day: {:.1} MiB/year, {} lock rows/year", per_year as f64 / 1048576.0, 3 * 720 * 365);
+    println!(
+        "  per V1-licensed Final {per_claim_v1} B; at 720 Finals/day: {:.1} MiB/year, {} lock rows/year",
+        per_year as f64 / 1048576.0,
+        3 * 720 * 365
+    );
     println!("  state_root re-serialises and re-hashes both maps whole on every block (collection_root, palw_state_v2.rs:8118-8132),");
     println!("  and slashable_available / slashable_live_locked scan every lock ever written per call (9463-9485).");
     assert!(lock_bytes >= 150 && row3 >= 500);

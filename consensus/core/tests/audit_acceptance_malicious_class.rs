@@ -51,11 +51,11 @@ use kaspa_consensus_core::palw_model_registry_v1::{
     PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1, palw_genesis_model_works_v1, palw_model_work_from_carriage_v1,
     palw_rc_typed_class_works_v1,
 };
+use kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClassAdmissionCarriageV2, PalwConsensusObjectV2,
     PalwPwuRuleV2, PalwStateParamsV2, PalwTransitionExtrasV1, apply_palw_transition_v7, palw_operator_id_v2,
 };
-use kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2;
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_consensus_core::palw_work_target_v1::{PalwWorkTargetFoldV1, palw_work_floor_v1, palw_work_ticket_target_v1};
@@ -216,9 +216,9 @@ fn t12_extras(p: &Params, b: &PalwConsensusParamsV2, daa: u64) -> PalwTransition
         prompt_ids_merkle: true,
         objective_offence_daa: p.palw_objective_offence.map(|f| f.daa_score()),
         seat_gate_possession_daa: p.palw_seat_gate_possession.map(|f| f.daa_score()),
-        escrow_carve: Some(PalwRewardParamsV2::new(
-            p.palw_overlay_carve.expect("carve").worker_carve_permille,
-        ).expect("the t12 worker carve")),
+        escrow_carve: Some(
+            PalwRewardParamsV2::new(p.palw_overlay_carve.expect("carve").worker_carve_permille).expect("the t12 worker carve"),
+        ),
         model_registry: Some(fold),
         ..Default::default()
     }
@@ -422,7 +422,10 @@ fn the_malicious_class_walked_through_every_gate_in_order() {
             // like the top tier be refused at registration, claim, execution or reward; the fence's
             // admission twin refuses it at the first of those, by name, because the geometry the
             // price is computed from (65,535 x 41,854) is wider than the query row its graph reads.
-            if matches!(e, kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError::AttentionGeometryWiderThanQueryRow { .. }) {
+            if matches!(
+                e,
+                kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError::AttentionGeometryWiderThanQueryRow { .. }
+            ) {
                 println!("\nVERDICT: the malicious class is stopped at GATE 2 (registration admission) by");
                 println!("         ATTENTION_GEOMETRY_WIDER_THAN_QUERY_ROW — it never reaches a claim, an");
                 println!("         execution, a price or a reward. (Before the fence it reached gate 4.)");
@@ -674,9 +677,8 @@ fn the_reward_the_malicious_class_collects_for_floor_work() {
     // The malicious class is NOT the base class, so it takes the economic-payout snapshot (the
     // base class is paid its escrow whole and is exempt — palw_state_v2.rs:9913). bits = 0.
     let fold = p.palw_economic_payout.expect("payout").fold_v1(0);
-    let snap = kaspa_consensus_core::palw_economic_payout_v1::palw_claim_economics_snapshot_v1(
-        &fold, &evil_work, seat_count, evil_target, 0,
-    );
+    let snap =
+        kaspa_consensus_core::palw_economic_payout_v1::palw_claim_economics_snapshot_v1(&fold, &evil_work, seat_count, evil_target, 0);
     let evil_reward = snap.priced_reward(escrow);
     let evil_attempted = snap.attempted_ccu();
 
@@ -711,11 +713,12 @@ fn the_reward_the_malicious_class_collects_for_floor_work() {
     // The malicious class collects the FULL escrow for ONE floor inference.
     assert_eq!(evil_reward, escrow, "the malicious class collects the whole escrow");
     assert_eq!(evil_draws, 1, "for a single draw (its target is u128::MAX)");
-    assert!(
-        reward_per_mac_evil / reward_per_mac_floor > 10_000.0,
-        "reward per real MAC-eq is >10,000x the floor's"
+    assert!(reward_per_mac_evil / reward_per_mac_floor > 10_000.0, "reward per real MAC-eq is >10,000x the floor's");
+    println!(
+        "\n*** IF the lifecycle is satisfied, the class collects {} for {} MAC-eq of real work,",
+        msk(evil_reward as u128),
+        evil_real_per_win
     );
-    println!("\n*** IF the lifecycle is satisfied, the class collects {} for {} MAC-eq of real work,", msk(evil_reward as u128), evil_real_per_win);
     println!("    the same escrow the honest floor earns for {}x more compute. ***", floor_real_per_win / evil_real_per_win);
 }
 
@@ -761,15 +764,29 @@ fn bypass_1_the_genesis_sentinel_bond_skips_the_independence_jury() {
         admission: Some(Box::new(carriage)),
     };
     let folded = apply_palw_transition_v7(
-        &state0, &b.state, None, &ctx(2, 1, 2, T12_BLOCK_SUBSIDY_SOMPI), std::slice::from_ref(&reg),
-        PalwBlockWorkV3::None, &[], Hash64::default(), false, false, false, false, &t12_extras(&p, &b, 1),
+        &state0,
+        &b.state,
+        None,
+        &ctx(2, 1, 2, T12_BLOCK_SUBSIDY_SOMPI),
+        std::slice::from_ref(&reg),
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &t12_extras(&p, &b, 1),
     );
     match folded {
         Ok((s, _, _)) => {
             let row = s.model_lifecycle(&evil_id).expect("row");
             println!("fold verdict                         : ACCEPTED");
             println!("lifecycle state                      : {:?}", row.state);
-            println!("record.registrant_bond               : {:?} (sentinel -> None means NOT bought)", s.class(&evil_id).and_then(|c| c.registrant_bond));
+            println!(
+                "record.registrant_bond               : {:?} (sentinel -> None means NOT bought)",
+                s.class(&evil_id).and_then(|c| c.registrant_bond)
+            );
             println!("admits_claims                        : {}", row.state.admits_claims());
             println!("RESULT: the fold opens the class at {:?} instead of Candidate — the jury is skipped.", row.state);
             println!("        BUT the acceptance layer (processor.rs:6816) verifies the carriage signature");
@@ -808,8 +825,19 @@ fn bypass_2_a_carriageless_registration() {
         admission: None,
     };
     let folded = apply_palw_transition_v7(
-        &state0, &b.state, None, &ctx(2, 1, 2, T12_BLOCK_SUBSIDY_SOMPI), std::slice::from_ref(&reg),
-        PalwBlockWorkV3::None, &[], Hash64::default(), false, false, false, false, &t12_extras(&p, &b, 1),
+        &state0,
+        &b.state,
+        None,
+        &ctx(2, 1, 2, T12_BLOCK_SUBSIDY_SOMPI),
+        std::slice::from_ref(&reg),
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &t12_extras(&p, &b, 1),
     );
     match folded {
         Ok((s, _, _)) => {
@@ -820,18 +848,34 @@ fn bypass_2_a_carriageless_registration() {
                     println!("economic_ccu_per_claim               : {}", row.work.economic_ccu_per_claim);
                     println!("admits_claims                        : {}", row.state.admits_claims());
                 }
-                None => println!("lifecycle row                        : NONE this block (opens at next span boundary as inert Registered)"),
+                None => println!(
+                    "lifecycle row                        : NONE this block (opens at next span boundary as inert Registered)"
+                ),
             }
             // Now try to admit a claim of it: on t12 work_target_active, a class with no usable row
             // is refused with "no row".
             let admission = PalwAdmissionParamsV2::new(b.state.fp_max_exposure_ratio_permille()).unwrap();
             let declared = declared_ccu(&evil, &evil_job);
-            let pwu = palw_attempt_derived_pwu_v1(palw_work_ticket_target_v1(declared, palw_work_floor_v1(t12_escrow_sompi(&p), t12_rate_sompi_per_giga(&p))), declared);
+            let pwu = palw_attempt_derived_pwu_v1(
+                palw_work_ticket_target_v1(declared, palw_work_floor_v1(t12_escrow_sompi(&p), t12_rate_sompi_per_giga(&p))),
+                declared,
+            );
             let env = attempt_envelope(evil_id, floor_root, pwu, 7, 1_700_000_000);
             let key = execution_commitment_v3(&env.attempt, execution_anchor_v3(h(999), h(5), evil_id, &bond_key(0xA77AC).0, 7));
             let attempted = apply_palw_transition_v7(
-                &s, &b.state, Some(&admission), &ctx(3, 2, 3, T12_BLOCK_SUBSIDY_SOMPI), &[],
-                PalwBlockWorkV3::Attempt(&env), &[], key, false, false, false, false, &t12_extras(&p, &b, 2),
+                &s,
+                &b.state,
+                Some(&admission),
+                &ctx(3, 2, 3, T12_BLOCK_SUBSIDY_SOMPI),
+                &[],
+                PalwBlockWorkV3::Attempt(&env),
+                &[],
+                key,
+                false,
+                false,
+                false,
+                false,
+                &t12_extras(&p, &b, 2),
             );
             match attempted {
                 Ok(_) => println!("attempt admission                    : ACCEPTED — a carriageless class admitted a claim"),

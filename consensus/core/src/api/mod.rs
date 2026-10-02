@@ -1250,10 +1250,7 @@ pub trait ConsensusApi: Send + Sync {
 
     /// RFC-0002 Phase F: the IR class record the chain holds for `class_id` (its `tir_classes`
     /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
-    fn palw_tir_class_record_v1(
-        &self,
-        _class_id: kaspa_hashes::Hash64,
-    ) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+    fn palw_tir_class_record_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
         None
     }
 

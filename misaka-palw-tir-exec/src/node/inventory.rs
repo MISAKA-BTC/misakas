@@ -116,7 +116,12 @@ impl TirInventoryTreeV1 {
     /// levels instead of folding the inventory again, so a run of leaves costs its two boundary paths.
     /// `None` for an empty set, a repeated leaf, a leaf outside the inventory, or a source that does not
     /// hold a piece.
-    pub fn multiproof(&self, program: &TirProgramV1, src: &dyn PalwTirTensorSourceV1, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+    pub fn multiproof(
+        &self,
+        program: &TirProgramV1,
+        src: &dyn PalwTirTensorSourceV1,
+        leaves: &[u32],
+    ) -> Option<PalwArtifactMultiproofV1> {
         let mut sorted = leaves.to_vec();
         sorted.sort_unstable();
         if sorted.is_empty() || sorted.windows(2).any(|w| w[0] == w[1]) || *sorted.last()? >= self.leaf_count() {

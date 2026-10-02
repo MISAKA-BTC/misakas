@@ -136,7 +136,11 @@ fn testnet12_s_operators_are_its_eight_genesis_cards() {
     let keys: Vec<(PalwBondKeyV2, Vec<u8>)> = rule.operators().map(|(b, k)| (*b, k.to_vec())).collect();
     for card in PALW_T12_GENESIS_BONDS {
         let bond = PalwBondKeyV2(premine_outpoint_for(armed.net, card.premine_index));
-        assert!(keys.contains(&(bond, card.bond_pubkey.to_vec())), "card {}: its outpoint under its registered key", card.premine_index);
+        assert!(
+            keys.contains(&(bond, card.bond_pubkey.to_vec())),
+            "card {}: its outpoint under its registered key",
+            card.premine_index
+        );
     }
     assert!(rule.active_at(1_234) && !rule.active_at(1_233), "keyed on the anchor's DAA");
 }
@@ -205,8 +209,14 @@ fn an_armed_build_below_its_fence_handshakes_with_the_shipped_build() {
             assert!(!shipped_gate.contains(&height), "{what} at {height}: an INDEPENDENT height, not one the release schedules");
             for daa in [0, 1, first / 2, first - 1] {
                 let (a, s) = (fork_id_v1(armed, daa), fork_id_v1(&shipped, daa));
-                assert!(!evaluate_fork_id_v1(armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "{what}: armed keeps shipped at {daa}");
-                assert!(!evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(), "{what}: shipped keeps armed at {daa}");
+                assert!(
+                    !evaluate_fork_id_v1(armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                    "{what}: armed keeps shipped at {daa}"
+                );
+                assert!(
+                    !evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(),
+                    "{what}: shipped keeps armed at {daa}"
+                );
             }
             let s = fork_id_v1(&shipped, first);
             let past = evaluate_fork_id_v1(armed, first, s.fired.as_bytes().as_slice(), s.next);
@@ -218,10 +228,16 @@ fn an_armed_build_below_its_fence_handshakes_with_the_shipped_build() {
         let f1_only = f1_at(height - 1);
         for daa in [0, height - 1] {
             let o = fork_id_v1(&f1_only, daa);
-            assert!(!evaluate_fork_id_v1(&later, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "below lane A's height the two keep each other");
+            assert!(
+                !evaluate_fork_id_v1(&later, daa, o.fired.as_bytes().as_slice(), o.next).refuses(),
+                "below lane A's height the two keep each other"
+            );
         }
         let o = fork_id_v1(&f1_only, height);
-        assert!(evaluate_fork_id_v1(&later, height, o.fired.as_bytes().as_slice(), o.next).refuses(), "from lane A's height the F1-only build is refused");
+        assert!(
+            evaluate_fork_id_v1(&later, height, o.fired.as_bytes().as_slice(), o.next).refuses(),
+            "from lane A's height the F1-only build is refused"
+        );
     }
 }
 

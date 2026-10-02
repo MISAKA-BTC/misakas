@@ -2255,7 +2255,9 @@ pub(super) fn proved_slashing_evidence_txs(
     evidence_window_blocks: u64,
 ) -> Vec<Transaction> {
     txs.iter()
-        .filter(|tx| !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty())
+        .filter(|tx| {
+            !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty()
+        })
         .cloned()
         .collect()
 }

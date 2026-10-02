@@ -804,8 +804,8 @@ pub fn tir_admit_with_rules_v1(
             leaves.sort_unstable();
             leaves.dedup();
             let (tile, tile_opened_bytes, _) = tile_demand(&p, bi, ni, &nodes, tile_len, h, rules);
-            let chunked = (!h_reductions.is_empty())
-                .then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h), rules));
+            let chunked =
+                (!h_reductions.is_empty()).then(|| tile_demand(&p, bi, ni, &nodes, tile_len, (inputs.h_chunk as u64).min(h), rules));
             let (chunk, chunk_opened_bytes) = match chunked {
                 Some((c, o, _)) => (Some(c), Some(o)),
                 None => (None, None),

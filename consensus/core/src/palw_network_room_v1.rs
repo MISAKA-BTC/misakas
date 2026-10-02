@@ -170,7 +170,11 @@ pub fn palw_network_share_admits_v1(
     let others = || others.iter().filter(|(key, bond)| *key != b && (bond.registered || bond.held > 0));
     let units_total: u64 = others().map(|(_, bond)| bond.units).fold(units_b, u64::saturating_add);
     let share = |units: u64| -> u64 {
-        if units_total == 0 { 0 } else { ((u128::from(shared) * u128::from(units)) / u128::from(units_total)).min(u128::from(u64::MAX)) as u64 }
+        if units_total == 0 {
+            0
+        } else {
+            ((u128::from(shared) * u128::from(units)) / u128::from(units_total)).min(u128::from(u64::MAX)) as u64
+        }
     };
     let owed_to = |bond: &PalwNetworkBondV1| share(bond.units).saturating_sub(bond.held);
     let owed: u64 = others().filter(|(_, bond)| bond.registered).map(|(_, bond)| owed_to(bond)).fold(0u64, u64::saturating_add);
@@ -252,7 +256,10 @@ mod tests {
         from_2.insert(bond(3), holder(0, 18));
         assert!(palw_network_admits_v1(20, 18, &bond(2), 10, 0, true, &from_2).is_ok(), "bond 2 is the most owed");
         assert!(palw_network_admits_v1(20, 18, &bond(2), 10, 9, true, &from_2).is_err(), "owed 1 < 10: bond 1 is");
-        assert!(palw_network_admits_v1(20, 18, &bond(4), 10, 0, false, &from_2).is_err(), "an unregistered asker takes no reserved unit");
+        assert!(
+            palw_network_admits_v1(20, 18, &bond(4), 10, 0, false, &from_2).is_err(),
+            "an unregistered asker takes no reserved unit"
+        );
     }
 
     /// A class room's headroom stays out of the shares and is first come.

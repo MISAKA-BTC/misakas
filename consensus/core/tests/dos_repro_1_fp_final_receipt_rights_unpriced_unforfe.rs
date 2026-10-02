@@ -30,7 +30,9 @@ use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV
 use kaspa_consensus_core::palw_economic_safety_v1::{
     PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_permit_value_sompi_v1, palw_realizable_before_maturity_v1, palw_seat_lock_required_v2,
 };
-use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXEC_MAX_QUANTA_PER_SPAN_V1, PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1};
+use kaspa_consensus_core::palw_execution_quanta_v1::{
+    PALW_EXEC_MAX_QUANTA_PER_SPAN_V1, PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1,
+};
 use kaspa_consensus_core::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
 use kaspa_consensus_core::palw_panel_var_v1::{PalwClaimFraudFactsV1, palw_max_fraud_gain_v1};
@@ -43,9 +45,13 @@ use kaspa_consensus_core::palw_state_v2::{
 use kaspa_consensus_core::palw_work_target_v1::palw_work_floor_v1;
 
 const MSK: f64 = 1e8;
-fn to_msk(s: u128) -> f64 { s as f64 / MSK }
+fn to_msk(s: u128) -> f64 {
+    s as f64 / MSK
+}
 /// The fold's `mul_div_u128` is pub(crate); the operands here stay far below 2^128.
-fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 { a * b / d }
+fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
+    a * b / d
+}
 
 /// **The processor's t12 FP extras.** `dos_l5_common::extras` leaves `fp_derived_work_daa = None`
 /// and `fp_da_pins_active = false`; the shipped `palw_transition_extras_for` (processor.rs:8351)
@@ -64,7 +70,14 @@ fn t12_extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
 /// `audit` is the 2026-09-23 audit fence (armed on testnet-12 from genesis). `false` is the fold every
 /// network but testnet-12 runs, which is where the defect this repro measured still lives — and
 /// must, byte for byte: a dormant network's receipt lane is not the fix's to change.
-fn fold_at(p: &Params, audit: bool, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>) -> Result<PalwChainStateV2, PalwStateV2Error> {
+fn fold_at(
+    p: &Params,
+    audit: bool,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    objects: &[PalwConsensusObjectV2],
+    work: PalwBlockWorkV3<'_>,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let sp = bundle(p).state;
     let f = flags(p, ctx.daa_score);
     let mut e = t12_extras(p, ctx.daa_score);
@@ -73,8 +86,19 @@ fn fold_at(p: &Params, audit: bool, parent: &PalwChainStateV2, ctx: &PalwBlockCo
         e.settled_anchor_depth = None;
     }
     apply_palw_transition_v7(
-        parent, &sp, None, ctx, objects, work, &[], Hash64::default(),
-        f.unavailable_abstains, f.capability_bound, f.uncertified_weightless, f.da_court, &e,
+        parent,
+        &sp,
+        None,
+        ctx,
+        objects,
+        work,
+        &[],
+        Hash64::default(),
+        f.unavailable_abstains,
+        f.capability_bound,
+        f.uncertified_weightless,
+        f.da_court,
+        &e,
     )
     .map(|(s, _, _)| s)
 }
@@ -146,14 +170,31 @@ fn seed_prereqs(p: &Params, s: &PalwChainStateV2) -> PalwChainStateV2 {
     c.into_state_v3(&bundle(p).state, None, false, p.palw_canonical_work_daa()).expect("carriage rebuilds")
 }
 
-fn fp_commit(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves: u64, prompt: &[u32], decode: u32, claim: Hash64) -> PalwConsensusObjectV2 {
+fn fp_commit(
+    class_id: Hash64,
+    bond: PalwBondKeyV2,
+    pk: Vec<u8>,
+    work_leaves: u64,
+    prompt: &[u32],
+    decode: u32,
+    claim: Hash64,
+) -> PalwConsensusObjectV2 {
     fp_commit_on(class_id, bond, pk, work_leaves, prompt, decode, claim, h(0x73_0001))
 }
 
 /// [`fp_commit`] naming `execution_root` — two commits naming one root are two claims of one
 /// execution, which is what ADR-0151 forfeits together.
 #[allow(clippy::too_many_arguments)]
-fn fp_commit_on(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves: u64, prompt: &[u32], decode: u32, claim: Hash64, execution_root: Hash64) -> PalwConsensusObjectV2 {
+fn fp_commit_on(
+    class_id: Hash64,
+    bond: PalwBondKeyV2,
+    pk: Vec<u8>,
+    work_leaves: u64,
+    prompt: &[u32],
+    decode: u32,
+    claim: Hash64,
+    execution_root: Hash64,
+) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
         job_pin: kaspa_hashes::Hash64::default(),
         claim,
@@ -178,11 +219,24 @@ fn fp_commit_on(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves:
 /// A receipt-lane block's own work: one certified quantum spent. The fold's `apply_receipt_spend`
 /// gates only on phase==Final, index range, and the spent set (the lottery/beacon/window are the
 /// admission layer's job). The `challenge` binds a header position but is not read by the fold.
-fn fp_spend(claim_id: Hash64, quantum_index: u32, bond: &kaspa_consensus_core::tx::TransactionOutpoint, pk: &[u8]) -> kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
+fn fp_spend(
+    claim_id: Hash64,
+    quantum_index: u32,
+    bond: &kaspa_consensus_core::tx::TransactionOutpoint,
+    pk: &[u8],
+) -> kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
     kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
         version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
         network_domain: h(0x0D05_0012),
-        challenge: kaspa_consensus_core::palw_freeprompt_v3::spend_challenge_v3(h(0x0D05_0012), h(0xB0 + quantum_index as u64), 1_700, 7, claim_id, quantum_index, bond),
+        challenge: kaspa_consensus_core::palw_freeprompt_v3::spend_challenge_v3(
+            h(0x0D05_0012),
+            h(0xB0 + quantum_index as u64),
+            1_700,
+            7,
+            claim_id,
+            quantum_index,
+            bond,
+        ),
         claim_id,
         quantum_index,
         beacon_block: h(0xBEAC),
@@ -195,10 +249,21 @@ fn fp_spend(claim_id: Hash64, quantum_index: u32, bond: &kaspa_consensus_core::t
 /// exposure — the execution quanta the mint WOULD issue (ceiling 2^16) + 1, priced over the
 /// maturity gap. It prices EXECUTION quanta from the class draw, never the FP receipt quanta.
 fn rights_of(exposure: u64, window_challenge: u64, window_court: u64, ttpb: u64) -> u128 {
-    let counted = palw_execution_quantum_count_v1(u128::from(exposure), u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default())
-        .min(PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32);
+    let counted = palw_execution_quantum_count_v1(
+        u128::from(exposure),
+        u128::from(PALW_EXECUTION_QUANTUM_V1),
+        Hash64::default(),
+        Hash64::default(),
+    )
+    .min(PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32);
     let quanta = counted.saturating_add(1);
-    palw_realizable_before_maturity_v1(quanta, window_challenge, window_court, ttpb, palw_permit_value_sompi_v1(PALW_T12_PERMIT_FEE_CEILING_SOMPI))
+    palw_realizable_before_maturity_v1(
+        quanta,
+        window_challenge,
+        window_court,
+        ttpb,
+        palw_permit_value_sompi_v1(PALW_T12_PERMIT_FEE_CEILING_SOMPI),
+    )
 }
 
 /// **Past the fence (testnet-12): the conviction takes the receipt rights back.** The claim the
@@ -254,10 +319,20 @@ fn run(audit: bool) {
     let bond = bond_key(attacker);
     let pk = pubkey_of(attacker);
     let g = genesis_state(&p);
-    let s = fold_at(&p, audit, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))], PalwBlockWorkV3::None).unwrap();
+    let s = fold_at(
+        &p,
+        audit,
+        &g,
+        &ctx(1, 1_000, 1, 0),
+        &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))],
+        PalwBlockWorkV3::None,
+    )
+    .unwrap();
     let s = seed_prereqs(&p, &s);
-    let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
-    let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).expect("real ClassLaneCertified publishes the profile");
+    let publish =
+        PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
+    let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None)
+        .expect("real ClassLaneCertified publishes the profile");
     assert!(s.fp_work_profile_of(&floor).is_some(), "the floor's fp work profile is published");
 
     // The largest reachable single floor claim (prompt 512, decode 256; leaves the real cap derives).
@@ -265,10 +340,12 @@ fn run(audit: bool) {
     let ladder = s.class_step_ladder_v1(&floor, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
     let (pt, dc) = (512u32, 256u32);
     let ids: Vec<u32> = (0..pt).collect();
-    let work_leaves = kaspa_consensus_core::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, pt, dc, ladder).expect("floor leaves derive");
+    let work_leaves =
+        kaspa_consensus_core::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, pt, dc, ladder).expect("floor leaves derive");
     let claim_id = h(0xF0_00A1);
     let commit = fp_commit(floor, bond, pk.clone(), work_leaves, &ids, dc, claim_id);
-    let s = fold_at(&p, audit, &s, &ctx(3, 1_002, 3, 0), &[commit], PalwBlockWorkV3::None).expect("real FreePromptCommitted prices in compute");
+    let s = fold_at(&p, audit, &s, &ctx(3, 1_002, 3, 0), &[commit], PalwBlockWorkV3::None)
+        .expect("real FreePromptCommitted prices in compute");
 
     let claim = s.claim(&claim_id).expect("the claim exists").clone();
     let reserved = claim.reserved;
@@ -279,20 +356,48 @@ fn run(audit: bool) {
         _ => panic!("free-prompt claim"),
     };
     // **THE FIRST STRUCTURAL FACT (palw_state_v2.rs:17372): the FP commitment lane escrows 0.**
-    assert_eq!(escrowed, 0, "a free-prompt claim escrows 0 — so option A (carry the escrow into the reservation) reaches nothing here");
-    assert!(reserved > 0 && to_msk(reserved) < 1.0, "the whole reservation is the compute-in-floor-unit at 5 sompi: {} sompi ({:.6} MSK)", reserved, to_msk(reserved));
+    assert_eq!(
+        escrowed, 0,
+        "a free-prompt claim escrows 0 — so option A (carry the escrow into the reservation) reaches nothing here"
+    );
+    assert!(
+        reserved > 0 && to_msk(reserved) < 1.0,
+        "the whole reservation is the compute-in-floor-unit at 5 sompi: {} sompi ({:.6} MSK)",
+        reserved,
+        to_msk(reserved)
+    );
 
     // Bind a panel of 5 genesis seats, license with a Valid quorum of 3, sweep to Final.
     let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
-    let s = fold_at(&p, audit, &s, &ctx(4, 1_003, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats: seats.clone() }], PalwBlockWorkV3::None)
-        .expect("panel binds");
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(4, 1_003, 4, 0),
+        &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats: seats.clone() }],
+        PalwBlockWorkV3::None,
+    )
+    .expect("panel binds");
     let valid_seats: Vec<PalwBondKeyV2> = bonds[0..3].iter().map(|(k, _, _)| *k).collect();
     let receipts: Vec<PalwSeatReceiptV2> = valid_seats
         .iter()
-        .map(|k| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 1_004, signature: Vec::new() })
+        .map(|k| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: *k,
+            signed_daa: 1_004,
+            signature: Vec::new(),
+        })
         .collect();
-    let s = fold_at(&p, audit, &s, &ctx(5, 1_004, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], PalwBlockWorkV3::None)
-        .expect("the Valid quorum licenses");
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(5, 1_004, 5, 0),
+        &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }],
+        PalwBlockWorkV3::None,
+    )
+    .expect("the Valid quorum licenses");
     // Sweep past the challenge window -> Final.
     let s = fold_at(&p, audit, &s, &ctx(6, 1_300, 6, 0), &[], PalwBlockWorkV3::None).expect("challenge window closes");
     let final_daa = match &s.claim(&claim_id).expect("claim still live").phase {
@@ -327,7 +432,13 @@ fn run(audit: bool) {
         claim_id,
         network_domain: h(0x0D05_0012),
         accused_seat: accused.0,
-        valid_receipt: PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: accused, signed_daa: 1_004, signature: Vec::new() },
+        valid_receipt: PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: accused,
+            signed_daa: 1_004,
+            signature: Vec::new(),
+        },
         executor_pubkey: pk.clone(),
         contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ExecutorEquivocation(equivocation),
     };
@@ -339,7 +450,12 @@ fn run(audit: bool) {
         audit,
         &s,
         &ctx(8, 1_810, 8, 0),
-        &[PalwConsensusObjectV2::ObjectiveOffence { kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid, accused, evidence_id, evidence }],
+        &[PalwConsensusObjectV2::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+            accused,
+            evidence_id,
+            evidence,
+        }],
         PalwBlockWorkV3::None,
     )
     .expect("the PanelFalseValid conviction folds");
@@ -347,13 +463,17 @@ fn run(audit: bool) {
     let convicted = seat_collateral_before - seat_collateral_after;
     assert!(convicted > 0, "the conviction slashed the seat's lock ({} sompi)", convicted);
     let weight_after_conviction = s.safe_weight();
-    let post_conviction_spend = fold_at(&p, audit, &s, &ctx(9, 1_820, 9, 0), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(claim_id, 1, &bond.0, &pk)));
+    let post_conviction_spend =
+        fold_at(&p, audit, &s, &ctx(9, 1_820, 9, 0), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(claim_id, 1, &bond.0, &pk)));
     let s = if audit {
         // **#8: the conviction voids the Final it names, and takes its spent weight back.**
         assert!(
             matches!(
                 s.claim(&claim_id).unwrap().phase,
-                PalwClaimPhaseV2::Voided { voided_daa: 1_810, reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud }
+                PalwClaimPhaseV2::Voided {
+                    voided_daa: 1_810,
+                    reason: kaspa_consensus_core::palw_state_v2::PalwVoidReasonV2::CourtFraud
+                }
             ),
             "past the fence a PanelFalseValid conviction voids the Final claim: {:?}",
             s.claim(&claim_id).unwrap().phase
@@ -369,11 +489,17 @@ fn run(audit: bool) {
         s
     } else {
         // **THE KEY FACT (pre-fence): the conviction did NOT move the phase.**
-        assert!(matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "a PanelFalseValid conviction leaves the claim Final");
+        assert!(
+            matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+            "a PanelFalseValid conviction leaves the claim Final"
+        );
         assert_eq!(weight_after_conviction, weight_after_spend0, "and its weight stays");
         // === 4. and so the NEXT receipt block still spends legally, after the conviction =========
         let s = post_conviction_spend.expect("a receipt block STILL spends after the conviction — the phase never moved");
-        assert!(s.safe_weight() > weight_after_spend0, "the post-conviction spend adds more weight and earns another unescrowed worker base");
+        assert!(
+            s.safe_weight() > weight_after_spend0,
+            "the post-conviction spend adds more weight and earns another unescrowed worker base"
+        );
         s
     };
 
@@ -393,7 +519,13 @@ fn run(audit: bool) {
     let reserved_w0 = mul_div_u128(w0, 7_708u128, fdraw) * 5;
     let exposure_w0 = (reserved_w0 / 5) as u64;
     let rights_w0 = rights_of(exposure_w0, window_challenge, window_court, ttpb);
-    let facts_w0 = PalwClaimFraudFactsV1 { reserved: reserved_w0, escrowed_reward: 0, exposure_pwu: exposure_w0, slash_value_per_pwu: slash, extra_economic_rights_sompi: rights_w0 };
+    let facts_w0 = PalwClaimFraudFactsV1 {
+        reserved: reserved_w0,
+        escrowed_reward: 0,
+        exposure_pwu: exposure_w0,
+        slash_value_per_pwu: slash,
+        extra_economic_rights_sompi: rights_w0,
+    };
     let gain_w0 = palw_max_fraud_gain_v1(&facts_w0);
     let lock_w0 = palw_seat_lock_required_v2(gain_w0, PALW_PANEL_COLLUDING_QUORUM_V1);
     let v1_slash_w0 = lock_w0 * 3; // full Valid quorum (V1 door)
@@ -405,7 +537,13 @@ fn run(audit: bool) {
     let amp_pre_final = payout_w0 as f64 / reserved_w0 as f64;
 
     println!("\n================ fp-final-receipt-rights-unpriced-unforfeitable (t12, real fold) ================");
-    println!("worker_base per receipt block (unescrowed)  = {} sompi ({:.2} MSK)   [carve {:.2} MSK; split {:?}]", worker_base, to_msk(worker_base as u128), to_msk(worker_escrow as u128), split_worker_base);
+    println!(
+        "worker_base per receipt block (unescrowed)  = {} sompi ({:.2} MSK)   [carve {:.2} MSK; split {:?}]",
+        worker_base,
+        to_msk(worker_base as u128),
+        to_msk(worker_escrow as u128),
+        split_worker_base
+    );
     println!("W0 (escrow/rate)                             = {w0} MAC-eq ; floor draw = {fdraw}");
     println!("--- the FP claim the REAL fold drove to Final ---");
     println!("class = BASE-0 ; prompt {pt} decode {dc} ; work_leaves {work_leaves}");
@@ -413,21 +551,48 @@ fn run(audit: bool) {
     println!("reserved (compute in floor unit x 5 sompi)   = {reserved} sompi ({:.6} MSK)", to_msk(reserved));
     println!("credited compute C (claim.pwu)               = {claim_pwu} MAC-eq -> {quanta} quanta");
     println!("Final at DAA                                 = {final_daa}");
-    println!("seat lock the FOLD wrote per Valid seat      = {fold_seat_lock} sompi ({:.6} MSK) ; V1(3 seats) {fold_v1_slashable} ({:.6} MSK)", to_msk(fold_seat_lock), to_msk(fold_v1_slashable));
+    println!(
+        "seat lock the FOLD wrote per Valid seat      = {fold_seat_lock} sompi ({:.6} MSK) ; V1(3 seats) {fold_v1_slashable} ({:.6} MSK)",
+        to_msk(fold_seat_lock),
+        to_msk(fold_v1_slashable)
+    );
     println!("E[receipt blocks] this claim (C/W0, ceiling) = {e_wins_this_claim:.6} ; E[payout] {:.4} MSK", payout_this_claim / MSK);
     println!("amplification for THIS claim (payout / V1)   = {amp_fold_v1:.0}x   (scale-invariant: same ratio at any C)");
     println!("--- a receipt block spent AFTER Final, then a REAL PanelFalseValid conviction ---");
     if audit {
         println!("conviction slashed seat collateral           = {convicted} sompi ; claim phase after = Voided(CourtFraud) (#8)");
-        println!("post-conviction receipt spend                = REFUSED (safe_weight {weight_after_spend0} -> {weight_after_conviction} at the conviction)");
+        println!(
+            "post-conviction receipt spend                = REFUSED (safe_weight {weight_after_spend0} -> {weight_after_conviction} at the conviction)"
+        );
     } else {
-        println!("conviction slashed seat collateral           = {convicted} sompi ; claim phase after = Final (UNCHANGED, pre-fence)");
-        println!("post-conviction receipt spend                = accepted (safe_weight {} -> {})", weight_after_spend0, s.safe_weight());
+        println!(
+            "conviction slashed seat collateral           = {convicted} sompi ; claim phase after = Final (UNCHANGED, pre-fence)"
+        );
+        println!(
+            "post-conviction receipt spend                = accepted (safe_weight {} -> {})",
+            weight_after_spend0,
+            s.safe_weight()
+        );
     }
     println!("--- per ONE W0 of fabricated compute (finding basis, execution-rights term in the lock) ---");
-    println!("reserved/W0 {} ({:.4} MSK) ; G(code) {} ({:.4} MSK) ; lock/seat {} ({:.4} MSK)", reserved_w0, to_msk(reserved_w0), gain_w0, to_msk(gain_w0), lock_w0, to_msk(lock_w0));
-    println!("E[payout]/W0 {:.2} MSK ; V1 slashable {:.2} MSK ; S2 slashable {:.2} MSK", to_msk(payout_w0), to_msk(v1_slash_w0), to_msk(s2_slash_w0));
-    println!("AMPLIFICATION  payout/V1 = {amp_v1:.0}x ; payout/S2 = {amp_s2:.0}x ; payout/(reserved lost pre-Final) = {amp_pre_final:.0}x");
+    println!(
+        "reserved/W0 {} ({:.4} MSK) ; G(code) {} ({:.4} MSK) ; lock/seat {} ({:.4} MSK)",
+        reserved_w0,
+        to_msk(reserved_w0),
+        gain_w0,
+        to_msk(gain_w0),
+        lock_w0,
+        to_msk(lock_w0)
+    );
+    println!(
+        "E[payout]/W0 {:.2} MSK ; V1 slashable {:.2} MSK ; S2 slashable {:.2} MSK",
+        to_msk(payout_w0),
+        to_msk(v1_slash_w0),
+        to_msk(s2_slash_w0)
+    );
+    println!(
+        "AMPLIFICATION  payout/V1 = {amp_v1:.0}x ; payout/S2 = {amp_s2:.0}x ; payout/(reserved lost pre-Final) = {amp_pre_final:.0}x"
+    );
     println!("=================================================================================================\n");
 
     // === the assertions the finding claims ======================================================
@@ -437,7 +602,10 @@ fn run(audit: bool) {
     if !audit {
         return;
     }
-    assert!(worker_escrow as u128 == worker_base as u128 || split_worker_base.is_some(), "the receipt block's worker base is the unescrowed carve");
+    assert!(
+        worker_escrow as u128 == worker_base as u128 || split_worker_base.is_some(),
+        "the receipt block's worker base is the unescrowed carve"
+    );
     // Rights are worth ~3,200.85 MSK and the seat lock is ~6.97 MSK/seat: >150x for V1, >450x for S2.
     assert!(amp_v1 > 150.0, "the full V1 Valid quorum's slashable is < 1/150 of one W0's receipt payout: {amp_v1:.1}x");
     assert!(amp_s2 > 450.0, "a single full-replay seat's slashable is < 1/450 of one W0's receipt payout: {amp_s2:.1}x");
@@ -459,7 +627,10 @@ fn run(audit: bool) {
 #[test]
 fn dos_repro_1_a_sibling_of_the_convicted_execution_spends_nothing() {
     let refused = sibling_spend_after_conviction(true).expect_err("past the fence the sibling's spend is refused");
-    assert!(matches!(refused, PalwStateV2Error::ReceiptRightsForfeited { execution_root, .. } if execution_root == h(0x73_0001)), "{refused:?}");
+    assert!(
+        matches!(refused, PalwStateV2Error::ReceiptRightsForfeited { execution_root, .. } if execution_root == h(0x73_0001)),
+        "{refused:?}"
+    );
     sibling_spend_after_conviction(false).expect("below the fence the sibling still spends — the dormant fold is unchanged");
 }
 
@@ -470,9 +641,18 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
     let attacker = 1u64;
     let bond = bond_key(attacker);
     let pk = pubkey_of(attacker);
-    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))], PalwBlockWorkV3::None).unwrap();
+    let s = fold_at(
+        &p,
+        audit,
+        &genesis_state(&p),
+        &ctx(1, 1_000, 1, 0),
+        &[bond_obj(attacker, at_least_the_floor(&p, 100_000_000_000))],
+        PalwBlockWorkV3::None,
+    )
+    .unwrap();
     let s = seed_prereqs(&p, &s);
-    let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
+    let publish =
+        PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
     let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).unwrap();
     let profile = floor_profile();
     let ladder = s.class_step_ladder_v1(&floor, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
@@ -481,19 +661,39 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
     let work_leaves = kaspa_consensus_core::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, pt, dc, ladder).unwrap();
     let (named, sibling) = (h(0xF0_00A1), h(0xF0_00B2));
     let root = h(0x73_0001);
-    let s = fold_at(&p, audit, &s, &ctx(3, 1_002, 3, 0), &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &ids, dc, named, root)], PalwBlockWorkV3::None)
-        .expect("the first claim commits");
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(3, 1_002, 3, 0),
+        &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &ids, dc, named, root)],
+        PalwBlockWorkV3::None,
+    )
+    .expect("the first claim commits");
     // Another prompt, so another work id (`fp_work_id_v1` is class, prompt, bond) — the same
     // declared execution root, which is what the forfeiture keys on.
     let other_ids: Vec<u32> = (1..=pt).collect();
-    let s = fold_at(&p, audit, &s, &ctx(4, 1_003, 4, 0), &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &other_ids, dc, sibling, root)], PalwBlockWorkV3::None)
-        .expect("a second claim of the same execution commits");
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(4, 1_003, 4, 0),
+        &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &other_ids, dc, sibling, root)],
+        PalwBlockWorkV3::None,
+    )
+    .expect("a second claim of the same execution commits");
     let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
     let valid_seats: Vec<PalwBondKeyV2> = bonds[0..3].iter().map(|(k, _, _)| *k).collect();
     let receipts = |claim: Hash64| -> Vec<PalwSeatReceiptV2> {
         valid_seats
             .iter()
-            .map(|k| PalwSeatReceiptV2 { claim, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 1_006, signature: Vec::new() })
+            .map(|k| PalwSeatReceiptV2 {
+                claim,
+                verdict: PalwReceiptVerdictV2::Valid,
+                seat_bond: *k,
+                signed_daa: 1_006,
+                signature: Vec::new(),
+            })
             .collect()
     };
     let s = fold_at(
@@ -522,7 +722,11 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
     .expect("both license");
     let s = fold_at(&p, audit, &s, &ctx(7, 1_300, 7, 0), &[], PalwBlockWorkV3::None).unwrap();
     for id in [named, sibling] {
-        assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{id} Final: {:?}", s.claim(&id).unwrap().phase);
+        assert!(
+            matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+            "{id} Final: {:?}",
+            s.claim(&id).unwrap().phase
+        );
     }
     // Before the conviction the sibling spends like any Final.
     let s = fold_at(&p, audit, &s, &ctx(8, 1_800, 8, 0), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(sibling, 0, &bond.0, &pk)))
@@ -533,9 +737,17 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
         claim_id: named,
         network_domain: h(0x0D05_0012),
         accused_seat: accused.0,
-        valid_receipt: PalwSeatReceiptV2 { claim: named, verdict: PalwReceiptVerdictV2::Valid, seat_bond: accused, signed_daa: 1_006, signature: Vec::new() },
+        valid_receipt: PalwSeatReceiptV2 {
+            claim: named,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: accused,
+            signed_daa: 1_006,
+            signature: Vec::new(),
+        },
         executor_pubkey: pk.clone(),
-        contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ExecutorEquivocation(equivocation_carriage(&bond.0, &profile)),
+        contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ExecutorEquivocation(equivocation_carriage(
+            &bond.0, &profile,
+        )),
     };
     let evidence = borsh::to_vec(&payload).unwrap();
     let evidence_id = kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence);
@@ -544,7 +756,12 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
         audit,
         &s,
         &ctx(9, 1_810, 9, 0),
-        &[PalwConsensusObjectV2::ObjectiveOffence { kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid, accused, evidence_id, evidence }],
+        &[PalwConsensusObjectV2::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+            accused,
+            evidence_id,
+            evidence,
+        }],
         PalwBlockWorkV3::None,
     )
     .expect("the conviction of the first claim's seat folds");
@@ -559,7 +776,10 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
 /// `accused` — the claim's EXECUTOR bond. The acceptance layer verifies the two signatures; the
 /// fold does not, but past the 2026-09-24 review fix `bind_panel_false_valid` requires the carriage
 /// to accuse the claim's executor bond and the evidence's key to be the one it registered.
-fn equivocation_carriage(accused: &kaspa_consensus_core::tx::TransactionOutpoint, profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> kaspa_consensus_core::palw_carriage::PalwEquivocationCarriageV1 {
+fn equivocation_carriage(
+    accused: &kaspa_consensus_core::tx::TransactionOutpoint,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> kaspa_consensus_core::palw_carriage::PalwEquivocationCarriageV1 {
     let job_context = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, 512, 256);
     let att = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
         version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,

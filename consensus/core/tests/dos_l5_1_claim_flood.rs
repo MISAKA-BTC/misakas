@@ -68,7 +68,8 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     let flooder = flooder_collateral(&p, floor, pwu);
 
     let g = genesis_state(&p);
-    let (mut s, _, _) = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, flooder)], PalwBlockWorkV3::None, Hash64::default()).unwrap();
+    let (mut s, _, _) =
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, flooder)], PalwBlockWorkV3::None, Hash64::default()).unwrap();
     let baseline_bytes = carriage_bytes(&s);
     let baseline_root_s = time_per_call(20, || {
         let _ = s.state_root();
@@ -83,9 +84,11 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     for i in 0..N_JUNK {
         daa += 1;
         blue += 1;
-        let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, i + 1, 0x5EED_0000 + i);
-        let (next, _, skips) = fold(&p, &sp, &s, &ctx(0x1000 + i, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
-            .unwrap_or_else(|e| panic!("junk #{i} folds: {e:?}"));
+        let (env, key, id) =
+            junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, i + 1, 0x5EED_0000 + i);
+        let (next, _, skips) =
+            fold(&p, &sp, &s, &ctx(0x1000 + i, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+                .unwrap_or_else(|e| panic!("junk #{i} folds: {e:?}"));
         assert!(skips.is_empty());
         s = next;
         if i == 0 {
@@ -104,7 +107,8 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     let retire = sp.claim_retirement_daa();
     for (j, jump) in [daa + bind + 1, daa + bind + 1 + retire + 1].into_iter().enumerate() {
         blue += 1;
-        let (next, _, _) = fold(&p, &sp, &s, &ctx(0x9000 + j as u64, jump, blue, 0), &[], PalwBlockWorkV3::None, Hash64::default()).unwrap();
+        let (next, _, _) =
+            fold(&p, &sp, &s, &ctx(0x9000 + j as u64, jump, blue, 0), &[], PalwBlockWorkV3::None, Hash64::default()).unwrap();
         s = next;
         daa = jump;
     }
@@ -138,14 +142,25 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     println!("floor: expected draws/win = {draws}  (each draw = 1 BLAKE2b over a made-up execution_root, NOT an inference)");
     println!("reserved per junk claim   = {reserved_one} sompi ({:.6} MSK), held {bind} DAA", msk(reserved_one));
     println!("fold time for the flood   = {flood_s:.2} s debug ({:.2} ms/block)", flood_s * 1e3 / N_JUNK as f64);
-    println!("carriage bytes: baseline {baseline_bytes} -> peak {peak_bytes} ({peak_claims} claims, attacker reserved {peak_reserved})");
-    println!("after bind+retirement windows: bytes {after_bytes}, claims {after_claims}, attacker reserved {after_reserved}, attacker collateral {attacker_after} (posted {flooder})");
-    println!("panel_liabilities rows left by voided junk = {after_liabilities}/{N_JUNK}  (first: reason/signers/expiry = {voided_reason:?})");
+    println!(
+        "carriage bytes: baseline {baseline_bytes} -> peak {peak_bytes} ({peak_claims} claims, attacker reserved {peak_reserved})"
+    );
+    println!(
+        "after bind+retirement windows: bytes {after_bytes}, claims {after_claims}, attacker reserved {after_reserved}, attacker collateral {attacker_after} (posted {flooder})"
+    );
+    println!(
+        "panel_liabilities rows left by voided junk = {after_liabilities}/{N_JUNK}  (first: reason/signers/expiry = {voided_reason:?})"
+    );
     println!("residue                    = {residue} bytes = {residue_per_claim:.1} bytes per junk claim");
     println!("  (#12 (a): a signer-less BindTimeout writes no liability past the audit fence)");
     println!();
     println!("=== 1b: per-block cost of the residue (debug build) ===");
-    println!("state_root(): baseline {:.3} ms -> {:.3} ms with {after_liabilities} residue rows => {:.3} us per row per call", baseline_root_s * 1e3, root_s * 1e3, root_s_per_row * 1e6);
+    println!(
+        "state_root(): baseline {:.3} ms -> {:.3} ms with {after_liabilities} residue rows => {:.3} us per row per call",
+        baseline_root_s * 1e3,
+        root_s * 1e3,
+        root_s_per_row * 1e6
+    );
     println!("claimless fold on the residue state = {:.3} ms", fold_s * 1e3);
     println!("--- extrapolation (formula: rows x bytes_per_row; root_time = rows x us_per_row) ---");
     for (label, rows) in [
@@ -160,7 +175,9 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     }
     println!("--- the ratio ---");
     println!("attacker: 0 sompi fee, 0 sompi slashed, {lock_sompi_daa} sompi*DAA locked per claim, {draws} ticket hashes per claim");
-    println!("defender: {residue_per_claim:.0} rooted bytes per claim on every node for the chain's life + a re-hash of them on every block");
+    println!(
+        "defender: {residue_per_claim:.0} rooted bytes per claim on every node for the chain's life + a re-hash of them on every block"
+    );
 
     // The flooder was sized for its own concurrency (#9 refuses past the ceiling on the live state).
     assert!(
@@ -197,14 +214,23 @@ fn dense_2m_reserved_sompi() -> u128 {
         let j = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, c.0, c.1);
         palw_canonical_draw_work_v1(&d, &j, true).unwrap().provisional_scalar_v1()
     };
-    let floor_p = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+    let floor_p =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .unwrap();
     let floor_draw = draw(&floor_p, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
-    let d_p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
-        n_ctx: kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
-        ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
-    })
+    let d_p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx: kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
+    )
     .unwrap();
-    let d_draw = draw(&d_p, kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX));
+    let d_draw = draw(
+        &d_p,
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(
+            kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
+        ),
+    );
     palw_exposure_unit_pwu_v1(d_draw, 7_708, floor_draw) as u128 * 5
 }
 
@@ -217,17 +243,27 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     let pwu = palw_pwu_v1(target, leaves);
     let bonds = genesis_bonds(&p);
     let seats_a: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
-    let seats_b: Vec<(PalwBondKeyV2, Hash64)> = [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
+    let seats_b: Vec<(PalwBondKeyV2, Hash64)> =
+        [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
     // The least a producer can post and still get ONE floor attempt past #9 (runtime, not a guess).
     let per = admitted_per_attempt(&p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
     let attacker_collateral = at_least_the_floor(&p, per.collateral);
 
     let g = genesis_state(&p);
-    let mut s: PalwChainStateV2 = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+    let mut s: PalwChainStateV2 =
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default())
+            .unwrap()
+            .0;
     let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 1, 0x5EED);
     let mut daa = 1_001u64;
     let mut blue = 2u64;
-    let step = |s: &PalwChainStateV2, daa: u64, blue: u64, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, sub: u64| {
+    let step = |s: &PalwChainStateV2,
+                daa: u64,
+                blue: u64,
+                objs: &[PalwConsensusObjectV2],
+                work: PalwBlockWorkV3<'_>,
+                key: Hash64,
+                sub: u64| {
         fold(&p, &sp, s, &ctx(0x7000 + blue, daa, blue, sub), objs, work, key).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}")).0
     };
     s = step(&s, daa, blue, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
@@ -249,7 +285,15 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     daa += 1;
     blue += 1;
     account(&s, daa, &mut last, &mut integral_other, &mut integral_attacker);
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     let other_after_bind = others(&s);
     let receipt_window = sp.receipt_window_for_claim_v1(
         &s,
@@ -267,7 +311,15 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     daa += 1;
     blue += 1;
     account(&s, daa, &mut last, &mut integral_other, &mut integral_attacker);
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats_of(&seats_b) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats_of(&seats_b) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     let other_after_rebind = others(&s);
     daa += receipt_window + 1;
     blue += 1;
@@ -302,12 +354,19 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
         msk(attacker_collateral as u128),
         msk(per.reservation)
     );
-    println!("seat duty per seat (ADR-0130 floor) = {} sompi; 3 x reserved = {}", other_after_bind / b.panel.seat_count() as u128, palw_seat_exposure_v1(reserved));
+    println!(
+        "seat duty per seat (ADR-0130 floor) = {} sompi; 3 x reserved = {}",
+        other_after_bind / b.panel.seat_count() as u128,
+        palw_seat_exposure_v1(reserved)
+    );
     println!("reserved on OTHER bonds after bind #1 = {other_after_bind} ({:.2} MSK)", msk(other_after_bind));
     println!("after first receipt window: phase = {phase_after_first}");
     println!("reserved on OTHER bonds after redraw bind #2 = {other_after_rebind}");
     println!("after second receipt window: phase = {final_phase}");
-    println!("producer collateral {attacker_collateral} -> {attacker_collateral_after}  (charged {charge} = {:.2} MSK; before: 0)", msk(charge));
+    println!(
+        "producer collateral {attacker_collateral} -> {attacker_collateral_after}  (charged {charge} = {:.2} MSK; before: 0)",
+        msk(charge)
+    );
     println!("seats' collateral {seats_posted} -> {seats_collateral}");
     println!(
         "sompi x DAA reserved: OTHER parties {integral_other}, producer {integral_attacker}  => ratio {:.4} (before: 3,316,585)",
@@ -316,10 +375,20 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     println!("peak pinned on others / charge = {:.4}", other_after_bind as f64 / charge.max(1) as f64);
     println!();
     println!("=== 1c': the 2M dense row at the registry-armed reservation (analytic, t12_collateral_terms arithmetic) ===");
-    println!("expected draws per 2M win     = {}  (the lottery needs no inference at all)", palw_expected_attempts_v1(genesis_classes(&p)[2].2));
-    println!("reserved per 2M claim         = {r2m} sompi ({:.2} MSK); + escrow = {:.2} MSK on the producer's bond", msk(r2m), msk(res2m));
+    println!(
+        "expected draws per 2M win     = {}  (the lottery needs no inference at all)",
+        palw_expected_attempts_v1(genesis_classes(&p)[2].2)
+    );
+    println!(
+        "reserved per 2M claim         = {r2m} sompi ({:.2} MSK); + escrow = {:.2} MSK on the producer's bond",
+        msk(r2m),
+        msk(res2m)
+    );
     println!("seat duty per seat            = {seat2m} sompi ({:.2} MSK)", msk(seat2m));
-    println!("genesis bond ceiling          = {:.2} MSK  -> 2M seats one bond can hold at once = {seats_per_bond}", msk(genesis_collateral as u128 * ratio as u128 / 1000));
+    println!(
+        "genesis bond ceiling          = {:.2} MSK  -> 2M seats one bond can hold at once = {seats_per_bond}",
+        msk(genesis_collateral as u128 * ratio as u128 / 1000)
+    );
     println!("a second 2M seat fits on a bond already seated? {fits_second}; a third? {fits_third}");
     println!("honest bonds eligible for a panel = {honest_bonds}; seats per panel = {}", b.panel.seat_count());
     println!(

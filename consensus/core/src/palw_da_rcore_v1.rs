@@ -96,20 +96,28 @@ pub const PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/da-disclo
 /// `answered` set and every session's unit list are iterated in consensus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwDaUnitV1 {
-    Event { row: u32, tile: u8 },
+    Event {
+        row: u32,
+        tile: u8,
+    },
     Held(PalwHeldMissingV1),
     /// **One committed step leaf of an IR claim** (past `Params::palw_tir_fence2`; appended, so no
     /// earlier tag moves): its preimage and opening, with the claim's ids (and a logits tile's row
     /// pin) — [`crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1`] — or, for an index at or past
     /// the execution's leaves, the claim's binding proving so (`TirStepOutOfRange`).
-    TirStepLeaf { index: u64 },
+    TirStepLeaf {
+        index: u64,
+    },
     /// **One interior node of an IR claim's step tree** (past `Params::palw_tir_fence2`; appended):
     /// level `level ≥ 1` above the leaf nodes, `index` from the left. Answered by its frontier —
     /// the nodes [`crate::palw_tir_court_v1::PALW_TIR_STEP_NODE_DEPTH_V1`] levels below it — and its
     /// opening ([`crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1`]), or, past the tree, by the
     /// binding proving so. A seat descends ten levels a session to the first leaf its replay
     /// disputes.
-    TirStepNode { level: u8, index: u64 },
+    TirStepNode {
+        level: u8,
+        index: u64,
+    },
     /// **One node of an IR claim's tiled logits trace's rows tree** (past `Params::palw_tir_fence2`;
     /// appended): at `level ≥ 1` answered by its frontier ten levels down and its opening, at level 0
     /// (a row) by the row's tile leaves and its opening — both with the ids that tie the rows root to
@@ -117,7 +125,10 @@ pub enum PalwDaUnitV1 {
     /// or on a flat one, by the binding proving so. A seat whose replay disputes the claim's trace but
     /// not its steps descends to the first row and tile it disputes, and demands that tile's lanes as
     /// an event unit.
-    TirRowNode { level: u8, index: u64 },
+    TirRowNode {
+        level: u8,
+        index: u64,
+    },
 }
 
 impl PalwDaUnitV1 {
@@ -387,16 +398,16 @@ impl PalwDaDrawSpaceV1<'_> {
                 let total = u64::from(*rows) * u64::from(*tiles);
                 (total <= limit).then(|| {
                     (0..*rows)
-                        .flat_map(|row| (0..*tiles).map(move |tile| PalwDaUnitV1::Event { row, tile: tile.min(u32::from(u8::MAX)) as u8 }))
+                        .flat_map(|row| {
+                            (0..*tiles).map(move |tile| PalwDaUnitV1::Event { row, tile: tile.min(u32::from(u8::MAX)) as u8 })
+                        })
                         .collect()
                 })
             }
-            Self::PromptTiles { tiles } => (*tiles <= limit).then(|| {
-                (0..*tiles).map(|tile| PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: tile as u32 })).collect()
-            }),
-            Self::StepRanges { leaves } => (*leaves <= limit).then(|| {
-                (0..*leaves).map(|first| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count: 1 })).collect()
-            }),
+            Self::PromptTiles { tiles } => (*tiles <= limit)
+                .then(|| (0..*tiles).map(|tile| PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: tile as u32 })).collect()),
+            Self::StepRanges { leaves } => (*leaves <= limit)
+                .then(|| (0..*leaves).map(|first| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count: 1 })).collect()),
             Self::StateChunks { .. } => None,
         }
     }
@@ -412,9 +423,8 @@ impl PalwDaDrawSpaceV1<'_> {
                 let index = scaled(word, rows.checked_mul(tiles)?.max(1));
                 (rows > 0 && tiles > 0).then(|| PalwDaUnitV1::Event { row: (index / tiles) as u32, tile: (index % tiles) as u8 })
             }
-            Self::PromptTiles { tiles } => (*tiles > 0).then(|| {
-                PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: scaled(word, (*tiles).min(1 << 32)) as u32 })
-            }),
+            Self::PromptTiles { tiles } => (*tiles > 0)
+                .then(|| PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: scaled(word, (*tiles).min(1 << 32)) as u32 })),
             Self::StepRanges { leaves } => {
                 (*leaves > 0).then(|| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: scaled(word, *leaves), count: 1 }))
             }
@@ -584,7 +594,11 @@ pub fn palw_da_producer_action_v1(collateral: u64, g: u128) -> u128 {
 /// placing a step leaf in a segment needs the claim's committed step-leaf count, which no record the
 /// fold keeps after the accusation carries (a partial seat is therefore never charged for a held
 /// unit — an under-charge of a colluding partial seat, named, never an over-charge of an honest one).
-pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_verification_v2::PalwSegmentMaskV2, segments: u16) -> bool {
+pub fn palw_da_unit_covered_by_v1(
+    _unit: &PalwDaUnitV1,
+    attested: crate::palw_verification_v2::PalwSegmentMaskV2,
+    segments: u16,
+) -> bool {
     segments > 0 && attested.is_full(segments)
 }
 
@@ -936,7 +950,6 @@ pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
     PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
 ];
 
-
 // ---------------------------------------------------------------------------------------------
 // The second IR fence: a DA demand for one unit of an IR claim's step tree (evidence transport C)
 // ---------------------------------------------------------------------------------------------
@@ -1036,7 +1049,10 @@ mod tests {
     use super::*;
 
     fn bond(n: u8) -> PalwBondKeyV2 {
-        PalwBondKeyV2(crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(u64::from(n)), index: 0 })
+        PalwBondKeyV2(crate::tx::TransactionOutpoint {
+            transaction_id: crate::tx::TransactionId::from_u64_word(u64::from(n)),
+            index: 0,
+        })
     }
 
     /// **The DA-2 records encode field by field in the ADR's order** (the v22 layout): a session's
@@ -1110,10 +1126,10 @@ mod tests {
         assert_ne!(palw_da_draw_seed_v1(&Hash64::from_bytes([1; 64]), &claim, &bond(2)), seed(1), "and so does the accuser");
         // The attempt run: one row, one tile.
         let one = PalwDaDrawSpaceV1::Events { rows: 1, tiles: 1 };
-        assert_eq!(palw_da_draw_units_v1(&seed(1), &PalwDaUnitV1::Event { row: 5, tile: 0 }, &one), vec![PalwDaUnitV1::Event {
-            row: 0,
-            tile: 0
-        }]);
+        assert_eq!(
+            palw_da_draw_units_v1(&seed(1), &PalwDaUnitV1::Event { row: 5, tile: 0 }, &one),
+            vec![PalwDaUnitV1::Event { row: 0, tile: 0 }]
+        );
         assert!(palw_da_draw_units_v1(&seed(1), &PalwDaUnitV1::Event { row: 0, tile: 0 }, &one).is_empty());
         assert!(palw_da_draw_units_v1(&seed(1), &PalwDaUnitV1::Event { row: 0, tile: 0 }, &PalwDaDrawSpaceV1::Nothing).is_empty());
         // A wide run: three distinct in-run units, none the named one, the same on every node.
@@ -1132,17 +1148,24 @@ mod tests {
         }
         // Held spaces: width-1 ranges over two leaves (both drawn), prompt tiles, state chunks.
         let leaf = PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 0 });
-        assert_eq!(palw_da_draw_units_v1(&seed(1), &leaf, &PalwDaDrawSpaceV1::StepRanges { leaves: 2 }), vec![
-            PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 0, count: 1 }),
-            PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 1, count: 1 }),
-        ]);
+        assert_eq!(
+            palw_da_draw_units_v1(&seed(1), &leaf, &PalwDaDrawSpaceV1::StepRanges { leaves: 2 }),
+            vec![
+                PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 0, count: 1 }),
+                PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 1, count: 1 }),
+            ]
+        );
         let tiles = palw_da_draw_units_v1(
             &seed(3),
             &PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 0 }),
             &PalwDaDrawSpaceV1::PromptTiles { tiles: 100 },
         );
         assert_eq!(tiles.len(), 3);
-        assert!(tiles.iter().all(|u| matches!(u, PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile }) if *tile < 100 && *tile != 0)));
+        assert!(
+            tiles
+                .iter()
+                .all(|u| matches!(u, PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile }) if *tile < 100 && *tile != 0))
+        );
         let chunks_of = |checkpoint: u32| -> Option<u64> { (checkpoint > 0).then_some(u64::from(checkpoint) * 2) };
         let chunks = palw_da_draw_units_v1(
             &seed(4),

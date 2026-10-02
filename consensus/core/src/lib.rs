@@ -169,14 +169,14 @@ pub mod palw_attn_court_v1;
 /// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
 pub mod palw_attn_dissect;
 pub mod palw_attn_responder_v1;
+/// ADR-0160 stage 2 lane Q: the audit door (F-Q, `Params::palw_capacity_audit_door`) — a credited
+/// claim reaches `Final` only with `k_aud` operator receipts from outside its panel.
+pub mod palw_audit_door_v1;
 pub mod palw_backend;
 pub mod palw_base0;
 pub mod palw_base0_a16;
 pub mod palw_base0_ops;
 pub mod palw_base0_profile;
-/// ADR-0160 stage 2 lane Q: the audit door (F-Q, `Params::palw_capacity_audit_door`) — a credited
-/// claim reaches `Final` only with `k_aud` operator receipts from outside its panel.
-pub mod palw_audit_door_v1;
 /// ADR-0160 lane verify V1: the batch licence (F-B, `Params::palw_capacity_batch_licence`) — one
 /// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
 pub mod palw_batch_licence_v1;
@@ -205,7 +205,6 @@ pub mod palw_capacity_formulas_v1;
 /// allow for every live claim and bond, next to today's values. Node-only (`getPalwCapacityShadow`,
 /// kaspad's interval log); no consensus rule reads it.
 pub mod palw_capacity_shadow_v1;
-pub mod palw_class_identity_v1;
 /// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission
 /// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
@@ -218,6 +217,7 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+pub mod palw_class_identity_v1;
 /// ADR-0152 §4-quater — class-derived verification deadlines behind
 /// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
 /// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but
@@ -238,6 +238,9 @@ pub mod palw_court_v2;
 /// consumer).
 pub mod palw_credit;
 pub mod palw_credit_batch;
+/// ADR-0152 v3.1 §3.11 (DA-1…DA-9, M3) — the data-availability court past `Params::palw_rcore_plus`:
+/// sessions in side maps, drawn units, any locked signer answers, seat-only pause credit.
+pub mod palw_da_rcore_v1;
 pub mod palw_decode_constraint_v1;
 pub mod palw_decode_select_v2;
 pub mod palw_derived_v1;
@@ -252,9 +255,9 @@ pub mod palw_e2e_adjudicability;
 /// claim or per block and do not. A doc comment with a test suite attached; no rule, no state,
 /// no caller. Read it before proposing that one answer become several claims.
 pub mod palw_economic_compute_v1;
-pub mod palw_economic_safety_v1;
 pub mod palw_economic_locus_v1;
 pub mod palw_economic_payout_v1;
+pub mod palw_economic_safety_v1;
 pub mod palw_economics_ledger_v1;
 /// ADR-0160 lane escrow (testnet-12, post-launch): past `Params::palw_capacity_escrow_at_licence` the
 /// bond holds `m_c` in a claim's escrow slot instead of `E`, and an unconvicted void keeps the claim's
@@ -279,26 +282,19 @@ pub mod palw_fp_interval_v1;
 pub mod palw_fp_objects_v3;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;
-pub mod palw_heartbeat_v1;
 /// ADR-0152 v3.1 H-1 — the lifecycle objects a heartbeat must be able to carry: the one list the
 /// miner's carrier lane and the relay's exemption read (P2-9). Node policy; no rule reads it.
 pub mod palw_heartbeat_carriers_v1;
-/// The 2026-09-25 model-registry review, M1 — a possession proof whose row is about to lapse outranks
-/// the court queue at the seat and holds a carrier's place in the pool and the template. Node
-/// policy past R-core+; no rule reads it.
-pub mod palw_readiness_escalation_v1;
+pub mod palw_heartbeat_v1;
 /// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
 /// width and its fetch, as pure functions. Consensus-inert.
 pub mod palw_held_context_v1;
 /// ADR-0103 Decision 4 — a data-availability accusation names a prompt tile, a state chunk or a
 /// step range, and is answered by that unit and its path. Behind `Params::palw_held_context`.
 pub mod palw_held_da_v1;
-/// ADR-0152 v3.1 §3.11 (DA-1…DA-9, M3) — the data-availability court past `Params::palw_rcore_plus`:
-/// sessions in side maps, drawn units, any locked signer answers, seat-only pause credit.
-pub mod palw_da_rcore_v1;
-/// Lane B of the panel-seed stopgap (2026-09-26): what an operator's non-seat data-availability
-/// filer reads of the tip — node policy's read, never a rule.
-pub mod palw_operator_da_v1;
+/// ADR-0160 stage 2 lane S: the issuance slots (F-S, `Params::palw_capacity_issuance_slots`) —
+/// outstanding, burst and rate caps at the step's ρ; queue bounds, never the safety.
+pub mod palw_issuance_slots_v1;
 pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;
@@ -337,9 +333,10 @@ pub mod palw_model_benefits_v1;
 pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
-pub mod palw_model_registry_v1;
 /// Model-add tracking: machine-readable refusal codes and the constructed→folded pipeline.
 pub mod palw_model_registration_v1;
+pub mod palw_model_registry_v1;
+pub mod palw_network_room_v1;
 /// ADR-0152 v2 F2: one adjudicator for a false `Valid`, bound to the claim's committed root —
 /// called by the processor and the fold alike. Consensus-inert until
 /// `Params::palw_offence_attribution` is Some.
@@ -351,6 +348,9 @@ pub mod palw_offence_v1;
 /// attempt produced by an operator (genesis) bond may anchor a claim's panel. Consensus-inert while the
 /// fence is `None` (every shipped preset).
 pub mod palw_operator_anchor_v1;
+/// Lane B of the panel-seed stopgap (2026-09-26): what an operator's non-seat data-availability
+/// filer reads of the tip — node policy's read, never a rule.
+pub mod palw_operator_da_v1;
 /// ADR-0133 S2: optimistic licence from the full-replay seat, behind `Params::palw_verification_s2`.
 pub mod palw_optimistic_licence_v2;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
@@ -361,12 +361,12 @@ pub mod palw_panel_da_v1;
 /// that reads a fence.
 pub mod palw_panel_economy_v1;
 pub mod palw_panel_v2;
-/// Operator/RPC view of panel seats, class readiness, and per-claim assignments.
-/// Seat counts stay distinct (`bonded` / `ready` / `selected` / `validReceipt`); a hold has a reason code.
-pub mod palw_panel_view_v1;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
 pub mod palw_panel_var_v1;
+/// Operator/RPC view of panel seats, class readiness, and per-claim assignments.
+/// Seat counts stay distinct (`bonded` / `ready` / `selected` / `validReceipt`); a hold has a reason code.
+pub mod palw_panel_view_v1;
 pub mod palw_producer_v2;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
@@ -377,6 +377,10 @@ pub mod palw_qwen25_profile;
 pub mod palw_qwen36_ops;
 pub mod palw_qwen36_profile;
 pub mod palw_rc_identity_v2;
+/// The 2026-09-25 model-registry review, M1 — a possession proof whose row is about to lapse outranks
+/// the court queue at the seat and holds a carrier's place in the pool and the template. Node
+/// policy past R-core+; no rule reads it.
+pub mod palw_readiness_escalation_v1;
 pub mod palw_receipt;
 /// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
 /// adjudication maths. Land-stage, consensus-inert.
@@ -451,34 +455,34 @@ pub mod palw_step_leg;
 /// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
-/// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
-pub mod palw_tir_v1;
-/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
-pub mod palw_tir_fence2_v1;
-/// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
-pub mod palw_tir_artifact_v1;
+pub mod palw_terminal;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
 pub mod palw_tir_admission_v1;
+/// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
+pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
 pub mod palw_tir_attempt_v1;
 /// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
 pub mod palw_tir_certify_v1;
 /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
 pub mod palw_tir_class_v1;
-/// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
-pub mod palw_tir_court_v1;
-/// RFC-0002 Phase F step F6: the IR one-move court — an IR claim accused at a named leaf and decided in one move.
-pub mod palw_tir_one_move_v1;
-/// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
-pub mod palw_tir_dissect_v1;
+pub mod palw_tir_close_range_v1;
 /// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
 pub mod palw_tir_close_size_v1;
-pub mod palw_tir_close_range_v1;
+/// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
+pub mod palw_tir_court_v1;
+/// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
+pub mod palw_tir_dissect_v1;
+/// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
+pub mod palw_tir_fence2_v1;
+/// RFC-0002 Phase F step F6: the IR one-move court — an IR claim accused at a named leaf and decided in one move.
+pub mod palw_tir_one_move_v1;
 /// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
 pub mod palw_tir_step_v1;
+/// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
+pub mod palw_tir_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.
 pub mod palw_tir_work_v1;
-pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;
@@ -492,10 +496,6 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
-/// ADR-0160 stage 2 lane S: the issuance slots (F-S, `Params::palw_capacity_issuance_slots`) —
-/// outstanding, burst and rate caps at the step's ρ; queue bounds, never the safety.
-pub mod palw_issuance_slots_v1;
-pub mod palw_network_room_v1;
 /// ADR-0160 lane verify V2: room v2 (F-R, `Params::palw_capacity_verify_room`) — the measured `k = 2`
 /// capacity, the stake-proportional bond share, the floor's seat-capital room.
 pub mod palw_verify_capacity_v1;

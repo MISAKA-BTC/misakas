@@ -53,7 +53,8 @@ const BEFORE_2M_DEAD_DAA: u64 = 1_436;
 fn attacker_collateral(p: &kaspa_consensus_core::config::params::Params, floor: Hash64, pwu: u64) -> (u64, AdmittedPerAttempt) {
     let b = bundle(p);
     let per = admitted_per_attempt(p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
-    let reg = (u128::from(b.state.registration_exposure_sompi()) * N_CLASSES as u128 * 1000).div_ceil(u128::from(per.ratio_permille)) as u64;
+    let reg =
+        (u128::from(b.state.registration_exposure_sompi()) * N_CLASSES as u128 * 1000).div_ceil(u128::from(per.ratio_permille)) as u64;
     let burn = N_CLASSES * kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1;
     (per.collateral * FLOOD_DAA + reg + burn, per)
 }
@@ -67,14 +68,23 @@ fn dense_2m_reserved_sompi() -> u128 {
         let j = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, c.0, c.1);
         palw_canonical_draw_work_v1(&d, &j, true).unwrap().provisional_scalar_v1()
     };
-    let floor_p = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+    let floor_p =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .unwrap();
     let floor_draw = draw(&floor_p, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
-    let d_p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
-        n_ctx: kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
-        ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
-    })
+    let d_p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx: kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
+    )
     .unwrap();
-    let d_draw = draw(&d_p, kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX));
+    let d_draw = draw(
+        &d_p,
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(
+            kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
+        ),
+    );
     palw_exposure_unit_pwu_v1(d_draw, 7_708, floor_draw) as u128 * 5
 }
 
@@ -97,7 +107,9 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
     // ---- 1. registration ------------------------------------------------------------------------
     let g = genesis_state(&p);
     let mut s: PalwChainStateV2 =
-        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default())
+            .unwrap()
+            .0;
     let mut daa = 1_000u64;
     let mut blue = 1u64;
     let mut reg_fees = 0u64;
@@ -130,7 +142,12 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
             .iter()
             .filter(|(k, _, _)| {
                 let bnd = s.bond(k).unwrap();
-                palw_seat_has_headroom_v1(bnd.collateral, s.reserved_exposure(k) + s.registration_exposure(k), stake, economy.max_exposure_ratio_permille)
+                palw_seat_has_headroom_v1(
+                    bnd.collateral,
+                    s.reserved_exposure(k) + s.registration_exposure(k),
+                    stake,
+                    economy.max_exposure_ratio_permille,
+                )
             })
             .count()
     };
@@ -195,7 +212,8 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         let flooding = daa <= start + FLOOD_DAA;
         let env_key = if flooding {
             seed += 1;
-            let (env, key, _) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, seed, 0xF100D + seed);
+            let (env, key, _) =
+                junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, seed, 0xF100D + seed);
             attempts += 1;
             Some((env, key))
         } else {
@@ -205,8 +223,8 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
             Some((env, key)) => (PalwBlockWorkV3::Attempt(env), *key, T12_BLOCK_SUBSIDY_SOMPI),
             None => (PalwBlockWorkV3::None, Hash64::default(), 0),
         };
-        let (next, _, skips) =
-            fold(&p, &sp, &s, &ctx(0x10_0000 + blue, daa, blue, subsidy), &objects, work, key).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}"));
+        let (next, _, skips) = fold(&p, &sp, &s, &ctx(0x10_0000 + blue, daa, blue, subsidy), &objects, work, key)
+            .unwrap_or_else(|e| panic!("DAA {daa}: {e:?}"));
         s = next;
         if env_key.is_some() {
             if skips.is_empty() { admitted += 1 } else { refused_by_ceiling += 1 }
@@ -255,7 +273,10 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         "=== composite (FIXED: #9 + #10): {attempts} junk floor attempts over {FLOOD_DAA} DAA, {admitted} admitted, {refused_by_ceiling} refused by #9, \
          {binds} panel bindings, {unbindable} could not bind (fold time {elapsed:.1} s debug) ==="
     );
-    println!("{:>7} {:>16} {:>18} {:>18} {:>16} {:>7}", "DAA", "attacker res.", "honest res. (MSK)", "bonds: floor seat", "bonds: 2M seat", "claims");
+    println!(
+        "{:>7} {:>16} {:>18} {:>18} {:>16} {:>7}",
+        "DAA", "attacker res.", "honest res. (MSK)", "bonds: floor seat", "bonds: 2M seat", "claims"
+    );
     for (d, ar, hr, rf, r2, c) in &samples {
         println!("{d:>7} {ar:>16} {:>18.2} {rf:>18} {r2:>16} {c:>7}", msk(*hr));
     }
@@ -271,11 +292,19 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
     println!("fees (registrations + PanelBound relay) = {attacker_fees} sompi ({:.4} MSK)", msk(attacker_fees as u128));
     println!("slashed (#10 forfeits, burn excluded)   = {slashed} sompi ({:.2} MSK; before: 0)", msk(slashed as u128));
     println!("lottery work                            = {attempts} x {draws} BLAKE2b tickets; 0 inferences");
-    println!("forgone own escrow (opportunity only)   = {:.2} MSK ({:.2} MSK per claim, burned by don't-mint)", msk(forgone_escrow), msk(escrow as u128));
+    println!(
+        "forgone own escrow (opportunity only)   = {:.2} MSK ({:.2} MSK per claim, burned by don't-mint)",
+        msk(forgone_escrow),
+        msk(escrow as u128)
+    );
     println!("reserved after the flood                = {reserved_after}  -> the same collateral re-funds the next wave");
     println!("--- defender side ---");
     println!("max honest collateral pinned on duty    = {:.2} MSK  (before: {BEFORE_PINNED_MSK:.2} MSK)", msk(max_honest_reserved));
-    println!("per-seat duty (floor junk claim)        = {:.2} MSK  (ADR-0130 floor: λ={}‰ x escrow share)", msk(seat_floor_honest), economy.reward_multiple_permille);
+    println!(
+        "per-seat duty (floor junk claim)        = {:.2} MSK  (ADR-0130 floor: λ={}‰ x escrow share)",
+        msk(seat_floor_honest),
+        economy.reward_multiple_permille
+    );
     println!("per-seat duty (2M claim, registry basis)= {:.2} MSK", msk(seat_2m));
     println!("min honest bonds with room for a 2M seat= {min_2m_room} (need {} = seats + the executor excluded)", seat_count + 1);
     println!("DAA with the 2M lane unbindable         = {daa_2m_dead} of {}  (before: {BEFORE_2M_DEAD_DAA} of 3,650)", end - start);
@@ -297,11 +326,20 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         msk(escrow as u128),
         FLOOD_DAA
     );
-    println!("for: {:.4} MSK fees + {} sompi slashed + {:.6} MSK locked", msk(attacker_fees as u128), slashed, msk(max_attacker_reserved));
+    println!(
+        "for: {:.4} MSK fees + {} sompi slashed + {:.6} MSK locked",
+        msk(attacker_fees as u128),
+        slashed,
+        msk(max_attacker_reserved)
+    );
 
     // The attacker was sized by #9 for the whole flood, so every attempt is admitted.
     assert_eq!(admitted, attempts, "an attacker sized by #9 gets every attempt of the flood");
-    assert_eq!(void_reasons.get("ReceiptTimeout").copied().unwrap_or(0), attempts, "every junk claim withholds to its second ReceiptTimeout");
+    assert_eq!(
+        void_reasons.get("ReceiptTimeout").copied().unwrap_or(0),
+        attempts,
+        "every junk claim withholds to its second ReceiptTimeout"
+    );
     assert_eq!(slashed as u128, per.reservation * attempts as u128, "#10: each forfeits weight + escrow");
     if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 && economy.reward_multiple_permille <= 2_000 {
         // At λ = 2 the vesting line's floor duty is the λ-term, 256.07 MSK — 2/5 of the claim's

@@ -663,7 +663,8 @@ mod tests {
             // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
             // the probe does not run — it asks only the hashers and the schedule.
             "palw_capacity_aggregate_liability" => {
-                params.palw_capacity_aggregate_liability = Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+                params.palw_capacity_aggregate_liability =
+                    Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
             }
             // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
             // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.

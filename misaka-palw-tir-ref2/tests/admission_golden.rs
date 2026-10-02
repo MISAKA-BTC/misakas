@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use misaka_palw_tir_ref2::admit::{AdmitError, AdmitInputs, Admission, Ceilings, Cost, Leaf, admit};
+use misaka_palw_tir_ref2::admit::{Admission, AdmitError, AdmitInputs, Ceilings, Cost, Leaf, admit};
 use serde_json::Value;
 
 fn u64_of(v: &Value) -> u64 {
@@ -184,7 +184,11 @@ fn admission_vectors() {
                 if real.is_empty() {
                     ok += 1;
                 } else {
-                    fails.push(format!("{name}: {} differences: {}", real.len(), real.iter().take(4).map(|s| s.as_str()).collect::<Vec<_>>().join(" | ")));
+                    fails.push(format!(
+                        "{name}: {} differences: {}",
+                        real.len(),
+                        real.iter().take(4).map(|s| s.as_str()).collect::<Vec<_>>().join(" | ")
+                    ));
                 }
             }
             ("refused", Err(e)) => {
@@ -203,10 +207,13 @@ fn admission_vectors() {
                     fails.push(format!("{name}: expected {x}, got {e:?}"));
                 }
             }
-            (want, got) => fails.push(format!("{name}: expected {want}, got {}", match got {
-                Ok(_) => "admitted".to_string(),
-                Err(e) => format!("{e:?}"),
-            })),
+            (want, got) => fails.push(format!(
+                "{name}: expected {want}, got {}",
+                match got {
+                    Ok(_) => "admitted".to_string(),
+                    Err(e) => format!("{e:?}"),
+                }
+            )),
         }
     }
     println!("admission vectors: {ok}/{total} reproduced ({leaf_order_only} admitted cases list some cone's leaves in another order)");

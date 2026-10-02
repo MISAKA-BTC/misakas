@@ -279,7 +279,13 @@ fn palw_tir_registered_class_context(
 ) -> PalwRegisteredClassContext {
     let n_ctx = record.facts.max_context;
     let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx) else {
-        return PalwRegisteredClassContext { n_ctx, canonical_prefill_tokens: 0, canonical_decode_tokens: 0, max_context_tokens: 0, ir: true };
+        return PalwRegisteredClassContext {
+            n_ctx,
+            canonical_prefill_tokens: 0,
+            canonical_decode_tokens: 0,
+            max_context_tokens: 0,
+            ir: true,
+        };
     };
     // The one constructor of an IR job context, so the bound is the one the chain's jobs carry.
     let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, canonical);
@@ -2417,7 +2423,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwClassPanelStatusResponse::default());
         };
         let Some(row) = view.classes.into_iter().find(|c| c.class_id == class_id) else {
-            return Ok(GetPalwClassPanelStatusResponse { available: true, tip_daa: view.tip_daa, found: false, status: Default::default() });
+            return Ok(GetPalwClassPanelStatusResponse {
+                available: true,
+                tip_daa: view.tip_daa,
+                found: false,
+                status: Default::default(),
+            });
         };
         let holds_local = self
             .flow_context
@@ -2439,21 +2450,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelSeatsRequest,
     ) -> RpcResult<GetPalwPanelSeatsResponse> {
-        let class_filter = if request.class_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_class_id_or_alias(&request.class_id)?)
-        };
+        let class_filter = if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
             return Ok(GetPalwPanelSeatsResponse::default());
         };
-        let seats = view
-            .seats
-            .into_iter()
-            .filter(|s| class_filter.is_none_or(|id| s.class_id == id))
-            .map(rpc_palw_panel_seat)
-            .collect();
+        let seats =
+            view.seats.into_iter().filter(|s| class_filter.is_none_or(|id| s.class_id == id)).map(rpc_palw_panel_seat).collect();
         Ok(GetPalwPanelSeatsResponse { available: true, tip_daa: view.tip_daa, seats })
     }
 
@@ -2462,11 +2465,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelStatusRequest,
     ) -> RpcResult<GetPalwPanelStatusResponse> {
-        let class_filter = if request.class_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_class_id_or_alias(&request.class_id)?)
-        };
+        let class_filter = if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
         let synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
@@ -2481,9 +2480,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             });
         };
         let mut classes = Vec::new();
-        for local in rt.panel_classes.iter().filter(|c| {
-            class_filter.is_none_or(|id| c.class_id.eq_ignore_ascii_case(&id.to_string()))
-        }) {
+        for local in rt.panel_classes.iter().filter(|c| class_filter.is_none_or(|id| c.class_id.eq_ignore_ascii_case(&id.to_string())))
+        {
             let class_id = local.class_id.parse::<kaspa_hashes::Hash64>().ok();
             let chain = class_id.and_then(|id| view.classes.iter().find(|c| c.class_id == id));
             let seat = class_id.and_then(|id| {
@@ -2527,7 +2525,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 classes.push(RpcPalwLocalPanelClass {
                     class_id: row.class_id.to_string(),
                     model_name: row.model_name.clone(),
-                    seat_id: seat.map(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id)).unwrap_or_default(),
+                    seat_id: seat
+                        .map(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id))
+                        .unwrap_or_default(),
                     artifact_loaded: false,
                     artifact_root: String::new(),
                     working_set_bytes: 0,
@@ -2570,11 +2570,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelAssignmentsRequest,
     ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
-        let claim_filter = if request.claim_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_hash64(&request.claim_id, "claim id")?)
-        };
+        let claim_filter = if request.claim_id.trim().is_empty() { None } else { Some(parse_hash64(&request.claim_id, "claim id")?) };
         let seat_filter = if request.seat_id.trim().is_empty() { None } else { Some(request.seat_id.trim().to_string()) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
@@ -2621,11 +2617,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
-        let object = if request.object_hex.trim().is_empty() {
-            None
-        } else {
-            Some(decode_class_registered_hex(&request.object_hex)?)
-        };
+        let object = if request.object_hex.trim().is_empty() { None } else { Some(decode_class_registered_hex(&request.object_hex)?) };
         let mut checks = Vec::new();
         let mut registration = RpcPalwModelRegistration { constructed: object.is_some(), ..Default::default() };
         if let Some(object) = &object {
@@ -2700,7 +2692,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class) {
             if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
                 if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
-                    registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
+                    registration.registry_state =
+                        class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
                     if class.row.is_some() {
                         registration.folded = true;
                         registration.included = true;
@@ -2715,11 +2708,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             self.fill_registration_from_tx(&mut registration, &request.transaction_id, inclusion_known).await?;
         }
         finalize_registration_state(&mut registration);
-        let found = registration.folded || registration.included || registration.accepted || registration.submitted || registration.constructed;
+        let found = registration.folded
+            || registration.included
+            || registration.accepted
+            || registration.submitted
+            || registration.constructed;
         if !found {
-            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
-                .code()
-                .to_string();
+            registration.reject_code =
+                kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
+                    .code()
+                    .to_string();
             registration.processor_verdict = registration.reject_code.clone();
         }
         Ok(GetPalwModelRegistrationStatusResponse { available: true, tip_daa, found, registration })
@@ -2738,7 +2736,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let tip_daa = session.get_virtual_daa_score();
         let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
-            return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
+            return Ok(GetPalwModelResponse {
+                available: true,
+                tip_daa,
+                found: false,
+                class_id: class_id.to_string(),
+                ..Default::default()
+            });
         };
         // An IR class's window is its record's (RFC-0002 Phase F): it registered no legacy carriage.
         let n_ctx = session
@@ -2782,7 +2786,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .and_then(|c| c.row.as_ref().map(|r| format!("{:?}", r.state)))
                 .unwrap_or_else(|| "Legacy".into()),
             ready_seats: class_reg.map(|c| c.ready_seats_now).or_else(|| panel_class.map(|c| c.ready_seats)).unwrap_or(0),
-            required_ready_seats: class_reg.and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats)).or_else(|| panel_class.map(|c| c.required_ready_seats)).unwrap_or(0),
+            required_ready_seats: class_reg
+                .and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats))
+                .or_else(|| panel_class.map(|c| c.required_ready_seats))
+                .unwrap_or(0),
             inflight_claims: class_reg.map(|c| c.inflight_now).or_else(|| panel_class.map(|c| c.inflight_claims)).unwrap_or(0),
             admission_permille: class_reg
                 .and_then(|c| c.row.as_ref().map(|r| r.admission_milli as u32))
@@ -4956,7 +4963,9 @@ pub fn palw_capacity_shadow_response_v1(
     }
 }
 
-fn palw_v2_bundle(params: &kaspa_consensus_core::config::params::Params) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
+fn palw_v2_bundle(
+    params: &kaspa_consensus_core::config::params::Params,
+) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
     match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
         _ => None,
@@ -5033,7 +5042,9 @@ fn palw_tir_preflight_report(
     report
 }
 
-fn rpc_preflight_check(check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1) -> RpcPalwModelPreflightCheck {
+fn rpc_preflight_check(
+    check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1,
+) -> RpcPalwModelPreflightCheck {
     RpcPalwModelPreflightCheck { code: check.code.clone(), ok: check.ok, message: check.message.clone() }
 }
 
@@ -5056,7 +5067,10 @@ fn rpc_preflight_response(
     }
 }
 
-fn fill_registration_from_class(registration: &mut RpcPalwModelRegistration, row: &kaspa_consensus_core::palw_state_v2::PalwClassRowV2) {
+fn fill_registration_from_class(
+    registration: &mut RpcPalwModelRegistration,
+    row: &kaspa_consensus_core::palw_state_v2::PalwClassRowV2,
+) {
     registration.class_id = row.class_id.to_string();
     registration.constructed = true;
     registration.submitted = true;
@@ -5067,9 +5081,8 @@ fn fill_registration_from_class(registration: &mut RpcPalwModelRegistration, row
     registration.mempool_accepted = false;
     registration.reject_code.clear();
     if registration.processor_verdict.is_empty() {
-        registration.processor_verdict = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::AdmissionOk
-            .code()
-            .to_string();
+        registration.processor_verdict =
+            kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();
     }
 }
 
@@ -5461,7 +5474,13 @@ mod palw_class_context_tests {
 
     /// This build's Qwen3.6-35B-A3B row: a (7, 2) canonical job at `n_ctx` 8 — a footprint of 8, valid.
     fn declared() -> PalwRegisteredClassContext {
-        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8, ir: false }
+        PalwRegisteredClassContext {
+            n_ctx: 8,
+            canonical_prefill_tokens: 7,
+            canonical_decode_tokens: 2,
+            max_context_tokens: 8,
+            ir: false,
+        }
     }
 
     /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class

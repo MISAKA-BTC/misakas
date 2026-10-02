@@ -246,8 +246,11 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
         if let Some(dir) = &a.site_windows_out {
             let rows: Vec<serde_json::Value> = errs.iter().map(|(k, v)| serde_json::json!({ "site": k, "rel": v })).collect();
-            std::fs::write(dir, serde_json::to_vec_pretty(&serde_json::json!({ "windows": windows, "sites": rows })).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            std::fs::write(
+                dir,
+                serde_json::to_vec_pretty(&serde_json::json!({ "windows": windows, "sites": rows })).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
         }
         // The diagnosis replaces the evaluation (it is one of its own).
         return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "site_windows": windows, "metrics": {} }));

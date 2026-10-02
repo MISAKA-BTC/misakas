@@ -201,9 +201,7 @@ pub fn palw_court_catalog_root_v1() -> Hash64 {
 /// refused testnet-12's own genesis hybrid class (`Qwen3.6-35B-A3B/graph-v7@512`, one fenced kernel
 /// among 22) as "uncatalogued". Two spellings of one predicate, one of them wrong — so this is the
 /// spelling, and both callers read it.
-pub fn catalog_covered_kernels_v1(
-    reachable: &std::collections::BTreeSet<crate::Hash64>,
-) -> std::collections::BTreeSet<crate::Hash64> {
+pub fn catalog_covered_kernels_v1(reachable: &std::collections::BTreeSet<crate::Hash64>) -> std::collections::BTreeSet<crate::Hash64> {
     let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
     let kimi_fenced = crate::palw_step_refute::kimi_fenced_kernel_ids_v1();
     reachable.difference(&fenced).copied().collect::<std::collections::BTreeSet<_>>().difference(&kimi_fenced).copied().collect()

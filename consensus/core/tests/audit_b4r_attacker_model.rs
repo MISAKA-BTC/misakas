@@ -85,7 +85,13 @@ fn ccu(profile: &PalwShapeProfileV3, job: &PalwJobContextV2) -> u128 {
 /// The t12 admission gate, exactly as `processor.rs:6886` calls it, at DAA 0.
 /// `share_permille` is 0 because `palw_admission_independence` is armed at 0 on t12
 /// (processor.rs:6779: `required = if prosecutable && !independence { floor } else { 0 }`).
-fn admit(p: &Params, b: &PalwConsensusParamsV2, profile: &PalwShapeProfileV3, job: &PalwJobContextV2, root: Hash64) -> Result<u64, PalwClassAdmissionError> {
+fn admit(
+    p: &Params,
+    b: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    job: &PalwJobContextV2,
+    root: Hash64,
+) -> Result<u64, PalwClassAdmissionError> {
     let shape = palw_admission_shape_at_v1(p, b, profile, 0).expect("shape");
     let ladder_cap = match shape.ladder {
         Some(r) => r.ladder,
@@ -314,7 +320,13 @@ fn b4r_02_the_floor_row_is_the_big_prize() {
         base.gdn_head_v_dim,
         base.n_ctx
     );
-    println!("  gdn table nodes {}  attn table nodes {}  pre {} post {}", base.gdn_nodes.len(), base.attn_nodes.len(), base.pre_nodes.len(), base.post_nodes.len());
+    println!(
+        "  gdn table nodes {}  attn table nodes {}  pre {} post {}",
+        base.gdn_nodes.len(),
+        base.attn_nodes.len(),
+        base.pre_nodes.len(),
+        base.post_nodes.len()
+    );
     let shape = palw_economic_shape_v1(&base, &PALW_ECONOMIC_COST_TABLE_V1).expect("shape");
     println!("  per-position body at kv_len 1: {:?}", shape.body_at(1));
     show("honest", &econ(ccu_real, ccu_real, w, escrow));
@@ -465,7 +477,11 @@ fn b4r_05_the_minimal_floor_variant_that_saturates_the_work_target() {
                 if a.is_ok() {
                     let cost = (heads as u128) * (hd as u128) * if code == 26 { 4 } else { 1 };
                     let tag = format!("attn_heads={heads} attn_head_dim={hd} dtype={dt}");
-                    println!("  reaches W0 and ADMITS: {tag:<52} ccu {c:>22} (x{:>10.1})  {}", c as f64 / ccu_real as f64, verdict(&a));
+                    println!(
+                        "  reaches W0 and ADMITS: {tag:<52} ccu {c:>22} (x{:>10.1})  {}",
+                        c as f64 / ccu_real as f64,
+                        verdict(&a)
+                    );
                     if best.as_ref().is_none_or(|(_, _, bc)| cost < *bc) {
                         best = Some((tag, v, cost));
                     }
@@ -484,22 +500,43 @@ fn b4r_05_the_minimal_floor_variant_that_saturates_the_work_target() {
     println!("  class id            {}", prof.shape_profile_id());
     println!("  declared ccu/draw   {c} MAC-eq   (honest {ccu_real})");
     println!("  ticket target       {} = {:.9} of MAX", e.target, e.target as f64 / u128::MAX as f64);
-    println!("  expected draws/win  {:.6} (honest {:.4})", e.draws_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64, 
-             palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64);
+    println!(
+        "  expected draws/win  {:.6} (honest {:.4})",
+        e.draws_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64,
+        palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64
+    );
     println!("  priced reward       {} sompi = {:.4} MSK", e.reward_sompi, e.reward_sompi as f64 / 1e8);
-    println!("  REAL MAC-eq a claim {} (honest {})", e.real_work_per_claim, palw_attempted_compute_q32_per_claim_v1(palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)), ccu_real));
-    println!("  MSK per G real MAC-eq  cheat {:.6}   honest {:.6}",
+    println!(
+        "  REAL MAC-eq a claim {} (honest {})",
+        e.real_work_per_claim,
+        palw_attempted_compute_q32_per_claim_v1(palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)), ccu_real)
+    );
+    println!(
+        "  MSK per G real MAC-eq  cheat {:.6}   honest {:.6}",
         (e.reward_sompi as f64 / 1e8) / (e.real_work_per_claim as f64 / 1e9),
-        (escrow as f64 / 1e8) / (palw_attempted_compute_q32_per_claim_v1(palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)), ccu_real) as f64 / 1e9));
+        (escrow as f64 / 1e8)
+            / (palw_attempted_compute_q32_per_claim_v1(
+                palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)),
+                ccu_real
+            ) as f64
+                / 1e9)
+    );
     println!("  GAIN                {:.2}x", (w as f64) / (e.real_work_per_claim as f64) * (ccu_real as f64 / ccu_real as f64));
     // Nothing else about the class moved:
     let honest_leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&base, &job, 1u64 << 40).unwrap();
     let cheat_leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&prof, &job, 1u64 << 40).unwrap();
     println!("  declared leaves: honest {honest_leaves}  cheat {cheat_leaves}  (equal: {})", honest_leaves == cheat_leaves);
-    println!("  node tables byte-identical to the floor's: pre {} gdn {} attn {} post {}",
-        prof.pre_nodes == base.pre_nodes, prof.gdn_nodes == base.gdn_nodes,
-        prof.attn_nodes.iter().zip(base.attn_nodes.iter()).all(|(a, b)| a.out_len == b.out_len && a.op_kind == b.op_kind && a.input_refs == b.input_refs && a.tile_len == b.tile_len && a.kernel_semantics_id == b.kernel_semantics_id),
-        prof.post_nodes.iter().zip(base.post_nodes.iter()).all(|(a, b)| a.out_len == b.out_len && a.op_kind == b.op_kind));
+    println!(
+        "  node tables byte-identical to the floor's: pre {} gdn {} attn {} post {}",
+        prof.pre_nodes == base.pre_nodes,
+        prof.gdn_nodes == base.gdn_nodes,
+        prof.attn_nodes.iter().zip(base.attn_nodes.iter()).all(|(a, b)| a.out_len == b.out_len
+            && a.op_kind == b.op_kind
+            && a.input_refs == b.input_refs
+            && a.tile_len == b.tile_len
+            && a.kernel_semantics_id == b.kernel_semantics_id),
+        prof.post_nodes.iter().zip(base.post_nodes.iter()).all(|(a, b)| a.out_len == b.out_len && a.op_kind == b.op_kind)
+    );
 }
 
 #[test]
@@ -590,25 +627,41 @@ fn b4r_07_the_maximal_admitted_floor_forgery() {
         println!("  class id             {}", prof.shape_profile_id());
         println!("  declared ccu/draw    {c} MAC-eq  (honest {ccu_real}, x{:.2})", c as f64 / ccu_real as f64);
         println!("  provisional_scalar   {scalar}  (same number: {})", scalar == c);
-        println!("  declared leaves      {} (honest {})",
+        println!(
+            "  declared leaves      {} (honest {})",
             kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&prof, &job, 1u64 << 40).unwrap(),
-            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&base, &job, 1u64 << 40).unwrap());
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&base, &job, 1u64 << 40).unwrap()
+        );
         println!("  ticket target        {} ({:.9} of MAX)", e.target, e.target as f64 / u128::MAX as f64);
-        println!("  expected draws/win   {:.6}   (honest {:.2})",
+        println!(
+            "  expected draws/win   {:.6}   (honest {:.2})",
             e.draws_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64,
-            palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64);
+            palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64
+        );
         println!("  priced reward        {} sompi = {:.4} MSK", e.reward_sompi, e.reward_sompi as f64 / 1e8);
-        println!("  REAL MAC-eq a claim  {}  (honest {})", e.real_work_per_claim, palw_attempted_compute_q32_per_claim_v1(
-            palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)), ccu_real));
-        println!("  MSK per G real MAC-eq: cheat {:.4}, honest {:.4}  => GAIN {:.2}x",
+        println!(
+            "  REAL MAC-eq a claim  {}  (honest {})",
+            e.real_work_per_claim,
+            palw_attempted_compute_q32_per_claim_v1(palw_expected_attempts_q32_v1(palw_work_ticket_target_v1(ccu_real, w)), ccu_real)
+        );
+        println!(
+            "  MSK per G real MAC-eq: cheat {:.4}, honest {:.4}  => GAIN {:.2}x",
             (e.reward_sompi as f64 / 1e8) / (e.real_work_per_claim as f64 / 1e9),
             (escrow as f64 / 1e8) / 355.649611199,
-            (w as f64) / (e.real_work_per_claim as f64));
+            (w as f64) / (e.real_work_per_claim as f64)
+        );
         // the node the price is charged on, unchanged:
         for (i, n) in prof.attn_nodes.iter().enumerate() {
-            if n.input_refs.iter().any(|r| *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V) {
-                println!("  over-cache node attn[{i}] op {:?} out {:?} (identical to the honest floor's: {})",
-                    n.op_kind, n.out_len, n.out_len == base.attn_nodes[i].out_len);
+            if n.input_refs.iter().any(|r| {
+                *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K
+                    || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V
+            }) {
+                println!(
+                    "  over-cache node attn[{i}] op {:?} out {:?} (identical to the honest floor's: {})",
+                    n.op_kind,
+                    n.out_len,
+                    n.out_len == base.attn_nodes[i].out_len
+                );
             }
         }
         // the one refusal just past it:

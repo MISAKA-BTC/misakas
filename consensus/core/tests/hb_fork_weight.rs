@@ -44,7 +44,10 @@ fn t12_facts_the_heartbeat_lane_rests_on() {
     println!("  pow_palw_activation          never = {}", p.pow_palw_activation == never);
     println!("  pow_palw_ollama_activation   never = {}", p.pow_palw_ollama_activation == never);
     println!("  clock advances w/o a claim   {}", palw_clock_advances_without_a_claim_v1(&p));
-    println!("  heartbeat intervals          nominal {} ms / recovery {} ms", HEARTBEAT_NOMINAL_INTERVAL_MS, HEARTBEAT_RECOVERY_INTERVAL_MS);
+    println!(
+        "  heartbeat intervals          nominal {} ms / recovery {} ms",
+        HEARTBEAT_NOMINAL_INTERVAL_MS, HEARTBEAT_RECOVERY_INTERVAL_MS
+    );
 
     // The facts the rest of this file uses.
     assert!(hb.activation.is_active(0), "the heartbeat lane is open from DAA 0");
@@ -149,7 +152,8 @@ fn heartbeat_padding_buys_key_one_of_the_fork_choice_order() {
     }
     // Binary-search the exact price in beats.
     let wins = |k: u64| {
-        decide_deep_reorg_v2(&honest, &PalwCandidateOrderV1::new(fork_point_blue_score + k + 1, 1, 0, h64(2))) == PalwDeepReorgV2::Allow
+        decide_deep_reorg_v2(&honest, &PalwCandidateOrderV1::new(fork_point_blue_score + k + 1, 1, 0, h64(2)))
+            == PalwDeepReorgV2::Allow
     };
     let (mut lo, mut hi) = (0u64, 1_000_000u64);
     assert!(wins(hi));
@@ -223,7 +227,11 @@ fn every_depth_gate_and_the_clock_it_reads() {
     // HEARTBEAT_RECOVERY_INTERVAL_MS of wall clock (difficulty.rs:437-476).
     let daa_secs = p.coinbase_maturity() as f64 * (HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0);
     println!("\n  coinbase_maturity is DAA, and DAA is cursor-capped at 1 / {} ms:", HEARTBEAT_RECOVERY_INTERVAL_MS);
-    println!("    {} DAA of heartbeat-only history costs {:.1} h of WALL CLOCK (not hashes)", p.coinbase_maturity(), daa_secs / 3600.0);
+    println!(
+        "    {} DAA of heartbeat-only history costs {:.1} h of WALL CLOCK (not hashes)",
+        p.coinbase_maturity(),
+        daa_secs / 3600.0
+    );
 }
 
 /// The DNS-BFT veto — the one gate that refuses a reorg *before* the PALW comparator — expires on
@@ -237,9 +245,16 @@ fn the_dns_veto_ttl_is_a_daa_clock_and_heartbeats_drive_daa() {
     println!("  dns_veto_ttl_daa_score       {}", dns.dns_veto_ttl_daa_score);
     println!("  unit                         DAA SCORE (dns_bft.rs:553, confirmed_anchor_is_stale)");
     let secs = dns.dns_veto_ttl_daa_score as f64 * (HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0);
-    println!("  heartbeat-only cost to expire the veto: {} DAA = {:.1} h wall clock, 0 bond, 0 pwu", dns.dns_veto_ttl_daa_score, secs / 3600.0);
-    println!("  hash cost of those beats:    {} x 2^24 = 2^{:.1}", dns.dns_veto_ttl_daa_score,
-        ((dns.dns_veto_ttl_daa_score as u128 * (1u128 << PALW_HEARTBEAT_WORK_LOG2)) as f64).log2());
+    println!(
+        "  heartbeat-only cost to expire the veto: {} DAA = {:.1} h wall clock, 0 bond, 0 pwu",
+        dns.dns_veto_ttl_daa_score,
+        secs / 3600.0
+    );
+    println!(
+        "  hash cost of those beats:    {} x 2^24 = 2^{:.1}",
+        dns.dns_veto_ttl_daa_score,
+        ((dns.dns_veto_ttl_daa_score as u128 * (1u128 << PALW_HEARTBEAT_WORK_LOG2)) as f64).log2()
+    );
     assert!(dns.dns_veto_ttl_daa_score > 0);
 }
 
@@ -259,7 +274,9 @@ fn the_hashrate_that_keeps_a_heartbeat_branch_at_blue_work_parity() {
     println!("  honest chain: 1 attempt block / {block_s} s at blue work {attempt} = {honest_bw_per_s:.0} blue-work/s");
     println!("  heartbeat:    {hashes_per_bw:.0} hashes per 1 blue-work");
     println!("  hashrate to match the honest chain's blue work: {:.1} GH/s", needed_hs / 1e9);
-    println!("  (blue SCORE parity is far cheaper: 1 beat / honest block = {:.4} GH/s)",
-        (1.0 / block_s) * (1u64 << PALW_HEARTBEAT_WORK_LOG2) as f64 / 1e9);
+    println!(
+        "  (blue SCORE parity is far cheaper: 1 beat / honest block = {:.4} GH/s)",
+        (1.0 / block_s) * (1u64 << PALW_HEARTBEAT_WORK_LOG2) as f64 / 1e9
+    );
     assert!(needed_hs > 1e11, "parity is above 100 GH/s: {needed_hs}");
 }

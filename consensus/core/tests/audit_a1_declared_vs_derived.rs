@@ -5,12 +5,18 @@
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
-use kaspa_consensus_core::palw_economic_payout_v1::{palw_attempted_ccu_v1, palw_network_draws_q32_from_bits_v1, palw_panel_share_permille_v1};
 use kaspa_consensus_core::palw_economic_compute_v1::palw_expected_attempts_q32_v1;
+use kaspa_consensus_core::palw_economic_payout_v1::{
+    palw_attempted_ccu_v1, palw_network_draws_q32_from_bits_v1, palw_panel_share_permille_v1,
+};
 use kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1;
 use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ticket_target_v1};
@@ -102,7 +108,10 @@ fn a1_declared_decode_moves_the_money_split_though_not_the_weight() {
     let prefill = 262_143u32;
     let w0 = palw_work_floor_v1(T12_ESCROW_SOMPI, T12_RATE);
     println!("\nDense @2M, prefill fixed at {prefill}, sweeping the DECLARED decode budget:");
-    println!("  {:>8} {:>24} {:>24} {:>10} {:>26} {:>8}", "decode", "economic_ccu_per_claim", "verification_ccu", "V/C", "C_P (bits=0)", "share");
+    println!(
+        "  {:>8} {:>24} {:>24} {:>10} {:>26} {:>8}",
+        "decode", "economic_ccu_per_claim", "verification_ccu", "V/C", "C_P (bits=0)", "share"
+    );
     let mut first_draw = 0u128;
     for decode in [2u32, 4, 8, 16, 64, 256, 1024] {
         let job = job_of(&p, prefill, decode);
@@ -119,14 +128,21 @@ fn a1_declared_decode_moves_the_money_split_though_not_the_weight() {
         let c_p = palw_attempted_ccu_v1(ea_q32, palw_network_draws_q32_from_bits_v1(0), draw);
         let c_v = work.verification_ccu.saturating_mul(5);
         let share = palw_panel_share_permille_v1(c_p, c_v, ALPHA, SHARE_MIN, SHARE_MAX);
-        println!("  {decode:>8} {draw:>24} {:>24} {:>10.4} {c_p:>26} {share:>8}", work.verification_ccu, work.verification_ccu as f64 / draw as f64);
+        println!(
+            "  {decode:>8} {draw:>24} {:>24} {:>10.4} {c_p:>26} {share:>8}",
+            work.verification_ccu,
+            work.verification_ccu as f64 / draw as f64
+        );
         assert_eq!(draw, first_draw, "the PRODUCER's priced draw is flat in the declared decode budget");
     }
     println!("\n  reward at t12 escrow {T12_ESCROW_SOMPI} sompi:");
     for share in [SHARE_MIN, 200u16, SHARE_MAX] {
         let pool = (T12_ESCROW_SOMPI as u128) * share as u128 / 1000;
-        println!("    share {share}permille -> panel pool {pool} sompi = {:.2} MSK, producer keeps {:.2} MSK",
-            pool as f64 / 1e8, (T12_ESCROW_SOMPI as u128 - pool) as f64 / 1e8);
+        println!(
+            "    share {share}permille -> panel pool {pool} sompi = {:.2} MSK, producer keeps {:.2} MSK",
+            pool as f64 / 1e8,
+            (T12_ESCROW_SOMPI as u128 - pool) as f64 / 1e8
+        );
     }
 }
 

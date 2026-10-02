@@ -432,7 +432,20 @@ pub fn palw_producer_facts_v2(
     work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
     // v2's callers predate the 2026-09-23 fence: the pre-fence headroom, byte for byte.
-    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None, false, 0)
+    palw_producer_facts_v3(
+        state,
+        state_params,
+        admission,
+        chain_point,
+        daa_score,
+        class_id,
+        bond,
+        work_target_floor,
+        None,
+        None,
+        false,
+        0,
+    )
 }
 
 /// [`palw_producer_facts_v2`] with **ADR-0149's derived pwu**: `canonical_work_daa` is
@@ -599,8 +612,14 @@ pub fn palw_producer_facts_v4(
             // Lane V02 (review HIGH): 0 below the fence.
             accuser_reserve: crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, daa_score),
             frozen: crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key),
-            issuance_capped: crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, key, bond_state.collateral, daa_score)
-                .is_some_and(|read| read.admits_v1().is_err()),
+            issuance_capped: crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(
+                state,
+                state_params,
+                key,
+                bond_state.collateral,
+                daa_score,
+            )
+            .is_some_and(|read| read.admits_v1().is_err()),
             audit_backlog_full: state_params.capacity_audit_active_at(daa_score) && {
                 let template = crate::palw_state_v2::palw_claim_template_v1(class_id, *key, daa_score, 0, claim_escrow);
                 crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(state_params, &template)
@@ -860,8 +879,17 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let bond_key = PalwBondKeyV2(bond_outpoint());
-        let base = palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key), None)
-            .expect("facts");
+        let base = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            None,
+        )
+        .expect("facts");
         assert_eq!(base.ready_to_produce_v3(&[7; 4], true), Ok(()), "an honest bond is ready on either side");
         let mut f = base.clone();
         {

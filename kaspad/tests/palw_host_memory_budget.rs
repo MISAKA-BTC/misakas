@@ -98,7 +98,6 @@ fn verifying_nothing_is_not_a_pass() {
     assert!(!body.contains("PalwManifestLookupV1::Absent => {}"), "the Absent arm still discards the fact");
 }
 
-
 /// **A share stated outright overrides the equal division**, for a host whose nodes are not alike.
 /// The floor still applies to it, and a stated share that ignores the budget is the operator's call.
 #[test]
@@ -112,7 +111,10 @@ fn a_stated_share_overrides_the_equal_division() {
     let mut b = args_for(None, 1);
     b.palw_host_memory_share = Some(1 * GIB);
     assert_eq!(palw_host_share_bytes_v1(&b), Some(1 * GIB));
-    assert!(check_host_share_v1(None, 1, palw_host_share_bytes_v1(&b)).is_ok(), "no budget: the floor check passes through (nothing to divide)");
+    assert!(
+        check_host_share_v1(None, 1, palw_host_share_bytes_v1(&b)).is_ok(),
+        "no budget: the floor check passes through (nothing to divide)"
+    );
     // The scale follows the stated share, not the budget's split.
     assert!((palw_ram_scale_for_share_v1(13 * GIB) - 0.4875).abs() < 0.001);
 }

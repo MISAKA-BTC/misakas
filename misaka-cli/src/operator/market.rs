@@ -124,10 +124,8 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
     // built before the op closes the WebSocket on it, and then the list prints without the column.
     let contexts = reader.client.get_palw_class_contexts().await.ok().map(|r| class_contexts_by_id(r.classes));
     let registry = reader.client.get_palw_model_registry().await.ok();
-    let lifecycle: std::collections::HashMap<String, String> = registry
-        .as_ref()
-        .map(|r| r.classes.iter().map(|c| (c.class_id.clone(), c.state.clone())).collect())
-        .unwrap_or_default();
+    let lifecycle: std::collections::HashMap<String, String> =
+        registry.as_ref().map(|r| r.classes.iter().map(|c| (c.class_id.clone(), c.state.clone())).collect()).unwrap_or_default();
     if ctx.output == OutputFormat::Json {
         let doc: Vec<serde_json::Value> = rows
             .iter()
@@ -172,10 +170,8 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         if c.is_base_class {
             label.push_str(" (base)");
         }
-        let status = lifecycle
-            .get(&c.class_id)
-            .cloned()
-            .unwrap_or_else(|| c.status.split([' ', '{']).next().unwrap_or(&c.status).to_string());
+        let status =
+            lifecycle.get(&c.class_id).cloned().unwrap_or_else(|| c.status.split([' ', '{']).next().unwrap_or(&c.status).to_string());
         let context = contexts.as_ref().map(|all| format!("{:<11}", context_cell(all.get(&c.class_id)))).unwrap_or_default();
         if c.held {
             label.push_str(" (held)");

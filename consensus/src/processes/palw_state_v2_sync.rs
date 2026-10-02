@@ -506,8 +506,26 @@ mod tests {
         }
 
         // The subject: sync + store + batches.
-        let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(
+            &store,
+            params(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -519,8 +537,26 @@ mod tests {
         assert_eq!(tip_state, book.state_of(&steps[1].ctx.block).unwrap(), "the sync's tip is the book's state");
 
         // A restart resumes at the same tip, root-verified.
-        let resumed =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let resumed = PalwStateSyncV2::load(
+            &store,
+            params(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -550,8 +586,26 @@ mod tests {
         let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
         store.reindex_if_stale().unwrap();
 
-        let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(
+            &store,
+            params(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -577,8 +631,26 @@ mod tests {
         // not exist durably, and the polluted write-through cache of the old handle must not be
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
-        let resumed =
-            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let resumed = PalwStateSyncV2::load(
+            &fresh,
+            params(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -592,8 +664,26 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let steps = steps();
-        let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(
+            &store,
+            params(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

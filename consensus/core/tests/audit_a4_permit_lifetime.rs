@@ -52,10 +52,21 @@ fn the_folds_mint_puts_every_ticket_inside_the_span_its_schedule_is_judged_at() 
     println!("\n=== t12 lane geometry ===");
     println!("  PALW_EXEC_ROUND_MS        {PALW_EXEC_ROUND_MS} ms  -> 1 round = 1 second");
     println!("  target_time_per_block     {ttpb} ms -> {rounds_per_daa} rounds per DAA");
-    println!("  schedule_span_daa         {span_daa} DAA -> 1 span = {} rounds = {:.1} min", span_daa * rounds_per_daa, (span_daa * rounds_per_daa) as f64 / 60.0);
-    println!("  window_challenge()        {} DAA   (window_challenge_at(0) = {} DAA, the SHORT one)", bundle.state.window_challenge(), bundle.state.window_challenge_at(0));
+    println!(
+        "  schedule_span_daa         {span_daa} DAA -> 1 span = {} rounds = {:.1} min",
+        span_daa * rounds_per_daa,
+        (span_daa * rounds_per_daa) as f64 / 60.0
+    );
+    println!(
+        "  window_challenge()        {} DAA   (window_challenge_at(0) = {} DAA, the SHORT one)",
+        bundle.state.window_challenge(),
+        bundle.state.window_challenge_at(0)
+    );
     println!("  window_court              {} DAA", bundle.state.window_court());
-    println!("  maturity                  {maturity_daa} DAA = {maturity_rounds} rounds = {:.1} hours", maturity_rounds as f64 / 3600.0);
+    println!(
+        "  maturity                  {maturity_daa} DAA = {maturity_rounds} rounds = {:.1} hours",
+        maturity_rounds as f64 / 3600.0
+    );
 
     println!("\n=== how long a schedule lives ===");
     println!("  rotate_round_lane prunes round_schedules below span_now - 1 (palw_state_v2.rs:10905)");

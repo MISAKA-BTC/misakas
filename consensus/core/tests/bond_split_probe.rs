@@ -26,13 +26,13 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test bond_split_probe -- --nocapture
 
+use kaspa_consensus_core::TransactionId;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_panel_v2::{PALW_DRAW_WEIGHT_CAP_MSK_V1, PalwPanelStakeDrawV1, palw_panel_stake_weight_v1};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStateV2, PalwBondStatusV2, palw_operator_id_v2};
 use kaspa_consensus_core::tx::TransactionOutpoint;
-use kaspa_consensus_core::TransactionId;
 use kaspa_hashes::Hash64;
 
 const SOMPI_PER_MSK: u64 = 100_000_000;
@@ -112,7 +112,12 @@ fn a_sub_cap_sybil_split_manufactures_no_free_weight() {
     let sybil: Vec<_> = (0..3).map(|i| bond(10 + i, 200 + i, c_msk / 3)).collect();
     assert_eq!(weight_of(&one), c_msk as u128, "one sub-cap operator weighs its collateral");
     assert_eq!(weight_of(&sybil), c_msk as u128, "three sub-cap Sybils sharing C weigh C — no free weight");
-    eprintln!("[bond-split] sub-cap Sybil: 1x{c_msk} weighs {}, 3x{} weighs {} (equal)", weight_of(&one), c_msk / 3, weight_of(&sybil));
+    eprintln!(
+        "[bond-split] sub-cap Sybil: 1x{c_msk} weighs {}, 3x{} weighs {} (equal)",
+        weight_of(&one),
+        c_msk / 3,
+        weight_of(&sybil)
+    );
 }
 
 #[test]

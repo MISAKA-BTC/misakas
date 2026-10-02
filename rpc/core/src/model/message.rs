@@ -6267,11 +6267,7 @@ impl Serializer for RpcPalwPanelHoldReasonCount {
 impl Deserializer for RpcPalwPanelHoldReasonCount {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
-        Ok(Self {
-            code: load!(String, reader)?,
-            message: load!(String, reader)?,
-            seats: load!(u32, reader)?,
-        })
+        Ok(Self { code: load!(String, reader)?, message: load!(String, reader)?, seats: load!(u32, reader)? })
     }
 }
 
@@ -6617,11 +6613,7 @@ impl Serializer for GetPalwPanelSeatsResponse {
 impl Deserializer for GetPalwPanelSeatsResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
-        Ok(Self {
-            available: load!(bool, reader)?,
-            tip_daa: load!(u64, reader)?,
-            seats: deserialize!(Vec<RpcPalwPanelSeat>, reader)?,
-        })
+        Ok(Self { available: load!(bool, reader)?, tip_daa: load!(u64, reader)?, seats: deserialize!(Vec<RpcPalwPanelSeat>, reader)? })
     }
 }
 

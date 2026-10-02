@@ -18,10 +18,12 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{
     PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1, palw_execution_quantum_count_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7,
-    qwen25_a16_held_canonical_v1};
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps,
-    qwen36_held_canonical_v1, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,7 +64,8 @@ fn per_draw_mac_eq() -> BTreeMap<&'static str, u128> {
         palw_canonical_draw_work_v1(&d, &rc_job_context(&floor, pf, df), true).expect("floor work").provisional_scalar_v1(),
     );
 
-    let hybrid = qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN36_35B_A3B })).expect("hybrid");
+    let hybrid =
+        qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN36_35B_A3B })).expect("hybrid");
     let (ph, dh) = qwen36_held_canonical_v1(512);
     let d = PalwCanonicalClassDescriptorV1::of(&hybrid, Hash64::default()).expect("hybrid descriptor");
     out.insert(
@@ -171,8 +174,13 @@ fn audit_c1_duplicate_execution_roots_double_the_snapshot_credits() {
     assert_eq!(honest_credits, doubled_credits, "indistinguishable from two real jobs at the quota stage");
 
     // And the quanta stage does collapse them, so the two stages disagree about how much work exists.
-    let mut sched =
-        PalwExecScheduleV1 { span_index: 7, seed: h(9), domains: doubled.domains.clone(), finals: doubled.finals.clone(), quanta: vec![] };
+    let mut sched = PalwExecScheduleV1 {
+        span_index: 7,
+        seed: h(9),
+        domains: doubled.domains.clone(),
+        finals: doubled.finals.clone(),
+        quanta: vec![],
+    };
     palw_execution_schedule_assign_quanta_matured_v1(&mut sched, 100_000, 0, 0, &BTreeSet::new());
     println!("quanta minted from the doubled snapshot = {}", sched.quanta.len());
     assert_eq!(sched.quanta.len(), 10, "quota says 2x, the mint says 1x — two answers from one snapshot");
@@ -195,8 +203,7 @@ fn audit_c1_t12_quanta_outlive_the_schedule_that_holds_them() {
     // is u32::MAX tickets, which is ~1.2 TiB of PalwExecQuantumV1 and is itself the finding.
     let dense = per_draw_mac_eq()["qwen25-a16@2M"];
     let dense_credit = dense.min(u128::from(u64::MAX)) as u64;
-    let dense_tickets =
-        palw_execution_quantum_count_v1(u128::from(dense_credit), u128::from(PALW_EXECUTION_QUANTUM_V1), h(42), h(1));
+    let dense_tickets = palw_execution_quantum_count_v1(u128::from(dense_credit), u128::from(PALW_EXECUTION_QUANTUM_V1), h(42), h(1));
     println!("dense Final credit (MAC-eq)       = {dense_credit}");
     println!("dense tickets (counted)           = {dense_tickets}  (unsaturated {})", dense / u128::from(PALW_EXECUTION_QUANTUM_V1));
     assert_eq!(dense_tickets, u32::MAX, "the ticket count saturates on the 2M row");
@@ -234,9 +241,9 @@ fn audit_c1_t12_quanta_outlive_the_schedule_that_holds_them() {
 // ---------------------------------------------------------------------------------------------
 
 use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptUnsignedV2,
-    attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3, execution_commitment_v3,
-    l1_tag_v2, palw_nonce_bucket_v1,
+    PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptUnsignedV2, attempt_id_v2,
+    attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3, execution_commitment_v3, l1_tag_v2,
+    palw_nonce_bucket_v1,
 };
 use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, is_palw_attempt_algo_id, pow_finalizer_blake2b_512};
 
@@ -308,7 +315,8 @@ fn audit_c1_one_winning_draw_is_an_unbounded_supply_of_valid_blocks() {
 
     // Siblings the attacker can mint from the SAME inference: any nonce in the bucket, any legal
     // timestamp. Nothing here re-runs the model and nothing here re-solves anything.
-    let bucket_top = (base_nonce >> PALW_TICKET_NONCE_BUCKET_LOG2 << PALW_TICKET_NONCE_BUCKET_LOG2) + (1 << PALW_TICKET_NONCE_BUCKET_LOG2) - 1;
+    let bucket_top =
+        (base_nonce >> PALW_TICKET_NONCE_BUCKET_LOG2 << PALW_TICKET_NONCE_BUCKET_LOG2) + (1 << PALW_TICKET_NONCE_BUCKET_LOG2) - 1;
     for (ts, nonce) in [
         (base_ts, base_nonce + 1),
         (base_ts, bucket_top),
@@ -409,7 +417,11 @@ fn audit_c1_the_dense_rows_lottery_admits_every_ticket() {
     println!("W0 (CCU) from escrow {escrow} at rate {} = {w0}", payout.rate_sompi_per_giga);
     for (name, ccu) in per_draw_mac_eq() {
         let target = palw_work_ticket_target_v1(ccu, w0);
-        println!("  {name:<14} ccu={ccu:>22}  ccu/W0={:>10.4}  target/MAX={:.6}", ccu as f64 / w0 as f64, target as f64 / u128::MAX as f64);
+        println!(
+            "  {name:<14} ccu={ccu:>22}  ccu/W0={:>10.4}  target/MAX={:.6}",
+            ccu as f64 / w0 as f64,
+            target as f64 / u128::MAX as f64
+        );
     }
     assert_eq!(palw_work_ticket_target_v1(per_draw_mac_eq()["qwen25-a16@2M"], w0), u128::MAX, "the dense row saturates");
 

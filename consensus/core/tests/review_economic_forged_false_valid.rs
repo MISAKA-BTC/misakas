@@ -31,7 +31,9 @@ use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
     palw_offence_evidence_digest_v1, palw_panel_contradiction_convicts_execution_v1, palw_verify_objective_offence_v1,
 };
-use kaspa_consensus_core::palw_panel_v2::{PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2};
+use kaspa_consensus_core::palw_panel_v2::{
+    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+};
 use kaspa_consensus_core::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V3, PalwExecutionAttestationV1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -72,8 +74,9 @@ fn review_economic_a_stranger_key_convicts_an_honest_valid_seat_of_any_claim() {
     // The STRANGER: a fresh key, no bond, never the executor of anything.
     let stranger = generate_key_pair([2u8; 32]);
     let stranger_pk: Vec<u8> = stranger.verification_key.as_ref().to_vec();
-    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-        .expect("floor profile");
+    let profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("floor profile");
     let mut job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, 512, 256);
     job.job_id = claim_x; // the only binding the verifier asks for
     job.network_id = network_id.clone();

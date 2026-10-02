@@ -32,8 +32,8 @@ use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, tiled_decode_p
 use kaspa_consensus_core::palw_tir_artifact_v1::{palw_tir_leaf_index_v1, palw_tir_visit_inventory_rows_v1};
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceStoreV1, PalwTirInventoryIndexV1, PalwTirLogitsConsistencyV1,
-    PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1,
-    PalwTirTraceLanesV1, check_tir_cone_refutation_v1, check_tir_decode_token_tiled_v1, check_tir_logits_consistency_v1,
+    PalwTirParamCarriageV1, PalwTirTraceLanesV1, check_tir_cone_refutation_v1, check_tir_decode_token_tiled_v1,
+    check_tir_logits_consistency_v1, palw_tir_param_carriage_bytes_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, palw_tir_execution_root_v1};
 use misaka_palw_tir::DType;
@@ -453,7 +453,12 @@ fn the_parameter_carriage_is_one_multiproof_priced_to_the_byte() {
             let leaves: Vec<u32> = r.params.iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
             assert_eq!(r.params, multiproof(&f, &leaves), "{} leaf {i}: the builder's multiproof of the leaves read", f.name);
             let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
-            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried), "{} leaf {i}", f.name);
+            assert_eq!(
+                palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves),
+                Some(carried),
+                "{} leaf {i}",
+                f.name
+            );
             let openings: Vec<PalwArtifactOpeningV1> = leaves.iter().map(|l| open_artifact_leaf_v1(&f.ops, *l).unwrap()).collect();
             let per_leaf = borsh::to_vec(&openings).unwrap().len() as u64;
             assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::PerLeafOpenings, &leaves), Some(per_leaf));
@@ -473,7 +478,9 @@ fn the_parameter_carriage_is_one_multiproof_priced_to_the_byte() {
             multiproof_total += carried;
         }
     }
-    println!("closes: {runs} runs, {gaps} with gaps, {singles} single leaves, {none} with none; bytes {multiproof_total} vs {per_leaf_total} per leaf");
+    println!(
+        "closes: {runs} runs, {gaps} with gaps, {singles} single leaves, {none} with none; bytes {multiproof_total} vs {per_leaf_total} per leaf"
+    );
     // The corpus's closes read runs and gapped sets (the single-leaf close is the tiny program's:
     // `palw_tir_court_v1`'s `the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none`).
     assert!(runs > 0 && gaps > 0 && none > 0, "every shape occurs: {runs} runs, {gaps} gaps, {none} none");
@@ -489,7 +496,8 @@ fn a_malformed_multiproof_is_refused_never_a_panic() {
     let mut adjudicated = 0usize;
     for f in fixtures() {
         let x = f.honest();
-        let Some(i) = (0..f.leaves.len()).find(|i| refute(&f, &x, *i as u64).params.as_ref().is_some_and(|p| p.opened.len() >= 2)) else {
+        let Some(i) = (0..f.leaves.len()).find(|i| refute(&f, &x, *i as u64).params.as_ref().is_some_and(|p| p.opened.len() >= 2))
+        else {
             continue;
         };
         let honest = refute(&f, &x, i as u64);

@@ -318,7 +318,12 @@ pub fn palw_false_valid_receipts_of_licence_for_v1(
                     .filter(|seat| seat.verdict == PalwReceiptVerdictV2::Valid)
                     .filter_map(|seat| {
                         let root = roots.get(seat.root_index as usize)?;
-                        crate::palw_batch_licence_v1::PalwWindowedReceiptV1::of_batch_entry(roots, entry, seat.seat_index, root.seat_bond)
+                        crate::palw_batch_licence_v1::PalwWindowedReceiptV1::of_batch_entry(
+                            roots,
+                            entry,
+                            seat.seat_index,
+                            root.seat_bond,
+                        )
                     })
                     .map(PalwFalseValidReceiptV1::Windowed)
                     .collect(),
@@ -1485,7 +1490,11 @@ pub fn palw_prompt_not_anchored_admit_v1(
 /// `windowed_admitted` is `Params::palw_capacity_batch_licence` at the block's DAA: below it a kind-3
 /// payload whose receipt is `Windowed` reads as undecodable ([`palw_false_valid_evidence_decode_v1`]),
 /// as it does on `0e8ec984e`, so it prices nothing.
-pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8], windowed_admitted: bool) -> u64 {
+pub fn palw_offence_heavy_prompt_ids_v1(
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    windowed_admitted: bool,
+) -> u64 {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return 0;
@@ -1746,11 +1755,12 @@ pub fn palw_check_panel_false_valid_v2(
     let da_confirmed = rules.da_signer_liability
         && matches!(payload.contradiction, PalwPanelContradictionV1::ProducerWithholding { voided_daa }
             if palw_da_default_confirms_withholding_v1(state, &target, voided_daa));
-    let admission = if let (true, PalwPanelContradictionV1::ProducerWithholding { voided_daa }) = (da_confirmed, &payload.contradiction) {
-        PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa }
-    } else {
-        palw_false_valid_admission_v1(&payload.contradiction)?
-    };
+    let admission =
+        if let (true, PalwPanelContradictionV1::ProducerWithholding { voided_daa }) = (da_confirmed, &payload.contradiction) {
+            PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa }
+        } else {
+            palw_false_valid_admission_v1(&payload.contradiction)?
+        };
     if let PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } = admission
         && !da_confirmed
     {
@@ -3159,7 +3169,8 @@ mod tests {
             edit(&mut moved_ctx);
             assert_ne!(palw_fp_job_pin_of_context_v1(&moved_ctx), pin, "the pin reads the {what}");
         }
-        let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
+        let rules =
+            PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
         let fp_binding = moved(&floor, |b| {
             b.job_context = ctx.clone();
             b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&ctx);
@@ -3531,7 +3542,11 @@ mod f1c_tests {
         assert_eq!(judge(&relabel, &tile_of(&anchored_ids, 0)), Err(E::PanelFalseValidNeedsContradiction));
         // The refusals.
         let floor = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(&anchor, form);
-        let floor_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: floor.shape_profile.shape_profile_id(), da_signer_liability: false };
+        let floor_rules = PalwIdentityRulesV1 {
+            prompt_ids_form: form,
+            base_class_id: floor.shape_profile.shape_profile_id(),
+            da_signer_liability: false,
+        };
         assert!(matches!(
             palw_prompt_not_anchored_fault_v1(&target_of(&floor, anchor), &floor, &PalwPromptProofV1::Whole, floor_rules),
             Err(E::ContradictionNotAdmitted(_))
@@ -3607,7 +3622,13 @@ mod f1c_tests {
         let whole = PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole };
         let seat = PalwBondKeyV2(TransactionOutpoint::new(h64(0x5EA7), 0));
         let signed = PalwSeatReceiptV3 {
-            receipt: PalwSeatReceiptV2 { claim: h64(0xC1A1), verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat, signed_daa: 9, signature: vec![7; 8] },
+            receipt: PalwSeatReceiptV2 {
+                claim: h64(0xC1A1),
+                verdict: PalwReceiptVerdictV2::Valid,
+                seat_bond: seat,
+                signed_daa: 9,
+                signature: vec![7; 8],
+            },
             segments: crate::palw_verification_v2::PalwSegmentMaskV2(0b1),
         };
         let windowed = PalwFalseValidReceiptV1::Windowed(crate::palw_batch_licence_v1::PalwWindowedReceiptV1 {

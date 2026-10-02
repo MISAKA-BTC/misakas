@@ -29,7 +29,9 @@
 //!
 //! Every run is `#[ignore]` (minutes to an hour of a debug build) and is steered by environment
 //! variables; the results are JSON lines appended to `CAP_OUT`.
-use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
+use super::t12_round_lane_e2e::{
+    T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
+};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
@@ -266,10 +268,11 @@ impl CapSim {
         }
         assert!(won, "the class lottery is winnable");
         let claim_id = attempt_id_v2(&attempt);
-        let signature = libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, claim_id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Bu8; 32])
-            .expect("sign")
-            .as_ref()
-            .to_vec();
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, claim_id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Bu8; 32])
+                .expect("sign")
+                .as_ref()
+                .to_vec();
         t.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
         t.block.header.finalize();
         self.insert(t.block, &format!("{p:?}'s attempt")).await;
@@ -327,8 +330,7 @@ impl CapSim {
         use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
         let idx = self.wallet.iter().position(|(_, _, _, ready)| *ready <= self.blocks)?;
         let (outpoint, entry, card, _) = self.wallet.remove(idx);
-        let payload =
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
         let change = entry.amount - 400_000;
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
@@ -385,7 +387,13 @@ impl CapSim {
         let policy = match policy {
             LicencePolicy::Mix(a, q, _) => {
                 let draw = (u64::from_le_bytes(claim_id.as_byte_slice()[..8].try_into().unwrap()) % 1000) as u16;
-                if draw < a { LicencePolicy::All5 } else if draw < a + q { LicencePolicy::Quorum3 } else { LicencePolicy::S2 }
+                if draw < a {
+                    LicencePolicy::All5
+                } else if draw < a + q {
+                    LicencePolicy::Quorum3
+                } else {
+                    LicencePolicy::S2
+                }
             }
             other => other,
         };
@@ -488,7 +496,13 @@ impl CapSim {
                         .expect("sign")
                         .as_ref()
                         .to_vec();
-                        PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat.bond, signed_daa, signature }
+                        PalwSeatReceiptV2 {
+                            claim: claim_id,
+                            verdict: PalwReceiptVerdictV2::Valid,
+                            seat_bond: seat.bond,
+                            signed_daa,
+                            signature,
+                        }
                     })
                     .collect();
                 vp.palw_v2_receipt_quorum_assemble_impl(claim_id, &receipts)
@@ -532,7 +546,9 @@ impl CapSim {
                 && matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. })
             {
                 let delay = match &self.lic_delays {
-                    Some(table) => table[(u64::from_le_bytes(claim_id.as_byte_slice()[8..16].try_into().unwrap()) as usize) % table.len()],
+                    Some(table) => {
+                        table[(u64::from_le_bytes(claim_id.as_byte_slice()[8..16].try_into().unwrap()) as usize) % table.len()]
+                    }
                     None => self.lic_delay,
                 };
                 self.receipts_due.insert(claim_id, now + delay);
@@ -609,9 +625,10 @@ impl CapSim {
                 row.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
             }
             for card in &self.chain.bonds {
-                carriage
-                    .seat_readiness
-                    .insert((*card, k8_class), PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 });
+                carriage.seat_readiness.insert(
+                    (*card, k8_class),
+                    PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 },
+                );
             }
         }
         let planted: PalwChainStateV2 = carriage.into_state(&bundle.state, None).expect("the planted tip is a consistent state");
@@ -627,9 +644,10 @@ impl CapSim {
         let now = self.daa();
         let mut carriage = PalwStateCarriageV2::from_state(&tip);
         for card in &self.chain.bonds {
-            carriage
-                .seat_readiness
-                .insert((*card, k8_class), PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 });
+            carriage.seat_readiness.insert(
+                (*card, k8_class),
+                PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 },
+            );
         }
         if let Some(row) = carriage.model_lifecycles.get_mut(&k8_class)
             && !row.state.admits_claims()
@@ -704,11 +722,15 @@ impl CapSim {
             let own: u128 = st
                 .claims_iter()
                 .filter(|(_, c)| c.bond == *card)
-                .map(|(_, c)| kaspa_consensus_core::palw_state_v2::palw_claim_commitment_v1(&self.chain.bundle.state, c, now).unwrap_or(0))
+                .map(|(_, c)| {
+                    kaspa_consensus_core::palw_state_v2::palw_claim_commitment_v1(&self.chain.bundle.state, c, now).unwrap_or(0)
+                })
                 .sum();
             let own_held = st
                 .claims_iter()
-                .filter(|(_, c)| c.bond == *card && matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) && !c.rcore.escrow_released)
+                .filter(|(_, c)| {
+                    c.bond == *card && matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) && !c.rcore.escrow_released
+                })
                 .count();
             let (duties, duty_rows): (u128, usize) = st
                 .panel_duty_rows_iter()
@@ -732,7 +754,15 @@ impl CapSim {
                 let l = self.life.get(c).copied().unwrap_or_default();
                 out_line(format!(
                     "{{\"run\":\"{}\",\"life\":\"{}\",\"subject\":\"{}\",\"accepted\":{},\"bound\":{},\"licensed\":{},\"released\":{},\"final\":{},\"void\":{}}}",
-                    self.run, c, s.label, json_opt(l[0]), json_opt(l[1]), json_opt(l[2]), json_opt(l[3]), json_opt(l[4]), json_opt(l[5])
+                    self.run,
+                    c,
+                    s.label,
+                    json_opt(l[0]),
+                    json_opt(l[1]),
+                    json_opt(l[2]),
+                    json_opt(l[3]),
+                    json_opt(l[4]),
+                    json_opt(l[5])
                 ));
             }
         }
@@ -922,7 +952,31 @@ async fn t12_capacity_run() {
     // Live public testnet-12 bind -> licence delays (DAA 140-170, 309 floor / 11 8k licences),
     // less the harness's own carriage DAA (a licence lands the DAA after it is signed).
     s.lic_delays = match lic_spec.as_str() {
-        "live:floor" => Some(expand(&[(0, 66), (1, 118), (2, 50), (3, 11), (4, 14), (5, 11), (6, 4), (7, 4), (8, 2), (9, 4), (10, 4), (11, 3), (13, 7), (14, 2), (16, 1), (21, 1), (24, 1), (25, 1), (32, 1), (39, 1), (51, 1), (57, 1), (66, 1)])),
+        "live:floor" => Some(expand(&[
+            (0, 66),
+            (1, 118),
+            (2, 50),
+            (3, 11),
+            (4, 14),
+            (5, 11),
+            (6, 4),
+            (7, 4),
+            (8, 2),
+            (9, 4),
+            (10, 4),
+            (11, 3),
+            (13, 7),
+            (14, 2),
+            (16, 1),
+            (21, 1),
+            (24, 1),
+            (25, 1),
+            (32, 1),
+            (39, 1),
+            (51, 1),
+            (57, 1),
+            (66, 1),
+        ])),
         "live:8k" => Some(expand(&[(2, 5), (3, 3), (4, 1), (7, 1), (8, 1)])),
         _ => None,
     };
@@ -1028,7 +1082,8 @@ impl CapSim {
             for _ in 0..*n {
                 i += 1;
                 let claim = planted_claim(*class, *bond, now, accepted_block, i, *reserved, *escrow);
-                let held = kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(&bundle.state, &claim).expect("a reservation");
+                let held =
+                    kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(&bundle.state, &claim).expect("a reservation");
                 *carriage.reserved_exposure.entry(*bond).or_insert(0) += held;
                 carriage.claims.insert(Hash64::from_u64_word(0x7F00_0000_0000 + i), claim);
             }
@@ -1158,7 +1213,10 @@ async fn t12_capacity_instant_sweep() {
         ("8k+2M-x1", vec![(two_m, filler, 1, w_2m, e)]),
         ("8k+B(8k-clone)-x1", vec![(b_id, filler, 1, kc.reserved, kc.escrowed_reward)]),
         ("8k+B(8k-clone)-x2", vec![(b_id, filler, 2, kc.reserved, kc.escrowed_reward)]),
-        ("8k+B-x1+H(half)-x2", vec![(b_id, filler, 1, kc.reserved, kc.escrowed_reward), (h_id, filler, 2, kc.reserved, kc.escrowed_reward)]),
+        (
+            "8k+B-x1+H(half)-x2",
+            vec![(b_id, filler, 1, kc.reserved, kc.escrowed_reward), (h_id, filler, 2, kc.reserved, kc.escrowed_reward)],
+        ),
         ("8k+BIG(4x,window7)-x1", vec![(big_id, filler, 1, kc.reserved, kc.escrowed_reward)]),
     ];
     for (label, others) in &scenarios {
@@ -1237,7 +1295,14 @@ async fn t12_capacity_instant_sweep() {
 /// (`PalwProducerBondFactsV2::has_committed_room`, the fold's `apply_attempt` / admission item 8
 /// arithmetic), whatever the class's lifecycle says: planted Provisional claims at the reservation the
 /// facts price (`claim_exposure`), counted until the room refuses.
-fn exposure_only_n(s: &mut CapSim, class: Hash64, j: usize, claim_exposure: u128, escrow: u64, extra_rows: &[(Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleRowV1)]) -> u64 {
+fn exposure_only_n(
+    s: &mut CapSim,
+    class: Hash64,
+    j: usize,
+    claim_exposure: u128,
+    escrow: u64,
+    extra_rows: &[(Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleRowV1)],
+) -> u64 {
     let bond = s.subjects[j].bond;
     let reserved = claim_exposure.saturating_sub(escrow as u128);
     let mut n = 0u64;
@@ -1292,7 +1357,8 @@ async fn t12_capacity_collateral_study() {
         let facts = s.chain.ctx.consensus.palw_producer_facts_v2(class, Some(s.subjects[0].bond.0)).expect("facts");
         let b = facts.bond.as_ref().unwrap();
         let eccu = row.as_ref().map(|r| r.work.economic_ccu_per_claim).unwrap_or(0);
-        let attempts = kaspa_consensus_core::palw_pwu::palw_claim_attempts_v1(facts.pwu, (eccu > 0).then_some(eccu.min(u64::MAX as u128) as u64));
+        let attempts =
+            kaspa_consensus_core::palw_pwu::palw_claim_attempts_v1(facts.pwu, (eccu > 0).then_some(eccu.min(u64::MAX as u128) as u64));
         let exposure_pwu = if base_canonical > 0 { eccu * base_declared as u128 / base_canonical } else { 0 };
         out_line(format!(
             "{{\"run\":\"study\",\"decompose\":\"{name}\",\"slash_value_per_pwu\":{},\"pwu_rule\":\"{:?}\",\"economic_ccu\":{eccu},\"verification_ccu\":{},\"claim_pwu\":{},\"attempts\":{attempts},\"exposure_pwu\":{exposure_pwu},\"w\":{},\"escrow\":{escrow},\"claim_exposure\":{},\"immature_contribution\":{},\"refusal\":{}}}",
@@ -1308,7 +1374,8 @@ async fn t12_capacity_collateral_study() {
     }
     // Variants. PWU: the class's registry work (economic and verification CCU) / f — every exposure,
     // weight, credit and replay-cost reader follows it. SVP: every class's slash_value_per_pwu = 1.
-    let variants: Vec<(&str, u128, Option<u64>)> = vec![("shipped", 1, None), ("pwu/10", 10, None), ("pwu/100", 100, None), ("svp=1", 1, Some(1))];
+    let variants: Vec<(&str, u128, Option<u64>)> =
+        vec![("shipped", 1, None), ("pwu/10", 10, None), ("pwu/100", 100, None), ("svp=1", 1, Some(1))];
     for (vname, div, svp) in &variants {
         for (name, class) in [("floor", base), ("8k", k8), ("2M", two_m)] {
             // The variant's tip: the class row's work divided; slash values replaced.
@@ -1324,8 +1391,10 @@ async fn t12_capacity_collateral_study() {
                 row.work.verification_ccu /= *div;
                 // The registry re-derives the profile from the work (palw_model_registry_v1.rs:173, 229).
                 let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(&bundle);
-                row.profile.verification_window_spans = kaspa_consensus_core::palw_model_registry_v1::palw_verification_window_spans_v1(&row.work, &g);
-                row.profile.max_inflight_claims = kaspa_consensus_core::palw_model_registry_v1::palw_max_inflight_claims_v1(&row.work, &g, true);
+                row.profile.verification_window_spans =
+                    kaspa_consensus_core::palw_model_registry_v1::palw_verification_window_spans_v1(&row.work, &g);
+                row.profile.max_inflight_claims =
+                    kaspa_consensus_core::palw_model_registry_v1::palw_max_inflight_claims_v1(&row.work, &g, true);
             }
             if let Some(v) = svp {
                 for cs in carriage.classes.values_mut() {
@@ -1335,7 +1404,10 @@ async fn t12_capacity_collateral_study() {
             let planted: PalwChainStateV2 = match carriage.into_state(&bundle.state, None) {
                 Ok(p) => p,
                 Err(e) => {
-                    out_line(format!("{{\"run\":\"study\",\"variant\":\"{vname}\",\"class\":\"{name}\",\"error\":{}}}", json_str(&format!("{e:?}"))));
+                    out_line(format!(
+                        "{{\"run\":\"study\",\"variant\":\"{vname}\",\"class\":\"{name}\",\"error\":{}}}",
+                        json_str(&format!("{e:?}"))
+                    ));
                     continue;
                 }
             };
@@ -1351,7 +1423,11 @@ async fn t12_capacity_collateral_study() {
             let mut gate_n = 0u64;
             let gate_why;
             loop {
-                let planted_claims = if gate_n > 0 { vec![(class, s.subjects[2].bond, gate_n, ce.saturating_sub(escrow as u128), escrow)] } else { vec![] };
+                let planted_claims = if gate_n > 0 {
+                    vec![(class, s.subjects[2].bond, gate_n, ce.saturating_sub(escrow as u128), escrow)]
+                } else {
+                    vec![]
+                };
                 let (ok, why, _) = s.with_planted(&planted_claims, &[], |s| s.verdict(class, 2));
                 if !ok || gate_n > 400 {
                     gate_why = why;

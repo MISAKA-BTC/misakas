@@ -43,10 +43,9 @@ fn work_of(p: &PalwShapeProfileV3, c: (u32, u32)) -> (u128, u128) {
 }
 
 fn rows() -> Vec<(&'static str, u128, u128)> {
-    let floor = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("floor");
+    let floor =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("floor");
     let dense = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
         kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
             n_ctx: PALW_T12_DENSE_N_CTX,
@@ -99,7 +98,8 @@ fn a2_reward_is_capped_at_escrow_and_the_seat_lock_is_not() {
             Hash64::default(),
         )
         .saturating_add(1);
-        let extra = palw_realizable_before_maturity_v1(quanta, WINDOW_CHALLENGE, WINDOW_COURT, CADENCE_MS, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
+        let extra =
+            palw_realizable_before_maturity_v1(quanta, WINDOW_CHALLENGE, WINDOW_COURT, CADENCE_MS, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
         let facts = PalwClaimFraudFactsV1 {
             reserved,
             escrowed_reward: escrow,
@@ -113,9 +113,17 @@ fn a2_reward_is_capped_at_escrow_and_the_seat_lock_is_not() {
         println!("\n-- {name} --");
         println!("   one draw           {draw} MAC-eq   claim.pwu {claim_pwu} MAC-eq");
         println!("   uncapped reward    {uncapped} sompi = {:.2} MSK", uncapped as f64 / 1e8);
-        println!("   priced (CLAMPED)   {priced} sompi = {:.5} MSK   clamp swallowed {:.0}x", priced as f64 / 1e8, uncapped as f64 / priced.max(1) as f64);
+        println!(
+            "   priced (CLAMPED)   {priced} sompi = {:.5} MSK   clamp swallowed {:.0}x",
+            priced as f64 / 1e8,
+            uncapped as f64 / priced.max(1) as f64
+        );
         println!("   quanta minted +1   {quanta}   realizable extra rights {extra} sompi");
-        println!("   max_fraud_gain     {gain} sompi = {:.2} MSK   (weight term = pwu x {SLASH} = {})", gain as f64 / 1e8, claim_pwu as u128 * SLASH as u128);
+        println!(
+            "   max_fraud_gain     {gain} sompi = {:.2} MSK   (weight term = pwu x {SLASH} = {})",
+            gain as f64 / 1e8,
+            claim_pwu as u128 * SLASH as u128
+        );
         println!("   seat lock required {required} sompi = {:.2} MSK", required as f64 / 1e8);
         println!("   vs one genesis bond: {:.3}x the WHOLE posted collateral", required as f64 / collateral as f64);
         if required > collateral {
@@ -162,11 +170,12 @@ fn a2_the_lambda_floor_band_where_it_under_reserves() {
         let seat_exposure = palw_panel_seat_exposure_v1(reserved, escrow, SEATS, lambda);
         let assumed = palw_panel_split_v1(escrow, SEATS, 0).per_seat;
         let intended = paid as u128 * lambda as u128 / 1000;
-        println!(
-            "\n  draw {draw} MAC-eq -> share {share} permille, priced {priced}, per-seat paid {paid}"
-        );
+        println!("\n  draw {draw} MAC-eq -> share {share} permille, priced {priced}, per-seat paid {paid}");
         println!("     3 x reserved (stake)  {}", reserved * 3);
-        println!("     lambda floor          {} (from the FIXED 200-permille per_seat {assumed})", assumed as u128 * lambda as u128 / 1000);
+        println!(
+            "     lambda floor          {} (from the FIXED 200-permille per_seat {assumed})",
+            assumed as u128 * lambda as u128 / 1000
+        );
         println!("     seat_exposure written {seat_exposure}");
         println!(
             "     intended floor (lambda x what the seat is REALLY paid) {intended}  SHORTFALL {} sompi = {:.5} MSK per seat, {:.5} MSK per claim",
@@ -174,7 +183,11 @@ fn a2_the_lambda_floor_band_where_it_under_reserves() {
             intended.saturating_sub(seat_exposure) as f64 / 1e8,
             intended.saturating_sub(seat_exposure) as f64 * SEATS as f64 / 1e8
         );
-        println!("     effective lambda {:.4}x against a declared {:.1}x", seat_exposure as f64 / paid.max(1) as f64, lambda as f64 / 1000.0);
+        println!(
+            "     effective lambda {:.4}x against a declared {:.1}x",
+            seat_exposure as f64 / paid.max(1) as f64,
+            lambda as f64 / 1000.0
+        );
     }
 }
 

@@ -4,12 +4,12 @@
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
-use kaspa_consensus_core::palw_class_admission_v2::{
-    PalwClassAdmissionError, palw_admission_shape_at_v1, verify_class_admission_v9,
-};
+use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, palw_admission_shape_at_v1, verify_class_admission_v9};
 use kaspa_consensus_core::palw_economic_compute_v1::{PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -105,8 +105,13 @@ fn b4_00_baseline_the_three_shipped_rows() {
     println!("  kimi             {}", shape.kimi_family);
     println!("  canonical_work   {}", p.palw_canonical_work_at(0));
     println!("  admission_indep  {}", p.palw_admission_independence_at(0));
-    println!("  court ceilings: close_bytes {} chunks {} terminal_macs {} operands {}",
-        b.court.max_close_bytes(), b.court.max_close_chunks(), b.court.max_terminal_macs(), b.court.max_operand_count());
+    println!(
+        "  court ceilings: close_bytes {} chunks {} terminal_macs {} operands {}",
+        b.court.max_close_bytes(),
+        b.court.max_close_chunks(),
+        b.court.max_terminal_macs(),
+        b.court.max_operand_count()
+    );
     println!("  max_step_leaf_count {}", b.court.max_step_leaf_count());
 
     for (name, prof, can) in [
@@ -125,7 +130,12 @@ fn b4_00_baseline_the_three_shipped_rows() {
         println!(
             "  {name}: class {} n_ctx {:>9} layers {:>3} heads {:>3} head_dim {:>6} hidden {:>5} ccu/draw {:>22} admit {:?}",
             &prof.shape_profile_id().to_string()[..12],
-            prof.n_ctx, prof.layer_count, prof.attn_heads, prof.attn_head_dim, prof.hidden_dim, ccu,
+            prof.n_ctx,
+            prof.layer_count,
+            prof.attn_heads,
+            prof.attn_head_dim,
+            prof.hidden_dim,
+            ccu,
             verdict.map(|c| format!("OK leaves={c}")).map_err(|e| format!("{e:?}"))
         );
     }
@@ -233,8 +243,12 @@ fn b4_04_print_the_hybrid_node_tables() {
         for (i, n) in t.iter().enumerate() {
             println!(
                 "   [{i:>2}] {:?} out={:?} tile={} w='{}' dtypes={:?} refs={:?}",
-                n.op_kind, n.out_len, n.tile_len, n.weight_name,
-                n.weight_dtypes.first(), n.input_refs
+                n.op_kind,
+                n.out_len,
+                n.tile_len,
+                n.weight_name,
+                n.weight_dtypes.first(),
+                n.input_refs
             );
         }
     }
@@ -244,8 +258,11 @@ fn b4_04_print_the_hybrid_node_tables() {
 // THE CONSTRUCTION: one u16 field. Everything admission checks is byte-identical.
 // -------------------------------------------------------------------------------------------
 
-fn court_cost_of(p: &Params, b: &PalwConsensusParamsV2, prof: &PalwShapeProfileV3)
-    -> Option<kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostV1> {
+fn court_cost_of(
+    p: &Params,
+    b: &PalwConsensusParamsV2,
+    prof: &PalwShapeProfileV3,
+) -> Option<kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostV1> {
     let shape = palw_admission_shape_at_v1(p, b, prof, 0).ok()?;
     let sh = shape.ladder?.cost_shape;
     kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_shaped_v1(prof, sh).ok()
@@ -264,9 +281,16 @@ fn b4_05_gdn_heads_moves_the_price_and_nothing_admission_checks() {
     let base_worst = kaspa_consensus_core::palw_step::worst_case_step_leaf_count_deepest_job_capped_v1(&base, 1 << 40).unwrap();
 
     println!("\n==== B4: gdn_heads is a price multiplier admission does not bound ====");
-    println!("baseline gdn_heads={} ccu={} leaves={} worst={} close_bytes={} terminal_macs={} operands={}",
-        base.gdn_heads, base_ccu, base_leaves, base_worst,
-        base_cost.max_close_bytes, base_cost.max_terminal_macs, base_cost.max_operand_count);
+    println!(
+        "baseline gdn_heads={} ccu={} leaves={} worst={} close_bytes={} terminal_macs={} operands={}",
+        base.gdn_heads,
+        base_ccu,
+        base_leaves,
+        base_worst,
+        base_cost.max_close_bytes,
+        base_cost.max_terminal_macs,
+        base_cost.max_operand_count
+    );
 
     for heads in [64u16, 256, 1623, 4096, 16384, 65535] {
         let mut m = base.clone();
@@ -294,16 +318,19 @@ fn b4_05_gdn_heads_moves_the_price_and_nothing_admission_checks() {
         let mut m = base.clone();
         m.gdn_heads = heads;
         let slice = kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&m, &node, &[2048, 8192, 2048, 32, 32], 0);
-        println!("     gdn_heads={heads:<6} slice={}", if slice.is_some() { "Some(..) -> triable" } else { "None -> the court cannot open this leaf" });
+        println!(
+            "     gdn_heads={heads:<6} slice={}",
+            if slice.is_some() { "Some(..) -> triable" } else { "None -> the court cannot open this leaf" }
+        );
     }
 }
 
 #[test]
 fn b4_06_what_the_inflated_class_earns() {
+    use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1};
     use kaspa_consensus_core::palw_panel_economy_v1::palw_work_priced_reward_v1;
     use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
     use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ticket_target_v1};
-    use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1};
 
     let p = t12();
     let carve = p.palw_overlay_carve.expect("t12 arms the carve").worker_carve_permille as u64;
@@ -313,8 +340,7 @@ fn b4_06_what_the_inflated_class_earns() {
     let rate = p.palw_economic_payout.expect("armed").rate_sompi_per_giga;
     let w0 = palw_work_floor_v1(escrow, rate);
     println!("\n==== B4: what the class is paid ====");
-    println!("  carve {carve} permille, escrow {escrow} sompi ({:.2} MSK), rate {rate} sompi/G, W0 = {w0} CCU",
-        escrow as f64 / 1e8);
+    println!("  carve {carve} permille, escrow {escrow} sompi ({:.2} MSK), rate {rate} sompi/G, W0 = {w0} CCU", escrow as f64 / 1e8);
 
     let base = hybrid_512();
     let (pf, d) = qwen36_held_canonical_v1(512);
@@ -324,8 +350,10 @@ fn b4_06_what_the_inflated_class_earns() {
     let fcan = rc_job_context(&floor, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
     let base_declared = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&floor, &fcan, 1 << 40).unwrap();
     let base_canonical = price_of(&floor, &fcan) as u64;
-    println!("  floor basis: declared {base_declared} leaves / canonical {base_canonical} MAC-eq (ratio {:.4})",
-        base_canonical as f64 / base_declared as f64);
+    println!(
+        "  floor basis: declared {base_declared} leaves / canonical {base_canonical} MAC-eq (ratio {:.4})",
+        base_canonical as f64 / base_declared as f64
+    );
 
     let row = |tag: &str, heads: u16| {
         let mut m = base.clone();
@@ -389,8 +417,20 @@ pub fn admit_raw(
     };
     let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
     verify_class_admission_v9(
-        bundle, profile, canonical, &reg, &certified, &[], shape.ladder, shape.court, false,
-        shape.token_lift, shape.fused_dissectable, params.palw_canonical_work_at(0), shape.held, shape.kimi_family,
+        bundle,
+        profile,
+        canonical,
+        &reg,
+        &certified,
+        &[],
+        shape.ladder,
+        shape.court,
+        false,
+        shape.token_lift,
+        shape.fused_dissectable,
+        params.palw_canonical_work_at(0),
+        shape.held,
+        shape.kimi_family,
         params.palw_audit_2026_09_23_active_at(0),
     )
     .map(|e| e.canonical_step_leaf_count)
@@ -409,15 +449,19 @@ fn b4_07_the_other_six_constructions() {
     println!("\n==== C1: big declared leaves, trivial table ====");
     for declared in [honest_leaves, honest_leaves * 1000, u64::MAX / 2] {
         let r = admit_raw(&p, &b, &hy, &can, hy.shape_profile_id(), Hash64::from_u64_word(1), declared, 0);
-        println!("   declared pwu_per_inference={declared:<24} => {}",
-            r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+        println!(
+            "   declared pwu_per_inference={declared:<24} => {}",
+            r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+        );
     }
 
     println!("\n==== C5: a small model claiming a large model's ClassId ====");
     let dense = dense_2m();
     let r = admit_raw(&p, &b, &hy, &can, dense.shape_profile_id(), Hash64::from_u64_word(1), honest_leaves, 0);
-    println!("   hybrid profile + dense@2M class_id => {}",
-        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+    println!(
+        "   hybrid profile + dense@2M class_id => {}",
+        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+    );
 
     println!("\n==== C6: one artifact root, two reward tiers ====");
     let root = Hash64::from_u64_word(0xA271FAC7);
@@ -425,11 +469,24 @@ fn b4_07_the_other_six_constructions() {
     twin.n_threads = hy.n_threads + 1; // a field no price, leaf or court cost reads
     let can_t = rc_job_context(&twin, pf, d);
     let a = admit_raw(&p, &b, &hy, &can, hy.shape_profile_id(), root, honest_leaves, 0);
-    let bb = admit_raw(&p, &b, &twin, &can_t, twin.shape_profile_id(), root,
-        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&twin, &can_t, 1 << 40).unwrap(), 0);
+    let bb = admit_raw(
+        &p,
+        &b,
+        &twin,
+        &can_t,
+        twin.shape_profile_id(),
+        root,
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&twin, &can_t, 1 << 40).unwrap(),
+        0,
+    );
     println!("   class A {} root {root} => {:?}", &hy.shape_profile_id().to_string()[..12], a.is_ok());
-    println!("   class B {} root {root} => {:?}  (n_threads {} vs {})",
-        &twin.shape_profile_id().to_string()[..12], bb.is_ok(), hy.n_threads, twin.n_threads);
+    println!(
+        "   class B {} root {root} => {:?}  (n_threads {} vs {})",
+        &twin.shape_profile_id().to_string()[..12],
+        bb.is_ok(),
+        hy.n_threads,
+        twin.n_threads
+    );
     println!("   distinct class ids: {}", hy.shape_profile_id() != twin.shape_profile_id());
     println!("   both priced at ccu {} / {}", base_ccu, price_of(&twin, &can_t));
 
@@ -447,9 +504,11 @@ fn b4_07_the_other_six_constructions() {
     let leaves_u = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&unrouted, &can_u, 1 << 40).unwrap();
     let r = admit_raw(&p, &b, &unrouted, &can_u, unrouted.shape_profile_id(), root, leaves_u, 0);
     println!("   rename 'router'->'selector' in the softmax node's weight_name");
-    println!("   ccu {ccu_u} (x{:.4})  leaves {leaves_u} (honest {honest_leaves})  => {}",
+    println!(
+        "   ccu {ccu_u} (x{:.4})  leaves {leaves_u} (honest {honest_leaves})  => {}",
         ccu_u as f64 / base_ccu as f64,
-        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+    );
 
     let mut unmarked = hy.clone();
     for t in [&mut unmarked.gdn_nodes, &mut unmarked.attn_nodes] {
@@ -464,41 +523,53 @@ fn b4_07_the_other_six_constructions() {
     let leaves_m = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&unmarked, &can_m, 1 << 40).unwrap();
     let r = admit_raw(&p, &b, &unmarked, &can_m, unmarked.shape_profile_id(), root, leaves_m, 0);
     println!("   rename '.routed'->'.dense_w' on the three expert matmuls");
-    println!("   ccu {ccu_m} (x{:.4})  leaves {leaves_m} (honest {honest_leaves})  => {}",
+    println!(
+        "   ccu {ccu_m} (x{:.4})  leaves {leaves_m} (honest {honest_leaves})  => {}",
         ccu_m as f64 / base_ccu as f64,
-        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+    );
 
     println!("\n==== C4: dtype declared I32 while the artifact stores I8 ====");
     let mut i32d = hy.clone();
     for t in [&mut i32d.pre_nodes, &mut i32d.gdn_nodes, &mut i32d.attn_nodes, &mut i32d.post_nodes] {
         for n in t.iter_mut() {
-            for x in n.weight_dtypes.iter_mut() { *x = 26; }
+            for x in n.weight_dtypes.iter_mut() {
+                *x = 26;
+            }
         }
     }
     let can_i = rc_job_context(&i32d, pf, d);
     let ccu_i = price_of(&i32d, &can_i);
     let leaves_i = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&i32d, &can_i, 1 << 40).unwrap();
     let r = admit_raw(&p, &b, &i32d, &can_i, i32d.shape_profile_id(), root, leaves_i, 0);
-    println!("   every weight_dtype 24 (I8) -> 26 (I32): ccu {ccu_i} (x{:.4}) leaves {leaves_i} => {}",
+    println!(
+        "   every weight_dtype 24 (I8) -> 26 (I32): ccu {ccu_i} (x{:.4}) leaves {leaves_i} => {}",
         ccu_i as f64 / base_ccu as f64,
-        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+    );
 
     println!("\n==== combined: gdn_heads 1623 + unrouted + I32 ====");
     let mut combo = hy.clone();
     combo.gdn_heads = 1623;
     for t in [&mut combo.pre_nodes, &mut combo.gdn_nodes, &mut combo.attn_nodes, &mut combo.post_nodes] {
         for n in t.iter_mut() {
-            if n.weight_name.contains("router") { n.weight_name = n.weight_name.replace("router", "selector"); }
-            for x in n.weight_dtypes.iter_mut() { *x = 26; }
+            if n.weight_name.contains("router") {
+                n.weight_name = n.weight_name.replace("router", "selector");
+            }
+            for x in n.weight_dtypes.iter_mut() {
+                *x = 26;
+            }
         }
     }
     let can_c = rc_job_context(&combo, pf, d);
     let ccu_c = price_of(&combo, &can_c);
     let leaves_c = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&combo, &can_c, 1 << 40).unwrap();
     let r = admit_raw(&p, &b, &combo, &can_c, combo.shape_profile_id(), root, leaves_c, 0);
-    println!("   ccu {ccu_c} (x{:.4}) leaves {leaves_c} (honest {honest_leaves}) => {}",
+    println!(
+        "   ccu {ccu_c} (x{:.4}) leaves {leaves_c} (honest {honest_leaves}) => {}",
         ccu_c as f64 / base_ccu as f64,
-        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}")));
+        r.map(|c| format!("ADMITTED leaves={c}")).unwrap_or_else(|e| format!("REFUSED {e:?}"))
+    );
 }
 
 #[test]
@@ -508,21 +579,34 @@ fn b4_08_attention_geometry_is_cross_checked_against_the_row_and_the_recurrence_
     let hy = hybrid_512();
     let q = hy.attn_nodes[10].clone();
     let gdn = hy.gdn_nodes[15].clone();
-    println!("\n  fused query row (attn[10]) out={:?}  vs attn_heads x attn_head_dim = {}",
-        q.out_len, hy.attn_heads as u64 * hy.attn_head_dim as u64);
-    println!("  GatedDeltaNet row (gdn[15]) out={:?}  vs gdn_heads x gdn_head_v_dim  = {}",
-        gdn.out_len, hy.gdn_heads as u64 * hy.gdn_head_v_dim as u64);
+    println!(
+        "\n  fused query row (attn[10]) out={:?}  vs attn_heads x attn_head_dim = {}",
+        q.out_len,
+        hy.attn_heads as u64 * hy.attn_head_dim as u64
+    );
+    println!(
+        "  GatedDeltaNet row (gdn[15]) out={:?}  vs gdn_heads x gdn_head_v_dim  = {}",
+        gdn.out_len,
+        hy.gdn_heads as u64 * hy.gdn_head_v_dim as u64
+    );
     for heads in [16u16, 17, 1623] {
         let mut m = hy.clone();
         m.attn_heads = heads;
-        println!("   attn_heads={heads:<6} fused_query_slice_is_openable => {:?}",
-            kaspa_consensus_core::palw_class_admission_v2::palw_fused_query_slice_is_openable_v1(&m).map(|_| "Ok").map_err(|e| format!("{e:?}")));
+        println!(
+            "   attn_heads={heads:<6} fused_query_slice_is_openable => {:?}",
+            kaspa_consensus_core::palw_class_admission_v2::palw_fused_query_slice_is_openable_v1(&m)
+                .map(|_| "Ok")
+                .map_err(|e| format!("{e:?}"))
+        );
     }
     for heads in [32u16, 33, 1623] {
         let mut m = hy.clone();
         m.gdn_heads = heads;
         // the only per-class check of the GDN geometry anywhere in the admission gate:
-        println!("   gdn_heads={heads:<6} validate_shape => {:?}, gdn row still {:?}",
-            m.validate_shape().map(|_| "Ok").map_err(|e| format!("{e:?}")), m.gdn_nodes[15].out_len);
+        println!(
+            "   gdn_heads={heads:<6} validate_shape => {:?}, gdn row still {:?}",
+            m.validate_shape().map(|_| "Ok").map_err(|e| format!("{e:?}")),
+            m.gdn_nodes[15].out_len
+        );
     }
 }

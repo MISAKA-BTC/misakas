@@ -15,9 +15,7 @@ use kaspa_consensus_core::palw_economic_safety_v1::{
 use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_round_v1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
-use kaspa_consensus_core::palw_panel_var_v1::{
-    PalwSlashableExposureLedgerV1, PalwSlashableLockV1, palw_panel_liability_expiry_v1,
-};
+use kaspa_consensus_core::palw_panel_var_v1::{PalwSlashableExposureLedgerV1, PalwSlashableLockV1, palw_panel_liability_expiry_v1};
 use kaspa_consensus_core::palw_settlement_v1::palw_settlement_v1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwTransitionExtrasV1, apply_palw_transition_v7,
@@ -268,7 +266,9 @@ fn the_quantum_maturity_and_the_liability_horizon_read_different_clocks() {
     println!("liability horizon (DAA)          = {window_court}");
     println!("priced gap                       = {priced_gap_daa} DAA -> {priced_rounds} rounds");
     println!("quanta one held-2M Final mints   = {quanta}");
-    println!("realizable priced into the lock  = {priced} sompi (= min({quanta},{priced_rounds}) x {PALW_T12_PERMIT_FEE_CEILING_SOMPI})");
+    println!(
+        "realizable priced into the lock  = {priced} sompi (= min({quanta},{priced_rounds}) x {PALW_T12_PERMIT_FEE_CEILING_SOMPI})"
+    );
     assert_eq!(priced, u128::from(quanta) * u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI), "the mint binds, not the rounds");
 
     // Now let the DAA clock run slower than 120 s per tick. Nothing forbids it: the cursor sets a
@@ -393,6 +393,9 @@ fn the_whole_exit_is_one_clock() {
     println!("= {:.0} h of wall clock at {cadence_ms} ms/DAA", (total * cadence_ms) as f64 / 3_600_000.0);
     println!("PALW anchors required            = 0");
     println!("bond required to mint the clock  = 0");
-    println!("hashes                           = {} (= {total} x 2^{PALW_HEARTBEAT_WORK_LOG2})", u128::from(total) * (1u128 << PALW_HEARTBEAT_WORK_LOG2));
+    println!(
+        "hashes                           = {} (= {total} x 2^{PALW_HEARTBEAT_WORK_LOG2})",
+        u128::from(total) * (1u128 << PALW_HEARTBEAT_WORK_LOG2)
+    );
     assert_eq!(total, window_court + delay);
 }

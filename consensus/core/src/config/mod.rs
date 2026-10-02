@@ -1,8 +1,8 @@
 pub mod bps;
+pub mod class_manifest_const_v1;
 pub mod constants;
 pub mod drill;
 pub mod genesis;
-pub mod class_manifest_const_v1;
 pub mod ibd_checkpoint;
 pub mod params;
 pub mod premine;

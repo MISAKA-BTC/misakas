@@ -4,9 +4,8 @@ use crate::protowire::{
     KaspadRequest, KaspadResponse, NotifyBlockAddedRequestMessage, NotifyFinalityConflictRequestMessage,
     NotifyNewBlockTemplateRequestMessage, NotifyPalwClassReadinessChangedRequestMessage, NotifyPalwPanelAssignmentRequestMessage,
     NotifyPalwPanelEligibilityChangedRequestMessage, NotifyPalwPanelReceiptRequestMessage,
-    NotifyPruningPointUtxoSetOverrideRequestMessage, NotifySinkBlueScoreChangedRequestMessage,
-    NotifyUtxosChangedRequestMessage, NotifyVirtualChainChangedRequestMessage, NotifyVirtualDaaScoreChangedRequestMessage,
-    kaspad_request, kaspad_response,
+    NotifyPruningPointUtxoSetOverrideRequestMessage, NotifySinkBlueScoreChangedRequestMessage, NotifyUtxosChangedRequestMessage,
+    NotifyVirtualChainChangedRequestMessage, NotifyVirtualDaaScoreChangedRequestMessage, kaspad_request, kaspad_response,
 };
 
 impl KaspadRequest {

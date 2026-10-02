@@ -25,7 +25,9 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{
 use kaspa_consensus_core::palw_panel_economy_v1::palw_work_priced_reward_v1;
 use kaspa_consensus_core::palw_panel_var_v1::palw_fork_weight_sompi_v1;
 use kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -196,7 +198,8 @@ fn measure(draw: u128, escrow: u64, work_target_w: u128, rate: u64, bits: u32, b
     let reward_0124_sompi = palw_work_priced_reward_v1(escrow, exposure_v2, unit_u64);
 
     // ADR-0132.
-    let attempted = palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(class_target), palw_network_draws_q32_from_bits_v1(bits), draw);
+    let attempted =
+        palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(class_target), palw_network_draws_q32_from_bits_v1(bits), draw);
     let reward_0132_sompi = palw_rate_priced_reward_v1(escrow, attempted, rate as u128);
 
     // Execution lane: `record_round_final` sets `credit = exposure` whenever the round lane's
@@ -299,7 +302,14 @@ fn the_t12_ratio_table() {
         let r = measure(*draw, escrow, w0, rate, 0, basis);
         println!(
             "  {:<22} {:>20} {:>8} {:>22} {:>16} {:>16} {:>12} {:>22}",
-            name, r.draw_mac_eq, r.attempts, r.real_work_claim, r.reward_0124_sompi, r.reward_0132_sompi, r.permits, r.fork_weight_sompi
+            name,
+            r.draw_mac_eq,
+            r.attempts,
+            r.real_work_claim,
+            r.reward_0124_sompi,
+            r.reward_0132_sompi,
+            r.permits,
+            r.fork_weight_sompi
         );
         rows.push((*name, r));
     }
@@ -398,11 +408,16 @@ fn sweep(label: &str, points: Vec<(String, Option<u128>)>, escrow: u64, w: u128,
         );
         if let Some((pw, prw, pcr, ppm, pfw)) = previous {
             let work_move = r.real_work_claim as f64 / pw.max(1) as f64;
-            let flags: Vec<String> = [("reward", rw / prw.max(f64::MIN_POSITIVE)), ("credit", cr / pcr.max(f64::MIN_POSITIVE)), ("permit", pm / ppm.max(f64::MIN_POSITIVE)), ("forkwt", fw / pfw.max(f64::MIN_POSITIVE))]
-                .iter()
-                .filter(|(_, m)| !m.is_finite() || (*m - 1.0).abs() > 0.005)
-                .map(|(n, m)| format!("{n} x{m:.4}"))
-                .collect();
+            let flags: Vec<String> = [
+                ("reward", rw / prw.max(f64::MIN_POSITIVE)),
+                ("credit", cr / pcr.max(f64::MIN_POSITIVE)),
+                ("permit", pm / ppm.max(f64::MIN_POSITIVE)),
+                ("forkwt", fw / pfw.max(f64::MIN_POSITIVE)),
+            ]
+            .iter()
+            .filter(|(_, m)| !m.is_finite() || (*m - 1.0).abs() > 0.005)
+            .map(|(n, m)| format!("{n} x{m:.4}"))
+            .collect();
             if !flags.is_empty() {
                 println!("      ^ real_work x{work_move:.4}  ==> RATIO MOVED: {}", flags.join(", "));
             }
@@ -423,18 +438,17 @@ fn sweep_the_shape_parameters_for_discontinuities() {
     println!("  W (work target) held at W0 = {w} CCU; escrow {escrow} sompi; bits = 0.");
 
     // --- n_ctx: the ladder's own boundary values plus the t12 row -------------------------------
-    let n_ctx_points: Vec<(String, Option<u128>)> = [
-        16u32, 64, 128, 256, 512, 1_024, 4_096, 16_384, 65_536, 262_144, 524_288, 1_048_576, 2_097_152, 4_194_304,
-    ]
-    .iter()
-    .map(|&n| {
-        let d = dense_profile(PalwQwen25GeometryV1 { n_ctx: n, ..QWEN25_1_5B }).and_then(|p| {
-            let (pf, dc) = qwen25_a16_held_canonical_v1(n);
-            draw_mac_eq(&p, pf, dc)
-        });
-        (format!("n_ctx = {n}"), d)
-    })
-    .collect();
+    let n_ctx_points: Vec<(String, Option<u128>)> =
+        [16u32, 64, 128, 256, 512, 1_024, 4_096, 16_384, 65_536, 262_144, 524_288, 1_048_576, 2_097_152, 4_194_304]
+            .iter()
+            .map(|&n| {
+                let d = dense_profile(PalwQwen25GeometryV1 { n_ctx: n, ..QWEN25_1_5B }).and_then(|p| {
+                    let (pf, dc) = qwen25_a16_held_canonical_v1(n);
+                    draw_mac_eq(&p, pf, dc)
+                });
+                (format!("n_ctx = {n}"), d)
+            })
+            .collect();
     sweep("n_ctx (dense, canonical job follows the ladder)", n_ctx_points, escrow, w, rate, basis);
 
     // --- layer_count: 0, 1, 2, N-1, N, N+1, max ------------------------------------------------
@@ -674,7 +688,10 @@ fn boundary_sweep_of_the_permit_mint_and_the_pwu_product() {
         println!("  {credit:<34} {n:>14} {:>16.6e}", per(u128::from(n), credit));
     }
     println!("  => the clamp bites at credited_work = {clamp_credit} raw MAC-eq.");
-    println!("  => the t12 dense @2M draw is 3_357_281_757_221_376, i.e. {:.3}x past it.", 3_357_281_757_221_376f64 / clamp_credit as f64);
+    println!(
+        "  => the t12 dense @2M draw is 3_357_281_757_221_376, i.e. {:.3}x past it.",
+        3_357_281_757_221_376f64 / clamp_credit as f64
+    );
 
     // `palw_pwu_v1` / `palw_attempt_derived_pwu_v1` saturate into u64.
     println!("\n--- palw_attempt_derived_pwu_v1 BOUNDARIES (fork weight's only input) ---");
@@ -849,10 +866,7 @@ fn the_live_reward_arm_at_the_t12_genesis_targets() {
         };
         let claim_pwu = palw_attempt_derived_pwu_v1(target, draw);
         let fork_weight = palw_fork_weight_sompi_v1(claim_pwu, T12_SLASH_VALUE_PER_PWU);
-        println!(
-            "  {name:<22} {attempts:>10} {real_work:>22} {reward:>18} {:>14.6e} {cap_util:>12}",
-            per(reward as u128, real_work)
-        );
+        println!("  {name:<22} {attempts:>10} {real_work:>22} {reward:>18} {:>14.6e} {cap_util:>12}", per(reward as u128, real_work));
         measured.push((name, real_work, reward, cap_util, fork_weight, *declared, draw));
     }
 
@@ -1055,7 +1069,10 @@ fn the_draw_target_and_the_pay_target_are_not_the_same_number() {
         "  {:<22} {:>12} {:>12} {:>12} {:>14} {:>14} {:>13}",
         "class", "draw att.", "pay att.", "overpay x", "cap util pm", "panel share pm", "panel share pm"
     );
-    println!("  {:<22} {:>12} {:>12} {:>12} {:>14} {:>14} {:>13}", "", "(lottery)", "(snapshot)", "", "(ceiling 800)", "(paid, stale)", "(if honest)");
+    println!(
+        "  {:<22} {:>12} {:>12} {:>12} {:>14} {:>14} {:>13}",
+        "", "(lottery)", "(snapshot)", "", "(ceiling 800)", "(paid, stale)", "(if honest)"
+    );
     for (name, profile, job, declared) in
         [("Qwen2.5 dense @8k", &dense_8k, (ep, ed), 105_518_224u64), ("Qwen2.5 dense @2M", &dense, (dp, dd), 27_002_967_184)]
     {

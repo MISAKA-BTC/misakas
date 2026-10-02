@@ -145,7 +145,10 @@ pub fn palw_capacity_credited_at_v1(params: &PalwStateParamsV2, accepted_daa: u6
 /// **The ramp step that prices `claim`'s seats** (v3 AS-1′, stage 2): its step where the claim is
 /// credited (the duty and the lock divided by ρ, AS-1/AS-2), `None` otherwise — an uncredited claim, a C7
 /// claim and a free prompt are priced exactly as today whatever the step.
-pub fn palw_capacity_seat_step_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<crate::palw_aggregate_liability_v1::PalwCapacityStepV1> {
+pub fn palw_capacity_seat_step_v1(
+    params: &PalwStateParamsV2,
+    claim: &PalwClaimStateV2,
+) -> Option<crate::palw_aggregate_liability_v1::PalwCapacityStepV1> {
     if palw_capacity_claim_credited_v1(params, claim) { params.capacity_step_at(claim.accepted_daa) } else { None }
 }
 
@@ -170,7 +173,11 @@ pub fn palw_capacity_audit_gate_v1(
 
 /// **Whether a credited claim counts against the backlog** (§5.9 (f)): licensed (any licence), not
 /// terminal, not yet audited. (`DefaultDisputed` — an open accusation — is out: its session decides.)
-pub fn palw_capacity_awaits_audit_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, status: Option<&PalwAuditStatusV1>) -> bool {
+pub fn palw_capacity_awaits_audit_v1(
+    params: &PalwStateParamsV2,
+    claim: &PalwClaimStateV2,
+    status: Option<&PalwAuditStatusV1>,
+) -> bool {
     matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
         && matches!(palw_capacity_audit_gate_v1(params, claim, status), Some(None))
 }
@@ -228,7 +235,8 @@ pub fn palw_audit_pool_of_claim_v1(
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
 ) -> Vec<PalwBondKeyV2> {
-    let seats: Vec<PalwBondKeyV2> = state.panel(claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+    let seats: Vec<PalwBondKeyV2> =
+        state.panel(claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
     palw_audit_pool_v1(
         params.capacity_audit_operators().iter(),
         claim_id,

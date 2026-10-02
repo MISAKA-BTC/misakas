@@ -74,7 +74,9 @@ impl PalwPanelHoldReasonV1 {
             Self::ReadinessProofExpired => "the last possession proof is older than the readiness age",
             Self::NotSelected => "this seat is ready but the claim's panel did not draw it",
             Self::SegmentCheckpointMissing => "the assigned segment's SC01 checkpoint is not open, so a partial seat cannot resume",
-            Self::BondImmature => "the bond registered less than the seat-maturity window ago (ADR-0065 D1); it counts from its registration DAA plus the window",
+            Self::BondImmature => {
+                "the bond registered less than the seat-maturity window ago (ADR-0065 D1); it counts from its registration DAA plus the window"
+            }
         }
     }
 
@@ -265,11 +267,7 @@ pub fn palw_bond_seat_id_v1(bond: PalwBondKeyV2) -> String {
 /// Known class aliases an operator would type (`QWEN36`, `BASE0`). Empty when the id is not one
 /// of the shipped named classes.
 pub fn palw_class_model_name_v1(class_id: Hash64) -> String {
-    if class_id == crate::palw_qwen36_profile::qwen36_class_id_v3() {
-        "QWEN36".to_string()
-    } else {
-        String::new()
-    }
+    if class_id == crate::palw_qwen36_profile::qwen36_class_id_v3() { "QWEN36".to_string() } else { String::new() }
 }
 
 /// Resolve `QWEN36` / 128-hex into a class id. Caller still has to check the chain holds it.
@@ -411,9 +409,7 @@ pub fn palw_panel_network_view_v1(
             };
             let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
             let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
-            let eligible = ready
-                && matches!(bond.status, PalwBondStatusV2::Active)
-                && palw_bond_may_take_work_v2(bond, floor);
+            let eligible = ready && matches!(bond.status, PalwBondStatusV2::Active) && palw_bond_may_take_work_v2(bond, floor);
             seats.push(PalwPanelSeatViewV1 {
                 seat_id: *bond_key,
                 class_id: class.class_id,
@@ -437,9 +433,7 @@ pub fn palw_panel_network_view_v1(
         }
         let class_seats: Vec<&PalwPanelSeatViewV1> = seats.iter().filter(|s| s.class_id == class.class_id).collect();
         let bonded = class_seats.len() as u32;
-        let missing = palw_panel_missing_reason_counts_v1(
-            &class_seats.iter().copied().cloned().collect::<Vec<_>>(),
-        );
+        let missing = palw_panel_missing_reason_counts_v1(&class_seats.iter().copied().cloned().collect::<Vec<_>>());
         let row = class.row.as_ref();
         classes.push(PalwClassPanelViewV1 {
             class_id: class.class_id,
@@ -524,11 +518,7 @@ pub fn palw_panel_notify_snapshot_v1(view: &PalwPanelNetworkViewV1) -> PalwPanel
             .iter()
             .map(|a| (a.claim_id, (a.class_id, a.coverage_mask, a.valid_receipt_seats, a.selected_panel_seats)))
             .collect(),
-        eligibility: view
-            .seats
-            .iter()
-            .map(|s| ((s.seat_id, s.class_id), (s.eligible, s.ready, s.hold)))
-            .collect(),
+        eligibility: view.seats.iter().map(|s| ((s.seat_id, s.class_id), (s.eligible, s.ready, s.hold))).collect(),
     }
 }
 
@@ -667,11 +657,14 @@ mod tests {
             seat(false, Some(PalwPanelHoldReasonV1::ReadinessProofExpired)),
         ];
         let counts = palw_panel_missing_reason_counts_v1(&seats);
-        assert_eq!(counts, vec![
-            (PalwPanelHoldReasonV1::NoArtifact, 2),
-            (PalwPanelHoldReasonV1::CollateralInsufficient, 1),
-            (PalwPanelHoldReasonV1::ReadinessProofExpired, 1),
-        ]);
+        assert_eq!(
+            counts,
+            vec![
+                (PalwPanelHoldReasonV1::NoArtifact, 2),
+                (PalwPanelHoldReasonV1::CollateralInsufficient, 1),
+                (PalwPanelHoldReasonV1::ReadinessProofExpired, 1),
+            ]
+        );
     }
 
     #[test]

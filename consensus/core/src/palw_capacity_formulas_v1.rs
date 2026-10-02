@@ -434,7 +434,10 @@ pub fn palw_capacity_tier_at_min_bond_v1(min_collateral_sompi: u64, e_sompi: u12
 /// decision 1 (S1 tier-class; a first default adds no tier, X11) that is `Tier(0)`. Lane D replaces this
 /// pricing with an all-or-nothing credit (v3's audit door, D-23), and the shadow follows it there (D.9).
 pub fn palw_capacity_conviction_floor_v1(min_collateral_sompi: u64, e_sompi: u128) -> PalwCapacityConvictionFloorV1 {
-    PalwCapacityConvictionFloorV1::Tier(crate::palw_aggregate_liability_v1::palw_credit_conviction_floor_v1(min_collateral_sompi, e_sompi))
+    PalwCapacityConvictionFloorV1::Tier(crate::palw_aggregate_liability_v1::palw_credit_conviction_floor_v1(
+        min_collateral_sompi,
+        e_sompi,
+    ))
 }
 
 /// **Does a step's credit lower the escrow slot at all?** Lane escrow's `palw_escrow_credit_applies_v1`

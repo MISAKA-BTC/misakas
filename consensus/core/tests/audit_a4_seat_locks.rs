@@ -36,10 +36,9 @@ fn the_seat_lock_each_t12_class_demands_against_the_collateral_that_is_posted() 
     let base = bundle.base_class_id;
 
     // The floor's basis, from the build's own canonical floor profile.
-    let fp = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .unwrap();
+    let fp =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .unwrap();
     let (p, d) = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let fj = kaspa_consensus_core::palw_base0_profile::rc_job_context(&fp, p, d);
     let fw = kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1(&fp, &fj).unwrap();
@@ -49,11 +48,20 @@ fn the_seat_lock_each_t12_class_demands_against_the_collateral_that_is_posted() 
     let escrow = T12_BLOCK_SUBSIDY_SOMPI / 1_000 * carve;
 
     println!("\n=== Q3: is the ADR-0033 credit lane alive on t12? ===");
-    println!("  params.palw_credit = {:?}  <- decide_credit_v1 / panel_seats_at_anchor_v3 are DEAD here", params.palw_credit.is_some());
+    println!(
+        "  params.palw_credit = {:?}  <- decide_credit_v1 / panel_seats_at_anchor_v3 are DEAD here",
+        params.palw_credit.is_some()
+    );
     assert!(params.palw_credit.is_none(), "t12 carries no PalwCreditParamsV1");
 
-    println!("\n=== posted collateral per genesis bond: {POSTED_COLLATERAL_SOMPI} sompi = {:.2} MSK ===", POSTED_COLLATERAL_SOMPI as f64 / 1e8);
-    println!("\n  {:<22} {:>20} {:>18} {:>18} {:>12} {:>10}", "class", "max_fraud_gain(MSK)", "seat lock (MSK)", "lock/posted", "claims/seat", "verdict");
+    println!(
+        "\n=== posted collateral per genesis bond: {POSTED_COLLATERAL_SOMPI} sompi = {:.2} MSK ===",
+        POSTED_COLLATERAL_SOMPI as f64 / 1e8
+    );
+    println!(
+        "\n  {:<22} {:>20} {:>18} {:>18} {:>12} {:>10}",
+        "class", "max_fraud_gain(MSK)", "seat lock (MSK)", "lock/posted", "claims/seat", "verdict"
+    );
 
     let mut base_declared = 0u64;
     for object in &bundle.genesis_objects {
@@ -135,5 +143,9 @@ fn the_seat_lock_each_t12_class_demands_against_the_collateral_that_is_posted() 
     }
 
     println!("\n  window_court = {} DAA; a lock lives that long (palw_panel_liability_expiry_v1)", bundle.state.window_court());
-    println!("  target_time_per_block = {} ms -> a lock holds for {:.1} hours", params.target_time_per_block_history().after(), bundle.state.window_court() as f64 * params.target_time_per_block_history().after() as f64 / 3_600_000.0);
+    println!(
+        "  target_time_per_block = {} ms -> a lock holds for {:.1} hours",
+        params.target_time_per_block_history().after(),
+        bundle.state.window_court() as f64 * params.target_time_per_block_history().after() as f64 / 3_600_000.0
+    );
 }

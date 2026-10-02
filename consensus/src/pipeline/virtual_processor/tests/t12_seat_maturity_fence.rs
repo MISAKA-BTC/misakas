@@ -531,8 +531,7 @@ async fn t12_the_registry_counts_a_newcomer_below_the_fence_and_waits_its_window
     // ---- the one predicate on the chain's own state -------------------------------------------------
     let (_, state) = armed.chain.tip_state();
     let sp = armed.chain.bundle.state.clone();
-    let classes: Vec<Hash64> =
-        state.classes_iter().map(|(id, _)| *id).filter(|id| *id != armed.chain.bundle.base_class_id).collect();
+    let classes: Vec<Hash64> = state.classes_iter().map(|(id, _)| *id).filter(|id| *id != armed.chain.bundle.base_class_id).collect();
     assert_eq!(classes.len(), 2, "testnet-12's two genesis model classes");
     assert!(armed.chain.bonds.iter().all(|k| state.bond(k).is_some_and(|b| b.registered_daa == 0)), "the cards are genesis bonds");
     let mut seats = armed.chain.bonds.clone();
@@ -562,7 +561,11 @@ async fn t12_the_registry_counts_a_newcomer_below_the_fence_and_waits_its_window
                 let row = rowed.seat_readiness(card, class).unwrap();
                 assert_eq!(palw_seat_not_ready_reason_v1(&rowed, &sp, card, row, daa, &fold), None, "DAA {daa}: a card is ready");
             }
-            assert_eq!(palw_model_registry_ready_seats_v1(&rowed, &sp, class, daa, &released), 9, "DAA {daa}: the release counts nine");
+            assert_eq!(
+                palw_model_registry_ready_seats_v1(&rowed, &sp, class, daa, &released),
+                9,
+                "DAA {daa}: the release counts nine"
+            );
         }
     }
 }

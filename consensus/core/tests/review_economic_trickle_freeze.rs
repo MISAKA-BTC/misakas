@@ -286,7 +286,10 @@ fn review_economic_one_licence_per_two_court_windows_freezes_every_retirement_fo
     let trickle_wait = trickle_open.expect("trickle chain opens within the horizon") - trickle_retired;
     println!("window_court {WINDOW_COURT}, depth {DEPTH}, withdrawal delay {WITHDRAWAL_DELAY} (t12 scaled 1/10)");
     println!("quiet lane: retiree withdraws {quiet_wait} DAA after retiring (escape fires)");
-    println!("one licence every {} DAA: retiree withdraws {trickle_wait} DAA after retiring, after {licences} licences", 2 * WINDOW_COURT - 1);
+    println!(
+        "one licence every {} DAA: retiree withdraws {trickle_wait} DAA after retiring, after {licences} licences",
+        2 * WINDOW_COURT - 1
+    );
     assert!(quiet_wait <= (2 * WINDOW_COURT).max(WITHDRAWAL_DELAY) + 5, "quiet wait {quiet_wait}");
     assert!(licences >= DEPTH - 1, "the trickle needed {licences} licences");
     assert!(trickle_wait >= (DEPTH - 1) * (2 * WINDOW_COURT - 1), "trickle wait {trickle_wait}");

@@ -283,10 +283,7 @@ const PALW_PRODUCER_STARVED_AFTER: std::time::Duration = std::time::Duration::fr
 /// produced — once it has outlived [`PALW_PRODUCER_STARVED_AFTER`] since the producer last made progress.
 fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Duration) {
     if since_progress >= PALW_PRODUCER_STARVED_AFTER {
-        error!(
-            "[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}",
-            since_progress.as_secs() / 60
-        );
+        error!("[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}", since_progress.as_secs() / 60);
     } else if loud {
         warn!("[{PALW_PRODUCER}] holding: {detail}");
     } else {
@@ -708,7 +705,8 @@ impl PalwProducerService {
         // the ERROR line ends in `— production disabled` (the phrase `misaka-cli`'s nodelog parses),
         // and the node, its seat and this producer's receipt lane keep running.
         let class_refusal = if refusal.is_none()
-            && let Some(why) = crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
+            && let Some(why) =
+                crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
         {
             let remedy = "Give it the artifact that class registered (convert it and check it with `palw-class manifest \
                           --check`), name a class one of its artifacts pairs with (`palw-class inspect <artifact>`), or drop \
@@ -1422,7 +1420,11 @@ impl PalwProducerService {
             |id| if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None },
         );
         let reserved = crate::palw_memory_ledger::host_ledger_v1().reserve(
-            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "producer", class_id: facts.class_id, job: job.context_hash() },
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: "producer",
+                class_id: facts.class_id,
+                job: job.context_hash(),
+            },
             need.total_bytes(),
         );
         // The ledger as it stands after this decision, where `getPalwNodeStatus` reads it — on the
@@ -1565,7 +1567,11 @@ impl PalwProducerService {
             let material = self.retain_execution(message, &run.material)?;
             // The last bracket of the attempt (ADR-0151 follow-up): the material is on disk, the
             // execution's buffers are gone, and this is what the process holds after one attempt.
-            crate::palw_backends::log_memory_phase_v1(PALW_PRODUCER, "attempt returned and its material retained", crate::palw_backends::armed_ram_scale_pub_v1());
+            crate::palw_backends::log_memory_phase_v1(
+                PALW_PRODUCER,
+                "attempt returned and its material retained",
+                crate::palw_backends::armed_ram_scale_pub_v1(),
+            );
             // **And the answer envelope beside it** (ADR-0084 Decision 4): the anchor, the prompt
             // the anchor derives, and the answer's ids — what a seat on the interval arm needs when
             // this capture (748 MB on the graph-v5 class) does not fit the transport. Best-effort:
@@ -1858,10 +1864,18 @@ mod da_ladder_tests {
         let flag_day = params.palw_tir_fence2.expect("the DAA-3,600 flag day").daa_score();
         assert_eq!(flag_day, 3_600);
         for daa in [0, 2_000, flag_day - 1] {
-            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_STEP_LEG_MAX_LEAVES, "DAA {daa}: below the second IR fence");
+            assert_eq!(
+                palw_tir_da_answerable_leaves_v1(&params, daa),
+                PALW_STEP_LEG_MAX_LEAVES,
+                "DAA {daa}: below the second IR fence"
+            );
         }
         for daa in [flag_day, flag_day + 1, 5_000, u64::MAX / 2] {
-            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_HELD_STEP_LADDER_V1, "DAA {daa}: the network's held ladder");
+            assert_eq!(
+                palw_tir_da_answerable_leaves_v1(&params, daa),
+                PALW_HELD_STEP_LADDER_V1,
+                "DAA {daa}: the network's held ladder"
+            );
         }
         // The int-8 ruleset (no fence2) answers at 2^22 at every height; so does a ruleset with the fence and no held context.
         let int8 = palw_t12_release_v4_params();
@@ -1870,7 +1884,11 @@ mod da_ladder_tests {
         }
         let mut no_held = params.clone();
         no_held.palw_held_context = None;
-        assert_eq!(palw_tir_da_answerable_leaves_v1(&no_held, 5_000), PALW_STEP_LEG_MAX_LEAVES, "no held context: no ladder in the fold");
+        assert_eq!(
+            palw_tir_da_answerable_leaves_v1(&no_held, 5_000),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "no held context: no ladder in the fold"
+        );
         let class = Hash64::from_bytes([0x70; 64]);
         assert!(palw_tir_da_ladder_refusal_v1(class, 1_260_000, PALW_STEP_LEG_MAX_LEAVES).is_none(), "SmolLM2 at 512");
         assert!(palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_LEAVES).is_none(), "at the ladder");
@@ -1878,7 +1896,10 @@ mod da_ladder_tests {
         assert!(why.contains("will not produce") && why.contains(&class.to_string()), "{why}");
         assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_STEP_LEG_MAX_LEAVES).is_some(), "a 70B-shaped job below the fence");
         assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_HELD_STEP_LADDER_V1).is_none(), "…and answerable from it");
-        assert!(palw_tir_da_ladder_refusal_v1(class, PALW_HELD_STEP_LADDER_V1 + 1, PALW_HELD_STEP_LADDER_V1).is_some(), "past the ladder");
+        assert!(
+            palw_tir_da_ladder_refusal_v1(class, PALW_HELD_STEP_LADDER_V1 + 1, PALW_HELD_STEP_LADDER_V1).is_some(),
+            "past the ladder"
+        );
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
         let at = src

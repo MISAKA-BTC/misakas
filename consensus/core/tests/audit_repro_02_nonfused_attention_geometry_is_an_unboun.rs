@@ -157,14 +157,7 @@ struct Paid {
 /// `palw_claim_economics_snapshot_v1(..)` then `.priced_reward(escrow)` (`palw_state_v2.rs:11866`).
 /// `carrying_bits = 0` because t12 has no bits-priced lane, which prices the network draw at
 /// exactly one (`palw_network_draws_q32_from_bits_v1`).
-fn paid(
-    p: &Params,
-    profile: &PalwShapeProfileV3,
-    job: &PalwJobContextV2,
-    ccu_real: u128,
-    w0: u128,
-    escrow: u64,
-) -> Paid {
+fn paid(p: &Params, profile: &PalwShapeProfileV3, job: &PalwJobContextV2, ccu_real: u128, w0: u128, escrow: u64) -> Paid {
     let fence = p.palw_economic_payout.expect("t12 arms palw_economic_payout");
     let fold = PalwEconomicPayoutFoldV1 {
         rate_sompi_per_giga: fence.rate_sompi_per_giga,
@@ -191,18 +184,11 @@ fn show(tag: &str, x: &Paid) {
     println!("  {tag}");
     println!("    ccu declared        {:>22} MAC-eq / draw", x.ccu_declared);
     println!("    ticket target       {} ({:.9} of u128::MAX)", x.target, x.target as f64 / u128::MAX as f64);
-    println!(
-        "    expected draws      {:.6} (Q32 {})",
-        x.draws_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64,
-        x.draws_q32
-    );
+    println!("    expected draws      {:.6} (Q32 {})", x.draws_q32 as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64, x.draws_q32);
     println!("    attempted_ccu       {:>22} MAC-eq (declared, what is paid on)", x.attempted_ccu);
     println!("    priced_reward       {:>22} sompi = {:.4} MSK", x.reward_sompi, x.reward_sompi as f64 / 1e8);
     println!("    REAL arithmetic     {:>22} MAC-eq / paid claim", x.real_mac_eq_per_claim);
-    println!(
-        "    MSK per G real MAC-eq {:>20.4}",
-        (x.reward_sompi as f64 / 1e8) / (x.real_mac_eq_per_claim as f64 / 1e9)
-    );
+    println!("    MSK per G real MAC-eq {:>20.4}", (x.reward_sompi as f64 / 1e8) / (x.real_mac_eq_per_claim as f64 / 1e9));
 }
 
 // ==================================================================== the exploit
@@ -327,10 +313,7 @@ fn repro02_the_attention_geometry_is_an_unbounded_price_multiplier() {
     println!("    forged  {msk_per_g_cheat:>14.4} MSK per G real MAC-eq");
     println!("    GAIN    x{gain:.4}   (= W0 / ccu_real, the saturation ceiling)");
 
-    assert!(
-        pc.real_mac_eq_per_claim < ph.real_mac_eq_per_claim,
-        "the forged class must buy its escrow with less real arithmetic"
-    );
+    assert!(pc.real_mac_eq_per_claim < ph.real_mac_eq_per_claim, "the forged class must buy its escrow with less real arithmetic");
     assert!(gain > 10_000.0, "the gain must exceed 10,000x, got {gain}");
     assert!(
         (gain - (w0 as f64 / ccu_honest as f64)).abs() / gain < 0.001,

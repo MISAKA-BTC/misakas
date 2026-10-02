@@ -32,8 +32,8 @@ use common::*;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_class_admission_v2::{palw_admission_shape_at_v1, verify_class_admission_v9};
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1, PalwBlockWorkV3, PalwChainStateV2, PalwConsensusObjectV2,
-    palw_bond_burn_obligation_v2, palw_relay_fee_for_mass_v1,
+    PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1, PalwBlockWorkV3, PalwChainStateV2,
+    PalwConsensusObjectV2, palw_bond_burn_obligation_v2, palw_relay_fee_for_mass_v1,
 };
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -116,8 +116,17 @@ fn dos_l5_2_registration_flood() {
 
     // ---- fold them, one per chain block ---------------------------------------------------------
     let g = genesis_state(&p);
-    let mut s: PalwChainStateV2 =
-        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, registrant_collateral(&p))], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+    let mut s: PalwChainStateV2 = fold(
+        &p,
+        &sp,
+        &g,
+        &ctx(1, 1_000, 1, 0),
+        &[bond_obj(REGISTRANT, registrant_collateral(&p))],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    )
+    .unwrap()
+    .0;
     let base_bytes = carriage_bytes(&s);
     let bond_before = s.bond(&bond_key(REGISTRANT)).unwrap().clone();
     let t0 = Instant::now();
@@ -133,7 +142,15 @@ fn dos_l5_2_registration_flood() {
     let mut fold_errors = Vec::new();
     for (i, reg) in regs.iter().enumerate() {
         daa += 1;
-        match fold(&p, &sp, &s, &ctx(0x2000 + i as u64, daa, 2 + i as u64, 0), std::slice::from_ref(reg), PalwBlockWorkV3::None, Hash64::default()) {
+        match fold(
+            &p,
+            &sp,
+            &s,
+            &ctx(0x2000 + i as u64, daa, 2 + i as u64, 0),
+            std::slice::from_ref(reg),
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        ) {
             Ok((next, _, _)) => {
                 s = next;
                 folded += 1;
@@ -146,7 +163,17 @@ fn dos_l5_2_registration_flood() {
     // #12 (b)'s cap: five of them in ONE block is refused whole, the fold's second lock.
     let five_refused = {
         let extra: Vec<PalwConsensusObjectV2> = regs.iter().take(5).cloned().collect();
-        let fresh = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, registrant_collateral(&p))], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        let fresh = fold(
+            &p,
+            &sp,
+            &g,
+            &ctx(1, 1_000, 1, 0),
+            &[bond_obj(REGISTRANT, registrant_collateral(&p))],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        )
+        .unwrap()
+        .0;
         fold(&p, &sp, &fresh, &ctx(0x2FFF, 1_001, 2, 0), &extra, PalwBlockWorkV3::None, Hash64::default()).is_err()
     };
     let peak_bytes = carriage_bytes(&s);
@@ -182,7 +209,11 @@ fn dos_l5_2_registration_flood() {
     });
     let lifecycle_bond = s
         .model_lifecycles_iter()
-        .filter_map(|(id, row)| regs.iter().any(|r| matches!(r, PalwConsensusObjectV2::ClassRegistered { class_id, .. } if class_id == id)).then_some(row.profile.registration_bond_sompi))
+        .filter_map(|(id, row)| {
+            regs.iter()
+                .any(|r| matches!(r, PalwConsensusObjectV2::ClassRegistered { class_id, .. } if class_id == id))
+                .then_some(row.profile.registration_bond_sompi)
+        })
         .max()
         .unwrap_or(0);
 
@@ -192,20 +223,48 @@ fn dos_l5_2_registration_flood() {
     let attacker_sompi = (burned as f64 / folded.max(1) as f64) + fee as f64;
     println!("=== registration flood: {} admitted of {tried} tried ({refused} refused) ===", regs.len());
     println!("admission CPU (verify_class_admission_v9, debug)   = {admit_ms:.3} ms per registration per node");
-    println!("object bytes (borsh, lower bound on mass)          = {avg_mass:.0} B  -> relay fee >= {fee} sompi ({:.6} MSK)", msk(fee as u128));
-    println!("registration exposure (enforced)                   = {} sompi per live class, against COLLATERAL (not the 50% ceiling)", sp.registration_exposure_sompi());
+    println!(
+        "object bytes (borsh, lower bound on mass)          = {avg_mass:.0} B  -> relay fee >= {fee} sompi ({:.6} MSK)",
+        msk(fee as u128)
+    );
+    println!(
+        "registration exposure (enforced)                   = {} sompi per live class, against COLLATERAL (not the 50% ceiling)",
+        sp.registration_exposure_sompi()
+    );
     println!("registry-derived registration bond (NOT enforced)  = {lifecycle_bond} sompi ({:.2} MSK)", msk(lifecycle_bond as u128));
-    println!("classes one {:.0} MSK bond may register            = {}", msk(registrant_collateral(&p) as u128), registrant_collateral(&p) / sp.registration_exposure_sompi().max(1));
-    println!("folded {folded}/{} ({} fold errors{}) in {fold_total:.2} s", regs.len(), fold_errors.len(), fold_errors.first().map(|e| format!(", first: {e}")).unwrap_or_default());
-    println!("rooted bytes: {base_bytes} -> {peak_bytes}  = {per_class:.0} B per class; lifecycle rows {lifecycles_peak}; registrant reserved {reserved}");
+    println!(
+        "classes one {:.0} MSK bond may register            = {}",
+        msk(registrant_collateral(&p) as u128),
+        registrant_collateral(&p) / sp.registration_exposure_sompi().max(1)
+    );
+    println!(
+        "folded {folded}/{} ({} fold errors{}) in {fold_total:.2} s",
+        regs.len(),
+        fold_errors.len(),
+        fold_errors.first().map(|e| format!(", first: {e}")).unwrap_or_default()
+    );
+    println!(
+        "rooted bytes: {base_bytes} -> {peak_bytes}  = {per_class:.0} B per class; lifecycle rows {lifecycles_peak}; registrant reserved {reserved}"
+    );
     println!("state_root(): {:.3} ms -> {:.3} ms", base_root * 1e3, peak_root * 1e3);
     println!("idle boundary folds (ms, debug): {:?}", boundary_ms.iter().map(|x| (x * 100.0).round() / 100.0).collect::<Vec<_>>());
-    println!("after 12 idle epochs/spans: bytes {idle_bytes} ({residue_per_class:.0} B/class residue), classes {classes_left} {statuses:?}, registrant reserved {idle_reserved}");
+    println!(
+        "after 12 idle epochs/spans: bytes {idle_bytes} ({residue_per_class:.0} B/class residue), classes {classes_left} {statuses:?}, registrant reserved {idle_reserved}"
+    );
     println!("--- the ratio ---");
-    println!("burned by the registrant: {burned} sompi over {folded} registrations (+{} to `slashed`, the release spend's burn)", bond_after.slashed - bond_before.slashed);
+    println!(
+        "burned by the registrant: {burned} sompi over {folded} registrations (+{} to `slashed`, the release spend's burn)",
+        bond_after.slashed - bond_before.slashed
+    );
     println!("five registrations in one block refused: {five_refused}");
-    println!("attacker per class, NOT returned: {attacker_sompi:.0} sompi ({:.6} MSK: the 1 MSK burn + the fee; the {} sompi reservation comes back at Dormant)", attacker_sompi / 1e8, sp.registration_exposure_sompi());
-    println!("defender per class: {per_class:.0} rooted B on every node ({residue_per_class:.0} B forever) + {admit_ms:.3} ms admission CPU + a re-hash every block");
+    println!(
+        "attacker per class, NOT returned: {attacker_sompi:.0} sompi ({:.6} MSK: the 1 MSK burn + the fee; the {} sompi reservation comes back at Dormant)",
+        attacker_sompi / 1e8,
+        sp.registration_exposure_sompi()
+    );
+    println!(
+        "defender per class: {per_class:.0} rooted B on every node ({residue_per_class:.0} B forever) + {admit_ms:.3} ms admission CPU + a re-hash every block"
+    );
     println!("RATIO rooted bytes per MSK the attacker pays = {:.0} B/MSK", per_class / (attacker_sompi / 1e8));
 
     assert!(folded > 0, "the flood folds");

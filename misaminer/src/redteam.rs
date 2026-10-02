@@ -25,9 +25,7 @@ use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::network::NetworkId;
 use kaspa_grpc_client::GrpcClient;
 use kaspa_notify::subscription::context::SubscriptionContext;
-use kaspa_rpc_core::{
-    api::rpc::RpcApi, notify::mode::NotificationMode, RpcAddress, RpcRawBlock, SubmitBlockReport,
-};
+use kaspa_rpc_core::{RpcAddress, RpcRawBlock, SubmitBlockReport, api::rpc::RpcApi, notify::mode::NotificationMode};
 use std::str::FromStr;
 
 fn parse_hash64(text: &str) -> kaspa_hashes::Hash64 {
@@ -66,11 +64,7 @@ struct Ctx {
 
 impl Ctx {
     async fn fresh_template(&self) -> RpcRawBlock {
-        self.client
-            .get_block_template(RpcAddress::from(self.pay.clone()), vec![])
-            .await
-            .expect("get_block_template")
-            .block
+        self.client.get_block_template(RpcAddress::from(self.pay.clone()), vec![]).await.expect("get_block_template").block
     }
 
     async fn submit(&self, block: RpcRawBlock) -> Result<SubmitBlockReport, String> {
@@ -92,8 +86,14 @@ fn verdict(name: &str, desc: &str, res: &Result<SubmitBlockReport, String>) -> b
         Err(e) => {
             // A transport/RPC error that carries the validation rejection also counts as blocked;
             // the message names the rule. Anything else is inconclusive.
-            let blocked = e.contains("invalid") || e.contains("reject") || e.contains("PALW") || e.contains("palw")
-                || e.contains("pow") || e.contains("PoW") || e.contains("coinbase") || e.contains("algo");
+            let blocked = e.contains("invalid")
+                || e.contains("reject")
+                || e.contains("PALW")
+                || e.contains("palw")
+                || e.contains("pow")
+                || e.contains("PoW")
+                || e.contains("coinbase")
+                || e.contains("algo");
             let tag = if blocked { "[BLOCKED]" } else { "[inconclusive]" };
             println!("  {tag}  {name:24}  Err: {e}   — {desc}");
             blocked
@@ -152,10 +152,20 @@ async fn main() {
     let t = ctx.fresh_template().await;
     let h = &t.header;
     eprintln!("=== honest algo-{} template (what an outsider gets from get_block_template) ===", h.pow_algo_id);
-    eprintln!("  bits {:#010x}  nonce {}  daa {}  blue {}  state_root[..8] {}", h.bits, h.nonce, h.daa_score, h.blue_score,
-              &h.palw_state_root.to_string()[..16]);
-    eprintln!("  palw_commitment {} bytes   coinbase outs {}   #txs {}", h.palw_commitment.len(),
-              t.transactions.first().map(|c| c.outputs.len()).unwrap_or(0), t.transactions.len());
+    eprintln!(
+        "  bits {:#010x}  nonce {}  daa {}  blue {}  state_root[..8] {}",
+        h.bits,
+        h.nonce,
+        h.daa_score,
+        h.blue_score,
+        &h.palw_state_root.to_string()[..16]
+    );
+    eprintln!(
+        "  palw_commitment {} bytes   coinbase outs {}   #txs {}",
+        h.palw_commitment.len(),
+        t.transactions.first().map(|c| c.outputs.len()).unwrap_or(0),
+        t.transactions.len()
+    );
     eprintln!();
 
     if attack == "dump" {
@@ -209,7 +219,11 @@ async fn main() {
                 Some(n) => {
                     b.header.nonce = n;
                     eprintln!("  (algo_downgrade: solved a real kHeavyHash nonce={n})");
-                    run(verdict("algo_downgrade_khh", "a genuinely hash-PoW-solved block on the inference-only net", &ctx.submit(b).await));
+                    run(verdict(
+                        "algo_downgrade_khh",
+                        "a genuinely hash-PoW-solved block on the inference-only net",
+                        &ctx.submit(b).await,
+                    ));
                 }
                 None => {
                     println!("  [skip]     algo_downgrade_khh        (could not solve kHeavyHash in budget)");
@@ -266,22 +280,20 @@ async fn main() {
     // signature/challenge that binds nothing. It clears the shape gate the outsider forgeries died
     // on, so it must be rejected DEEPER — at the stateless challenge/signature check.
     {
-        use kaspa_consensus_core::palw_attempt_v2::{
-            PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, PALW_ATTEMPT_V2_VERSION,
-        };
+        use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2};
         use kaspa_consensus_core::tx::TransactionOutpoint;
         let h = |b: u8| kaspa_hashes::Hash64::from_bytes([b; 64]);
         let attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain: h(0x11),
-            challenge: h(0x22), // NOT the header-position challenge — a free draw
+            challenge: h(0x22),                    // NOT the header-position challenge — a free draw
             class_id: class_id.unwrap_or(h(0x33)), // D-F3: the drill's IR class
             executor_bond: TransactionOutpoint { transaction_id: h(0x44), index: 0 },
             executor_pubkey: vec![0x55u8; 32], // not any bonded key
             operator_id: h(0x66),
             artifact_root: artifact_root.unwrap_or(h(0x77)), // D-F3: the IR class's own inventory root
             trace_root: h(0x88),
-            output_root: h(0x99),    // a fabricated inference output
+            output_root: h(0x99), // a fabricated inference output
             pwu: 1,
             trace_manifest_root: h(0xAA),
             trace_chunk_count: 1,

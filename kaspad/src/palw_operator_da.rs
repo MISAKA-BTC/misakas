@@ -91,10 +91,10 @@
 //! rule, an id or a fingerprint.
 
 use super::*;
-use kaspa_core::{debug, error};
 use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1};
 use kaspa_consensus_core::palw_operator_da_v1::{PalwOperatorDaCandidateV1, PalwOperatorDaJobV1, PalwOperatorDaStandingV1};
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1;
+use kaspa_core::{debug, error};
 
 /// The court queue's round of this lane's accusation of a claim ([`palw_operator_da_queue_key_v1`]) —
 /// a round no court move, P2-6 accusation (`u32::MAX`), reporter-filer object (`u32::MAX − 3 ..=
@@ -234,13 +234,22 @@ pub(crate) enum PalwOperatorDaSkipV1 {
 pub(crate) enum PalwOperatorDaPlanV1 {
     /// This node's turn to JUDGE the claim: replay it, and accuse only if the replay refutes it.
     /// `rank` of `of` judges.
-    Judge { rank: usize, of: usize },
+    Judge {
+        rank: usize,
+        of: usize,
+    },
     /// This node's turn to accuse BLIND (no operator can judge the claim by replay), within the blind
     /// budget, landing by `due` (the turn's end). `rank` of `of` eligible.
-    File { rank: usize, of: usize, due: u64 },
+    File {
+        rank: usize,
+        of: usize,
+        due: u64,
+    },
     /// Not now: this node's next turn starts at `from_daa` (or DA-8's three open non-seat sessions
     /// are full, and `from_daa` is the next DAA).
-    Wait { from_daa: u64 },
+    Wait {
+        from_daa: u64,
+    },
     Skip(PalwOperatorDaSkipV1),
 }
 
@@ -351,7 +360,8 @@ pub(crate) fn palw_operator_da_refuted_may_file_v1(
         let from = claim.stage_daa.saturating_add((rank as u64).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1));
         return (now_daa >= from).then(|| now_daa.saturating_add(PALW_OPERATOR_DA_TURN_DAA_V1).min(claim.accuse_until_daa));
     }
-    let others: Vec<PalwBondKeyV2> = palw_operator_da_order_v1(claim, operators).into_iter().filter(|bond| !judges.contains(bond)).collect();
+    let others: Vec<PalwBondKeyV2> =
+        palw_operator_da_order_v1(claim, operators).into_iter().filter(|bond| !judges.contains(bond)).collect();
     let k = others.iter().position(|bond| bond == me)? as u64;
     let judged_until = claim.stage_daa.saturating_add((judges.len() as u64).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1));
     if now_daa < judged_until {
@@ -996,9 +1006,14 @@ impl PalwPanelService {
             Ok(backend) => backend,
             Err(why) => return unjudged(book, "its class does not resolve on this host", format!(" ({why})")),
         };
-        let Some((ctx, prompt)) =
-            self.attempt_job_for_claim(session, backend.as_ref(), network_domain, job.accepted_block, job.class_id, &candidate.producer)
-        else {
+        let Some((ctx, prompt)) = self.attempt_job_for_claim(
+            session,
+            backend.as_ref(),
+            network_domain,
+            job.accepted_block,
+            job.class_id,
+            &candidate.producer,
+        ) else {
             return unjudged(book, "its block's header is not held here", String::new());
         };
         let key = (claim, ctx.job_id);
@@ -1026,7 +1041,8 @@ impl PalwPanelService {
             candidate.producer.0,
             candidate.outside_signers.len()
         );
-        book.replays.start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
+        book.replays
+            .start(key, job.class_id, false, current_daa, Some(reserved), backend, move |b| b.execute_for_verdict(&ctx, &prompt));
         book.replaying = Some((claim, key));
         book.idle_at = None;
     }
@@ -1152,7 +1168,10 @@ mod tests {
         assert!(bonds.iter().all(|b| b.0.transaction_id == premine), "all on the premine {premine}");
         assert_eq!(bonds.iter().map(|b| b.0.index).collect::<Vec<_>>(), (0..8).collect::<Vec<u32>>(), "outputs 0..7");
         assert!(registrations.iter().all(|(_, c)| *c == GENESIS_C), "each registered at the genesis collateral: {registrations:?}");
-        assert!(palw_operator_registrations_v1(&Params::from(NetworkId::new(NetworkType::Mainnet))).is_empty(), "no genesis cards on mainnet");
+        assert!(
+            palw_operator_registrations_v1(&Params::from(NetworkId::new(NetworkType::Mainnet))).is_empty(),
+            "no genesis cards on mainnet"
+        );
         let book = PalwOperatorDaBookV1::new(registrations).with_audit(None);
         assert_eq!(book.registered(&bonds[3]), GENESIS_C);
         assert_eq!(book.registered(&outsider(0)), 0);
@@ -1197,7 +1216,8 @@ mod tests {
         let judges = palw_operator_da_judges_v1(&c, &ops);
         assert_eq!(judges, order[..PALW_OPERATOR_DA_JUDGES_V1].to_vec(), "the first three eligible, in rank order");
         // Only the declared: drop the first two ranks' capability.
-        let partly = PalwOperatorDaCandidateV1 { capable: ops.iter().copied().filter(|b| !order[..2].contains(b)).collect(), ..c.clone() };
+        let partly =
+            PalwOperatorDaCandidateV1 { capable: ops.iter().copied().filter(|b| !order[..2].contains(b)).collect(), ..c.clone() };
         assert_eq!(palw_operator_da_judges_v1(&partly, &ops), order[2..5].to_vec(), "capability, then rank");
         // A seat that declared is still a seat, never a judge.
         assert!(judges.iter().all(|j| !c.seats.contains(j) && *j != c.producer));
@@ -1595,7 +1615,8 @@ mod tests {
             };
             let down: BTreeMap<Hash64, PalwBondKeyV2> =
                 claims.iter().filter(|_| down_rank0).map(|(c, _)| (c.claim_id, first_owner(c))).collect();
-            let mut books: Vec<PalwOperatorDaBookV1> = ops.iter().map(|_| PalwOperatorDaBookV1::new(registrations()).with_audit(None)).collect();
+            let mut books: Vec<PalwOperatorDaBookV1> =
+                ops.iter().map(|_| PalwOperatorDaBookV1::new(registrations()).with_audit(None)).collect();
             let mut accused: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = Default::default();
             let mut replays: BTreeMap<Hash64, usize> = Default::default();
             let mut per_node: BTreeMap<PalwBondKeyV2, Vec<u64>> = Default::default();
@@ -1660,7 +1681,13 @@ mod tests {
                         );
                     }
                     Kind::Junk | Kind::Blind => {
-                        assert_eq!(got, 1, "down_rank0={down_rank0}: {k:?} claim {} accused once: {:?}", c.claim_id, accused.get(&c.claim_id))
+                        assert_eq!(
+                            got,
+                            1,
+                            "down_rank0={down_rank0}: {k:?} claim {} accused once: {:?}",
+                            c.claim_id,
+                            accused.get(&c.claim_id)
+                        )
                     }
                 }
                 if down_rank0 && got == 1 {
@@ -1815,7 +1842,9 @@ mod tests {
                 let mut books: Vec<PalwOperatorDaBookV1> = ops
                     .iter()
                     .enumerate()
-                    .map(|(i, _)| PalwOperatorDaBookV1::new(registrations()).with_audit(Some(([0xA0u8 ^ (i as u8).wrapping_mul(37); 32], a))))
+                    .map(|(i, _)| {
+                        PalwOperatorDaBookV1::new(registrations()).with_audit(Some(([0xA0u8 ^ (i as u8).wrapping_mul(37); 32], a)))
+                    })
                     .collect();
                 let mut accused: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = Default::default();
                 let mut detected: std::collections::BTreeSet<Hash64> = Default::default();
@@ -1896,7 +1925,10 @@ mod tests {
                             assert!(mean_replays <= bound + 0.35, "honest replays {mean_replays} vs judges + a × others = {bound}");
                         }
                         _ => {
-                            assert!((det - expect_detect).abs() < 0.07, "{s:?} a={a} judges_down={judges_down}: detected {det} vs {expect_detect}");
+                            assert!(
+                                (det - expect_detect).abs() < 0.07,
+                                "{s:?} a={a} judges_down={judges_down}: detected {det} vs {expect_detect}"
+                            );
                             assert_eq!(acc, det, "every detected lie is accused once it is refuted");
                             let sessions = ids.iter().map(|c| accused.get(c).map(Vec::len).unwrap_or(0)).max().unwrap_or(0);
                             assert!(sessions <= 1, "{s:?} a={a}: one operator session a lie, not one an auditor ({sessions})");
@@ -1925,7 +1957,11 @@ mod tests {
                 }
                 other => assert_eq!(audited, other),
             }
-            assert_eq!(palw_operator_da_plan_with_audit_v1(&c, me, &ops, now, false), base, "an unselected claim: the turn rule alone");
+            assert_eq!(
+                palw_operator_da_plan_with_audit_v1(&c, me, &ops, now, false),
+                base,
+                "an unselected claim: the turn rule alone"
+            );
         }
         // Not replayable here (a free prompt): the audit adds nothing.
         let mut fp = c.clone();

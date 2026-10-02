@@ -340,7 +340,6 @@ fn false_valid(f: &Finalized, accused: PalwBondKeyV2) -> PalwConsensusObjectV2 {
     }
 }
 
-
 /// **Past the fence: a `Valid` signer the licence did not carry is not convicted.** The carried
 /// signer loses exactly its lock; the uncarried one — no lock, not on the liability row — is
 /// refused by name and keeps every sompi it posted.
@@ -356,7 +355,12 @@ fn review_economic_a_valid_signer_the_licence_did_not_carry_is_not_convicted() {
     let lock = f.at_final.slashable_lock(carried, f.claim_id).copied().expect("a carried signer is locked");
     assert!(f.at_final.slashable_lock(uncarried, f.claim_id).is_none(), "the uncarried seat holds no lock");
     assert!(
-        !f.at_final.panel_liability(&f.claim_id).expect("the Final's liability row").valid_signers.iter().any(|(s, _)| *s == uncarried.0),
+        !f.at_final
+            .panel_liability(&f.claim_id)
+            .expect("the Final's liability row")
+            .valid_signers
+            .iter()
+            .any(|(s, _)| *s == uncarried.0),
         "and is not on the liability row"
     );
     let before_c = f.at_final.bond(&carried).unwrap().collateral;

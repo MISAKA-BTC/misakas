@@ -660,7 +660,10 @@ pub async fn submit(
                     .await
                 {
                     Ok(txid) if !json_mode(ctx, json) => {
-                        println!("sponsored {} into class {class_id}'s Activation Pool: carrier {txid}", crate::palw_model::msk(amount))
+                        println!(
+                            "sponsored {} into class {class_id}'s Activation Pool: carrier {txid}",
+                            crate::palw_model::msk(amount)
+                        )
                     }
                     Ok(_) => {}
                     // The registration stands: a sponsor not filed is a warning and a command.

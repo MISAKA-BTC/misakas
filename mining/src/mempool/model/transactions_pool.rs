@@ -485,10 +485,7 @@ impl TransactionsPool {
     /// **The next market carriers the gate sweep puts to the tip's market gate** (the V01 review's
     /// LOW 3) — `PalwMarketCarrierSetV1::next_sweep_window`, with each transaction. Empty where
     /// `Config::palw_h1_carrier_priority` is off: nothing is indexed there.
-    pub(crate) fn next_palw_market_sweep(
-        &mut self,
-        limit: usize,
-    ) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
+    pub(crate) fn next_palw_market_sweep(&mut self, limit: usize) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
         self.palw_market_carriers
             .next_sweep_window(limit)
             .into_iter()

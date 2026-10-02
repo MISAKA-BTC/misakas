@@ -215,7 +215,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_activation_pool" => {
             genesis_only(name, at)?;
             let terms = params.palw_activation_pool.map(|pool| pool.terms).unwrap_or_default();
-            params.palw_activation_pool = Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
+            params.palw_activation_pool =
+                Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
         }
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis-only
         // (a crossing would count one row by two horizons), so a height is refused here by name. At

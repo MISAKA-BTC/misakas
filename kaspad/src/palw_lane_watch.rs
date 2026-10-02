@@ -141,7 +141,9 @@ impl PalwLaneMixV1 {
         (self.window_blocks >= PALW_LANE_WATCH_MIN_BLOCKS_TO_ALARM && self.blocks_since_work >= PALW_LANE_WATCH_MIN_BLOCKS_TO_ALARM)
             .then(|| {
                 let last = match self.last_work_daa {
-                    Some(daa) => format!("the newest work block is at DAA {daa}, {} selected-chain blocks back", self.blocks_since_work),
+                    Some(daa) => {
+                        format!("the newest work block is at DAA {daa}, {} selected-chain blocks back", self.blocks_since_work)
+                    }
                     None => format!("none in the whole window of {} (DAA {}..{})", self.window_blocks, self.from_daa, self.to_daa),
                 };
                 format!(

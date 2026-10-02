@@ -6,14 +6,13 @@
 //! PoCs are unit/property only; no network attack.
 
 use kaspa_consensus_core::config::params::{
-    palw_rc_shipped_params, ForkActivation, PALW_RC_DA_COURT_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
-    MAINNET_PARAMS,
+    ForkActivation, MAINNET_PARAMS, PALW_RC_DA_COURT_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA, palw_rc_shipped_params,
 };
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
-use kaspa_consensus_core::palw_canonical_work_v1::{palw_canonical_draw_work_v1, PalwCanonicalClassDescriptorV1};
+use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5;
 use kaspa_consensus_core::palw_economic_compute_v1::{
-    palw_attempt_economic_compute_v1, palw_attempted_compute_per_claim_v1, PALW_ECONOMIC_COST_TABLE_V1,
+    PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_attempted_compute_per_claim_v1,
 };
 use kaspa_consensus_core::palw_economics_ledger_v1::palw_rate_priced_reward_v1;
 use kaspa_consensus_core::palw_freeprompt_v3::fp_work_id_v1;
@@ -99,10 +98,7 @@ fn reserved_slash_versus_one_claim_payout_on_the_shipped_dense_row() {
     assert_eq!(declared_leaves, 6_630_544, "shipped dense declared leaves at (63,2)");
     assert_eq!(reserved, 33_152_720);
     assert!(payout > 0);
-    assert!(
-        derived_reserved > 0,
-        "past 7,400 the slash unit follows CanonicalWork, not the leaf declaration"
-    );
+    assert!(derived_reserved > 0, "past 7,400 the slash unit follows CanonicalWork, not the leaf declaration");
     // Document the inequality rather than invent a new slash: P3 forbids rolling back a Final,
     // so reserved is the only debit a timely court can take. If payout > reserved the one-job
     // credit error is larger than the slash — that is the 1-of-N re-execution assumption, not
@@ -116,9 +112,7 @@ fn reserved_slash_versus_one_claim_payout_on_the_shipped_dense_row() {
 /// can exceed reserved. Panel seat locks must be sized from this number, not from reserved.
 #[test]
 fn max_fraud_gain_is_payout_plus_weight_on_the_shipped_dense_row() {
-    use kaspa_consensus_core::palw_panel_var_v1::{
-        palw_max_fraud_gain_v1, palw_panel_seat_required_v1, PalwClaimFraudFactsV1,
-    };
+    use kaspa_consensus_core::palw_panel_var_v1::{PalwClaimFraudFactsV1, palw_max_fraud_gain_v1, palw_panel_seat_required_v1};
     let dense = dense_512();
     let PalwConsensusMode::ConsensusV2(bundle) = palw_rc_shipped_params().palw_consensus_mode else {
         panic!("shipped RC is ConsensusV2");
@@ -153,10 +147,7 @@ fn max_fraud_gain_is_payout_plus_weight_on_the_shipped_dense_row() {
     assert_eq!(required, gain / 3 + 1);
     assert!(required * 3 > gain);
     assert!(required > 11_050_907);
-    assert_eq!(
-        palw_rc_shipped_params().palw_objective_offence,
-        Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA))
-    );
+    assert_eq!(palw_rc_shipped_params().palw_objective_offence, Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA)));
 }
 
 /// **The 400k registry floor still does not cover a dense-row claim.** Three floor seats are
@@ -166,7 +157,7 @@ fn max_fraud_gain_is_payout_plus_weight_on_the_shipped_dense_row() {
 #[test]
 fn three_of_five_collusion_value_at_risk_does_not_yet_cover_max_fraud_gain() {
     use kaspa_consensus_core::palw_offence_v1::{
-        palw_colluding_quorum_covers_v1, palw_min_slashable_per_colluding_seat_v1, PALW_PANEL_COLLUDING_QUORUM_V1,
+        PALW_PANEL_COLLUDING_QUORUM_V1, palw_colluding_quorum_covers_v1, palw_min_slashable_per_colluding_seat_v1,
     };
     let PalwConsensusMode::ConsensusV2(bundle) = palw_rc_shipped_params().palw_consensus_mode else {
         panic!("shipped RC is ConsensusV2");
@@ -187,10 +178,7 @@ fn three_of_five_collusion_value_at_risk_does_not_yet_cover_max_fraud_gain() {
     assert!(palw_colluding_quorum_covers_v1(required_from_gain, PALW_PANEL_COLLUDING_QUORUM_V1, DENSE_MAX_GAIN));
     // The 400k floor still cannot cover a dense-row claim. Eligibility is the formula amount,
     // not a raised floor: genesis 10k MSK can lock; a cheap new bond cannot.
-    assert_eq!(
-        palw_rc_shipped_params().palw_objective_offence,
-        Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA))
-    );
+    assert_eq!(palw_rc_shipped_params().palw_objective_offence, Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA)));
 }
 
 /// Extras still default to dormant. The scheduled fence writes the height into extras on the

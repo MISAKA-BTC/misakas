@@ -12469,7 +12469,8 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
             }
             let unfunded = {
                 let mut tx = second.clone();
-                tx.inputs[0].previous_outpoint = TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
+                tx.inputs[0].previous_outpoint =
+                    TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
                 tx.finalize();
                 std::sync::Arc::new(tx)
             };

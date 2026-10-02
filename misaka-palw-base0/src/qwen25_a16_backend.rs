@@ -584,7 +584,11 @@ fn a16_execute_streaming_v1(
     // in `memory_phase`, which is off the execution path.
     let started = std::time::Instant::now();
     let anon_at_start = crate::memory_phase::process_anon_bytes_v1();
-    let bracket = |at: &str, positions: usize, cache: &A16Cache, capture: &crate::legs::Base0CaptureSinkV1, leg: &crate::legs::Base0CheckpointCaptureV1| {
+    let bracket = |at: &str,
+                   positions: usize,
+                   cache: &A16Cache,
+                   capture: &crate::legs::Base0CaptureSinkV1,
+                   leg: &crate::legs::Base0CheckpointCaptureV1| {
         crate::memory_phase::execution_phase_v1(|| {
             let (filled, leaves) = capture.progress();
             let kind = match capture.kind() {
@@ -667,7 +671,9 @@ fn a16_execute_streaming_v1(
         if last {
             last_logits = logits;
         }
-        if position / crate::memory_phase::PALW_MEMORY_BRACKET_POSITIONS_V1 != end / crate::memory_phase::PALW_MEMORY_BRACKET_POSITIONS_V1 {
+        if position / crate::memory_phase::PALW_MEMORY_BRACKET_POSITIONS_V1
+            != end / crate::memory_phase::PALW_MEMORY_BRACKET_POSITIONS_V1
+        {
             bracket("prefill bracket", end, &cache, &capture, &checkpoints);
         }
         position = end;
@@ -2470,18 +2476,14 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             .global_node_slot(table, site.layer, 0)
             .ok_or_else(|| "this layer has no node to sample".to_string())?;
         let prefill = binding.job_context.declared_prefill_tokens;
-        let (call_index, position) = if site.position < prefill {
-            (0u32, site.position)
-        } else {
-            (site.position - prefill + 1, 0u32)
-        };
+        let (call_index, position) = if site.position < prefill { (0u32, site.position) } else { (site.position - prefill + 1, 0u32) };
         let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index, node_slot, position, tile_index: 0 };
         let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
             .ok_or_else(|| "the sampled site is not a main step of this job".to_string())?;
         let seats = seat_count.max(1);
         let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
-        let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
-            .unwrap_or(0);
+        let index =
+            kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf).unwrap_or(0);
         // The segment holding the site, from the capture's own authenticated opening (SEAT-S4): the
         // site's leaf is inside the proven range, so a match roots it to the capture's binding.
         let replay = crate::segment_opening::base0_replay_capture_segment_v2(
@@ -2626,7 +2628,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             // A held class's fold attempt is the honest producer's own material and stays
             // licensable here; its selecting row is the residual SEAT-R (a full-mask `Valid` only
             // from a replay) and F1c's rule 12 close at `palw_offence_attribution`.
-            if claim.attempt_draw.is_some() && !kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile) {
+            if claim.attempt_draw.is_some()
+                && !kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile)
+            {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             // **SEAT-S1: the whole job, here too.** This branch checked the id alone, and a held
@@ -2831,7 +2835,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                         prompt_token_ids,
                         self.checkpoint_interval(),
                         self.step_ladder_cap(),
-                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                        &A16IntervalKernels {
+                            artifact: &self.artifact,
+                            plan: self.plan.as_ref(),
+                            fault: self.drill_fault_v1(),
+                            storage: self.runtime_profile,
+                        },
                         &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                         self.prompt_ids_form,
                     )
@@ -2880,7 +2889,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.checkpoint_interval(),
             self.step_ladder_cap(),
             state.as_ref(),
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &A16IntervalKernels {
+                artifact: &self.artifact,
+                plan: self.plan.as_ref(),
+                fault: self.drill_fault_v1(),
+                storage: self.runtime_profile,
+            },
             self.prompt_ids_form,
         )
         .to_consensus_v1()
@@ -2994,7 +3008,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                &A16IntervalKernels {
+                    artifact: &self.artifact,
+                    plan: self.plan.as_ref(),
+                    fault: self.drill_fault_v1(),
+                    storage: self.runtime_profile,
+                },
                 &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 self.prompt_ids_form,
                 disputed,
@@ -3033,7 +3052,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                &A16IntervalKernels {
+                    artifact: &self.artifact,
+                    plan: self.plan.as_ref(),
+                    fault: self.drill_fault_v1(),
+                    storage: self.runtime_profile,
+                },
                 &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
@@ -3087,7 +3111,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             prompt_token_ids,
             self.checkpoint_interval(),
             cap,
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &A16IntervalKernels {
+                artifact: &self.artifact,
+                plan: self.plan.as_ref(),
+                fault: self.drill_fault_v1(),
+                storage: self.runtime_profile,
+            },
             &|covered| match &retention {
                 crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 crate::produce::Base0RetentionV1::Dense(_) => None,
@@ -3135,7 +3164,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &A16IntervalKernels {
+                artifact: &self.artifact,
+                plan: self.plan.as_ref(),
+                fault: self.drill_fault_v1(),
+                storage: self.runtime_profile,
+            },
             self.prompt_ids_form,
         )
     }
@@ -3180,7 +3214,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &A16IntervalKernels {
+                artifact: &self.artifact,
+                plan: self.plan.as_ref(),
+                fault: self.drill_fault_v1(),
+                storage: self.runtime_profile,
+            },
             self.prompt_ids_form,
         )
     }
@@ -3209,7 +3248,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     prompt_token_ids,
                     self.checkpoint_interval(),
                     self.step_ladder_cap(),
-                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+                    &A16IntervalKernels {
+                        artifact: &self.artifact,
+                        plan: self.plan.as_ref(),
+                        fault: self.drill_fault_v1(),
+                        storage: self.runtime_profile,
+                    },
                     &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                     self.prompt_ids_form,
                 )
@@ -3268,7 +3312,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
+            &A16IntervalKernels {
+                artifact: &self.artifact,
+                plan: self.plan.as_ref(),
+                fault: self.drill_fault_v1(),
+                storage: self.runtime_profile,
+            },
             self.prompt_ids_form,
         )
     }
@@ -3600,11 +3649,14 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 &canonical
             }
         };
-        use kaspa_consensus_core::palw_resource_profile_v1::{PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1, palw_profile_max_tile_len_v1};
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1, palw_profile_max_tile_len_v1,
+        };
         // The job's step space sizes every role's capture — the dense sink's vector, the fold's
         // retained set, a segment's window — and an unpriceable job must not turn into a zero-leaf
         // profile: `None`, by name.
-        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap()).ok()?;
+        let leaf_count =
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap()).ok()?;
         // **What each role's capture retains — the term the kills were made of**, chosen exactly as
         // the lanes choose their sinks: the attempt folds for a held class and keeps dense tiles
         // otherwise (`execute`); the verdict replay folds (`execute_for_verdict`); a segment replay
@@ -3639,7 +3691,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         &self,
         draw: &[u32],
     ) -> Result<
-        (kaspa_consensus_core::Hash64, Vec<kaspa_consensus_core::Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>),
+        (
+            kaspa_consensus_core::Hash64,
+            Vec<kaspa_consensus_core::Hash64>,
+            Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>,
+        ),
         String,
     > {
         // One streamed walk; nothing materialized, nothing retained. See
@@ -3937,7 +3993,11 @@ mod free_prompt_tests {
 
             let ra = oracle.execute_for_verdict(&job, &prompt).expect("the i32 verdict replay");
             let rb = compact.execute_for_verdict(&job, &prompt).expect("the i16 verdict replay");
-            assert_eq!((ra.execution_root, ra.trace_root, ra.work_leaves), (rb.execution_root, rb.trace_root, rb.work_leaves), "{name}: the verdict roots");
+            assert_eq!(
+                (ra.execution_root, ra.trace_root, ra.work_leaves),
+                (rb.execution_root, rb.trace_root, rb.work_leaves),
+                "{name}: the verdict roots"
+            );
             assert_eq!(ra.execution_root, a.execution_root, "{name}: and they are the claim's");
 
             // The court's half: the i32 producer's capture, resumed by both seats. A held class's attempt
@@ -3949,8 +4009,15 @@ mod free_prompt_tests {
             let folds = kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile);
             let mut captures = vec![a.material.clone()];
             if folds {
-                let dense = a16_execute_for_attempt_capped_v1(&artifact, &profile, oracle.plan.as_ref(), &job, &prompt, oracle.step_ladder_cap())
-                    .expect("the dense capture of the same job");
+                let dense = a16_execute_for_attempt_capped_v1(
+                    &artifact,
+                    &profile,
+                    oracle.plan.as_ref(),
+                    &job,
+                    &prompt,
+                    oracle.step_ladder_cap(),
+                )
+                .expect("the dense capture of the same job");
                 assert_eq!(dense.execution_root, a.execution_root, "{name}: the dense capture is the same execution");
                 captures.push(crate::produce::base0_material_encode_v1(&dense).expect("encodes"));
             }
@@ -3981,7 +4048,9 @@ mod free_prompt_tests {
     #[test]
     fn a_held_classs_attempt_folds_and_stays_adjudicable() {
         use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
-        use kaspa_consensus_core::palw_resource_profile_v1::{PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1};
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1,
+        };
         let (artifact, v2) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
@@ -4009,8 +4078,9 @@ mod free_prompt_tests {
         assert_eq!(m.prompt_token_ids, prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(), "the anchor's prompt rides the material");
 
         // The roots are the dense sink's, to the bit.
-        let dense = a16_execute_for_attempt_capped_v1(&artifact, &held, backend.plan.as_ref(), &job, &prompt, backend.step_ladder_cap())
-            .expect("the dense capture of the same job");
+        let dense =
+            a16_execute_for_attempt_capped_v1(&artifact, &held, backend.plan.as_ref(), &job, &prompt, backend.step_ladder_cap())
+                .expect("the dense capture of the same job");
         assert_eq!(folded.execution_root, dense.execution_root, "the fold's execution root is the dense capture's");
         assert_eq!(folded.trace_root, dense.trace_root);
         assert_eq!(folded.output_root, dense.output_root);
@@ -4047,10 +4117,17 @@ mod free_prompt_tests {
         // from the tiles while this instance's replays stay honest.
         let guilty = backend.execute_with_injected_fault(&job, &prompt, 3).expect("the drill's dense tamper commits");
         assert_ne!(guilty.execution_root, folded.execution_root, "the lie moved the commitment");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&guilty.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&guilty.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         assert_eq!(backend.verify_material(&guilty.material, claim), PalwMaterialVerdictV1::Mismatch, "a lie is not the honest claim");
         assert!(backend.refutation_for_index(&guilty.material, 3).is_ok(), "the tampered leaf opens from the retained tiles");
-        assert_eq!(backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root, folded.execution_root, "the replays stay honest");
+        assert_eq!(
+            backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root,
+            folded.execution_root,
+            "the replays stay honest"
+        );
         let profile = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
         assert_eq!(profile.leaves, leaves);
@@ -4060,7 +4137,10 @@ mod free_prompt_tests {
         let dense_backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), v2, (6, 3)).expect("servable");
         let (job2, prompt2) = dense_backend.job_for_anchor(Hash64::from_u64_word(0x0151_DE45)).expect("a job");
         let outcome = dense_backend.execute(&job2, &prompt2).expect("executes");
-        assert!(matches!(crate::produce::base0_material_decode_any_v1(&outcome.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert!(matches!(
+            crate::produce::base0_material_decode_any_v1(&outcome.material),
+            Ok(crate::produce::Base0RetentionV1::Dense(_))
+        ));
         let dense_profile = dense_backend.resource_profile_v1(Some(&job2), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(dense_profile.capture, PalwCaptureRetentionV1::DenseTiles { tile_len: 4 }), "{:?}", dense_profile.capture);
         assert!(dense_profile.capture_retained_bytes >= dense_profile.leaves * (64 + 16 + 56));
@@ -4114,8 +4194,9 @@ mod free_prompt_tests {
         // served come from a dense capture of the same job — what a server holding one publishes. The
         // producer's own (folded) roots are the dense capture's, which is the claim the seat attests.
         let folded = producer.execute(&job, &prompt).expect("the producer executes");
-        let dense = a16_execute_for_attempt_capped_v1(&artifact, &profile, producer.plan.as_ref(), &job, &prompt, producer.step_ladder_cap())
-            .expect("the dense capture of the same job");
+        let dense =
+            a16_execute_for_attempt_capped_v1(&artifact, &profile, producer.plan.as_ref(), &job, &prompt, producer.step_ladder_cap())
+                .expect("the dense capture of the same job");
         assert_eq!(dense.execution_root, folded.execution_root, "one execution, two retentions");
         let capture = crate::produce::base0_material_encode_v1(&dense).expect("encodes");
         let leaf_count = crate::produce::base0_material_decode_v1(&capture).expect("decodes").0.step_leaf_count;
@@ -4129,8 +4210,13 @@ mod free_prompt_tests {
         };
         let mut genesis_replays = Vec::new();
         for segment in 0..k {
-            let (resume, end) = palw_role_rows_v1(&profile, &job, leaf_count, PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment })
-                .expect("the derivation names the segment");
+            let (resume, end) = palw_role_rows_v1(
+                &profile,
+                &job,
+                leaf_count,
+                PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment },
+            )
+            .expect("the derivation names the segment");
             let opening =
                 producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("a dense retention serves its segments");
             let opened = crate::segment_opening::Base0SegmentOpeningV2::decode_v2(&opening).expect("decodes");
@@ -4138,8 +4224,16 @@ mod free_prompt_tests {
             for backend in &backends {
                 let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &opening, claim_of(segment)).expect("replays");
                 assert!(replay.matches, "segment {segment}: the seat's hashes are the capture's");
-                assert_eq!(u64::from(replay.calls_replayed), end, "segment {segment}: a genesis replay runs steps 1..=end_rows ({end})");
-                assert_eq!(resume, if segment == 0 { 0 } else { resume }, "the derivation's resume point is the segment's first position");
+                assert_eq!(
+                    u64::from(replay.calls_replayed),
+                    end,
+                    "segment {segment}: a genesis replay runs steps 1..=end_rows ({end})"
+                );
+                assert_eq!(
+                    resume,
+                    if segment == 0 { 0 } else { resume },
+                    "the derivation's resume point is the segment's first position"
+                );
             }
             genesis_replays
                 .push(backends[0].replay_segment_from_checkpoint_v1(&job, &prompt, &opening, claim_of(segment)).expect("replays"));
@@ -4152,8 +4246,13 @@ mod free_prompt_tests {
 
         // (b) Segment 1, served the checkpoint at its first position: loads [0, a), replays [a, b).
         let segment = 1u16;
-        let (a, b) = palw_role_rows_v1(&profile, &job, leaf_count, PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment })
-            .expect("derives");
+        let (a, b) = palw_role_rows_v1(
+            &profile,
+            &job,
+            leaf_count,
+            PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment },
+        )
+        .expect("derives");
         assert!(a > 0 && a < b, "segment 1 starts inside the prefill: [{a}, {b})");
         // The checkpoint's chunks at `a` rows, from a reference walk — what a server holding the
         // producer's cache re-derives (`base0_checkpoint_chunks_at_v1`).
@@ -4163,8 +4262,9 @@ mod free_prompt_tests {
         for (position, token) in prompt.iter().enumerate().take(a as usize) {
             engine.forward_token_planned(&plan, &mut reference, *token, position).expect("walks");
         }
-        let chunks = crate::legs::base0_checkpoint_chunks_at_v1(&profile, &job, a as u32, |entry| reference.state_chunk_bytes_v1(entry))
-            .expect("the checkpoint at a rows chunks");
+        let chunks =
+            crate::legs::base0_checkpoint_chunks_at_v1(&profile, &job, a as u32, |entry| reference.state_chunk_bytes_v1(entry))
+                .expect("the checkpoint at a rows chunks");
         // The checkpoint the claim COMMITS at `a` rows — its leaf and its opening against the leg, read
         // off the producer's fold (the leg's leaves are what a held retention keeps) — with the state.
         let dense_retention = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes");
@@ -4194,7 +4294,11 @@ mod free_prompt_tests {
         let whole = &genesis_replays[segment as usize];
         for backend in &backends {
             let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &resuming, claim_of(segment)).expect("resumes");
-            assert!(replay.matches, "{}: the resumed segment attests the capture's hashes", backend.runtime_profile_v1().unwrap().name());
+            assert!(
+                replay.matches,
+                "{}: the resumed segment attests the capture's hashes",
+                backend.runtime_profile_v1().unwrap().name()
+            );
             assert_eq!(u64::from(replay.calls_replayed), b - a, "the seat re-executed exactly [a, b)");
             assert_eq!(
                 replay.attested_hashes().collect::<Vec<_>>(),
@@ -4754,7 +4858,12 @@ mod free_prompt_tests {
                 index,
                 &ids,
                 interval,
-                &A16IntervalKernels { artifact: &artifact, plan: None, fault: None, storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1 },
+                &A16IntervalKernels {
+                    artifact: &artifact,
+                    plan: None,
+                    fault: None,
+                    storage: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+                },
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("interval {index} opens from the fold: {e}"));
@@ -7598,8 +7707,10 @@ mod aheld_end_to_end {
         let call = DECODE - 1;
         for layer in [0u16, 2, 3] {
             let honest = drilled(&artifact, &profile, layer, call, None);
-            let responder =
-                honest.backend.attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None).expect("the held site's evidence");
+            let responder = honest
+                .backend
+                .attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None)
+                .expect("the held site's evidence");
             let site = responder.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
             let tiles = u64::from(site.history_positions).div_ceil(u64::from(site.tile_positions));
             assert!(tiles >= 3, "layer {layer}: the history plays rounds");

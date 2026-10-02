@@ -32,9 +32,9 @@
 //! that is a class fact, and the class id is its graph.
 
 use crate::artifact::Base0ArtifactV1;
-use crate::engine::{argmax_lowest, Base0Engine, EngineError, KvCache};
-use crate::legs::{base0_captured_rows_v1, Base0CapturedRowV1, Base0StepCaptureV1, Base0StepTilesV1, LegError};
-use kaspa_consensus_core::palw_step::{step_leaf_count_capped_v1, PalwShapeProfileV3, PalwStepTableV1, PALW_STEP_MAX_LEAVES};
+use crate::engine::{Base0Engine, EngineError, KvCache, argmax_lowest};
+use crate::legs::{Base0CapturedRowV1, Base0StepCaptureV1, Base0StepTilesV1, LegError, base0_captured_rows_v1};
+use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, PalwStepTableV1, step_leaf_count_capped_v1};
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -42,7 +42,7 @@ use kaspa_hashes::Hash64;
 /// Moved to the COURT's module (`kaspa_consensus_core::palw_step_refute`) with the byte string
 /// unchanged, so the committing side and the adjudicating side are one implementation; re-exported
 /// here for every existing caller.
-pub use kaspa_consensus_core::palw_step_refute::{base0_logits_trace_root_v1, PALW_BASE0_DOMAIN_LOGITS_TRACE};
+pub use kaspa_consensus_core::palw_step_refute::{PALW_BASE0_DOMAIN_LOGITS_TRACE, base0_logits_trace_root_v1};
 
 /// Re-exported, not re-typed: the activation leg moved to core (ADR-0152 v3.1 J6) with its domain.
 pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_INT_ACTIVATION_LEG_DOMAIN_V1 as PALW_BASE0_DOMAIN_ACTIVATION_LEG;
@@ -110,11 +110,11 @@ pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
     kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(ctx)
 }
 
+/// Re-exported, not re-typed: the prompt loop moved to core (ADR-0152 v3.1 J-5) with its domain.
+pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_ATTEMPT_PROMPT_DOMAIN_V1 as PALW_BASE0_DOMAIN_JOB_PROMPT;
 /// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
 /// two spellings of one domain key is how the anchor quietly moves for half the network.
 pub use kaspa_consensus_core::palw_attempt_v2::PALW_DOMAIN_JOB_ANCHOR_V1 as PALW_BASE0_DOMAIN_JOB_ANCHOR;
-/// Re-exported, not re-typed: the prompt loop moved to core (ADR-0152 v3.1 J-5) with its domain.
-pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_ATTEMPT_PROMPT_DOMAIN_V1 as PALW_BASE0_DOMAIN_JOB_PROMPT;
 
 /// **What the RC's job is a function of — and what it deliberately is NOT.**
 ///
@@ -662,8 +662,8 @@ pub fn base0_disclose_trace_event_v1(
     tile: u8,
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
     use kaspa_consensus_core::palw_step_refute::{
-        flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1, tiled_trace_event_disclosure_v1, PalwBase0DecodeTokensV1,
-        PalwTraceEventDisclosureV1 as D, PALW_LOGITS_TILE_LANES,
+        PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwTraceEventDisclosureV1 as D, flat_logits_scheme_id_v1,
+        tiled_logits_scheme_id_v1, tiled_trace_event_disclosure_v1,
     };
     let retention = base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
     let binding = retention.binding().clone();
@@ -1214,7 +1214,8 @@ pub fn base0_drill_run_v1(
         };
         run.binding.full_logits_trace_root = trace_root;
         run.trace_root = trace_root;
-        run.trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, run.trace_chunk_count);
+        run.trace_manifest_root =
+            kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, run.trace_chunk_count);
         if matches!(fault, F::TokenNotSelected { .. } | F::TokenOutOfVocab { .. }) {
             run.output_root = output_root_of(&ctx, &run.generated_token_ids);
         }
@@ -1743,7 +1744,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
 mod tests {
     use super::*;
     use crate::rc::PALW_RC_BASE0_SEED;
-    use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY};
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
 
     /// A job small enough to run in a unit test and shaped exactly like the RC's — one prefill
     /// call and two decode calls, so the multi-call enumeration is exercised rather than assumed.
@@ -2042,9 +2043,9 @@ mod tests {
     /// slack enough to stop meaning anything.
     #[test]
     fn the_derived_close_cost_bounds_a_real_one() {
-        use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE};
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, base0_profile_v1};
         use kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1;
-        use kaspa_consensus_core::palw_court_v2::{arithmetic_close_bytes_v2, PalwCourtVerdictProofV2};
+        use kaspa_consensus_core::palw_court_v2::{PalwCourtVerdictProofV2, arithmetic_close_bytes_v2};
         use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1};
 
         let artifact = crate::rc::palw_rc_base0_artifact_v1().expect("the floor's artifact derives");
@@ -2435,7 +2436,7 @@ mod tests {
     #[test]
     fn an_anchored_kv_history_reaches_the_same_verdict_as_the_long_one() {
         use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
@@ -2702,8 +2703,8 @@ mod tests {
 
     #[test]
     fn the_court_convicts_no_leaf_of_an_honest_execution() {
-        use kaspa_consensus_core::palw_step::{canonical_step_coordinates, PalwStepOpKindV1};
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
@@ -2839,7 +2840,7 @@ mod tests {
     #[test]
     fn the_court_refutes_a_committed_decode_token_or_clears_it() {
         use kaspa_consensus_core::palw_step_refute::{
-            check_base0_decode_token_refutation_v1, PalwBase0DecodeTokensV1, PalwStepRefuteError,
+            PalwBase0DecodeTokensV1, PalwStepRefuteError, check_base0_decode_token_refutation_v1,
         };
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
@@ -3093,7 +3094,7 @@ mod tests {
     #[test]
     fn a_dense_material_above_the_default_ladder_roots_under_its_rulesets_cap() {
         use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
-        use kaspa_consensus_core::palw_step_leg::{PalwStepTileLeafV1, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_OBJECT_VERSION_V1};
+        use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
         let mut binding = run.binding.clone();
@@ -3132,7 +3133,7 @@ mod tests {
     #[test]
     fn the_free_prompt_manifest_is_the_traces_leaves_chunked_at_256() {
         use kaspa_consensus_core::palw_freeprompt_v3::{
-            fp_trace_chunk_digest_v3, fp_trace_manifest_root_v3, PALW_FP_TRACE_CHUNK_EVENTS_V3,
+            PALW_FP_TRACE_CHUNK_EVENTS_V3, fp_trace_chunk_digest_v3, fp_trace_manifest_root_v3,
         };
         use kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1;
         let (_artifact, _profile, ctx, _prompt) = small_job();

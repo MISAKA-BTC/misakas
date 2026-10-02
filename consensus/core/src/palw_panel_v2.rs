@@ -4600,8 +4600,7 @@ mod tests {
     fn route_matrix_3_a_bond_that_cannot_post_the_valid_lock_is_not_drawn() {
         use crate::palw_state_v2::{PalwClaimPhaseV2, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras};
         let sp = state_params();
-        let extras =
-            PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..Default::default() };
+        let extras = PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..Default::default() };
         let registry = |cheap: u64| {
             vec![
                 adr0130_bond(1, 7, 0x21, 1_000_000), // executor — excluded from its own panel
@@ -4639,7 +4638,11 @@ mod tests {
                 &state,
                 &sp,
                 &ctx(3, 103, 3),
-                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: BlockHash::from_u64_word(0x77), seats: seats.to_vec() }],
+                &[PalwConsensusObjectV2::PanelBound {
+                    claim: claim_id,
+                    anchor: BlockHash::from_u64_word(0x77),
+                    seats: seats.to_vec(),
+                }],
                 None,
                 false,
                 false,
@@ -4653,8 +4656,9 @@ mod tests {
         let mut blind_drew_the_cheap_bond = false;
         for i in 0..24u64 {
             let anchor = BlockHash::from_u64_word(0x3A00 + i);
-            let blind = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, PalwPanelDrawPolicyV1::default())
-                .unwrap();
+            let blind =
+                derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, PalwPanelDrawPolicyV1::default())
+                    .unwrap();
             if blind.iter().any(|seat| seat.bond == cheap) {
                 blind_drew_the_cheap_bond = true;
                 assert!(!bind(&blind), "anchor {i}: the bind refuses the seat that cannot post its lock");
@@ -5668,12 +5672,9 @@ mod tests {
         let env = attempt(pwu, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
-        let p = PalwPanelParamsV2::new(
-            crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS,
-            crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM,
-            4,
-        )
-        .unwrap();
+        let p =
+            PalwPanelParamsV2::new(crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS, crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM, 4)
+                .unwrap();
         let sp = state_params();
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
         let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).expect("five eligible operators seat five");
@@ -5842,7 +5843,8 @@ mod tests {
         let a = palw_segment_assignment_v2(panel.anchor, claim_id, seats.len() as u16);
 
         // A full mask on a partial seat is not that seat's assignment.
-        let stolen_full = sign(&seats[(a.full_seat as usize + 1) % seats.len()], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k));
+        let stolen_full =
+            sign(&seats[(a.full_seat as usize + 1) % seats.len()], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k));
         assert!(matches!(check(vec![stolen_full]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
 
         // The assigned masks of every seat (full + four disjoint partials) license: quorum of 5 ≥ 3
@@ -5861,7 +5863,11 @@ mod tests {
         assert!(matches!(check(few), Err(PalwPanelV2Error::CoverageShort { have: 1, need: 2, .. })), "{a:?}");
         // A partial that attests a neighbour's segment is refused.
         let neighbour = (a.full_seat as usize + 1) % seats.len();
-        let wrong = sign(&seats[neighbour], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::single((a.mask_of(neighbour as u16).0.trailing_zeros() as u16 + 1) % k));
+        let wrong = sign(
+            &seats[neighbour],
+            PalwReceiptVerdictV2::Valid,
+            PalwSegmentMaskV2::single((a.mask_of(neighbour as u16).0.trailing_zeros() as u16 + 1) % k),
+        );
         assert!(matches!(check(vec![wrong]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
 
         // A widened mask is refused with the signature: the mask is signed.

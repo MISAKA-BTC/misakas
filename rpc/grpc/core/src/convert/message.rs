@@ -209,7 +209,10 @@ from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelReceiptResponse>, protowire::Not
 from!(item: &kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, protowire::NotifyPalwPanelEligibilityChangedRequestMessage, {
     Self { command: item.command.into() }
 });
-from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>, protowire::NotifyPalwPanelEligibilityChangedResponseMessage);
+from!(
+    RpcResult<&kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>,
+    protowire::NotifyPalwPanelEligibilityChangedResponseMessage
+);
 
 // ~~~
 
@@ -2284,7 +2287,10 @@ try_from!(&protowire::NotifyNewBlockTemplateResponseMessage, RpcResult<kaspa_rpc
 try_from!(item: &protowire::NotifyPalwClassReadinessChangedRequestMessage, kaspa_rpc_core::NotifyPalwClassReadinessChangedRequest, {
     Self { command: item.command.into() }
 });
-try_from!(&protowire::NotifyPalwClassReadinessChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>);
+try_from!(
+    &protowire::NotifyPalwClassReadinessChangedResponseMessage,
+    RpcResult<kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>
+);
 try_from!(item: &protowire::NotifyPalwPanelAssignmentRequestMessage, kaspa_rpc_core::NotifyPalwPanelAssignmentRequest, {
     Self { command: item.command.into() }
 });
@@ -2296,7 +2302,10 @@ try_from!(&protowire::NotifyPalwPanelReceiptResponseMessage, RpcResult<kaspa_rpc
 try_from!(item: &protowire::NotifyPalwPanelEligibilityChangedRequestMessage, kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, {
     Self { command: item.command.into() }
 });
-try_from!(&protowire::NotifyPalwPanelEligibilityChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>);
+try_from!(
+    &protowire::NotifyPalwPanelEligibilityChangedResponseMessage,
+    RpcResult<kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>
+);
 
 // ~~~
 

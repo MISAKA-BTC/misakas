@@ -156,7 +156,13 @@ pub fn sealed_line_v1(leaves: u64, kv_bytes: u64, elapsed_ms: u64) -> String {
 }
 
 /// The line at the return: what the execution hands back, with its cache already dropped.
-pub fn returning_line_v1(tiles: usize, retained_tree: Option<usize>, checkpoint_leaves: usize, chunk_sets: usize, elapsed_ms: u64) -> String {
+pub fn returning_line_v1(
+    tiles: usize,
+    retained_tree: Option<usize>,
+    checkpoint_leaves: usize,
+    chunk_sets: usize,
+    elapsed_ms: u64,
+) -> String {
     format!(
         "attempt returning: {tiles} tiles, tree {}, {checkpoint_leaves} checkpoint leaves ({chunk_sets} chunk sets); cache dropped; {}; {:.0} s",
         retained_tree.map(|n| format!("{n} retained")).unwrap_or_else(|| "none".into()),

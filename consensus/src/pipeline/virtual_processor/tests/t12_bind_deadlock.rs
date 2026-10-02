@@ -381,8 +381,7 @@ async fn t12_bind_deadlock_m0_the_ledger_of_one_floor_claim() {
     let object = f.chain.vp().palw_v2_receipt_quorum_assemble_impl(claim_id, &receipts).expect("a signed quorum assembles");
     let carrier = {
         use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
-        let payload =
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
         let (float_outpoint, float_entry) = floats[0].clone();
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
@@ -569,7 +568,10 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
         assert!(panel.seats.iter().all(|seat| seat.bond != f.chain.bonds[7]), "the executor never sits on its own panel");
         assert!(matches!(state.claim(claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa } if bound_daa == daa));
     }
-    assert!(parent.claim(&binder_attempt).is_none() && state.claim(&binder_attempt).is_none(), "the binder's attempt carries no claim");
+    assert!(
+        parent.claim(&binder_attempt).is_none() && state.claim(&binder_attempt).is_none(),
+        "the binder's attempt carries no claim"
+    );
     assert_eq!(f.committed(7), committed_at_ceiling, "card 7's commitment does not move: the binder reserved nothing");
     let withheld = f.chain.vp().palw_v2_escrow_withheld_at(&state, binder);
     let vp = f.chain.vp();
@@ -596,7 +598,10 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
         vp.coinbase_manager.calc_block_subsidy(daa) as f64 / MSK,
         withheld as f64 / MSK
     );
-    assert_eq!(paid, 0, "testnet-12 escrows the whole worker share, so a binder (no fees here) is paid nothing: a duty, not an income");
+    assert_eq!(
+        paid, 0,
+        "testnet-12 escrows the whole worker share, so a binder (no fees here) is paid nothing: a duty, not an income"
+    );
 }
 
 /// **`f2`: the binder beside lane A** (`palw_operator_anchor` over cards 0–5, lane F1 and
@@ -635,7 +640,11 @@ async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_att
     let s0 = f.state().claim(&claims_0[0]).unwrap().bind_base_daa() + anchor_delay;
     assert!(s7 < s0, "card 7's claims fall due first ({s7} < {s0})");
     let committed_0 = f.committed(0);
-    println!("[f2] card 7 (non-operator): {} claims, slot {s7}; card 0 (operator): {} claims, slot {s0}", claims_7.len(), claims_0.len());
+    println!(
+        "[f2] card 7 (non-operator): {} claims, slot {s7}; card 0 (operator): {} claims, slot {s0}",
+        claims_7.len(),
+        claims_0.len()
+    );
 
     // 2. O (card 1, an operator with room) just below s7 — within the merge depth of what follows —
     //    displaced by a heartbeat sibling and held back.
@@ -664,7 +673,10 @@ async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_att
     let point = PalwBlockContextV2 { block: n_hash, daa_score: n_header.daa_score, blue_score: n_header.blue_score, subsidy: 0 };
     assert_eq!(vp.palw_sw8_anchor_delay_for(&point), Some(anchor_delay), "under lane A N anchors: it merges an operator attempt");
     assert_eq!(vp.palw_anchor_reach_of_v1(n_hash, &n_header), Some(o.header.daa_score), "but only up to O's DAA, below s7");
-    println!("[f2] N (card 7, DAA {}) merges O (card 1, DAA {}): reach {}; {status:?}", n_header.daa_score, o.header.daa_score, o.header.daa_score);
+    println!(
+        "[f2] N (card 7, DAA {}) merges O (card 1, DAA {}): reach {}; {status:?}",
+        n_header.daa_score, o.header.daa_score, o.header.daa_score
+    );
     assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "a non-operator's at-ceiling attempt is no binder past lane A");
     assert_eq!(f.chain.sink(), sink, "the chain does not take it");
     assert_eq!(phases(&f.state(), &claims_7).get("Provisional"), Some(&claims_7.len()), "nothing bound, nothing voided");
@@ -681,7 +693,11 @@ async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_att
     let merges_o = merged.mergeset_blues.contains(&o.header.hash) || merged.mergeset_reds.contains(&o.header.hash);
     let state = f.state();
     let bound = phases(&state, &claims_7);
-    println!("[f2] B (card 0, DAA {}, merges O: {merges_o}): card 7's claims {bound:?}; card 0's {:?}", b_header.daa_score, phases(&state, &claims_0));
+    println!(
+        "[f2] B (card 0, DAA {}, merges O: {merges_o}): card 7's claims {bound:?}; card 0's {:?}",
+        b_header.daa_score,
+        phases(&state, &claims_0)
+    );
     assert_eq!(bound.get("PanelBound"), Some(&claims_7.len()), "every claim due at the operator's binder binds in it");
     let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         f.chain.config.params.net.to_string().as_bytes(),
@@ -692,7 +708,9 @@ async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_att
         let panel = state.panel(claim_id).expect("a bound claim has a panel");
         assert_eq!(panel.seats.len(), f.chain.bundle.panel.seat_count() as usize, "a full jury");
         assert_eq!(panel.anchor, palw_panel_draw_seed_v1(&execution, claim_id), "on the binder's own execution (lane F1)");
-        assert!(matches!(state.claim(claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa } if bound_daa == b_header.daa_score));
+        assert!(
+            matches!(state.claim(claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa } if bound_daa == b_header.daa_score)
+        );
     }
     if b_header.daa_score < s0 {
         assert_eq!(phases(&state, &claims_0).get("Provisional"), Some(&claims_0.len()), "card 0's own claims are not due yet");
@@ -708,6 +726,10 @@ async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_att
         .map(|c| state.panel_duty_row_of(c).map_or(0, |row| row.seat_exposure))
         .sum();
     println!("[f2] card 0 committed {:.4} → {:.4} MSK (seat duties {:.4})", msk(committed_0), msk(f.committed(0)), msk(seat_duties));
-    assert_eq!(f.committed(0), committed_0 + seat_duties, "card 0's commitment moves by its seat duties only: the binder reserved nothing");
+    assert_eq!(
+        f.committed(0),
+        committed_0 + seat_duties,
+        "card 0's commitment moves by its seat duties only: the binder reserved nothing"
+    );
     assert!(!f.facts(7).binder_due, "and card 7 is still told no binder is due");
 }

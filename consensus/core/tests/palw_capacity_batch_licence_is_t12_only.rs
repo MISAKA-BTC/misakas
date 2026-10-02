@@ -12,8 +12,8 @@
 //! `PALW_T12_CAPACITY_FENCES_V1`, never of the DAA-750 list (rcore/cap-s1).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS,
+    TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -148,8 +148,14 @@ fn an_armed_build_below_the_fence_handshakes_with_the_shipped_build() {
         assert!(!shipped_gate.contains(&height), "armed at {height}: an INDEPENDENT height, not one the release schedules");
         for daa in [0, 1, height / 2, height - 1] {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
-            assert!(!evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "armed at {height}, DAA {daa}");
-            assert!(!evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(), "armed at {height}, DAA {daa}");
+            assert!(
+                !evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
         }
         let s = fork_id_v1(&shipped, height);
         assert!(
@@ -175,9 +181,12 @@ fn validate_names_the_prerequisites_and_the_mirror() {
     refused(&|p| p.palw_verification_v2 = Some(ForkActivation::new(1_501)), "palw_capacity_batch_licence is armed without");
 
     // The mirror: an armed fence whose bundle copy was never synced, and a bundle copy with no fence.
-    refused(&|p| {
-        p.palw_capacity_batch_licence = Some(ForkActivation::new(1_600));
-    }, "disagrees with the V2 bundle's mirror");
+    refused(
+        &|p| {
+            p.palw_capacity_batch_licence = Some(ForkActivation::new(1_600));
+        },
+        "disagrees with the V2 bundle's mirror",
+    );
     let mut stale = palw_t12_release_v2_params();
     stale.palw_capacity_batch_licence = Some(ForkActivation::new(1_500));
     stale.sync_palw_capacity_verify();

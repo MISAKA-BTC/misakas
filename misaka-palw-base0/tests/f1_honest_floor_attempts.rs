@@ -32,7 +32,8 @@ fn honest_floor_attempts_have_no_identity_or_output_fault() {
         let profile = backend.profile().clone();
         let class_id = profile.shape_profile_id();
         let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: class_id, da_signer_liability: false };
-        let as_model = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: Hash64::from_u64_word(0xB45E), da_signer_liability: false };
+        let as_model =
+            PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: Hash64::from_u64_word(0xB45E), da_signer_liability: false };
         let model_formula = palw_attempt_canonical_v1(&profile, false);
         for n in 0u64..24 {
             let anchor = Hash64::from_u64_word(0x5EED_0000_0000 ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17));

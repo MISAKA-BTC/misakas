@@ -685,11 +685,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // attempts anywhere; with the work target armed they are pinned near `W0 / CCU`, so this is
     // bounded by `W0` per claim, and what it buys is that the reservation and `claim.pwu` are of
     // one order — the registrant's canonical job can no longer sell weight at a 230x discount.
-    let attempts = if budget_fences.audit_2026_09_23_active {
-        crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw)
-    } else {
-        1
-    };
+    let attempts =
+        if budget_fences.audit_2026_09_23_active { crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw) } else { 1 };
     let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
@@ -776,7 +773,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     if let Some(read) =
         crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, &bond_key, bond.collateral, ctx.daa_score)
     {
-        read.admits_v1().map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
+        read.admits_v1()
+            .map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
     }
     if state_params.capacity_audit_active_at(ctx.daa_score) {
         let escrow = crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve);
@@ -1622,8 +1620,9 @@ mod tests {
         let env = attempt(100, 1);
         check_palw_attempt_admission_v2(&state, &dormant, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
             .expect("below the height the weight alone fits the ceiling");
-        let err = check_palw_attempt_admission_v2(&state, &armed, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
-            .expect_err("past it the escrow does not fit beside the weight");
+        let err =
+            check_palw_attempt_admission_v2(&state, &armed, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
+                .expect_err("past it the escrow does not fit beside the weight");
         assert!(
             matches!(err, PalwAdmissionV2Error::ExposureCeilingExceeded { claim, ceiling: 500, .. } if claim == 500 + 62_000),
             "{err:?}"

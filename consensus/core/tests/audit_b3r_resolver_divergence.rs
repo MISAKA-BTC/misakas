@@ -58,9 +58,11 @@ fn audit_b3r_what_the_seat_allocates_and_what_the_claim_is_worth() {
 
         let Some(carriage) = admission.as_ref() else {
             println!("  (genesis floor: no carriage on the object — the catalog holds its counts)");
-            println!("  seat allocation at the NETWORK ladder = {} bytes ({:.2} GiB)",
+            println!(
+                "  seat allocation at the NETWORK ladder = {} bytes ({:.2} GiB)",
                 network_ladder.saturating_mul(LEAF_SLOT_BYTES),
-                network_ladder as f64 * LEAF_SLOT_BYTES as f64 / (1u64 << 30) as f64);
+                network_ladder as f64 * LEAF_SLOT_BYTES as f64 / (1u64 << 30) as f64
+            );
             continue;
         };
         let profile = &carriage.profile;
@@ -74,8 +76,10 @@ fn audit_b3r_what_the_seat_allocates_and_what_the_claim_is_worth() {
         let attempt_leaves = step_leaf_count_capped_v1(profile, &attempt_job, ladder).expect("the attempt job counts");
         println!(
             "  canonical job ({},{}) -> {canonical_leaves} leaves ; attempt job ({},{}) -> {attempt_leaves} leaves",
-            canonical.declared_prefill_tokens, canonical.exact_decode_tokens,
-            attempt_job.declared_prefill_tokens, attempt_job.exact_decode_tokens
+            canonical.declared_prefill_tokens,
+            canonical.exact_decode_tokens,
+            attempt_job.declared_prefill_tokens,
+            attempt_job.exact_decode_tokens
         );
         assert_eq!(canonical_leaves, declared, "the declared pwu is the canonical count");
 

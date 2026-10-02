@@ -764,10 +764,15 @@ pub fn palw_drill_capacity_fences_at_v1(
 ) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1};
     if params.net != palw_drill_network_v1() {
-        return Err(format!("the capacity fences are testnet-12's, and this ruleset is {}: a salted testnet-12 drill only", params.net));
+        return Err(format!(
+            "the capacity fences are testnet-12's, and this ruleset is {}: a salted testnet-12 drill only",
+            params.net
+        ));
     }
     if params.genesis.hash == PALW_T12_GENESIS.hash {
-        return Err("this ruleset runs PUBLIC testnet-12's genesis: the capacity fences are crossed on a salted drill chain only".to_owned());
+        return Err(
+            "this ruleset runs PUBLIC testnet-12's genesis: the capacity fences are crossed on a salted drill chain only".to_owned()
+        );
     }
     if at == 0 || at == u64::MAX {
         return Err(format!("capacity fences at {at}: a drill CROSSES the flag day, so not genesis (0) and not never"));
@@ -786,7 +791,11 @@ pub fn palw_drill_capacity_fences_at_v1(
             return Err(format!("{} is not a fence of this ruleset (Params::palw_fences_v1 does not name it)", fence.name));
         };
         (fence.set)(&mut moved, Some(ForkActivation::new(at)));
-        moves.push(PalwDrillFenceMoveV1 { name: fence.name, was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()), at });
+        moves.push(PalwDrillFenceMoveV1 {
+            name: fence.name,
+            was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()),
+            at,
+        });
     }
     for ((name, was), (_, now)) in before.iter().zip(moved.palw_fences_v1().iter()) {
         if listed(name) {
@@ -796,7 +805,9 @@ pub fn palw_drill_capacity_fences_at_v1(
                 return Err(format!("{name}'s entry did not set it to DAA {at} (it reads {now:?})"));
             }
         } else if was != now && !name.starts_with("palw_capacity_") {
-            return Err(format!("arming the capacity fences moved {name} too ({was:?} -> {now:?}): the drill moves them and nothing else"));
+            return Err(format!(
+                "arming the capacity fences moved {name} too ({was:?} -> {now:?}): the drill moves them and nothing else"
+            ));
         }
     }
     moved.validate_palw_v2().map_err(|e| format!("the drill ruleset with the capacity fences at DAA {at} does not validate: {e}"))?;
@@ -1147,9 +1158,9 @@ mod tests {
     #[test]
     fn the_capacity_fence_list_is_dormant_everywhere_and_apart_from_the_post_launch_list() {
         use crate::config::params::{
-            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA,
-            PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
-            palw_t12_drill_params_v1, palw_t12_release_v2_params, palw_t12_shipped_params,
+            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
+            PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_drill_params_v1,
+            palw_t12_release_v2_params, palw_t12_shipped_params,
         };
         assert!(!PALW_T12_CAPACITY_FENCES_V1.is_empty());
         let drill = palw_t12_drill_params_v1(&salt(0x53));
@@ -1210,13 +1221,23 @@ mod tests {
         let mut taken = drill.clone();
         assert!(palw_drill_capacity_fences_at_v1(&mut taken, 750).unwrap_err().contains("already"), "750 is the release's height");
         let mut early = drill.clone();
-        assert!(palw_drill_capacity_fences_at_v1(&mut early, 700).unwrap_err().contains("does not validate"), "below strict-win and lane A");
+        assert!(
+            palw_drill_capacity_fences_at_v1(&mut early, 700).unwrap_err().contains("does not validate"),
+            "below strict-win and lane A"
+        );
         let mut moved = drill.clone();
         let moves = palw_drill_capacity_fences_at_v1(&mut moved, 1_234).expect("past the release's fences");
-        assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>());
+        assert_eq!(
+            moves.iter().map(|m| m.name).collect::<Vec<_>>(),
+            PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>()
+        );
         let rho10 = |name: &str| crate::config::params::PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == name);
         assert!(moves.iter().all(|m| m.at == 1_234
-            && if rho10(m.name) { m.was == Some(1_700) && !m.to_string().contains("ARMED") } else { m.was.is_none() && m.to_string().contains("ARMED") }));
+            && if rho10(m.name) {
+                m.was == Some(1_700) && !m.to_string().contains("ARMED")
+            } else {
+                m.was.is_none() && m.to_string().contains("ARMED")
+            }));
         assert!(moved.palw_capacity_weight_cap_active_at(1_234) && !moved.palw_capacity_weight_cap_active_at(1_233));
         assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
         for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {

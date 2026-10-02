@@ -90,8 +90,19 @@ fn fold_t12(
     let sp = bundle(p).state;
     let f = flags(p, ctx.daa_score);
     apply_palw_transition_v7(
-        parent, &sp, None, ctx, objects, PalwBlockWorkV3::None, &[], Hash64::default(), f.unavailable_abstains,
-        f.capability_bound, f.uncertified_weightless, f.da_court, &t12_extras(p, ctx.daa_score),
+        parent,
+        &sp,
+        None,
+        ctx,
+        objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        f.unavailable_abstains,
+        f.capability_bound,
+        f.uncertified_weightless,
+        f.da_court,
+        &t12_extras(p, ctx.daa_score),
     )
     .map(|(s, _, _)| s)
 }
@@ -217,8 +228,14 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     println!("=== FREE-PROMPT FLOOD on the REAL testnet-12 fold (compute path; fp_derived_work + canonical_work armed at DAA 0) ===");
     println!("object wire bytes                 = {obj_bytes} (incl. the 2,592 B ML-DSA executor key + a 1-token prompt)");
     println!("consensus rent for the object     = {rent} sompi  (palw_object_rent_ceiling_v1: FreePromptCommitted is unpriced)");
-    println!("reserve per minimal claim         = {first_reserved} sompi ({:.7} MSK), pwu {first_pwu}  [COMPUTE path, not the finding's leaves 4,815-38,540]", msk(first_reserved));
-    println!("bond fp exposure ceiling (50%)    = {ceiling} sompi -> {} concurrent minimal claims on one 1,000-MSK bond", ceiling / first_reserved.max(1));
+    println!(
+        "reserve per minimal claim         = {first_reserved} sompi ({:.7} MSK), pwu {first_pwu}  [COMPUTE path, not the finding's leaves 4,815-38,540]",
+        msk(first_reserved)
+    );
+    println!(
+        "bond fp exposure ceiling (50%)    = {ceiling} sompi -> {} concurrent minimal claims on one 1,000-MSK bond",
+        ceiling / first_reserved.max(1)
+    );
     assert_eq!(rent, 0, "the finding's 'rent is 0' holds on the real t12 object");
 
     // ---- 1. flood: N minimal commitments, measure rooted bytes and per-block cost -------------
@@ -259,7 +276,10 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
         let _ = fold_t12(&p, &s, &ctx(0x2000 + blue, 1_002, blue, 0), &[]).unwrap();
         let fold_ms = t.elapsed().as_secs_f64() * 1e3;
         std::hint::black_box(acc);
-        println!("{n:>7} {bytes:>13} {:>10} {root_ms:>12.3} {clone_ms:>12.3} {fold_ms:>12.3}   (claims {claims}, prompt rows {prompt_rows})", (bytes - base_bytes) / n);
+        println!(
+            "{n:>7} {bytes:>13} {:>10} {root_ms:>12.3} {clone_ms:>12.3} {fold_ms:>12.3}   (claims {claims}, prompt rows {prompt_rows})",
+            (bytes - base_bytes) / n
+        );
         last = (root_ms, clone_ms, fold_ms, bytes - base_bytes, claims);
     }
     let per_claim_bytes = last.3 / n;
@@ -273,15 +293,28 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     let per_block = body / carrier_bytes;
     let life = sp.window_bind() + sp.fp_abandon_hold_daa() + sp.claim_retirement_daa();
     let steady = per_block as u64 * life;
-    println!("\nconsensus per-block bound (mass)  = {body} B body (max_block_mass {} / {}) / ~{carrier_bytes} B/carrier = {per_block} commitments/block",
-        p.max_block_mass, kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR);
-    println!("abandoned-claim rooted lifetime   = window_bind {} + abandon_hold {} + retirement {} = {life} DAA",
-        sp.window_bind(), sp.fp_abandon_hold_daa(), sp.claim_retirement_daa());
+    println!(
+        "\nconsensus per-block bound (mass)  = {body} B body (max_block_mass {} / {}) / ~{carrier_bytes} B/carrier = {per_block} commitments/block",
+        p.max_block_mass,
+        kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR
+    );
+    println!(
+        "abandoned-claim rooted lifetime   = window_bind {} + abandon_hold {} + retirement {} = {life} DAA",
+        sp.window_bind(),
+        sp.fp_abandon_hold_daa(),
+        sp.claim_retirement_daa()
+    );
     println!("steady-state live claims (1 bond) = {per_block} x {life} = {steady}");
-    println!("extrapolated at steady state       : rooted {:.1} MiB, state_root {:.1} ms/block (debug build; per-claim {per_claim_bytes} B, {per_claim_root_ms:.4} ms root)",
-        steady as f64 * per_claim_bytes as f64 / (1024.0 * 1024.0), steady as f64 * per_claim_root_ms);
-    println!("mergeset_size_limit {} x clone     : step 4b clones the whole state once per merged work (checkpoint) — up to {} clones/block",
-        p.mergeset_size_limit(), p.mergeset_size_limit());
+    println!(
+        "extrapolated at steady state       : rooted {:.1} MiB, state_root {:.1} ms/block (debug build; per-claim {per_claim_bytes} B, {per_claim_root_ms:.4} ms root)",
+        steady as f64 * per_claim_bytes as f64 / (1024.0 * 1024.0),
+        steady as f64 * per_claim_root_ms
+    );
+    println!(
+        "mergeset_size_limit {} x clone     : step 4b clones the whole state once per merged work (checkpoint) — up to {} clones/block",
+        p.mergeset_size_limit(),
+        p.mergeset_size_limit()
+    );
 
     // ---- 3. lifecycle of one abandoned commitment: void without slash, permanent residue -------
     let commit = fp_commit(floor, bond, pk.clone(), wl, 900_001);
@@ -292,8 +325,10 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     // Advance strictly past window_bind: the claim voids at BindTimeout (no panel bound, no slash).
     let after_bind = fold_t12(&p, &s0, &ctx(0x5001, 2_000 + sp.window_bind() + 1, 5_001, 0), &[]).expect("bind window sweeps");
     let void_phase = format!("{:?}", after_bind.claim(&id).map(|c| c.phase.clone()));
-    let voided_no_slash =
-        matches!(after_bind.claim(&id).map(|c| &c.phase), Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }));
+    let voided_no_slash = matches!(
+        after_bind.claim(&id).map(|c| &c.phase),
+        Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. })
+    );
     let reserved_on_hold = after_bind.reserved_exposure(&bond);
     let liability_after_void = after_bind.panel_liability(&id).is_some();
     // Advance past the abandon hold: reservation released in full.
@@ -310,7 +345,9 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     .expect("retirement sweeps");
     let claim_gone = after_retire.claim(&id).is_none();
     let liability_after_retire = after_retire.panel_liability(&id).is_some();
-    let prompt_row_after_retire = after_retire.fp_claimed_prompt_ids_of(&floor, 2_000 + sp.window_bind() + sp.fp_abandon_hold_daa() + sp.claim_retirement_daa() + 3).len();
+    let prompt_row_after_retire = after_retire
+        .fp_claimed_prompt_ids_of(&floor, 2_000 + sp.window_bind() + sp.fp_abandon_hold_daa() + sp.claim_retirement_daa() + 3)
+        .len();
     let collateral_after = after_retire.bond(&bond).unwrap().collateral;
 
     println!("\n=== lifecycle of ONE abandoned commitment (no panel, no material served) ===");
@@ -318,7 +355,9 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     println!("void reason is BindTimeout (no slash) = {voided_no_slash}; reserved while on abandon hold = {reserved_on_hold}");
     println!("panel_liability row after void    = {liability_after_void} (objective_offence armed on t12)");
     println!("reserved after abandon hold        = {reserved_after_hold} (released in full)");
-    println!("after retirement: claim record gone = {claim_gone}; panel_liability row still rooted = {liability_after_retire}; paid-prompt rows still rooted = {prompt_row_after_retire}");
+    println!(
+        "after retirement: claim record gone = {claim_gone}; panel_liability row still rooted = {liability_after_retire}; paid-prompt rows still rooted = {prompt_row_after_retire}"
+    );
     println!("attacker collateral {collateral_before} -> {collateral_after}  (slashed {})", collateral_before - collateral_after);
 
     assert!(voided_no_slash, "an abandoned FP commitment voids at BindTimeout, not by slash");
@@ -330,12 +369,17 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     // the audit fence (and a liability that is written is pruned past its evidence horizon).
     assert!(!liability_after_void, "#12 (a): an abandoned FP commitment writes no panel_liability row at its BindTimeout");
     assert!(!liability_after_retire, "#12 (a): and none outlives the claim");
-    assert!(prompt_row_after_retire >= 1, "and a PERMANENT paid-prompt row (compute-path only; retained ~100 epochs, outlives the claim)");
+    assert!(
+        prompt_row_after_retire >= 1,
+        "and a PERMANENT paid-prompt row (compute-path only; retained ~100 epochs, outlives the claim)"
+    );
 
     // ---- 4. the amplification ------------------------------------------------------------------
     println!("\n=== amplification (defender cost / attacker cost) ===");
-    println!("attacker per claim  : carrier fee (NODE POLICY; 0 on a self-mined block) + reserve {first_reserved} sompi locked ~{} DAA and RETURNED + 0 slashed",
-        sp.window_bind() + sp.fp_abandon_hold_daa());
+    println!(
+        "attacker per claim  : carrier fee (NODE POLICY; 0 on a self-mined block) + reserve {first_reserved} sompi locked ~{} DAA and RETURNED + 0 slashed",
+        sp.window_bind() + sp.fp_abandon_hold_daa()
+    );
     println!("defender per claim  : {per_claim_bytes} rooted B on every node re-hashed into state_root each block for ~{life} DAA,");
     println!("                      + a ~100-epoch paid-prompt row that OUTLIVES the claim (no liability row since #12 (a)),");
     println!("                      + an O(claims) fp_accounted_prefix_tokens_v2 scan on every new commitment,");

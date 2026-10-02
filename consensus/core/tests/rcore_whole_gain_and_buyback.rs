@@ -81,7 +81,11 @@ fn h1_the_lock_prices_the_residual_and_the_vesting_row_holds_e() {
         let lock_3 = palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 3);
         assert_eq!(prices.lock_2, palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 2));
         for (k, lock) in [(3u8, lock_3), (2, prices.lock_2)] {
-            assert_eq!(lock, palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, k), "{name}: lock_{k} at the cap");
+            assert_eq!(
+                lock,
+                palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, k),
+                "{name}: lock_{k} at the cap"
+            );
         }
         let at_cap = prices.g_res + u128::from(palw_model_buyback_slice_v1(claim.escrowed_reward));
         assert!(3 * lock_3 > at_cap + at_cap / 10 - 3, "{name}: three lock_3 out-value the residual with the margin");

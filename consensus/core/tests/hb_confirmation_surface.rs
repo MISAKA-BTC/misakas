@@ -200,16 +200,26 @@ fn heartbeat_only_history_settles_nothing_but_matures_everything() {
         long_maturity_daa: t12.coinbase_settlement_long_maturity_daa(),
         confirmed_anchor_daa: None, // no DNS validator ever confirmed an anchor
     };
-    let coinbase_spendable =
-        coinbase_spend_settled(PAYMENT_DAA, sink_daa, t12.coinbase_maturity(), (settlement.long_maturity_daa > 0).then_some(&settlement));
+    let coinbase_spendable = coinbase_spend_settled(
+        PAYMENT_DAA,
+        sink_daa,
+        t12.coinbase_maturity(),
+        (settlement.long_maturity_daa > 0).then_some(&settlement),
+    );
     // wallet/core/src/utxo/settings.rs: user_transaction_maturity_period_daa = 100,
     // coinbase_transaction_maturity_period_daa = 1_000, stasis = 500 (every shipped network).
     const WALLET_USER_MATURITY_DAA: u64 = 100;
     let wallet_user_confirmed = PAYMENT_DAA + WALLET_USER_MATURITY_DAA <= sink_daa;
 
     println!("---- heartbeat-only history: {BEATS} beats, payment accepted at DAA {PAYMENT_DAA} ----");
-    println!("  hashes burned by the attacker            = {BEATS} x 2^{PALW_HEARTBEAT_WORK_LOG2} = {}", BEATS * (1u64 << PALW_HEARTBEAT_WORK_LOG2));
-    println!("  wall clock at the cursor's interval      = {BEATS} x {HEARTBEAT_RECOVERY_INTERVAL_MS} ms = {} h", BEATS * HEARTBEAT_RECOVERY_INTERVAL_MS / 3_600_000);
+    println!(
+        "  hashes burned by the attacker            = {BEATS} x 2^{PALW_HEARTBEAT_WORK_LOG2} = {}",
+        BEATS * (1u64 << PALW_HEARTBEAT_WORK_LOG2)
+    );
+    println!(
+        "  wall clock at the cursor's interval      = {BEATS} x {HEARTBEAT_RECOVERY_INTERVAL_MS} ms = {} h",
+        BEATS * HEARTBEAT_RECOVERY_INTERVAL_MS / 3_600_000
+    );
     println!("  bond / collateral required               = 0 (bondless, claimless lane)");
     println!("  getPalwSettlement.depth  (anchors)       = {}", after.depth);
     println!("  getPalwSettlement.settled                = {}", after.settled);
@@ -274,7 +284,11 @@ fn the_beat_count_that_buys_each_economic_threshold() {
     let wallet_coinbase = first_true(&|n| 1_000 + 1_000 <= 1_000 + n);
     let hours = |n: u64| n * HEARTBEAT_RECOVERY_INTERVAL_MS / 3_600_000;
     println!("beats to reach each threshold on t12, bondless, zero PALW anchors:");
-    println!("  node mempool coinbase spendable   : {coinbase} beats ({} h, {} hashes)", hours(coinbase), coinbase << PALW_HEARTBEAT_WORK_LOG2);
+    println!(
+        "  node mempool coinbase spendable   : {coinbase} beats ({} h, {} hashes)",
+        hours(coinbase),
+        coinbase << PALW_HEARTBEAT_WORK_LOG2
+    );
     println!("  wallet user tx Confirmed          : {wallet_user} beats ({} h)", hours(wallet_user));
     println!("  wallet coinbase Confirmed         : {wallet_coinbase} beats ({} h)", hours(wallet_coinbase));
     assert_eq!(coinbase, t12.coinbase_settlement_long_maturity_daa(), "the DNS long fallback is the binding term");

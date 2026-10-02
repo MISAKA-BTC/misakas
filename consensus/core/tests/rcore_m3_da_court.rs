@@ -142,7 +142,10 @@ fn t65_da8_seats_and_non_seats_each_accuse_and_nobody_monopolizes() {
     let mut c = Chain::new(t12());
     c.step(&(1..=5).map(|n| bond_obj(n, 20_000 * MSK)).collect::<Vec<_>>());
     let (id, seats, bound) = bound_floor_claim(&mut c, 0x65);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     // A non-seat's session at L+1 blocks no seat (reverses probe adr0152v2_r1).
     c.step(&[accuse(id, bond_key(1), 3)]);
     c.step(&[accuse(id, seats[0].0, 3)]);
@@ -191,7 +194,10 @@ fn t65_da8_seats_and_non_seats_each_accuse_and_nobody_monopolizes() {
     let mut t = Chain::new(twin(&t12()));
     t.step(&[bond_obj(1, 20_000 * MSK)]);
     let (tid, tseats, tbound) = bound_floor_claim(&mut t, 0x65);
-    t.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: tid, receipts: tseats.iter().map(|(k, _)| valid(tid, *k, tbound)).collect() }]);
+    t.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: tid,
+        receipts: tseats.iter().map(|(k, _)| valid(tid, *k, tbound)).collect(),
+    }]);
     t.step(&[accuse(tid, bond_key(1), 3)]);
     assert!(matches!(t.claim(&tid).phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "fence off: the v1 session takes the phase");
     assert!(t.s.da_claim(&tid).is_none(), "and writes no side map");
@@ -206,7 +212,9 @@ fn t65_da8_seats_and_non_seats_each_accuse_and_nobody_monopolizes() {
 /// (the 8k row) draws nothing: its held bound is in a binding the event object does not carry.
 #[test]
 fn t64_da3_an_event_accusation_draws_inside_the_one_row_run() {
-    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+    use kaspa_consensus_core::palw_base0_profile::{
+        PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context,
+    };
     let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
     let canonical = rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
     assert_eq!(canonical.exact_decode_tokens, PALW_RC_BASE0_CANONICAL.1, "the floor's canonical job decodes four");
@@ -225,7 +233,11 @@ fn t64_da3_an_event_accusation_draws_inside_the_one_row_run() {
         "the named row, then the run's one row"
     );
     c.step(&[accuse(id, seats[1].0, 0)]);
-    assert_eq!(c.s.da_session(&id, &seats[1].0).unwrap().units, vec![PalwDaUnitV1::Event { row: 0, tile: 0 }], "nothing else in the run");
+    assert_eq!(
+        c.s.da_session(&id, &seats[1].0).unwrap().units,
+        vec![PalwDaUnitV1::Event { row: 0, tile: 0 }],
+        "nothing else in the run"
+    );
     assert!(
         matches!(try_step(&c, &[accuse(id, seats[2].0, 256)]), Err(PalwStateV2Error::DaIndexOutOfRange { count: 256, .. })),
         "a row past trace_chunk_count x 256 is no unit"
@@ -264,7 +276,10 @@ fn t67_da5_only_a_seat_session_pauses_the_claim() {
     let paused_at = c.daa;
     assert_eq!(c.s.deadline_of(&id), None, "a seat session pauses the claim");
     assert_eq!(c.s.da_claim(&id).unwrap().paused_since, Some(paused_at));
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = c.claim(&id).phase else { panic!("licensed during the pause") };
     assert_eq!(c.s.deadline_of(&id), None, "a licence during the pause arms nothing");
     let past = licensed_daa + c.sp.window_challenge_at(licensed_daa) + 5;
@@ -290,7 +305,10 @@ fn t69_da6_a_session_costs_r_times_the_stage_reward_base() {
     assert_eq!((live.stage, live.exposure), (PalwDaStageV1::Live, expected), "Live: r x (w + esc + rr)");
     assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), expected, "on the accuser ledger");
     assert_eq!(c.reserved(&bond_key(1)), reserved_before, "never in reserved_exposure (A-6)");
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     c.step(&[accuse(id, bond_key(2), 3)]);
     let licensed = c.s.da_session(&id, &bond_key(2)).unwrap().clone();
     assert_eq!((licensed.stage, licensed.exposure), (PalwDaStageV1::Licensed, expected), "Licensed: the same base (X7)");
@@ -318,7 +336,10 @@ fn m1_a_da_accusation_is_refused_past_the_accusers_free_half() {
     c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
     let bound2m = c.bind(two_m, &seats);
     c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: two_m, receipts: seats.iter().map(|(k, _)| valid(two_m, *k, bound2m)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: two_m,
+        receipts: seats.iter().map(|(k, _)| valid(two_m, *k, bound2m)).collect(),
+    }]);
     let collateral = 65_000 * MSK;
     c.step(&[bond_obj(2, collateral), bond_obj(3, collateral), bond_obj(4, collateral)]);
     for seed in 0..2u64 {
@@ -629,7 +650,11 @@ fn t32_c7_body(landed: bool) {
     };
     let action = (u128::from(full_before) / 4).min(3 * g);
     assert!(c.s.slashable_lock(full[0], id).is_none(), "the full seat's lock is taken");
-    assert_eq!(u128::from(full_before - c.s.bond(&full[0]).unwrap().collateral), full_lock.amount + action, "S4: lock + min(25% C, 3G)");
+    assert_eq!(
+        u128::from(full_before - c.s.bond(&full[0]).unwrap().collateral),
+        full_lock.amount + action,
+        "S4: lock + min(25% C, 3G)"
+    );
     let row = c.s.consumed_offence(&palw_false_valid_offence_id_v2(&full[0].0, &id)).expect("S4 under the (seat, claim) key");
     assert_eq!((row.kind, row.claim_id, row.execution_root), (PalwOffenceKindV1::PanelFalseValidV2, id, Hash64::default()));
     for (k, before) in partials.iter().zip(partial_before) {
@@ -699,21 +724,19 @@ fn t66_body(landed: bool) {
     let debit = u128::from(producer_before - c.s.bond(&producer).unwrap().collateral);
     assert!(c.s.vesting_row(&id).is_none(), "the row is burned: S3's marker");
     assert_eq!(debit, (u128::from(producer_before) / 4).min(3 * g), "S3");
-    let record = c
-        .s
-        .consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
-        .expect("the DaDefault record")
-        .clone();
+    let record =
+        c.s.consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
+            .expect("the DaDefault record")
+            .clone();
     assert_eq!(u128::from(record.amount), debit, "the record's nominal tier is the S3 debit");
     if landed {
         assert!(full_before > c.s.bond(&full[0]).unwrap().collateral, "S4 on the covering signer, its lock still live");
     } else {
         assert_eq!(full_before, c.s.bond(&full[0]).unwrap().collateral, "dormant: no signer is charged");
     }
-    let record = c
-        .s
-        .consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
-        .expect("one DaDefault record");
+    let record =
+        c.s.consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
+            .expect("one DaDefault record");
     assert_eq!(
         (u128::from(record.amount), u128::from(record.collected), record.claim_id, record.accepted_daa),
         (debit, debit, id, closed),
@@ -735,9 +758,14 @@ fn t69_da6_refuted_exposure_is_burned_at_retirement_or_refunded_at_a_conviction(
     let held = 320 * MSK as u128;
     // (a) unconvicted: licensed, finalized, retired.
     let (a, aseats, abound) = bound_floor_claim(&mut c, 0x6A);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: a, receipts: aseats.iter().map(|(k, _)| valid(a, *k, abound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: a,
+        receipts: aseats.iter().map(|(k, _)| valid(a, *k, abound)).collect(),
+    }]);
     c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.da_claims.insert(a, PalwDaClaimV1 { refuted_held: vec![(bond_key(1), held)], last_closed_daa: Some(c.daa), ..Default::default() });
+        carriage
+            .da_claims
+            .insert(a, PalwDaClaimV1 { refuted_held: vec![(bond_key(1), held)], last_closed_daa: Some(c.daa), ..Default::default() });
     });
     assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), held);
     c.finalize(a);
@@ -750,7 +778,9 @@ fn t69_da6_refuted_exposure_is_burned_at_retirement_or_refunded_at_a_conviction(
     // (b) convicted by a DA default: refunded.
     let (b, _, _) = bound_floor_claim(&mut c, 0x6B);
     c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.da_claims.insert(b, PalwDaClaimV1 { refuted_held: vec![(bond_key(2), held)], last_closed_daa: Some(c.daa), ..Default::default() });
+        carriage
+            .da_claims
+            .insert(b, PalwDaClaimV1 { refuted_held: vec![(bond_key(2), held)], last_closed_daa: Some(c.daa), ..Default::default() });
     });
     let before = c.s.bond(&bond_key(2)).unwrap().collateral;
     c.step(&[accuse(b, bond_key(1), 0)]);
@@ -857,7 +887,10 @@ fn t34_body(armed: bool) {
     m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
     let bound = m.bind(id, &seats);
     m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
-    m.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    m.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     let claim = m.claim(&id);
     let commitment = palw_claim_bond_reservation_v1(&m.sp, &claim).unwrap();
     let before = m.s.bond(&bond_key(1)).unwrap().collateral;
@@ -890,7 +923,10 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
     let mut c = Chain::new(t12());
     c.step(&[bond_obj(1, 20_000 * MSK), bond_obj(2, 20_000 * MSK)]);
     let (id, seats, bound) = bound_floor_claim(&mut c, 0x08);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     c.finalize(id);
     let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final") };
     let (producer, _, _) = floor_producer(&c.p);
@@ -907,7 +943,10 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
         let mut t = Chain::new(twin(&t12()));
         t.step(&[bond_obj(1, 20_000 * MSK)]);
         let (tid, tseats, tbound) = bound_floor_claim(&mut t, 0x08);
-        t.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: tid, receipts: tseats.iter().map(|(k, _)| valid(tid, *k, tbound)).collect() }]);
+        t.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+            claim: tid,
+            receipts: tseats.iter().map(|(k, _)| valid(tid, *k, tbound)).collect(),
+        }]);
         t.finalize(tid);
         assert!(matches!(try_step(&t, &[accuse(tid, bond_key(1), 0)]), Err(PalwStateV2Error::WrongPhase { .. })), "fence off");
     }
@@ -930,12 +969,7 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
 // ---------------------------------------------------------------------------------------------
 
 /// The full seat of a coverage licence and the receipt the licence carried for it (public on chain).
-fn full_seat_receipt(
-    c: &Chain,
-    id: Hash64,
-    seats: &[(PalwBondKeyV2, Hash64)],
-    bound: u64,
-) -> (PalwBondKeyV2, PalwSeatReceiptV3) {
+fn full_seat_receipt(c: &Chain, id: Hash64, seats: &[(PalwBondKeyV2, Hash64)], bound: u64) -> (PalwBondKeyV2, PalwSeatReceiptV3) {
     let r = covered(id, c.anchor(&id), seats, &[0, 1, 2, 3, 4], bound)
         .into_iter()
         .find(|r| {
@@ -946,7 +980,12 @@ fn full_seat_receipt(
 }
 
 /// A kind-3 object against `seat` on its own segmented receipt, with `contradiction`.
-fn kind3(id: Hash64, seat: PalwBondKeyV2, receipt: PalwSeatReceiptV3, contradiction: PalwPanelContradictionV1) -> PalwConsensusObjectV2 {
+fn kind3(
+    id: Hash64,
+    seat: PalwBondKeyV2,
+    receipt: PalwSeatReceiptV3,
+    contradiction: PalwPanelContradictionV1,
+) -> PalwConsensusObjectV2 {
     let evidence = borsh::to_vec(&PalwPanelFalseValidEvidenceV2 {
         version: PALW_PANEL_FALSE_VALID_VERSION_V2,
         claim_id: id,
@@ -1173,12 +1212,17 @@ fn m3r_a_court_default_refunds_the_refuted_exposure() {
     c.attribution = true;
     c.step(&[bond_obj(1, 20_000 * MSK), bond_obj(2, 20_000 * MSK)]);
     let (id, seats, bound) = bound_floor_claim(&mut c, 0xC5);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     let held = 320 * MSK as u128;
     let claim = c.claim(&id);
     let at = c.daa;
     c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.da_claims.insert(id, PalwDaClaimV1 { refuted_held: vec![(bond_key(1), held)], last_closed_daa: Some(at), ..Default::default() });
+        carriage
+            .da_claims
+            .insert(id, PalwDaClaimV1 { refuted_held: vec![(bond_key(1), held)], last_closed_daa: Some(at), ..Default::default() });
         let ladder = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
             &id,
             &claim.trace_root,

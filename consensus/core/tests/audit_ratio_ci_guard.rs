@@ -35,16 +35,11 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
-use kaspa_consensus_core::palw_base0_profile::{
-    PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context,
-};
-use kaspa_consensus_core::palw_class_admission_v2::{
-    PalwClassAdmissionError, palw_admission_shape_at_v1, verify_class_admission_v9,
-};
+use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, palw_admission_shape_at_v1, verify_class_admission_v9};
 use kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1;
 use kaspa_consensus_core::palw_economic_compute_v1::{
-    PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1,
-    palw_expected_attempts_q32_v1,
+    PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1, palw_expected_attempts_q32_v1,
 };
 use kaspa_consensus_core::palw_economic_payout_v1::palw_attempted_ccu_v1;
 use kaspa_consensus_core::palw_economics_ledger_v1::palw_rate_priced_reward_v1;
@@ -140,8 +135,7 @@ fn hybrid_profile() -> PalwShapeProfileV3 {
         .expect("Qwen3.6 graph-v7 @512")
 }
 fn dense_profile() -> PalwShapeProfileV3 {
-    qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B })
-        .expect("Qwen2.5 A16 graph-v7 @2M")
+    qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B }).expect("Qwen2.5 A16 graph-v7 @2M")
 }
 
 /// Each registered class with the canonical job its genesis registration carries. The jobs come
@@ -261,8 +255,7 @@ fn price(p: &Params, ccu_declared: u128, ccu_real: u128, basis: (u64, u128)) -> 
 
     let target = palw_work_ticket_target_v1(ccu_declared, w0);
     let draws = palw_expected_attempts_v1(target);
-    let attempted_ccu =
-        palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(target), PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, ccu_declared);
+    let attempted_ccu = palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(target), PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, ccu_declared);
     let reward = palw_rate_priced_reward_v1(escrow, attempted_ccu, rate as u128);
     let fork_weight = palw_pwu_v1(target, ccu_declared.min(u64::MAX as u128) as u64);
 
@@ -270,12 +263,7 @@ fn price(p: &Params, ccu_declared: u128, ccu_real: u128, basis: (u64, u128)) -> 
     // `palw_exposure_pwu_v2`, not `_v3`) whenever `lane.execution_quantum > 0`, which it is on
     // testnet-12 from DAA 0.
     let credit = ccu_declared;
-    let permits = palw_execution_quantum_count_v1(
-        credit,
-        PALW_EXECUTION_QUANTUM_V1 as u128,
-        Hash64::default(),
-        Hash64::default(),
-    );
+    let permits = palw_execution_quantum_count_v1(credit, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
 
     let reserved = palw_exposure_unit_pwu_v1(ccu_declared, basis.0, basis.1) as u128 * SLASH_VALUE_PER_PWU;
 
@@ -415,8 +403,8 @@ fn minimise(p: &Params, base: &Baseline, cand: &Candidate, basis: (u64, u128), r
         let _ = dropped;
         // Load-bearing if dropping it would empty the candidate, or would move the ratio off the
         // maximum this candidate achieved.
-        let load_bearing = trial.edits.is_empty()
-            || evaluate(p, base, &trial, basis, &mut Stats::default()).map(|q| ratio.of(&q)) != Some(target);
+        let load_bearing =
+            trial.edits.is_empty() || evaluate(p, base, &trial, basis, &mut Stats::default()).map(|q| ratio.of(&q)) != Some(target);
         if load_bearing {
             i += 1;
         } else {
@@ -439,16 +427,8 @@ fn minimise(p: &Params, base: &Baseline, cand: &Candidate, basis: (u64, u128), r
 /// gdn_head_v_dim, gdn_heads, hidden_dim` plus the four node tables, `layer_count`/`layer_kind`
 /// (which change how many layers execute, so they are excluded as real work) and
 /// `shape_profile_id`/`validate_shape` (identity and the gate).
-const LEVERS: [&str; 8] = [
-    "attn_heads",
-    "attn_head_dim",
-    "attn_kv_heads",
-    "hidden_dim",
-    "gdn_heads",
-    "gdn_head_k_dim",
-    "gdn_head_v_dim",
-    "gdn_conv_kernel",
-];
+const LEVERS: [&str; 8] =
+    ["attn_heads", "attn_head_dim", "attn_kv_heads", "hidden_dim", "gdn_heads", "gdn_head_k_dim", "gdn_head_v_dim", "gdn_conv_kernel"];
 
 /// The ladder each lever is drawn from. Small values probe the refusals, large ones probe the
 /// ceiling; `u16::MAX` is the widest value a `u16` lever can carry at all.
@@ -608,7 +588,11 @@ fn the_searched_maximum_value_per_real_work_stays_inside_the_legitimate_band() {
     println!("  claim escrow             {} sompi", commas(escrow as u128));
     println!("  rate_sompi_per_giga      {} sompi per 1e9 MAC-eq", commas(rate as u128));
     println!("  W0 (work floor)          {} CCU", commas(w0));
-    println!("  exposure basis           floor declared {} leaves / floor derived {} MAC-eq", commas(basis.0 as u128), commas(basis.1));
+    println!(
+        "  exposure basis           floor declared {} leaves / floor derived {} MAC-eq",
+        commas(basis.0 as u128),
+        commas(basis.1)
+    );
     println!("  execution quantum        {}", commas(PALW_EXECUTION_QUANTUM_V1 as u128));
 
     // ---------------------------------------------------------------------------------------
@@ -786,10 +770,7 @@ fn the_real_work_witness_rejects_an_edit_that_buys_real_work() {
 
     // (0) The witness accepts the identity — otherwise it would reject everything and the guard
     //     would be vacuous in the other direction.
-    assert!(
-        real_work_is_unchanged(&base, &base.clone(), base_leaves, base_leaves),
-        "the witness must accept an unmodified profile"
-    );
+    assert!(real_work_is_unchanged(&base, &base.clone(), base_leaves, base_leaves), "the witness must accept an unmodified profile");
 
     // (1) A GRAPH edit. Widening one attention node's output is more arithmetic for the executor
     //     and more leaves for a seat to replay. The witness must refuse to call this free.

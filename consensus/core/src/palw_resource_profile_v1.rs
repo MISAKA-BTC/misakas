@@ -445,7 +445,12 @@ pub fn palw_role_rows_v1(
 /// seat, the leaves from its resume point (the first leaf of the position after the checkpoint's
 /// rows, or leaf 0 at the prompt) to its segment's last leaf — what `replay_segment_opening_v1`
 /// keeps an `(index, hash)` for.
-pub fn palw_role_leaves_v1(profile: &PalwShapeProfileV3, job: &PalwJobContextV2, leaf_count: u64, role: PalwResourceRoleV1) -> Option<u64> {
+pub fn palw_role_leaves_v1(
+    profile: &PalwShapeProfileV3,
+    job: &PalwJobContextV2,
+    leaf_count: u64,
+    role: PalwResourceRoleV1,
+) -> Option<u64> {
     match role {
         PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => Some(leaf_count),
         PalwResourceRoleV1::PartialSeat { seat_count, segment_index } => {
@@ -561,7 +566,10 @@ pub fn palw_resource_profile_v1(
 mod tests {
     use super::*;
     use crate::Hash64;
-    use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_graph_v5_profile_v1, qwen25_a16_profile_v2, qwen25_geometry_artifact_eps};
+    use crate::palw_qwen25_profile::{
+        PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_graph_v5_profile_v1, qwen25_a16_profile_v2,
+        qwen25_geometry_artifact_eps,
+    };
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2};
 
     const GIB: f64 = (1u64 << 30) as f64;
@@ -576,7 +584,9 @@ mod tests {
             PalwResourceRoleV1::Producer if !palw_attempt_capture_folds_v1(profile) => {
                 PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(profile) }
             }
-            PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL },
+            PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => {
+                PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL }
+            }
             PalwResourceRoleV1::PartialSeat { .. } => PalwCaptureRetentionV1::ReplayHashes,
         }
     }
@@ -666,11 +676,14 @@ mod tests {
         let per_row_i32 = 28u64 * 2 * 256 * 4;
         let rows = 262_143u64;
         let i32_producer =
-            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
-                .expect("derives");
+            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer).expect("derives");
         assert_eq!(i32_producer.attention_layers, 28);
         assert_eq!(i32_producer.kv_dim, 256);
-        assert_eq!((i32_producer.resume_rows, i32_producer.end_rows), (0, rows), "an attempt holds every prefill row and no decode row");
+        assert_eq!(
+            (i32_producer.resume_rows, i32_producer.end_rows),
+            (0, rows),
+            "an attempt holds every prefill row and no decode row"
+        );
         assert_eq!(i32_producer.kv_resident_bytes, rows * per_row_i32, "15,032,328,192 bytes of i32 rows");
         assert!((i32_producer.kv_resident_bytes as f64 / GIB - 14.0).abs() < 0.01);
         assert_eq!(i32_producer.checkpoint_bytes, i32_producer.kv_resident_bytes, "the committed width IS i32");
@@ -680,10 +693,8 @@ mod tests {
         assert_eq!(i32_producer.attention_scratch_bytes, 12 * 2 * 12 * rows * 4, "twelve threads of two history-long rows");
         assert_eq!(i32_producer.trace_scratch_bytes, 64 * 3 * palw_committed_trace_bytes_v1(&profile, rows));
 
-
         let i16_producer =
-            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::Producer)
-                .expect("derives");
+            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::Producer).expect("derives");
         assert_eq!(i16_producer.kv_resident_bytes * 2, i32_producer.kv_resident_bytes, "i16 halves the resident term");
         assert_eq!(i16_producer.checkpoint_bytes, i32_producer.checkpoint_bytes, "and moves no committed byte");
         assert_eq!(i16_producer.attention_scratch_bytes, i32_producer.attention_scratch_bytes);
@@ -702,7 +713,10 @@ mod tests {
         // node's caches and arenas. The vector is the term, to within a rounding of everything else.
         let dmesg_total_vm_bytes = 1_702_360_980u64 * 1024;
         assert!(leaf_vector_bytes < dmesg_total_vm_bytes);
-        assert!((dmesg_total_vm_bytes - leaf_vector_bytes) < 16 * (1u64 << 30), "everything else in the address space was under 16 GiB");
+        assert!(
+            (dmesg_total_vm_bytes - leaf_vector_bytes) < 16 * (1u64 << 30),
+            "everything else in the address space was under 16 GiB"
+        );
         assert!(leaf_vector_bytes as f64 / dmesg_total_vm_bytes as f64 > 0.99);
         let dense = palw_dense_capture_bytes_v1(leaves, palw_profile_max_tile_len_v1(&profile));
         assert_eq!(palw_profile_max_tile_len_v1(&profile), 128);
@@ -710,12 +724,15 @@ mod tests {
         assert_eq!(i16_producer.capture, PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL });
         assert_eq!(i16_producer.capture_retained_bytes, palw_fold_capture_bytes_v1(leaves, HELD_RETAIN_LEVEL));
         assert!((0.7..0.9).contains(&(i16_producer.capture_retained_bytes as f64 / GIB)), "the fold retains under a GiB");
-        assert!(i16_producer.checkpoint_leg_bytes as f64 / GIB < 0.2, "the leg's own retention is small: {}", i16_producer.checkpoint_leg_bytes);
+        assert!(
+            i16_producer.checkpoint_leg_bytes as f64 / GIB < 0.2,
+            "the leg's own retention is small: {}",
+            i16_producer.checkpoint_leg_bytes
+        );
         assert_eq!(i16_producer.leaves, leaves);
 
         // The full seat replays the same job, so it holds the same rows.
-        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat)
-            .expect("derives");
+        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat).expect("derives");
         assert_eq!((full.resume_rows, full.end_rows, full.working_set_bytes()), (0, rows, i16_producer.working_set_bytes()));
 
         for p in [&i32_producer, &i16_producer] {
@@ -734,7 +751,11 @@ mod tests {
             );
         }
         // A 21 GiB share admits the folded i16 attempt; a dense one would never be admitted anywhere.
-        assert!(i16_producer.working_set_bytes() < 14 * (1u64 << 30), "the folded i16 attempt fits a stated share: {}", i16_producer.working_set_bytes());
+        assert!(
+            i16_producer.working_set_bytes() < 14 * (1u64 << 30),
+            "the folded i16 attempt fits a stated share: {}",
+            i16_producer.working_set_bytes()
+        );
         let dense_attempt = palw_resource_profile_v1(
             &profile,
             &job,
@@ -763,8 +784,7 @@ mod tests {
     fn a_partial_seat_of_the_2m_attempt_holds_the_prefix_to_its_segments_end() {
         let (profile, job) = two_m();
         let leaves = leaf_count(&profile, &job);
-        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat)
-            .expect("derives");
+        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat).expect("derives");
         let mut ends = Vec::new();
         for segment in 0..3u16 {
             let role = PalwResourceRoleV1::PartialSeat { seat_count: 4, segment_index: segment };
@@ -826,9 +846,9 @@ mod tests {
         let profile = qwen25_a16_profile_v2(g).expect("v2 projects");
         assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerDecodeCall);
         let job = job(&profile, 14, 3);
-        let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
-        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
-            .expect("derives");
+        let leaves =
+            crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
+        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer).expect("derives");
         assert_eq!(p.end_rows, 16, "14 prefill rows and one per decode call after the first");
         // Checkpoints after calls 1 and 2 (interval 1): 15 and 16 rows of i32.
         assert_eq!(p.retained_checkpoint_bytes, palw_kv_series_bytes_v1(28, 256, 15 + 16, 4));
@@ -849,9 +869,9 @@ mod tests {
     fn the_512_row_is_small_and_that_is_why_nobody_asked() {
         let profile = qwen25_a16_graph_v5_profile_v1().expect("the shipped 512 row");
         let job = job(&profile, 14, 2);
-        let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
-        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
-            .expect("derives");
+        let leaves =
+            crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
+        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer).expect("derives");
         assert_eq!(p.end_rows, 15);
         assert_eq!(p.kv_resident_bytes, 15 * 28 * 2 * 256 * 4);
         assert!(p.kv_resident_bytes < 1 << 20);
@@ -871,8 +891,9 @@ mod tests {
         assert_eq!(palw_recurrence_layers_v1(&profile), 30);
         assert_eq!(palw_attention_layers_v1(&profile), 10);
         let job = job(&profile, 63, 2);
-        let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1)
-            .expect("the job's step space");
+        let leaves =
+            crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1)
+                .expect("the job's step space");
         let folded = palw_resource_profile_v1(
             &profile,
             &job,
@@ -902,10 +923,17 @@ mod tests {
             dense.capture_retained_bytes as f64 / GIB,
             dense.working_set_bytes() as f64 / GIB
         );
-        assert!((0.05..0.08).contains(&(folded.gdn_state_bytes as f64 / GIB)), "30 layers × 32 heads × 128 × 128 × 4 B and the conv windows");
+        assert!(
+            (0.05..0.08).contains(&(folded.gdn_state_bytes as f64 / GIB)),
+            "30 layers × 32 heads × 128 × 128 × 4 B and the conv windows"
+        );
         assert!(folded.kv_resident_bytes < 8 << 20, "10 attention layers at 64 rows are megabytes");
         assert!(folded.working_set_bytes() < 1 << 30, "the folded attempt is under a GiB: {}", folded.working_set_bytes());
-        assert!(dense.capture_retained_bytes > 9 * (1u64 << 30), "the dense capture is what grew 9 GiB and was killed: {}", dense.capture_retained_bytes);
+        assert!(
+            dense.capture_retained_bytes > 9 * (1u64 << 30),
+            "the dense capture is what grew 9 GiB and was killed: {}",
+            dense.capture_retained_bytes
+        );
         assert!(leaves > 15_000_000, "{leaves}");
     }
 
@@ -916,7 +944,11 @@ mod tests {
             assert!(p.name().ends_with("-KV-i32") || p.name().ends_with("-KV-i16"), "{}", p.name());
         }
         assert_eq!(PalwRuntimeProfileV1::Q36KvI32.kv_bytes_per_element(), 4);
-        assert_eq!(PalwRuntimeProfileV1::parse("A16-KV-i8"), None, "refused by name, with the measurement in the module doc as the reason");
+        assert_eq!(
+            PalwRuntimeProfileV1::parse("A16-KV-i8"),
+            None,
+            "refused by name, with the measurement in the module doc as the reason"
+        );
         assert_eq!(PalwRuntimeProfileV1::A16KvI32.kv_bytes_per_element(), PALW_KV_COMMITTED_BYTES_PER_ELEMENT_V1);
         assert_eq!(PalwRuntimeProfileV1::A16KvI16.kv_bytes_per_element() * 2, PALW_KV_COMMITTED_BYTES_PER_ELEMENT_V1);
     }

@@ -20,16 +20,18 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_flag_day_t12`
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_tir_fence_at_v1};
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::params::{
     PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA,
     PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_drill_params_v1, palw_t12_release_v3_params,
     palw_t12_release_v4_params, palw_t12_shipped_params,
 };
-use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_tir_v1::{PALW_T12_TIR_CEILINGS_V1, PALW_TIR_COURT_VERSION_V1, PalwTirFenceV1, palw_tir_prim_set_id_v1};
+use kaspa_consensus_core::palw_tir_v1::{
+    PALW_T12_TIR_CEILINGS_V1, PALW_TIR_COURT_VERSION_V1, PalwTirFenceV1, palw_tir_prim_set_id_v1,
+};
 
 /// The flag day's height.
 const FLAG_DAY: u64 = 2_000;

@@ -1003,8 +1003,10 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwPanelSeats => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let response =
-                        rpc_client.get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() }).await.unwrap();
+                    let response = rpc_client
+                        .get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
                     assert!(!response.available);
                     assert!(response.seats.is_empty());
                 })
@@ -1012,8 +1014,10 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwPanelStatus => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let response =
-                        rpc_client.get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() }).await.unwrap();
+                    let response = rpc_client
+                        .get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
                     assert!(!response.available);
                 })
             }
@@ -1033,10 +1037,15 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwModelPreflight => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    assert!(rpc_client
-                        .get_palw_model_preflight_call(None, GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() })
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_model_preflight_call(
+                                None,
+                                GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() }
+                            )
+                            .await
+                            .is_err()
+                    );
                 })
             }
             KaspadPayloadOps::SubmitPalwModelRegistration => {
@@ -1058,7 +1067,11 @@ async fn sanity_test() {
                     let response = rpc_client
                         .get_palw_model_registration_status_call(
                             None,
-                            GetPalwModelRegistrationStatusRequest { class_id: String::new(), object_id: String::new(), transaction_id: String::new() },
+                            GetPalwModelRegistrationStatusRequest {
+                                class_id: String::new(),
+                                object_id: String::new(),
+                                transaction_id: String::new(),
+                            },
                         )
                         .await
                         .unwrap();
@@ -1082,13 +1095,15 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwModelAdmission => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    assert!(rpc_client
-                        .get_palw_model_admission_call(
-                            None,
-                            GetPalwModelAdmissionRequest { class_id: String::new(), object_hex: String::new() },
-                        )
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_model_admission_call(
+                                None,
+                                GetPalwModelAdmissionRequest { class_id: String::new(), object_hex: String::new() },
+                            )
+                            .await
+                            .is_err()
+                    );
                 })
             }
             KaspadPayloadOps::GetPalwModelCertification => {

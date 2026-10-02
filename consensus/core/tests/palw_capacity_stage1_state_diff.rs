@@ -118,7 +118,8 @@ fn snap(c: &Chain, stage: &'static str, ids: &[Hash64], refused: usize) -> Snap 
             PalwClaimPhaseV2::Voided { reason, .. } => format!("Voided({reason:?})"),
             PalwClaimPhaseV2::DefaultDisputed { .. } => "Disputed".to_string(),
         };
-        let seats: Vec<PalwBondKeyV2> = c.s.panel(id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        let seats: Vec<PalwBondKeyV2> =
+            c.s.panel(id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
         let locks = seats.iter().filter_map(|seat| c.s.slashable_lock(*seat, *id).map(|lock| lock.amount)).sum();
         claims.insert(
             *id,
@@ -130,7 +131,10 @@ fn snap(c: &Chain, stage: &'static str, ids: &[Hash64], refused: usize) -> Snap 
                 escrow_slot: c.sp.claim_escrow_term_v2(claim.accepted_daa, claim.escrowed_reward, &claim.class_id),
                 duty: c.s.panel_duty_row_of(id).map(|row| row.seat_exposure),
                 locks,
-                vesting: c.s.vesting_row(id).map(|row| (row.producer.amount, row.seats.iter().map(|(_, leg)| leg.amount).sum(), row.reserve)),
+                vesting: c
+                    .s
+                    .vesting_row(id)
+                    .map(|row| (row.producer.amount, row.seats.iter().map(|(_, leg)| leg.amount).sum(), row.reserve)),
             },
         );
     }
@@ -158,16 +162,20 @@ fn snap(c: &Chain, stage: &'static str, ids: &[Hash64], refused: usize) -> Snap 
 /// armed twin at the same DAA (a step one twin has nothing for is an empty block there), so their
 /// snapshots line up stage by stage.
 pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
-    let mut sims = [Sim::new(params_for(class, false), class, &[(SUBJECT, collateral_msk)]), Sim::new(params_for(class, true), class, &[(SUBJECT, collateral_msk)])];
+    let mut sims = [
+        Sim::new(params_for(class, false), class, &[(SUBJECT, collateral_msk)]),
+        Sim::new(params_for(class, true), class, &[(SUBJECT, collateral_msk)]),
+    ];
     let windows = (sims[0].c.sp.window_bind(), sims[0].c.sp.window_receipt(), sims[0].c.sp.window_challenge_at(sims[0].c.daa));
     let mut snaps: [Vec<Snap>; 2] = [Vec::new(), Vec::new()];
     let mut ids: [Vec<Hash64>; 2] = [Vec::new(), Vec::new()];
     let mut refused = [0usize; 2];
-    let snap_both = |sims: &[Sim; 2], snaps: &mut [Vec<Snap>; 2], stage: &'static str, ids: &[Vec<Hash64>; 2], refused: &[usize; 2]| {
-        for t in 0..2 {
-            snaps[t].push(snap(&sims[t].c, stage, &ids[t], refused[t]));
-        }
-    };
+    let snap_both =
+        |sims: &[Sim; 2], snaps: &mut [Vec<Snap>; 2], stage: &'static str, ids: &[Vec<Hash64>; 2], refused: &[usize; 2]| {
+            for t in 0..2 {
+                snaps[t].push(snap(&sims[t].c, stage, &ids[t], refused[t]));
+            }
+        };
     // 1. The fill: four attempt blocks a DAA.
     let base = sims[0].c.daa;
     for k in 0..class.fill_blocks() {
@@ -213,8 +221,9 @@ pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
     }
     snap_both(&sims, &mut snaps, "final", &ids, &refused);
     // 3. The unbound claims void BindTimeout; then past h_obl.
-    let last_accept =
-        (0..2).flat_map(|t| ids[t].iter().filter_map(|id| sims[t].c.s.claim(id).map(|claim| claim.accepted_daa)).collect::<Vec<_>>()).max();
+    let last_accept = (0..2)
+        .flat_map(|t| ids[t].iter().filter_map(|id| sims[t].c.s.claim(id).map(|claim| claim.accepted_daa)).collect::<Vec<_>>())
+        .max();
     let voided = last_accept.map_or(0, |at| at + windows.0 + 2).max(sims[0].c.daa + 1);
     for sim in sims.iter_mut() {
         sim.block(voided, vec![], None);
@@ -253,7 +262,9 @@ pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
         sims[t].step(objects);
     }
     for t in 0..2 {
-        let objects = targets[t].map(|target| vec![guilty_close(court_session_of(&sims[t].c.s, target, bond_key(CHALLENGER)))]).unwrap_or_default();
+        let objects = targets[t]
+            .map(|target| vec![guilty_close(court_session_of(&sims[t].c.s, target, bond_key(CHALLENGER)))])
+            .unwrap_or_default();
         sims[t].step(objects);
         if let Some(target) = targets[t] {
             assert!(
@@ -329,7 +340,9 @@ pub fn intended(class: Class, stage: &str, component: &str, shipped: u128, armed
             Intended("v3 §5.4 / v1 §4.4 E-4: an unconvicted void keeps m_c + reserved for h_obl")
         }
         "weights.bounded_immature" if armed <= shipped => Intended("v3 §5.2 / v1 §4.2: staged weight and W_cap (J-1)"),
-        "weights.safe_weight" if armed <= shipped && class == Class::M2 => Intended("v3 §5.2, D-3: the C7 Final ceiling (8k raw weight)"),
+        "weights.safe_weight" if armed <= shipped && class == Class::M2 => {
+            Intended("v3 §5.2, D-3: the C7 Final ceiling (8k raw weight)")
+        }
         "claim.duty" if armed <= shipped => Intended("v3 §5.6 AS-1: the duty is capped by the commitment over the seats"),
         _ => Unexpected,
     }
@@ -371,7 +384,13 @@ pub fn diff(class: Class, shipped: &Run, armed: &Run) -> Vec<Diff> {
                     Verdict::Unexpected | Verdict::Finding(_) if bond_total && !same_claims => Verdict::CountDriven,
                     verdict => verdict,
                 };
-                out.push(Diff { stage: s.stage, component: component.to_string(), shipped: sv.to_string(), armed: av.to_string(), verdict });
+                out.push(Diff {
+                    stage: s.stage,
+                    component: component.to_string(),
+                    shipped: sv.to_string(),
+                    armed: av.to_string(),
+                    verdict,
+                });
             }
         };
         if s.stage == "filled" || s.stage == "convicted" {
@@ -400,7 +419,9 @@ pub fn diff(class: Class, shipped: &Run, armed: &Run) -> Vec<Diff> {
         let mut per: BTreeMap<String, (u128, u128, usize, Verdict)> = BTreeMap::new();
         for (id, sc) in &s.claims {
             let Some(ac) = a.claims.get(id) else { continue };
-            for component in ["claim.reserved", "claim.commitment", "claim.escrowed_reward", "claim.escrow_slot", "claim.duty", "claim.locks"] {
+            for component in
+                ["claim.reserved", "claim.commitment", "claim.escrowed_reward", "claim.escrow_slot", "claim.duty", "claim.locks"]
+            {
                 let (sv, av) = (claim_value(sc, component), claim_value(ac, component));
                 if sv != av {
                     let verdict = intended(class, s.stage, component, sv, av);
@@ -534,7 +555,13 @@ fn stage1_the_rho_1_state_diff_shows_only_intended_differences() {
                     }
                 }
                 // The subject is the only bond with claims, so the armed twin's live weight IS its term.
-                assert!(a.bounded_immature <= w_cap, "{} @ {collateral} [{}]: J-1, {} ≤ W_cap {w_cap}", class.label(), s.stage, a.bounded_immature);
+                assert!(
+                    a.bounded_immature <= w_cap,
+                    "{} @ {collateral} [{}]: J-1, {} ≤ W_cap {w_cap}",
+                    class.label(),
+                    s.stage,
+                    a.bounded_immature
+                );
             }
         }
     }

@@ -741,7 +741,10 @@ fn own_span_pruning_period_works(
     defender_relay_blue_work: BlueWorkType,
     challenger_relay_blue_work: BlueWorkType,
 ) -> (BlueWorkType, BlueWorkType) {
-    (defender_relay_blue_work.saturating_sub(defender_pp_blue_work), challenger_relay_blue_work.saturating_sub(challenger_pp_blue_work))
+    (
+        defender_relay_blue_work.saturating_sub(defender_pp_blue_work),
+        challenger_relay_blue_work.saturating_sub(challenger_pp_blue_work),
+    )
 }
 
 /// **lane rcore/hf-pptake — the sampled-level terms: the same-span cut, with the challenger's
