@@ -130,18 +130,24 @@ pub const PALW_T12_CAPACITY_STEPS_RHO10_V1: &[PalwCapacityStepOffsetV1] =
     &[PalwCapacityStepOffsetV1 { after_daa: 0, rho: 10, q_credit_permille: PALW_CAPACITY_Q_SEAT_PERMILLE_V1 }];
 
 /// **ADR-0160 stage 3: set step `slot` of an armed F-L value** (2-based — the fork id's
-/// `palw_capacity_aggregate_liability_step_<slot>`) to `(at, ρ, q_seat)`, dropping every later step — the
-/// one mutation a ready ρ variant's flag-day entry makes. `at = None` (or `never()`) drops the step and
-/// every later one: the entry set back to dormant. A value that is absent or carries fewer than
-/// `slot − 1` steps is left alone (the entry's `set` refuses to ARM a step there, loudly).
+/// `palw_capacity_aggregate_liability_step_<slot>`) to `(at, ρ, q_seat)` — the one mutation a ready ρ variant's flag-day entry
+/// makes. `at = None` (or `never()`) drops the step and every later one: the entry set back to dormant. With a height the step
+/// is appended (or, where the slot already holds one, MOVED: a move keeps the later steps that stay strictly after it, as moving
+/// the ρ = 10 entry keeps the appended steps — int-11's flag day arms steps 2 and 3 together, and a drill moving step 2 below
+/// them must not undo step 3 — and drops the first later step that does not, with every one after it: the ramp's heights strictly
+/// increase). A value that is absent or carries fewer than `slot − 1` steps is left alone (the entry's `set` refuses to ARM a
+/// step there, loudly).
 pub fn palw_capacity_step_append_v1(value: Option<&mut PalwCapacityLiabilityV1>, slot: usize, at: Option<ForkActivation>, rho: u32) {
     let Some(value) = value else { return };
     if slot < 2 || value.steps.len() < slot - 1 {
         return;
     }
-    value.steps.truncate(slot - 1);
+    // The steps from this slot on: the one this entry sets (if the slot holds one) and the later ones.
+    let from_slot = value.steps.split_off(slot - 1);
     if let Some(at) = at.filter(|at| *at != ForkActivation::never()) {
-        value.steps.push(PalwCapacityStepV1 { from_daa: at.daa_score(), rho, q_credit_permille: PALW_CAPACITY_Q_SEAT_PERMILLE_V1 });
+        let at = at.daa_score();
+        value.steps.push(PalwCapacityStepV1 { from_daa: at, rho, q_credit_permille: PALW_CAPACITY_Q_SEAT_PERMILLE_V1 });
+        value.steps.extend(from_slot.into_iter().skip(1).take_while(|later| later.from_daa > at));
     }
 }
 

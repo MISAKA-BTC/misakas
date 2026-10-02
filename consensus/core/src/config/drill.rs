@@ -750,6 +750,16 @@ const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
 /// The improvement fence alone (`--palw-drill-improve-at`, RFC-0004): a drill-only list.
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1, flag: "--palw-drill-improve-at" };
+/// **The int-11 flag day's whole list** (`--palw-drill-int11-at`): decode rules, gen, FP Job V5, the held leaf challenge, improvement,
+/// F-N's verification term and ρ = 25 — at one height, as the release arms them.
+const PALW_DRILL_FLAG_DAY_INT11_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_FENCES_V1, flag: "--palw-drill-int11-at" };
+
+/// ρ = 100, the int-11 flag day's second entry, [`crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA`] after the list's height
+/// (`--palw-drill-int11-at`).
+const PALW_DRILL_FLAG_DAY_INT11_RHO100_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_RHO100_FENCES_V1, flag: "--palw-drill-int11-at" };
+
 /// The model-specific finite court window alone (`--palw-drill-model-court-at`).
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
@@ -866,6 +876,26 @@ pub fn palw_drill_capacity_step3_at_v1(
     palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1.flag)?;
     palw_drill_capacity_step_prerequisite_v1(params, 3, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1.flag)?;
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1)
+}
+
+/// **A drill crosses the int-11 flag day as the release arms it** (`--palw-drill-int11-at=H'`): every entry of
+/// [`crate::config::params::PALW_T12_INT11_FENCES_V1`] at `at` and ρ = 100 at `at +`
+/// [`crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA`], on a salted drill ruleset, each through its entry's own `set` — the
+/// combined crossing, besides the per-fence flags (`-gen-at`, `-decode-rules-at`, `-fp-v5-at`, `-held-chunks-at`, `-improve-at`,
+/// `-capacity-network-verify-at`, `-capacity-step2-at`, `-capacity-step3-at`), which it excludes (the node refuses the combination by
+/// name). Every refusal of the post-launch moves applies, named for this flag, and the prerequisites it needs below `at`
+/// (`--palw-drill-tir-at`, `-tir2-at` and, for the capacity entries, `-fence3-at`) must be moved first. Done on a copy: a refusal
+/// at either height leaves `params` exactly as it came.
+pub fn palw_drill_int11_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    let rho100_at = at
+        .checked_add(crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA)
+        .filter(|rho100| *rho100 != u64::MAX)
+        .ok_or_else(|| format!("--palw-drill-int11-at={at}: ρ = 100 arms {} DAA after it, past the last DAA", crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA))?;
+    let mut moved = params.clone();
+    let mut moves = palw_drill_move_fences_v1(&mut moved, at, &PALW_DRILL_FLAG_DAY_INT11_V1)?;
+    moves.extend(palw_drill_move_fences_v1(&mut moved, rho100_at, &PALW_DRILL_FLAG_DAY_INT11_RHO100_V1)?);
+    *params = moved;
+    Ok(moves)
 }
 
 /// **A drill appends ρ = 100 straight after ρ = 10** (`--palw-drill-capacity-rho100-at`): F-L's second step with
@@ -1030,6 +1060,14 @@ mod tests {
 
     fn salt(byte: u8) -> PalwDrillSaltV1 {
         PalwDrillSaltV1::from_bytes([byte; PALW_DRILL_SALT_LEN_V1]).unwrap()
+    }
+
+    /// **The salted drill ruleset with the int-11 flag day set back to dormant** — what the per-fence movers' own tests move from:
+    /// every testnet-12 ruleset (a drill's included) arms the int-11 list at its height, which these tests judge their fence against.
+    fn dormant_drill(byte: u8) -> crate::config::params::Params {
+        let mut drill = crate::config::params::palw_t12_drill_params_v1(&salt(byte));
+        crate::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut drill, None);
+        drill
     }
 
     /// **The command line's form, and every refusal names its fix.** 64 hex characters, not all
@@ -1325,10 +1363,9 @@ mod tests {
     fn the_post_launch_fence_list_names_fences_and_each_entry_sets_its_own_alone() {
         use crate::config::params::{
             DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
-            palw_t12_drill_params_v1,
         };
         assert!(!PALW_T12_POST_LAUNCH_FENCES_V1.is_empty());
-        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let drill = dormant_drill(0x53);
         let fences = drill.palw_fences_v1();
         let height = |p: &crate::config::params::Params, name: &str| {
             p.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
@@ -1366,10 +1403,10 @@ mod tests {
         use crate::config::params::{
             DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA,
             PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
-            palw_t12_drill_params_v1, palw_t12_release_v2_params, palw_t12_shipped_params,
+            palw_t12_release_v2_params, palw_t12_shipped_params,
         };
         assert!(!PALW_T12_CAPACITY_FENCES_V1.is_empty());
-        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let drill = dormant_drill(0x53);
         // The DAA-1,300 release (every capacity entry dormant) is the "public" baseline here.
         let public = palw_t12_release_v2_params();
         let shipped = palw_t12_shipped_params();
@@ -1415,8 +1452,8 @@ mod tests {
     /// height of 60 is legal too.
     #[test]
     fn a_drill_crosses_the_capacity_flag_day_and_nothing_else_moves() {
-        use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_drill_params_v1, palw_t12_shipped_params};
-        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_shipped_params};
+        let drill = dormant_drill(0x53);
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_capacity_fences_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
         for bad in [0, u64::MAX] {
@@ -1456,8 +1493,8 @@ mod tests {
     /// its ρ, the fork id names its height, the params id moves and no other fence moves.
     #[test]
     fn a_drill_appends_the_capacity_ramp_steps_and_nothing_else_moves() {
-        use crate::config::params::{ForkActivation, palw_t12_drill_params_v1, palw_t12_shipped_params};
-        let drill = palw_t12_drill_params_v1(&salt(0x57));
+        use crate::config::params::{ForkActivation, palw_t12_shipped_params};
+        let drill = dormant_drill(0x57);
         let ramp = |p: &crate::config::params::Params| -> Vec<(u64, u32)> {
             p.palw_capacity_aggregate_liability.as_ref().map(|v| v.steps.iter().map(|s| (s.from_daa, s.rho)).collect()).unwrap_or_default()
         };
@@ -1572,7 +1609,7 @@ mod tests {
     #[test]
     fn a_drill_arms_the_second_ir_fence_and_nothing_else_moves() {
         use crate::config::params::palw_t12_shipped_params;
-        let mut drill = crate::config::params::palw_t12_drill_params_v1(&salt(0x55));
+        let mut drill = dormant_drill(0x55);
         palw_drill_tir_fence_at_v1(&mut drill, 1_020).expect("the IR fence low");
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_tir_fence2_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
@@ -1610,8 +1647,8 @@ mod tests {
     /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
     #[test]
     fn a_drill_crosses_the_ir_fence_and_nothing_else_moves() {
-        use crate::config::params::{palw_t12_drill_params_v1, palw_t12_shipped_params};
-        let drill = palw_t12_drill_params_v1(&salt(0x54));
+        use crate::config::params::{palw_t12_shipped_params};
+        let drill = dormant_drill(0x54);
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_tir_fence_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
         for bad in [0, u64::MAX] {
@@ -1653,8 +1690,8 @@ mod tests {
 
     #[test]
     fn a_drill_moves_the_model_court_window_fence_independently() {
-        use crate::config::params::{PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, palw_t12_drill_params_v1, palw_t12_shipped_params};
-        let drill = palw_t12_drill_params_v1(&salt(0x5D));
+        use crate::config::params::{PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, palw_t12_shipped_params};
+        let drill = dormant_drill(0x5D);
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_model_court_window_at_v1(&mut public, 3_100).unwrap_err().contains("PUBLIC testnet-12"));
         let mut base = drill.clone();
@@ -1686,9 +1723,9 @@ mod tests {
     /// setting the listed ones back gives the release drill byte for byte.
     #[test]
     fn a_drill_crosses_the_post_launch_flag_day_at_a_low_height_and_nothing_else_moves() {
-        use crate::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1, palw_t12_drill_params_v1};
+        use crate::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
         use crate::fork_id_v1::{fork_id_gate_fences_v1, fork_id_v1};
-        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let drill = dormant_drill(0x53);
         let mut moved = drill.clone();
         let moves = palw_drill_post_launch_fences_at_v1(&mut moved, 40).expect("a drill crosses the flag day at DAA 40");
         assert_eq!(
@@ -1783,8 +1820,8 @@ mod tests {
     /// height (invisible to the fork id), and a move that moves nothing.
     #[test]
     fn the_drill_fence_move_refuses_by_name_and_leaves_the_ruleset_alone() {
-        use crate::config::params::{PALW_T12_POST_LAUNCH_FENCES_V1, Params, palw_t12_drill_params_v1};
-        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        use crate::config::params::{PALW_T12_POST_LAUNCH_FENCES_V1, Params};
+        let drill = dormant_drill(0x53);
         let refusal = |mut params: Params, at: u64| -> String {
             let before = format!("{params:?}");
             let why = palw_drill_post_launch_fences_at_v1(&mut params, at).expect_err("refused");

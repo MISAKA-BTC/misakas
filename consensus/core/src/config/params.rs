@@ -19464,6 +19464,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
@@ -20131,6 +20132,95 @@ fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
     }
 }
 
+/// **testnet-12's int-11 flag day** (the user's decision of 2026-10-01, "100倍にして", and the coordinator's of 2026-10-02): RFC-0003's
+/// generative lane, RFC-0004's model improvement and ADR-0160's capacity ramp to ρ = 25, at ONE height,
+/// [`PALW_T12_INT11_FLAG_DAY_DAA`] (H), through each entry's own `set` (mirrors included) — the ONE list of what arms there, in
+/// the order the entries' prerequisites need:
+///
+/// * `palw_fp_decode_rules` — ADR-0082 D10/D11, the sampler's seed, temperature and repeat penalty: the prerequisite of FP
+///   Job V5 and of an evaluation's decode (spec 17 [A6-1]);
+/// * `palw_gen_v1` — RFC-0003 at testnet-12's provisional ceilings ([`crate::palw_gen_v1::PALW_T12_GEN_CEILINGS_V1`]);
+/// * `palw_fp_job_v5` — the free-prompt job's version-8..10 tail: V5, the tensor claim;
+/// * `palw_held_close_chunks_v1` — the held leaf challenge (object tag 90);
+/// * `palw_improvement_v1` — RFC-0004 at [`crate::palw_improve_v1::PALW_T12_IMPROVE_CEILINGS_V1`] (the pipeline-claim data
+///   availability rides with it);
+/// * `palw_capacity_network_verify` — F-N's static verification term, `L_ver` = 435 at the shipped 600 / 20 ("at or before"
+///   ρ = 25's height: at it);
+/// * `palw_capacity_aggregate_liability_step_2` — ρ = 25, F-L's second step, from H.
+///
+/// ρ = 100, F-L's third step, is its own entry at H + 95 ([`PALW_T12_INT11_RHO100_FENCES_V1`] at [`PALW_T12_INT11_RHO100_DAA`]).
+/// **Not on this list, by decision:** `palw_model_court_window` (armed nowhere), `palw_model_virtual_v1` (ADR-0162, the user has not
+/// decided), the P0a list. Lane F's class-seating fence joins the list when it lands.
+///
+/// * a drill's `--palw-drill-int11-at=<DAA>` moves exactly these to a low height H' (ρ = 100 to H' + 95) on a salted drill chain, so a
+///   drill rehearses the real combined crossing besides the per-fence flags of rows 12–17 of `docs/design/palw/int-11-drill-flags.md`;
+/// * every entry is hashed Some-only with the `never()` collapse, so while the height is `None` the list is dormant and every
+///   shipped id is the DAA-3,600 release's ([`palw_t12_release_v5_params`]), byte for byte.
+pub const PALW_T12_INT11_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1,
+    crate::palw_gen_v1::PALW_DRILL_GEN_V1_ENTRY,
+    crate::palw_fp_job_v5::PALW_DRILL_FP_V5_ENTRY,
+    crate::palw_held_close_v1::PALW_HELD_CLOSE_CHUNKS_ENTRY_V1,
+    crate::palw_improve_v1::PALW_DRILL_IMPROVE_V1_ENTRY,
+    PALW_T12_CAPACITY_NETWORK_VERIFY_V1,
+    PALW_T12_CAPACITY_RHO25_STEP_2_V1,
+];
+
+/// **The int-11 flag day's second height: ρ = 100** — F-L's third step, [`PALW_T12_INT11_RHO100_OFFSET_DAA`] (95) DAA after H (the
+/// user's decision of 2026-10-01), in an entry of its own: the fork id names the step's height.
+pub const PALW_T12_INT11_RHO100_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_CAPACITY_RHO100_STEP_3_V1];
+
+/// **The int-11 flag day's height H — DAA 5,300 (tentative: the user names the final one)**, ONE named constant that the preset, a
+/// drill's `--palw-drill-int11-at` offsets and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to this
+/// value by `t12_deploy_kit_constants`) share. A height no other fence uses — not 750, 1,000, 1,300, 1,700, 2,000 or 3,600: the fork id
+/// names heights, not fences. `None` is the dormant release.
+pub const PALW_T12_INT11_FLAG_DAY_DAA: Option<u64> = Some(5_300);
+
+/// ρ = 100 arms this many DAA after H (the user's decision of 2026-10-01).
+pub const PALW_T12_INT11_RHO100_OFFSET_DAA: u64 = 95;
+
+/// **ρ = 100's height, H + 95** — `None` while H is.
+pub const PALW_T12_INT11_RHO100_DAA: Option<u64> = match PALW_T12_INT11_FLAG_DAY_DAA {
+    Some(at) => Some(at + PALW_T12_INT11_RHO100_OFFSET_DAA),
+    None => None,
+};
+
+/// **The int-11 flag day, armed** — every entry of [`PALW_T12_INT11_FENCES_V1`] at [`PALW_T12_INT11_FLAG_DAY_DAA`] and ρ = 100's entry at
+/// [`PALW_T12_INT11_RHO100_DAA`], each through its own `set`, on the ASSEMBLED ruleset, after the DAA-3,600 flag day whose
+/// `palw_tir_fence2` an evaluation pipeline needs below it; a no-op while H is `None`.
+fn palw_t12_arm_int11_flag_day_v1(params: &mut Params) {
+    palw_t12_arm_int11_flag_day_at_v1(params, PALW_T12_INT11_FLAG_DAY_DAA);
+}
+
+/// **The int-11 flag day at `at`** (`None`: dormant) — the list at `at`, ρ = 100 at `at + 95`; the one body the preset, a drill and the
+/// tests share. Dormant is set in the reverse order, so a step is never the one a later step stands on.
+pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
+    match at {
+        Some(at) => {
+            for fence in PALW_T12_INT11_FENCES_V1 {
+                (fence.set)(params, Some(ForkActivation::new(at)));
+            }
+            for fence in PALW_T12_INT11_RHO100_FENCES_V1 {
+                (fence.set)(params, Some(ForkActivation::new(at.saturating_add(PALW_T12_INT11_RHO100_OFFSET_DAA))));
+            }
+        }
+        None => {
+            for fence in PALW_T12_INT11_RHO100_FENCES_V1.iter().chain(PALW_T12_INT11_FENCES_V1.iter().rev()) {
+                (fence.set)(params, None);
+            }
+        }
+    }
+}
+
+/// **testnet-12 as its DAA-3,600 release (int-10) ships it** — [`palw_t12_shipped_params`] with the int-11 flag day (its list and ρ = 100's
+/// entry) set back to dormant: the ruleset a node that has not taken the int-11 release runs, the fleet's today, and the baseline the
+/// int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
+pub fn palw_t12_release_v5_params() -> Params {
+    let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
+    params
+}
+
 /// **testnet-12 as its DAA-2,000 release (int-8, `4ca695b98`) ships it** — [`palw_t12_shipped_params`] with
 /// the DAA-3,600 flag day's list (and the dormant model court window's and decode rules') set back to dormant: the ruleset a
 /// node that has not taken the DAA-3,600 release runs (the fleet's int-8 ids, params `3db42ea6…`), and the
@@ -20138,6 +20228,7 @@ fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
@@ -20154,6 +20245,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
@@ -20171,6 +20263,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
@@ -20189,6 +20282,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
@@ -20251,6 +20345,9 @@ fn palw_t12_params_with_registry_v1(
     // **The model court window is armed nowhere** (`PALW_T12_MODEL_COURT_WINDOW_DAA` is `None`; the coordinator's
     // decision of 2026-10-01): testnet-12 charges the held clock, under which the fence moves no verdict.
     palw_t12_arm_model_court_window_v1(&mut params);
+    // **The int-11 flag day** (RFC-0003, RFC-0004 and the capacity ramp to ρ = 25 / ρ = 100, 2026-10-02): `PALW_T12_INT11_FENCES_V1` at
+    // `PALW_T12_INT11_FLAG_DAY_DAA` and ρ = 100 at H + 95, after the DAA-3,600 flag day whose `palw_tir_fence2` it needs below it.
+    palw_t12_arm_int11_flag_day_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -24026,9 +24123,15 @@ mod consensus_params_id_tests {
         let err = format!("{}", devnet.validate_palw_v2().expect_err("no derivation"));
         assert!(err.contains("palw_fp_derived_work"), "{err}");
 
-        // Over testnet-12: the entry arms it, mirror and all, at the flag day's height.
-        let shipped = palw_t12_shipped_params();
-        assert!(shipped.palw_fp_decode_rules.is_none(), "dormant on the shipped preset");
+        // Over testnet-12 as the DAA-3,600 release ships it (the int-11 list, which arms the decode rules at its own height, is
+        // dormant on it): the entry arms it, mirror and all, at the flag day's height.
+        let shipped = palw_t12_release_v5_params();
+        assert!(shipped.palw_fp_decode_rules.is_none(), "dormant on the int-10 release");
+        assert_eq!(
+            palw_t12_shipped_params().palw_fp_decode_rules,
+            PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new),
+            "the int-11 list arms it at H on the shipped ruleset"
+        );
         let mut armed = shipped.clone();
         (PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1.set)(&mut armed, Some(ForkActivation::new(1_500)));
         armed.validate_palw_v2().expect("testnet-12 carries the derivation at genesis, so the rules arm");
@@ -30397,15 +30500,22 @@ mod post_launch_fence_arming_tests {
         // The schedule: 750, D1's 1,000, and — on this build — the second and third flag days' own
         // heights (`PALW_T12_POST_LAUNCH_FENCES_V2`/`_V3`), the IR flag day's
         // (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`) and the DAA-3,600 flag day's
-        // (`PALW_T12_TIR_FENCE2_FENCES_V1`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
+        // (`PALW_T12_TIR_FENCE2_FENCES_V1`) and the int-11 flag day's two (H and ρ = 100's H + 95); the DAA-750 release as the fleet
+        // ran it is 750 and 1,000 alone.
         let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V3_DAA);
         expected_schedule.extend(PALW_T12_TIR_FLAG_DAY_DAA);
         expected_schedule.extend(PALW_T12_TIR_FENCE2_DAA);
+        expected_schedule.extend(PALW_T12_INT11_FLAG_DAY_DAA);
+        expected_schedule.extend(PALW_T12_INT11_RHO100_DAA);
         expected_schedule.sort_unstable();
         expected_schedule.dedup();
-        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second, third, IR and DAA-3,600 flag days");
+        assert_eq!(
+            release.fence_schedule_v1(),
+            expected_schedule,
+            "750, D1's 1,000, then the second, third, IR, DAA-3,600 and int-11 flag days"
+        );
         // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
         // model court window rides no flag day (the coordinator's decision of 2026-10-01).
         let flag_day = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
@@ -30419,8 +30529,11 @@ mod post_launch_fence_arming_tests {
         let pre_flag_day = palw_t12_release_v4_params();
         assert!(!pre_flag_day.palw_tir_fence2_active_at(flag_day), "the pre-flag release keeps the release's IR rules");
         let mut pre_flag_schedule = expected_schedule.clone();
-        pre_flag_schedule.retain(|height| *height != flag_day);
-        assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the flag day's height");
+        // The pre-flag release (int-8) omits the DAA-3,600 flag day's height and the int-11 flag day's two.
+        pre_flag_schedule.retain(|height| {
+            *height != flag_day && Some(*height) != PALW_T12_INT11_FLAG_DAY_DAA && Some(*height) != PALW_T12_INT11_RHO100_DAA
+        });
+        assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the later flag days' heights");
         assert_eq!(
             palw_t12_release_v1_params().fence_schedule_v1(),
             vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA],
