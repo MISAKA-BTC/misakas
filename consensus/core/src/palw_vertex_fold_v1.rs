@@ -18,10 +18,11 @@
 use super::*;
 use crate::palw_vertex_v1::{
     PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1, PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1, PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1,
-    PALW_VERTEX_HELD_MAX_PER_CLAIM_V1, PALW_VERTEX_ROUND_DAA_V1, PALW_VERTEX_SWEEP_PER_BLOCK_V1, PalwClaimRefV1, PalwVertexCountedV1,
-    PalwVertexEquivocationV1, PalwVertexErrorV1, PalwVertexHeldRowV1, PalwVertexLeafFateV1, PalwVertexLeafV1, PalwVertexRoundRowV1,
-    PalwVertexTallyV1, PalwVerificationVertexV1, palw_vertex_admissible_v1, palw_vertex_equivocation_admissible_v1,
-    palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1, palw_vertex_resolve_claim_v1,
+    PALW_VERTEX_HELD_MAX_PER_CLAIM_V1, PALW_VERTEX_ROUND_DAA_V1, PALW_VERTEX_SWEEP_PER_BLOCK_V1, PalwClaimRefV1,
+    PalwVerificationVertexV1, PalwVertexCountedV1, PalwVertexEquivocationV1, PalwVertexErrorV1, PalwVertexHeldRowV1,
+    PalwVertexLeafFateV1, PalwVertexLeafV1, PalwVertexRoundRowV1, PalwVertexTallyV1, palw_vertex_admissible_v1,
+    palw_vertex_equivocation_admissible_v1, palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1,
+    palw_vertex_resolve_claim_v1,
 };
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
@@ -140,7 +141,9 @@ fn license_from_tally_v1(
     let Some(receipts) = palw_vertex_receipts_of_v1(&builder.state, claim_id, &tally.counted) else { return Ok(()) };
     let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
     let verdicts = palw_seat_verdicts_of_v2(&inner);
-    if palw_licence_names_its_outsider_v1(&builder.state, claim_id, &claim, &verdicts, builder.extras.admission_independence_daa).is_err() {
+    if palw_licence_names_its_outsider_v1(&builder.state, claim_id, &claim, &verdicts, builder.extras.admission_independence_daa)
+        .is_err()
+    {
         return Ok(());
     }
     apply_receipt_licensed_v2(builder, ctx, claim_id, &receipts)
@@ -167,7 +170,15 @@ fn record_held_v1(
     {
         return;
     }
-    rows.push(PalwVertexHeldRowV1 { seat: vertex.seat_bond, object, first, last, digest, signed_daa: vertex.signed_daa, charged: false });
+    rows.push(PalwVertexHeldRowV1 {
+        seat: vertex.seat_bond,
+        object,
+        first,
+        last,
+        digest,
+        signed_daa: vertex.signed_daa,
+        charged: false,
+    });
     builder.write_vertex_held(*claim_id, Some(rows));
 }
 
@@ -227,10 +238,18 @@ pub(super) fn sweep_vertex_rounds_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         return;
     }
     let dead = |round: u64| {
-        round.saturating_add(1).saturating_mul(PALW_VERTEX_ROUND_DAA_V1).saturating_add(PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1) < ctx.daa_score
+        round.saturating_add(1).saturating_mul(PALW_VERTEX_ROUND_DAA_V1).saturating_add(PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1)
+            < ctx.daa_score
     };
-    let doomed: Vec<(u64, PalwBondKeyV2)> =
-        builder.state.vertex.rounds.keys().take_while(|(round, _)| dead(*round)).take(PALW_VERTEX_SWEEP_PER_BLOCK_V1).copied().collect();
+    let doomed: Vec<(u64, PalwBondKeyV2)> = builder
+        .state
+        .vertex
+        .rounds
+        .keys()
+        .take_while(|(round, _)| dead(*round))
+        .take(PALW_VERTEX_SWEEP_PER_BLOCK_V1)
+        .copied()
+        .collect();
     for key in doomed {
         builder.write_vertex_round(key, None);
     }
@@ -238,8 +257,12 @@ pub(super) fn sweep_vertex_rounds_v1(builder: &mut TransitionBuilder<'_>, ctx: &
 
 /// **The attesters of a claim not yet charged**, read before a data-availability default voids the claim (the void drops the rows).
 pub(super) fn held_attesters_to_charge_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Vec<PalwBondKeyV2> {
-    let mut seats: Vec<PalwBondKeyV2> =
-        state.vertex.held.get(claim_id).map(|rows| rows.iter().filter(|row| !row.charged).map(|row| row.seat).collect()).unwrap_or_default();
+    let mut seats: Vec<PalwBondKeyV2> = state
+        .vertex
+        .held
+        .get(claim_id)
+        .map(|rows| rows.iter().filter(|row| !row.charged).map(|row| row.seat).collect())
+        .unwrap_or_default();
     seats.sort();
     seats.dedup();
     seats

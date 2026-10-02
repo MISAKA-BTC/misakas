@@ -59,7 +59,12 @@ const PALW_VERTEX_HELD_DIGEST_DOMAIN_V1: &[u8] = b"misaka-node/vertex-held-captu
 /// **The `Held` leaf of a capture this seat holds** (RFC-0007 §I.7): "I hold chunks `0..=last` of this claim's capture, whose digest is
 /// `digest`, and I will serve them until its challenge window closes." Voluntary — a seat that verified a claim's material and kept it
 /// (`persist_foreign_material`) says so; three equal leaves are a DA certificate. `None` for an empty capture.
-pub(crate) fn palw_vertex_held_capture_leaf_v1(claim: &Hash64, bound_daa: u64, bytes: &[u8], full_refs: bool) -> Option<PalwVertexLeafV1> {
+pub(crate) fn palw_vertex_held_capture_leaf_v1(
+    claim: &Hash64,
+    bound_daa: u64,
+    bytes: &[u8],
+    full_refs: bool,
+) -> Option<PalwVertexLeafV1> {
     if bytes.is_empty() {
         return None;
     }
@@ -156,7 +161,8 @@ impl PalwVertexBookV1 {
             take.push(key.clone());
         }
         let leaves: Vec<PalwVertexLeafV1> = take.iter().filter_map(|key| self.pending.get(key).copied()).collect();
-        let vertex = PalwVerificationVertexV1::sign_v1(network_domain, seat, now_daa, leaves, |message, context| sign(message, context))?;
+        let vertex =
+            PalwVerificationVertexV1::sign_v1(network_domain, seat, now_daa, leaves, |message, context| sign(message, context))?;
         if !persist(round) {
             return None;
         }
@@ -375,7 +381,11 @@ mod tests {
         let claim = Hash64::from_bytes([5; 64]);
         assert!(matches!(palw_vertex_claim_by_leaf_v1(&claim, 123, false), PalwClaimRefV1::Compact { bound_daa: 123, .. }));
         assert_eq!(palw_vertex_claim_by_leaf_v1(&claim, 123, true), PalwClaimRefV1::Full(claim));
-        assert_eq!(palw_vertex_claim_by_leaf_v1(&claim, u64::from(u32::MAX) + 1, false), PalwClaimRefV1::Full(claim), "a DAA past 32 bits is whole");
+        assert_eq!(
+            palw_vertex_claim_by_leaf_v1(&claim, u64::from(u32::MAX) + 1, false),
+            PalwClaimRefV1::Full(claim),
+            "a DAA past 32 bits is whole"
+        );
     }
 
     /// A held capture is attested as the chunks it spans, under a digest of its bytes; the same bytes give the same leaf.
@@ -390,7 +400,8 @@ mod tests {
         assert_eq!(leaf, palw_vertex_held_capture_leaf_v1(&claim, 9, &bytes, false).unwrap(), "the same bytes, the same leaf");
         let mut other = bytes.clone();
         other[0] ^= 1;
-        let PalwVertexLeafV1::Held { digest: other_digest, .. } = palw_vertex_held_capture_leaf_v1(&claim, 9, &other, false).unwrap() else {
+        let PalwVertexLeafV1::Held { digest: other_digest, .. } = palw_vertex_held_capture_leaf_v1(&claim, 9, &other, false).unwrap()
+        else {
             panic!("a Held leaf")
         };
         assert_ne!(digest, other_digest, "another capture, another digest");

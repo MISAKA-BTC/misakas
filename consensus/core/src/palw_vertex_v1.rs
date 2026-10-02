@@ -391,7 +391,9 @@ pub enum PalwVertexErrorV1 {
     SignatureLength { got: usize, expected: usize },
     #[error("a vertex signed at DAA {signed_daa} in a block at DAA {at}: it is signed after the block carrying it")]
     SignedInTheFuture { signed_daa: u64, at: u64 },
-    #[error("a vertex signed at DAA {signed_daa} carried at DAA {at}: older than the {PALW_VERTEX_MAX_CARRY_DAA_V1} DAA a vertex may wait")]
+    #[error(
+        "a vertex signed at DAA {signed_daa} carried at DAA {at}: older than the {PALW_VERTEX_MAX_CARRY_DAA_V1} DAA a vertex may wait"
+    )]
     TooOld { signed_daa: u64, at: u64 },
     #[error("bond {0:?} is not registered on this chain")]
     UnknownBond(PalwBondKeyV2),
@@ -407,7 +409,9 @@ pub enum PalwVertexErrorV1 {
     EquivocationRootsEqual,
     #[error("an equivocation side whose carried leaves do not match its header's root and count")]
     EquivocationLeavesMismatch,
-    #[error("an equivocation about a round signed at DAA {signed_daa}, past the {PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1} DAA it stays provable (block at DAA {at})")]
+    #[error(
+        "an equivocation about a round signed at DAA {signed_daa}, past the {PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1} DAA it stays provable (block at DAA {at})"
+    )]
     EvidenceTooOld { signed_daa: u64, at: u64 },
     #[error("the equivocation of seat {seat:?} in round {round} was already convicted")]
     AlreadyConvicted { seat: PalwBondKeyV2, round: u64 },
@@ -748,7 +752,9 @@ pub fn palw_vertex_leaf_fate_v1(
         return Ignored("signed outside the claim's receipt window");
     }
     match verdict {
-        PalwReceiptVerdictV2::Incapable if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, params.base_class_id()) => {
+        PalwReceiptVerdictV2::Incapable
+            if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, params.base_class_id()) =>
+        {
             return Ignored("Incapable is not pleaded on the liveness floor");
         }
         PalwReceiptVerdictV2::Sampled if !params.rcore_plus_active_at(daa_score) => return Ignored("Sampled needs palw_rcore_plus"),
@@ -1192,11 +1198,10 @@ mod tests {
             }
         }
         // …and none is a receipt's own signing domain, so a vertex signature is neither a receipt's nor another court move's.
-        assert!(![
-            crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
-            crate::palw_panel_v2::PALW_RECEIPT_V3_MLDSA87_CONTEXT,
-        ]
-        .contains(&PALW_VERTEX_MLDSA87_CONTEXT_V1));
+        assert!(
+            ![crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT, crate::palw_panel_v2::PALW_RECEIPT_V3_MLDSA87_CONTEXT,]
+                .contains(&PALW_VERTEX_MLDSA87_CONTEXT_V1)
+        );
     }
 
     /// The honest vertex passes the shape check; the leaves are sorted into the strict order and a repeated leaf is one.
@@ -1258,10 +1263,7 @@ mod tests {
         assert!(matches!(palw_vertex_shape_v1(&bad), Err(E::TooManyLeaves { .. })));
         // An audit leaf, an unknown Held object and an inverted Held range.
         for (leaf, want) in [
-            (
-                PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 0 },
-                E::AuditedLeafNotArmed { index: 0 },
-            ),
+            (PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 0 }, E::AuditedLeafNotArmed { index: 0 }),
             (
                 PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h(5)), object: 9, first: 0, last: 1, digest: h(1) },
                 E::HeldObjectUnknown { index: 0, object: 9 },
@@ -1386,12 +1388,13 @@ mod tests {
         watch.forget(a.round, &a.seat_bond);
         assert!(watch.pending().is_empty());
         // Another round of the same seat is its own.
-        let c = PalwVerificationVertexV1::sign_v1(h(0xD0), bond(1), 101, vec![verdict_leaf(3, PalwReceiptVerdictV2::Valid)], |m, _| {
-            let mut s = m.to_vec();
-            s.resize(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN, 0);
-            Some(s)
-        })
-        .unwrap();
+        let c =
+            PalwVerificationVertexV1::sign_v1(h(0xD0), bond(1), 101, vec![verdict_leaf(3, PalwReceiptVerdictV2::Valid)], |m, _| {
+                let mut s = m.to_vec();
+                s.resize(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN, 0);
+                Some(s)
+            })
+            .unwrap();
         assert!(!watch.observe_verified(&c));
         assert_eq!(watch.observed(), 2, "the first vertex of each round is remembered");
     }

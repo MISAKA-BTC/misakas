@@ -70,7 +70,10 @@ async fn t12_a_vertex_is_signed_by_its_seat_and_dropped_below_its_fence() {
         if !fence {
             let refused = gate(&object(good.clone())).expect_err("below the fence");
             assert!(refused.contains("below palw_verification_vertex_v1"), "{refused}");
-            assert!(vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![object(good)], block).is_empty(), "dropped");
+            assert!(
+                vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![object(good)], block).is_empty(),
+                "dropped"
+            );
             continue;
         }
         // Past the fence: signed by its seat, the gate takes it, and the walk accepts it — its leaves name claims this chain does not
@@ -84,7 +87,8 @@ async fn t12_a_vertex_is_signed_by_its_seat_and_dropped_below_its_fence() {
         // One vertex per seat per round: the second of the same round is dropped, the first stands.
         let second = make(card, card, daa, &[4, 5]);
         assert_ne!(good.leaves_root, second.leaves_root);
-        let walked = vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![object(good.clone()), object(second)], block);
+        let walked =
+            vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, vec![object(good.clone()), object(second)], block);
         assert_eq!(walked.len(), 1, "one vertex a round: the second is dropped, the block stands");
         // Hostile vertices, each refused at the gate by its own reason.
         let mut tampered = good.clone();

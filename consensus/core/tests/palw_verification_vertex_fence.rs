@@ -10,12 +10,12 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_vertex_at_v1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_INT11_FENCES_V1,
-    PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
-    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1,
-    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
-    palw_t12_release_v5_params, palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
+    PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS,
+    TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
+    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -92,7 +92,11 @@ fn every_ruleset_leaves_it_dormant_and_no_flag_day_list_names_it() {
         assert_eq!(mirror(&p), None, "{name}: no mirror");
         assert!(p.palw_fences_v1().contains(&("palw_verification_vertex_v1", None)), "{name}: the exhaustive fence list names it");
         assert!(p.validate_palw_verification_vertex_v1().is_ok(), "{name}: nothing to refuse");
-        p.validate_palw_v2().unwrap_or_else(|e| if matches!(p.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) { panic!("{name}: {e}") });
+        p.validate_palw_v2().unwrap_or_else(|e| {
+            if matches!(p.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                panic!("{name}: {e}")
+            }
+        });
     }
     // In NO testnet-12 flag-day list: it ships dormant and arms with a later flag day the lead decides.
     for list in [

@@ -54,12 +54,27 @@ fn step(
     daa: u64,
     objects: &[PalwConsensusObjectV2],
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
-    let applied = apply_palw_transition_v2_with_extras(parent, p, &ctx(block_word, daa, block_word), objects, None, true, false, false, false, &vx())?;
+    let applied = apply_palw_transition_v2_with_extras(
+        parent,
+        p,
+        &ctx(block_word, daa, block_word),
+        objects,
+        None,
+        true,
+        false,
+        false,
+        false,
+        &vx(),
+    )?;
     applied.0.assert_internal_consistency(p).expect("internal consistency after apply");
     applied.0.assert_deadline_consistency(p).expect("deadline consistency after apply");
     // The delta reproduces the fold and reverts to the parent.
     assert_eq!(apply_delta_v2(parent, &applied.1, p).unwrap().state_root(), applied.0.state_root(), "the delta reproduces the fold");
-    assert_eq!(revert_delta_v2(&applied.0, &applied.1, p).unwrap().state_root(), parent.state_root(), "the delta reverts to the parent");
+    assert_eq!(
+        revert_delta_v2(&applied.0, &applied.1, p).unwrap().state_root(),
+        parent.state_root(),
+        "the delta reverts to the parent"
+    );
     Ok(applied)
 }
 
@@ -135,13 +150,9 @@ fn the_licence_is_the_tally() {
             segments: assignment.mask_of(i as u16),
         })
         .collect();
-    let (by_receipts, _) =
-        step(&sr, &pr, 30, 105, &[PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_r, receipts }]).expect("the receipts license");
-    assert_eq!(
-        by_receipts.claim(&claim_r).unwrap().rcore.licence_door,
-        s5.claim(&claim).unwrap().rcore.licence_door,
-        "the same door"
-    );
+    let (by_receipts, _) = step(&sr, &pr, 30, 105, &[PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_r, receipts }])
+        .expect("the receipts license");
+    assert_eq!(by_receipts.claim(&claim_r).unwrap().rcore.licence_door, s5.claim(&claim).unwrap().rcore.licence_door, "the same door");
     assert_eq!(by_receipts.claim(&claim_r).unwrap().rcore.basis_k, record.basis_k, "the same recount");
 }
 
@@ -169,15 +180,8 @@ fn a_leaf_that_does_not_count_is_ignored_and_the_vertex_stands() {
     let outsider = bond_key(50);
     // A bond that is registered but holds no seat on the panel.
     let mut registered = s0.clone();
-    let (with_outsider, _) = apply_door(
-        &registered,
-        &p,
-        &ctx(8, 103, 8),
-        &[seat_bond_reg(50, COLLATERAL)],
-        None,
-        &vx(),
-    )
-    .expect("a bond registers");
+    let (with_outsider, _) =
+        apply_door(&registered, &p, &ctx(8, 103, 8), &[seat_bond_reg(50, COLLATERAL)], None, &vx()).expect("a bond registers");
     registered = with_outsider;
     let stranger = vertex(outsider, 104, vec![leaf(claim, Verdict::Valid)]);
     let (s1, _) = step(&registered, &p, 10, 104, &[object(stranger)]).unwrap();
@@ -259,8 +263,8 @@ fn a_claim_bound_across_the_fence_licenses_on_the_old_path() {
             segments: assignment.mask_of(i as u16),
         })
         .collect();
-    let (licensed, _) =
-        step(&s, &p, 40, 511, &[PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.clone() }]).expect("the old path licenses");
+    let (licensed, _) = step(&s, &p, 40, 511, &[PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.clone() }])
+        .expect("the old path licenses");
     assert!(matches!(phase(&licensed, claim), PalwClaimPhaseV2::ReceiptLicensed { .. }));
 
     // A claim bound at the fence refuses the receipt object by name (the fold's second lock), and the licence by tally works.
@@ -295,7 +299,11 @@ fn an_equivocating_seat_is_slashed_its_locks_forfeited_and_the_bond_ejected() {
     assert!(matches!(before.status, PalwBondStatusV2::Active));
     // Round 150: the seat signs two vertices, one naming the claim, one saying nothing of it.
     let a = vertex(seat, 150, vec![leaf(claim, Verdict::Valid)]);
-    let b = vertex(seat, 150, vec![PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h64(0xAB)), object: 0, first: 0, last: 1, digest: h64(2) }]);
+    let b = vertex(
+        seat,
+        150,
+        vec![PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h64(0xAB)), object: 0, first: 0, last: 1, digest: h64(2) }],
+    );
     assert_ne!(a.leaves_root, b.leaves_root);
     // The first lands as the round's vertex.
     let (s1, _) = step(&licensed, &p, 50, 151, &[object(a.clone())]).expect("the first vertex of the round lands");
@@ -304,20 +312,29 @@ fn an_equivocating_seat_is_slashed_its_locks_forfeited_and_the_bond_ejected() {
     let (s2, _) = step(&s1, &p, 51, 152, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence.clone()) }])
         .expect("the equivocation is convicted");
     let after = s2.bond(&seat).unwrap();
-    let penalty = u64::try_from(palw_vertex_permille_of_v1(u128::from(before.collateral), PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1).unwrap())
-        .unwrap();
+    let penalty = u64::try_from(
+        palw_vertex_permille_of_v1(u128::from(before.collateral), PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1).unwrap(),
+    )
+    .unwrap();
     let forfeited = u64::try_from(lock.amount).unwrap();
-    assert_eq!(before.collateral - after.collateral, (penalty + forfeited).min(before.collateral), "100 ‰ of the bond plus the forfeited lock");
+    assert_eq!(
+        before.collateral - after.collateral,
+        (penalty + forfeited).min(before.collateral),
+        "100 ‰ of the bond plus the forfeited lock"
+    );
     assert_eq!(after.slashed - before.slashed, before.collateral - after.collateral, "burned, recorded");
     assert!(s2.slashable_lock(seat, claim).is_none(), "the lock on the named claim is forfeited");
     assert!(matches!(after.status, PalwBondStatusV2::Retiring { .. }), "the bond is ejected: it takes no new work");
     assert!(s2.vertex_round_row_v1(150, &seat).unwrap().convicted);
     // The pair is convicted once; a vertex of that round cannot land again.
-    let again = step(&s2, &p, 52, 153, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) }]).expect_err("once");
+    let again =
+        step(&s2, &p, 52, 153, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) }]).expect_err("once");
     assert!(again.to_string().contains("already convicted"), "{again}");
     // Hostile evidence is refused by name: one vertex twice, two seats, two rounds, too old, an unregistered bond.
     let refused = |evidence: PalwVertexEquivocationV1| {
-        step(&s1, &p, 60, 152, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) }]).expect_err("refused").to_string()
+        step(&s1, &p, 60, 152, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) }])
+            .expect_err("refused")
+            .to_string()
     };
     let same = PalwVertexEquivocationV1 { a: a.header(), b: a.header(), a_leaves: Vec::new(), b_leaves: Vec::new() };
     assert!(refused(same).contains("same leaf root"));
@@ -331,9 +348,20 @@ fn an_equivocating_seat_is_slashed_its_locks_forfeited_and_the_bond_ejected() {
     assert!(refused(lying.clone()).contains("do not match"), "leaves that are not the header's");
     lying.a_leaves.clear();
     let old_a = vertex(seat, 150, vec![leaf(claim, Verdict::Valid)]);
-    let stale = step(&s1, &p, 61, 150 + PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1 + 1, &[PalwConsensusObjectV2::VertexEquivocationV1 {
-        evidence: Box::new(PalwVertexEquivocationV1 { a: old_a.header(), b: b.header(), a_leaves: Vec::new(), b_leaves: Vec::new() }),
-    }])
+    let stale = step(
+        &s1,
+        &p,
+        61,
+        150 + PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1 + 1,
+        &[PalwConsensusObjectV2::VertexEquivocationV1 {
+            evidence: Box::new(PalwVertexEquivocationV1 {
+                a: old_a.header(),
+                b: b.header(),
+                a_leaves: Vec::new(),
+                b_leaves: Vec::new(),
+            }),
+        }],
+    )
     .expect_err("too old");
     assert!(stale.to_string().contains("stays provable") || stale.to_string().contains("past the"), "{stale}");
 }
@@ -352,14 +380,22 @@ fn held_leaves_make_a_da_certificate_and_attesters_are_charged_on_a_default() {
     };
     let mut s = s0;
     for (i, seat) in seats().into_iter().take(3).enumerate() {
-        let (next, _) = step(&s, &p, 10 + i as u64, 104 + i as u64, &[object(vertex(seat, 104 + i as u64, vec![held(0, 7, h64(0xAA))]))]).unwrap();
+        let (next, _) =
+            step(&s, &p, 10 + i as u64, 104 + i as u64, &[object(vertex(seat, 104 + i as u64, vec![held(0, 7, h64(0xAA))]))]).unwrap();
         s = next;
     }
     assert_eq!(s.vertex_held_of_v1(&claim).unwrap().len(), 3);
-    let cert = palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_WITNESS_V1, 0, 7, &h64(0xAA)).expect("three equal Held leaves");
+    let cert = palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_WITNESS_V1, 0, 7, &h64(0xAA))
+        .expect("three equal Held leaves");
     assert_eq!(cert.len(), usize::from(PALW_VERTEX_DA_QUORUM_V1));
-    assert!(palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_WITNESS_V1, 0, 7, &h64(0xAB)).is_none(), "another digest is no certificate");
-    assert!(palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_CAPTURE_V1, 0, 7, &h64(0xAA)).is_none(), "another object either");
+    assert!(
+        palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_WITNESS_V1, 0, 7, &h64(0xAB)).is_none(),
+        "another digest is no certificate"
+    );
+    assert!(
+        palw_vertex_da_certificate_v1(&s, &claim, PALW_VERTEX_HELD_OBJECT_CAPTURE_V1, 0, 7, &h64(0xAA)).is_none(),
+        "another object either"
+    );
     // Two seats: not a certificate.
     let mut two = s.clone();
     two.vertex.held.get_mut(&claim).unwrap().pop();
@@ -377,7 +413,8 @@ fn held_leaves_make_a_da_certificate_and_attesters_are_charged_on_a_default() {
     let (charged, _) = builder.checkpoint();
     for seat in &attesters {
         let before = s.bond(seat).unwrap().collateral;
-        let exposure = u64::try_from(palw_vertex_permille_of_v1(u128::from(before), PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1).unwrap()).unwrap();
+        let exposure =
+            u64::try_from(palw_vertex_permille_of_v1(u128::from(before), PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1).unwrap()).unwrap();
         assert_eq!(before - charged.bond(seat).unwrap().collateral, exposure, "5 ‰ of the attester's collateral");
     }
     assert!(charged.vertex_held_of_v1(&claim).unwrap().iter().all(|row| row.charged), "charged once: the rows are marked");
@@ -451,10 +488,7 @@ fn a_chain_with_no_vertex_row_roots_and_carries_as_before() {
     assert!(!bytes.windows(1).any(|_| false));
     assert_ne!(*bytes.last().unwrap(), PALW_CARRIAGE_VERTEX_TAIL_V1, "no tail is written for an empty table");
     let mut with_row = s0.clone();
-    with_row.vertex.rounds.insert(
-        (1, bond_key(2)),
-        PalwVertexRoundRowV1 { leaves_root: h64(1), accepted_daa: 1, convicted: false },
-    );
+    with_row.vertex.rounds.insert((1, bond_key(2)), PalwVertexRoundRowV1 { leaves_root: h64(1), accepted_daa: 1, convicted: false });
     assert_ne!(with_row.state_root(), s0.state_root(), "a row moves the root");
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&with_row)).unwrap();
     let imported = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, None);
@@ -467,10 +501,7 @@ fn the_vertex_tail_is_pinned_at_0xe4() {
     assert_eq!(PALW_CARRIAGE_VERTEX_TAIL_V1, 0xE4);
     let (_p, s0, _claim) = world(None);
     let mut with_row = s0;
-    with_row.vertex.rounds.insert(
-        (1, bond_key(2)),
-        PalwVertexRoundRowV1 { leaves_root: h64(1), accepted_daa: 1, convicted: false },
-    );
+    with_row.vertex.rounds.insert((1, bond_key(2)), PalwVertexRoundRowV1 { leaves_root: h64(1), accepted_daa: 1, convicted: false });
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&with_row)).unwrap();
     // The tail: the byte, then the struct (three LE u32 map lengths follow the rounds'): rounds 1 row, tallies 0, held 0.
     let row_len = 8 + 64 + 4 + (64 + 8 + 1);
