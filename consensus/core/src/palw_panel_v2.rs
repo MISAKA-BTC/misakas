@@ -630,8 +630,8 @@ pub fn derive_stratified_panel_v2(
 /// ([`crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1`]): `s_shard` class seats from the bonds that proved they
 /// hold the shard, one per operator, drawn by the draw policy in force (the stake race past `palw_rcore_plus`), and, where
 /// the claim is outsider-judged, the shard's OUTSIDER first — drawn from the network's base-class population exactly as
-/// ADR-0147 draws the claim's, the shard in the ticket. A bond holds one seat per claim and an operator at most one
-/// outsider seat of it. The result is stored flat, shard-major, `[outsider?] ++ class seats` a shard
+/// ADR-0147 draws the claim's, the shard in the ticket. A bond may sit in several shards (distinct duties, distinct masks) and
+/// an operator holds at most one outsider seat of the claim. The result is stored flat, shard-major, `[outsider?] ++ class seats` a shard
 /// ([`crate::palw_tir_shard_v1::palw_tir_panel_stride_v1`]), which is what makes it recognisable by its length. A shard
 /// short of seats refuses the whole draw by name: a sharded class never falls back to a flat panel.
 #[allow(clippy::too_many_arguments)]
@@ -654,13 +654,14 @@ pub fn derive_tir_shard_panel_v1(
     let stride = crate::palw_tir_shard_v1::palw_tir_panel_stride_v1(outsider);
     let mut seats: Vec<PalwPanelSeatV2> = Vec::with_capacity(usize::from(s_l) * usize::from(stride));
     let mut outsider_operators: Vec<Hash64> = Vec::new();
-    let mut seated_bonds: Vec<PalwBondKeyV2> = Vec::new();
     for shard in 0..s_l {
         let judged = PalwShardJudgedV1 {
             judged_class: crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&claim.class_id, s_l, shard),
             seats: stride,
             excluded_outsider_operators: &outsider_operators,
-            excluded_bonds: &seated_bonds,
+            // The same bond may sit in several shards (RFC §4.1): its seats are distinct duties with distinct masks, and its lock
+            // accumulates the shards' prices.
+            excluded_bonds: &[],
         };
         let drawn = derive_panel_v2_with_policy_judged_v1(
             state,
@@ -684,7 +685,6 @@ pub fn derive_tir_shard_panel_v1(
                 outsider_operators.push(first.operator_id);
             }
         }
-        seated_bonds.extend(drawn.iter().map(|seat| seat.bond));
         seats.extend(drawn);
     }
     Ok(seats)
@@ -1384,8 +1384,7 @@ pub struct PalwShardJudgedV1<'a> {
     pub judged_class: Hash64,
     pub seats: u16,
     pub excluded_outsider_operators: &'a [Hash64],
-    /// Bonds already seated in an earlier shard of this claim: a bond holds one seat per claim (its lock records ONE
-    /// attested mask), however many shards it could judge. An operator with several bonds may still sit in several.
+    /// Bonds left out of this shard's draw (none for a per-shard draw: a bond may sit in several shards).
     pub excluded_bonds: &'a [PalwBondKeyV2],
 }
 

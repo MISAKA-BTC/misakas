@@ -198,9 +198,11 @@ pub(super) fn apply_part_v1(
             return Ok(());
         }
         let price = price_of(bond, *mask);
-        let backed = builder.state.slashable_locks.contains_key(&(*bond, claim_id))
-            || price.saturating_sub(palw_seat_duty_of_v1(&builder.state, &claim_id, bond)) <= builder.gate_room(bond, now, PalwRcoreGateV1::Work);
-        if !backed {
+        // A bond that sits in several shards posts the shards' prices one after another: the first lock is covered by its duty,
+        // each later shard's price is an increment that needs its own room.
+        let held = builder.state.slashable_locks.get(&(*bond, claim_id)).is_some();
+        let owed = if held { price } else { price.saturating_sub(palw_seat_duty_of_v1(&builder.state, &claim_id, bond)) };
+        if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work) {
             return Ok(());
         }
     }
@@ -209,7 +211,20 @@ pub(super) fn apply_part_v1(
     builder.credit_seat_receipts(claim_id, &receipts_v2, now);
     for (bond, mask) in &signers {
         let price = price_of(bond, *mask);
-        builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now);
+        match builder.state.slashable_locks.get(&(*bond, claim_id)).copied() {
+            // A second shard of the same bond: the lock grows by this shard's price and no longer names one cell's mask
+            // (`segments: 0` is the unscoped record: the seat is liable wherever on the claim it attested).
+            Some(lock) => builder.write_slashable_lock(
+                (*bond, claim_id),
+                Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+                    amount: lock.amount.saturating_add(price),
+                    attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                    segments: 0,
+                    ..lock
+                }),
+            ),
+            None => builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now),
+        }
     }
     // Land the part: the shard's cell counts, the counted signers, the abstention latch, the progress.
     let mut next = record.clone();
@@ -325,7 +340,18 @@ pub(super) fn final_legs_v1(
         return None;
     }
     let drawn: Vec<u32> = record.drawn_permille.clone();
-    let flags: Vec<bool> = panel.seats.iter().map(|seat| credited.contains(&seat.bond)).collect();
+    // A seat is paid for the shard it vouched for: `(bond, shard)` is in the claim's counted signers (a bond that sits in
+    // several shards is credited, and paid, shard by shard). `credited` is the duty row's credit, the same fact per bond.
+    let stride = usize::from(rules::palw_tir_panel_stride_v1(record.outsider));
+    let flags: Vec<bool> = panel
+        .seats
+        .iter()
+        .enumerate()
+        .map(|(i, seat)| {
+            let shard = (i / stride) as u16;
+            credited.contains(&seat.bond) && record.counted.iter().any(|(bond, s, _)| *bond == seat.bond && *s == shard)
+        })
+        .collect();
     let split = rules::palw_tir_shard_split_v1(reward, pool_permille, &drawn, &flags);
     let legs = panel.seats.iter().zip(&split.paid).filter(|(_, amount)| **amount > 0).map(|(seat, amount)| (seat.bond, *amount)).collect();
     Some((split.producer, legs, split.reserve))

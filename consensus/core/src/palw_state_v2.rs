@@ -57064,6 +57064,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ImprovementArtifact { .. } => "improvement_artifact",
                     PalwDeltaEntryV2::ImprovementLicence { .. } => "improvement_licence",
                     PalwDeltaEntryV2::ImprovementCompositeClass { .. } => "improvement_composite_class",
+                    // RFC-0006: their round trips are the layer-shard suite's (`tests/palw_tir_shard_fold.rs`).
+                    PalwDeltaEntryV2::TirShardPlan { .. } => "tir_shard_plan",
+                    PalwDeltaEntryV2::TirShardClaim { .. } => "tir_shard_claim",
                 });
             }
         }
@@ -57347,6 +57350,9 @@ pub(crate) mod tests {
             // The release line's model-specific finite court horizon, at the END of the delta enum (spec 17 §17.0:
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
+            // RFC-0006, after the court window: a layer-shard plan and a claim's per-shard record.
+            (101, PalwDeltaEntryV2::TirShardPlan { key, old: None, new: None }),
+            (102, PalwDeltaEntryV2::TirShardClaim { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");

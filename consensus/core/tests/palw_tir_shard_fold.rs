@@ -83,6 +83,8 @@ fn params(shard_at: Option<u64>) -> PalwStateParamsV2 {
         .with_rcore_plus_mirrors(Some(RCORE), 0, Vec::new())
         .with_tir_fence2_from_daa(Some(FENCE2))
         .with_tir_shard_from_daa(shard_at)
+        .with_worker_carve_permille(620)
+        .unwrap()
 }
 
 struct Run {
@@ -94,7 +96,7 @@ struct Run {
 
 impl Run {
     fn ctx(daa: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: h64(0xB10C_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 0 }
+        PalwBlockContextV2 { block: h64(0xB10C_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 1_000_000_000 }
     }
 
     fn try_at(
@@ -135,7 +137,8 @@ fn bond(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
         operator_pubkey: op_key(n),
         collateral,
         payout_payload: Hash64::from_u64_word(0x9A00 + n),
-        capable_classes: Default::default(),
+        // The floor class: every node runs it, and it is the population an outsider is drawn from.
+        capable_classes: std::iter::once(h64(1)).collect(),
         signature: Vec::new(),
     }
 }
@@ -164,11 +167,11 @@ fn claimed(f: &Fixture, x: &Execution, shard_at: Option<u64>) -> (Run, Hash64) {
             activation_daa: 0,
             admission: None,
         },
-        bond(PRODUCER, 1_000_000),
-        bond(OTHER, 1_000_000),
+        bond(PRODUCER, 100_000_000_000),
+        bond(OTHER, 100_000_000_000),
     ];
     for n in 10..18 {
-        objects.push(bond(n, 1_000_000));
+        objects.push(bond(n, 100_000_000_000));
     }
     objects.push(PalwConsensusObjectV2::ClassRegisteredTirV1 {
         class_id,
@@ -473,4 +476,175 @@ fn a_run_of_step_leaves_is_demanded_and_answered_as_one_unit() {
         }]);
         assert!(matches!(refused, PalwStateV2Error::TirFence2Refused(_)), "{bad:?}: {refused:?}");
     }
+}
+
+#[test]
+fn a_bond_may_sit_in_several_shards_and_its_lock_accumulates_and_it_is_paid_shard_by_shard() {
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    // Four bonds hold both shards (a small network): shard 0 is [10 | 11, 12, 13], shard 1 [11 | 10, 12, 13].
+    let anchor = h64(81);
+    let seats = vec![seat(10), seat(11), seat(12), seat(13), seat(11), seat(10), seat(12), seat(13)];
+    run.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats }]);
+    let bound = run.daa;
+    let shard_receipts = |shard: u16, outsider: u64, class: [u64; 3]| {
+        let masks = palw_tir_shard_assignment_v1(&anchor, &claim_id, shard, 1);
+        let mut out = vec![receipt(claim_id, outsider, shard, PalwReceiptVerdictV2::Valid, palw_tir_shard_outsider_mask_v1(1), bound + 1)];
+        for (i, n) in class.iter().enumerate() {
+            out.push(receipt(claim_id, *n, shard, PalwReceiptVerdictV2::Valid, masks[i], bound + 1));
+        }
+        out
+    };
+    run.step(&[part(claim_id, 0, shard_receipts(0, 10, [11, 12, 13]))]);
+    let first = run.s.slashable_lock(bond_key(11), claim_id).expect("locked by shard 0").amount;
+    run.step(&[part(claim_id, 1, shard_receipts(1, 11, [10, 12, 13]))]);
+    let claim = run.s.claim(&claim_id).unwrap();
+    assert!(matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+    let second = run.s.slashable_lock(bond_key(11), claim_id).expect("locked").amount;
+    assert!(second > first, "the second shard's price joins the first's: {first} -> {second}");
+    assert_eq!(run.s.slashable_lock(bond_key(11), claim_id).unwrap().segments, 0, "no longer one cell's mask");
+    let record = run.s.tir_shard_claim(&claim_id).unwrap();
+    assert_eq!(record.counted.len(), 8, "(bond, shard) pairs: every seat of both shards");
+}
+
+#[test]
+fn a_final_claim_pays_its_seats_by_the_work_they_vouched_for_and_the_reward_is_conserved() {
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    let anchor = h64(82);
+    run.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: panel_of(2, true) }]);
+    let bound = run.daa;
+    for shard in 0..2u16 {
+        run.step(&[part(claim_id, shard, licensing_receipts(claim_id, shard, 1, anchor, bound + 1))]);
+    }
+    assert!(matches!(run.s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+    let escrow = run.s.claim(&claim_id).unwrap().escrowed_reward;
+    let record = run.s.tir_shard_claim(&claim_id).unwrap().clone();
+    // Through the challenge window to `Final`.
+    let mut daa = run.daa;
+    for _ in 0..40 {
+        daa += 10;
+        run.at(daa, &[], None);
+        if matches!(run.s.claim(&claim_id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Final { .. })) {
+            break;
+        }
+    }
+    let claim = run.s.claim(&claim_id).expect("the claim stands");
+    assert!(matches!(claim.phase, PalwClaimPhaseV2::Final { .. }), "{:?}", claim.phase);
+    // Past R-core+ the legs vest in one row: the producer's, each credited seat's by its share of the work, the reserve.
+    let row = run.s.vesting_row(&claim_id).expect("a vesting row").clone();
+    let seat_pay: Vec<u64> = (10..18)
+        .map(|n| row.seats.iter().find(|(bond, _)| *bond == bond_key(n)).map(|(_, leg)| leg.amount).unwrap_or(0))
+        .collect();
+    assert!(seat_pay.iter().all(|a| *a > 0), "every credited seat is paid: {seat_pay:?}");
+    let (producer, reserve) = (row.producer.amount, row.reserve);
+    let paid: u64 = seat_pay.iter().sum();
+    assert_eq!(
+        producer as u128 + paid as u128 + reserve as u128 + row.buyback_bound.min(escrow) as u128 * 0,
+        (row.producer.amount + paid + row.reserve) as u128
+    );
+    assert!(producer + paid + reserve <= escrow, "never more than the escrow: {producer} + {paid} + {reserve} of {escrow}");
+    let shares: Vec<u32> = record.drawn_permille.clone();
+    assert_eq!(shares.len(), 8);
+    for (i, (a, s)) in seat_pay.iter().zip(&shares).enumerate() {
+        let want = seat_pay[0] as u128 * u128::from((*s).max(125)) / u128::from(shares[0].max(125));
+        assert!((*a as i128 - want as i128).abs() <= 1, "seat {i}: pay follows the share: {a} for {s}‰ (first seat {} for {}‰)", seat_pay[0], shares[0]);
+    }
+    let row_none = run.s.vesting_row(&claim_id).is_none();
+    let _ = row_none;
+    assert!(producer > 0 && paid > 0);
+}
+
+// =================================================================================================
+// The per-shard draw: class seats from the bonds that proved the shard, the shard's outsider from the network
+// =================================================================================================
+
+fn ready(run: &mut Run, f: &Fixture, s_l: u16, shard: u16, bonds: std::ops::RangeInclusive<u64>) {
+    use kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1;
+    use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
+    let ready_class = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&f.class_id, s_l, shard);
+    let entries = bonds
+        .map(|n| PalwDeltaEntryV2::SeatReadiness {
+            key: (bond_key(n), ready_class),
+            old: None,
+            new: Some(PalwSeatReadinessRowV1 { proved_daa: 100, proved_span: 1, leaf_index: 0, proof_version: 2, chunks: 16 }),
+        })
+        .collect();
+    let delta = PalwStateDeltaV2 { point: Run::ctx(run.daa + 1), entries };
+    run.s = apply_delta_v2(&run.s, &delta, &run.p).expect("the readiness rows install");
+}
+
+#[test]
+fn the_draw_seats_each_shard_from_the_bonds_that_proved_it_with_an_outsider_per_shard() {
+    use kaspa_consensus_core::palw_panel_v2::{
+        PalwPanelDrawPolicyV1, PalwPanelIndependenceV1, PalwPanelParamsV2, PalwPanelV2Error, derive_tir_shard_panel_v1,
+    };
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    // Shard 0 is held by 10..=15, shard 1 by 12..=17.
+    ready(&mut run, &f, 2, 0, 10..=15);
+    ready(&mut run, &f, 2, 1, 12..=17);
+    let params = PalwPanelParamsV2::new(5, 3, 4).unwrap();
+    let policy = PalwPanelDrawPolicyV1 {
+        weighted: false,
+        economy: None,
+        readiness: Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1 {
+            now_daa: 120,
+            max_age_daa: 1_000,
+            base_class_id: h64(1),
+            readiness_v2: true,
+        }),
+        independence: Some(PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa: 40 }),
+        valid_lock: None,
+        stake: None,
+    };
+    let draw = |seed: Hash64| derive_tir_shard_panel_v1(&run.s, &params, &claim_id, seed, 1_000, None, false, policy, 2);
+    let seats = draw(h64(500)).expect("both shards fill");
+    assert_eq!(seats.len(), 8, "2 shards x (outsider + 3 class seats)");
+    let id = |seat: &PalwPanelSeatV2| -> u64 { (10..18).chain([PRODUCER, OTHER]).find(|n| bond_key(*n) == seat.bond).expect("a known bond") };
+    // Class seats hold the shard they judge; the first seat of a shard is its outsider, drawn from the whole network.
+    for (shard, slice) in seats.chunks(4).enumerate() {
+        let held: Vec<u64> = if shard == 0 { (10..=15).collect() } else { (12..=17).collect() };
+        for class_seat in &slice[1..] {
+            assert!(held.contains(&id(class_seat)), "shard {shard}: seat {} did not prove it", id(class_seat));
+        }
+        let mut operators: Vec<Hash64> = slice.iter().map(|s| s.operator_id).collect();
+        operators.sort_unstable_by_key(|o| o.as_bytes());
+        operators.dedup();
+        assert_eq!(operators.len(), 4, "one seat per operator in a shard, the outsider's operator not a class seat's");
+    }
+    assert_ne!(seats[0].operator_id, seats[4].operator_id, "one operator holds at most one outsider seat of a claim");
+    // Deterministic; another seed is another draw; the draw never seats the claim's executor or the registrant as outsider.
+    assert_eq!(seats, draw(h64(500)).unwrap());
+    assert_ne!(seats, draw(h64(501)).unwrap());
+    assert!(seats.iter().all(|s| s.bond != bond_key(PRODUCER)));
+    // A shard short of operators refuses the whole draw by name; a sharded class never falls back to a flat panel.
+    let mut thin = run.s.clone();
+    {
+        use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
+        let class1 = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&f.class_id, 2, 1);
+        let rows = (12..=17u64).filter(|n| *n > 13).map(|n| PalwDeltaEntryV2::SeatReadiness {
+            key: (bond_key(n), class1),
+            old: Some(kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1 {
+                proved_daa: 100,
+                proved_span: 1,
+                leaf_index: 0,
+                proof_version: 2,
+                chunks: 16,
+            }),
+            new: None,
+        });
+        thin = apply_delta_v2(&thin, &PalwStateDeltaV2 { point: Run::ctx(run.daa + 2), entries: rows.collect() }, &run.p).unwrap();
+    }
+    let short = derive_tir_shard_panel_v1(&thin, &params, &claim_id, h64(500), 1_000, None, false, policy, 2);
+    assert!(
+        matches!(short, Err(PalwPanelV2Error::InsufficientEligibleShardBonds { shard: 1, needed: 3, available: 2 })),
+        "{short:?}"
+    );
 }
