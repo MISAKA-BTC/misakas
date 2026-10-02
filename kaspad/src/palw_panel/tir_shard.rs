@@ -18,7 +18,7 @@
 //!
 //! **Shadow mode** (`--palw-tir-shard-shadow`): the whole pass runs — cells verified, verdicts logged — and nothing is signed,
 //! gossiped, accused or carried: the node-only period RFC-0006 decision 1 puts before the fence is armed. **A device**
-//! (`--palw-tir-shard-gpu`) is a plug-in the binary registers ([`misaka_palw_sdk::lineages::tir::register_kernel_backend_v1`]); a
+//! (`--palw-tir-shard-gpu`) is a plug-in the binary registers ([`misaka_palw_sdk::lineages::tir::register_device_v1`]); a
 //! node that asked for one and has none says so once and runs the CPU — a refusal of the device is never a different verdict.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};

@@ -264,9 +264,13 @@ defaults (`ProducerWithholding`).
   assigned mask), read off the claim's record. The node leaves the flat replay for such a duty, verifies its cells over the
   claim's capture (`tir_verify_capture_cells_v1`, the CPU executor's `step_cell`, from the shard's own params), and files a V4
   receipt. A cell finding builds the same `TirShardCourtAccused` a whole-job replay builds, from the finding's leaf.
-- **Device.** Cells run through `KernelBackendV1`; a device backend is registered by a binary that links one
-  (`register_kernel_backend_v1`) and enabled with `--palw-tir-shard-gpu` (default off). A refusal of the device is never a
-  different verdict: the CPU runs the cell (`gpu-integer-backend.md` §8).
+- **Device.** Cells run through `KernelBackendV1`; a device is a `TirDeviceV1` (`misaka-palw-tir-exec::cellstep`: it builds the
+  stepper of a cell from the cell's own params, no consensus type crosses) that a binary registers (`register_device_v1`) and
+  `--palw-tir-shard-gpu` selects (default off). A refusal of the device — a cell of a segment after the first, params it cannot
+  hold, a history short of rows — is never a different verdict: the CPU runs the cell (`gpu-integer-backend.md` §8). The GPU
+  crate (`misaka-palw-tir-gpu`, an isolated workspace) implements `TirDeviceV1`; its `tests/cell.rs` holds the cell grain equal to
+  the CPU executor's. A node binary that carries it needs a plug-in boundary, because wgpu 30 (`js-sys ^0.3.104`) and the consensus
+  stack (`js-sys =0.3.77`) have no common lock.
 - **Shadow.** `--palw-tir-shard-shadow` runs the pass and files nothing.
 - **Holding a shard.** `--palw-tir-shard-hold` limits the shards a node proves and answers. The executor runs a shard from the
   params of its own occurrences alone (`TirExecutor::new_cell` refuses a cell whose occurrences read an unbound instance).
