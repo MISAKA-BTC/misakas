@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub use conn_builder::ConnBuilder;
 use kaspa_utils::fd_budget::FDGuard;
-pub use rocksdb_preset::RocksDbPreset;
+pub use rocksdb_preset::{DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, RocksDbPreset};
 
 mod conn_builder;
 mod rocksdb_preset;

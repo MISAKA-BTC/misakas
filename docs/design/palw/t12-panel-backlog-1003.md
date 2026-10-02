@@ -1,0 +1,104 @@
+# testnet-12 panel starvation, 2026-10-03 — measurements, causes, the node-only fixes (int-10.4)
+
+Lane P2, branch `rcore/int-10-p4` off `rcore/int-10-p2` 2483c570c (the fleet's int-10.3). Read-only on the fleet (journalctl,
+`/proc`, `perf`, the nodes' own JSON-wRPC). Nothing was restarted, edited or sent. DAA at the time of the measurements ≈ 3,960.
+
+## 1. What was measured
+
+**Who the stuck claims are.** 114 `panel_bound` claims (b0's `getPalwClaims`, 8 producers, 500 rows each). Their ages
+(DAA since the bind) run 0-211; the 22 older than 100 DAA **all** carry seats 2, 4 and 5 — the three seats still on 5.104
+(a panel is 5 of the 8 genesis bonds, quorum 3, so a panel with all of 2/4/5 needs at least one of them). Aged 30-100: seats 2/4/5 are on
+35/36/41 of 42. Receipts per hour per seat (`seat_receipts_1h`): b0 55, b1 30-38, b3 57, b6 50, b7 62-64, **b2 10, b4 9-12, b5 7-16**.
+Those three seats owe 213-252 duties each; b0 owes 82, b6 63.
+
+**The seats are not idle because they have nothing to do; the snapshot of `running` is the wrong gauge.** A floor replay
+takes 2-8 s (b0, 23:07: four replays in 14 s, two slots), so a `running=0` reading is the usual one on every seat; the number that
+matters is how many replays a seat STARTS and HARVESTS per iteration of its panel loop. A seat starts at most its slots' worth per
+iteration (`PalwSeatReplaysV1::has_room`) and files a finished one only when an iteration polls its duty, so
+
+    receipts per hour  ≈  slots × 3600 / iteration seconds.
+
+**The loop period, measured from the throttled `seat schedule` line (a log line at most once a minute, so its spacing is
+max(60 s, iteration)), 3 h of journal:**
+
+| unit | iterations | mean spacing | max | spacings > 75 s |
+| --- | --- | --- | --- | --- |
+| b0 (ibm) | 167 | 64 s | 140 s | 9 |
+| b6 (.113) | 167 | 64 s | 113 s | 12 |
+| b7 (.113) | 167 | 65 s | 115 s | 13 |
+| b3 (ibm) | 164 | 66 s | 122 s | 19 |
+| b1 (ibm) | 82 | 131 s | 360 s | 65 |
+| **b2 (5.104)** | 27 | **386 s** | 684 s | 27 |
+| **b4 (5.104)** | 28 | **368 s** | 694 s | 28 |
+| **b5 (5.104)** | 25 | **418 s** | 728 s | 25 |
+
+A 5.104 seat's loop iterates every ~6 minutes; with `--palw-seat-replay-slots=1` that is one receipt per iteration = the observed 10 an hour. Its
+replay "durations" in the journal (`replaying the anchor's job` → `licensed by replay`) are 250-540 s for every claim (mean 380 s, 88 replays) against 2-5 s for
+fresh claims on b0/b6/b7 — the same claims: `acfc43711c41` took 205 s on an ibm seat, 8 s on b7 and 415 s on b4. A duration is the time to the
+next poll, not the work (the replay thread itself is a spawn_blocking task; the `perf` profile of a running one is BLAKE2b over the replay's trace, 100 % of one core).
+
+The iteration period grows with the duties a seat owes, linearly at ~0.4 s a duty on an ibm seat (b3: 100 s at 240 duties, 122 s at 280; b0 at 82 duties hides
+under the 60 s throttle) and ~1.5 s a duty on 5.104:
+
+| host | CPU share the VP + loop get | SHA-256 4 KB, 3 s, single thread (python) |
+| --- | --- | --- |
+| .113 (load 0.15) | idle | 862k |
+| ibm (load 0.86) | | 715k |
+| 5.104 (load 7.5 on 8 vCPU, swap 8 GB) | saturated | 270-286k |
+
+**What saturates 5.104: the virtual processor of each seat** (`virtual-process` thread: 186 % on b4, 185 % on b5, 121 % on b1, 12 % on b0, 0 % on the idle ones;
+`top`: 43 % system time). `perf trace` on b4: **79 `pread64`s of 59,984,525 bytes in 8 s (10 a second)** — the same 57 MB range of one SST (`055687.sst`) — and
+the thread is 70 % kernel (`rep_movs_alternative`, `filemap_read`). That block is the data block that carries the PALW chain state's **tip row** (a ~57 MB
+borsh carriage, rewritten at every virtual commit: a new 60 MB L0 file every flush, 44.7 GB flushed since 03:44). The rows beside it
+in key order are the per-block overlay rows (`rewarded_epochs`, `block_quality_pool`, `reserve_balance`, the epoch accumulator — the SST's block starts with
+prefix 0xc6 = `EpochAccumulator` rows 1760, 1761, …). Every virtual commit walks the selected chain back `overlay_window_walk_bound` (≈ 600 DAA at the 120 s cadence:
+`selected_chain_overlay_window`) and reads two of those rows for each ancestor — through caches of `block_data_cache_size` = 200 × `bps()` (= 1 here) = **200 rows**, so every
+walk misses, and a miss that lands in the big block costs a 57 MB read. And RocksDB cannot cache that block at all: its built-in cache is 32 MB in 64 shards of 512 KB, and
+**an entry bigger than one shard is never kept** (measured in the new database test: a 40 MB row leaves 289 bytes resident under the default, 41.9 MB under the fix).
+
+Evidence this is the VP and not the panel: `getPalwNodeStatus` answers in 10-90 ms on every node (the consensus session is not blocked); 32-40 `SendPingsFlow … timeout expired after 120s`
+a node on 5.104 (the localhost peers too, i.e. the node's async runtime itself is starved), 31 on b6, 11/19 on b0/b1; b2 sat 24 DAA behind the tip.
+
+## 2. Causes, in order of confidence
+
+1. **(certain) The slowest seats gate every licence.** Panels with seats 2+4+5 cannot reach quorum without one of them, and those seats file 7-16 receipts an hour.
+   Licensing keeps pace with binding elsewhere (b0, 3 h, 30-minute bins: licences carried 29-99, binds 15-72; queue 109-135 stable) — the backlog is the claims behind the slow seats.
+2. **(certain) A seat's throughput is slots × 3600 / loop period**, and the 5.104 loop period is ~6 minutes with 1 slot.
+3. **(high) The 5.104 hosts are CPU-saturated, mostly by the three virtual processors** re-reading 57 MB through a block cache that cannot hold it, and by the per-commit overlay
+   walk missing a 200-row cache. A 2.6-3× slower per-thread speed (generic EPYC, 2.8 GHz, 3 nodes on 8 vCPUs) makes it worse.
+4. **(open) Which phase of the loop takes the six minutes is not yet attributed.** The throttled logs cannot say. int-10.4 adds the stopwatch (§3, F3); the first canary names the phase.
+
+## 3. What int-10.4 changes (node-only; no consensus rule, no on-disk format; `scripts/t12-repin.sh --drift-only` clean)
+
+* **F1 — a block cache that holds the block** (`database/src/db/rocksdb_preset.rs`, `consensus/src/consensus/factory.rs`, `kaspad/src/daemon.rs`): the default preset's consensus databases
+  open with a 256 MiB LRU cache in **two shards** (`BLOCK_CACHE_SHARD_BITS = 1`, 128 MiB each); `--rocksdb-cache-size` (MB) now also applies to the default preset (it used to be HDD only).
+  The address-manager/meta/utxo-index databases keep RocksDB's default. Filled lazily: resident = what the node reads. Test:
+  `a_consensus_sized_block_cache_keeps_a_block_bigger_than_rocksdbs_default_and_the_default_does_not`.
+* **F2 — the overlay row caches cover the overlay window** (`consensus/src/consensus/storage.rs`): `rewarded_epochs`, `block_quality_pool`, `reserve_balance` hold at least
+  `OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS` = 16,384 rows (under 2 MB each), so a steady-state walk reads no database.
+* **F3 — the loop's stopwatch** (`kaspad/src/palw_panel.rs`, `PalwTickGuardV1`): `getPalwNodeStatus.verification` gains `tick_last_s=… tick_max20_s=… tick_slowest=<phase>:<s>` (check-fleet prints it
+  on the F4 line) and an iteration over 20 s logs its phases of a second or more, once a minute. Phases: setup, challenger, court+da, duty-read, receipt-pool, schedule, duty-sweep, resend, accusations, tail.
+
+Expected gain: the VP stops preading 57 MB (b4/b5: 185 % → single digits; the ibm/.113 nodes are already at 0-120 %), the 5.104 hosts get back ~3-4 cores, and the
+loop and replay threads run at the speed the other hosts have. **This is a prediction: the canary reading is `tick_last_s` and the VP's CPU before/after on b2.**
+
+## 4. What int-10.4 does NOT do, and what needs a consensus change
+
+* **The PALW tip row is still 57 MB and rewritten every virtual commit** (60 MB L0 file per flush, compaction every 1-2 min, 2.2 GB/h flushed). A lagging snapshot (every K commits, recovery by the delta walk that already exists at
+  `processor.rs:1881`) or blob separation would end it; both touch crash recovery and the readers' "the row is the sink" assumption — a storage redesign for its own lane, not a canary change. The state root is a full
+  recompute over every collection (`state_root`), also O(state) per commit; an incremental root is a consensus-neutral change only if the bytes stay identical (a new golden-vector gate).
+* **Duplicate licence sets are not what delays licences.** b0 over 3 h: 1,316 `a PALW lifecycle object was dropped, and the block stands` (990 "seat … is already credited on this claim", 309 optimistic
+  receipts that do not verify, 13 no quorum, 3 refused) against 457 licences carried (343 `ReceiptLicensed`, 114 `OptimisticLicensed`), 319 `PanelBound`, 255 audit batches. Blocks carry 1-4 PALW objects (290 of 346 PALW-carrying blocks;
+  the largest had 18) and there is no per-block cap in play; the drops are parallel blocks crediting a seat first and a collector's single in-flight carrier (`MAX_INFLIGHT_CARRIERS = 1`) spent on a loser. They cost block mass and a
+  carrier slot, not licence throughput. A deterministic collector per claim would save the waste; it is node policy but the gain is small, so it is not in this lane.
+* **`PALW V2 state tip stood at X while the template selected parent is Y`** (37 in 20 minutes on b0): a template over a parent that is not the stored tip re-derives the state over the chain path
+  (`processor.rs:6369`) — parallel blocks, not a fault; each pays a `load_tip` (a full 57 MB decode). Gone with the lagging-snapshot redesign, not with a cache.
+* **Seat draws are by bond, not by host**: nothing in the draw can prefer fast hosts. That is a consensus change (capacity-weighted draws) and is the lever behind "a panel needs one of the slow seats" — F-N / L_ver in int-11 bounds issuance instead.
+
+## 5. Deploy notes and operations
+
+* int-10.4 is a binary swap on every node: no new flag is needed. `--rocksdb-cache-size=<MB>` overrides the 256 MiB. Memory: up to +224 MiB resident per node over today's 32 MB (lazily); on 5.104 three nodes = +0.7 GB of ~14.7 GB available.
+* Roll b2 first (5.104, the worst), watch `tick_last_s` and the VP's CPU (`top -H -p <pid>`, `virtual-process`) for 30 minutes, then the rest. A restart loses nothing a tick does not rebuild.
+* **No code change needed for this one, and it is the larger lever: put the seats where the CPU is.** .113 runs two nodes at a load of 0.15 and files 50-64 receipts an hour per seat; 5.104 runs
+  three at 7.5 and files 7-16. Moving b4 and b5 to .113 (b2 stays) with the existing `move-seat.sh` makes every panel's quorum reachable at the 50-60 an hour rate — the three seats that gate licensing become fast, and the
+  .113 host is still at one core a node. `--palw-seat-replay-slots` on the seats left on 5.104: leave 1 until the VP is fixed (a floor replay is a core's worth of BLAKE2b; more slots on a saturated host starve the VP further).

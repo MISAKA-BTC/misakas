@@ -1040,6 +1040,96 @@ pub(crate) struct PalwSeatSlotsV1 {
     pub load_limited: bool,
 }
 
+/// **How long the panel's loop takes per iteration, and where** (the 2026-10-03 panel starvation,
+/// `docs/design/palw/t12-panel-backlog-1003.md` §3).
+///
+/// A seat starts at most its slots' worth of replays per iteration and files a finished one only when an iteration
+/// polls it, so its receipts per hour are `slots × 3600 / iteration seconds`. On testnet-12 that period was never
+/// logged: the throttled `seat schedule` line (one a minute) was the only trace of it, and its spacing — 60-65 s on
+/// the fast hosts, 260-690 s on the 5.104 seats — is how the lane found that the 5.104 seats' loop ran every six
+/// minutes. This guard puts the number where an operator reads it: [`palw_panel_tick_status_v1`] rides the
+/// `getPalwNodeStatus.verification` line (`tick_last_s`, `tick_max20_s`, `tick_slowest`), and an iteration over
+/// [`PALW_PANEL_TICK_SLOW_SECS_V1`] logs its phases once a minute, so the phase that holds the loop is named in the
+/// journal instead of guessed from a profile. Node-local; nothing reads it but a human.
+pub(crate) const PALW_PANEL_TICK_SLOW_SECS_V1: f64 = 20.0;
+
+/// The last iterations' lengths in milliseconds (newest last, at most [`PALW_PANEL_TICK_HISTORY_V1`]) and the slowest
+/// phase of the last iteration.
+static PALW_PANEL_TICKS_V1: std::sync::Mutex<(std::collections::VecDeque<u64>, (u64, &'static str))> =
+    std::sync::Mutex::new((std::collections::VecDeque::new(), (0, "")));
+pub(crate) const PALW_PANEL_TICK_HISTORY_V1: usize = 20;
+
+/// `tick_last_s=.. tick_max20_s=.. tick_slowest=<phase>:<s>` — the loop's iteration time as the status line reads it
+/// (empty before the first iteration finishes).
+pub(crate) fn palw_panel_tick_status_v1() -> String {
+    let ticks = PALW_PANEL_TICKS_V1.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(last) = ticks.0.back() else { return String::new() };
+    let max = ticks.0.iter().max().copied().unwrap_or(0);
+    format!(
+        "tick_last_s={:.1} tick_max{}_s={:.1} tick_slowest={}:{:.1}",
+        *last as f64 / 1000.0,
+        PALW_PANEL_TICK_HISTORY_V1,
+        max as f64 / 1000.0,
+        if ticks.1.1.is_empty() { "-" } else { ticks.1.1 },
+        ticks.1.0 as f64 / 1000.0
+    )
+}
+
+/// One iteration's stopwatch: [`Self::phase`] names the section that just ended; dropping it (every way out of the
+/// iteration, `continue` included) records the iteration.
+pub(crate) struct PalwTickGuardV1 {
+    started: std::time::Instant,
+    mark: std::time::Instant,
+    phases: Vec<(&'static str, std::time::Duration)>,
+}
+
+impl PalwTickGuardV1 {
+    pub(crate) fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self { started: now, mark: now, phases: Vec::with_capacity(12) }
+    }
+
+    /// The section that ended now is `name`: its length is the time since the previous mark.
+    pub(crate) fn phase(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.phases.push((name, now.duration_since(self.mark)));
+        self.mark = now;
+    }
+}
+
+impl Drop for PalwTickGuardV1 {
+    fn drop(&mut self) {
+        let now = std::time::Instant::now();
+        let total = now.duration_since(self.started);
+        // What was after the last mark is the tail (the sections below the last `phase` call).
+        self.phases.push(("tail", now.duration_since(self.mark)));
+        let slowest = self.phases.iter().max_by_key(|(_, d)| *d).map(|(name, d)| (d.as_millis() as u64, *name)).unwrap_or((0, ""));
+        {
+            let mut ticks = PALW_PANEL_TICKS_V1.lock().unwrap_or_else(|e| e.into_inner());
+            if ticks.0.len() >= PALW_PANEL_TICK_HISTORY_V1 {
+                ticks.0.pop_front();
+            }
+            ticks.0.push_back(total.as_millis() as u64);
+            ticks.1 = slowest;
+        }
+        if total.as_secs_f64() >= PALW_PANEL_TICK_SLOW_SECS_V1 {
+            let phases = self.phases.clone();
+            crate::palw_backends::note_throttled_v1("panel-tick-slow", move || {
+                let mut listed: Vec<String> =
+                    phases.iter().filter(|(_, d)| d.as_secs_f64() >= 1.0).map(|(name, d)| format!("{name} {:.1} s", d.as_secs_f64())).collect();
+                if listed.is_empty() {
+                    listed.push("no phase over a second".to_string());
+                }
+                format!(
+                    "[{PALW_PANEL}] a panel loop iteration took {:.1} s (the seat starts at most its replay slots per iteration, so receipts per hour = slots x 3600 / this): {}",
+                    total.as_secs_f64(),
+                    listed.join(", ")
+                )
+            });
+        }
+    }
+}
+
 /// **SEAT-R's replays, off the panel's loop.**
 ///
 /// Before SEAT-R the full seat's replay was a last resort — a material that reproduced the roots
@@ -7427,6 +7517,8 @@ impl PalwPanelService {
                 return;
             }
 
+            // The iteration's stopwatch (`PalwTickGuardV1`): the phases below name the section that just ended.
+            let mut tick_guard = PalwTickGuardV1::new();
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
             while let Ok(event) = inbox.try_recv() {
                 match event {
@@ -7765,6 +7857,7 @@ impl PalwPanelService {
                 continue;
             }
 
+            tick_guard.phase("setup");
             // --- the challenger's half: dispute a licensed claim whose execution is not the
             // canonical one ---
             //
@@ -7938,6 +8031,7 @@ impl PalwPanelService {
                 .await;
             }
 
+            tick_guard.phase("challenger");
             // --- the court's half: answer the disputes this bond is a party to ---
             //
             // Nothing in this tree used to construct a `CourtDisclosed`. A challenger could open a
@@ -9497,9 +9591,11 @@ impl PalwPanelService {
                 }
             }
 
+            tick_guard.phase("court+da");
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
 
+            tick_guard.phase("duty-read");
             // --- the receipt pools: this tick's arrivals, against one read of the tip ---
             //
             // After the duty read, so the claims kept out of the ceiling's reach are this tick's
@@ -9560,6 +9656,7 @@ impl PalwPanelService {
                 }
             }
 
+            tick_guard.phase("receipt-pool");
             // **SEAT-R at the seat's own DAA, as every fence the verdict block reads, and what it makes
             // of each duty** (`PalwSeatRDutyV1`): the chain's per-claim receipt deadline, this seat's
             // role (full seat, a partial seat that replays — outside C7, or the claim's outsider — or
@@ -9663,7 +9760,7 @@ impl PalwPanelService {
                 let slots = seat_replays.occupancy();
                 let status = format!(
                     "seat_duties={} seat_oldest_wait_daa={} seat_receipts_1h={} sched_needed={} sched_backup={} sched_satisfied={} \
-                     slots={} running={} overdue={} detached={} load_limited={}",
+                     slots={} running={} overdue={} detached={} load_limited={} {}",
                     duties.len(),
                     duties.iter().map(|duty| current_daa.saturating_sub(duty.bound_daa)).max().unwrap_or(0),
                     receipts_filed_at.len(),
@@ -9674,7 +9771,8 @@ impl PalwPanelService {
                     slots.running,
                     slots.overdue,
                     slots.detached,
-                    slots.load_limited
+                    slots.load_limited,
+                    palw_panel_tick_status_v1()
                 );
                 self.flow_context.update_palw_runtime(|r| r.verification_seat = status);
             }
@@ -9712,6 +9810,7 @@ impl PalwPanelService {
                     );
                 }
             }
+            tick_guard.phase("schedule");
             for index in order {
                 let (duty, seat_r_duty) = (&duties[index], seat_r_duties[index]);
                 let deadline = seat_r_duty.deadline;
@@ -11321,6 +11420,7 @@ impl PalwPanelService {
                 answered.insert(key);
             }
 
+            tick_guard.phase("duty-sweep");
             // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
             //
             // A receipt was broadcast once and never again, and a peer's relay-once memory made even
@@ -11365,6 +11465,7 @@ impl PalwPanelService {
                 }
             }
 
+            tick_guard.phase("resend");
             // --- P2-6: this seat's accusations of withholding ---
             //
             // ADR-0152 §3.8 / DA-1 / DA-6 / DA-9: a seat that filed `Unavailable` (above), or whose
@@ -11461,6 +11562,7 @@ impl PalwPanelService {
                 court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
             }
 
+            tick_guard.phase("accusations");
             // --- P2-8b / P2-8d: this seat's replay filer (`palw_filer_replay`) ---
             //
             // ADR-0152 SR-8, §3.9's garbage row, J-6, DA-3: a claim this seat's replay refuted, or on
@@ -20852,6 +20954,37 @@ mod p2_6_da_accusation_policy {
         let sparse = run(100, &|tick| tick % 10 == 3);
         assert_eq!(sparse.iter().filter(|lane| **lane == Licence).count(), 10, "every waiting licence is carried in its slot");
     }
+
+    /// The loop's stopwatch (the 2026-10-03 panel starvation): an iteration is recorded however it ends, the status line
+    /// names its length and its slowest phase, and a phase is what ran since the previous mark.
+    #[test]
+    fn a_panel_tick_is_recorded_with_its_slowest_phase_on_every_way_out_of_the_iteration() {
+        fn one_iteration(exit_early: bool) {
+            let mut guard = PalwTickGuardV1::new();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            guard.phase("quick");
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            guard.phase("slow");
+            if exit_early {
+                // A `continue` or an early return: the guard drops with whatever phases it has.
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for exit_early in [false, true] {
+            one_iteration(exit_early);
+            let status = palw_panel_tick_status_v1();
+            assert!(status.starts_with("tick_last_s="), "the status names the last iteration: {status}");
+            assert!(status.contains(&format!("tick_max{PALW_PANEL_TICK_HISTORY_V1}_s=")), "{status}");
+            assert!(status.contains("tick_slowest=slow:"), "the 40 ms phase is the slowest of the three: {status}");
+        }
+        // The history is bounded.
+        for _ in 0..(PALW_PANEL_TICK_HISTORY_V1 + 5) {
+            drop(PalwTickGuardV1::new());
+        }
+        assert!(PALW_PANEL_TICKS_V1.lock().unwrap().0.len() <= PALW_PANEL_TICK_HISTORY_V1);
+    }
+
 
     /// **The tick is that scheduler**: the submitter builds one `PalwCarrierSlotsV1` from the last
     /// lane, marks each site in `TICK_ORDER`, asks the one gate at every site — the priority lane at
