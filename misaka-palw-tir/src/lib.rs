@@ -41,6 +41,7 @@ pub mod admit_v2;
 pub mod arith;
 pub mod builder;
 pub mod demand;
+pub mod dataflow;
 pub mod demand_v2;
 pub mod error;
 pub mod eval;

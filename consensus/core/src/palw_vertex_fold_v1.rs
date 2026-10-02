@@ -83,6 +83,7 @@ pub(super) fn apply_vertex_v1(
         Some(PalwVertexRoundRowV1 { leaves_root: vertex.leaves_root, accepted_daa: daa, convicted: false }),
     );
     let resolved = ResolvedLeavesV1::of(&builder.state, &vertex.leaves);
+    let audit_index = super::palw_mesh_fold_v1::AuditRefIndexV1::of(&builder.state, &vertex.leaves);
     for leaf in &vertex.leaves {
         match leaf {
             PalwVertexLeafV1::Verdict { claim, verdict } => {
@@ -90,11 +91,25 @@ pub(super) fn apply_vertex_v1(
                 count_verdict_v1(builder, ctx, vertex, &claim_id, verdict)?;
             }
             PalwVertexLeafV1::Held { claim, object, first, last, digest } => {
-                let Some(claim_id) = resolved.resolve(&builder.state, claim) else { continue };
+                let Some(claim_id) = resolved.resolve(&builder.state, claim) else {
+                    // **RFC-0007 Part IV.2: a class-level DA attestation** — a `Held` leaf naming a `Prefetching` class by its id
+                    // (the capture of its probe job), from any Active bond, is one vote of the DA certificate capped entry reads.
+                    if let PalwClaimRefV1::Full(class_id) = claim {
+                        super::palw_mesh_fold_v1::record_class_held_v1(builder, vertex, class_id, *object, *first, *last, *digest);
+                    }
+                    continue;
+                };
                 record_held_v1(builder, vertex, &claim_id, *object, *first, *last, *digest);
             }
-            // Refused by the shape check above; named, never `unreachable!`.
-            PalwVertexLeafV1::Audited { .. } => return Err(refused("an audit leaf: the audit mesh is not armed by this fence")),
+            // **RFC-0007 Part IV.1**: an audit leaf rides a vertex only where `palw_audit_mesh_v1` is in force; it counts when its seat
+            // is a drawn auditor of the claim (`palw_mesh_fold_v1`), and is otherwise ignored.
+            PalwVertexLeafV1::Audited { claim, leaf, result } => {
+                if !builder.params.audit_mesh_active_at(daa) {
+                    return Err(refused(PalwVertexErrorV1::AuditedLeafNotArmed { index: 0 }.to_string()));
+                }
+                let Some(claim_id) = audit_index.resolve(&builder.state, claim) else { continue };
+                super::palw_mesh_fold_v1::count_audited_leaf_v1(builder, ctx, &vertex.seat_bond, vertex.signed_daa, &claim_id, *leaf, *result)?;
+            }
         }
     }
     Ok(())
@@ -317,6 +332,13 @@ impl PalwChainStateV2 {
             }
         }
         for (claim_id, rows) in &self.vertex.held {
+            // A class-level attestation (RFC-0007 Part IV.2) is keyed by a class that still gathers holders.
+            if self.model_lifecycles.contains_key(claim_id) {
+                if rows.is_empty() || rows.len() > PALW_VERTEX_HELD_MAX_PER_CLAIM_V1 {
+                    return bad(format!("class-level Held rows of {claim_id} are empty or past the cap"));
+                }
+                continue;
+            }
             let (Some(claim), true) = (self.claims.get(claim_id), self.panels.contains_key(claim_id)) else {
                 return bad(format!("Held rows of claim {claim_id}, which has no claim or panel"));
             };

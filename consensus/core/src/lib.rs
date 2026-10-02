@@ -509,6 +509,8 @@ pub mod palw_gen_one_move_v1;
 pub mod palw_held_close_v1;
 /// RFC-0007 Part I and Part III (spec 18): verification vertices, licence by tally, equivocation, `Held` leaves and the security parameters — dormant behind `palw_verification_vertex_v1`.
 pub mod palw_vertex_v1;
+/// RFC-0007 Part II (consensus half), Part IV.1 and Part IV.2 (spec 18): the witness manifest, the global audit mesh with its traps, and staged (capped) onboarding — each dormant behind its own fence.
+pub mod palw_mesh_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

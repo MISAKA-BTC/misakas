@@ -925,6 +925,25 @@ pub fn check_palw_attempt_da_pins_v1(
     attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
     daa_score: u64,
 ) -> Result<(), PalwAdmissionV2Error> {
+    // **RFC-0007 Part II, past `palw_witness_manifest_v1`**: the chunk count may carry the witness (`1 + chunks`), under the v2 manifest
+    // root. Which count a class owes is the stateful half ([`check_palw_attempt_witness_pin_v1`], where the class profile is read);
+    // here, with no state, the shape: a count of 1 under the v1 root or `2..=1 + max` under the v2 one.
+    if state_params.witness_manifest_active_at(daa_score) {
+        crate::palw_mesh_v1::palw_witness_manifest_shape_ok_v1(attempt.trace_root, attempt.trace_chunk_count, attempt.trace_manifest_root)
+            .map_err(|refusal| match refusal {
+                crate::palw_mesh_v1::WitnessPinRefusalV1::CountOutOfRange { count } => {
+                    PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: count, canonical: 1 }
+                }
+                crate::palw_mesh_v1::WitnessPinRefusalV1::ManifestNotDerived { claimed, derived } => {
+                    PalwAdmissionV2Error::TraceManifestNotDerived { claimed, derived }
+                }
+            })?;
+        let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+        if attempt.trace_retention_daa != derived {
+            return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
+        }
+        return Ok(());
+    }
     let canonical = crate::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS;
     if attempt.trace_chunk_count != canonical {
         return Err(PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: attempt.trace_chunk_count, canonical });
@@ -936,6 +955,25 @@ pub fn check_palw_attempt_da_pins_v1(
     let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
     if attempt.trace_retention_daa != derived {
         return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
+    }
+    Ok(())
+}
+
+/// **The stateful half of the witness manifest pin** (RFC-0007 Part II): past `palw_witness_manifest_v1`, an attempt of a class that
+/// recorded a witness profile commits exactly `1 + profile.chunks` trace chunks; a class with none commits one. A producer chooses
+/// neither (a free count would be a free draw on both lotteries, ADR-0072 Decision 8).
+pub fn check_palw_attempt_witness_pin_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    daa_score: u64,
+) -> Result<(), PalwAdmissionV2Error> {
+    if !state_params.witness_manifest_active_at(daa_score) {
+        return Ok(());
+    }
+    let canonical = crate::palw_mesh_v1::palw_witness_canonical_chunk_count_v1(state.mesh_witness_profile_v1(&attempt.class_id));
+    if attempt.trace_chunk_count != canonical {
+        return Err(PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: attempt.trace_chunk_count, canonical });
     }
     Ok(())
 }
@@ -1006,6 +1044,7 @@ where
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
     check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
+    check_palw_attempt_witness_pin_v1(state, state_params, &envelope.attempt, daa_score)?;
     let attempt_id =
         check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond, budget_fences)?;
     // The anchor is derived HERE, from the header, after the stateless list has agreed that the

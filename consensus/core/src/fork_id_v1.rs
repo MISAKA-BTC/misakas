@@ -735,6 +735,9 @@ mod tests {
             "palw_held_close_chunks_v1" => params.palw_held_close_chunks_v1 = Some(at),
             // RFC-0007 Part I: a bare height.
             "palw_verification_vertex_v1" => params.palw_verification_vertex_v1 = Some(at),
+            "palw_witness_manifest_v1" => params.palw_witness_manifest_v1 = Some(at),
+            "palw_audit_mesh_v1" => params.palw_audit_mesh_v1 = Some(at),
+            "palw_capped_onboarding_v1" => params.palw_capped_onboarding_v1 = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),

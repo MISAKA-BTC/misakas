@@ -345,6 +345,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::VertexEquivocationV1 { evidence } => {
             crate::palw_vertex_v1::palw_vertex_equivocation_shape_v1(evidence).map_err(|_| "a vertex equivocation is malformed (RFC-0007 Part I)")
         }
+        // RFC-0007 Part IV.1: the trap objects ride shaped at every height (the signature's length, the tile count the commitment can
+        // bind); the setter's signature, the slot lottery and the windows are the acceptance layer's and the fold's, and below
+        // `palw_audit_mesh_v1` the walk drops them by name.
+        PalwConsensusObjectV2::TrapCommittedV1 { trap } => {
+            crate::palw_mesh_v1::palw_trap_committed_shape_v1(trap).map_err(|_| "a trap commitment is malformed (RFC-0007 Part IV.1)")
+        }
+        PalwConsensusObjectV2::TrapRevealedV1 { reveal } => {
+            crate::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|_| "a trap reveal is malformed (RFC-0007 Part IV.1)")
+        }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),

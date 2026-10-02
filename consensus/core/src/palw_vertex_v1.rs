@@ -379,8 +379,10 @@ pub enum PalwVertexErrorV1 {
     LeavesTooLarge { got: usize },
     #[error("a vertex whose leaves are not strictly ascending (leaf {index})")]
     LeavesNotAscending { index: usize },
-    #[error("a vertex whose leaf {index} is an audit leaf: the audit mesh is not armed by this fence")]
+    #[error("a vertex whose leaf {index} is an audit leaf: the audit mesh (palw_audit_mesh_v1) is not armed")]
     AuditedLeafNotArmed { index: usize },
+    #[error("a vertex whose Audited leaf {index} reports result {result}, which is neither 0 (match) nor 1 (mismatch)")]
+    AuditResultUnknown { index: usize, result: u8 },
     #[error("a vertex whose Held leaf {index} names object {object}, which is not 0 (capture), 1 (witness) or 2 (trace manifest)")]
     HeldObjectUnknown { index: usize, object: u8 },
     #[error("a vertex whose Held leaf {index} names the chunks {first}..={last}, an inverted range")]
@@ -466,7 +468,13 @@ pub fn palw_vertex_leaves_shape_v1(leaves: &[PalwVertexLeafV1]) -> Result<(), Pa
         }
         previous = Some(key);
         match leaf {
-            PalwVertexLeafV1::Audited { .. } => return Err(E::AuditedLeafNotArmed { index }),
+            // An audit leaf is well formed when its result is a match or a mismatch; whether the audit mesh is armed is the
+            // acceptance gate's and the fold's question ([`palw_vertex_has_audit_leaf_v1`]).
+            PalwVertexLeafV1::Audited { result, .. } => {
+                if *result > 1 {
+                    return Err(E::AuditResultUnknown { index, result: *result });
+                }
+            }
             PalwVertexLeafV1::Held { object, first, last, .. } => {
                 if *object > PALW_VERTEX_HELD_OBJECT_TRACE_MANIFEST_V1 {
                     return Err(E::HeldObjectUnknown { index, object: *object });
@@ -479,6 +487,11 @@ pub fn palw_vertex_leaves_shape_v1(leaves: &[PalwVertexLeafV1]) -> Result<(), Pa
         }
     }
     Ok(())
+}
+
+/// **Does a vertex carry an audit leaf** — which only a chain with `palw_audit_mesh_v1` in force may take.
+pub fn palw_vertex_has_audit_leaf_v1(leaves: &[PalwVertexLeafV1]) -> Option<usize> {
+    leaves.iter().position(|leaf| matches!(leaf, PalwVertexLeafV1::Audited { .. }))
 }
 
 /// **The signature check** (PALW-VC-2): the seat's registered key, over [`palw_vertex_message_v1`], under
@@ -659,11 +672,21 @@ pub struct PalwVertexStateV1 {
     pub rounds: std::collections::BTreeMap<(u64, PalwBondKeyV2), PalwVertexRoundRowV1>,
     pub tallies: std::collections::BTreeMap<Hash64, PalwVertexTallyV1>,
     pub held: std::collections::BTreeMap<Hash64, Vec<PalwVertexHeldRowV1>>,
+    /// **RFC-0007 Parts II and IV's tables** ([`crate::palw_mesh_v1::PalwMeshStateV1`]): the witness profiles, the audit rows, the trap
+    /// rows and the capped claims. They ride in this struct's carriage tail and journal (`VertexRow`, table ids 4 to 7) and are
+    /// rooted in their own Some-only block (`mesh/v1`).
+    pub mesh: crate::palw_mesh_v1::PalwMeshStateV1,
 }
 
 impl PalwVertexStateV1 {
+    /// No vertex table holds a row (the mesh's tables are asked by [`Self::is_fully_empty`]).
     pub fn is_empty(&self) -> bool {
         self.rounds.is_empty() && self.tallies.is_empty() && self.held.is_empty()
+    }
+
+    /// No table of either family holds a row: nothing to carry.
+    pub fn is_fully_empty(&self) -> bool {
+        self.is_empty() && self.mesh.is_empty()
     }
 }
 
@@ -1261,9 +1284,10 @@ mod tests {
         bad.leaves_root = palw_vertex_root_of_leaves_v1(&many).unwrap();
         bad.leaves = many;
         assert!(matches!(palw_vertex_shape_v1(&bad), Err(E::TooManyLeaves { .. })));
-        // An audit leaf, an unknown Held object and an inverted Held range.
+        // An audit leaf's result (a well-formed audit leaf passes the shape: the fence is the gate's), an unknown Held object and an
+        // inverted Held range.
         for (leaf, want) in [
-            (PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 0 }, E::AuditedLeafNotArmed { index: 0 }),
+            (PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 2 }, E::AuditResultUnknown { index: 0, result: 2 }),
             (
                 PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h(5)), object: 9, first: 0, last: 1, digest: h(1) },
                 E::HeldObjectUnknown { index: 0, object: 9 },

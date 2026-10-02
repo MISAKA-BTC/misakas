@@ -250,6 +250,7 @@ pub fn palw_lifecycle_state_name_v1(state: &PalwModelLifecycleV1) -> &'static st
         PalwModelLifecycleV1::ActiveLimited { .. } => "ActiveLimited",
         PalwModelLifecycleV1::Active => "Active",
         PalwModelLifecycleV1::Held => "Held",
+        PalwModelLifecycleV1::Capped { .. } => "Capped",
     }
 }
 
