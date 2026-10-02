@@ -405,6 +405,15 @@ pub struct Args {
     /// line only, like the salt.
     #[serde(skip)]
     pub palw_drill_held_chunks_at: Option<u64>,
+    /// **DRILL ONLY: cross the int-11 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int11_at_v1`): the
+    /// whole list — decode rules, the generative fence, FP Job V5, the held leaf challenge, the improvement fence, F-N's
+    /// verification term and the capacity ramp's ρ = 25 step — at H', and ρ = 100 at H' + 95, the offset the release uses. The
+    /// combined crossing, instead of the per-fence flags (`--palw-drill-gen-at`, `-decode-rules-at`, `-fp-v5-at`, `-held-chunks-at`,
+    /// `-improve-at`, `-capacity-network-verify-at`, `-capacity-step2-at`, `-capacity-step3-at`), which it excludes. It needs
+    /// `palw_tir_v1` and `palw_tir_fence2` in force at or below it (`--palw-drill-tir-at`, `--palw-drill-tir2-at`) and the ρ = 10
+    /// capacity flag day below it. Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_int11_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
     /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
@@ -688,6 +697,7 @@ impl Default for Args {
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
             palw_drill_held_chunks_at: None,
+            palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
             palw_improve_artifact_dir: None,
@@ -1821,6 +1831,20 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-int11-at")
+                .long("palw-drill-int11-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: cross the int-11 flag day as the release arms it — decode rules, \
+                     palw_gen_v1, palw_fp_job_v5, palw_held_close_chunks_v1, palw_improvement_v1, palw_capacity_network_verify \
+                     and the capacity ramp's rho = 25 step at this DAA, rho = 100 at this DAA + 95 — on the drill chain. Nothing \
+                     else moves. Excludes the per-fence flags of those entries. Refused without the salt, at 0, at a height \
+                     another fence uses, and unless palw_tir_v1, palw_tir_fence2 and the rho = 10 capacity flag day are in force at \
+                     or below it (--palw-drill-tir-at, --palw-drill-tir2-at, --palw-drill-fence3-at).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-improve-at")
                 .long("palw-drill-improve-at")
                 .require_equals(true)
@@ -2908,6 +2932,7 @@ impl Args {
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
+            palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),

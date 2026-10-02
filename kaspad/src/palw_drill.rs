@@ -88,6 +88,9 @@ pub struct PalwDrillExtraFencesV1 {
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
     pub improve_at: Option<u64>,
+    /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
+    /// per-fence flags of its entries, never with them.
+    pub int11_at: Option<u64>,
 }
 
 impl PalwDrillExtraFencesV1 {
@@ -106,6 +109,7 @@ impl PalwDrillExtraFencesV1 {
             fp_v5_at: args.palw_drill_fp_v5_at,
             held_chunks_at: args.palw_drill_held_chunks_at,
             improve_at: args.palw_drill_improve_at,
+            int11_at: args.palw_drill_int11_at,
         }
     }
 
@@ -119,6 +123,7 @@ impl PalwDrillExtraFencesV1 {
             || self.fp_v5_at.is_some()
             || self.held_chunks_at.is_some()
             || self.improve_at.is_some()
+            || self.int11_at.is_some()
     }
 
     /// Does any capacity step flag stand?
@@ -157,6 +162,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
             ("--palw-drill-held-chunks-at", self.held_chunks_at, "RFC-0003's held leaf challenge (palw_held_close_chunks_v1)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
+            ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
         ]
         .into_iter()
         .find_map(|(flag, at, what)| at.map(|at| (flag, at, what)))
@@ -173,12 +179,37 @@ impl PalwDrillExtraFencesV1 {
                     .to_owned(),
             );
         }
+        // The whole int-11 list moves its entries together; a per-fence flag of any of them would move one a second time.
+        if self.int11_at.is_some() {
+            let per_fence = [
+                ("--palw-drill-gen-at", self.gen_at),
+                ("--palw-drill-decode-rules-at", self.decode_rules_at),
+                ("--palw-drill-fp-v5-at", self.fp_v5_at),
+                ("--palw-drill-held-chunks-at", self.held_chunks_at),
+                ("--palw-drill-improve-at", self.improve_at),
+                ("--palw-drill-capacity-network-verify-at", self.capacity_network_verify_at),
+                ("--palw-drill-capacity-step2-at", self.capacity_step2_at),
+                ("--palw-drill-capacity-step3-at", self.capacity_step3_at),
+                ("--palw-drill-capacity-rho100-at", self.capacity_rho100_at),
+            ];
+            if let Some((flag, _)) = per_fence.into_iter().find(|(_, at)| at.is_some()) {
+                return Err(format!(
+                    "--palw-drill-int11-at moves the int-11 flag day's whole list (decode rules, gen, FP Job V5, the held leaf challenge, \
+                     improvement, F-N's verification term, rho = 25 at H' and rho = 100 at H' + 95), and {flag} moves one of its entries: \
+                     pick the combined crossing or the per-fence flags"
+                ));
+            }
+        }
         let mut moves = Vec::new();
         if let Some(at) = self.tir2_at {
             moves.extend(d::palw_drill_tir_fence2_at_v1(params, at).map_err(|e| format!("--palw-drill-tir2-at: {e}"))?);
         }
         if let Some(at) = self.model_court_at {
             moves.extend(d::palw_drill_model_court_window_at_v1(params, at).map_err(|e| format!("--palw-drill-model-court-at: {e}"))?);
+        }
+        // After the IR fences it needs below it, before the per-fence flags it excludes.
+        if let Some(at) = self.int11_at {
+            moves.extend(d::palw_drill_int11_at_v1(params, at).map_err(|e| format!("--palw-drill-int11-at: {e}"))?);
         }
         if let Some(at) = self.capacity_network_room_at {
             moves.extend(
@@ -252,7 +283,10 @@ impl PalwDrillExtraFencesV1 {
     /// `none` when absent, also what a marker written before the flag existed counts as, so no earlier line changes its text
     /// and a chain a release line's binary started reopens under this build.
     fn later_marker_lines(&self) -> Vec<(&'static str, &'static str, String)> {
-        vec![("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at))]
+        vec![
+            ("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at)),
+            ("int11_at=", "--palw-drill-int11-at", palw_drill_marker_fence_text_v1(self.int11_at)),
+        ]
     }
 
     /// The marker's `extra_at=` line — RFC-0003 / RFC-0004's four flags only (`none` when none stands, else
@@ -871,6 +905,7 @@ pub fn palw_drill_write_keyring_v4(
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
         "held_chunks_at": extra.held_chunks_at,
+        "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
