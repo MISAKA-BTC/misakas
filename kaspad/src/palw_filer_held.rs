@@ -1013,6 +1013,7 @@ mod tests {
             free_prompt: false,
             work_leaves: 0,
             job_identity: h(0x1D),
+            tir_shard: None,
         }
     }
 

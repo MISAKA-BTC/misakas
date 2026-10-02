@@ -1265,6 +1265,32 @@ pub struct PalwSeatDutyV2 {
     /// holding a free-prompt capture binds it to this pin before it signs (the 3a review's L-b:
     /// `PalwClaimRootsV1::job_pin`); carried off the claim record, like the roots.
     pub job_identity: Hash64,
+    /// **RFC-0006: this seat's place in a layer-sharded panel** — `None` on every flat panel (every network that never armed
+    /// `palw_tir_shard_v1`). Read off the claim's shard record and the seat's index in the stored panel; node policy, nothing
+    /// that folds.
+    pub tir_shard: Option<PalwTirShardDutyV1>,
+}
+
+/// **A seat's duty in a layer-sharded panel** (RFC-0006 §4): which shard's slice it sits in and which segments of that shard
+/// it is assigned (`outsider` seats attest the whole shard).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirShardDutyV1 {
+    pub shard: u16,
+    pub s_l: u16,
+    pub s_p: u16,
+    /// This seat is the shard's outsider (the first seat of its slice).
+    pub outsider: bool,
+    /// The seat's index inside its slice (`[outsider?] ++ class seats`).
+    pub slice_index: u8,
+    /// The segments of the shard this seat is assigned: the whole shard for the outsider and under `S_P = 1`.
+    pub segments: crate::palw_verification_v2::PalwSegmentMaskV2,
+}
+
+impl PalwSeatDutyV2 {
+    /// A seat of the flat panel: no shard place. The one place a duty's RFC-0006 half is spelled out for tests and doubles.
+    pub fn flat_v1(self) -> Self {
+        Self { tir_shard: None, ..self }
+    }
 }
 
 impl PalwSeatDutyV2 {
@@ -2457,6 +2483,34 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             if awaits && !crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &seat.bond) {
                 continue;
             }
+            // RFC-0006: a seat of a layer-sharded panel answers for its shard's slice only, and a shard whose part has landed
+            // owes nothing more.
+            let mut tir_shard_duty = None;
+            if let Some(record) = state.tir_shard_claim(claim_id) {
+                let stride = usize::from(crate::palw_tir_shard_v1::palw_tir_panel_stride_v1(record.outsider));
+                let (shard, index) = ((seat_index / stride) as u16, seat_index % stride);
+                if record.progress.is_licensed(u32::from(shard)) {
+                    continue;
+                }
+                let Some(segments) = crate::palw_tir_shard_v1::palw_tir_shard_seat_mask_v1(
+                    &panel.anchor,
+                    claim_id,
+                    shard,
+                    record.s_p,
+                    record.outsider,
+                    index,
+                ) else {
+                    continue;
+                };
+                tir_shard_duty = Some(PalwTirShardDutyV1 {
+                    shard,
+                    s_l: record.s_l,
+                    s_p: record.s_p,
+                    outsider: record.outsider && index == 0,
+                    slice_index: index as u8,
+                    segments,
+                });
+            }
             out.push(PalwSeatDutyV2 {
                 panel_anchor: panel.anchor,
                 seat_index: seat_index as u8,
@@ -2480,6 +2534,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
                 work_leaves: claim.work_leaves,
                 job_identity: claim.job_identity,
+                tir_shard: tir_shard_duty,
             });
         }
     }

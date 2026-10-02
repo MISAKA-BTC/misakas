@@ -17146,6 +17146,7 @@ mod seat_duty_panel_key_tests {
             free_prompt: false,
             work_leaves: 0,
             job_identity: Hash64::default(),
+            tir_shard: None,
         }
     }
 
@@ -18055,6 +18056,7 @@ mod seat_r_tests {
             free_prompt: false,
             work_leaves: 0,
             job_identity: Hash64::default(),
+            tir_shard: None,
         }
     }
 

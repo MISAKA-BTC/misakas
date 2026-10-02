@@ -323,6 +323,20 @@ fn a_claim_licenses_by_two_parts_with_its_outsiders_and_the_recount_runs_over_ce
     assert_eq!(record.drawn_permille.len(), 8);
     assert_eq!(record.progress.licensed_count(), 0);
     let bound = run.daa;
+    // The seat duties name each seat's shard, slice index and assigned segments (RFC-0006 §4; node policy).
+    let everyone: Vec<PalwBondKeyV2> = (10..18).map(bond_key).collect();
+    let duties = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&run.s, &run.p, &everyone);
+    assert_eq!(duties.len(), 8);
+    for d in &duties {
+        let n = d.seat_bond.0.index as u64;
+        let _ = n;
+        let place = d.tir_shard.expect("a sharded claim's duty has a shard place");
+        let i = d.seat_index as usize;
+        assert_eq!((place.shard as usize, place.slice_index as usize), (i / 4, i % 4));
+        assert_eq!(place.outsider, i % 4 == 0, "the outsider leads each slice");
+        assert_eq!((place.s_l, place.s_p), (2, 1));
+        assert_eq!(place.segments, PalwSegmentMaskV2::full(1), "layers-only: every seat attests the whole shard");
+    }
     // A flat licence of the claim is refused by name: it licenses by its parts only.
     assert!(matches!(
         run.refused(&[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![] }]),
@@ -345,6 +359,9 @@ fn a_claim_licenses_by_two_parts_with_its_outsiders_and_the_recount_runs_over_ce
     assert!(matches!(run.s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "one part licenses no claim");
     let landed = run.s.tir_shard_claim(&claim_id).unwrap();
     assert!(landed.progress.is_licensed(0) && !landed.progress.is_licensed(1));
+    let after = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&run.s, &run.p, &everyone);
+    assert_eq!(after.len(), 4, "a shard whose part landed owes nothing more");
+    assert!(after.iter().all(|d| d.tir_shard.is_some_and(|p| p.shard == 1)));
     assert_eq!(landed.cell_counts, vec![3, 0], "two class seats and the outsider on shard 0's cell");
     assert_eq!(landed.counted.len(), 4, "the outsider and the three class seats said Valid");
     for n in 10..14 {
