@@ -331,6 +331,10 @@ pub fn palw_batch_entry_route_v1(
     let (Some(claim), Some(panel)) = (state.claim(&entry.claim), state.panel(&entry.claim)) else {
         return PalwBatchEntryRouteV1::Inert;
     };
+    // RFC-0007's path rule: a claim that licenses by tally takes no receipt entry (inert, like a claim already gone).
+    if crate::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, params, daa_score, &entry.claim) {
+        return PalwBatchEntryRouteV1::Inert;
+    }
     if panel.anchor != entry.anchor_hash {
         return PalwBatchEntryRouteV1::Inert;
     }

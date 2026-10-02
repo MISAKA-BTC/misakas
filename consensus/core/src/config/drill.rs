@@ -662,6 +662,17 @@ pub fn palw_drill_held_close_chunks_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1)
 }
 
+/// **A drill arms the verification vertex at a low height** (RFC-0007 Part I; `--palw-drill-vertex-at`) — the one-entry drill list
+/// [`crate::palw_vertex_v1::PALW_DRILL_VERTEX_FENCES_V1`]: ARMS `palw_verification_vertex_v1` at `at` and moves nothing else.
+/// `validate_palw_v2` refuses the result unless `palw_verification_v2`, `palw_rcore_plus`, `palw_unavailable_abstains`,
+/// `palw_panel_economy` and `palw_objective_offence` are in force at or below `at`.
+pub fn palw_drill_vertex_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_VERTEX_V1)
+}
+
 /// **A drill crosses testnet-12's DAA-3,600 flag day at a low height** (`--palw-drill-tir2-at`) —
 /// [`palw_drill_post_launch_fences_at_v1`] for
 /// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: MOVES `palw_tir_fence2` from the release's
@@ -738,6 +749,10 @@ const PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1: PalwDrillFlagDayV1 = PalwDrillFl
     list: crate::palw_held_close_v1::PALW_DRILL_HELD_CLOSE_CHUNKS_FENCES_V1,
     flag: "--palw-drill-held-chunks-at",
 };
+
+/// The verification vertex alone (`--palw-drill-vertex-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_VERTEX_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_vertex_v1::PALW_DRILL_VERTEX_FENCES_V1, flag: "--palw-drill-vertex-at" };
 
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =

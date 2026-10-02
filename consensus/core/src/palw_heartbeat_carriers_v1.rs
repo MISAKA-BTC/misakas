@@ -186,7 +186,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::TeacherLicenceRegistered { .. }
         | O::CandidateSubmitted { .. }
         | O::LineageHeadRolledBack { .. }
-        | O::ImprovementPoolFunded { .. } => false,
+        | O::ImprovementPoolFunded { .. }
+        // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the
+        // equivocation evidence is a conviction needing no court, but like the round lane's it is outside H-1's enumeration.
+        | O::VerificationVertexV1 { .. }
+        | O::VertexEquivocationV1 { .. } => false,
     }
 }
 

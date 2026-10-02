@@ -336,6 +336,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
             crate::palw_held_close_v1::palw_held_leaf_challenge_shape_v1(challenge)
         }
+        // RFC-0007 Part I: a vertex rides shaped (the strict leaf order, the caps, the root) at every height, and an equivocation
+        // shaped (one seat, one round, two roots), as the held leaf challenge does; the signatures, the clock and the registry are
+        // the acceptance layer's, and below `palw_verification_vertex_v1` the walk drops them by name.
+        PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
+            crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
+        }
+        PalwConsensusObjectV2::VertexEquivocationV1 { evidence } => {
+            crate::palw_vertex_v1::palw_vertex_equivocation_shape_v1(evidence).map_err(|_| "a vertex equivocation is malformed (RFC-0007 Part I)")
+        }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),
