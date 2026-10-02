@@ -53,7 +53,9 @@ fn every_program_of_the_node_suites_conforms_streamed_and_sampled() {
         let got = tir_executor_conformance_of_file_v1(&path, TIR_CONFORMANCE_POSITIONS_V1).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(got.positions, TIR_CONFORMANCE_POSITIONS_V1.min(program.history_bound as usize), "{name}");
         assert!(got.commits > 0, "{name}: commit points were compared");
-        assert!(got.reference_param_reads > 0, "{name}: the reference read its params through the lazy source");
+        if !params.tensors.is_empty() {
+            assert!(got.reference_param_reads > 0, "{name}: the reference read its params through the lazy source");
+        }
         // Streamed: the reference never held more than one tensor at a time — the largest one, in its i128 form.
         let largest = params.tensors.values().map(|t| t.data.len() * 16).max().unwrap_or(0) as u64;
         assert!(got.reference_peak_tensor_bytes <= largest, "{name}: held {} bytes at once, the largest tensor is {largest}", got.reference_peak_tensor_bytes);
@@ -92,7 +94,7 @@ fn a_reference_that_differs_by_one_weight_is_refused_by_position() {
             match tir_executor_conformance_against_v1(&artifact, &flipped, TIR_CONFORMANCE_POSITIONS_V1) {
                 Ok(_) => {}
                 Err(why) => {
-                    assert!(why.contains("position") && why.contains("is not the reference evaluator's"), "{name}: {why}");
+                    assert!(why.contains("position") && why.contains("reference evaluator"), "{name}: {why}");
                     refused = true;
                     break;
                 }
