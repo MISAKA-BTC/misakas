@@ -11736,14 +11736,14 @@ impl PalwPanelService {
                     }
                     if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })
                         && service.is_unserved(&duty.claim_id)
-                        && let Some(by) = palw_seat_da_accuse_by_v1(
+                        && let Some(accuse_by) = palw_seat_da_accuse_by_v1(
                             self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
                             replay_refuted.contains(&duty.claim_id),
                             current_daa,
                             deadline,
                         )
                     {
-                        accusations.want(duty.claim_id, by);
+                        accusations.want(duty.claim_id, accuse_by);
                     }
                     answered.insert(seat_duty_panel_key_v1(duty));
                     continue;
@@ -22874,7 +22874,11 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert!(tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"), "the escalated site defers to it");
         let tail_at = tick.find("last_lane = slots.finish(inflight);").expect("the tail");
         let (sites, tail) = tick.split_at(tail_at);
-        assert_eq!(sites.matches("self.submit_carrier_v1(&session, tx)").count(), 4, "class registration, licences, sets, receipts");
+        assert_eq!(
+            sites.matches("self.submit_carrier_v1(&session, tx)").count(),
+            5,
+            "class registration, licences, sets, receipts, and (RFC-0007) the seat's vertex"
+        );
         assert_eq!(sites.matches("self.flow_context.submit_rpc_transaction(").count(), 1, "the canonical claim alone");
         let canonical = sites.find("self.flow_context.submit_rpc_transaction(").unwrap();
         assert!(sites[..canonical].rfind("&& !stuck_opened").is_some_and(|guard| canonical - guard < 2_000), "and it never replaces");

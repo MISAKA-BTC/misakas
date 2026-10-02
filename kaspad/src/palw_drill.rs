@@ -2220,7 +2220,7 @@ mod tests {
         palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("an older marker is none");
         // The keyring's manifest names it.
         let keys = tempfile::tempdir().unwrap();
-        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), set).expect("written");
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), None, set).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["vertex_at"], serde_json::json!(140));
         assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
