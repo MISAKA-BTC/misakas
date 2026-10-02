@@ -2888,6 +2888,33 @@ fn serve_connection(
 
 #[cfg(test)]
 mod tests {
+    /// **ADR-0096 Decisions 7-8 at the entrance**: where the network commits formats, a `response_format` becomes a
+    /// constraint the job carries (version 6); where it does not, or none was asked, nothing changes; and a committed format
+    /// beside sampler controls is refused by name.
+    #[test]
+    fn a_response_format_is_committed_only_where_the_fence_is_armed_and_beside_no_sampler_controls() {
+        let body = |extra: serde_json::Value| {
+            let mut v = serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }], "response_format": { "type": "json_object" } });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::to_vec(&v).unwrap()
+        };
+        let armed = chain::ChainFacts { fp_decode_constraint_armed: true, fp_decode_rules_armed: true, ..Default::default() };
+        let dormant = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let admit = |facts: &chain::ChainFacts, extra| surface::parse_and_admit(&body(extra), facts).map(|(_, a)| a);
+        let ok = admit(&armed, serde_json::json!({})).expect("admitted");
+        let bytes = committed_constraint_v1(&ok, &armed, ok.sampling).unwrap().expect("committed on an armed network");
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&bytes).expect("the bytes are an admitted constraint");
+        let advisory = admit(&dormant, serde_json::json!({})).expect("admitted");
+        assert_eq!(committed_constraint_v1(&advisory, &dormant, advisory.sampling).unwrap(), None, "dormant: advisory, as before");
+        let plain = surface::parse_and_admit(&serde_json::to_vec(&serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap(), &armed)
+            .map(|(_, a)| a)
+            .unwrap();
+        assert_eq!(committed_constraint_v1(&plain, &armed, plain.sampling).unwrap(), None, "no format asked");
+        let with_stop = admit(&armed, serde_json::json!({ "stop": ["END"] })).expect("admitted");
+        let err = committed_constraint_v1(&with_stop, &armed, with_stop.sampling).unwrap_err();
+        assert!(err.contains("no sampler controls or stop strings"), "{err}");
+    }
+
     /// **ADR-0096 Decision 10: a bond-less identity is admitted exactly when the gateway never
     /// commits.** Without the flag the refusal names what is missing and the flag that would
     /// admit it; with it the bond is the zero outpoint and the key is empty, which `/health`
