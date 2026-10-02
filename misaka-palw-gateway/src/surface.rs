@@ -390,6 +390,9 @@ pub struct AdmittedRequest {
     pub candidates: u32,
     /// RFC-0001 §2.9: what the artifact sidecar's defaults did to this request (`None`: no sidecar).
     pub sidecar_report: Option<Value>,
+    /// **RFC-0001 §2.11: the request's decoded images**, in the order the messages carried them (the V5 slot order).
+    /// Decoded integer tensors only ([`crate::tensor`]); empty for a text request.
+    pub images: Vec<crate::tensor::DecodedImageV1>,
 }
 
 /// The identity value of each knob ADR-0096 Decision 4 names: the value a stock SDK sends by
@@ -423,6 +426,11 @@ pub struct EmbeddingsExt {
     /// returns the pooled hidden-state codes as they are.
     #[serde(default)]
     pub normalize: Option<bool>,
+    /// **RFC-0001 §2.8: ask for the embedding to be a CLAIM** (RFC-0003's `Embedding` profile). Refused by name on a
+    /// gateway whose worker serves the free-prompt lane only (every build today): the job is a tensor job on a registered
+    /// `Embedding` class ([`crate::tensor::embedding_claim_job_v1`]), not the local forward pass.
+    #[serde(default)]
+    pub claim: Option<bool>,
 }
 
 /// OpenAI's `POST /v1/embeddings` body, with this lane's own extension.
@@ -506,6 +514,12 @@ pub fn admit_embeddings(request: &EmbeddingsRequest, max_input_bytes: usize) -> 
         return Err("dimensions is refused by name: the vector is the class's hidden width and is not truncated".to_string());
     }
     let ext = request.misaka.clone().unwrap_or_default();
+    if ext.claim == Some(true) {
+        return Err("misaka.claim is refused by name: an embedding claim is an RFC-0003 `Embedding`-profile tensor job (FP job version 10) on a \
+                    registered class with palw_gen_v1 armed, and this gateway's worker serves the free-prompt lane only — the pooled vector \
+                    is served locally without `claim`"
+            .to_string());
+    }
     let pool = match ext.pool.as_deref() {
         None | Some("mean") => kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::Mean,
         Some("last") => kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::LastToken,
@@ -735,6 +749,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         return Err(format!("{} messages exceeds the {}-message cap", chat.messages.len(), crate::MAX_CHAT_MESSAGES));
     }
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(chat.messages.len());
+    let mut images: Vec<crate::tensor::DecodedImageV1> = Vec::new();
     for (i, message) in chat.messages.iter().enumerate() {
         if !matches!(message.role.as_str(), "system" | "user" | "assistant" | "tool") {
             return Err(format!(
@@ -774,7 +789,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
                 ignored.push(name.to_string());
             }
         }
-        let content = flatten_content(i, message.content.as_ref())?;
+        let content = flatten_content(i, message.content.as_ref(), &mut images)?;
         let mut tool_calls = Vec::new();
         if let Some(calls) = &message.tool_calls
             && !calls.is_empty()
@@ -938,6 +953,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         include_usage,
         candidates,
         sidecar_report: None,
+        images,
     })
 }
 
@@ -945,7 +961,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
 /// `null`. A non-text part is refused by NAME with its position — the class's model reads token
 /// ids and nothing else, and an image the entrance dropped would be a prompt the person did not
 /// write.
-fn flatten_content(i: usize, content: Option<&Value>) -> Result<String, String> {
+fn flatten_content(i: usize, content: Option<&Value>, images: &mut Vec<crate::tensor::DecodedImageV1>) -> Result<String, String> {
     match content {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(text)) => Ok(text.clone()),
@@ -960,6 +976,20 @@ fn flatten_content(i: usize, content: Option<&Value>) -> Result<String, String> 
                         Some(text) => texts.push(text),
                         None => return Err(format!("messages[{i}].content[{j}] is a text part without a `text` string")),
                     },
+                    // RFC-0001 §2.11: a decoded integer tensor, and nothing a codec would have to decode.
+                    Some(crate::tensor::IMAGE_TENSOR_PART) => {
+                        if images.len() >= crate::tensor::MAX_IMAGES {
+                            return Err(format!(
+                                "messages[{i}].content[{j}] is image {} and a job carries at most {}",
+                                images.len() + 1,
+                                crate::tensor::MAX_IMAGES
+                            ));
+                        }
+                        images.push(crate::tensor::parse_image_tensor_part(&format!("messages[{i}].content[{j}]"), members)?);
+                    }
+                    Some(other) if crate::tensor::is_encoded_image_kind(other) => {
+                        return Err(crate::tensor::refuse_encoded_image(&format!("messages[{i}].content[{j}]"), other));
+                    }
                     Some(other) => {
                         return Err(format!(
                             "messages[{i}].content[{j}] is a `{other}` part, and this lane carries text only (ADR-0096 Decision 1): the \
@@ -1453,7 +1483,6 @@ mod tests {
         assert_eq!(admitted.turns[0], ChatTurn::text("system", "s"));
 
         for (kind, needle) in [
-            ("image_url", "messages[1].content[1] is a `image_url` part"),
             ("input_audio", "`input_audio` part"),
             ("file", "`file` part"),
         ] {
@@ -1462,6 +1491,19 @@ mod tests {
             assert!(err.contains(needle), "{err}");
             assert!(err.contains("this lane carries text only (ADR-0096 Decision 1)"), "{err}");
         }
+        // RFC-0001 §2.11: an encoded image is refused by name with what to send; a decoded tensor is admitted.
+        for kind in ["image_url", "input_image"] {
+            let bad = json!([{ "role": "user", "content": [{ "type": "text", "text": "look" }, { "type": kind, kind: {} }] }]);
+            let err = admit(json!({ "messages": bad })).unwrap_err();
+            assert!(err.contains("messages[0].content[1]") && err.contains("decoded integer tensors only"), "{err}");
+        }
+        let tensor = json!({ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "0a0b0c0d0e0f" });
+        let admitted = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "text", "text": "look" }, tensor.clone(), tensor] }] })).unwrap();
+        assert_eq!(admitted.turns[0], ChatTurn::text("user", "look"), "an image part adds no text");
+        assert_eq!(admitted.images.len(), 2);
+        assert_eq!((admitted.images[0].h, admitted.images[0].w, admitted.images[0].rgb.as_slice()), (1, 2, &[10, 11, 12, 13, 14, 15][..]));
+        let err = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "00" }] }] })).unwrap_err();
+        assert!(err.contains("hex characters"), "{err}");
         let err = admit(json!({ "messages": [{ "role": "user", "content": ["plain string part"] }] })).unwrap_err();
         assert!(err.contains("messages[0].content[0] is a string where a {type, …} part was expected"), "{err}");
         let err = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "text" }] }] })).unwrap_err();
@@ -2149,6 +2191,7 @@ mod tests {
             (json!({ "input": "x", "encoding_format": "base64" }), "encoding_format \"base64\" is refused by name"),
             (json!({ "input": "x", "dimensions": 64 }), "dimensions is refused by name"),
             (json!({ "input": "x", "misaka": { "pool": "max" } }), "misaka.pool \"max\" is neither"),
+            (json!({ "input": "x", "misaka": { "claim": true } }), "misaka.claim is refused by name"),
             (json!({ "input": "x", "task_type": "retrieval" }), "`task_type` is not a field the embeddings surface serves"),
         ] {
             let err = embeddings(request.clone()).expect_err(&format!("{request} must be refused"));

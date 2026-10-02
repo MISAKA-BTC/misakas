@@ -73,6 +73,7 @@ mod wire;
 mod surface;
 // RFC-0001 §2.7: the worker pool and the per-source bounds.
 mod pool;
+mod tensor;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -1327,6 +1328,16 @@ fn prepare_request(
     admitted: &AdmittedRequest,
     sampling: ([u8; 32], u32),
 ) -> Result<PreparedJob, String> {
+    // RFC-0001 §2.11: the request's images are decoded tensors, committed as a V5 job's slot references; the family worker
+    // behind this gateway reads token ids and runs no image encoder, so a request that carries one is refused HERE, by name,
+    // rather than answered as if the picture had been read.
+    if !admitted.images.is_empty() {
+        return Err(format!(
+            "this request carries {} image(s) and the class behind this gateway has no image slots: its worker runs no image encoder, \
+             so the images would be dropped from a prompt the person wrote (RFC-0001 §2.11; V5 slots are a class's, RFC-0003 §II.2.1)",
+            admitted.images.len()
+        ));
+    }
     // ADR-0096 Decision 2: tool turns and the tool list become the model's own text; Decision 3:
     // the format instruction rides the system turn as text. Both BEFORE the template, which then
     // sees plain turns and nothing else.
