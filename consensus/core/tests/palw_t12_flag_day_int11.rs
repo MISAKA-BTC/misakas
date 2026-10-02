@@ -20,7 +20,7 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_flag_day_int11`
 
 use kaspa_consensus_core::config::drill::{
-    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_int11_at_v1, palw_drill_post_launch_fences_at_v1,
+    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_int11_at_v1, palw_drill_model_court_window_at_v1, palw_drill_post_launch_fences_at_v1,
     palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1, palw_drill_tir_fence2_at_v1, palw_drill_tir_fence_at_v1,
 };
 use kaspa_consensus_core::config::params::{
@@ -366,9 +366,12 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_with_rho100_95_later_and_mov
     assert!(palw_drill_int11_at_v1(&mut same, 24).is_err(), "another fence's height (the second IR fence's)");
     assert_eq!(ids(&same), ids(&before), "refused untouched");
     let mut rho100_collides = before.clone();
-    palw_drill_tir_fence2_at_v1(&mut rho100_collides, 28 + 95).expect("the second IR fence at ρ = 100's future height");
-    assert!(palw_drill_int11_at_v1(&mut rho100_collides, 28).is_err(), "ρ = 100's height is another fence's: refused, and the list is not moved either");
-    assert_eq!(fence_at(&rho100_collides, "palw_gen_v1"), Some(H), "…the first move was on a copy");
+    palw_drill_model_court_window_at_v1(&mut rho100_collides, 28 + 95).expect("the (dormant-on-testnet-12) court window at ρ = 100's future height");
+    let was = ids(&rho100_collides);
+    let why = palw_drill_int11_at_v1(&mut rho100_collides, 28).expect_err("ρ = 100's height is another fence's");
+    assert!(why.contains("palw_model_court_window") && why.contains("fork id"), "{why}");
+    assert_eq!(ids(&rho100_collides), was, "refused on the second height: the first move was on a copy, the ruleset is as it came");
+    assert_eq!(fence_at(&rho100_collides, "palw_gen_v1"), Some(H), "…the list is where it was");
     // The flag days it needs below it, or it is refused by name and the ruleset is untouched.
     let bare = palw_t12_drill_params_v1(&salt());
     let mut p = bare.clone();
