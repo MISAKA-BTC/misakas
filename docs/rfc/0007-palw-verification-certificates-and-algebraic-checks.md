@@ -2,12 +2,12 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-10-01 — design. Part II prototyped and measured (crate `misaka-palw-tir-sketch`). Part IV.1's audit prototyped off-chain. Parts I, III and IV.2 are text only |
+| Status | Draft, 2026-10-01 — design. **Parts I and III implemented under the dormant fence `palw_verification_vertex_v1` (branch `rfc7/vertex`, 2026-10-03; spec `docs/spec/palw/18-verification-certificates.md`).** Part II prototyped and measured (crate `misaka-palw-tir-sketch`). Part IV.1's audit prototyped off-chain. Part IV.2 is text only |
 | Author(s) | MISAKA core (drafted with Claude; lane M4) |
 | Created | 2026-10-01 |
 | Normative dependencies | **RFC-0002** (PALW-TIR v1 and its Phase F integration: commit points, the step tree, cones, the demand evaluator, the court) for Parts II and IV; the V2 panel (`palw_panel_v2`), ADR-0065 Decision 4, ADR-0098 and ADR-0111 for Parts I, III and IV |
 | Affects | spec/palw 07 (claims, panels, receipts, licensing), 08 (verification), 09 (court: availability requests only — the exact court is unchanged), 10 (rewards and slashing: equivocation, trap settlement, capped-mode vesting), 14 (node: the checker, the audit worker, the vertex pool), 16 (fences), and a new chapter `spec/palw/18-verification-certificates.md` · all networks (dormant until armed) · `consensus/core` (Part I objects and fold, Part IV objects and lifecycle) · node software (Part II checker, Part IV.1 auditor) |
-| Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text |
+| Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text · `rfc7/vertex` (off `rfc4/int-release` @ `785d601b4`, with `rfc7/algebraic` merged): Parts I and III |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
 ## 概要(日本語)
