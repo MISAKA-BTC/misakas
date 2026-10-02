@@ -3567,6 +3567,8 @@ pub struct PalwPanelConfig {
     pub seat_replay_slots: Option<usize>,
     /// `--palw-vertex-full-refs` (RFC-0007): name claims by whole id in this seat's vertices (default: compact references).
     pub vertex_full_refs: bool,
+    /// `--palw-drill-vertex-equivocate-at` (a salted drill only): sign a second vertex for one round, once, from this DAA.
+    pub vertex_equivocate_at: Option<u64>,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// ADR-0132: the node's per-class counters this seat reports its replays and receipts into.
@@ -6164,6 +6166,14 @@ impl PalwPanelService {
         }
         let key = (evidence.a.round, evidence.a.seat_bond);
         let object = PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) };
+        // Asked of the chain first: evidence the fold would refuse (convicted meanwhile, too old) is not worth a carrier.
+        if let Some(answer) = session.palw_object_rehearsal_v1(&object)
+            && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+        {
+            trace!("[{PALW_PANEL}] a vertex equivocation (seat {:?}, round {}) is not offered a carrier now: {answer:?}", key.1, key.0);
+            self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
+            return;
+        }
         match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
             Ok(tx) => {
                 let txid = tx.id();
@@ -7622,6 +7632,8 @@ impl PalwPanelService {
         // this seat signed (persisted: a seat never signs one round twice, restarts included).
         let vertex_state_path = self.config.state_dir.join("palw-vertex-round");
         let mut vertex_book = vertex::PalwVertexBookV1::resume(vertex::palw_vertex_state_read_v1(&vertex_state_path));
+        // DRILL ONLY: whether this seat has already signed its deliberate second vertex.
+        let mut vertex_equivocated = false;
         // ADR-0152 SR-10 / Q-7: when this node last carried a supplementary set for a claim — a
         // debounce like `submitted`'s, re-offered after the replan interval if the carrier was lost.
         let mut supplementary_v3_submitted: HashMap<Hash64, u64> = HashMap::new();
@@ -11700,6 +11712,22 @@ impl PalwPanelService {
                         verdict,
                         self.config.vertex_full_refs,
                     ));
+                    // **A seat that verified a claim's material and kept it says so** — a `Held` leaf beside its verdict (RFC-0007 §I.7;
+                    // voluntary): three equal ones are a DA certificate, and an attester of a claim whose data the court concludes was
+                    // not served is charged its exposure.
+                    if valid
+                        && let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                            std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
+                        })
+                        && let Some(held) = vertex::palw_vertex_held_capture_leaf_v1(
+                            &duty.claim_id,
+                            duty.bound_daa,
+                            &bytes,
+                            self.config.vertex_full_refs,
+                        )
+                    {
+                        vertex_book.record(held);
+                    }
                     self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
                     receipts_filed_at.push_back(std::time::Instant::now());
                     info!("[{PALW_PANEL}] recorded a {:?} leaf for claim {} in this round's vertex (RFC-0007)", verdict_name(&verdict), duty.claim_id);
@@ -11856,6 +11884,40 @@ impl PalwPanelService {
                         vertex_book.pending_leaves(),
                         vertex_book.sealed_waiting()
                     );
+                }
+                // **DRILL ONLY: sign the round's second vertex** — the first vertex's leaves with every verdict changed — once, from the
+                // configured DAA. The persisted round is not consulted: this is the one thing a seat must never do, done on purpose in a
+                // salted drill so the equivocation's catch, slash and ejection can be shown.
+                if let (Some(round), Some(at)) = (sealed, self.config.vertex_equivocate_at)
+                    && current_daa >= at
+                    && !vertex_equivocated
+                    && let Some(first) = vertex_book.sealed_vertex(round)
+                {
+                    let leaves: Vec<_> = first
+                        .leaves
+                        .iter()
+                        .filter_map(|leaf| match leaf {
+                            kaspa_consensus_core::palw_vertex_v1::PalwVertexLeafV1::Verdict { claim, .. } => {
+                                Some(kaspa_consensus_core::palw_vertex_v1::PalwVertexLeafV1::Verdict {
+                                    claim: *claim,
+                                    verdict: PalwReceiptVerdictV2::Sampled,
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(second) = kaspa_consensus_core::palw_vertex_v1::PalwVerificationVertexV1::sign_v1(
+                        network_domain,
+                        bond_key,
+                        first.signed_daa,
+                        leaves,
+                        |message, context| Self::sign_hedged(&kp.signing_key, message, context),
+                    ) && second.leaves_root != first.leaves_root
+                    {
+                        warn!("[{PALW_PANEL}] DRILL: signing a SECOND vertex for round {round} (equivocation)");
+                        vertex_equivocated = true;
+                        vertex_book.drill_extra(second);
+                    }
                 }
                 let status_line = vertex_book.status_v1(Some(fence), status.rounds, status.tallies, status.held_claims);
                 self.flow_context.update_palw_runtime(|r| r.verification_vertex = status_line);
@@ -12867,10 +12929,21 @@ impl PalwPanelService {
                 if vertex_fence.is_some()
                     && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
                     && !readiness_waiting
-                    && let Some(vertex) = vertex_book.next_to_send(current_daa).cloned()
                     && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                    // (DRILL ONLY: after the round's first vertex has gone out, its deliberate second one — `take_drill_extra` is `None`
+                    // on every node that was not started with `--palw-drill-vertex-equivocate-at`.)
+                    && let Some(vertex) = vertex_book.next_to_send(current_daa).cloned().or_else(|| vertex_book.take_drill_extra())
                 {
                     let object = vertex::palw_vertex_object_v1(&vertex);
+                    // **Asked of the chain first** (P2-8e): the fold's own answer on the tip at the virtual's DAA — a vertex the chain
+                    // already holds (its carrier landed while this tick ran), or one whose clock has passed, is not worth a carrier. It waits
+                    // out the replan interval and is re-asked; the seat's row appearing at the tip retires it.
+                    if let Some(answer) = session.palw_object_rehearsal_v1(&object)
+                        && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+                    {
+                        trace!("[{PALW_PANEL}] this seat's vertex of round {} is not offered a carrier now: {answer:?}", vertex.round);
+                        vertex_book.mark_sent(vertex.round, current_daa);
+                    } else {
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -12903,6 +12976,7 @@ impl PalwPanelService {
                             }
                         }
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's vertex of round {}: {e}", vertex.round),
+                    }
                     }
                 }
                 let mut own: Vec<(Hash64, PalwSeatReceiptV2)> =

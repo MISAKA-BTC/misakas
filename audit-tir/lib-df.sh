@@ -41,6 +41,9 @@ FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14};
 # the court window rides none): above TIR_AT, a height no other fence uses; fixed for the chain's life (the datadir
 # marker's tir2_at). Empty: the chain does not cross it (the B/D/C piece's own chains set it at `up`: DF1=0 TIR2_AT=30).
 TIR2_AT=${TIR2_AT:-50}
+# **RFC-0007's verification vertex** (`--palw-drill-vertex-at`: palw_verification_vertex_v1): above TIR2_AT and a height no other fence uses; fixed
+# for the chain's life (the datadir marker's vertex_at). Empty: the chain does not arm it (every other drill is unchanged).
+VERTEX_AT=${VERTEX_AT:-}
 # One class registers only once the chain is past the flag day — PAST_CLASS=small (default: the small class, new4) or
 # PAST_CLASS=ir (the A16 class, new0): `df.sh register-past` creates this marker and restarts that registrant with
 # --palw-register-class. That is the registration Stage 1 judges under fence2's sizing (the range twin); the OTHER class
@@ -142,7 +145,7 @@ class_on_chain() {
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
-    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT PAST_CLASS FENCE_AT FENCE2_AT FENCE3_AT
+    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT VERTEX_AT PAST_CLASS FENCE_AT FENCE2_AT FENCE3_AT
     NEW0_P2P=$(p2p new0); NEW0_RPC=$(borsh new0); NEW0_GRPC=$(gport new0); NEW0_LOG=$WORK_DIR/new0/kaspad.out
     OLD_P2P=$(p2p old); OLD_RPC=$(borsh old); OLD_LOG=$WORK_DIR/old/kaspad.out
     export NEW0_P2P NEW0_RPC NEW0_GRPC NEW0_LOG OLD_P2P OLD_RPC OLD_LOG
@@ -173,6 +176,7 @@ node_args() {
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576))"
         "--palw-drill-tir-at=$TIR_AT")
     [ -n "$TIR2_AT" ] && a+=("--palw-drill-tir2-at=$TIR2_AT")
+    [ -n "$VERTEX_AT" ] && a+=("--palw-drill-vertex-at=$VERTEX_AT")
     if [ "$seat" != - ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"

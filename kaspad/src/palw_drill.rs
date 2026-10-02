@@ -2163,4 +2163,66 @@ mod tests {
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["held_chunks_at"], serde_json::Value::Null);
     }
+
+    /// **RFC-0007's verification vertex is a drill flag of its own** (`--palw-drill-vertex-at`, object tags 91 and 92): refused without
+    /// the salt; with the salt it ARMS `palw_verification_vertex_v1` at its height and moves nothing else (its prerequisites are armed at
+    /// the drill's genesis); the marker keeps it on a line of its own (`vertex_at=`, `none` where a marker written before it has none) and
+    /// a stored chain is never reopened under another height; the keyring's manifest names it.
+    #[test]
+    fn the_verification_vertex_is_a_drill_flag_of_its_own() {
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14"];
+        let parsed = |extra: &[&str]| {
+            let v: Vec<String> =
+                base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect();
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-vertex-at=140"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-vertex-at=140") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        let without = config_of(&parsed(&[]));
+        let with = config_of(&parsed(&["--palw-drill-vertex-at=140"]));
+        assert_eq!(without.params.palw_verification_vertex_v1, None);
+        assert_eq!(
+            with.params.palw_verification_vertex_v1,
+            Some(kaspa_consensus_core::config::params::ForkActivation::new(140)),
+            "armed at its height"
+        );
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "one fence moved");
+        with.params.validate_palw_v2().expect("the drill with the verification vertex validates");
+        assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
+        assert_eq!(
+            with.params.palw_verification_vertex_fence().map(|f| f.daa_score()),
+            Some(140),
+            "and the node's own reader sees it (the seat speaks in vertices from there)"
+        );
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-vertex-at=140"])).expect("the flag validates on a salted drill");
+        // The marker's own line, and a stored chain is never reopened under another height.
+        let dir = root.path().join("x/misaka-testnet-12");
+        let set = PalwDrillExtraFencesV1 { vertex_at: Some(140), ..Default::default() };
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
+        assert!(marker_of(&dir).contains("vertex_at=140\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("kept");
+        let moved = PalwDrillExtraFencesV1 { vertex_at: Some(150), ..Default::default() };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved).unwrap_err();
+        assert!(why.contains("--palw-drill-vertex-at (recorded 140, now 150)"), "{why}");
+        // A marker written before the flag existed counts as `none`.
+        let old = root.path().join("y/misaka-testnet-12");
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("created");
+        let text = marker_of(&old).replace("vertex_at=none\n", "");
+        std::fs::write(old.join(PALW_DRILL_DATADIR_MARKER_V1), text).unwrap();
+        std::fs::create_dir_all(old.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("an older marker is none");
+        // The keyring's manifest names it.
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), Some(20), set).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["vertex_at"], serde_json::json!(140));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
+    }
 }

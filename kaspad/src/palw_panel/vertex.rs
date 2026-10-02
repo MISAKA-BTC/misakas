@@ -50,6 +50,33 @@ pub(crate) fn palw_vertex_verdict_leaf_v1(
     PalwVertexLeafV1::Verdict { claim: palw_vertex_claim_by_leaf_v1(claim, bound_daa, full_refs), verdict }
 }
 
+/// The chunk size a `Held` attestation of a capture counts in: the capture is attested as chunks `0..=⌈len / chunk⌉ − 1`.
+pub(crate) const PALW_VERTEX_HELD_CHUNK_BYTES_V1: usize = 65_536;
+
+/// The domain of a `Held` capture digest (node policy: the chain compares attesters' digests, it does not recompute one).
+const PALW_VERTEX_HELD_DIGEST_DOMAIN_V1: &[u8] = b"misaka-node/vertex-held-capture/v1";
+
+/// **The `Held` leaf of a capture this seat holds** (RFC-0007 §I.7): "I hold chunks `0..=last` of this claim's capture, whose digest is
+/// `digest`, and I will serve them until its challenge window closes." Voluntary — a seat that verified a claim's material and kept it
+/// (`persist_foreign_material`) says so; three equal leaves are a DA certificate. `None` for an empty capture.
+pub(crate) fn palw_vertex_held_capture_leaf_v1(claim: &Hash64, bound_daa: u64, bytes: &[u8], full_refs: bool) -> Option<PalwVertexLeafV1> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_VERTEX_HELD_DIGEST_DOMAIN_V1).to_state();
+    state.update(bytes);
+    let mut digest = [0u8; 64];
+    digest.copy_from_slice(state.finalize().as_bytes());
+    let last = u32::try_from(bytes.len().div_ceil(PALW_VERTEX_HELD_CHUNK_BYTES_V1) - 1).ok()?;
+    Some(PalwVertexLeafV1::Held {
+        claim: palw_vertex_claim_by_leaf_v1(claim, bound_daa, full_refs),
+        object: kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_HELD_OBJECT_CAPTURE_V1,
+        first: 0,
+        last,
+        digest: Hash64::from_bytes(digest),
+    })
+}
+
 /// A vertex this seat sealed and has not seen land.
 #[derive(Clone, Debug)]
 pub(crate) struct PalwSealedVertexV1 {
@@ -70,6 +97,8 @@ pub(crate) struct PalwVertexBookV1 {
     pub landed_total: u64,
     pub expired_total: u64,
     pub leaves_total: u64,
+    /// DRILL ONLY: a second vertex of a round, signed on purpose (`--palw-drill-vertex-equivocate-at`), waiting to be carried once.
+    drill_extra: Option<PalwSealedVertexV1>,
 }
 
 impl PalwVertexBookV1 {
@@ -185,6 +214,21 @@ impl PalwVertexBookV1 {
             }
         }
         landed
+    }
+
+    /// The vertex sealed for `round`, if it is still waiting to land.
+    pub(crate) fn sealed_vertex(&self, round: u64) -> Option<&PalwVerificationVertexV1> {
+        self.sealed.get(&round).map(|sealed| &sealed.vertex)
+    }
+
+    /// DRILL ONLY: queue a deliberate second vertex of a round to be carried once, after the first.
+    pub(crate) fn drill_extra(&mut self, vertex: PalwVerificationVertexV1) {
+        self.drill_extra = Some(PalwSealedVertexV1 { vertex, sent_daa: None });
+    }
+
+    /// DRILL ONLY: the deliberate second vertex, once, when the first has gone out.
+    pub(crate) fn take_drill_extra(&mut self) -> Option<PalwVerificationVertexV1> {
+        self.drill_extra.take().map(|sealed| sealed.vertex)
     }
 
     /// The `key=value` pairs the node status carries (`getPalwNodeStatus`'s `verification` line).
@@ -332,6 +376,24 @@ mod tests {
         assert!(matches!(palw_vertex_claim_by_leaf_v1(&claim, 123, false), PalwClaimRefV1::Compact { bound_daa: 123, .. }));
         assert_eq!(palw_vertex_claim_by_leaf_v1(&claim, 123, true), PalwClaimRefV1::Full(claim));
         assert_eq!(palw_vertex_claim_by_leaf_v1(&claim, u64::from(u32::MAX) + 1, false), PalwClaimRefV1::Full(claim), "a DAA past 32 bits is whole");
+    }
+
+    /// A held capture is attested as the chunks it spans, under a digest of its bytes; the same bytes give the same leaf.
+    #[test]
+    fn a_held_capture_is_attested_as_its_chunks_under_one_digest() {
+        let claim = Hash64::from_bytes([3; 64]);
+        assert!(palw_vertex_held_capture_leaf_v1(&claim, 9, &[], false).is_none());
+        let bytes = vec![7u8; PALW_VERTEX_HELD_CHUNK_BYTES_V1 * 2 + 1];
+        let leaf = palw_vertex_held_capture_leaf_v1(&claim, 9, &bytes, false).expect("a leaf");
+        let PalwVertexLeafV1::Held { object, first, last, digest, .. } = leaf else { panic!("a Held leaf") };
+        assert_eq!((object, first, last), (0, 0, 2), "two whole chunks and one byte are three chunks");
+        assert_eq!(leaf, palw_vertex_held_capture_leaf_v1(&claim, 9, &bytes, false).unwrap(), "the same bytes, the same leaf");
+        let mut other = bytes.clone();
+        other[0] ^= 1;
+        let PalwVertexLeafV1::Held { digest: other_digest, .. } = palw_vertex_held_capture_leaf_v1(&claim, 9, &other, false).unwrap() else {
+            panic!("a Held leaf")
+        };
+        assert_ne!(digest, other_digest, "another capture, another digest");
     }
 
     #[test]

@@ -1878,6 +1878,19 @@ Do you confirm? (y/n)";
                         class_cache_bytes: args.palw_class_cache_bytes,
                         seat_replay_slots: args.palw_seat_replay_slots.map(|slots| slots as usize),
                         vertex_full_refs: args.palw_vertex_full_refs,
+                        vertex_equivocate_at: match args.palw_drill_vertex_equivocate_at {
+                            Some(at) if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() => {
+                                warn!(
+                                    "PALW DRILL: this seat will sign a second vertex for one round from DAA {at} (RFC-0007 equivocation). \
+                                     Its bond will be slashed and ejected."
+                                );
+                                Some(at)
+                            }
+                            Some(_) => panic!(
+                                "--palw-drill-vertex-equivocate-at is a drill: it needs --palw-drill-genesis-salt and --palw-drill-vertex-at"
+                            ),
+                            None => None,
+                        },
                         class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),

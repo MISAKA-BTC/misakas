@@ -469,6 +469,11 @@ pub struct Args {
     /// This node refuses every leaf-evidence request on the interval lane, so a seat that named a
     /// leaf must demand its evidence on chain (ADR-0111 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
+    /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
+    /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
+    #[serde(skip)]
+    pub palw_drill_vertex_equivocate_at: Option<u64>,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
     pub palw_canonical_claims: bool,
@@ -721,6 +726,7 @@ impl Default for Args {
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
             palw_drill_refuse_leaf_evidence: false,
+            palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
             palw_canonical_interval_daa: 600,
@@ -1633,6 +1639,17 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
                      named a leaf demands its evidence on chain through the held data-availability court (ADR-0111 \
                      Decision 3). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-vertex-equivocate-at")
+                .long("palw-drill-vertex-equivocate-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "PALW DRILL ONLY (RFC-0007): this seat signs a second, different vertex for one round, once, at the first round \
+                     at or past this DAA — an equivocation, slashed 100 per mille with its locks forfeited and its bond ejected. \
+                     A SALTED TESTNET-12 DRILL ONLY (it needs --palw-drill-genesis-salt and --palw-drill-vertex-at).",
                 ),
         )
         .arg(
@@ -2987,6 +3004,7 @@ impl Args {
                 .get_one::<bool>("palw-drill-refuse-leaf-evidence")
                 .copied()
                 .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
+            palw_drill_vertex_equivocate_at: m.get_one::<u64>("palw-drill-vertex-equivocate-at").copied(),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m
