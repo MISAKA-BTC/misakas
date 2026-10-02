@@ -1,0 +1,47 @@
+# **An isolated workspace, on purpose.** The GPU backend is a prototype (RFC-0002 §7 F-6, Phase G):
+# it pulls a graphics stack (wgpu, naga, the Metal and Vulkan bindings) that no release binary may
+# carry and no consensus crate may see. So it is its own workspace — NOT a member of the root one —
+# with its own Cargo.lock: building it never touches the root Cargo.lock, the root members or the
+# release build. It reads the IR and the CPU executor by path, read-only, so that the conformance
+# harness compares against the code a node runs, not against a copy of it.
+#
+#     cd misaka-palw-tir-gpu && cargo test --release
+#
+# Cargo.lock was seeded from the root lock (2026-10-01, rfc4/int @ ce04e5c22) so the shared crates
+# (rayon, borsh, thiserror, rand …) resolve to the versions the node builds with.
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "misaka-palw-tir-gpu"
+description = "RFC-0002 F-6 prototype: an exact integer GPU backend (wgpu: Metal, Vulkan) for the PALW-TIR v1 primitives, held byte-identical to the CPU executor (misaka-palw-tir-exec) and the reference evaluator. Node software, never a consensus dependency; an isolated workspace"
+publish = false
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88.0"
+license = "ISC"
+
+[dependencies]
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
+# wgpu 30 (MSRV 1.87): Metal on macOS, Vulkan on Linux. No DX12/GLES/WebGPU: a node backend, not a
+# browser one. `SHADER_INT64` is required of the device (see `device.rs`).
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan"] }
+pollster = "0.4"
+bytemuck = "1"
+rayon = "1.8.0"
+
+[dev-dependencies]
+# The RFC-0006 prototype's trace root (tests/layer_shard.rs): leaves opened against a Merkle root.
+blake2b_simd = "1.0.2"
+borsh = { version = "1.5.1", features = ["derive", "rc"] }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+serde_json = "1.0.107"
+
+[profile.release]
+# As the root workspace: overflow checks stay on in release, so a host-side integer slip panics
+# instead of wrapping silently.
+overflow-checks = true
+lto = false
