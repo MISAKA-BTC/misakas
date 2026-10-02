@@ -26,7 +26,7 @@ pub use backend::{
     tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
 };
 pub use cell::{
-    CpuKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1, TirCellV1,
+    CpuCellStepperV1, CpuKernelBackendV1, TirCellStepperV1, verify_cell_stepping_v1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1, TirCellV1,
     TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, tir_shard_cells_v1, tir_shard_geometry_v1, tir_verify_capture_cells_v1,
     TirKernelBackendFactoryV1, tir_shard_weight_bytes_v1, register_kernel_backend_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tokens_of_capture_v1,
     verify_cell_v1,

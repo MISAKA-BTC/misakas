@@ -201,9 +201,118 @@ fn written_instances(space: &PalwTirStepSpaceV1, occ: &Range<usize>) -> (Vec<usi
     (owned(space.fixed_instances()), owned(space.hist_instances()))
 }
 
-/// **Verify one cell** (the module doc). Pure given its inputs: the same request, the same verdict, on any build.
+/// **What the cell verifier asks of an executor** — the CPU executor ([`CpuCellStepperV1`]) or a device's (`misaka-palw-tir-gpu`).
+/// A backend implements the stepping and the reading of the state it holds, and refuses (`resume`) what it cannot do; the
+/// verifier ([`verify_cell_stepping_v1`]) is one function over both, so a device's verdict is the CPU's by construction.
+pub trait TirCellStepperV1 {
+    /// One position of the cell (see [`TirExecutor::step_cell`]): the committed values reach `sink`, the last occurrence's
+    /// carry-out is returned (empty at `post`).
+    fn step_cell(
+        &mut self,
+        token: u32,
+        occ: std::ops::Range<usize>,
+        carry_in: &[Vec<i128>],
+        sink: &mut dyn StepSink,
+    ) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>>;
+    /// The last step's logits row, as `i32` lanes (the last shard's).
+    fn logits_lanes(&self) -> Vec<i32>;
+    /// `n` lanes of the `Fixed` instance of `(state, layer)` from `first`, appended little-endian (`i32`/`u32`, PALW-TIR-5).
+    fn fixed_lanes(&self, state: u16, layer: Option<u16>, first: usize, n: usize, out: &mut Vec<u8>) -> Result<(), String>;
+    /// The newest `h_tile` rows of the history instance of `(state, layer)`, lanes `first_lane .. first_lane + row_lanes` of
+    /// each, oldest row first, appended little-endian.
+    fn hist_tile_lanes(
+        &self,
+        state: u16,
+        layer: Option<u16>,
+        h_tile: usize,
+        first_lane: usize,
+        row_lanes: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), String>;
+    /// Resume at the start of position `st.pos` for the instances `keep` names (a segment after the first). A backend that
+    /// cannot resume refuses; the caller then verifies the cell on the CPU.
+    fn resume(
+        &mut self,
+        _st: &RunState,
+        _keep: &dyn Fn(u16, Option<u16>) -> bool,
+        _tails: &[(u16, Option<u16>, Vec<Vec<i32>>)],
+    ) -> Result<(), String> {
+        Err("this backend does not resume a segment".to_string())
+    }
+}
+
+/// The CPU executor as a cell stepper.
+pub struct CpuCellStepperV1<'a>(pub TirExecutor<'a>);
+
+impl TirCellStepperV1 for CpuCellStepperV1<'_> {
+    fn step_cell(
+        &mut self,
+        token: u32,
+        occ: std::ops::Range<usize>,
+        carry_in: &[Vec<i128>],
+        sink: &mut dyn StepSink,
+    ) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>> {
+        self.0.step_cell(token, occ, carry_in, sink)
+    }
+    fn logits_lanes(&self) -> Vec<i32> {
+        self.0.logits().1.to_i128s().into_iter().map(|v| v as i32).collect()
+    }
+    fn fixed_lanes(&self, state: u16, layer: Option<u16>, first: usize, n: usize, out: &mut Vec<u8>) -> Result<(), String> {
+        let v = self.0.fixed_value(state, layer).ok_or_else(|| format!("no Fixed instance {:?}", (state, layer)))?;
+        lanes_of(v, first, n, out);
+        Ok(())
+    }
+    fn hist_tile_lanes(
+        &self,
+        state: u16,
+        layer: Option<u16>,
+        h_tile: usize,
+        first_lane: usize,
+        row_lanes: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), String> {
+        let tail = self.0.hist_tail(state, layer).ok_or_else(|| format!("no history instance {:?}", (state, layer)))?;
+        if tail.len() < h_tile {
+            return Err(format!("history {:?}: {} rows kept for a tile of {h_tile}", (state, layer), tail.len()));
+        }
+        for row in tail.iter().skip(tail.len() - h_tile) {
+            for x in &row[first_lane..first_lane + row_lanes] {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        Ok(())
+    }
+    fn resume(
+        &mut self,
+        st: &RunState,
+        keep: &dyn Fn(u16, Option<u16>) -> bool,
+        tails: &[(u16, Option<u16>, Vec<Vec<i32>>)],
+    ) -> Result<(), String> {
+        self.0.import_cell_state(st, keep).map_err(|e| e.to_string())?;
+        for (j, layer, rows) in tails {
+            self.0.set_hist_tail_rows(*j, *layer, rows).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+/// **Verify one cell** on the CPU (the module doc). Pure given its inputs: the same request, the same verdict, on any build.
 pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
-    let (space, plan, ctx, cell) = (req.space, req.plan, req.ctx, req.cell);
+    let mut exec = match TirExecutor::new_cell(req.plan, req.params, req.cell.occ.clone()) {
+        Ok(e) => e,
+        Err(e) => return TirCellVerdictV1::Refused(e.to_string()),
+    };
+    if req.fused {
+        exec.set_fused(true);
+    }
+    exec.set_hist_tail(req.space.layout.h_tile as usize);
+    verify_cell_stepping_v1(req, &mut CpuCellStepperV1(exec))
+}
+
+/// **Verify one cell over any stepper** — the one verifier. `stepper` is at position 0 with the cell's instances initial (a
+/// device builds it from the cell's occurrences' params), or resumable ([`TirCellStepperV1::resume`]).
+pub fn verify_cell_stepping_v1(req: &TirCellRequestV1<'_>, exec: &mut dyn TirCellStepperV1) -> TirCellVerdictV1 {
+    let (space, ctx, cell) = (req.space, req.ctx, req.cell);
     let job = match space.job_shape(ctx) {
         Ok(job) => job,
         Err(e) => return TirCellVerdictV1::Refused(format!("the job: {e}")),
@@ -221,15 +330,7 @@ pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
     }
     let ctx_hash = ctx.context_hash();
     let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
-    let mut exec = match TirExecutor::new_cell(plan, req.params, cell.occ.clone()) {
-        Ok(e) => e,
-        Err(e) => return TirCellVerdictV1::Refused(e.to_string()),
-    };
-    if req.fused {
-        exec.set_fused(true);
-    }
     let h_tile = space.layout.h_tile as usize;
-    exec.set_hist_tail(h_tile);
     let c_interval = space.layout.checkpoint_interval;
     // The commit tile length of every committed node slot of the cell's occurrences.
     let mut collected = Collected::default();
@@ -256,14 +357,8 @@ pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
     if p > 0 {
         match restore_state(req, &job, p, &owned_fixed, &owned_hist) {
             Ok(st) => {
-                let kept_tails: Vec<(u16, Option<u16>, Vec<Vec<i32>>)> = st.1;
-                if let Err(e) = exec.import_cell_state(&st.0, &keep) {
+                if let Err(e) = exec.resume(&st.0, &keep, &st.1) {
                     return TirCellVerdictV1::Refused(format!("the cell's state at position {p}: {e}"));
-                }
-                for (j, layer, rows) in kept_tails {
-                    if let Err(e) = exec.set_hist_tail_rows(j, layer, &rows) {
-                        return TirCellVerdictV1::Refused(e.to_string());
-                    }
                 }
             }
             Err(v) => return v,
@@ -345,8 +440,7 @@ pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
             }
             // The generated id this position selects: the greedy selection over the committed logits (the last shard's).
             if end == n_occ && runs_post {
-                let (_, logits) = exec.logits();
-                let row: Vec<i32> = logits.to_i128s().into_iter().map(|v| v as i32).collect();
+                let row: Vec<i32> = exec.logits_lanes();
                 if !row.is_empty() && a + 1 < job.positions && a + 1 >= job.prefill {
                     let want = base0_decode_token_select_v1(&row) as u32;
                     if want != req.tokens[(a + 1) as usize] {
@@ -360,26 +454,19 @@ pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
             let mine = match (*is_hist, leaf.kind) {
                 (false, PalwTirLeafKindV1::State { instance, first_element, .. }) => {
                     let inst = &space.fixed_instances()[instance as usize];
-                    let Some(v) = exec.fixed_value(inst.state, inst.layer) else {
-                        return TirCellVerdictV1::Refused(format!("no Fixed instance {:?}", (inst.state, inst.layer)));
-                    };
                     let mut lanes = Vec::new();
-                    lanes_of(v, first_element as usize, leaf.value_count as usize, &mut lanes);
+                    if let Err(e) = exec.fixed_lanes(inst.state, inst.layer, first_element as usize, leaf.value_count as usize, &mut lanes) {
+                        return TirCellVerdictV1::Refused(e);
+                    }
                     lanes
                 }
                 (true, PalwTirLeafKindV1::HistTile { instance, first_lane, row_lanes, .. }) => {
                     let inst = &space.hist_instances()[instance as usize];
-                    let Some(tail) = exec.hist_tail(inst.state, inst.layer) else {
-                        return TirCellVerdictV1::Refused(format!("no history instance {:?}", (inst.state, inst.layer)));
-                    };
-                    if tail.len() < h_tile {
-                        return TirCellVerdictV1::Refused(format!("history {:?}: {} rows kept for a tile of {h_tile}", (inst.state, inst.layer), tail.len()));
-                    }
                     let mut lanes = Vec::with_capacity(leaf.value_count as usize * 4);
-                    for row in tail.iter().skip(tail.len() - h_tile) {
-                        for x in &row[first_lane as usize..first_lane as usize + row_lanes as usize] {
-                            lanes.extend_from_slice(&x.to_le_bytes());
-                        }
+                    if let Err(e) =
+                        exec.hist_tile_lanes(inst.state, inst.layer, h_tile, first_lane as usize, row_lanes as usize, &mut lanes)
+                    {
+                        return TirCellVerdictV1::Refused(e);
                     }
                     lanes
                 }
