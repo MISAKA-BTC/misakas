@@ -7441,6 +7441,13 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a held leaf challenge was dropped by name below palw_held_close_chunks_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **RFC-0007 Part I, likewise**: below `palw_verification_vertex_v1` a verification vertex or an equivocation is a
+            // payload an older build cannot decode and skips (A-2), so it is dropped here, first, and charged nothing; the
+            // fold refuses it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_vertex_v1(&object) && !self.palw_vertex_at(point.daa_score) {
+                info!("Block {block}: a verification vertex move was dropped by name below palw_verification_vertex_v1, and the block stands (RFC-0007)");
+                continue;
+            }
             if tir_registration_gated
                 && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
             {
@@ -9140,7 +9147,70 @@ impl VirtualStateProcessor {
             return if objects.is_empty() { Ok(()) } else { Err("PALW objects on a network with no V2 bundle".to_string()) };
         };
         for object in objects {
+            // **RFC-0007's path rule** (spec 18 §18.6): a receipt-path licence for a claim whose panel bound at or after
+            // `palw_verification_vertex_v1` is refused by name — it licenses by tally. The fold refuses it too.
+            if let Some(claim) = kaspa_consensus_core::palw_vertex_v1::palw_receipt_object_claim_v1(object)
+                && kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, claim)
+            {
+                return Err(format!(
+                    "claim {claim}: a receipt licence for a claim bound at or after palw_verification_vertex_v1 (RFC-0007: it licenses by tally)"
+                ));
+            }
             match object {
+                // **RFC-0007 Part I: a verification vertex** (tag 91). The fence; the vertex's admissibility (its shape, its clock,
+                // a registered bond, the first of its `(seat, round)`); then the one ML-DSA-87 signature over the whole round, under
+                // the seat bond's registered key. Every leaf is the fold's: a leaf that does not count is ignored, so a seat can
+                // only lose by saying something wrong.
+                Obj::VerificationVertexV1 { vertex } => {
+                    if !state_params.vertex_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string());
+                    }
+                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_admissible_v1(state, vertex, point.daa_score)
+                        .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_verify_signature_v1(
+                        state,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &vertex.seat_bond,
+                        vertex.round,
+                        vertex.signed_daa,
+                        vertex.leaves.len(),
+                        vertex.leaves_root,
+                        &vertex.signature,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // **RFC-0007 §I.6: two vertices of one `(seat, round)` with different roots** (tag 92) — admissible evidence
+                // (one seat, one round, two roots, provable still, not yet convicted) and BOTH signatures under the seat's
+                // registered key. No court: two signatures over one round are the whole proof.
+                Obj::VertexEquivocationV1 { evidence } => {
+                    if !state_params.vertex_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string());
+                    }
+                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_equivocation_admissible_v1(state, evidence, point.daa_score)
+                        .map_err(|e| e.to_string())?;
+                    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    for header in [&evidence.a, &evidence.b] {
+                        kaspa_consensus_core::palw_vertex_v1::palw_vertex_verify_signature_v1(
+                            state,
+                            network_domain,
+                            &header.seat_bond,
+                            header.round,
+                            header.signed_daa,
+                            header.leaf_count as usize,
+                            header.leaves_root,
+                            &header.signature,
+                            Self::verify_mldsa87_with_context_bool,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
                 // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment is authorised by the reporter
                 // bond's own key, and by nothing else** — the lock a capability declaration carries,
                 // for its reason: a bond key is a public outpoint, and a commitment filed under
@@ -13713,6 +13783,12 @@ impl VirtualStateProcessor {
     /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
     fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
+    }
+
+    /// **RFC-0007 Part I's verification vertex, read off the bundle's mirror**
+    /// (`vertex_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_verification_vertex_v1`).
+    fn palw_vertex_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.vertex_active_at(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -19729,6 +19805,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
+        O::VerificationVertexV1 { .. } => "VerificationVertexV1",
+        O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         O::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",

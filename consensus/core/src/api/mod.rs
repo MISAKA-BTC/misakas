@@ -1287,6 +1287,17 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **RFC-0007: the vertex tables at the tip** — the counts, and `seat`'s own `(round, leaves_root, convicted)` rows from
+    /// `from_round` (a seat reads whether its vertex landed, and the kit reads the counts). Empty by `Default` on a consensus with no
+    /// V2 state.
+    fn palw_v2_vertex_status_v1(
+        &self,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+        _from_round: u64,
+    ) -> crate::palw_vertex_v1::PalwVertexStatusV1 {
+        Default::default()
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,

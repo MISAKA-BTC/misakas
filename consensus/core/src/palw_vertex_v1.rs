@@ -663,6 +663,19 @@ impl PalwVertexStateV1 {
     }
 }
 
+/// **What a node reads of the vertex tables at its tip** (the seat's landing check and the status the kit reads).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwVertexStatusV1 {
+    /// `Params::palw_verification_vertex_v1`'s height, if armed.
+    pub fence_from_daa: Option<u64>,
+    /// The `(round, seat)` rows, the tallies and the claims with `Held` rows the tip holds.
+    pub rounds: u64,
+    pub tallies: u64,
+    pub held_claims: u64,
+    /// The asked seat's rows from the asked round: `(round, leaves_root, convicted)`, ascending.
+    pub own: Vec<(u64, Hash64, bool)>,
+}
+
 /// **Why a leaf did not count** (informational: the fold ignores it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwVertexLeafFateV1 {

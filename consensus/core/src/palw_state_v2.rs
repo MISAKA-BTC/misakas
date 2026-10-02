@@ -12064,6 +12064,23 @@ impl PalwChainStateV2 {
         self.vertex.held.get(claim)
     }
 
+    /// **RFC-0007: what a node reads of the vertex tables** — the counts, and `seat`'s own rows from `from_round`.
+    pub fn vertex_status_v1(&self, params: &PalwStateParamsV2, seat: &PalwBondKeyV2, from_round: u64) -> crate::palw_vertex_v1::PalwVertexStatusV1 {
+        crate::palw_vertex_v1::PalwVertexStatusV1 {
+            fence_from_daa: params.vertex_from_daa(),
+            rounds: self.vertex.rounds.len() as u64,
+            tallies: self.vertex.tallies.len() as u64,
+            held_claims: self.vertex.held.len() as u64,
+            own: self
+                .vertex
+                .rounds
+                .iter()
+                .filter(|((round, bond), _)| *round >= from_round && bond == seat)
+                .map(|((round, _), row)| (*round, row.leaves_root, row.convicted))
+                .collect(),
+        }
+    }
+
     /// RFC-0007: the number of `(round, seat)` rows, tallies and claims with `Held` rows (telemetry and the status the kit reads).
     pub fn vertex_counts_v1(&self) -> (usize, usize, usize) {
         (self.vertex.rounds.len(), self.vertex.tallies.len(), self.vertex.held.len())
@@ -57050,6 +57067,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ImprovementArtifact { .. } => "improvement_artifact",
                     PalwDeltaEntryV2::ImprovementLicence { .. } => "improvement_licence",
                     PalwDeltaEntryV2::ImprovementCompositeClass { .. } => "improvement_composite_class",
+                    PalwDeltaEntryV2::VertexRow { .. } => "vertex_row",
                 });
             }
         }
@@ -69811,6 +69829,8 @@ pub(crate) mod tests {
     mod activation_pool_r1_v1;
     // ADR-0160 F-W (lane cap-weight): staged weight and the per-bond weight cap through the fold.
     mod capacity_weight_cap_v1;
+    // RFC-0007 Part I (spec 18): verification vertices, licence by tally, equivocation, `Held` leaves, the path rule.
+    mod vertex_fold_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

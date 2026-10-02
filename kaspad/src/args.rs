@@ -405,6 +405,13 @@ pub struct Args {
     /// line only, like the salt.
     #[serde(skip)]
     pub palw_drill_held_chunks_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 91 and 92) at this DAA**
+    /// (`config::drill::palw_drill_vertex_at_v1`): a seat signs one vertex a round of its verdicts, the fold tallies them and licenses a
+    /// claim at quorum, and two vertices of one round are slashed. It needs `palw_verification_v2`, `palw_rcore_plus`,
+    /// `palw_unavailable_abstains`, `palw_panel_economy` and `palw_objective_offence` in force at or below it. Command line only, like
+    /// the salt.
+    #[serde(skip)]
+    pub palw_drill_vertex_at: Option<u64>,
     /// **DRILL ONLY: cross the int-11 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int11_at_v1`): the
     /// whole list — decode rules, the generative fence, FP Job V5, the held leaf challenge, the improvement fence, F-N's
     /// verification term and the capacity ramp's ρ = 25 step — at H', and ρ = 100 at H' + 95, the offset the release uses. The
@@ -595,6 +602,10 @@ pub struct Args {
     /// replay of its class reserves none of its bytes. Off, every replay reserves the file again, as
     /// before this release.
     pub palw_no_artifact_pin: bool,
+    /// **RFC-0007: name claims by whole id in this seat's verification vertices** (`--palw-vertex-full-refs`). Off by default: a vertex
+    /// names a claim by the DAA its panel bound at and a 16-byte prefix of its id (20 bytes against 64), which is what takes the
+    /// per-claim carriage of a licence to a few tens of bytes. Node policy: the chain takes both, and nothing changes below the fence.
+    pub palw_vertex_full_refs: bool,
     /// int-10.2 A1: the most file bytes this process pins (`None` = a quarter of the host's memory).
     pub palw_artifact_pin_max_bytes: Option<u64>,
     /// int-10.2 A2: the widest prefill run (positions a layer at a time) a replay or an attempt runs at
@@ -697,6 +708,7 @@ impl Default for Args {
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
             palw_drill_held_chunks_at: None,
+            palw_drill_vertex_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -783,6 +795,7 @@ impl Default for Args {
             palw_host_memory_share: None,
             palw_seat_replay_slots: None,
             palw_no_artifact_pin: false,
+            palw_vertex_full_refs: false,
             palw_artifact_pin_max_bytes: None,
             palw_prefill_run_max: None,
             palw_host_ledger_dir: None,
@@ -1828,6 +1841,28 @@ pub fn cli() -> Command {
                      tag 90) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another \
                      fence uses, and unless palw_tir_v1 and palw_held_context are in force at or below it (--palw-drill-tir-at \
                      arms the first).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-vertex-at")
+                .long("palw-drill-vertex-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0007's verification vertex (palw_verification_vertex_v1, object \
+                     tags 91 and 92) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height \
+                     another fence uses, and unless palw_verification_v2, palw_rcore_plus, palw_unavailable_abstains, \
+                     palw_panel_economy and palw_objective_offence are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-vertex-full-refs")
+                .long("palw-vertex-full-refs")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW (RFC-0007): name each claim by its whole 64-byte id in this seat's verification vertices, \
+                     instead of by the DAA its panel bound at and a 16-byte prefix (the default, 20 bytes a leaf). The chain \
+                     accepts both; this changes nothing below palw_verification_vertex_v1.",
                 ),
         )
         .arg(
@@ -2932,6 +2967,8 @@ impl Args {
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
+            palw_drill_vertex_at: m.get_one::<u64>("palw-drill-vertex-at").copied(),
+            palw_vertex_full_refs: arg_match_unwrap_or::<bool>(&m, "palw-vertex-full-refs", defaults.palw_vertex_full_refs),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),

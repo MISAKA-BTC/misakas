@@ -869,22 +869,51 @@ seat relies on it.
 
 ## Open questions
 
-1. **`round_daa` and the leaf caps.** 1 DAA (today's licence latency) or longer (less header overhead at low load)? Should a seat be
-   allowed to sign mid-round when its leaves fill a vertex?
-2. **`Compact` references in v1**, or `Full` first and `Compact` behind a second fence?
-3. **The equivocation penalty.** 100 ‰ of the bond plus locks plus ejection, or the ADR-0152 per-act table?
-4. **Part I migration.** Receipts accepted for one receipt window past the fence, or until every claim bound before the fence is
-   licensed or void?
-5. **Witness bytes in the class profile** (§II.10). Should they enter the verification-window derivation, and seat pay?
+1. ~~**`round_daa` and the leaf caps.**~~ **Settled (the lead, 2026-10-03):** `round_daa` = 1 DAA; one vertex per seat per round; a
+   per-vertex leaf cap (1,024 leaves, 80,000 bytes); no mid-round signing in v1. Implemented as `PALW_VERTEX_ROUND_DAA_V1`,
+   `PALW_VERTEX_MAX_LEAVES_V1`, `PALW_VERTEX_MAX_LEAF_BYTES_V1`; a seat whose round holds more leaves than a vertex carries the
+   excess into its next round.
+2. ~~**`Compact` references in v1**, or `Full` first and `Compact` behind a second fence?~~ **Settled:** `Compact` ships in v1 under the
+   same fence (it is what brings per-claim signature data from 14.4 KB to 66–330 B); `Full` is accepted too. An unknown or ambiguous
+   compact reference is ignored by the fold.
+3. ~~**The equivocation penalty.**~~ **Settled:** a new act in the ADR-0152 per-act slash table: 100 ‰ of the bond
+   (`PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1`) plus every lock the seat holds on a claim either vertex names, plus ejection (a forced
+   retirement: the bond backs its existing claims to resolution and takes no new work).
+4. ~~**Part I migration.**~~ **Settled:** receipts are accepted past the fence until every claim bound before the fence is licensed or
+   void (no stranding). The path rule is one predicate (`palw_vertex_claim_licenses_by_tally_v1`): a claim whose panel bound at or after
+   the fence licenses by tally and refuses a receipt licence by name; a claim bound before it licenses on the receipt path, and a leaf
+   naming it counts for nothing. The two paths never count one seat twice.
+5. **Witness bytes in the class profile** (§II.10). Should they enter the verification-window derivation, and seat pay? *(Parts II/IV.)*
 6. **Seat pay for algebraic checks.** Should a receipt filed by a sketching seat earn what a replay earns? It costs the network the same
-   licence, but costs the seat less compute and more bandwidth.
-7. **Audit-mesh parameters.** `trap_rate` (1 %?), `trap_penalty` (a reservation?), audits per claim, and audit pay.
+   licence, but costs the seat less compute and more bandwidth. *(Parts II/IV.)*
+7. **Audit-mesh parameters.** `trap_rate` (1 %?), `trap_penalty` (a reservation?), audits per claim, and audit pay. *(Part IV.)*
 8. **`w_cap` for capped mode** (1 % of fork-choice weight?) and `capped_admission_permille`. Re-verify all capped claims, or a random
-   subset with a stated detection rate?
-9. **Per-row history sketches** (§II.3) are modelled, not built. Build them before any long-context class relies on Part II?
+   subset with a stated detection rate? *(Part IV.)*
+9. **Per-row history sketches** (§II.3) are modelled, not built. Build them before any long-context class relies on Part II? *(Part II.)*
 10. **The canonical serving set** (§II.2). Keep it as node policy, or pin it in the class profile so that every producer serves the same
-    bytes?
+    bytes? *(Part II.)*
 
 ## Decision
 
-<Open.>
+**Part I and Part III: implemented under the dormant fence `palw_verification_vertex_v1`** (branch `rfc7/vertex`; the lead's decisions of
+2026-10-03 on questions 1–4 above). Parts II and IV (questions 5–10) are the algebraic lane's.
+
+What the implementation fixed where this text left room (spec `docs/spec/palw/18-verification-certificates.md` is normative):
+
+- **The leaf carries no segment mask.** A `Valid` attests exactly the seat's assigned mask (`validate_receipt_coverage_v2` requires it of
+  a receipt), so the tally derives it. A `Verdict` leaf is 67 bytes with a `Full` reference and 23 with a `Compact` one (the RFC's 66 and 22
+  plus the verdict's tag byte; `Unavailable` adds 12).
+- **The tally rides the licensing arm.** Counted leaves are expanded into the `Vec<PalwSeatReceiptV3>` a `ReceiptLicensedV2` of the same
+  seats would carry and fed to the same fold arm, so the licence, its locks, its door record and its recount are the receipt path's.
+  On R-core+ the coverage door needs every segment attested twice, which is the full seat and the four partial seats: the tally licenses
+  when the fifth `Valid` lands, as the receipt path does.
+- **The state is three tables** (`vertex_rounds`, `vertex_tallies`, `vertex_held`), one Some-only root block `vertex/v1`, one carriage tail
+  `0xE4`, one generic delta entry `VertexRow` (delta 101). Rows of a round are kept for the evidence window (1,200 DAA) and swept 256 a
+  block; a tally lives while its claim is `PanelBound`; `Held` rows while it is live.
+- **Equivocation evidence carries two headers** (≈ 4.9 KB each) and, when the filer has them, the leaves of either side, so the fold can
+  forfeit the seat's locks on the claims they name. One conviction per `(seat, round)`.
+- **The `Held` exposure.** Every attester of a claim whose data a data-availability default concludes was not served loses 5 ‰ of its
+  collateral (`PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1`), charged beside the producer's own charge. A certificate is `q` = 3 equal leaves.
+- **Prerequisites** (named by `validate_palw_v2`): `palw_verification_v2`, `palw_rcore_plus`, `palw_unavailable_abstains`,
+  `palw_panel_economy`, `palw_objective_offence`, each in force at or below the fence.
+- **Tags and numbers**: objects 91 (`VerificationVertexV1`) and 92 (`VertexEquivocationV1`), delta entry 101, carriage tail `0xE4`.

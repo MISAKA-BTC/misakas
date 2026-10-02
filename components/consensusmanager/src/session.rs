@@ -394,6 +394,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disputable_claims_v2(mine)
     }
 
+    /// **RFC-0007: the vertex tables at the tip**, and `seat`'s own rows from `from_round`.
+    pub fn palw_v2_vertex_status_v1(
+        &self,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        from_round: u64,
+    ) -> kaspa_consensus_core::palw_vertex_v1::PalwVertexStatusV1 {
+        self.consensus.palw_v2_vertex_status_v1(seat, from_round)
+    }
+
     /// **A claim's own block header**, for deriving the job anchor a verifier must judge against.
     ///
     /// One header read per claim under judgement, on the panel's cadence — the same store-tip
