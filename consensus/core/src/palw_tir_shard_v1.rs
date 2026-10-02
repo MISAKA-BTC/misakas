@@ -409,6 +409,42 @@ pub fn palw_tir_shard_cell_permille_v1(
     Ok((parts, palw_largest_remainder_permille_v1(&raw)))
 }
 
+/// **Occurrence indices of shard `i`** (0 = `pre`, `1 + l` = layer `l`, `L + 1` = `post`): the layer range `layers` of the shard's
+/// partition, `pre` with the first shard and `post` with the last (`layers_total` = `L`).
+pub fn palw_tir_shard_occurrences_v1(layers: &Range<usize>, layers_total: usize) -> Range<usize> {
+    let first = if layers.start == 0 { 0 } else { 1 + layers.start };
+    let end = if layers.end == layers_total { layers_total + 2 } else { 1 + layers.end };
+    first..end
+}
+
+/// **The alignment of a segment cut** (RFC §1.2): `G = lcm(C, h_tile)`. `None` for a zero interval or tile, or an overflow.
+pub fn palw_tir_shard_segment_align_v1(checkpoint_interval: u32, h_tile: u32) -> Option<u32> {
+    if checkpoint_interval == 0 || h_tile == 0 {
+        return None;
+    }
+    fn gcd(a: u32, b: u32) -> u32 {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    (checkpoint_interval / gcd(checkpoint_interval, h_tile)).checked_mul(h_tile)
+}
+
+/// **Segment `j` of `s_p`, as positions** (RFC §1.2): `[⌊j·T/S_P⌋_G, ⌊(j+1)·T/S_P⌋_G)`, the last ending at `T`. `None` for
+/// `j ≥ s_p`, `s_p == 0` or a zero alignment. A segment may be empty when the job is shorter than the alignment; the draw's
+/// owner of an empty segment has nothing to verify.
+pub fn palw_tir_shard_segment_positions_v1(positions: u32, align: u32, s_p: u16, j: u16) -> Option<Range<u32>> {
+    if s_p == 0 || j >= s_p || align == 0 {
+        return None;
+    }
+    let cut = |k: u16| -> u32 {
+        if k >= s_p {
+            return positions;
+        }
+        let x = (u64::from(positions) * u64::from(k) / u64::from(s_p)) as u32;
+        x / align * align
+    };
+    Some(cut(j)..cut(j + 1))
+}
+
 /// `raw` as permille summing to exactly 1,000 (largest remainder, ties to the lowest index); all-zero raw is uniform.
 pub fn palw_largest_remainder_permille_v1(raw: &[u128]) -> Vec<u16> {
     let n = raw.len();
@@ -1039,6 +1075,27 @@ mod tests {
         // A class that fits one seat may still declare exactly two shards.
         assert!(palw_tir_shard_plan_shape_v1(2, 1, 8, 1).is_ok());
         assert!(palw_tir_shard_plan_shape_v1(3, 1, 8, 1).is_err());
+    }
+
+    #[test]
+    fn occurrences_and_segment_positions_follow_the_rfc_cuts() {
+        // 8 layers: shard 0 holds layers 0..3 (pre with it), shard 1 3..8 (post with it).
+        assert_eq!(palw_tir_shard_occurrences_v1(&(0..3), 8), 0..4);
+        assert_eq!(palw_tir_shard_occurrences_v1(&(3..8), 8), 4..10);
+        assert_eq!(palw_tir_shard_occurrences_v1(&(3..5), 8), 4..6, "a middle shard holds no pre or post");
+        assert_eq!(palw_tir_shard_segment_align_v1(2, 4), Some(4));
+        assert_eq!(palw_tir_shard_segment_align_v1(3, 2), Some(6));
+        assert_eq!(palw_tir_shard_segment_align_v1(0, 2), None);
+        assert_eq!(palw_tir_shard_segment_align_v1(u32::MAX, 2), None, "an overflow is refused");
+        // T = 100, G = 6: cuts at floor(50) -> 48.
+        assert_eq!(palw_tir_shard_segment_positions_v1(100, 6, 1, 0), Some(0..100));
+        assert_eq!(palw_tir_shard_segment_positions_v1(100, 6, 2, 0), Some(0..48));
+        assert_eq!(palw_tir_shard_segment_positions_v1(100, 6, 2, 1), Some(48..100));
+        assert_eq!(palw_tir_shard_segment_positions_v1(100, 6, 2, 2), None);
+        assert_eq!(palw_tir_shard_segment_positions_v1(100, 0, 2, 0), None);
+        // A job shorter than the alignment: the first segment is empty, the last is everything.
+        assert_eq!(palw_tir_shard_segment_positions_v1(5, 6, 2, 0), Some(0..0));
+        assert_eq!(palw_tir_shard_segment_positions_v1(5, 6, 2, 1), Some(0..5));
     }
 
     #[test]

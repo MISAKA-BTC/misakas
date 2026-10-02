@@ -154,6 +154,10 @@ pub fn tir_trace_event_disclosure_of_capture_v1(
     }))
 }
 
+fn count_of(binding: &PalwTirStepBindingV1) -> u64 {
+    binding.step_leaf_count
+}
+
 /// One IR class served from a mapped artifact.
 pub struct TirBackendV1 {
     model_id: String,
@@ -488,7 +492,8 @@ impl TirBackendV1 {
     ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
         use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
         use kaspa_consensus_core::palw_tir_court_v1::{
-            build_tir_row_node_disclosure_v1, build_tir_step_node_disclosure_v1, palw_tir_step_tree_width_v1,
+            build_tir_row_node_disclosure_v1, build_tir_step_node_disclosure_v1, build_tir_step_run_disclosure_v1,
+            palw_tir_step_tree_width_v1,
         };
         let tiled = Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1();
         self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
@@ -527,6 +532,14 @@ impl TirBackendV1 {
                         .map(|d| PalwDaAnswerV1::TirRowNode(Box::new(d)))
                         .map_err(|e| format!("rows-tree node ({level}, {index}): {e}"))
                 }
+                // RFC-0006's run unit: a contiguous run of leaves a cell reads, with one range opening. A run that is not
+                // wholly inside the execution is proven out of range by the binding, as a leaf past it is.
+                PalwDaUnitV1::TirStepRun { first, count } if count == 0 || first.saturating_add(u64::from(count)) > count_of(binding) => {
+                    out_of_range()
+                }
+                PalwDaUnitV1::TirStepRun { first, count } => build_tir_step_run_disclosure_v1(binding, first, count, store, self.ladder)
+                    .map(|d| PalwDaAnswerV1::TirStepRun(Box::new(d)))
+                    .map_err(|e| format!("step run [{first}, +{count}): {e}")),
                 other => Err(format!("{other:?} is not an IR step unit")),
             }
         })

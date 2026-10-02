@@ -2283,7 +2283,10 @@ pub(crate) fn palw_da_unit_answer_v1(
         // the executor answering for its own run; the rows from the capture's committed trace), a unit
         // past the execution by the binding proving so — each self-checked by the fold's check, the
         // program stripped.
-        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. } => {
+        PalwDaUnitV1::TirStepLeaf { .. }
+        | PalwDaUnitV1::TirStepNode { .. }
+        | PalwDaUnitV1::TirRowNode { .. }
+        | PalwDaUnitV1::TirStepRun { .. } => {
             if !tir_capture {
                 return Err(format!("{unit:?} is an IR claim's unit, and this material is not an IR capture"));
             }
@@ -13279,6 +13282,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        // RFC-0006 (tags 91-93): layer-sharded panels.
+        PalwConsensusObjectV2::TirShardPlanDeclared { .. } => "TirShardPlanDeclared",
+        PalwConsensusObjectV2::TirShardReceiptLicensed { .. } => "TirShardReceiptLicensed",
+        PalwConsensusObjectV2::TirSeatReadinessProved { .. } => "TirSeatReadinessProved",
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
