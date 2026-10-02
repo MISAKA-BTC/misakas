@@ -245,6 +245,8 @@ fn draw(rng: &mut ChaCha20Rng, extreme: f64) -> impl FnMut(&str, usize) -> i128 
             }
             // The router's kept weights in [0, 2^25].
             "table" if name.starts_with("w.") => rng.gen_range(0i128..=1 << 25),
+            // Wide activations the kernel fuses over: sums of their squares stay in a machine word (the plan decides).
+            "table" if name.starts_with("x32") => rng.gen_range(-(1i128 << 26)..=1 << 26),
             "write_shift" => rng.gen_range(-40i128..=40),
             _ => i128::MIN, // resolved by dtype below
         }
@@ -278,6 +280,45 @@ fn gate(kernel: &str, p: &TirProgramV1, layers: u16, positions: usize) {
 fn gdn_step_is_the_reference_on_random_and_extreme_operands_and_its_broken_variant_is_caught() {
     gate("gdn_step_q36", &gdn_program(4, 8, 16, 2), 2, 6);
     gate("gdn_step_q36", &gdn_program(2, 4, 4, 1), 1, 6);
+}
+
+/// A one-layer program whose layer normalises the row its token selects: `l2_unit_q15` over `i16` codes, or `rms_unit_q24` over
+/// `i16`/`i32` codes with an `i64` `eps` param. `rows × n` is the row shape; the table's rows are the operands.
+fn rowop_program(l2: bool, dtype: DType, rows: u32, n: u32, layers: usize) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param(if dtype == DType::I32 { "x32.table" } else { "x.table" }, dtype, &[VOCAB, rows * n], false);
+    let eps = (!l2).then(|| pb.param("eps", DType::I64, &[1], false));
+    let out_dtype = if l2 { DType::I16 } else { DType::I32 };
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let v = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let v = b.cast(v, out_dtype);
+        b.finish(&[v])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(out_dtype, &[rows * n])]);
+        let x = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.reshape_fixed(x, &[rows, n]);
+        let y = if l2 { b.l2_unit_q15(x) } else { b.rms_unit_q24(x, eps.expect("rms has an eps")) };
+        let y = b.reshape_fixed(y, &[rows * n]);
+        let y = b.commit(y);
+        b.finish(&[y])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(out_dtype, &[rows * n])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[rows * n]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer; layers], post, 0)
+}
+
+#[test]
+fn the_unit_row_kernels_are_the_reference_on_random_and_extreme_operands_and_their_broken_variants_are_caught() {
+    gate("l2_unit_q15", &rowop_program(true, DType::I16, 3, 8, 2), 2, 6);
+    gate("l2_unit_q15", &rowop_program(true, DType::I16, 1, 16, 1), 1, 6);
+    gate("rms_unit_q24", &rowop_program(false, DType::I16, 3, 8, 2), 2, 6);
+    gate("rms_unit_q24", &rowop_program(false, DType::I32, 2, 16, 1), 1, 6);
 }
 
 // ---- every HF tiny-fixture program -------------------------------------------------------------
