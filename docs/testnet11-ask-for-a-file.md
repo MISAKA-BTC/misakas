@@ -203,7 +203,7 @@ prints that document.
 
 This is the path where the network is involved. Setting it up is the miner's path — a key, some
 test coins, a registered bond, a node, and a gateway in front of a model — and it is written out
-step by step in [testnet11-join-mining.md](testnet11-join-mining.md) §1–§4 and §7. Do that first;
+step by step in testnet11-join-mining.md §1–§4 and §7. Do that first;
 this section is only the part that asks for a *file* instead of text.
 
 Once your gateway is up, one extra field turns an answer into an artifact:
@@ -421,7 +421,7 @@ who took both halves from one source would be checking nothing.
 
 ## Where to go next
 
-* [testnet11-join-mining.md](testnet11-join-mining.md) — the bond, the node, the gateway, and
+* testnet11-join-mining.md — the bond, the node, the gateway, and
   running the live lane at all.
 * [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) — from an executed job to a
   paid block: the watcher that submits, following a claim, and where the reward comes from.

@@ -534,7 +534,7 @@ Armed on a carded mainnet from block one (`mainnet_card_base_v1`), with the with
 past `liability + accuse + disclose` (`palw_v2_bond_outlasting_da_court`; `validate_palw_v2` refuses
 a delay inside that sum wherever the court is armed). testnet-11 and devnet stay dormant; arming
 them requires the state-version move this ADR asks for, and a test now says so. Design record:
-`docs/palw-private-prompts-design-2026-09-05.md`.
+`docs/archive/palw-private-prompts-design-2026-09-05.md`.
 
 ## Arming on testnet-11, 2026-09-06 — a scheduled fence, and what the state version really means
 

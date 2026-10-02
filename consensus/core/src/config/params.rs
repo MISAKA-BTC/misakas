@@ -342,7 +342,7 @@ impl From<Params> for OverrideParams {
     }
 }
 
-/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/kaspa-pq-design-mldsa87.md).
+/// kaspa-pq PQ-only enforcement mode (ADR-0019 / docs/design/kaspa-pq-design-mldsa87.md).
 /// Selects whether legacy secp256k1 signature paths are merely non-standard
 /// (mempool) or hard consensus failures. Every kaspa-pq network uses `Consensus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3418,7 +3418,7 @@ pub struct Params {
     pub pow_palw_ollama_activation: ForkActivation,
 
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
-    /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
+    /// docs/design/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
 
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
@@ -12226,7 +12226,7 @@ impl Params {
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
     /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
     /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
-    /// engine level. See ADR-0019 / docs/kaspa-pq-design-mldsa87.md.
+    /// engine level. See ADR-0019 / docs/design/kaspa-pq-design-mldsa87.md.
     #[inline]
     #[must_use]
     pub fn is_pq_active(&self, daa_score: u64) -> bool {
@@ -13142,7 +13142,7 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Both this `0` and the re-pinned mainnet entry in `shipped_presets_have_pinned_fingerprints`
     // are legal ONLY IF mainnet has not launched. The whole justification above — "a network that
     // has not launched has no history to fork" — rests on it, and the only written statement of it
-    // anywhere in this tree is one sentence in `docs/palw-mainnet-audit-2026-08-28.md`. Two nearby
+    // anywhere in this tree is one sentence in `docs/archive/palw-mainnet-audit-2026-08-28.md`. Two nearby
     // signals point the other way and are worth reading before trusting it: `genesis.rs` records
     // that this genesis differs from "the prior Argon2id-era mainnet genesis", and the 9B custody
     // ceremony is described there as complete.

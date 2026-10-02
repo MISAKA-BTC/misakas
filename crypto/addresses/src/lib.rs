@@ -161,7 +161,7 @@ pub enum Version {
     /// kaspa-pq ML-DSA P2PKH (the only standard send template).
     /// Carries a 64-byte `BLAKE2b-512(public_key)` (ADR-0019 §8; widened
     /// from the former 32-byte BLAKE2b-256). See docs/adr/0002-mldsa65-p2pkh.md
-    /// and docs/kaspa-pq-design-mldsa87.md §8.
+    /// and docs/design/kaspa-pq-design-mldsa87.md §8.
     PubKeyHashMlDsa87 = 2,
     /// ScriptHash addresses always have the version byte set to 8
     ScriptHash = 8,

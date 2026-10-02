@@ -41,7 +41,7 @@ can open.
 
 Read on `feat/adr-0097-model-fit` at `65ee18cd` (itself on `feat/adr-0096-everyday-lane`'s
 `421cc92e`) on 2026-09-10. Every figure is what `misaka-palw-base0 --bin palw-seat-coverage`
-printed on that tree (recorded in `docs/palw-seat-coverage-2026-09-10.md`); the binary is the
+printed on that tree (recorded in `docs/archive/palw-seat-coverage-2026-09-10.md`); the binary is the
 authority (ADR-0092 §5).
 
 ### 1.1 The draw, as it ships
@@ -293,7 +293,7 @@ claimant renumbers the later writer. **The next free number is 0099.**
   * `consensus/core/src/palw_seat_coverage_v1.rs` — Decision 1, with seven tests.
   * `misaka-palw-base0/src/bin/palw-seat-coverage.rs` — the generator, classified in the
     float-free scan as a measurement tool.
-  * `docs/palw-seat-coverage-2026-09-10.md` — the generator's output, as a dated record and not
+  * `docs/archive/palw-seat-coverage-2026-09-10.md` — the generator's output, as a dated record and not
     as a source.
   * `kaspad/src/palw_fp_seat.rs` — the fault ledger, with its test.
   * `kaspad/src/palw_panel.rs` — Decisions 2 and 3: the three gates, the recorded state-root

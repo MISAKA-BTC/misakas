@@ -190,7 +190,7 @@ implementations keep the residual in wider precision — and BASE-0 cannot, beca
 `i8 → i32` by ADR-0040 Decision D. Widening it is a **new kernel**, i.e. the one change that would
 re-open the catalog.
 
-**Measured 2026-08-21 — see `docs/palw-base0-depth-measurement-2026-08-21.md`. Two corrections
+**Measured 2026-08-21 — see `docs/archive/palw-base0-depth-measurement-2026-08-21.md`. Two corrections
 to the paragraph above.**
 
 *The `g_res = 1/2` claim was wrong.* A feature is not attenuated to nothing: C1 rounds half away

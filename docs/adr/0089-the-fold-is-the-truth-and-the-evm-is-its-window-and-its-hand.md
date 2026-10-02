@@ -16,7 +16,7 @@ trading model positions; and Hyperliquid's HyperEVM is the reference.
 devnet from genesis, inert on mainnet), ADR-0022 (the EVM snapshot at the pruning point),
 ADR-0023 (Lane 2; per-lane precompile profile; the frozen security labels), ADR-0087 (the market
 is a balance in the state fold; implemented behind `palw_model_market`), ADR-0088 (lines, versions,
-roles, usage; the market keyed by line), ADR-0059 (carve, never mint), `docs/misaka-evm-design-v0.4.md` §3.2 (system
+roles, usage; the market keyed by line), ADR-0059 (carve, never mint), `docs/design/misaka-evm-design-v0.4.md` §3.2 (system
 ops), §8 (fees), §9 (the UTXO ⇄ EVM bridge), §17 (invariants).
 **Amends:** ADR-0087 Decision 3 (two more ways to make the same two moves — from the EVM),
 Decision 8 (what a participant reads gains the EVM's surfaces); design v0.4 §9.1's supply

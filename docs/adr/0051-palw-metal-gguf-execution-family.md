@@ -22,8 +22,8 @@ walked back here, for one capped family**), ADR-0028 (challenge sampling), ADR-0
 the consensus work; BASE-0 is the floor — both premises kept), ADR-0040 (the integer family this
 one does NOT replace), ADR-0044 (free-prompt receipts — the UX carrier), ADR-0045 (the share
 table — where "half" lives), ADR-0049 (the adjudication contract this family deliberately never
-enters), `docs/ambient-pol-binary-audit-2026-08-15.md`,
-`docs/palw-qwen25-block-generation-blocked-2026-08-22.md` (the measurement that motivated this).
+enters), `docs/archive/ambient-pol-binary-audit-2026-08-15.md`,
+`docs/archive/palw-qwen25-block-generation-blocked-2026-08-22.md` (the measurement that motivated this).
 
 ---
 

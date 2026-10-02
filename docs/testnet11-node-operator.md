@@ -74,7 +74,7 @@ The fence schedule this build prints on start:
 ADR-0133's Verification V2 and the whole-artifact possession proof, **7,300** shortens the
 execution span, **7,301** retires the compute overlay, and **6,900** is the market's least seed.
 What each one changes:
-[docs/testnet11-7101-upgrade-announcement.md](testnet11-7101-upgrade-announcement.md).
+docs/testnet11-7101-upgrade-announcement.md.
 
 A different fingerprint or fork-id schedule is a ruleset mismatch, not an ordinary connectivity problem. Testnet-11 Relaunch 5f uses a different genesis from prior relaunches; old datadirs cannot be continued.
 
@@ -114,7 +114,7 @@ Do not wipe a healthy current-5f appdir for a routine binary update. Move only t
 
 ## Producing blocks
 
-An external hash miner cannot produce Testnet-11 blocks. Follow [testnet11-join-mining.md](testnet11-join-mining.md); the ADR-0122 wizard starts `kaspad --palw-produce --palw-round-lane` with the required Bond and class data.
+An external hash miner cannot produce Testnet-11 blocks. Follow testnet11-join-mining.md; the ADR-0122 wizard starts `kaspad --palw-produce --palw-round-lane` with the required Bond and class data.
 
 ## Execution-lane diagnosis
 

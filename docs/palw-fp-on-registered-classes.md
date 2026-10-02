@@ -12,7 +12,7 @@ sections from the bottom for the current shape, and
 **What is still narrow, and what a reader should not conclude from "implemented":** a registered
 class's context is 8–16 tokens for prompt and answer TOGETHER, so the lane runs end to end at a
 size no product would ship. That is a width problem, not a wiring problem, and it is stated where
-a person meets it in [testnet11-join-mining.md](testnet11-join-mining.md) §7.2a and
+a person meets it in testnet11-join-mining.md §7.2a and
 [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
 
 ## The finding
@@ -172,7 +172,7 @@ Step 1 is not code. It is the one that has to be made first, and by whoever owns
 > the free-prompt lane; see the dated sections at the bottom of this page. What did NOT change is
 > the WIDTH: a registered class is 8–16 tokens for prompt and answer together, which is why
 > "meaningful" is still doing work in that heading. The measured version of that sentence lives in
-> [testnet11-join-mining.md](testnet11-join-mining.md) §7.2a and
+> testnet11-join-mining.md §7.2a and
 > [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
 
 The A16 finding above is not one class's accident. testnet-11 registers three, and the property

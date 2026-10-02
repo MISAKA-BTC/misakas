@@ -79,7 +79,7 @@ Transactions are authorized only by ML-DSA-87. Addresses are keyed BLAKE2b-512 h
 verification key. Every consensus identity (block, txid, merkle roots, UTXO commitment) is a
 64-byte `Hash64`. secp256k1 is not linked into the node.
 - **Governing:** [0019](../adr/0019-mldsa87-migration.md) ML-DSA-87 migration · [0002](../adr/0002-mldsa65-p2pkh.md) P2PKH structure (its ML-DSA-65 scheme is superseded by 0019) · [0008](../adr/0008-hash64-consensus-identity.md) Hash64 identity · [0003](../adr/0003-lthash-utxo-accumulator.md) LtHash UTXO accumulator · [0004](../adr/0004-utxo-commitment64.md) 64-byte UTXO commitment · [0005](../adr/0005-mass-policy.md) mass / DoS policy · [0006](../adr/0006-rpc-wasm-sdk-types.md) RPC / WASM / SDK types
-- **Spec:** [kaspa-pq-spec.md](../kaspa-pq-spec.md), [kaspa-pq-design-mldsa87.md](../kaspa-pq-design-mldsa87.md)
+- **Spec:** [kaspa-pq-spec.md](../kaspa-pq-spec.md), [kaspa-pq-design-mldsa87.md](../design/kaspa-pq-design-mldsa87.md)
 - **Code:** `crypto/hashes/src/hash64.rs`, `crypto/addresses/`, `crypto/txscript/`, `consensus/core/src/mldsa87_primitives.rs`, `consensus/core/src/hashing/`
 
 ### 2.2 Block production: the PALW lottery and the clock
@@ -239,7 +239,7 @@ where they came from Kaspa (`kaspa-*`).
 | read the reasoning behind a rule | the ADR linked above, and the [ADR index](../adr/README.md) |
 | check the byte-level PQ spec | [kaspa-pq-spec.md](../kaspa-pq-spec.md) |
 | see how the provenance fields map to code | [palw-registry-map.md](../palw-registry-map.md) |
-| read testnet-11's history | [history/testnet-11.md](../history/testnet-11.md) |
+| read testnet-11's history | history/testnet-11.md |
 
 **Keep this page current.** When an ADR is accepted, superseded or armed, update its topic here in
 the same PR. This page is the current view, and an out-of-date current view is worse than none.

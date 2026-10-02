@@ -54,7 +54,7 @@ fn pay_to_script_hash(script_hash: &[u8]) -> ScriptVec {
 /// ```
 ///
 /// Total length 69 bytes (5 opcodes + 64-byte payload). See
-/// docs/adr/0002-mldsa65-p2pkh.md and docs/kaspa-pq-design-mldsa87.md §8.
+/// docs/adr/0002-mldsa65-p2pkh.md and docs/design/kaspa-pq-design-mldsa87.md §8.
 fn pay_to_pub_key_hash_mldsa87(address_payload: &[u8]) -> ScriptVec {
     // TODO: use ScriptBuilder when add_op and add_data fns or equivalents are available
     assert_eq!(address_payload.len(), 64);
@@ -78,7 +78,7 @@ pub fn pay_to_address_script(address: &Address) -> ScriptPublicKey {
     ScriptPublicKey::new(ScriptClass::from(address.version).version(), script)
 }
 
-/// kaspa-pq PQ-only (ADR-0019 §13 / docs/kaspa-pq-design-mldsa87.md §13.5): the
+/// kaspa-pq PQ-only (ADR-0019 §13 / docs/design/kaspa-pq-design-mldsa87.md §13.5): the
 /// PQ-network variant of [`pay_to_address_script`]. It accepts ONLY the standard
 /// ML-DSA-87 P2PKH address class ([`Version::PubKeyHashMlDsa87`]); any legacy
 /// secp256k1 (`PubKey` / `PubKeyECDSA`) or `ScriptHash` address is rejected with

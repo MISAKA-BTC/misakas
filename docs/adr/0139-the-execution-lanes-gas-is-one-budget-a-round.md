@@ -3,7 +3,7 @@
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`; **built**. Rides
 `palw_execution_lane` (testnet-11 DAA 6,001): below the lane the cap is what a chain block always
 had; past it the cap is a function of the round blocks the chain block merges. Decides the open
-item O13 of `docs/misaka-evm-design-v0.4.md` (§14.3: "per-second G_limit derivation + measured
+item O13 of `docs/design/misaka-evm-design-v0.4.md` (§14.3: "per-second G_limit derivation + measured
 propagation, frozen before activation").
 
 ## 1. The question

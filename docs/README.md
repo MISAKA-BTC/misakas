@@ -13,13 +13,13 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 ## Testnet-11 documents (previous network; build `1f98d3bf4` to run it)
 
-- [testnet-11 history](history/testnet-11.md) — the flag days, fingerprints and rollout notes that used to head the README
+- testnet-11 history — the flag days, fingerprints and rollout notes that used to head the README
 
-- [Join as a PALW producer](testnet11-join-mining.md)
+- Join as a PALW producer
 - [Run a full node](testnet11-node-operator.md)
-- [The DAA 7,101 PALW upgrade and Verification V2 at 7,200](testnet11-7101-upgrade-announcement.md) — what fires at 7,100, 7,101, 7,200, 7,300, 7,301 and 6,900, and how to diagnose the execution lane
-- [Pre-arming security audit of the DAA 7,101 bundle (2026-09-18)](palw-audit-2026-09-18-6001.md) — two Critical and six High findings, the seven release blockers and their fixes, and what is left as residual risk
-- [The DAA clock under the 7,101 bundle (2026-09-18)](palw-daa-clock-audit-2026-09-18.md) — every lane's effect on the DAA score, `bits` and blue work; the window arithmetic at 120 s / measured / max lane load; the blocker and its fix (ADR-0138)
+- The DAA 7,101 PALW upgrade and Verification V2 at 7,200 — what fires at 7,100, 7,101, 7,200, 7,300, 7,301 and 6,900, and how to diagnose the execution lane
+- Pre-arming security audit of the DAA 7,101 bundle (2026-09-18) — two Critical and six High findings, the seven release blockers and their fixes, and what is left as residual risk
+- The DAA clock under the 7,101 bundle (2026-09-18) — every lane's effect on the DAA score, `bits` and blue work; the window arithmetic at 120 s / measured / max lane load; the blocker and its fix (ADR-0138)
 - [Run a DNS-finality validator](validator-runbook.md)
 - [Operate model classes](palw-public-testnet-classes-runbook.md)
 - [Add a model through the SDK](palw-model-onboarding-sdk.md)
@@ -31,7 +31,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 - [ADR index](adr/README.md)
 - [PQ specification](kaspa-pq-spec.md)
-- [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
+- [ML-DSA-87 design](design/kaspa-pq-design-mldsa87.md)
 - [PALW registry map](palw-registry-map.md)
 - [PALW extension envelope](palw-extension-envelope.md)
 

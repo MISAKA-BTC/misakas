@@ -1,5 +1,5 @@
 //! kaspa-pq Selected-Parent EVM Lane (ADR-0020) — consensus type surface
-//! (design v0.4, `docs/misaka-evm-design-v0.4.md`).
+//! (design v0.4, `docs/design/misaka-evm-design-v0.4.md`).
 //!
 //! This module carries the **types only** for the EVM execution lane: the
 //! block-body [`EvmExecutionPayload`] (bounded system ops + EIP-2718 user txs),

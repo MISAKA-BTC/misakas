@@ -33,7 +33,7 @@ The normative table in *Revision 1.1* below is updated in place to these values.
 
 ## Revision 1.1 — PQ-only completion (2026-05-31)
 
-The original 1.0 decision was a minimal value/variant swap (ML-DSA-65→87) that *kept* legacy paths. Per the team design doc **`docs/kaspa-pq-design-mldsa87.md`**, the scope is now a full **PQ-only** completion: legacy secp256k1/Schnorr/ECDSA, legacy addresses, and P2SH are made **unrepresentable at the consensus, mempool, and wallet layers** — not merely "ML-DSA added". This revises several 1.0 decisions.
+The original 1.0 decision was a minimal value/variant swap (ML-DSA-65→87) that *kept* legacy paths. Per the team design doc **`docs/design/kaspa-pq-design-mldsa87.md`**, the scope is now a full **PQ-only** completion: legacy secp256k1/Schnorr/ECDSA, legacy addresses, and P2SH are made **unrepresentable at the consensus, mempool, and wallet layers** — not merely "ML-DSA added". This revises several 1.0 decisions.
 
 ### Locked decisions (this revision)
 1. **Address payload = 64-byte BLAKE2b-512** of the ML-DSA-87 verification key (was 32-byte). Needs an `OP_BLAKE2B_512` / `OpData64` opcode. `scriptPubKey = OP_DUP OP_BLAKE2B_512 OP_DATA64 <payload64> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`.

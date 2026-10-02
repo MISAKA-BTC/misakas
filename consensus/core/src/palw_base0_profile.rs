@@ -1240,7 +1240,7 @@ mod tests {
     ///   by nothing there, and a challenger naming it freely would convict an honest producer.
     ///
     /// The remaining half of G5d — deriving a decode token from the previous position's committed
-    /// logits — is recorded in `docs/palw-qwen25-class-phase0.md`. It is a runtime `Unadjudicable`
+    /// logits — is recorded in `docs/archive/palw-qwen25-class-phase0.md`. It is a runtime `Unadjudicable`
     /// on decode gathers, not a coverage failure: the node's SHAPE is servable, which is what
     /// this gate decides.
     #[test]

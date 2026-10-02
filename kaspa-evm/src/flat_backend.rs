@@ -1,4 +1,4 @@
-//! C-01 state-backend (design v0.1 `docs/misaka-evm-state-backend-design-v0.1.md`,
+//! C-01 state-backend (design v0.1 `docs/design/misaka-evm-state-backend-design-v0.1.md`,
 //! Stage 1) slice **S3** — the flat-state-backed revm adapter.
 //!
 //! [`FlatStateBackend`] is a revm [`DatabaseRef`] that lazily point-looks-up

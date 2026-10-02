@@ -145,7 +145,7 @@ pub enum TxRuleError {
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]
     FeerateTooLow,
 
-    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/kaspa-pq-design-mldsa87.md): on a
     /// PQ-active network a transaction (native, coinbase, or DNS overlay) created
     /// an output whose script is not the sole standard ML-DSA-87 P2PKH class.
     /// Enforced with no exemptions so non-PQ, signature-free UTXOs (e.g. OP_TRUE)

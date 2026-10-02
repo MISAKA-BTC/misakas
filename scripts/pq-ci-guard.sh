@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaspa-pq PQ-only CI guard — ADR-0019 / docs/kaspa-pq-design-mldsa87.md §14.
+# kaspa-pq PQ-only CI guard — ADR-0019 / docs/design/kaspa-pq-design-mldsa87.md §14.
 #
 #   1) Advisory audit of dependencies (libcrux-ml-dsa et al.) — active now.
 #   2) secp256k1 MUST be absent from the kaspa-consensus dependency tree.

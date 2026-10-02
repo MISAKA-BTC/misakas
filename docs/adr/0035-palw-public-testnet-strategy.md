@@ -2,9 +2,9 @@
 
 - Status: Accepted (implemented 2026-08-17; operator items listed in §6)
 - Track A gate 5. Evidence base: gates 1–4 —
-  `docs/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
-  `docs/palw-algo4-crosshost-determinism-2026-08-16.md` (gate 2),
-  `docs/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
+  `docs/archive/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
+  `docs/archive/palw-algo4-crosshost-determinism-2026-08-16.md` (gate 2),
+  `docs/archive/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
   `docs/palw-testnet11-soak-2026-08-16.md` (gate 4, running).
 
 > **Superseded in part (index reconciliation, 2026-09-02).** Decision 1 — "the chain the fleet is

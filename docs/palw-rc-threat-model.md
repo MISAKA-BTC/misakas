@@ -5,7 +5,7 @@ ruleset must defeat, and the tests that prove each is defeated. It exists so tha
 condition — *"the attack tests are red on the current implementation"* — is a concrete, reviewable
 artifact rather than a claim.
 
-Baseline: audit `9cfcbf99` / `docs/palw-critical-audit-2026-08-19-ja.md`. Every P0 below is quoted
+Baseline: audit `9cfcbf99` / `docs/archive/palw-critical-audit-2026-08-19-ja.md`. Every P0 below is quoted
 against that audit's file:line evidence, carried forward to the `palw-v2` branch.
 
 ## How to read the status column

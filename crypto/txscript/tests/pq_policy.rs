@@ -1,4 +1,4 @@
-//! kaspa-pq PQ-only script policy tests (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
+//! kaspa-pq PQ-only script policy tests (ADR-0019 / docs/design/kaspa-pq-design-mldsa87.md §6).
 //!
 //! These lock the consensus-critical decision of *exactly which* signature
 //! opcodes are disabled under PQ-only enforcement: the six legacy secp256k1

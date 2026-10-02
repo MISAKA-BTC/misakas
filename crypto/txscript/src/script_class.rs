@@ -139,7 +139,7 @@ impl ScriptClass {
             && Self::is_pay_to_pub_key_hash_mldsa87(&script_public_key[39..])
     }
 
-    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the sole
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/kaspa-pq-design-mldsa87.md): the sole
     /// standard and consensus-allowed script class on a PQ-active network is
     /// ML-DSA P2PKH. Used by mempool standardness and by consensus output-class
     /// enforcement (`check_transaction_pq_output_classes`) to reject every

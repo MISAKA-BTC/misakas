@@ -144,7 +144,7 @@ pub const POW_L1_PALW_N_PREDICT_V1: u32 = 128;
 /// the ordinary worker path (same prompt frame, same frozen `--n-predict`), so the probe measures
 /// exactly what block validation will do. Provenance: `BLAKE2b-256("palw-audit-2026-08-16/uniform-0/0")`
 /// — the "uniform/u0" seed of the 61-seed forgery audit, whose tag was measured byte-identical on
-/// every fleet host (docs/palw-algo4-crosshost-determinism-2026-08-16.md).
+/// every fleet host (docs/archive/palw-algo4-crosshost-determinism-2026-08-16.md).
 pub const POW_L1_PALW_PROBE_SEED_V1: [u8; 32] = [
     0xf5, 0xfe, 0xda, 0x2e, 0xe8, 0xc6, 0xcc, 0x2c, 0xa2, 0x3b, 0x79, 0x6d, 0x48, 0x00, 0xb8, 0xe0, 0x22, 0xcd, 0x89, 0x6f, 0xb2,
     0x95, 0xd5, 0xcb, 0xd2, 0x53, 0x66, 0xaf, 0x8d, 0x4a, 0x19, 0x0e,

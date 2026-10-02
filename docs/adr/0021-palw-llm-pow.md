@@ -4,7 +4,7 @@ Status: **SUPERSEDED FOR REWARD/POW ACTIVATION** — historical implementation r
 The Ollama path was disabled by `9736aec` after its output-text commitment was empirically shown
 forgeable without model execution. The worker full-logits path is now experimental and limited to
 devnet, shadow mode and consensus-visible zero-credit observation. See
-[`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) for the current safety model,
+[`palw-full-logits-trace-v2-design.md`](../design/palw-full-logits-trace-v2-design.md) for the current safety model,
 namespace rules and activation gates, and ADR-0026 for the successor (v2 / "algo 2") verification
 architecture. Mainnet remains inert.
 Date: 2026-08-11

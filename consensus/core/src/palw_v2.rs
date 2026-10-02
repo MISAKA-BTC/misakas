@@ -1,8 +1,8 @@
 //! PALW full-logits trace scheme **v2** — the canonical types, domains and preimage layouts.
 //!
-//! Normative sources: `docs/palw-full-logits-trace-v2-design.md` (safety model, identifiers,
-//! activation gates), `docs/misaka-palw-pow-detailed-design-v0.1-ja.md` §10–§11 (execution and
-//! projection), `docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md` §5–§7 (job envelope,
+//! Normative sources: `docs/design/palw-full-logits-trace-v2-design.md` (safety model, identifiers,
+//! activation gates), `docs/design/misaka-palw-pow-detailed-design-v0.1-ja.md` §10–§11 (execution and
+//! projection), `docs/design/misaka-palw-vps-canonical-worker-design-v0.1-ja.md` §5–§7 (job envelope,
 //! canonical policy, trace binding). Where those documents disagreed, this file is the
 //! reconciliation and the docs were amended to match it:
 //!

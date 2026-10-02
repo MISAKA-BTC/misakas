@@ -20,7 +20,7 @@
 //! # The three folds, applied here
 //!
 //! Qwen2.5 has three steps with no BASE-0 op, and each is resolved by an exact transformation at
-//! conversion time (`docs/palw-qwen25-class-phase0.md` records why each is exact):
+//! conversion time (`docs/archive/palw-qwen25-class-phase0.md` records why each is exact):
 //!
 //! * **G1, the RMSNorm learned gain** — `W·diag(g)·x`, so `diag(g)` scales the columns of every
 //!   consumer. **This un-ties the embedding**: `tie_word_embeddings` is true in the file, but

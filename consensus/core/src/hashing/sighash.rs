@@ -281,7 +281,7 @@ pub fn calc_ecdsa_signature_hash(
 
 // =====================================================================
 // kaspa-pq PQ-only ML-DSA-87 signature hash (ADR-0019 §9 /
-// docs/kaspa-pq-design-mldsa87.md §9).
+// docs/design/kaspa-pq-design-mldsa87.md §9).
 //
 // The legacy ML-DSA opcode path reused `calc_schnorr_signature_hash`
 // (a 32-byte digest under the `b"TransactionSigningHash"` domain). That
@@ -309,7 +309,7 @@ pub fn calc_ecdsa_signature_hash(
 // =====================================================================
 
 /// Literal domain tag prefixed to every ML-DSA-87 transaction sighash
-/// transcript (docs/kaspa-pq-design-mldsa87.md §9.3 / md2 §3.1, v2). Belt-and-
+/// transcript (docs/design/kaspa-pq-design-mldsa87.md §9.3 / md2 §3.1, v2). Belt-and-
 /// braces scheme/version separation on top of the keyed 64-byte hasher.
 pub const MLDSA87_SIGHASH_DOMAIN: &[u8] = b"kaspa-pq-v2/sighash/mldsa87";
 

@@ -851,7 +851,7 @@ fn worker_calibration_once(expected: &'static str) -> Result<(), PowLayer0Error>
                     "this worker runtime is not in the network's pinned determinism class.\n  expected calibration {expected}\n  got               {got}\n\
                      The GGUF pin matches, so the difference is the worker build profile or the CPU architecture. \
                      Every block this node validated would disagree with the network. Build the pinned CPU-profile \
-                     worker (docs/palw-algo4-crosshost-determinism-2026-08-16.md) or run a network pinned to this \
+                     worker (docs/archive/palw-algo4-crosshost-determinism-2026-08-16.md) or run a network pinned to this \
                      runtime's class."
                 ))
             }

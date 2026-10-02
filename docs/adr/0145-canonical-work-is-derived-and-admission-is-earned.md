@@ -35,7 +35,7 @@ since `palw_prefill_draw` armed at DAA 4,000 it does not. An attempt executes
 call. So `r_c` is not `∝ 1/w_c`; it is far larger, and the cancellation fails by exactly the ratio
 between the declared job and the executed one.
 
-Measured, on one artifact and one kernel set (`docs/audit/2026-09-19-llm-mining/`):
+Measured, on one artifact and one kernel set (`docs/archive/audit/2026-09-19-llm-mining/`):
 
 | declared canonical (P,D) | `w_c` | MAC-eq executed | weight index | pay index |
 |---|---|---|---|---|
@@ -244,7 +244,7 @@ work, eligibility, weight and reward.
 **Self-admission is impossible.** A class whose owner controls 100 % of the seats declaring
 capability for it cannot be admitted.
 
-The five counterexamples the red-team built (`docs/audit/2026-09-19-llm-mining/`) become regression
+The five counterexamples the red-team built (`docs/archive/audit/2026-09-19-llm-mining/`) become regression
 fixtures: the decode declaration, the re-tiled dense row, the better-model-paid-less table, the
 padded prefix, and the class admitted at a ladder its own legal jobs exceed. Each must FAIL or
 neutralise under the new design, and each must fail for a structural reason.

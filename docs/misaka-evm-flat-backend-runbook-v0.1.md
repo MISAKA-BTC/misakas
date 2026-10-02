@@ -2,7 +2,7 @@
 
 Operational guide for migrating a node from the legacy per-block **206** EVM state snapshot
 (storage O(state × blocks)) to the **C-01 flat latest-state backend** (storage O(latest state +
-window diffs + checkpoints)). Companion to the design `docs/misaka-evm-state-backend-design-v0.1.md`.
+window diffs + checkpoints)). Companion to the design `docs/design/misaka-evm-state-backend-design-v0.1.md`.
 
 **Everything here is node-local and consensus-neutral.** None of these flags changes a committed
 byte, a commitment, or the chain a node follows; they change only what THIS node persists, seeds

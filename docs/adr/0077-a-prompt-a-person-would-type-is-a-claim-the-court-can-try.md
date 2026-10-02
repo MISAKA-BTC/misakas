@@ -567,7 +567,7 @@ interval's opening carries the prompt's embeddings). The gateway files mode-2 un
 `--privacy panel-da`, refused where `panel_da_armed` is false, with the disclosure sentence printed
 verbatim at boot; the commitment builder carries no ids on chain and the submitter stages the
 worker's beside the material. Armed on a carded mainnet from genesis; dormant on testnet-11 and
-devnet. Design record: `docs/palw-private-prompts-design-2026-09-05.md`.
+devnet. Design record: `docs/archive/palw-private-prompts-design-2026-09-05.md`.
 
 ## ADR-0144 alignment (2026-09-21)
 

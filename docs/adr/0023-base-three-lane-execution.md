@@ -3,7 +3,7 @@
 ## Status
 **Proposed — design freeze, 2026-06-25. Nothing is implemented.** This ADR is a forward-looking
 execution architecture for MISAKA L1. **Source design:**
-[`docs/misaka-base-3lane-execution-design-v0.1.md`](../misaka-base-3lane-execution-design-v0.1.md)
+[`docs/design/misaka-base-3lane-execution-design-v0.1.md`](../design/misaka-base-3lane-execution-design-v0.1.md)
 (v0.1) — this ADR is the **code-grounded freeze** of that design against the current kaspa-pq tree;
 every "§N" reference below points to a section of that document. It **does not supersede
 [ADR-0020](0020-selected-parent-evm-lane.md) by replacement** — it **generalizes** it: the
@@ -434,18 +434,18 @@ O-DEC F003/F004 versioned-ABI + activation ownership shared across FSL (ADR-0021
 ---
 
 ## References
-- **Source design:** [`docs/misaka-base-3lane-execution-design-v0.1.md`](../misaka-base-3lane-execution-design-v0.1.md)
+- **Source design:** [`docs/design/misaka-base-3lane-execution-design-v0.1.md`](../design/misaka-base-3lane-execution-design-v0.1.md)
   (v0.1, 2026-06-25). Every "§N" reference in this ADR (§0 acceptance conditions, §0.2 non-goals,
   §1.4 labels, §5.2 naming prohibition, §7.3/§7.9, §12.2, §16 invariants, §18 phases, §20 test plan /
   §20.8 benchmark matrix, §21.1 capacity / §21.2 release gates, §22 open decisions) is a section of
   that document; this ADR is its code-grounded freeze.
 - EVM lane (generalized to Lane 2): [ADR-0020](0020-selected-parent-evm-lane.md),
-  `docs/misaka-evm-design-v0.4.md`, `docs/misaka-evm-optimization-design-v0.1.md`.
+  `docs/design/misaka-evm-design-v0.4.md`, `docs/design/misaka-evm-optimization-design-v0.1.md`.
 - PQ scheme / sizes / verifier reuse: [ADR-0019](0019-mldsa87-migration.md),
   [ADR-0008](0008-hash64-consensus-identity.md), NIST FIPS 204 (ML-DSA).
 - Node-role / single-binary policy: [ADR-0010](0010-validator-node-architecture.md).
 - F003 contention: `ADR-0021 (fact-settlement-layer)`, `ADR-0022 (fsl-economic-design)` (neither resident — see the O-DEC note),
-  `docs/misaka-prea-design-v1.1.md` (§9 versioned 0xF003 ABI).
+  `docs/design/misaka-prea-design-v1.1.md` (§9 versioned 0xF003 ABI).
 - Grounding code: `consensus/core/src/{header.rs,constants.rs,evm/mod.rs,config/params.rs}`,
   `consensus/src/processes/evm/mod.rs`, `kaspa-evm/src/{executor,tx,snapshot,state,mldsa_verify}.rs`,
   `database/src/registry.rs`, `crypto/txscript/src/lib.rs`.

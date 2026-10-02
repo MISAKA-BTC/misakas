@@ -20,7 +20,7 @@ in both directions. Devnet is likewise genesis-active; **mainnet/simnet stay ine
 > else below stands. Map: [`README.md`](README.md).
 
 > **Design superseded by v0.4** — the unified design doc
-> [`docs/misaka-evm-design-v0.4.md`](../misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
+> [`docs/design/misaka-evm-design-v0.4.md`](../design/misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
 > model with **mergeset delayed acceptance** (B's own payload is executed by its selected child), adds
 > `evm_payload_hash` as a second header commitment, 5-class skip semantics, payload-miner fee routing,
 > two-stage caps, and a non-decreasing timestamp clamp. The v0.4 migration deltas are listed in

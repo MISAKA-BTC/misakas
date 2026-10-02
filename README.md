@@ -87,11 +87,11 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > from 7,100; its own 6,900 and 7,000 are never reached by it.
 >
 > **Before it was armed**, this bundle was audited twice against the code rather than the design:
-> a pre-arming security audit ([docs/palw-audit-2026-09-18-6001.md](docs/palw-audit-2026-09-18-6001.md),
+> a pre-arming security audit (docs/palw-audit-2026-09-18-6001.md,
 > two Critical and six High findings, all fixed) and a DAA-clock audit
-> ([docs/palw-daa-clock-audit-2026-09-18.md](docs/palw-daa-clock-audit-2026-09-18.md), which is why
+> (docs/palw-daa-clock-audit-2026-09-18.md, which is why
 > ADR-0138 exists and what it deliberately does not close). The release report
-> ([docs/palw-release-6001-verdict-2026-09-18.md](docs/palw-release-6001-verdict-2026-09-18.md))
+> (docs/palw-release-6001-verdict-2026-09-18.md)
 > records the gates on the frozen candidate, the three holes the bundle's own fixes opened, the
 > measured cost of a block at the 390,000,000 gas ceiling, and the drill that armed the verdict.
 
@@ -274,8 +274,8 @@ operational state and can change or be withdrawn.
 | I want to… | read |
 |---|---|
 | run a node / verify the chain | [docs/testnet11-node-operator.md](docs/testnet11-node-operator.md) |
-| join as a PALW verifier / panel seat | [docs/testnet11-verification-participation-ja.md](docs/testnet11-verification-participation-ja.md) |
-| produce blocks (floor class, no model needed) | [docs/testnet11-join-mining.md](docs/testnet11-join-mining.md) |
+| join as a PALW verifier / panel seat | docs/testnet11-verification-participation-ja.md |
+| produce blocks (floor class, no model needed) | docs/testnet11-join-mining.md |
 | produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](docs/palw-public-testnet-classes-runbook.md) |
 
 ## What's different from Kaspa
@@ -296,9 +296,9 @@ operational state and can change or be withdrawn.
 Authoritative design & spec live under [`docs/`](docs/):
 
 - [ADR-0019 — ML-DSA-87 migration](docs/adr/0019-mldsa87-migration.md) (rev 1.2 is the current governing record)
-- [Design doc — `docs/kaspa-pq-design-mldsa87.md`](docs/kaspa-pq-design-mldsa87.md)
+- [Design doc — `docs/design/kaspa-pq-design-mldsa87.md`](docs/design/kaspa-pq-design-mldsa87.md)
 - [Spec — `docs/kaspa-pq-spec.md`](docs/kaspa-pq-spec.md)
-- [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](docs/kaspa-pq-mldsa87-verification-runbook.md)
+- [Verification runbook — `docs/archive/kaspa-pq-mldsa87-verification-runbook.md`](docs/archive/kaspa-pq-mldsa87-verification-runbook.md)
 - [Validator runbook — `docs/validator-runbook.md`](docs/validator-runbook.md)
 - [PALW provenance map — `docs/palw-registry-map.md`](docs/palw-registry-map.md) — **where the model registry, the artifact hash, the runtime registry, the receipt, the output root, the verification, the metering and the capability profile already are**, field by field, plus the layers that are refused and why (ADR-0079 §7 / R-09). Read it before proposing a provenance layer.
 - [ADR index — `docs/adr/README.md`](docs/adr/README.md) (what governs, and what was reversed)

@@ -98,7 +98,7 @@ Past the fence `palw_lane_advances_daa_v1` is true only for a `bits`-priced lane
 that set is empty. The clock would fall from 275 s per DAA to the heartbeat's nominal 3,600 s — and
 to nothing across a stretch like the most recent 4.58 hours, which carried no beat — resting entirely
 on one unbonded producer on one host. The arithmetic and its consequences are in §2 of
-[the clock audit](../palw-daa-clock-audit-2026-09-18.md).
+the clock audit.
 
 **The params in this tree still arm it.** `Params::set_palw_single_lottery` arms the lottery and the
 clock together at 6,001, and `validate_palw_v2` refuses the pair at two heights, so the clock cannot

@@ -1,7 +1,7 @@
 # The extension envelope — bringing something to a MISAKA network
 
 *The operator's guide to ADR-0108. The ADR is the reasoning; this is the procedure, with the
-example manifests in [`extension-manifests/`](extension-manifests/) and the output this build
+example manifests in [`extension-manifests/`](extension-manifests) and the output this build
 actually prints.*
 
 You made something — a model class, a context width, a drill's evidence, a converter — and you want
@@ -122,7 +122,7 @@ that is exit `23`. The verdict above it still stands; what is missing is the byt
 
 ## One worked example per kind
 
-Every example is in [`extension-manifests/`](extension-manifests/) and is run by
+Every example is in [`extension-manifests/`](extension-manifests) and is run by
 `misaka-palw-extension/tests/doc_examples.rs`, so a stale example is a failing test rather than a
 document nobody executes. Run them from that directory.
 

@@ -42,7 +42,7 @@ pub use standard::*;
 
 pub const MAX_SCRIPT_PUBLIC_KEY_VERSION: u16 = 0;
 pub const MAX_STACK_SIZE: usize = 244;
-// kaspa-pq PQ-only design cap (md2 §3.2 / docs/kaspa-pq-design-mldsa87.md §11.1):
+// kaspa-pq PQ-only design cap (md2 §3.2 / docs/design/kaspa-pq-design-mldsa87.md §11.1):
 // launch scope is ML-DSA-87 P2PKH only; multisig / P2SH is out of scope. A P2PKH
 // unlock is `<sig 4628B> <pubkey 2592B>` = (3 + 4628) + (3 + 2592) = 7226 bytes,
 // so a single input fits comfortably; the cap is 16_384 for headroom and constant
@@ -74,7 +74,7 @@ pub const MLDSA87_SIG_LEN: usize = 4627; // ML-DSA-87 signature size (ADR-0019)
 /// docs/kaspa-pq-spec.md §2.
 pub const MLDSA87_TX_CONTEXT: &[u8] = b"kaspa-pq-v2/tx/mldsa87";
 
-/// kaspa-pq PQ-only script policy (ADR-0019 / docs/kaspa-pq-design-mldsa87.md §6).
+/// kaspa-pq PQ-only script policy (ADR-0019 / docs/design/kaspa-pq-design-mldsa87.md §6).
 /// Threaded into [`TxScriptEngine`] to gate legacy secp256k1 signature opcodes
 /// and pay-to-script-hash. Defaults to [`ScriptPolicy::LEGACY`] (fully permissive,
 /// upstream-identical) so the mechanism is inert until consensus opts a network

@@ -6,7 +6,7 @@
 
 The consensus layer is intentionally agnostic to how an EVM address is derived: the EVM
 lane is an independent secp256k1 / ECDSA domain, and a deposit‑lock simply records a
-destination `EvmAddress` ([u8; 20]) — see `docs/misaka-evm-design-v0.4.md` and
+destination `EvmAddress` ([u8; 20]) — see `docs/design/misaka-evm-design-v0.4.md` and
 `consensus/core/src/evm/mod.rs` (`EvmAddress`, `EVM_CHAIN_ID = 0x4D534B`). Consensus
 **MUST NOT** require that an address be derived from any particular mnemonic or path —
 the destination can be an EOA, a contract, a smart‑account, a system predeploy, or a
@@ -79,7 +79,7 @@ break MetaMask address recovery for the same mnemonic.
 A destination may be an EOA, a contract, a smart/multisig account, a system predeploy, a
 precompile, or the zero address. Consensus accepts any 20 bytes — it MUST NOT require a derivation
 proof. By design a deposit **credits a balance**; it is **not** a contract call, so a deposit to a
-contract does **not** run `receive()`/`fallback()` (`docs/misaka-evm-design-v0.4.md`). Wallets
+contract does **not** run `receive()`/`fallback()` (`docs/design/misaka-evm-design-v0.4.md`). Wallets
 should resolve the destination kind over RPC and confirm; the CLI applies the static guards below.
 
 ## Deposit safety (P0/P1 — funds are unrecoverable after a claim)

@@ -268,7 +268,7 @@ the host; it is a line an operator watches now.
 |---|---|
 | ADR-0052's note that expert residency "remains the page cache's, with a measured note" and the `Qwen36Residency` LRU (`MADV_WILLNEED` admission, `MADV_DONTNEED` eviction, on the engine, used only by the bench tool) | Decisions 1, 3, 4: residency is the artifact's, owned buffers read through the file descriptor, on every engine over the artifact. The `MADV` advice stays in `mmap.rs` as a utility nobody calls. |
 | the root pass's rule "per-token expert access stays on the map, whose resident-set behavior is the reason the map exists" (`mmap.rs`) | withdrawn: the resident-set behaviour was the reason the draw took twenty minutes. The map's reason is now the header and the embedding row. |
-| `docs/palw-practical-runtime-plan-2026-08-26.md`'s residency line ("always-set は pin, routed expert 以外を open 時に MADV_WILLNEED") | Decision 3, with the pin an owned read. |
+| `docs/archive/palw-practical-runtime-plan-2026-08-26.md`'s residency line ("always-set は pin, routed expert 以外を open 時に MADV_WILLNEED") | Decision 3, with the pin an owned read. |
 
 Nothing in consensus moves. `PalwExecutionBackendV1` is unchanged; the lineage contract gains one
 parameter.

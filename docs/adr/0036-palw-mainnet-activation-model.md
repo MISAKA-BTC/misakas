@@ -40,7 +40,7 @@ ADR-0033 (`palw_credit` gate), ADR-0034 (routing),
 ADR-0035 (`0035-palw-public-testnet-strategy.md` — the public PALW *testnet* decision; distinct
 from this *mainnet* one, and the reason this ADR is 0036),
 `docs/palw-mainnet-readiness-audit-2026-08-16-ja.md` (the audit and its 9 blockers),
-`docs/palw-class-activation-gate-status.md` (the §12 gate ledger, corrected the same day).
+`docs/archive/palw-class-activation-gate-status.md` (the §12 gate ledger, corrected the same day).
 
 > **Landed later than written (2026-08-17).** This ADR was drafted in a worktree and never
 > committed, so the lineage that then produced ADR-0037 and ADR-0038 branched without it — while
