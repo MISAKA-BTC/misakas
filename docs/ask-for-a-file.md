@@ -1,4 +1,4 @@
-# Asking testnet-11 for a file — and checking a file someone hands you
+# Asking the network for a file — and checking a file someone hands you
 
 You want a MIDI file, a 3D model, an STL you can print. This page is how you ask the network for
 one, where it lands, and what a stranger can check about it afterwards without you sending them
@@ -11,78 +11,60 @@ Two halves, and they are for two different people:
   the result and wants to know it is what it claims to be. They need no model, no bond, and no
   permission from you.
 
-Read [§0](#0-what-fits-today) before either. The size a live class can answer at today is very
-small, and a page that let you find that out at the end would have wasted your afternoon.
+Read [§0](#0-what-fits-today) before either. Whether the live path runs at all depends on which
+classes the chain registers, and a page that let you find that out at the end would have wasted
+your afternoon.
 
 ---
 
 ## 0. What fits today
 
-**Two paths lead to a file, and only one of them is size-limited right now.**
+**Two paths lead to a file, and only one of them depends on the chain.**
 
 | | what runs | biggest thing it makes | on the chain? |
 |---|---|---|---|
 | **the offline path** ([§1](#1-the-offline-path-a-file-today-at-full-size)) | the transformer alone, over an answer you already have | the format's own ceiling — a 4 MiB MIDI description, a 64 KiB CAD description | no, unless you also have a claim to attach it to |
-| **the live path** ([§2](#2-the-live-path-a-prompt-a-model-a-claim)) | a model on testnet-11 answers your prompt, and the answer is turned into the file | **about a dozen tokens, total** — see below | yes: a claim, and a record of what was made from it |
+| **the live path** ([§2](#2-the-live-path-a-prompt-a-model-a-claim)) | a model on the network answers your prompt through the free-prompt gateway, and the answer is turned into the file | what fits in the class's width, **prompt and answer together** | yes: a claim, and a record of what was made from it |
 
-The live path's limit is not a policy, a quota or a rate limit. It is the width of the classes
-this network currently registers, and the width is small because everything a class does has to
-stay cheap enough for a stranger to re-run one disputed step of it inside a single transaction.
-Widening it is the work in progress; it is not a knob on your side.
+The live path's limit is not a policy, a quota or a rate limit. It is the width (`n_ctx`) of the
+class the gateway's worker serves, and a job is refused when `prompt + decode ceiling > n_ctx`.
 
-**The numbers, measured on this build:**
+**The numbers:**
 
 | | tokens |
 |---|---|
-| the widest model class testnet-11 registers (`QWEN25-A16`) — **prompt and answer together** | **16** |
-| the conversation wrapper the gateway must send before your first word | 8 |
-| `"hello"`, wrapped | 9 — leaving 7 for the answer |
-| `"A small courtyard at dusk."`, wrapped | 14 — leaving 2 for the answer |
-| `"Write a short MIDI melody in C major, four bars, as JSON."`, wrapped | 23 — **over the class's whole width; refused before the model runs** |
+| the dense free-prompt worker's row (`Qwen/Qwen2.5-1.5B/graph-v5@512`) — **prompt and answer together** | **512** |
+| the conversation wrapper the gateway sends before your first word | 8 |
 | the shortest MIDI description that ships in this repository (one note) | 118 |
 | the shortest CAD description that ships (one box) | 76 |
 | the shortest 3D scene description that ships (one cube) | 255 |
 
-**And when that width arrives, be careful whose answer it was.** The two model tiers are not
-equally evidenced on the machine this page was written on, and the difference is invisible in a
-class table:
+`palw-derive width --tokenizer <tokenizer.json> --n-ctx <n> --prompt <text> --dsl <file>` answers
+the question for your own prompt and description: whether the wrapped prompt plus the description
+fits the width (exit 6 when it does not).
 
-| tier | what has been run here | what has NOT |
-|---|---|---|
-| `QWEN25-A16` (dense) | the real 1.7 GiB artifact, on this machine, through the shipped executor | — |
-| `QWEN36` (hybrid, "35B") | the LANE — its graph, executor, tokenizer and ChatML assembly — carrying a **2B** model (`qwen35-2b.palwq36`, 2.48 GB) | the 35B's own answers. `Qwen3.6-35B-A3B-Claude-4.7-base-meta` is **19 MB of metadata**, its weight directory is **0 bytes**, and the runtime repo's cache holds **96 KB** of refs. The weights are a download an operator makes, not something exercised here. |
-
-So a sentence of the form "Qwen3.6 wrote this file" cannot be supported by anything measured
-here, however green the QWEN36 lane goes: a 2B model in the 35B's lane is evidence about the
-LANE. "The QWEN36 lane produced a grammar-valid description" is the claim the evidence carries,
-and it is a different claim.
-
-Put plainly: **no class registered on testnet-11 today can emit even the shortest of these files
-from a real inference.** A live prompt on the model classes gets you a few tokens of English, and
-a request that asks for a derivation on top will be refused by the worker, by name:
-
-```
-prompt 23 + decode ceiling 256 exceeds max_context_tokens 16
-```
-
-That refusal is the honest one. Nothing silently truncates, and nothing pretends.
-
-So: if you want a file **today**, use the offline path in §1 — it is the same transformer code,
-the same file formats, the same hashes, and it has no width limit. Use §2 to run the live lane
-end to end at the size it currently supports, and to be ready for the wider rows when they land.
-
-This paragraph is a dated claim, and the date is on it: measured **2026-09-03**, against the
-classes registered at Relaunch 5e. Ask the chain rather than trusting this table — a node prints
-what it actually registers:
+**On testnet-12, check the class before anything else.** `palw-a16-fp-worker` embodies the
+`graph-v5@512` row, and the testnet-12 genesis registers the floor and the dense `graph-v7@8192`
+and `graph-v7@2097152` rows, not that one
+([testnet-12-regenesis-2026-09-23.md](testnet-12-regenesis-2026-09-23.md)). A gateway in front of
+that worker answers, reports `registered: false` or `fp_certified: false` in `/health`, and commits
+nothing — so it makes no claim to attach a file to. Ask the chain rather than trusting this
+paragraph:
 
 ```bash
-kaspad --testnet --netsuffix=11 --palw-dump-classes
+kaspad --testnet --netsuffix=12 --palw-dump-classes   # what this build registers
+misaka --network testnet-12 palw registry              # every class's lifecycle state on the chain
+misaka --network testnet-12 palw certified <class-id>  # is it on the free-prompt lane
 ```
+
+So: if you want a file **today**, use the offline path in §1 — it is the same transformer code,
+the same file formats, the same hashes, and it needs no chain. Use §2 where a network registers
+and certifies a class your worker serves.
 
 <sub>Where the numbers come from: the class's registered width is `n_ctx` in the class row, and a
 job is refused when `prompt + decode ceiling > n_ctx`
 (`misaka-palw-base0/src/fp_worker.rs`). The token counts are the shipped Qwen2.5 tokenizer over
-`misaka-palw-derive/corpus/`; the commands are in the launch report.</sub>
+`misaka-palw-derive/corpus/` (measured 2026-09-03).</sub>
 
 ---
 
@@ -202,22 +184,23 @@ prints that document.
 ## 2. The live path: a prompt, a model, a claim
 
 This is the path where the network is involved. Setting it up is the miner's path — a key, some
-test coins, a registered bond, a node, and a gateway in front of a model — and it is written out
-step by step in testnet11-join-mining.md §1–§4 and §7. Do that first;
-this section is only the part that asks for a *file* instead of text.
+test coins, a registered bond, a node, and a gateway in front of a model — written out in
+[testnet12-join-mining.md](testnet12-join-mining.md) and
+[palw-freeprompt-gateway.md](palw-freeprompt-gateway.md#from-a-committed-job-to-a-paid-block). Do
+that first; this section is only the part that asks for a *file* instead of text.
 
 Once your gateway is up, one extra field turns an answer into an artifact:
 
 ```bash
 curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"one quiet note"}],
-       "max_tokens":5,
+       "max_tokens":200,
        "derive":"music/smf/v1"}'
 ```
 
-`"max_tokens": 5` is not a stylistic choice. On a class 16 tokens wide, the wrapper takes 8
-and this three-word prompt takes 3, so 5 is what is left ([§0](#0-what-fits-today)). Ask for more and the
-worker refuses the whole job by name rather than trimming it.
+Size `max_tokens` for the description you want: the shortest MIDI description is 118 tokens, and
+prompt plus `max_tokens` must fit the class's width ([§0](#0-what-fits-today)). Ask for more and
+the worker refuses the whole job by name rather than trimming it.
 
 What comes back, beside the ordinary chat reply:
 
@@ -252,7 +235,7 @@ made under, one to carry it:
 ```bash
 misaka-palw-fp-rail --derive-artifact <outbox>/fp-job-<id> --bond-key-seed ~/.misaka/miner.seed
 
-misaka --network testnet-11 --rpc 127.0.0.1:26312 \
+misaka --network testnet-12 \
   palw submit-object --key-file ~/.misaka/miner.seed \
   --object <outbox>/fp-job-<id>.derived-object.borsh --yes
 ```
@@ -300,17 +283,10 @@ should show you which stage it is in, by these names:
 | **certified** | the panel replayed the job, agreed, and licensed a receipt | `receipt_licensed`, then `final` |
 | **spent** | the work behind it paid for a block | one of the claim's quanta is spent |
 
-On testnet-11's windows that walk is **about 80 hours to `final`, and about 93 hours — near four
-days — before the work behind it can pay for a block.** It is a challenge period, not a progress
-bar someone forgot to speed up: the time is what gives anyone the room to dispute the job before
-it is paid for.
-
-<sub>The arithmetic, so it can be rechecked rather than believed: the shipped bundle's windows are
-bind 600, receipt 600, challenge 1,200 and receipt maturity 400, all in DAA score, at the frozen
-120-second cadence (`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). A claim reaches `final` at
-bind + receipt + challenge = 2,400 DAA = 80 h, and its receipt is spendable at
-`final + receipt_maturity` = 2,800 DAA = 93.3 h. Print the windows this build actually ships with
-`cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture`.</sub>
+The windows are DAA counts and the walk takes days, not seconds. It is a challenge period, not a
+progress bar someone forgot to speed up: the time is what gives anyone the room to dispute the job
+before it is paid for. `misaka palw claim <claim-id>` prints the stage a claim is in and what can
+still happen next.
 
 Two things follow that matter to you:
 
@@ -325,7 +301,7 @@ Two things follow that matter to you:
 
 ## Part 2 — checking a file someone handed you
 
-Someone gives you a MIDI file and says "testnet-11 made this". Here is how you find out, holding
+Someone gives you a MIDI file and says "the network made this". Here is how you find out, holding
 nothing but what they gave you.
 
 **You need two things from them, and neither is the file:**
@@ -336,16 +312,16 @@ nothing but what they gave you.
    description.
 
 You need no bond, no model, no key, and nothing from them beyond that. You do need a node on
-testnet-11 to ask, or the address of someone else's.
+the network the claim was made on, or the address of someone else's.
 
 ### The two commands
 
 ```bash
 # 1. what the chain actually holds about this claim
-misaka --network testnet-11 --rpc 127.0.0.1:26312 palw derived <claim-id>
+misaka --network testnet-12 palw derived <claim-id>
 
 # 2. re-run the derivation over the answer they gave you and compare
-misaka --network testnet-11 --rpc 127.0.0.1:26312 \
+misaka --network testnet-12 \
   palw derived-verify <claim-id> --answer their-response.json
 ```
 
@@ -400,9 +376,13 @@ $ echo $?
 2
 ```
 
-Add `--output-token-ids ids.json --job-context-hash <hex> --family qwen25-a16` and it also
-recomputes the claim's own fingerprint of the answer, which is the check that ties the file to the
-inference rather than only to the description.
+Add `--output-token-ids ids.json --job-context <file> --tokenizer tokenizer.json --family <the
+response's misaka.family> --network testnet-12` and it also renders the answer from the claim's ids and
+recomputes the claim's own fingerprint of the answer (`binding_checked: true`), which is the check
+that ties the file to the inference rather than only to the description. Without all four of the
+ids, the context, the tokenizer and the family it reports `binding_checked: false`. `--network`
+matters: testnet-12 computes `output_root` by core's `CoreV1` rule and the retired networks by the
+family's own rendering, so the tool refuses to guess (`misaka-palw-derive/src/bin/palw-derive.rs`).
 
 ### What a mismatch costs the person who made it
 
@@ -421,10 +401,10 @@ who took both halves from one source would be checking nothing.
 
 ## Where to go next
 
-* testnet11-join-mining.md — the bond, the node, the gateway, and
-  running the live lane at all.
-* [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) — from an executed job to a
-  paid block: the watcher that submits, following a claim, and where the reward comes from.
+* [testnet12-join-mining.md](testnet12-join-mining.md) — the bond, the node, and running a
+  producer at all.
+* [palw-freeprompt-gateway.md § From a committed job to a paid block](palw-freeprompt-gateway.md#from-a-committed-job-to-a-paid-block)
+  — the watcher that submits, following a claim, and where the reward comes from.
 * [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) — the gateway's own options, the
   worker protocol, and what it refuses.
 * [palw-derived-artifacts.md](palw-derived-artifacts.md) — the same subject at protocol depth:

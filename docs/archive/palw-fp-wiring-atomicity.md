@@ -1,5 +1,7 @@
 # The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
 
+> **Archived.** The work this page tracked has landed (Units A–D are in the tree); it is kept as history, and its testnet-11 references describe a retired network. The current description is [palw-freeprompt-gateway.md](../palw-freeprompt-gateway.md).
+
 Status (corrected 2026-09-03): **the wiring landed.** Units A–D are in the tree, testnet-11 has
 been mining on them since the 2026-08 relaunches, the gateway signs, submits and stages a
 capture, and the host-side hardening of that path landed with ADR-0079's R-01..R-07. "The
@@ -328,9 +330,9 @@ follows are elsewhere and this one should not be competing with them:
 
 * testnet11-join-mining.md — joining, bonding, producing, and §7 for
   the free-prompt lane end to end.
-* [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) — the gateway and the worker protocol
+* [palw-freeprompt-gateway.md](../palw-freeprompt-gateway.md) — the gateway and the worker protocol
   as they are.
-* [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) — the artifact path, and the widths
+* [ask-for-a-file.md](../ask-for-a-file.md) — the artifact path, and the widths
   that bound it today.
 
 What this page is still worth reading for is the argument in "The atomic units": the reason each

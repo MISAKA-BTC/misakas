@@ -15,7 +15,7 @@ it yet**, and it has not had its first dry run (§2 step 3). testnet-12 shipped 
 |---|---|
 | `v0.9.0-rc.N` | release candidate. Consensus is frozen. After `rc.1`, a consensus rule changes only to fix a Critical safety issue, and that change is a new `rc.N+1` |
 | `v1.0.0` | the mainnet release. Genesis and parameters are final |
-| `testnet-main-<sha>` | legacy testnet builds (testnet-11 and earlier), kept for history |
+| `testnet-main-<sha>` | legacy builds of retired testnets, kept for history |
 
 A consensus rule change after `rc.1` is recorded in [mainnet-readiness.md](mainnet-readiness.md)
 with its fence height and the finding that forced it, and the soak clock restarts.
@@ -82,7 +82,7 @@ with its fence height and the finding that forced it, and the soak clock restart
   "consensus_frozen": false,
   "consensus_params_fingerprint": "<printed by every platform's kaspad>",
   "consensus_schedule_id": "<printed>",
-  "fence_schedule": ["1000"],
+  "fence_schedule": ["750", "1000", "1300", "1700", "2000", "3600"],
   "genesis_declared": "<from release.json>",
   "platforms": ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"],
   "identity_verified_on_every_platform": true

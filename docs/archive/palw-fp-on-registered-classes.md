@@ -1,5 +1,7 @@
 # Free prompts on a registered class — what is left, and why it is executor-side only
 
+> **Archived.** The work this page tracked has landed (the free-prompt lane runs on registered classes through the family workers); it is kept as history, and its testnet-11 references describe a retired network. The current description is [palw-freeprompt-gateway.md](../palw-freeprompt-gateway.md).
+
 Status: **implemented**, and this page is now a record of how it got there rather than a plan.
 The header it used to carry — "specification; nothing here is implemented" — was written at
 `d181577d` and stayed put through the three landings logged at the bottom of this page; a stale
@@ -7,13 +9,13 @@ The header it used to carry — "specification; nothing here is implemented" —
 warning about. What the page still is: the reasoning, in the order it was found, for why the FP
 lane runs on a class the chain already registers instead of bringing its own. Read the dated
 sections from the bottom for the current shape, and
-[palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) for the protocol.
+[palw-freeprompt-gateway.md](../palw-freeprompt-gateway.md) for the protocol.
 
 **What is still narrow, and what a reader should not conclude from "implemented":** a registered
 class's context is 8–16 tokens for prompt and answer TOGETHER, so the lane runs end to end at a
 size no product would ship. That is a width problem, not a wiring problem, and it is stated where
 a person meets it in testnet11-join-mining.md §7.2a and
-[testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
+[ask-for-a-file.md](../ask-for-a-file.md) §0.
 
 ## The finding
 
@@ -173,7 +175,7 @@ Step 1 is not code. It is the one that has to be made first, and by whoever owns
 > the WIDTH: a registered class is 8–16 tokens for prompt and answer together, which is why
 > "meaningful" is still doing work in that heading. The measured version of that sentence lives in
 > testnet11-join-mining.md §7.2a and
-> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
+> [ask-for-a-file.md](../ask-for-a-file.md) §0.
 
 The A16 finding above is not one class's accident. testnet-11 registers three, and the property
 the free-prompt lane needs — runs a language model AND is adjudicable — belongs to none of them:
