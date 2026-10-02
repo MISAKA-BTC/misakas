@@ -117,6 +117,25 @@ impl PalwGenExecutionV1 {
         let index = self.space.stages.get(coord.stage as usize)?.leaf_index(coord)?;
         self.open(coord.stage, index)
     }
+
+    /// **Leaves `indices` of stage `stage`, opened** — the stage's tree built ONCE (byte-identical to [`Self::open`] leaf by leaf, which
+    /// rebuilds it per call): a decode close opens every tile of a logits row, thousands of leaves of one stage at a real vocabulary.
+    pub fn open_many(&self, stage: u8, indices: &[u64]) -> Option<Vec<PalwGenOpenedLeafV1>> {
+        let s = stage as usize;
+        let leaves = self.space.stages.get(s)?.leaves();
+        let levels = crate::palw_gen_step_v1::palw_gen_leaf_levels_v1(self.leaf_hashes.get(s)?);
+        indices
+            .iter()
+            .map(|index| {
+                let i = *index as usize;
+                Some(PalwGenOpenedLeafV1 {
+                    coord: leaves.get(i)?.coord,
+                    values: self.leaf_values[s][i].clone(),
+                    path: crate::palw_gen_step_v1::palw_gen_path_in_levels_v1(&levels, i)?,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Why a run is refused.

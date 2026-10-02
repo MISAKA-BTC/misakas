@@ -14,6 +14,7 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
+use kaspa_consensus_core::palw_fp_job_v5::palw_fp_job_version_offered_v1;
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_v1;
@@ -551,8 +552,12 @@ fn a_vision_language_class_is_a_text_class_with_image_slots() {
     assert_ne!(c.class_id(&root), other.class_id(&root));
 }
 
+/// **A text-only pipeline is not a generative class** (RFC-0003 PALW-GEN-13, open question 14). A generative text class takes FP Job
+/// V5, which carries images or a source, and the generative court binds V5 jobs alone; a text class that offers neither takes FP Job
+/// V4 — the text lane's — and could be registered and never claimed: a dead registration that costs its registrant for nothing. The
+/// preflight refuses it by name, before the IR's admission, and points the registrant at the text lane.
 #[test]
-fn a_text_only_pipeline_is_a_text_class() {
+fn a_text_only_pipeline_is_refused_by_name_and_pointed_at_the_text_lane() {
     let (p, progs) = {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/admission.json");
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -583,8 +588,24 @@ fn a_text_only_pipeline_is_a_text_class() {
         programs: progs,
         tokenizer_id: Hash64::from_bytes([0x72; 64]),
     };
-    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the text class: {e}"));
-    assert_eq!((report.profile, report.output_tile_len, report.draws_randomness), (PalwGenProfileV1::Text, None, false));
+    // Otherwise a well-formed text class: the one thing wrong with it is that nothing could ever claim it.
+    let refused = palw_gen_class_preflight_v1(&c, &fence()).expect_err("a text-only class is a dead registration");
+    assert_eq!(refused, PalwGenClassErrorV1::TextOnly);
+    // The refusal names the lane it belongs on: FP Job V4, the text lane, registered as an IR class.
+    let said = refused.to_string();
+    for needle in ["text-only", "FP Job V4", "text lane", "tir-registration", "FP Job V5", "image slot or a source"] {
+        assert!(said.contains(needle), "the refusal should say {needle:?}: {said}");
+    }
+    // It is the job version the class takes that decides it (OQ14's one function): a class that takes V4 only is refused, one that
+    // takes V5 is not — here, the VLM class of the tests above, a text class with its image slot.
+    assert!(palw_fp_job_version_offered_v1(&c.offers, true).is_err() && palw_fp_job_version_offered_v1(&c.offers, false).is_ok());
+    let vlm = vlm_class();
+    assert!(palw_fp_job_version_offered_v1(&vlm.offers, true).is_ok());
+    assert!(palw_gen_class_preflight_v1(&vlm, &fence()).is_ok(), "an image slot makes it a generative text class");
+    // The refusal is not the class's other offers' (a prompt past the stream is refused as it was, first).
+    let mut long = c.clone();
+    long.offers.max_prompt_tokens = 99;
+    assert!(matches!(palw_gen_class_preflight_v1(&long, &fence()), Err(PalwGenClassErrorV1::Offers(_))));
 }
 
 /// **An image's price in prompt tokens** (RFC-0003 open question 13's recommendation, pending user
