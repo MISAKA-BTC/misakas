@@ -1877,6 +1877,7 @@ Do you confirm? (y/n)";
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
                         seat_replay_slots: args.palw_seat_replay_slots.map(|slots| slots as usize),
+                        vertex_full_refs: args.palw_vertex_full_refs,
                         class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),

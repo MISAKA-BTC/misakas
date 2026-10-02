@@ -394,6 +394,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disputable_claims_v2(mine)
     }
 
+    /// **RFC-0007 §I.6: the vertex equivocations this node has seen that the tip has not yet convicted.**
+    pub fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVertexEquivocationV1> {
+        self.consensus.palw_v2_pending_vertex_equivocations_v1()
+    }
+
     /// **RFC-0007: the vertex tables at the tip**, and `seat`'s own rows from `from_round`.
     pub fn palw_v2_vertex_status_v1(
         &self,

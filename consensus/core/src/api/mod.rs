@@ -1298,6 +1298,12 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// **RFC-0007 §I.6: the vertex equivocations this node has seen that the tip has not yet convicted** — evidence any funded node may
+    /// carry as `VertexEquivocationV1`. Empty by `Default`.
+    fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<crate::palw_vertex_v1::PalwVertexEquivocationV1> {
+        Vec::new()
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,

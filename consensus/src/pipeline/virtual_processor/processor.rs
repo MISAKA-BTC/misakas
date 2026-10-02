@@ -619,6 +619,10 @@ pub struct VirtualStateProcessor {
     /// that attempt seeds the draw ([`Self::palw_chain_block_as_anchor_v1`]). `None` on every shipped
     /// preset.
     pub(super) palw_operator_anchor: Option<kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1>,
+    /// **RFC-0007 §I.6: the vertices this node has seen, to catch a seat that signed a round twice** — fed by the acceptance walk past
+    /// `palw_verification_vertex_v1` (after the signature is checked), read by the node's panel, which carries the evidence. Node
+    /// policy; nothing here decides a block.
+    pub(super) palw_vertex_watch: std::sync::Mutex<kaspa_consensus_core::palw_vertex_v1::PalwVertexWatchV1>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1154,6 +1158,7 @@ impl VirtualStateProcessor {
             palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_panel_seed_execution: params.palw_panel_seed_execution_fence(),
             palw_operator_anchor: params.palw_operator_anchor_rule_v1(),
+            palw_vertex_watch: Default::default(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
@@ -4400,6 +4405,26 @@ impl VirtualStateProcessor {
     // `palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization`, which measures decoded
     // carriage bytes rather than trusting this comment.
     // ---------------------------------------------------------------------------------------
+    /// **RFC-0007 §I.6: the equivocations this node has seen and the chain has not yet convicted** — the evidence a seat's node
+    /// carries (any funded node may). Entries the tip already convicts, or whose round is no longer provable, are forgotten here.
+    pub fn palw_v2_pending_vertex_equivocations_impl(&self) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVertexEquivocationV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        let tip_daa = self.lkg_virtual_state.load().daa_score;
+        let mut watch = self.palw_vertex_watch.lock().unwrap();
+        for evidence in watch.pending() {
+            let convicted = state.vertex_round_row_v1(evidence.a.round, &evidence.a.seat_bond).is_some_and(|row| row.convicted);
+            let stale = tip_daa.saturating_sub(evidence.a.signed_daa.max(evidence.b.signed_daa))
+                > kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1;
+            if convicted || stale {
+                watch.forget(evidence.a.round, &evidence.a.seat_bond);
+            }
+        }
+        watch.pending()
+    }
+
     pub fn palw_disputable_claims_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
@@ -7185,6 +7210,41 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
     ) {
+        // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
+        // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
+        // vertex — becomes evidence for the node to carry. A vertex already seen is not verified again.
+        if self.palw_vertex_at(point.daa_score) {
+            let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.network_id_bytes.as_slice(),
+                Some(self.genesis.hash),
+            );
+            let mut watch = self.palw_vertex_watch.lock().unwrap();
+            for carried in &objects {
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::VerificationVertexV1 { vertex } = &carried.object else {
+                    continue;
+                };
+                if watch.knows(vertex.round, &vertex.seat_bond, &vertex.leaves_root)
+                    || kaspa_consensus_core::palw_vertex_v1::palw_vertex_shape_v1(vertex).is_err()
+                {
+                    continue;
+                }
+                if kaspa_consensus_core::palw_vertex_v1::palw_vertex_verify_signature_v1(
+                    state,
+                    network_domain,
+                    &vertex.seat_bond,
+                    vertex.round,
+                    vertex.signed_daa,
+                    vertex.leaves.len(),
+                    vertex.leaves_root,
+                    &vertex.signature,
+                    Self::verify_mldsa87_with_context_bool,
+                )
+                .is_ok()
+                {
+                    watch.observe_verified(vertex);
+                }
+            }
+        }
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
         // Validating every object against the parent state alone is wrong in exactly the way the
@@ -8244,6 +8304,10 @@ impl VirtualStateProcessor {
         if !self.palw_panel_economy_active_at(point.daa_score) {
             return None;
         }
+        // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
+        if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(&state, state_params, point.daa_score, &claim) {
+            return None;
+        }
         let record = state.claim(&claim)?;
         if !matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             return None;
@@ -8324,6 +8388,10 @@ impl VirtualStateProcessor {
         v2_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
+        if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
+            return None;
+        }
         if !state_params.rcore_plus_active_at(point.daa_score)
             || !state.claim(&claim).is_some_and(|record| matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
         {
@@ -8415,6 +8483,10 @@ impl VirtualStateProcessor {
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
+        // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
+        if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
+            return None;
+        }
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -8681,6 +8753,10 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
+        if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
+            return None;
+        }
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -8851,6 +8927,10 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
+        if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
+            return None;
+        }
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),

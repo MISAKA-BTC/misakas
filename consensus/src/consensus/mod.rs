@@ -2484,6 +2484,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
     }
 
+    fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVertexEquivocationV1> {
+        self.virtual_processor.palw_v2_pending_vertex_equivocations_impl()
+    }
+
     fn palw_v2_vertex_status_v1(
         &self,
         seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,

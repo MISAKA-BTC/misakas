@@ -651,6 +651,8 @@ pub struct PalwNodeRuntimeV1 {
     pub verification_memory: String,
     pub verification_seat: String,
     pub verification_producer: String,
+    /// RFC-0007: this seat's verification vertices (`vertex_*=` pairs), published by the panel; empty below the fence.
+    pub verification_vertex: String,
 }
 
 /// One class this node's panel is (or is not) serving.

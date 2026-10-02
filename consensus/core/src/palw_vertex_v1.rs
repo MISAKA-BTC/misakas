@@ -976,6 +976,79 @@ pub fn palw_vertex_escalation_v1(check_ran: bool, check_passed: bool) -> PalwEsc
 pub const PALW_VERTEX_DUTY_RUNS_TO_FINAL_V1: bool = true;
 
 // ---------------------------------------------------------------------------------------------
+// The watch: who may file an equivocation
+// ---------------------------------------------------------------------------------------------
+
+/// The bytes of observed vertices a [`PalwVertexWatchV1`] keeps (oldest evicted first).
+pub const PALW_VERTEX_WATCH_BUDGET_BYTES_V1: usize = 32 * 1024 * 1024;
+
+/// **What a node remembers of the vertices it has seen, to catch a seat that signed a round twice** (RFC-0007 §I.6: "anyone may carry
+/// both"). A node feeds it every vertex it extracts from an accepted block **after** checking the signature, whether or not the fold takes
+/// the vertex; the second distinct root of one `(round, seat)` is an equivocation, kept as ready-to-carry evidence. Nothing here is a rule
+/// — the chain judges the evidence it is handed — and the memory is bounded by [`PALW_VERTEX_WATCH_BUDGET_BYTES_V1`].
+#[derive(Debug, Default)]
+pub struct PalwVertexWatchV1 {
+    seen: std::collections::BTreeMap<(u64, PalwBondKeyV2), PalwVerificationVertexV1>,
+    order: std::collections::VecDeque<(u64, PalwBondKeyV2)>,
+    bytes: usize,
+    pending: std::collections::BTreeMap<(u64, PalwBondKeyV2), PalwVertexEquivocationV1>,
+}
+
+impl PalwVertexWatchV1 {
+    /// Observe a vertex whose shape and signature the caller has verified. Returns whether it completed a **new** equivocation.
+    pub fn observe_verified(&mut self, vertex: &PalwVerificationVertexV1) -> bool {
+        let key = (vertex.round, vertex.seat_bond);
+        if let Some(first) = self.seen.get(&key) {
+            if first.leaves_root == vertex.leaves_root || self.pending.contains_key(&key) {
+                return false;
+            }
+            let evidence = PalwVertexEquivocationV1 {
+                a: first.header(),
+                b: vertex.header(),
+                a_leaves: first.leaves.clone(),
+                b_leaves: vertex.leaves.clone(),
+            };
+            self.pending.insert(key, evidence);
+            return true;
+        }
+        let size = borsh::to_vec(vertex).map(|bytes| bytes.len()).unwrap_or(usize::MAX);
+        if size > PALW_VERTEX_WATCH_BUDGET_BYTES_V1 {
+            return false;
+        }
+        while self.bytes.saturating_add(size) > PALW_VERTEX_WATCH_BUDGET_BYTES_V1 {
+            let Some(oldest) = self.order.pop_front() else { break };
+            if let Some(gone) = self.seen.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(borsh::to_vec(&gone).map(|bytes| bytes.len()).unwrap_or(0));
+            }
+        }
+        self.bytes = self.bytes.saturating_add(size);
+        self.order.push_back(key);
+        self.seen.insert(key, vertex.clone());
+        false
+    }
+
+    /// Has this exact vertex (its round, seat and root) been seen? A caller asks before it pays for a signature check.
+    pub fn knows(&self, round: u64, seat: &PalwBondKeyV2, leaves_root: &Hash64) -> bool {
+        self.seen.get(&(round, *seat)).is_some_and(|first| first.leaves_root == *leaves_root)
+            || self.pending.get(&(round, *seat)).is_some_and(|ev| ev.b.leaves_root == *leaves_root)
+    }
+
+    /// The evidence waiting to be carried, oldest round first.
+    pub fn pending(&self) -> Vec<PalwVertexEquivocationV1> {
+        self.pending.values().cloned().collect()
+    }
+
+    /// Drop the evidence of `(round, seat)` — the chain convicted it, or it grew too old to be provable.
+    pub fn forget(&mut self, round: u64, seat: &PalwBondKeyV2) {
+        self.pending.remove(&(round, *seat));
+    }
+
+    pub fn observed(&self) -> usize {
+        self.seen.len()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The fence
 // ---------------------------------------------------------------------------------------------
 
@@ -1290,6 +1363,37 @@ mod tests {
         assert_eq!(palw_vertex_escalation_v1(false, true), PalwEscalationV1::Abstain);
         assert_eq!(palw_vertex_permille_of_v1(1_000_000, PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1), Some(100_000));
         assert_eq!(palw_vertex_permille_of_v1(u128::MAX, 100), None, "checked, never wrapped");
+    }
+
+    /// **A node catches a seat that signed a round twice**, from the vertices it has seen, and keeps the evidence until it is carried.
+    #[test]
+    fn the_watch_catches_a_seat_that_signed_a_round_twice() {
+        let a = vertex(vec![verdict_leaf(1, PalwReceiptVerdictV2::Valid)]);
+        let b = vertex(vec![verdict_leaf(2, PalwReceiptVerdictV2::Valid)]);
+        assert_eq!((a.seat_bond, a.round), (b.seat_bond, b.round));
+        assert_ne!(a.leaves_root, b.leaves_root);
+        let mut watch = PalwVertexWatchV1::default();
+        assert!(!watch.observe_verified(&a), "the first of a round is no conflict");
+        assert!(!watch.observe_verified(&a), "nor is the same vertex seen again");
+        assert!(watch.pending().is_empty());
+        assert!(watch.observe_verified(&b), "the second root of the round is an equivocation");
+        let pending = watch.pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!((pending[0].a.leaves_root, pending[0].b.leaves_root), (a.leaves_root, b.leaves_root));
+        assert_eq!(pending[0].a_leaves, a.leaves, "the leaves ride, so the fold can forfeit the locks they name");
+        assert_eq!(palw_vertex_equivocation_shape_v1(&pending[0]), Ok(()), "and it is shaped as the fold wants it");
+        assert!(!watch.observe_verified(&b), "a third sighting files nothing more");
+        watch.forget(a.round, &a.seat_bond);
+        assert!(watch.pending().is_empty());
+        // Another round of the same seat is its own.
+        let c = PalwVerificationVertexV1::sign_v1(h(0xD0), bond(1), 101, vec![verdict_leaf(3, PalwReceiptVerdictV2::Valid)], |m, _| {
+            let mut s = m.to_vec();
+            s.resize(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN, 0);
+            Some(s)
+        })
+        .unwrap();
+        assert!(!watch.observe_verified(&c));
+        assert_eq!(watch.observed(), 2, "the first vertex of each round is remembered");
     }
 
     /// A tally counts a seat once and sums its `Valid`s.
