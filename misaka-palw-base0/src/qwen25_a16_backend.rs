@@ -9235,6 +9235,48 @@ mod prefix_cache_serving {
         }
     }
 
+    /// **RFC-0001 §2.6 stage 2: a prefix state is a function of the ids alone** — a cached producer and a cacheless seat
+    /// derive the same state root, a job naming it verifies, and a job naming another state (or another prefix length, or
+    /// a prefix that is not proper) is refused by name.
+    #[test]
+    fn a_prefix_state_is_the_same_cached_or_recomputed_and_a_wrong_one_is_refused() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+        let (artifact, profile) = fixture();
+        let class = profile.shape_profile_id();
+        let tok = Hash64::from_u64_word(0x70);
+        let full = prompt(20, 3);
+        let ids: Vec<u32> = full.iter().map(|t| *t as u32).collect();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let seat = backend(&artifact, &profile);
+        // The producer served a prompt that ended at 8 ids, so its cache holds that exact state.
+        let _ = answer(&cached, &job(&profile, 8, 2), &full[..8]);
+        let from_cache = cached.prefix_state_v1(class, tok, &ids[..8]).unwrap();
+        let recomputed = seat.prefix_state_v1(class, tok, &ids[..8]).unwrap();
+        assert_eq!(from_cache, recomputed, "cache and recomputation agree");
+        assert_eq!(from_cache.prefix_tokens, 8);
+        assert_ne!(seat.prefix_state_v1(class, tok, &ids[..9]).unwrap().state_root, recomputed.state_root, "another prefix, another state");
+        let mut other = ids.clone();
+        other[3] ^= 1;
+        assert_ne!(seat.prefix_state_v1(class, tok, &other[..8]).unwrap().state_root, recomputed.state_root, "other ids, another state");
+        assert!(seat.prefix_state_v1(class, tok, &[]).is_err());
+        assert!(seat.prefix_state_v1(class, tok, &[9_999]).is_err(), "outside the vocabulary");
+
+        let mut j = job(&profile, ids.len(), 4);
+        j.version = kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        j.decode = Some(DecodeConfigV4::NOOP);
+        j.tail = Some(PalwFpJobTailV1::Prefix(recomputed));
+        seat.verify_prefix_state_v1(&j, &ids).expect("the named state is the derived one");
+        let mut wrong = j.clone();
+        wrong.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(1), ..recomputed }));
+        assert!(seat.verify_prefix_state_v1(&wrong, &ids).unwrap_err().contains("derives"));
+        let mut whole = j.clone();
+        whole.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { prefix_tokens: ids.len() as u32, ..recomputed }));
+        assert!(seat.verify_prefix_state_v1(&whole, &ids).unwrap_err().contains("proper prefix"));
+        // A job that names no state is not this check's business.
+        seat.verify_prefix_state_v1(&job(&profile, ids.len(), 4), &ids).expect("no state named");
+    }
+
     /// A conversation: turn 2 extends turn 1's prompt AND its answer, and resumes from the whole
     /// of turn 1's state (prompt + answer ids).
     #[test]

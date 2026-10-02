@@ -151,6 +151,16 @@ fn walk(
     payload: &PalwFpCommitmentTxPayloadV3,
     rules: PalwFpDecodeRulesV1,
 ) -> Vec<PalwConsensusObjectV2> {
+    walk_with(p, s, payload, rules, false)
+}
+
+fn walk_with(
+    p: &Params,
+    s: &PalwChainStateV2,
+    payload: &PalwFpCommitmentTxPayloadV3,
+    rules: PalwFpDecodeRulesV1,
+    prefix_state_armed: bool,
+) -> Vec<PalwConsensusObjectV2> {
     let tx = kaspa_consensus_core::tx::Transaction::new(
         0,
         vec![],
@@ -176,7 +186,7 @@ fn walk(
                 None => PalwFpDerivedWorkCapV1::Unpublished,
             },
             logits_q24: s.class_commits_q24_logits_v1(class_id),
-            prefix_state_armed: false,
+            prefix_state_armed,
             tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
         },
         true,
@@ -333,4 +343,134 @@ fn a_v4_job_goes_produce_verify_license_on_testnet_12_with_the_decode_rules_arme
         .expect("the Valid quorum licenses");
     let phase = &s.claim(&claim_id).expect("still live").phase;
     assert!(matches!(phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed: {phase:?}");
+}
+
+/// **RFC-0001 §2.6 stage 2 end to end on a copy of testnet-12 with `palw_fp_prefix_state` ARMED** (a copy: no preset
+/// carries it). A prefix-state claim (FP job version 11) produced by the floor's real engine is carried only past the
+/// fence, is credited less than the same run as a V4 claim (the cached prefix is not paid), is replayed by the floor's seats
+/// under V4 rules, and is licensed by a `Valid` quorum through the real fold.
+#[test]
+fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_fence_armed() {
+    use kaspa_consensus_core::palw_fp_prefix_v1::{PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_VERSION, palw_fp_prefix_state_root_v1};
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+
+    const PREFIX_FENCE: u64 = 111;
+    let mut p = t12_with_v4();
+    (PALW_DRILL_FP_PREFIX_STATE_ENTRY.set)(&mut p, Some(ForkActivation::new(PREFIX_FENCE)));
+    p.validate_palw_v2().expect("testnet-12 with the decode rules and the prefix state armed assembles");
+    let (s, floor) = chain(&p);
+    let backend = common::floor_backend(PalwPromptIdsFormV1::MerkleV1);
+    let prompt: Vec<usize> = vec![17, 3, 911, 44, 5];
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    let limit = 6u32;
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
+    let state = PalwFpPrefixStateV1 {
+        state_root: palw_fp_prefix_state_root_v1(&floor, 3, &Hash64::from_u64_word(0xCAFE)),
+        prefix_tokens: 3,
+        class_id: floor,
+    };
+    let v4 = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: domain,
+        class_id: floor,
+        executor_bond: bond_key(1).0,
+        executor_pubkey: pubkey_of(1),
+        operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey_of(1)),
+        anchor_block: h(0xA0),
+        anchor_daa: 100,
+        job_nonce: [0x6B; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
+            .expect("the ids commit"),
+        prompt_tokens: ids.len() as u32,
+        decode_token_limit: limit,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: [0x3C; 32],
+        temperature_q: 1 << 24,
+        decode: None,
+        tail: None,
+    }
+    .into_v4(DecodeConfigV4::NOOP);
+    let mut job = v4.clone();
+    job.version = PALW_FP_PREFIX_VERSION;
+    job.tail = Some(PalwFpJobTailV1::Prefix(state));
+    assert!(job.is_prefix_state() && job.decodes_under_v4_rules());
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: floor,
+        cu_ruleset_id: Hash64::default(),
+    };
+    let sig = vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
+    let mk = |j: &PalwFreePromptJobV3| {
+        let run = backend.execute_free_prompt(j, &prompt).expect("the floor's real engine runs the job");
+        let commitment = palw_fp_commitment_v3(j, &class, &run, b"misaka-palw-rc", 9_999_999).expect("the run commits");
+        (PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids.clone(), signature: sig.clone() }, run)
+    };
+    let (payload, run) = mk(&job);
+    let (v4_payload, _) = mk(&v4);
+    // The V11 job id is its own domain: the two claims are distinct objects.
+    assert_ne!(payload.claim_id(), v4_payload.claim_id());
+    assert_eq!(payload.consumed_prefix_state_v1(), state);
+    let claim_id = payload.claim_id();
+
+    // carry: not below the prefix fence (V4 still is), and not with the fence unarmed in the caps.
+    let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
+    assert!(walk_with(&p, &s, &payload, rules(PREFIX_FENCE - 1), false).is_empty(), "no prefix-state claim below the fence");
+    assert!(walk_with(&p, &s, &payload, rules(PREFIX_FENCE), false).is_empty(), "and none where the ruleset does not arm it");
+    assert_eq!(walk_with(&p, &s, &v4_payload, rules(PREFIX_FENCE - 1), false).len(), 1, "the V4 twin is carried either way");
+    let objects = walk_with(&p, &s, &payload, rules(PREFIX_FENCE + 1), true);
+    assert_eq!(objects.len(), 1, "armed, the prefix-state claim opens");
+
+    // price: the cached prefix is not paid.
+    let s2 = fold_at(&p, &s, &ctx(3, 112, 3, 0), &objects).expect("the real fold opens the prefix-state claim");
+    let credited = s2.claim(&claim_id).expect("the claim exists").pwu;
+    let twin_objects = walk_with(&p, &s, &v4_payload, rules(112), false);
+    let s_twin = fold_at(&p, &s, &ctx(3, 112, 3, 0), &twin_objects).expect("the V4 twin opens");
+    let decode_only = s_twin.claim(&v4_payload.claim_id()).expect("priced").pwu;
+    // FINDING (stage 2 is credit-side only): with the decode rules armed D10 already credits the DECODE work only, so the
+    // named prefix state changes no price on top of it — the claim is credited exactly the V4 twin, never more.
+    assert_eq!(credited, decode_only, "armed D10 already prices the prefill at zero; stage 2 adds no credit and takes none");
+    let unarmed = palw_t12_shipped_params();
+    let (s_unarmed, _) = chain(&unarmed);
+    let s_unarmed = fold_at(&unarmed, &s_unarmed, &ctx(3, 112, 3, 0), &twin_objects).expect("the unarmed fold prices the twin too");
+    let whole = s_unarmed.claim(&v4_payload.claim_id()).expect("priced unarmed").pwu;
+    assert!(credited < whole, "the cached prefix is not paid: {credited} < {whole} (prefill + decode, unarmed)");
+
+    // verify: the seats replay every interval under V4 rules (the job's decode rules, version 11 notwithstanding).
+    let roots = PalwClaimRootsV1 {
+        execution_root: run.outcome.execution_root,
+        trace_root: run.outcome.trace_root,
+        anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job),
+        attempt_draw: None,
+        output_root: None,
+        job_pin: None,
+    };
+    let count = backend.fp_interval_count_for(job.prompt_tokens, run.facts.decode_tokens_executed).expect("intervals");
+    for index in 0..count {
+        let opening = backend.open_fp_interval(&run.outcome.material, index, &ids).expect("the executor opens it");
+        backend.fp_forget_seat_state_v1();
+        if let Some((_, covered, _)) = misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
+            let c = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
+            backend.checkpoint_root_for_context_v1(&c, &ids, &run.output_token_ids, covered).expect("the seat recomputes");
+        }
+        let v = backend.verify_fp_interval_opening_under_job_v1(&opening, roots, index, &ids, run.facts.step_leaf_count, &job, &run.output_token_ids);
+        assert_eq!(v, PalwFpIntervalVerdictV1::Valid, "interval {index}");
+    }
+
+    // license.
+    let bonds = genesis_bonds(&p);
+    let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
+    let s3 = fold_at(&p, &s2, &ctx(4, 113, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats }])
+        .expect("the panel binds");
+    let receipts: Vec<PalwSeatReceiptV2> = bonds[0..3]
+        .iter()
+        .map(|(k, _, _)| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 114, signature: Vec::new() })
+        .collect();
+    let s4 = fold_at(&p, &s3, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
+        .expect("the Valid quorum licenses");
+    assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
 }
