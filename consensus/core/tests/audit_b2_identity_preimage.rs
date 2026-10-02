@@ -639,6 +639,7 @@ fn b2_10_the_admission_gate_on_an_i32_declaration() {
                 shape.held,
                 shape.kimi_family,
                 params.palw_audit_2026_09_23_active_at(0),
+                shape.gdn_key_heads,
             );
             println!(
                 "{name} @n_ctx {n_ctx} canonical ({pf},{de}) leaves {counted}: {}   draw {} MAC-eq",

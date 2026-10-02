@@ -445,6 +445,12 @@ pub struct Args {
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
     pub palw_tir_fused_kernels: bool,
+    /// **DRILL ONLY: cross testnet-12's FOURTH post-launch flag day at this DAA** (P0a, the live GDN
+    /// key-head fix) — with the salt, every fence of `PALW_T12_POST_LAUNCH_FENCES_V4` is armed at this
+    /// height on the drill chain, after the first three flag days' moves and at a height of its own
+    /// (`config::drill::palw_drill_post_launch_fences_v4_at_v1`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_fence4_at: Option<u64>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -704,6 +710,7 @@ impl Default for Args {
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
+            palw_drill_fence4_at: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -1913,6 +1920,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-fence4-at")
+                .long("palw-drill-fence4-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm every fence of testnet-12's fourth post-launch flag day (P0a, the \
+                     GDN key-head count) at this DAA on the drill chain, after the first three flag days. Nothing else moves. \
+                     Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-tamper-leaf")
                 .long("palw-drill-tamper-leaf")
                 .env("KASPAD_PALW_DRILL_TAMPER_LEAF")
@@ -2939,6 +2957,7 @@ impl Args {
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
+            palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

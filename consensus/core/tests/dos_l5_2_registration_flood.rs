@@ -72,6 +72,7 @@ fn dos_l5_2_registration_flood() {
             shape.held,
             shape.kimi_family,
             p.palw_audit_2026_09_23_active_at(0),
+            shape.gdn_key_heads,
         )
         .map(|e| e.canonical_step_leaf_count)
         .map_err(|e| format!("{e}"))

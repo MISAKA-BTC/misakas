@@ -703,6 +703,18 @@ pub fn palw_drill_improve_fence_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_IMPROVE_V1)
 }
 
+/// **A drill crosses testnet-12's FOURTH post-launch flag day at a low height** (P0a, the live GDN
+/// key-head fix) — [`palw_drill_post_launch_fences_at_v1`] for
+/// [`crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V4`] (`--palw-drill-fence4-at`): ARMS the list's
+/// fences (dormant while the list's height is `None`, as it is until the user sets it) and nothing else,
+/// with every refusal of the first three, named for this flag.
+pub fn palw_drill_post_launch_fences_v4_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_V4)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -827,6 +839,10 @@ fn palw_drill_capacity_step_prerequisite_v1(
     }
     Ok(())
 }
+
+/// The fourth flag day (`--palw-drill-fence4-at`, P0a).
+const PALW_DRILL_FLAG_DAY_V4: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V4, flag: "--palw-drill-fence4-at" };
 
 /// **A drill moves F-N — the network level and the work-conserving fair share (ADR-0160 stage 4,
 /// `palw_capacity_network_room`) — to its own height** (`--palw-drill-capacity-network-room-at`): the stage-4 gate that

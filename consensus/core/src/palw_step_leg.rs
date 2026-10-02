@@ -2573,7 +2573,8 @@ fn checkpoint_fault(
     }
     // ADR-0103 Decision 3: the held map's count has no cap of its own — its bound is the proof's
     // depth, and the equality with the map's canonical count below is what binds it.
-    let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.state_chunk_map_id);
+    let held =
+        crate::palw_state_chunk_map::palw_map_is_held_for_version_v1(&binding.state_chunk_map_id, binding.shape_profile.version);
     if preimage.state_chunk_count == 0 || (!held && preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS) {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }

@@ -497,7 +497,7 @@ impl PalwAttnHeldFilingV1 {
         if binding.committed_execution_root != claim_execution_root {
             return Err("the binding is not the claim's execution".to_string());
         }
-        if !crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.shape_profile.state_chunk_map_id) {
+        if !crate::palw_state_chunk_map::palw_profile_is_held_v4(&binding.shape_profile) {
             return Err("the binding does not register the held map".to_string());
         }
         match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {

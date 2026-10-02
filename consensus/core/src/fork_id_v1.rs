@@ -787,6 +787,8 @@ mod tests {
             "palw_shard_court" => params.palw_shard_court = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
+            // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.
+            "palw_gdn_key_heads" => params.palw_gdn_key_heads = Some(at),
             "palw_fused_dissectable" => params.palw_fused_dissectable = Some(at),
             "palw_attn_anchored_root" => params.palw_attn_anchored_root = Some(at),
             "palw_held_context" => params.palw_held_context = Some(at),

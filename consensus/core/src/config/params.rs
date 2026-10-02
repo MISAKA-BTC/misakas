@@ -3447,6 +3447,25 @@ pub struct Params {
     /// through [`Self::palw_share_growth_final_fence`] only.
     pub palw_share_growth_final: Option<ForkActivation>,
 
+    /// **P0a — the GDN key-head count is derived, and the held map that reads it spells it**
+    /// (`docs/design/palw/tir/phase-f-integration.md` §3.3). Past this fence a registration may
+    /// carry a profile of version 3 (`crate::palw_step::PALW_STEP_OBJECT_VERSION_V3`: `k_heads =
+    /// width(GatedDeltaNet.ref0) / gdn_head_k_dim`) on the held composition v5
+    /// (`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v5`, whose recurrence half gathers a
+    /// conv window row of `2 · k_heads · k + v_heads · v` lanes); before it the admission gate
+    /// refuses such a class by name (`GdnKeyHeadsNeedsItsFence`) — which a build without this field
+    /// also does, in `validate_shape`. Past it (hygiene) the gate also refuses a V1/V2 profile whose
+    /// derived key-head count is not its value-head count on a recurrence map written over one head
+    /// count (`GdnMapAssumesEqualHeads`): such a class can never produce a checkpoint.
+    ///
+    /// No kernel is added, so `court_catalog_root` does not move. **A bare fence, top level**:
+    /// `None` on every shipped preset, Some-only in both fingerprints, collapsed from
+    /// `Some(never())` in the identity's normaliser; [`Self::validate_palw_v2`] refuses a genesis
+    /// that registers a version-3 profile unless it is armed from genesis. Read it through
+    /// [`Self::palw_gdn_key_heads_fence`] only. testnet-12 schedules it in
+    /// [`PALW_T12_POST_LAUNCH_FENCES_V4`], whose height is the user's to set.
+    pub palw_gdn_key_heads: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -5152,6 +5171,18 @@ impl Params {
                  genesis",
             ));
         }
+        // **P0a at the genesis door**, the ADR-0102 precedent: genesis rows are verified against the
+        // committed catalog rather than through the admission gate, so a version-3 row needs the
+        // fence armed from genesis or it would be the one class the fence exists to admit, admitted
+        // without it.
+        if crate::palw_class_admission_v2::palw_genesis_registers_key_head_class_v1(bundle)
+            && !self.palw_gdn_key_heads.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers a version-3 profile (the derived GDN key-head count, P0a) and \
+                 palw_gdn_key_heads is not armed from genesis",
+            ));
+        }
         // **ADR-0093 Decision 6 at the genesis door**, the same reason: a fence armed from genesis
         // judges the genesis rows too, or its first class would be the one it exists to refuse.
         if self.palw_fused_dissectable.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
@@ -6283,6 +6314,10 @@ impl Params {
         if self.palw_share_growth_final == Some(ForkActivation::never()) {
             self.palw_share_growth_final = None;
         }
+        // P0a, a bare fence: the same collapse for the same reason.
+        if self.palw_gdn_key_heads == Some(ForkActivation::never()) {
+            self.palw_gdn_key_heads = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -6485,6 +6520,20 @@ impl Params {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
+    }
+
+    /// **P0a's fence, resolved**: `Some` only on a `ConsensusV2` network that armed it. The ONE place
+    /// "may a class derive its GDN key-head count" is decided.
+    pub fn palw_gdn_key_heads_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_gdn_key_heads) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is [`Self::palw_gdn_key_heads_fence`] in force at `daa_score`?
+    pub fn palw_gdn_key_heads_active_at(&self, daa_score: u64) -> bool {
+        self.palw_gdn_key_heads_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// **Is the attempt lane's constant work in force at `daa_score`?** (ADR-0066 Decision 3 /
@@ -9437,6 +9486,7 @@ impl Params {
             // ADR-0160 lane escrow (post-launch)
             palw_capacity_escrow_at_licence,
             palw_share_growth_final,
+            palw_gdn_key_heads,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
             pow_palw_activation: _,
@@ -9669,6 +9719,8 @@ impl Params {
             // implement, so it is on the schedule and gates the fork id like every other.
             ("palw_capacity_escrow_at_licence", *palw_capacity_escrow_at_licence),
             ("palw_share_growth_final", *palw_share_growth_final),
+            // P0a: a top-level fence an un-upgraded peer does not implement.
+            ("palw_gdn_key_heads", *palw_gdn_key_heads),
         ]
     }
 
@@ -10253,6 +10305,12 @@ impl Params {
             h.write(b"palw_share_growth_final");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // P0a. Some-only, at the tail, NAMED: it changes which classes may register, and a preset
+        // that leaves it `None` prints the id of a build from before the field existed.
+        if let Some(activation) = self.palw_gdn_key_heads {
+            h.write(b"palw_gdn_key_heads");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -10464,6 +10522,7 @@ impl Params {
             // ADR-0160 lane escrow (post-launch)
             palw_capacity_escrow_at_licence,
             palw_share_growth_final,
+            palw_gdn_key_heads,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -11261,6 +11320,10 @@ impl Params {
         if let Some(activation) = palw_share_growth_final.as_mut() {
             fork(activation, visit);
         }
+        // P0a. Some-only and at the tail, likewise.
+        if let Some(activation) = palw_gdn_key_heads.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -11600,6 +11663,7 @@ impl Params {
             // ADR-0160 lane escrow (post-launch)
             palw_capacity_escrow_at_licence,
             palw_share_growth_final,
+            palw_gdn_key_heads,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -12538,6 +12602,11 @@ impl Params {
             h.write(b"palw_share_growth_final");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // P0a. Some-only, likewise: every preset leaves it `None`.
+        if let Some(activation) = palw_gdn_key_heads {
+            h.write(b"palw_gdn_key_heads");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -13012,6 +13081,8 @@ impl Params {
             // ADR-0160 lane escrow (post-launch)
             palw_capacity_escrow_at_licence: self.palw_capacity_escrow_at_licence,
             palw_share_growth_final: self.palw_share_growth_final,
+            // P0a: CARRIED — a class registered past it must stay admissible on an overridden ruleset.
+            palw_gdn_key_heads: self.palw_gdn_key_heads,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -14074,6 +14145,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
+    palw_gdn_key_heads: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -14333,6 +14405,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
+    palw_gdn_key_heads: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -14574,6 +14647,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
+    palw_gdn_key_heads: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -19467,8 +19541,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
-    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
+        .chain(PALW_T12_DECODE_RULES_FENCES_V1)
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
@@ -20030,6 +20105,36 @@ fn palw_t12_arm_post_launch_fences_v3(params: &mut Params) {
     }
 }
 
+/// **testnet-12's fourth post-launch flag day: the live GDN key-head fix (P0a)** —
+/// `docs/design/palw/tir/phase-f-integration.md` §3.3, "an entry in the first flag-day list after DAA
+/// 1,500 at an unused height". Past it a class may register a version-3 profile on the held composition
+/// v5, which is what lets the fleet's Qwen3.6 artifact (16 key / 32 value heads) capture a recurrence
+/// checkpoint at all: under graph-v7 every held hybrid attempt fails at prefill.
+///
+/// Entries (lane · fence):
+/// * P0a · `palw_gdn_key_heads` — profile version 3 and the v5 map admitted; a V1/V2 profile whose
+///   derived key-head count is not its value-head count refused on a recurrence map (hygiene).
+pub const PALW_T12_POST_LAUNCH_FENCES_V4: &[PalwPostLaunchFenceV1] = &[
+    // P0a: a bare height — the gate reads it at the registering block, and nothing is mirrored.
+    PalwPostLaunchFenceV1 { name: "palw_gdn_key_heads", set: |params, at| params.palw_gdn_key_heads = at },
+];
+
+/// **The fourth flag day's height — `None` until the user sets it** (Phase F §5 decision 9: "its
+/// height"). While `None` the list is dormant on every ruleset, the shipped one included, and a drill
+/// crosses it with `--palw-drill-fence4-at`. It must be a height no other fence uses (not 750, 1,000,
+/// 1,300 or 1,500): the fork id names heights, not fences.
+pub const PALW_T12_POST_LAUNCH_FENCE_V4_DAA: Option<u64> = None;
+
+/// **The fourth flag day, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V4`] at
+/// [`PALW_T12_POST_LAUNCH_FENCE_V4_DAA`] through its own `set`, on the ASSEMBLED ruleset, after the
+/// first three lists; a no-op while the height is `None`.
+fn palw_t12_arm_post_launch_fences_v4(params: &mut Params) {
+    let Some(at) = PALW_T12_POST_LAUNCH_FENCE_V4_DAA else { return };
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V4 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
 /// **testnet-12's IR flag day: RFC-0002 PALW-TIR v1** (the user's decision of 2026-09-28) — `palw_tir_v1`
 /// alone: this build's primitive set and IR court version at testnet-12's measured IR ceilings
 /// ([`crate::palw_tir_v1::PalwTirFenceV1::testnet12_v1`]: `max_cone_work` 2^16, 88,000 program bytes).
@@ -20229,8 +20334,9 @@ pub fn palw_t12_release_v5_params() -> Params {
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
-    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
+        .chain(PALW_T12_DECODE_RULES_FENCES_V1)
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
     {
@@ -20264,8 +20370,9 @@ pub fn palw_t12_release_v3_params() -> Params {
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
-    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
+        .chain(PALW_T12_DECODE_RULES_FENCES_V1)
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
@@ -20283,8 +20390,9 @@ pub fn palw_t12_release_v2_params() -> Params {
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
-    for fence in PALW_T12_DECODE_RULES_FENCES_V1
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
+        .chain(PALW_T12_DECODE_RULES_FENCES_V1)
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
@@ -20348,6 +20456,10 @@ fn palw_t12_params_with_registry_v1(
     // **The int-11 flag day** (RFC-0003, RFC-0004 and the capacity ramp to ρ = 25 / ρ = 100, 2026-10-02): `PALW_T12_INT11_FENCES_V1` at
     // `PALW_T12_INT11_FLAG_DAY_DAA` and ρ = 100 at H + 95, after the DAA-3,600 flag day whose `palw_tir_fence2` it needs below it.
     palw_t12_arm_int11_flag_day_v1(&mut params);
+    // **The fourth post-launch flag day** (P0a, the live GDN key-head fix): every fence of
+    // `PALW_T12_POST_LAUNCH_FENCES_V4` at `PALW_T12_POST_LAUNCH_FENCE_V4_DAA` — dormant while that height
+    // is `None` — after the first three lists and every other flag day's.
+    palw_t12_arm_post_launch_fences_v4(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -21855,6 +21967,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
+    palw_gdn_key_heads: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -30509,6 +30622,7 @@ mod post_launch_fence_arming_tests {
         expected_schedule.extend(PALW_T12_TIR_FENCE2_DAA);
         expected_schedule.extend(PALW_T12_INT11_FLAG_DAY_DAA);
         expected_schedule.extend(PALW_T12_INT11_RHO100_DAA);
+        expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V4_DAA);
         expected_schedule.sort_unstable();
         expected_schedule.dedup();
         assert_eq!(

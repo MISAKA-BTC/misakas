@@ -1037,3 +1037,10 @@ async fn t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk() {
 /// held model fixtures — a child of this module, so it runs their claims through T46's doors.
 #[path = "t18m_forged_output_tiled.rs"]
 mod t18m_forged_output_tiled;
+
+/// **P0a exit test (e)** (phase-f-integration.md §3.3): a version-3 hybrid across
+/// `palw_gdn_key_heads` — refused by name below it, admitted past it on the attribution-off twin,
+/// refused by C5 on testnet-12 as shipped, and produced, disputed and closed on T46's doors. A child
+/// of this module for the reason `t18m_forged_output_tiled` is.
+#[path = "t47_p0a_gdn_key_heads.rs"]
+mod t47_p0a_gdn_key_heads;

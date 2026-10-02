@@ -3224,10 +3224,8 @@ pub fn qwen36_gdn_slice_v1(
     if vh >= heads {
         return None;
     }
-    let k_heads = ref_widths[0] / hd_k.max(1);
-    if k_heads == 0 || ref_widths[0] != k_heads * hd_k || ref_widths[2] != ref_widths[0] {
-        return None;
-    }
+    // The key-head count, by the one derivation the profile's and the maps' readers share (P0a).
+    let k_heads = crate::palw_step::palw_gdn_key_heads_of_widths_v1(hd_k, ref_widths[0], ref_widths[2])?;
     let kh = vh % k_heads;
     let v_block = ref_widths[1].checked_sub(heads * hd_v)?;
     if ref_widths[3] < heads || ref_widths[4] < heads {
@@ -4246,7 +4244,7 @@ fn verify_kv_anchor<'a>(
     // **ADR-0103 Decision 3: a held class's chunks build a two-level root** over the same bytes in
     // the same order — the leaf binds `(slice, block)` rather than the flat index. Every other map
     // keeps the flat tree, byte for byte.
-    let root = if map::palw_map_is_held_v4(map_id) {
+    let root = if map::palw_map_is_held_for_version_v1(map_id, binding.shape_profile.version) {
         let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
             &binding.shape_profile,
             &binding.job_context,
@@ -4326,7 +4324,7 @@ fn verify_kv_anchor<'a>(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let expected = composition.chunk_count();
         (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
-    } else if map::palw_map_is_held_v4(&declared) {
+    } else if map::palw_profile_is_held_v4(&binding.shape_profile) {
         // ADR-0103 Decision 3: the held layout's attention half is the tiled enumeration with no
         // count cap; a hybrid's recurrence slices follow it, and only the count reads them here.
         let layout = map::palw_state_layout_v4(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;

@@ -87,6 +87,7 @@ pub fn admit(
         shape.held,
         shape.kimi_family,
         params.palw_audit_2026_09_23_active_at(daa),
+        shape.gdn_key_heads,
     )
     .map(|e| e.canonical_step_leaf_count)
 }
@@ -392,6 +393,7 @@ pub fn admit_raw(
         bundle, profile, canonical, &reg, &certified, &[], shape.ladder, shape.court, false,
         shape.token_lift, shape.fused_dissectable, params.palw_canonical_work_at(0), shape.held, shape.kimi_family,
         params.palw_audit_2026_09_23_active_at(0),
+        shape.gdn_key_heads,
     )
     .map(|e| e.canonical_step_leaf_count)
 }

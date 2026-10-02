@@ -195,6 +195,7 @@ mod tests {
             kimi_family,
             // The Kimi foundation drill predates the 2026-09-23 fence: the pre-fence gate.
             false,
+            false,
         )
     }
 

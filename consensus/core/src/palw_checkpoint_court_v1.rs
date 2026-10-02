@@ -32,8 +32,8 @@ use crate::Hash64;
 use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1, PalwAttnRowOpeningV1};
 use crate::palw_state_chunk_map::{
     PalwStateChunkKindV1, integer_kv_state_chunk_entry_v1, integer_kv_state_locate_v1, integer_kv_state_row_v1,
-    palw_map_addresses_history_tiles_v1, palw_map_is_held_v4, palw_state_chunk_leaf_for_map_v1, palw_state_chunk_membership_root_v1,
-    palw_state_layout_v4, tiled_kv_state_geometry_v3,
+    palw_map_addresses_history_tiles_v1, palw_state_chunk_leaf_for_map_v1, palw_state_chunk_membership_root_v1, palw_state_layout_v4,
+    tiled_kv_state_geometry_v3,
 };
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step::{PalwLayerKindV1, PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepTableV1};
@@ -227,7 +227,7 @@ pub fn palw_checkpoint_court_verdict_v1(
 
     // The class's layout at that checkpoint: the chunk count the leaf must declare, and where the
     // accused row lives.
-    let (geometry, count) = if palw_map_is_held_v4(&profile.state_chunk_map_id) {
+    let (geometry, count) = if crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
         let layout = palw_state_layout_v4(profile, positions).map_err(|e| E::Layout(e.to_string()))?;
         let count = layout.chunk_count();
         (layout.attn, count)
@@ -548,7 +548,7 @@ pub(crate) mod tests {
         pub(crate) fn accusation(&self, c: u32, kind: u8, layer: u16, position: u32) -> PalwCheckpointAccusationV1 {
             let profile = &self.binding.shape_profile;
             let positions = c + 1;
-            let geometry = if palw_map_is_held_v4(&profile.state_chunk_map_id) {
+            let geometry = if crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
                 palw_state_layout_v4(profile, positions).expect("a layout").attn
             } else {
                 tiled_kv_state_geometry_v3(profile, positions).expect("a layout")

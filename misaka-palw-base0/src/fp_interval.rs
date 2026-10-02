@@ -1576,7 +1576,7 @@ pub fn base0_state_chunks_root_for_v1(
     positions: u32,
     chunks: &[Vec<u8>],
 ) -> Result<Hash64, Base0FpIntervalError> {
-    if !kaspa_consensus_core::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id) {
+    if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
         return base0_state_chunks_root_v1(&profile.state_chunk_map_id, chunks);
     }
     if chunks.iter().any(|c| c.len() > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES) {

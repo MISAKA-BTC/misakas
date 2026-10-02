@@ -91,6 +91,9 @@ pub struct PalwDrillExtraFencesV1 {
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
     /// per-fence flags of its entries, never with them.
     pub int11_at: Option<u64>,
+    /// testnet-12's fourth post-launch flag day (P0a, the GDN key-head count; `palw_gdn_key_heads`), `--palw-drill-fence4-at`: its own
+    /// list, no prerequisite among the other fences.
+    pub fence4_at: Option<u64>,
 }
 
 impl PalwDrillExtraFencesV1 {
@@ -110,6 +113,7 @@ impl PalwDrillExtraFencesV1 {
             held_chunks_at: args.palw_drill_held_chunks_at,
             improve_at: args.palw_drill_improve_at,
             int11_at: args.palw_drill_int11_at,
+            fence4_at: args.palw_drill_fence4_at,
         }
     }
 
@@ -124,6 +128,7 @@ impl PalwDrillExtraFencesV1 {
             || self.held_chunks_at.is_some()
             || self.improve_at.is_some()
             || self.int11_at.is_some()
+            || self.fence4_at.is_some()
     }
 
     /// Does any capacity step flag stand?
@@ -138,6 +143,7 @@ impl PalwDrillExtraFencesV1 {
     /// The first flag that stands, named (for the unsalted refusal).
     fn first_named(&self) -> Option<(&'static str, u64, &'static str)> {
         [
+            ("--palw-drill-fence4-at", self.fence4_at, "testnet-12's fourth post-launch flag day (palw_gdn_key_heads, P0a)"),
             ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's DAA-3,600 flag day (palw_tir_fence2)"),
             ("--palw-drill-model-court-at", self.model_court_at, "the per-model court-window fence (palw_model_court_window)"),
             (
@@ -201,6 +207,9 @@ impl PalwDrillExtraFencesV1 {
             }
         }
         let mut moves = Vec::new();
+        if let Some(at) = self.fence4_at {
+            moves.extend(d::palw_drill_post_launch_fences_v4_at_v1(params, at).map_err(|e| format!("--palw-drill-fence4-at: {e}"))?);
+        }
         if let Some(at) = self.tir2_at {
             moves.extend(d::palw_drill_tir_fence2_at_v1(params, at).map_err(|e| format!("--palw-drill-tir2-at: {e}"))?);
         }
@@ -286,6 +295,7 @@ impl PalwDrillExtraFencesV1 {
         vec![
             ("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at)),
             ("int11_at=", "--palw-drill-int11-at", palw_drill_marker_fence_text_v1(self.int11_at)),
+            ("fence4_at=", "--palw-drill-fence4-at", palw_drill_marker_fence_text_v1(self.fence4_at)),
         ]
     }
 
@@ -907,6 +917,7 @@ pub fn palw_drill_write_keyring_v4(
         "held_chunks_at": extra.held_chunks_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
+        "fence4_at": extra.fence4_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),

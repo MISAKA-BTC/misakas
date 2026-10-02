@@ -160,6 +160,7 @@ fn audit_b3r_the_registration_gate_never_looks_at_the_artifact_root() {
             shape.kimi_family,
             // 2026-09-23 audit C-4 fence, as the network resolves it.
             p.palw_audit_2026_09_23_active_at(0),
+            shape.gdn_key_heads,
         );
         match verdict {
             Ok(entry) => {

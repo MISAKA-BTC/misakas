@@ -2397,7 +2397,7 @@ pub fn palw_attn_dispute_site_unpinned_v3(
             // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
             // ADR-0103 Decision 3: the held maps enumerate the same tiles, so they are tiled maps
             // here too; only how a chunk proves into the root differs, and the site says which.
-            let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id);
+            let held = crate::palw_state_chunk_map::palw_profile_is_held_v4(profile);
             if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
                 && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
                 && !held
