@@ -175,16 +175,16 @@ fn a_dissected_class_owes_its_terminal_move() {
     assert!(chain.s.class(&class_id).expect("the class").fused_attention, "it owes a root claim at a dissected leaf");
 }
 
-/// ref2's H7 shape (`tests/palw_tir_h7.rs`) as a one-stage text class: the scores `Qᵀ · K` over a
-/// 16-row window, then `TopK { axis 0, k 4 }` of them, committed in tiles of 4 lanes — a dissected
-/// cone with a `TopK`.
-fn topk_class() -> PalwGenClassV1 {
+/// ref2's H7 shape (`tests/palw_tir_h7.rs`) as a text stage: the scores `Qᵀ · K` over a 16-row window, then `TopK { axis 0, k 4 }` of
+/// them, committed in tiles of 4 lanes — a dissected cone with a `TopK`. `rows` adds the vision-language class's image-rows input (the
+/// golden toy VLM's: `[2, 4]` `I32`, through a `StageFinal` edge), which makes the stage the language model of a generative class.
+fn topk_lm_program(rows: bool) -> misaka_palw_tir::program_v2::TirProgramV2 {
     use misaka_palw_tir::builder::ProgramBuilder;
-    use misaka_palw_tir::pipeline::{StageDecl, TIR_PIPELINE_VERSION_V1, TripRule};
     use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
-    use misaka_palw_tir::program_v2::OutputDecl;
+    use misaka_palw_tir::program_v2::{InputSource, OutputDecl};
     use misaka_palw_tir::{DType, Ref, TensorType};
     let mut pb = ProgramBuilder::new(8, HISTORY_BOUND_V1_SMALL);
+    let image_rows = rows.then(|| pb.param("lm.image_rows", DType::I32, &[2, 4], false));
     let embed = pb.param("embed", DType::I8, &[8, 7], false);
     let head = pb.param("head", DType::I8, &[8, 7], false);
     let ks = pb.hist_state("k", DType::I32, &[3], 16, true);
@@ -194,6 +194,21 @@ fn topk_class() -> PalwGenClassV1 {
         let mut b = pb.block("pre", vec![]);
         let x = b.gather(embed, Ref::Input(0), 0, 0);
         let x = b.cast(x, DType::I32);
+        // The vision-language class's stage reads the first image row (the tower's output, shifted down as the golden toy language
+        // model reads its rows) into the first four lanes of the embedding.
+        let x = match image_rows {
+            None => x,
+            Some(rows) => {
+                let zero = b.c(DType::Idx, 0);
+                let row = b.gather(rows, zero, 0, 0);
+                let row = b.shr(row, 16, misaka_palw_tir::Rounding::HalfAwayFromZero, DType::I32);
+                let row = b.clamp(row, -128, 127, DType::I32);
+                let head4 = b.slice(x, 0, 0, 4);
+                let tail3 = b.slice(x, 0, 4, 3);
+                let mixed = b.add(head4, row, DType::I32);
+                b.concat(&[mixed, tail3], 0)
+            }
+        };
         b.finish(&[x])
     };
     let layer = {
@@ -222,48 +237,151 @@ fn topk_class() -> PalwGenClassV1 {
         (b.finish(&[]), i)
     };
     let v1 = pb.finish(pre, vec![layer], post, logits);
-    let program = TirProgramV2::from_v1_lifting_params(&v1, &[], OutputDecl::Logits { node: logits, scheme_id: v1.logits_scheme_id })
-        .expect("a text program");
+    let lifted: Vec<(u16, InputSource)> =
+        if rows { vec![(0, InputSource::External { lo: i32::MIN as i64, hi: i32::MAX as i64 })] } else { vec![] };
+    TirProgramV2::from_v1_lifting_params(&v1, &lifted, OutputDecl::Logits { node: logits, scheme_id: v1.logits_scheme_id })
+        .expect("a text program")
+}
+
+/// The offers of a text class of this file (no steps, no scalars, a prompt of 8, no source), with `images` slots.
+fn text_offers(images: Vec<PalwGenImageOfferV1>) -> PalwGenOffersV1 {
+    PalwGenOffersV1 {
+        steps: vec![],
+        scalars: vec![],
+        max_prompt_tokens: 8,
+        max_negative_tokens: 0,
+        images,
+        max_source_tokens: 0,
+        forced_prompt_prefix: vec![],
+        source_token_floor: 0,
+        profile: PalwGenProfileOffersV1::None,
+    }
+}
+
+/// One tile of 4 lanes per commit point and state of every stage, a checkpoint every 4 positions, a history tile of 16.
+fn tiny_layouts(
+    pipeline: &misaka_palw_tir::pipeline::TirPipelineV1,
+    programs: &[misaka_palw_tir::program_v2::TirProgramV2],
+) -> Vec<PalwTirLayoutV1> {
+    pipeline
+        .stages
+        .iter()
+        .map(|st| {
+            let p = &programs[st.program as usize];
+            let commits = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
+            PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: st.max_trip,
+                checkpoint_interval: 4,
+                h_tile: 16,
+                commit_tiles: vec![4; commits],
+                state_tiles: vec![4; p.states.len()],
+            }
+        })
+        .collect()
+}
+
+/// **A text-only class**: the H7 language model alone, no image slot and no source — a text-only model, whose jobs are FP Job V4.
+fn text_only_class() -> PalwGenClassV1 {
+    use misaka_palw_tir::pipeline::{StageDecl, TIR_PIPELINE_VERSION_V1, TripRule};
+    let program = topk_lm_program(false);
     let pipeline = TirPipelineV1 {
         version: TIR_PIPELINE_VERSION_V1,
-        stages: vec![StageDecl {
-            name: "lm".into(),
-            program: 0,
-            trip: TripRule::TextStream,
-            max_trip: 16,
-            tokens: None,
-            bind: vec![],
-        }],
+        stages: vec![StageDecl { name: "lm".into(), program: 0, trip: TripRule::TextStream, max_trip: 16, tokens: None, bind: vec![] }],
         output_stage: 0,
     };
-    let commits = program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
     PalwGenClassV1 {
         version: PALW_GEN_CLASS_VERSION_V1,
         profile: PalwGenProfileV1::Text as u8,
+        layouts: tiny_layouts(&pipeline, std::slice::from_ref(&program)),
         pipeline: pipeline.encode(),
         programs: vec![program.encode()],
-        layouts: vec![PalwTirLayoutV1 {
-            version: PALW_TIR_LAYOUT_VERSION_V1,
-            max_context: 16,
-            checkpoint_interval: 4,
-            h_tile: 16,
-            commit_tiles: vec![4; commits],
-            state_tiles: vec![4; program.states.len()],
-        }],
         output: OutputSpecV1::tokens(16),
-        offers: PalwGenOffersV1 {
-            steps: vec![],
-            scalars: vec![],
-            max_prompt_tokens: 8,
-            max_negative_tokens: 0,
-            images: vec![],
-            max_source_tokens: 0,
-            forced_prompt_prefix: vec![],
-            source_token_floor: 0,
-            profile: PalwGenProfileOffersV1::None,
-        },
+        offers: text_offers(vec![]),
         tokenizer_id: Hash64::from_bytes([0x74; 64]),
     }
+}
+
+/// **The H7 language model as a vision-language class**: the golden toy VLM's vision stage (a 2×3 image slot, `[2, 4]` rows out), then
+/// the H7 stage over the text stream reading them through a `StageFinal` edge — a text class with an image slot, so one that takes FP Job
+/// V5 and can be claimed.
+fn topk_class() -> PalwGenClassV1 {
+    use misaka_palw_tir::pipeline::{Binding, StageDecl, TIR_PIPELINE_VERSION_V1, TripRule};
+    use misaka_palw_tir::program_v2::TirProgramV2;
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines/toy-vlm.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the golden toy VLM")).expect("json");
+    let vision = TirProgramV2::decode_canonical(&unhex(v["programs"][0]["program_borsh_hex"].as_str().unwrap())).expect("the tower");
+    let programs = vec![vision, topk_lm_program(true)];
+    let pipeline = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            StageDecl {
+                name: "vision".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobImage { index: 0 }],
+            },
+            StageDecl {
+                name: "lm".into(),
+                program: 1,
+                trip: TripRule::TextStream,
+                max_trip: 16,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }],
+            },
+        ],
+        output_stage: 1,
+    };
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        layouts: tiny_layouts(&pipeline, &programs),
+        pipeline: pipeline.encode(),
+        programs: programs.iter().map(|p| p.encode()).collect(),
+        output: OutputSpecV1::tokens(16),
+        offers: text_offers(vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4, token_equivalents: 1_000_000 }]),
+        tokenizer_id: Hash64::from_bytes([0x74; 64]),
+    }
+}
+
+/// **A text-only class is a dead registration: refused by name under the gen fence, and pointed at the text lane.** A generative text
+/// class takes FP Job V5 (images or a source, never neither) and the generative court binds V5 jobs alone, so a text class that offers
+/// neither takes FP Job V4 — the text lane's — and would be registered and never claimed, costing its registrant for nothing. Below
+/// `palw_gen_v1` the registration is dropped by name like every generative registration; from it the gate's first step refuses it, whatever
+/// the court and the carrier would otherwise allow; and the same model behind an image slot is admitted.
+#[test]
+fn a_text_only_class_is_refused_by_name_under_the_gen_fence_and_pointed_at_the_text_lane() {
+    let p = armed();
+    let bundle = bundle(&p);
+    let object = register(text_only_class());
+    // Below the fence: dropped by name, as every generative registration is.
+    assert_eq!(
+        palw_gen_registration_preflight_at_v1(&p, &bundle, &object, AT - 1).err(),
+        Some(PalwClassAdmissionError::GenNeedsItsFence),
+        "below the fence"
+    );
+    // From it: refused by name at the first step, as a preflight refusal, with the lane it belongs on.
+    let rules = PalwGenAdmissionRulesV1::at(&p, AT).expect("the fence is in force");
+    let refused = palw_gen_registration_preflight_at_v1(&p, &bundle, &object, AT).err().expect("a text-only class is refused");
+    let PalwClassAdmissionError::GenClass(said) = &refused else { panic!("refused as a preflight refusal, by name: {refused:?}") };
+    assert_eq!(said, &PalwGenClassErrorV1::TextOnly.to_string());
+    assert_eq!(refused.code(), "GEN_CLASS_REFUSED");
+    for needle in ["text-only", "FP Job V4", "text lane", "tir-registration", "FP Job V5", "image slot or a source"] {
+        assert!(said.contains(needle), "the refusal should say {needle:?}: {said}");
+    }
+    // Nothing the court or the carrier allows lets it through: it is the class that is dead, not its closes.
+    for rules in [
+        PalwGenAdmissionRulesV1 { held_close_chunks: true, ..rules },
+        PalwGenAdmissionRulesV1 { court: None, ..rules },
+        PalwGenAdmissionRulesV1 { held_armed: false, ..rules },
+    ] {
+        assert_eq!(verify_gen_class_admission_v1(&bundle, &rules, &object).err(), Some(refused.clone()));
+    }
+    // The same model behind an image slot is a generative text class (the H7 class below, admitted past the second IR fence).
+    assert!(palw_gen_class_preflight_v1(&topk_class(), &rules.fence).is_ok(), "an image slot makes it a generative text class");
+    assert_eq!(palw_gen_class_preflight_v1(&text_only_class(), &rules.fence), Err(PalwGenClassErrorV1::TextOnly));
 }
 
 /// **A `TopK` in a dissected cone** (ref2's H7): below `palw_tir_fence2` the release's box-demand row

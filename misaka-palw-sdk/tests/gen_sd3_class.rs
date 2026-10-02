@@ -406,6 +406,13 @@ fn point_of(c: &Sd3Class, l: &misaka_palw_base0::gen_tensor_worker::GenLeafListi
     Some((l.stage, block, node.parse().ok()?))
 }
 
+/// **The pinned sizing work of the SD3 drill class**, in the twin's steps (the whole class, every stage: 66,871,506 of the cap's
+/// 67,108,864 — three quarters the ten VAE stages, a fifth the denoiser): see [`the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap`].
+const SD3_SIZING_WORK_V1: u64 = 66_871_506;
+/// **The least headroom the class may leave under the cap** (0.15 % of it): the pinned margin is 237,358 steps (0.35 %); a change that
+/// leaves less than this is a change the drill class must not absorb silently.
+const SD3_SIZING_MIN_HEADROOM_V1: u64 = 100_000;
+
 /// **PALW-GEN-20, what the gate prices**: the sizing of every close of this class, per commit point, and the work it does. Cheap (no
 /// close is built): the table is the gate's, printed beside the measured one by the sweep below.
 #[test]
@@ -428,7 +435,23 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
         eprintln!("  stage {} block {} node {:>3}: close {:>7} B{}", k.0, k.1, k.2, b.close_bytes, if b.dissected { format!(", root claim {} B (dissected)", b.root_claim_bytes) } else { String::new() });
     }
     eprintln!("the largest priced close: {} B at {:?} (one-move carrier {one_move_max} B)", worst.0, worst.1);
-    assert!(work <= PALW_GEN_CLOSE_SIZING_WORK_CAP_V1);
+    // **The drill class's sizing work and its headroom under the cap are PINNED.** The generative cap is the IR's own (`2^26`, the
+    // gate is no looser than the IR one) and this class sits 0.35 % under it: 237,358 steps. A lowering change that moves the work
+    // fails HERE, by name, with the headroom it leaves — before the gate refuses the drill class at the cap — and the pin is
+    // moved on purpose, with the class id (a lowering change moves that too: `docs/design/palw/rfc3-gen-drill-inputs.md`).
+    assert!(
+        work <= PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+        "the SD3 drill class's close sizing needs {work} steps and the gate's cap is {PALW_GEN_CLOSE_SIZING_WORK_CAP_V1}: the class is refused"
+    );
+    let headroom = PALW_GEN_CLOSE_SIZING_WORK_CAP_V1 - work;
+    assert!(
+        headroom >= SD3_SIZING_MIN_HEADROOM_V1,
+        "the SD3 drill class's sizing leaves {headroom} steps under the cap (the pinned floor is {SD3_SIZING_MIN_HEADROOM_V1}): a lowering change ate the margin"
+    );
+    assert_eq!(
+        work, SD3_SIZING_WORK_V1,
+        "the SD3 drill class's close sizing is {work} steps, pinned at {SD3_SIZING_WORK_V1} ({headroom} under the cap): the lowering changed the class — re-pin on purpose, and with the class id in the drill inputs"
+    );
     // Where the work goes: per stage.
     {
         use kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1;
@@ -447,6 +470,38 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
         }
         eprintln!("  total {total} steps");
     }
+}
+
+/// **PALW-GEN-20: the OUTPUT close** — the proof a challenger files against a forged output digest (`GenOutputTile`, tag 16: an output
+/// tile's bytes, its path under the claim's `output_root`, and the output node's committed step tile). The gate prices it in closed form
+/// ([`palw_gen_whole_closes_v1`]); every output tile of the class's image is built by the evidence builder and measured as a one-move
+/// accusation carries it, and the price must not be below the largest, and must fit one carrier.
+#[test]
+fn the_gate_prices_every_output_close_at_least_what_it_measures() {
+    use kaspa_consensus_core::palw_gen_close_price_v1::{PalwGenWholeCloseKindV1, palw_gen_whole_closes_v1};
+    let Some(c) = sd3_class() else { return };
+    let prices = palw_gen_whole_closes_v1(&c.declared.class, &c.spec.pipeline, &c.spec.programs).expect("the whole closes");
+    let [(PalwGenWholeCloseKindV1::Output, priced)] = prices[..] else { panic!("a tensor class has one whole close, its output close: {prices:?}") };
+    let (held, _file) = held(&c);
+    let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
+    let ev = honest.evidence(&held);
+    let output = honest.output();
+    let tiles = misaka_palw_gen::output::output_tile_count_v1(&output.spec, output.tile_len).expect("the output's tiles");
+    let (mut worst, mut smallest) = (0u64, u64::MAX);
+    for tile in 0..tiles {
+        let close = ev.output_close(tile).unwrap_or_else(|e| panic!("output tile {tile}: {e}"));
+        let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) }).unwrap().len() as u64;
+        assert!(priced >= bytes, "output tile {tile}: priced {priced} B, measured {bytes} B");
+        worst = worst.max(bytes);
+        smallest = smallest.min(bytes);
+    }
+    eprintln!(
+        "the SD3 class's {tiles} output closes (tiles of {} lanes): measured {smallest}..{worst} B, priced {priced} B (margin {} B; one-move carrier {} B)",
+        output.tile_len,
+        priced - worst,
+        palw_gen_one_move_max_proof_bytes_v1()
+    );
+    assert!(priced <= palw_gen_one_move_max_proof_bytes_v1(), "the output close of the drill class rides one carrier");
 }
 
 /// **PALW-GEN-20: the gate's price is an upper bound of the measured close — at every commit point, at every sampled leaf** (a
