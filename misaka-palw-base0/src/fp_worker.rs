@@ -787,26 +787,14 @@ pub fn prompt_ids_for_input_v1(
     }
     Ok(ids)
 }
-
-/// **One job, from a validated request to the result frame's contents.**
-///
-/// The whole of what `v3-job` and `v3-serve` share; that they share it is what makes W6 —
-/// byte-identical roots through both modes — a property of the code rather than of a habit.
-///
-/// `on_token` is called once per generated id, in decode order, as soon as it is SELECTED
-/// (Decision 2), with that id and the bytes of the answer that became renderable with it. Every
-/// generated id is reported, INCLUDING an end-of-generation id and anything after it: the
-/// execution runs to the job's declared decode budget because a step leaf hash binds the job
-/// context, which binds the executed count, so hashing cannot begin before the count is fixed. EOG
-/// is a DISPLAY stop and the manifest publishes the ids so the gateway can honour it — a worker
-/// that stopped executing there would commit a count the court's ladder was not sized for.
-pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
+/// **The job a request describes, and the ids it prompts with** — everything `run_one_job_v1` does
+/// before it touches the engine, shared with the answer-only path so the two build ONE job from one
+/// request (the same ids, the same decode config, the same sampling) and therefore select the same
+/// tokens.
+fn prepare_job_v1<B: PalwExecutionBackendV1>(
     rt: &FpWorkerRuntime<B>,
     request: &PalwFpWorkerRequestV3,
-    request_hash: Hash64,
-    trace_out: &Path,
-    on_token: &mut dyn FnMut(u32, &[u8]),
-) -> Result<PalwFpWorkerResultV3, String> {
+) -> Result<(PalwFreePromptJobV3, Vec<u32>), String> {
     precheck_request_v1(request)?;
     check_identity_v1(&rt.manifest, request)?;
 
@@ -881,6 +869,31 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         decode,
         tail: None,
     };
+    Ok((job, prompt_ids))
+}
+
+
+/// **One job, from a validated request to the result frame's contents.**
+///
+/// The whole of what `v3-job` and `v3-serve` share; that they share it is what makes W6 —
+/// byte-identical roots through both modes — a property of the code rather than of a habit.
+///
+/// `on_token` is called once per generated id, in decode order, as soon as it is SELECTED
+/// (Decision 2), with that id and the bytes of the answer that became renderable with it. Every
+/// generated id is reported, INCLUDING an end-of-generation id and anything after it: the
+/// execution runs to the job's declared decode budget because a step leaf hash binds the job
+/// context, which binds the executed count, so hashing cannot begin before the count is fixed. EOG
+/// is a DISPLAY stop and the manifest publishes the ids so the gateway can honour it — a worker
+/// that stopped executing there would commit a count the court's ladder was not sized for.
+pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &PalwFpWorkerRequestV3,
+    request_hash: Hash64,
+    trace_out: &Path,
+    on_token: &mut dyn FnMut(u32, &[u8]),
+) -> Result<PalwFpWorkerResultV3, String> {
+    let (job, prompt_ids) = prepare_job_v1(rt, request)?;
+    let prefill = job.prompt_tokens;
     let binding = fp_job_id_v3(&job);
 
     // **SA-6, immediately before the first page is touched.** Last of the checks because it is
@@ -972,6 +985,71 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         output_token_ids: run.output_token_ids,
         rendered,
         model_load_ms: rt.load_ms,
+        execute_ms,
+    })
+}
+
+/// **RFC-0001 §2.6/§2.7: one job answered with no commitment** — the same job a committed run would
+/// build from this request (one `prepare_job_v1`), run through the backend's answer-only path
+/// (prefix cache, no fold). `Err("… serves no answer-only path")` is the caller's cue to fall back
+/// to [`run_one_job_v1`].
+pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &PalwFpWorkerRequestV3,
+    request_hash: Hash64,
+    on_token: &mut dyn FnMut(u32, &[u8]),
+) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1, String> {
+    let (job, prompt_ids) = prepare_job_v1(rt, request)?;
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let prompt_usize: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+    let mut streamed: Vec<u32> = Vec::new();
+    let answer = {
+        let mut sink = |id: u32| {
+            streamed.push(id);
+            on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
+        };
+        rt.backend
+            .answer_free_prompt_v1(&job, &prompt_usize, &rt.manifest.eog_token_ids, &mut sink)
+            .map_err(|e| format!("execution refused: {e}"))?
+    };
+    if streamed != answer.output_token_ids {
+        return Err("the streamed ids are not the answered ids".to_string());
+    }
+    let execute_ms = started.elapsed().as_millis() as u64;
+    eprintln!(
+        "[{}] answer-only: prefill={} (cached {}) decode={}/{} in {execute_ms}ms",
+        rt.retention_family,
+        job.prompt_tokens,
+        answer.cached_prefix_tokens,
+        answer.output_token_ids.len(),
+        job.decode_token_limit
+    );
+    let stop_sequence_len = job.decode.as_ref().filter(|_| job.is_v4()).and_then(|decode| {
+        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
+            decode,
+            job.decode_token_limit,
+            u32::MAX,
+            &answer.output_token_ids,
+        )
+        .ok()?;
+        match stop.reason {
+            kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
+                decode.stop_sequences.get(index as usize).map(|s| s.len() as u32)
+            }
+            _ => None,
+        }
+    });
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
+        request_hash,
+        prompt_token_ids: prompt_ids,
+        rendered: render_answer_v1(&rt.tokenizer, &answer.output_token_ids),
+        output_token_ids: answer.output_token_ids,
+        cached_prefix_tokens: answer.cached_prefix_tokens,
+        ended_on_stop_id: answer.ended_on_stop_id,
+        stop_sequence_len,
         execute_ms,
     })
 }
@@ -1107,6 +1185,11 @@ where
     write_framed(output, &bytes).map_err(|e| format!("cannot write the result frame: {e}"))
 }
 
+enum WorkerOutcome {
+    Committed(PalwFpWorkerResultV3),
+    Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
+}
+
 /// `--mode v3-serve`: the artifact is already mapped; announce it once, then answer jobs until the
 /// stream ends.
 ///
@@ -1125,6 +1208,9 @@ where
             Some(payload) => payload,
             None => return Ok(()),
         };
+        // **RFC-0001 §2.6: an answer-only frame** — magic, then an ordinary request.
+        let answer_only = payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1);
+        let payload = if answer_only { payload[4..].to_vec() } else { payload };
         let request_hash = fp_worker_request_hash_v3(&payload);
         // A frame that is not a request at all is refused like any other bad job: the artifact is
         // resident and a gateway that sent nonsense gets to try again.
@@ -1153,13 +1239,18 @@ where
                     stream_error = Some(e);
                 }
             };
-            run_one_job_v1(rt, &request, request_hash, trace_out, &mut on_token)
+            if answer_only {
+                run_answer_only_v1(rt, &request, request_hash, &mut on_token).map(WorkerOutcome::Answered)
+            } else {
+                run_one_job_v1(rt, &request, request_hash, trace_out, &mut on_token).map(WorkerOutcome::Committed)
+            }
         };
         if let Some(e) = stream_error {
             return Err(e);
         }
         match outcome {
-            Ok(result) => write_frame_v1(output, &PalwFpWorkerFrameV1::Result(Box::new(result)))?,
+            Ok(WorkerOutcome::Committed(result)) => write_frame_v1(output, &PalwFpWorkerFrameV1::Result(Box::new(result)))?,
+            Ok(WorkerOutcome::Answered(answer)) => write_frame_v1(output, &PalwFpWorkerFrameV1::Answered(Box::new(answer)))?,
             // **The worker stays up.** One bad job must not drop a resident artifact — that is the
             // contract's sentence and the reason this mode exists at all.
             Err(reason) => {

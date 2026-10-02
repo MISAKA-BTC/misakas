@@ -72,6 +72,8 @@ pub mod memory_phase;
 pub mod mmap;
 pub mod operands;
 pub mod plan;
+/// RFC-0001 §2.6 stage 1: the node-only KV prefix cache for the answer-only path.
+pub mod prefix_cache;
 pub mod produce;
 pub mod qwen25_a16_backend;
 pub mod qwen36;

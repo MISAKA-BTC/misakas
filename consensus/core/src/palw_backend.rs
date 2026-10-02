@@ -173,6 +173,18 @@ pub struct PalwFpRunV1 {
     pub output_token_ids: Vec<u32>,
 }
 
+/// **What an answer-only run (RFC-0001 §2.6) returns**: the ids it selected, where its decoder
+/// stopped, and how many leading prompt positions came from a cached prefix rather than a forward
+/// pass. A node-local fact — never an input to any claim (invariant I-3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpAnswerV1 {
+    pub output_token_ids: Vec<u32>,
+    /// Leading prompt positions served from the prefix cache (0: a fresh prefill).
+    pub cached_prefix_tokens: u32,
+    /// The run ended on one of the caller's `stop_ids` (that id is the last of `output_token_ids`).
+    pub ended_on_stop_id: bool,
+}
+
 /// What a seat concluded about ONE opened checkpoint interval (ADR-0077 Decision 8).
 ///
 /// Four outcomes, because they are four different accusations: `Valid` is every replayed row
@@ -847,6 +859,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _on_leaf: &mut dyn FnMut(crate::Hash64),
     ) -> Option<Result<(crate::Hash64, u32, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String>> {
         None
+    }
+
+    /// **RFC-0001 §2.6/§2.7: the free-prompt ANSWER with no commitment** — the node-only serving
+    /// path. The same engine, the same decoder (`PalwFreePromptJobV3::decoder_v1`) and so the same
+    /// token ids a committed run of the job would select, but nothing is captured: no fold, no
+    /// checkpoint leg, no retention. That is what lets a worker resume from a cached prefix
+    /// (the committed fold hashes every prefill tile under the job's context and cannot) and
+    /// what a batch of sequences shares. `stop_ids` end the run at the first of them (the display
+    /// stop a committed run only observes). The default serves nothing, and the caller falls back
+    /// to the committed path.
+    fn answer_free_prompt_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _stop_ids: &[u32],
+        _on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpAnswerV1, String> {
+        Err("this backend serves no answer-only path".to_string())
     }
 
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each

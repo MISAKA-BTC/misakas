@@ -2529,6 +2529,35 @@ pub enum PalwFpWorkerFrameV1 {
     Refused {
         reason: String,
     } = 3,
+    /// **RFC-0001 §2.6/§2.7 — the answer-only terminator** (a request that began with
+    /// [`PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1`]): the ids the decoder selected, with no commitment.
+    /// Node-local; no consensus object is built from it.
+    Answered(Box<PalwFpWorkerAnswerV1>) = 4,
+}
+
+/// The first four bytes of a `v3-serve` request frame that asks for the ANSWER ONLY — no fold, no
+/// retention, no commitment (RFC-0001 §2.6). The rest of the frame is a [`PalwFpWorkerRequestV3`]
+/// whose first field is a `u16` version, so these bytes (`0x504D` read as a version) cannot begin a
+/// request and the two framings never collide. A worker that does not know the magic refuses the
+/// frame as "not a v3 request" and the gateway falls back to the committed path.
+pub const PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1: [u8; 4] = *b"MPAO";
+
+/// What an answer-only run returns (RFC-0001 §2.6): not bound to any trace, and never an input to
+/// a claim (I-3).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerAnswerV1 {
+    /// Hash of the request bytes after the magic — the worker is never trusted about what it was asked.
+    pub request_hash: Hash64,
+    pub prompt_token_ids: Vec<u32>,
+    pub output_token_ids: Vec<u32>,
+    pub rendered: Vec<u8>,
+    /// Leading prompt positions served from the KV prefix cache (0: fresh prefill).
+    pub cached_prefix_tokens: u32,
+    pub ended_on_stop_id: bool,
+    /// RFC-0001 §A.3 step 7: the length in ids of the stop sequence that ended the run, when one did
+    /// — derived by the worker from the job's own decode config over the ids it returned.
+    pub stop_sequence_len: Option<u32>,
+    pub execute_ms: u64,
 }
 
 // ---------------------------------------------------------------------------------------------

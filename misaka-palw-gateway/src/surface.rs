@@ -386,6 +386,8 @@ pub struct AdmittedRequest {
     /// Accepted fields that changed nothing, by name.
     pub ignored_fields: Vec<String>,
     pub include_usage: bool,
+    /// RFC-0001 §2.4: how many candidate jobs (1: the ordinary single choice).
+    pub candidates: u32,
 }
 
 /// The identity value of each knob ADR-0096 Decision 4 names: the value a stock SDK sends by
@@ -402,6 +404,23 @@ fn is_function_name(name: &str) -> bool {
 
 fn not_a_rule(name: &str, value: impl std::fmt::Display) -> String {
     format!("{name} {value} is not a rule on this lane (ADR-0096 Decision 4): the seat replays a greedy decode and nothing else")
+}
+
+/// The most candidates one request may ask for (RFC-0001 §2.4). Each is a whole job.
+pub const MAX_CANDIDATES: u32 = 8;
+
+/// **Candidate `i`'s sampling seed: `H(base_seed ‖ i)`** (RFC-0001 §2.4) — SHA-256 under a domain,
+/// the 32-byte base seed, then the index as a little-endian `u32`. Every candidate, the first
+/// included, takes a derived seed, so no candidate's seed is the caller's own and any two differ
+/// whatever the base; and the derivation is public, so a verifier handed the base seed and `n`
+/// rebuilds every job's seed.
+pub fn candidate_seed_v1(base_seed: &[u8; 32], index: u32) -> [u8; 32] {
+    use sha2::Digest as _;
+    let mut h = sha2::Sha256::new();
+    h.update(b"misaka.palw.fp.n-candidate-seed.v1");
+    h.update(base_seed);
+    h.update(index.to_le_bytes());
+    h.finalize().into()
 }
 
 /// **Parse a request body and admit it** — the route's and the conformance corpus's ONE path.
@@ -442,13 +461,39 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
                 .to_string(),
         );
     }
-    if let Some(n) = chat.n
-        && n != 1
-    {
+    // **RFC-0001 §2.4 (P1): `n` candidates are `n` jobs** — one inference is one claim, so the
+    // gateway issues `n` separate jobs for the same prompt under per-candidate seeds
+    // `H(base_seed ‖ i)` ([`candidate_seed_v1`]) and returns the `choices` together. The bounds are
+    // the entrance's, and each is a refusal by name: a count outside `1..=MAX_CANDIDATES`; a
+    // streamed response (one SSE stream cannot interleave jobs whose commitments differ); greedy
+    // decoding (`n` copies of one answer is `n` claims for the price of nothing); and a network
+    // whose decode-rules fence is dormant (a seed is refused there, so no two candidates differ).
+    let candidates = chat.n.unwrap_or(1);
+    if candidates == 0 || candidates > MAX_CANDIDATES {
         return Err(format!(
-            "n {n} is refused by name (ADR-0096 Decision 1): one inference is one claim (ADR-0077 R0), so this surface returns exactly \
-             one choice"
+            "n {candidates} is outside 1..={MAX_CANDIDATES} (RFC-0001 §2.4): each candidate is its own job and its own claim, so the \
+             count is bounded by name"
         ));
+    }
+    if candidates > 1 {
+        if chat.stream == Some(true) {
+            return Err(format!(
+                "n {candidates} with stream: true is refused by name (RFC-0001 §2.4): the candidates are separate jobs with separate \
+                 commitments and cannot share one stream — request them without streaming"
+            ));
+        }
+        if !facts.fp_decode_rules_armed {
+            return Err(format!(
+                "n {candidates} needs ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules), which this network has not armed: \
+                 without a temperature and a seed the candidates would be {candidates} copies of one answer"
+            ));
+        }
+        if chat.temperature.is_none_or(|t| t == 0.0) {
+            return Err(format!(
+                "n {candidates} needs temperature > 0 (RFC-0001 §2.4): at temperature 0 the {candidates} candidates are the same \
+                 answer, and each would be a claim"
+            ));
+        }
     }
     if chat.logprobs.as_ref().is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false))) {
         return Err(
@@ -761,6 +806,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         stop_texts,
         ignored_fields: ignored,
         include_usage,
+        candidates,
     })
 }
 
@@ -1517,9 +1563,11 @@ mod tests {
                 json!({ "messages": [{ "role": "user", "content": "u", "audio": { "id": "x" } }] }),
                 "messages[0].audio is refused by name",
             ),
+            (json!({ "messages": user("u"), "n": 0 }), "n 0 is outside 1..=8 (RFC-0001 §2.4)"),
+            (json!({ "messages": user("u"), "n": 9 }), "n 9 is outside 1..=8 (RFC-0001 §2.4)"),
             (
                 json!({ "messages": user("u"), "n": 2 }),
-                "n 2 is refused by name (ADR-0096 Decision 1): one inference is one claim (ADR-0077 R0)",
+                "n 2 needs ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules), which this network has not armed",
             ),
             (json!({ "messages": user("u"), "logprobs": true }), "logprobs is refused by name"),
             (json!({ "messages": user("u"), "top_logprobs": 5 }), "top_logprobs is refused by name"),

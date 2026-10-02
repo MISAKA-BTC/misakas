@@ -667,6 +667,42 @@ impl A16Cache {
         Ok(cache)
     }
 
+    /// **A copy of the first `rows` positions** — the snapshot a prefix cache (RFC-0001 §2.6) keeps
+    /// and a later run resumes from. `None` when any layer holds fewer than `rows` rows of BOTH
+    /// series (a cache mid-walk is not a state anybody may resume from) or `rows` is zero. The
+    /// copy is in the same representation, so a resumed run reads exactly the codes the original
+    /// wrote.
+    pub fn prefix_clone_v1(&self, rows: usize) -> Option<Self> {
+        if rows == 0 || self.kv_dim == 0 {
+            return None;
+        }
+        let elements = rows.checked_mul(self.kv_dim)?;
+        let cut = |side: &KvSideV1| -> Option<KvSideV1> {
+            if side.len() < elements {
+                return None;
+            }
+            Some(match side {
+                KvSideV1::I32(v) => KvSideV1::I32(v[..elements].to_vec()),
+                KvSideV1::I16(v) => KvSideV1::I16(v[..elements].to_vec()),
+            })
+        };
+        Some(Self {
+            profile: self.profile,
+            kv_dim: self.kv_dim,
+            keys: self.keys.iter().map(cut).collect::<Option<_>>()?,
+            values: self.values.iter().map(cut).collect::<Option<_>>()?,
+        })
+    }
+
+    /// TEST ONLY: move one stored key code, so a snapshot is no longer the state it claims to be.
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_key_for_test(&mut self) {
+        match &mut self.keys[0] {
+            KvSideV1::I32(v) => v[0] = v[0].wrapping_add(1),
+            KvSideV1::I16(v) => v[0] = v[0].wrapping_add(1),
+        }
+    }
+
     /// The key rows this cache holds, for tests that need to measure the STATE rather than reason
     /// about its type — `a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares` is the
     /// caller, and what it measures decides whether a checkpoint map is sound for this family.

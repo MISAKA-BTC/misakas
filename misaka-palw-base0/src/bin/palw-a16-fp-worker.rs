@@ -211,6 +211,22 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // ADR-0152 v3.1 post-edit 4: the network's attempt rule, so the output root this worker commits
     // is the one rendered rule the chain holds a free-prompt claim to where the fence is armed.
     .with_attempt_rules(misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)));
+    // RFC-0001 §2.6 stage 1: the node-only KV prefix cache the answer-only path resumes from. Off
+    // unless the operator gives it a budget; the boot self-check proves prefix-resume == fresh or
+    // leaves it disabled.
+    let args: Vec<String> = std::env::args().collect();
+    let flag_u64 = |name: &str| -> Option<u64> {
+        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(|v| v.parse().unwrap_or_else(|e| die(format!("{name}: {e}"))))
+    };
+    let backend = match flag_u64("--kv-cache-budget-mib").filter(|mib| *mib > 0) {
+        Some(mib) => {
+            let backend = backend.with_prefix_cache_v1(mib.saturating_mul(1 << 20), flag_u64("--kv-cache-verify-every").unwrap_or(0));
+            let on = backend.prefix_cache_stats_v1().is_some_and(|s| !s.disabled);
+            eprintln!("[palw-a16-fp-worker] kv prefix cache: {mib} MiB, boot self-check {}", if on { "passed" } else { "FAILED — cache disabled" });
+            backend
+        }
+        None => backend,
+    };
     FpWorkerRuntime::new(
         backend,
         &entry.profile,

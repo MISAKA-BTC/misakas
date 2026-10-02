@@ -71,6 +71,8 @@ mod chain;
 mod wire;
 // ADR-0096 Decision 1: the request shape, and every refusal, before the worker.
 mod surface;
+// RFC-0001 §2.7: the worker pool and the per-source bounds.
+mod pool;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -151,6 +153,15 @@ const MAX_CONNECTIONS: usize = 64;
 /// **The in-flight queue.** One job runs; at most this many wait for the slot. Past it the answer
 /// is a 503 with a Retry-After, never a queue whose depth silently eats deadlines.
 const MAX_IN_FLIGHT_JOBS: usize = 8;
+/// **The in-flight cap with `processes` job slots** (RFC-0001 §2.7): the slots plus the bounded
+/// queue behind them. One process keeps the cap it always had ([`MAX_IN_FLIGHT_JOBS`], one running
+/// and seven waiting).
+fn in_flight_cap(processes: usize) -> usize {
+    processes + (MAX_IN_FLIGHT_JOBS - 1)
+}
+/// Default per-source bounds (RFC-0001 §2.7): open connections and jobs in flight for one address.
+const DEFAULT_MAX_CONNECTIONS_PER_SOURCE: u32 = 8;
+const DEFAULT_MAX_JOBS_PER_SOURCE: u32 = 4;
 /// The public-job budget window.
 const PUBLIC_BUDGET_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 /// The per-source window (SA-8: secondary).
@@ -240,6 +251,17 @@ struct Config {
     /// When this process started, in Unix seconds — `GET /v1/models` reports it as the model's
     /// `created`, the moment the class became reachable here.
     booted_at_unix: u64,
+    /// **RFC-0001 §2.7 stage 1: resident worker processes for this class** (`--worker-processes`).
+    worker_processes: usize,
+    /// Extra arguments every worker process is started with (`--kv-cache-budget-mib`, …).
+    worker_args: Vec<String>,
+    /// **RFC-0001 §2.6/§2.7: answer a job that will not be committed WITHOUT folding it** (on by
+    /// default; `--no-answer-fast-path` turns it off). A worker that does not serve the path says
+    /// so once and the gateway stops asking.
+    answer_fast_path: bool,
+    /// Per-source open connections and in-flight jobs (RFC-0001 §2.7: connection limits).
+    max_connections_per_source: u32,
+    max_jobs_per_source: u32,
 }
 
 /// The exposure numbers actually in force for one job: the operator's declaration where they made
@@ -475,9 +497,10 @@ struct ResidentWorker {
 }
 
 impl ResidentWorker {
-    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path) -> Result<Self, String> {
+    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path, extra_args: &[String]) -> Result<Self, String> {
         let mut command = confinement.command(worker);
         command.args(["--mode", "v3-serve", "--trace-out", &trace_out.display().to_string()]);
+        command.args(extra_args);
         // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
         // operator environment, no PATH, and a working directory that is not the operator's home.
         harden_worker_command(&mut command, workdir);
@@ -564,9 +587,64 @@ impl ResidentWorker {
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
                 }
+                PalwFpWorkerFrameV1::Answered(_) => {
+                    return Err("the worker answered a committed job with an answer-only frame".to_string());
+                }
             }
         }
     }
+
+    /// **RFC-0001 §2.6/§2.7: one job, answered with no commitment.** The same request, behind the
+    /// answer-only magic; the worker runs the same decoder with no fold and may resume from its
+    /// KV prefix cache. [`AnswerRun::Unsupported`] is the worker saying it serves no such path
+    /// (a family without one, or a build older than this contract) — the caller runs the committed
+    /// path instead, and the worker is untouched.
+    fn run_answer(
+        &mut self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+    ) -> Result<AnswerRun, String> {
+        let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
+        let request_hash = fp_worker_request_hash_v3(&payload);
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&payload);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the job frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
+        loop {
+            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+                return Err("the worker stream ended before a terminator frame".to_string());
+            };
+            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+                PalwFpWorkerFrameV1::Token { token_id, rendered } => on_token(token_id, &rendered),
+                PalwFpWorkerFrameV1::Answered(answer) => {
+                    if answer.request_hash != request_hash {
+                        return Err("the worker's answer does not bind the request it was asked".to_string());
+                    }
+                    return Ok(AnswerRun::Answered(*answer));
+                }
+                PalwFpWorkerFrameV1::Refused { reason } => {
+                    return if reason.contains("serves no answer-only path") || reason.contains("not a v3 request") {
+                        Ok(AnswerRun::Unsupported)
+                    } else {
+                        Err(format!("the worker refused the job: {reason}"))
+                    };
+                }
+                PalwFpWorkerFrameV1::Result(_) => {
+                    return Err("the worker answered an answer-only request with a committed result".to_string());
+                }
+                PalwFpWorkerFrameV1::Manifest(_) => {
+                    return Err("the worker re-announced its manifest mid-session".to_string());
+                }
+            }
+        }
+    }
+}
+
+/// What an answer-only request came to.
+enum AnswerRun {
+    Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
+    /// The worker serves no answer-only path: run the committed one.
+    Unsupported,
 }
 
 impl Drop for ResidentWorker {
@@ -578,7 +656,12 @@ impl Drop for ResidentWorker {
     }
 }
 
-/// The one worker slot, respawned when its stream dies.
+/// **The class's worker pool** (RFC-0001 §2.7 stage 1), each slot respawned when its stream dies.
+///
+/// `--worker-processes N` resident workers serve one class: the artifact is mapped read-only by
+/// every process, so the weights live once in the OS page cache and each process adds its own KV and
+/// scratch; a request takes the next idle slot in arrival order ([`pool::SlotPool`]). With `N = 1`
+/// this is exactly the one worker slot it replaces.
 ///
 /// A transport failure is not a bad job: the artifact took minutes to map and the next request
 /// deserves a worker, so the supervisor drops the corpse and maps again on the next call. A
@@ -589,19 +672,60 @@ struct WorkerSupervisor {
     workdir: PathBuf,
     trace_out: PathBuf,
     confinement: Confinement,
-    current: Mutex<Option<ResidentWorker>>,
+    worker_args: Vec<String>,
+    pool: pool::SlotPool<Option<ResidentWorker>>,
     manifest: PalwFpWorkerManifestV1,
+    /// Cleared the first time a worker says it serves no answer-only path, so the gateway stops
+    /// asking (and stops paying a round trip) for the rest of its life.
+    answer_only: std::sync::atomic::AtomicBool,
 }
 
 impl WorkerSupervisor {
-    fn boot(confinement: Confinement, worker: PathBuf, workdir: PathBuf, trace_out: PathBuf) -> Result<Self, String> {
-        let resident = ResidentWorker::spawn(&confinement, &worker, &workdir, &trace_out)?;
-        let manifest = resident.manifest.clone();
-        Ok(Self { worker, workdir, trace_out, confinement, current: Mutex::new(Some(resident)), manifest })
+    fn boot(
+        confinement: Confinement,
+        worker: PathBuf,
+        workdir: PathBuf,
+        trace_out: PathBuf,
+        processes: usize,
+        worker_args: Vec<String>,
+    ) -> Result<Self, String> {
+        let processes = processes.clamp(1, MAX_WORKER_PROCESSES);
+        let mut residents = Vec::with_capacity(processes);
+        for _ in 0..processes {
+            residents.push(Some(ResidentWorker::spawn(&confinement, &worker, &workdir, &trace_out, &worker_args)?));
+        }
+        let manifest = residents[0].as_ref().expect("just spawned").manifest.clone();
+        // Every process must be the same class: a pool whose members disagree answers one class
+        // with several models.
+        if residents.iter().flatten().any(|r| r.manifest != manifest) {
+            return Err("the pool's workers announced different manifests".to_string());
+        }
+        Ok(Self {
+            worker,
+            workdir,
+            trace_out,
+            confinement,
+            worker_args,
+            pool: pool::SlotPool::new(residents),
+            manifest,
+            answer_only: std::sync::atomic::AtomicBool::new(true),
+        })
     }
 
     fn manifest(&self) -> &PalwFpWorkerManifestV1 {
         &self.manifest
+    }
+
+    fn processes(&self) -> usize {
+        self.pool.slots()
+    }
+
+    fn waiting(&self) -> usize {
+        self.pool.waiting()
+    }
+
+    fn answer_only_supported(&self) -> bool {
+        self.answer_only.load(Ordering::Relaxed)
     }
 
     fn run(
@@ -610,9 +734,10 @@ impl WorkerSupervisor {
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         on_token: &mut dyn FnMut(u32, &[u8]),
     ) -> Result<PalwFpWorkerResultV3, String> {
-        let mut slot = self.current.lock().expect("the worker lock is never poisoned");
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
         if slot.is_none() {
-            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out)?);
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
         }
         let outcome = slot.as_mut().expect("just spawned").run_job(request, prompt_ids_form, on_token);
         if let Err(e) = &outcome
@@ -625,7 +750,29 @@ impl WorkerSupervisor {
         }
         outcome
     }
+
+    /// RFC-0001 §2.6/§2.7: the answer with no commitment, on the next idle worker.
+    fn run_answer(&self, request: &PalwFpWorkerRequestV3, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<AnswerRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_answer(request, on_token);
+        match &outcome {
+            Ok(AnswerRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
+            Err(e) if !e.starts_with("the worker refused the job") => {
+                *slot = None;
+                eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+            }
+            _ => {}
+        }
+        outcome
+    }
 }
+
+/// The most worker processes one gateway runs for one class (`--worker-processes`).
+const MAX_WORKER_PROCESSES: usize = 16;
 
 // ---------------------------------------------------------------------------------------------
 // OpenAI-compatible request/response shapes: the request lives in `surface` (ADR-0096 Decision 1);
@@ -927,7 +1074,10 @@ fn handle_chat(
     facts: &chain::ChainFacts,
     chain_source: &chain::ChainSource,
     chat: &ChatRequest,
-    admitted: AdmittedRequest,
+    admitted: &AdmittedRequest,
+    // ADR-0082 Decision 11's `(sampling_seed, temperature_q)` THIS job runs under — the request's
+    // own for a single choice, `H(base_seed ‖ i)` for candidate `i` of `n` (RFC-0001 §2.4).
+    sampling: ([u8; 32], u32),
     sink: &mut dyn ChatSink,
 ) -> Result<serde_json::Value, String> {
     let manifest = worker.manifest();
@@ -971,7 +1121,7 @@ fn handle_chat(
 
     // ADR-0082 Decision 11, decided from the request and the CHAIN by `admit_request` — before the
     // model is loaded, so a refusal cost a 4xx rather than an inference.
-    let (sampling_seed, temperature_q) = admitted.sampling;
+    let (sampling_seed, temperature_q) = sampling;
 
     // **RFC-0001 §A: past the decode-rules fence every job is FP Job V4** — its controls in the one
     // canonical form `admit_request` normalized (the no-op when nothing was asked), its stop strings
@@ -1003,6 +1153,20 @@ fn handle_chat(
         decode: admitted.decode.clone(),
         stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
     };
+
+    // **RFC-0001 §2.6/§2.7: a job that will not be committed is answered, not folded.** The refusal
+    // is known before the run (the chain's facts, the budget, `--answer-never-commit`), so the
+    // worker is asked for the ANSWER ONLY: the same decoder, no capture, and the KV prefix cache
+    // where it holds one. A worker that serves no such path says so once and the committed path
+    // below runs as it always did.
+    if let Some(why) = &commit_refusal
+        && config.answer_fast_path
+        && worker.answer_only_supported()
+        && let Some(body) = answer_only_response(config, worker, chat, admitted, &request, &plan, why, sink)?
+    {
+        budget.lock().expect("the budget lock is never poisoned").answered_without_commit += 1;
+        return Ok(body);
+    }
 
     // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**
     // A V4 job with stop strings holds its last 16 ids back: a stop sequence ends the run, so it is
@@ -1410,6 +1574,201 @@ fn handle_chat(
     }))
 }
 
+/// **RFC-0001 §2.6/§2.7: the response for a job answered without a commitment.** `Ok(None)` when
+/// the worker serves no answer-only path (the caller runs the committed one). Every binding the
+/// committed path makes that does not need a commitment is made here: the prompt ids are the ones
+/// the gateway's own template placed (SA-3), and the streamed bytes are the rendering of the ids
+/// the worker returned (W5). What is absent is exactly what was refused up front — a trace, a
+/// root, a claim — and the response says so in `misaka.not_committed_because`.
+#[allow(clippy::too_many_arguments)]
+fn answer_only_response(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    request: &PalwFpWorkerRequestV3,
+    plan: &PromptPlan,
+    why_not_committed: &str,
+    sink: &mut dyn ChatSink,
+) -> Result<Option<serde_json::Value>, String> {
+    let manifest = worker.manifest();
+    let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
+    let mut stream = if admitted.stop_texts.is_empty() {
+        AnswerStream::new()
+    } else {
+        AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
+    };
+    let answer = {
+        let mut on_token = |token_id: u32, rendered: &[u8]| {
+            if let Some(delta) = stream.push(token_id, rendered, &eog) {
+                sink.delta(&delta);
+            }
+        };
+        match worker.run_answer(request, &mut on_token)? {
+            AnswerRun::Answered(answer) => answer,
+            AnswerRun::Unsupported => return Ok(None),
+        }
+    };
+    let stop_len = answer.stop_sequence_len.map(|n| n as usize);
+    if let Some(delta) = stream.finish_with_stop(stop_len) {
+        sink.delta(&delta);
+    }
+    // W5 without a commitment: the shown bytes are the rendering of the returned ids.
+    if stream.streamed() && (stream.ids() != answer.output_token_ids.as_slice() || stream.bytes() != answer.rendered.as_slice()) {
+        return Err("W5: the streamed answer is not the rendering of the ids the worker returned".to_string());
+    }
+    wire::check_committed_prompt_ids(plan, &answer.prompt_token_ids, &wire::control_token_ids(manifest))?;
+
+    let rendered_string = String::from_utf8_lossy(&answer.rendered).into_owned();
+    let shown = if stream.streamed() { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
+    let parsed = wire::parse_tool_calls(&shown);
+    let format_report = admitted.format.as_ref().map(|format| format.check(&shown));
+    let format_json = admitted.format.as_ref().zip(format_report.as_ref()).map(|(format, report)| format.report_json(report));
+    let answer_id = hex(answer.request_hash);
+    let tool_calls_json: Vec<serde_json::Value> = parsed
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(index, call)| {
+            let arguments = misaka_palw_constraint::canonical::to_rfc8785(&call.arguments)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_else(|_| call.arguments.to_string());
+            serde_json::json!({
+                "id": format!("call_{}_{index}", &answer_id[..16]),
+                "type": "function",
+                "function": { "name": call.name, "arguments": arguments },
+            })
+        })
+        .collect();
+    let finish_reason = if !parsed.calls.is_empty() {
+        "tool_calls"
+    } else if stop_len.is_some() || answer.ended_on_stop_id {
+        "stop"
+    } else {
+        "length"
+    };
+    let completion_tokens = answer.output_token_ids.len() as u32;
+    let prompt_tokens = answer.prompt_token_ids.len() as u32;
+    let mut message = serde_json::json!({ "role": "assistant", "content": shown });
+    if !parsed.calls.is_empty() {
+        message["content"] = if parsed.text.is_empty() { serde_json::Value::Null } else { serde_json::json!(parsed.text) };
+        message["tool_calls"] = serde_json::Value::Array(tool_calls_json);
+    }
+    eprintln!(
+        "[misaka-palw-gateway] answer-only {}: prefill {prompt_tokens} (cached {}), decode {completion_tokens} — not committed: {why_not_committed}",
+        &answer_id[..16],
+        answer.cached_prefix_tokens
+    );
+    Ok(Some(serde_json::json!({
+        "id": format!("palwcmpl-{}", &answer_id[..24]),
+        "object": "chat.completion",
+        "model": chat.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+        "misaka": {
+            "committed": false,
+            "not_committed_because": why_not_committed,
+            "output_token_ids": answer.output_token_ids,
+            "answer_untrimmed": rendered_string,
+            "template_id": plan.template_id,
+            "format": format_json,
+            "tool_calls_unparsed": parsed.unparsed_blocks,
+            "ignored_fields": admitted.ignored_fields,
+            // RFC-0001 §2.6/§2.7, I-3: a node-local fact about HOW the answer was served — never an
+            // input to any claim, because there is none.
+            "serving": {
+                "answer_only": true,
+                "cached_prefix_tokens": answer.cached_prefix_tokens,
+                "execute_ms": answer.execute_ms,
+                "worker_processes": worker.processes(),
+            },
+            "sampling": {
+                "requested": admitted.sampling_requested,
+                "applied": {
+                    "temperature": request.temperature_q as f64 / kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_T_ONE as f64,
+                    "seed": faster_hex::hex_string(&request.sampling_seed),
+                },
+                "not_a_rule_on_this_lane": admitted.not_a_rule_on_this_lane,
+            },
+            "decode": {
+                "requested_max_tokens": admitted.max_tokens,
+                "applied_limit": request.decode_token_limit,
+                "cap": config.max_decode_cap,
+                "clamped": admitted.max_tokens.is_some_and(|asked| asked != request.decode_token_limit),
+            },
+        },
+    })))
+}
+
+/// **RFC-0001 §2.4: `n` candidates are `n` jobs.** Each candidate is its own inference, its own
+/// commitment and its own claim, under its own seed `H(base_seed ‖ i)`
+/// ([`surface::candidate_seed_v1`]); they run on the worker pool in parallel (the pool's slots and
+/// the entrance's in-flight cap bound how many at once) and come back as one `choices` array. The
+/// first failure fails the request — the other candidates' outbox files stay (each is a complete,
+/// separate job) and the error says so.
+#[allow(clippy::too_many_arguments)]
+fn handle_chat_candidates(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    budget: &Mutex<PublicJobBudget>,
+    facts: &chain::ChainFacts,
+    chain_source: &chain::ChainSource,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+) -> Result<serde_json::Value, String> {
+    let (base_seed, temperature_q) = admitted.sampling;
+    let n = admitted.candidates;
+    let results: Vec<Result<serde_json::Value, String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let seed = surface::candidate_seed_v1(&base_seed, i);
+                scope.spawn(move || {
+                    let mut sink = BufferedSink;
+                    handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
+    });
+    let mut bodies = Vec::with_capacity(results.len());
+    for (i, result) in results.into_iter().enumerate() {
+        bodies.push(result.map_err(|e| {
+            format!("candidate {i} of {n} failed: {e} (the other candidates are separate jobs; any that completed is in the outbox)")
+        })?);
+    }
+    let mut merged = bodies[0].clone();
+    let mut choices = Vec::with_capacity(bodies.len());
+    let (mut prompt_tokens, mut completion_tokens) = (0u64, 0u64);
+    let mut candidate_reports = Vec::with_capacity(bodies.len());
+    for (i, body) in bodies.iter().enumerate() {
+        let mut choice = body["choices"][0].clone();
+        choice["index"] = serde_json::json!(i);
+        choices.push(choice);
+        prompt_tokens += body["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        completion_tokens += body["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+        candidate_reports.push(serde_json::json!({
+            "index": i,
+            "seed": faster_hex::hex_string(&surface::candidate_seed_v1(&base_seed, i as u32)),
+            "misaka": body["misaka"].clone(),
+        }));
+    }
+    merged["choices"] = serde_json::Value::Array(choices);
+    merged["usage"] = serde_json::json!({
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    });
+    merged["misaka"]["n"] = serde_json::json!(n);
+    merged["misaka"]["candidate_seed_rule"] = serde_json::json!("sha256(\"misaka.palw.fp.n-candidate-seed.v1\" || base_seed || u32_le(i))");
+    merged["misaka"]["candidates"] = serde_json::Value::Array(candidate_reports);
+    Ok(merged)
+}
+
 fn main() {
     let mut args: VecDeque<String> = std::env::args().skip(1).collect();
     let mut listen = "127.0.0.1:8790".to_string();
@@ -1432,6 +1791,11 @@ fn main() {
     let mut answer_never_commit = false;
     let mut privacy_mode: u8 = PALW_FP_PRIVACY_PUBLIC_DA;
     let mut per_source_jobs_per_window: u32 = 120;
+    let mut worker_processes: usize = 1;
+    let mut worker_args: Vec<String> = Vec::new();
+    let mut answer_fast_path = true;
+    let mut max_connections_per_source = DEFAULT_MAX_CONNECTIONS_PER_SOURCE;
+    let mut max_jobs_per_source = DEFAULT_MAX_JOBS_PER_SOURCE;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -1472,11 +1836,27 @@ fn main() {
                     other => die(format!("--privacy {other}: expected `public-da` or `panel-da`")),
                 }
             }
+            "--worker-processes" => worker_processes = value("--worker-processes").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            // The KV prefix cache lives in each worker process (RFC-0001 §2.6): the budget is PER
+            // process, and these two are forwarded to every one.
+            "--kv-cache-budget-mib" => {
+                let mib: u64 = value("--kv-cache-budget-mib").parse().unwrap_or_else(|e| die(format!("{e}")));
+                worker_args.extend(["--kv-cache-budget-mib".to_string(), mib.to_string()]);
+            }
+            "--kv-cache-verify-every" => {
+                let n: u64 = value("--kv-cache-verify-every").parse().unwrap_or_else(|e| die(format!("{e}")));
+                worker_args.extend(["--kv-cache-verify-every".to_string(), n.to_string()]);
+            }
+            "--no-answer-fast-path" => answer_fast_path = false,
+            "--max-connections-per-source" => {
+                max_connections_per_source = value("--max-connections-per-source").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
+            "--max-jobs-per-source" => max_jobs_per_source = value("--max-jobs-per-source").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--per-source-jobs-per-window" => {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -1509,6 +1889,11 @@ fn main() {
         per_source_jobs_per_window,
         confinement: Confinement::none(),
         booted_at_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        worker_processes: worker_processes.clamp(1, MAX_WORKER_PROCESSES),
+        worker_args,
+        answer_fast_path,
+        max_connections_per_source: max_connections_per_source.max(1),
+        max_jobs_per_source: max_jobs_per_source.max(1),
     };
 
     // -----------------------------------------------------------------------------------------
@@ -1583,8 +1968,15 @@ fn main() {
     let trace_dir = config.outbox.join("traces");
     std::fs::create_dir_all(&trace_dir).unwrap_or_else(|e| die(format!("cannot create the trace retention dir: {e}")));
     // ADR-0077 Decision 1: the artifact is mapped ONCE, here, before the listener opens.
-    let worker = WorkerSupervisor::boot(config.confinement.clone(), config.worker.clone(), config.workdir.clone(), trace_dir)
-        .unwrap_or_else(|e| die(e));
+    let worker = WorkerSupervisor::boot(
+        config.confinement.clone(),
+        config.worker.clone(),
+        config.workdir.clone(),
+        trace_dir,
+        config.worker_processes,
+        config.worker_args.clone(),
+    )
+    .unwrap_or_else(|e| die(e));
     // ADR-0096 Decision 10: an answer-only gateway that named no class adopts its worker's — the
     // one value the worker would refuse any other of (`check_identity_v1` pins it per job).
     if identity.class_id == Hash64::default() {
@@ -1615,9 +2007,11 @@ fn main() {
         boot_facts.source, boot_facts.registered, boot_facts.fp_certified, boot_facts.bond_active, boot_facts.exposure_room_sompi
     );
     eprintln!(
-        "[misaka-palw-gateway] confinement backend {} | one job slot, {MAX_IN_FLIGHT_JOBS} may queue, {MAX_CONNECTIONS} connections | \
+        "[misaka-palw-gateway] confinement backend {} | {} job slot(s), {} may queue, {MAX_CONNECTIONS} connections | \
          prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | public-job budget {}‰",
         backend.name(),
+        worker.processes(),
+        in_flight_cap(worker.processes()) - worker.processes(),
         config.max_prompt_bytes,
         config.max_decode_cap,
         config.public_job_budget_permille,
@@ -1634,6 +2028,8 @@ fn main() {
     let connections = Arc::new(AtomicUsize::new(0));
     let budget = Arc::new(Mutex::new(PublicJobBudget::new()));
     let sources = Arc::new(Mutex::new(SourceRates::default()));
+    // RFC-0001 §2.7: per-source open connections and jobs in flight.
+    let gate = Arc::new(pool::SourceGate::new(config.max_connections_per_source, config.max_jobs_per_source));
 
     let listener = TcpListener::bind(&config.listen).unwrap_or_else(|e| die(format!("cannot bind {}: {e}", config.listen)));
     for stream in listener.incoming() {
@@ -1647,7 +2043,18 @@ fn main() {
             (Arc::clone(&config), Arc::clone(&identity), Arc::clone(&worker), Arc::clone(&chain_source));
         let (in_flight, budget, sources) = (Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
         let connections = Arc::clone(&connections);
+        let gate = Arc::clone(&gate);
         let acknowledged_bind = acknowledged;
+        // The per-source connection share: counted here, before the thread, so a source over its
+        // share costs a 503 and not a thread.
+        let peer = stream.peer_addr().map(|a| a.ip()).ok();
+        if let Some(peer) = peer
+            && gate.open_connection(peer).is_err()
+        {
+            connections.fetch_sub(1, Ordering::AcqRel);
+            respond(&mut stream, "429 Too Many Requests", &error_body("per-source connection share exceeded"));
+            continue;
+        }
         std::thread::spawn(move || {
             serve_connection(
                 &mut stream,
@@ -1660,7 +2067,11 @@ fn main() {
                 &sources,
                 backend,
                 acknowledged_bind,
+                &gate,
             );
+            if let Some(peer) = peer {
+                gate.close_connection(peer);
+            }
             connections.fetch_sub(1, Ordering::AcqRel);
         });
     }
@@ -1678,6 +2089,7 @@ fn serve_connection(
     sources: &Mutex<SourceRates>,
     backend: ConfinementBackend,
     acknowledged_bind: bool,
+    gate: &pool::SourceGate,
 ) {
     let source = stream.peer_addr().map(|a| a.ip()).ok();
     let request = match read_http_request(stream) {
@@ -1743,9 +2155,13 @@ fn serve_connection(
                         "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
                         "max_prompt_bytes": config.max_prompt_bytes,
                         "max_decode_cap": config.max_decode_cap,
-                        "job_slots": 1,
-                        "max_in_flight_jobs": MAX_IN_FLIGHT_JOBS,
+                        "job_slots": worker.processes(),
+                        "max_in_flight_jobs": in_flight_cap(worker.processes()),
+                        "queued_jobs": worker.waiting(),
                         "max_connections": MAX_CONNECTIONS,
+                        "max_connections_per_source": config.max_connections_per_source,
+                        "max_jobs_per_source": config.max_jobs_per_source,
+                        "answer_fast_path": config.answer_fast_path && worker.answer_only_supported(),
                         "per_source_jobs_per_window": config.per_source_jobs_per_window,
                         "per_source_window_secs": PER_SOURCE_WINDOW.as_secs(),
                     },
@@ -1793,16 +2209,32 @@ fn serve_connection(
             };
             let streaming = chat.stream == Some(true);
             // The bounded in-flight queue. Reserved BEFORE the slot is contended, so the depth of
-            // the wait is a number this process chose rather than one the network chose for it.
-            if in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT_JOBS {
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+            // the wait is a number this process chose rather than one the network chose for it. A
+            // request for `n` candidates is `n` jobs (RFC-0001 §2.4), against the queue and against
+            // its source's share alike.
+            let jobs = admitted.candidates.max(1);
+            if in_flight.fetch_add(jobs as usize, Ordering::AcqRel) + jobs as usize > in_flight_cap(worker.processes()) {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
                 respond(
                     stream,
                     "503 Service Unavailable",
-                    &error_body("the in-flight queue is full; one job runs at a time and the queue is bounded"),
+                    &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"),
                 );
                 return;
             }
+            if let Some(source) = source
+                && gate.start_jobs(source, jobs).is_err()
+            {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
+                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                return;
+            }
+            let finish = |in_flight: &AtomicUsize| {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
+                if let Some(source) = source {
+                    gate.finish_jobs(source, jobs);
+                }
+            };
             if streaming {
                 // **A slow reader must not wedge the one job slot.** The deltas are written from
                 // inside the worker's mutex, so a client that stops reading would otherwise block
@@ -1817,8 +2249,8 @@ fn serve_connection(
                 let include_usage = admitted.include_usage;
                 let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink);
+                finish(in_flight);
                 match outcome {
                     Ok(body) => {
                         // The terminal chunk carries the finish reason and, in the same event, the
@@ -1856,9 +2288,13 @@ fn serve_connection(
                     }
                 }
             } else {
-                let mut sink = BufferedSink;
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+                let outcome = if admitted.candidates > 1 {
+                    handle_chat_candidates(config, identity, worker, budget, &facts, chain_source, &chat, &admitted)
+                } else {
+                    let mut sink = BufferedSink;
+                    handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink)
+                };
+                finish(in_flight);
                 match outcome {
                     Ok(body) => respond(stream, "200 OK", &body),
                     Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),

@@ -954,6 +954,9 @@ pub struct Qwen25A16Backend {
     runtime_profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **RFC-0001 §2.6 stage 1: the node-only KV prefix cache** the answer-only path resumes from
+    /// (`None`: no cache, every answer prefills fresh). Never read by a committed run.
+    prefix_cache: Option<std::sync::Mutex<crate::prefix_cache::PrefixKvCacheV1>>,
     /// **How many prompt positions this instance's prefill walks a layer at a time** (int-10.2 A2):
     /// [`A16_PREFILL_RUN_POSITIONS`] unless a node narrowed it for the memory it could reserve. Read by
     /// the resource profile (the trace scratch it prices) and by every execution this instance runs —
@@ -1052,7 +1055,63 @@ impl Qwen25A16Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
+            prefix_cache: None,
         })
+    }
+
+    /// **Give this backend a KV prefix cache** of at most `budget_bytes` (RFC-0001 §2.6 stage 1;
+    /// `verify_every` re-verifies every Nth hit against a fresh prefill, 0: never). Runs the boot
+    /// self-check first — a resume that is not bit-identical to a fresh prefill leaves the cache
+    /// DISABLED — and reports whether it is on.
+    pub fn with_prefix_cache_v1(mut self, budget_bytes: u64, verify_every: u64) -> Self {
+        let mut cache = crate::prefix_cache::PrefixKvCacheV1::new(budget_bytes).with_verify_every_v1(verify_every);
+        if budget_bytes > 0 && !self.prefix_resume_self_check_v1(&mut cache) {
+            eprintln!("[prefix-cache] the boot self-check found a resumed prefill that is not bit-identical to a fresh one: the cache is DISABLED");
+        }
+        self.prefix_cache = Some(std::sync::Mutex::new(cache));
+        self
+    }
+
+    /// The cache's counters, `None` when this backend holds none.
+    pub fn prefix_cache_stats_v1(&self) -> Option<crate::prefix_cache::PrefixCacheStatsV1> {
+        self.prefix_cache.as_ref().map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).stats_v1())
+    }
+
+    /// **The golden rule, run at boot**: prefill a fixed prompt fresh, prefill the same prompt in
+    /// two pieces (the second resumed from a cache snapshot of the first), and require the same
+    /// logits and the same K/V bits — at every split the prompt has. Returns whether the cache
+    /// stays enabled (it is `disable_v1`-ed on the first difference).
+    fn prefix_resume_self_check_v1(&self, cache: &mut crate::prefix_cache::PrefixKvCacheV1) -> bool {
+        let Some(plan) = self.plan.as_ref() else { return true };
+        let vocab = self.artifact.shape.vocab.max(1);
+        let prompt: Vec<usize> = (0..6usize).map(|i| (i * 7 + 3) % vocab).collect();
+        let Ok(engine) = A16Engine::new(&self.artifact) else { cache.disable_v1(); return false };
+        let run = |cache: &mut A16Cache, tokens: &[usize], first: usize| -> Option<Vec<i32>> {
+            if plan.one_pass_prefill_supported() {
+                engine.forward_prefill_planned(plan, cache, tokens, first, true).ok().map(|(l, _)| l)
+            } else {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_planned(plan, cache, *t, first + k).ok()?.0;
+                }
+                Some(last)
+            }
+        };
+        let mut fresh = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+        let Some(fresh_logits) = run(&mut fresh, &prompt, 0) else { cache.disable_v1(); return false };
+        for split in 1..prompt.len() {
+            let mut head = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+            if run(&mut head, &prompt[..split], 0).is_none() {
+                cache.disable_v1();
+                return false;
+            }
+            let Some(mut resumed) = head.prefix_clone_v1(split) else { cache.disable_v1(); return false };
+            let Some(resumed_logits) = run(&mut resumed, &prompt[split..], split) else { cache.disable_v1(); return false };
+            if !cache.boot_check_v1(&(fresh_logits.clone(), fresh.clone()), &(resumed_logits, resumed)) {
+                return false;
+            }
+        }
+        true
     }
 
     /// **Hold the cache in `profile`'s representation** — `A16-KV-i32` (the oracle) or
@@ -1315,6 +1374,7 @@ impl Qwen25A16Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
+            prefix_cache: None,
         })
     }
 
@@ -2737,6 +2797,159 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         self.execute_free_prompt_v1(job, prompt_tokens, on_token, None)
+    }
+
+    /// **RFC-0001 §2.6: the answer with no commitment, resuming from the prefix cache.** The same
+    /// engine, plan and decoder as the committed run, so the ids are the ones a committed job with
+    /// these fields selects; nothing is captured, which is what makes a cached prefix usable (the
+    /// fold would need the prefix's tiles). Fills the cache with the prompt's state after the
+    /// prefill, and again with the whole conversation (prompt + answer) when the run completes.
+    fn answer_free_prompt_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpAnswerV1, String> {
+        self.artifact_read_probe_v1()?;
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
+            && decode.bans_cover_vocab(vocab as u32)
+        {
+            return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
+        }
+        let plan = self.plan.as_ref();
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let prefill = prompt_tokens.len();
+        let limit = job.decode_token_limit as usize;
+        let (class_id, tokenizer_id) = (job.class_id, job.tokenizer_id);
+
+        // Resume from the longest cached prefix, when the cache is on.
+        let mut resumed: Option<(usize, A16Cache)> = None;
+        let mut verify = false;
+        if let Some(lock) = &self.prefix_cache {
+            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(hit) = cache.lookup_v1(class_id, tokenizer_id, &prompt_ids) {
+                verify = cache.wants_verification_v1();
+                resumed = Some((hit.positions as usize, hit.cache));
+            }
+        }
+        let forward_run = |cache: &mut A16Cache, tokens: &[usize], first: usize| -> Result<Vec<i32>, String> {
+            match plan {
+                Some(plan) if plan.one_pass_prefill_supported() => {
+                    let mut last = Vec::new();
+                    // Runs of the node's own width, exactly as the committed prefill walks them.
+                    let mut at = 0usize;
+                    while at < tokens.len() {
+                        let end = (at + self.prefill_run_positions.max(1)).min(tokens.len());
+                        let is_last = end == tokens.len();
+                        let (logits, _) = engine
+                            .forward_prefill_planned(plan, cache, &tokens[at..end], first + at, is_last)
+                            .map_err(|e| format!("the prefill run at {}: {e:?}", first + at))?;
+                        if is_last {
+                            last = logits;
+                        }
+                        at = end;
+                    }
+                    Ok(last)
+                }
+                Some(plan) => {
+                    let mut last = Vec::new();
+                    for (k, t) in tokens.iter().enumerate() {
+                        last = engine.forward_token_planned(plan, cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                    }
+                    Ok(last)
+                }
+                None => {
+                    let mut last = Vec::new();
+                    for (k, t) in tokens.iter().enumerate() {
+                        last = engine.forward_token_traced(cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                    }
+                    Ok(last)
+                }
+            }
+        };
+        let (mut kv, reused, mut logits) = match resumed {
+            Some((positions, mut kv)) => {
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = forward_run(&mut kv, &prompt_tokens[positions..], positions)?;
+                (kv, positions, logits)
+            }
+            None => {
+                let mut kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = forward_run(&mut kv, prompt_tokens, 0)?;
+                (kv, 0, logits)
+            }
+        };
+        // Sampled verification: the resumed logits against a fresh prefill's. A difference turns the
+        // cache off for the life of the process and the answer is served from the fresh run.
+        let mut reused = reused;
+        if verify && reused > 0 {
+            let mut fresh_kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+            let fresh_logits = forward_run(&mut fresh_kv, prompt_tokens, 0)?;
+            if fresh_logits != logits || fresh_kv.contents_as_i32() != kv.contents_as_i32() {
+                eprintln!("[prefix-cache] a resumed prefill differed from a fresh one: the cache is DISABLED and this answer is served fresh");
+                if let Some(lock) = &self.prefix_cache {
+                    lock.lock().unwrap_or_else(|e| e.into_inner()).disable_v1();
+                }
+                (kv, logits, reused) = (fresh_kv, fresh_logits, 0);
+            }
+        }
+        if let Some(lock) = &self.prefix_cache {
+            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &prompt_ids, &kv);
+        }
+
+        let mut decoder = job.decoder_v1();
+        let mut generated: Vec<u32> = Vec::new();
+        let mut ended_on_stop_id = false;
+        loop {
+            let next = decoder.select(&logits);
+            if decoder.generated().len() == generated.len() {
+                // The decoder committed nothing from this row: no lane was admissible.
+                break;
+            }
+            generated.push(next);
+            on_token(next);
+            if stop_ids.contains(&next) {
+                ended_on_stop_id = true;
+                break;
+            }
+            if decoder.stop().is_some() || generated.len() >= limit {
+                break;
+            }
+            let position = prefill + generated.len() - 1;
+            logits = match plan {
+                Some(plan) => engine.forward_token_planned(plan, &mut kv, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?.0,
+                None => engine.forward_token_traced(&mut kv, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?.0,
+            };
+        }
+        // The whole conversation so far — prompt plus every answer id whose K/V the cache holds
+        // (the last selected id was never fed forward) — is what the next turn most often extends.
+        if let Some(lock) = &self.prefix_cache
+            && generated.len() > 1
+        {
+            let mut ids = prompt_ids.clone();
+            ids.extend_from_slice(&generated[..generated.len() - 1]);
+            if kv.rows() == ids.len() {
+                lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &ids, &kv);
+            }
+        }
+        Ok(kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+            output_token_ids: generated,
+            cached_prefix_tokens: reused as u32,
+            ended_on_stop_id,
+        })
     }
 
     /// DRILL ONLY: the honest run with the committed tile at `leaf` made a lie, in the stream of
@@ -8657,5 +8870,227 @@ mod aheld_end_to_end {
         assert_eq!(end.court_sessions_for_claim(&claim), 0);
         assert_eq!(collateral(&end, SEAT), collateral(&s4, SEAT), "the winning seat pays nothing");
         assert!(collateral(&end, PRODUCER) < collateral(&s4, PRODUCER), "the forger is charged");
+    }
+}
+
+/// **RFC-0001 §2.6 stage 1 — the KV prefix cache and the answer-only path, on the real engine.**
+#[cfg(test)]
+mod prefix_cache_serving {
+    use super::*;
+    use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFreePromptJobV3,
+    };
+    use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    fn fixture() -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 128,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a held graph-v7 profile");
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+        (artifact, profile)
+    }
+
+    fn backend(artifact: &std::sync::Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3) -> Qwen25A16Backend {
+        Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(1 << 12)
+    }
+
+    fn job(profile: &PalwShapeProfileV3, prompt: usize, decode: u32) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::from_u64_word(0x70),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            prompt_tokens: prompt as u32,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            tail: None,
+        }
+    }
+
+    fn prompt(len: usize, salt: usize) -> Vec<usize> {
+        (0..len).map(|i| (i * 7919 + 1013 + salt) % 128).collect()
+    }
+
+    fn answer(b: &Qwen25A16Backend, job: &PalwFreePromptJobV3, p: &[usize]) -> kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+        b.answer_free_prompt_v1(job, p, &[], &mut |_| {}).expect("the answer runs")
+    }
+
+    /// **The answer-only path selects the tokens a committed run commits** — the claim every other
+    /// serving optimisation rests on: one decoder, one engine, so the ids a user is shown are the
+    /// ids a claim would have committed. Greedy, sampled (a seed and a temperature) and a V4 job
+    /// with penalties.
+    #[test]
+    fn an_answer_only_run_selects_the_tokens_a_committed_run_commits() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(20, 0);
+        let greedy = job(&profile, p.len(), 6);
+        let mut sampled = job(&profile, p.len(), 6);
+        sampled.sampling_seed = [0x33; 32];
+        sampled.temperature_q = 1 << 24;
+        let mut v4 = job(&profile, p.len(), 6);
+        v4.version = PALW_FP_V4_VERSION;
+        v4.decode = Some(DecodeConfigV4 { repeat_penalty_q: 98_304, penalty_window: 8, ..DecodeConfigV4::NOOP });
+        v4.sampling_seed = [0x44; 32];
+        v4.temperature_q = 1 << 24;
+        for (label, job) in [("greedy", &greedy), ("sampled", &sampled), ("v4 penalties", &v4)] {
+            let committed = b.execute_free_prompt(job, &p).expect("the committed run").output_token_ids;
+            let answered = answer(&b, job, &p);
+            assert_eq!(answered.output_token_ids, committed, "{label}: the answer is the committed ids");
+            assert_eq!(answered.cached_prefix_tokens, 0, "{label}: no cache, no reuse");
+        }
+    }
+
+    /// **GOLDEN: prefix-resume == fresh**, at every split of the prompt. For each prefix length the
+    /// cache is filled by running the prefix as its own prompt, then the whole prompt is answered
+    /// from that resume point; the ids must equal a cache-less backend's, the hit must be real
+    /// (`cached_prefix_tokens` is the prefix), and with `verify_every = 1` every hit is re-checked
+    /// logits-and-K/V against a fresh prefill — which must leave the cache enabled.
+    #[test]
+    fn a_run_resumed_from_a_cached_prefix_is_bit_identical_to_a_fresh_run() {
+        let (artifact, profile) = fixture();
+        let fresh = backend(&artifact, &profile);
+        let full = prompt(24, 5);
+        let mut sampled = job(&profile, full.len(), 8);
+        sampled.sampling_seed = [0x21; 32];
+        sampled.temperature_q = 1 << 24;
+        let expected = answer(&fresh, &sampled, &full).output_token_ids;
+        for split in [1usize, 2, 7, 8, 9, 16, 23] {
+            let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 1);
+            assert!(!cached.prefix_cache_stats_v1().unwrap().disabled, "the boot self-check passes");
+            // Fill the cache with the first `split` ids as a prompt of their own.
+            let head = &full[..split];
+            let _ = answer(&cached, &job(&profile, head.len(), 2), head);
+            let hit = answer(&cached, &sampled, &full);
+            assert_eq!(hit.cached_prefix_tokens as usize, split, "split {split}: the cache served the whole prefix");
+            assert_eq!(hit.output_token_ids, expected, "split {split}: resumed == fresh");
+            let stats = cached.prefix_cache_stats_v1().unwrap();
+            assert!(!stats.disabled, "split {split}: the sampled verification found no difference");
+            assert_eq!(stats.hits, 1);
+        }
+    }
+
+    /// A conversation: turn 2 extends turn 1's prompt AND its answer, and resumes from the whole
+    /// of turn 1's state (prompt + answer ids).
+    #[test]
+    fn the_next_turn_resumes_from_the_whole_of_the_last_one() {
+        let (artifact, profile) = fixture();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let fresh = backend(&artifact, &profile);
+        let turn1 = prompt(14, 9);
+        let first = answer(&cached, &job(&profile, turn1.len(), 5), &turn1);
+        let mut turn2 = turn1.clone();
+        turn2.extend(first.output_token_ids.iter().map(|t| *t as usize));
+        turn2.extend(prompt(5, 77));
+        let j2 = job(&profile, turn2.len(), 5);
+        let resumed = answer(&cached, &j2, &turn2);
+        // The cache holds prompt + the answer ids that were fed forward (all but the last).
+        assert_eq!(resumed.cached_prefix_tokens as usize, turn1.len() + first.output_token_ids.len() - 1);
+        assert_eq!(resumed.output_token_ids, answer(&fresh, &j2, &turn2).output_token_ids);
+    }
+
+    /// **A resume that is not the fresh run is caught and turns the cache off.** The stored snapshot
+    /// is corrupted (one key code moved); the next hit's verification compares it with a fresh
+    /// prefill, serves the FRESH answer, and disables the cache for good.
+    #[test]
+    fn a_corrupted_snapshot_is_caught_and_disables_the_cache() {
+        let (artifact, profile) = fixture();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 1);
+        let fresh = backend(&artifact, &profile);
+        let full = prompt(20, 3);
+        let head = &full[..10];
+        let _ = answer(&cached, &job(&profile, head.len(), 2), head);
+        cached.prefix_cache.as_ref().unwrap().lock().unwrap().corrupt_all_for_test();
+        let j = job(&profile, full.len(), 6);
+        let served = answer(&cached, &j, &full);
+        assert_eq!(served.output_token_ids, answer(&fresh, &j, &full).output_token_ids, "the answer is the fresh one");
+        assert_eq!(served.cached_prefix_tokens, 0, "the corrupted resume was discarded");
+        assert!(cached.prefix_cache_stats_v1().unwrap().disabled, "and the cache is off for good");
+        let again = answer(&cached, &job(&profile, full.len(), 2), &full);
+        assert_eq!(again.cached_prefix_tokens, 0);
+    }
+
+    /// The decoder's own stop ends an answer-only run, and an EOG id ends it at that id.
+    #[test]
+    fn the_run_ends_at_a_stop_id_and_at_the_decoders_stop() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(12, 1);
+        let j = job(&profile, p.len(), 8);
+        let all = answer(&b, &j, &p).output_token_ids;
+        assert_eq!(all.len(), 8, "no stop id: the budget");
+        let stop_at = all[3];
+        let cut = b.answer_free_prompt_v1(&j, &p, &[stop_at], &mut |_| {}).unwrap();
+        let first = all.iter().position(|t| *t == stop_at).unwrap();
+        assert_eq!(cut.output_token_ids, all[..=first], "the run ends at the first stop id, which is its last id");
+        assert!(cut.ended_on_stop_id);
+        // A V4 stop sequence ends it too, with the sequence in the ids.
+        let mut v4 = job(&profile, p.len(), 8);
+        v4.version = PALW_FP_V4_VERSION;
+        v4.decode = Some(DecodeConfigV4 { stop_sequences: vec![vec![all[1], all[2]]], ..DecodeConfigV4::NOOP });
+        let stopped = answer(&b, &v4, &p);
+        assert_eq!(stopped.output_token_ids, all[..3]);
+        let committed = b.execute_free_prompt(&v4, &p).unwrap().output_token_ids;
+        assert_eq!(stopped.output_token_ids, committed, "the committed run stops where the answer does");
+    }
+
+    /// The refusals a committed job names are the answer path's too, by name.
+    #[test]
+    fn the_answer_path_refuses_what_the_committed_path_refuses() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(8, 0);
+        let j = job(&profile, p.len(), 2);
+        assert!(b.answer_free_prompt_v1(&j, &[], &[], &mut |_| {}).is_err(), "no prompt");
+        let mut wrong = j.clone();
+        wrong.prompt_tokens = 7;
+        assert!(b.answer_free_prompt_v1(&wrong, &p, &[], &mut |_| {}).unwrap_err().contains("declares 7 prompt tokens"));
+        let mut outside = p.clone();
+        outside[0] = 5_000;
+        assert!(b.answer_free_prompt_v1(&j, &outside, &[], &mut |_| {}).unwrap_err().contains("outside this class's vocabulary"));
     }
 }
