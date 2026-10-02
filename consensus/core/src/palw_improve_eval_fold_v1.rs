@@ -596,6 +596,8 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     // class's attempts. And the executor's share of the class's unlicensed claims, as on the lane's own arm.
     if builder.extras.audit_2026_09_23_active {
         builder.check_class_admits_claim(c.class_id, daa, PalwGatedClaimV1::Evaluation)?;
+        // RFC-0002 Part II Proposal A: an evaluation claim of a class is a claim of it — the one seating function.
+        builder.read().check_class_seated_v1(c.class_id, c.bond, daa)?;
     }
     if let Some(why) = builder.read().eval_room_share_refusal_v1(c.class_id, daa, ceilings.max_eval_budget_permille) {
         return Err(refused(why));

@@ -119,6 +119,9 @@ mod palw_gen_claim_fold_v1;
 // floor, extracted from the tensor claim's readiness gate): a child module for the same reason.
 #[path = "palw_class_seating_v1.rs"]
 mod palw_class_seating_v1;
+pub use palw_class_seating_v1::{
+    PalwClassNotSeatedV1, PalwClassSeatingTermsV1, PalwClassSeatingV1, PalwSeatingFloorV1, palw_class_seating_v1,
+};
 // RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
 #[path = "palw_held_close_fold_v1.rs"]
 mod palw_held_close_fold_v1;
@@ -1615,6 +1618,11 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **RFC-0002 Part II §II.7.5 Proposal A: `Params::palw_class_seating`'s height and `independent_floor`**, mirrored by
+    /// `Params::sync_palw_class_seating` for `tir_fence2_from_daa`'s reason (the claim gate, the lifecycle step and the registry
+    /// read ask the seating rule through it). `None` on every shipped preset.
+    #[borsh(skip)]
+    class_seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingMirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1831,6 +1839,7 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            class_seating: None,
         })
     }
 
@@ -2151,6 +2160,23 @@ impl PalwStateParamsV2 {
     /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
     pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
         self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0002 Part II Proposal A: the class-seating fence's mirror** — the height, the floor and the raise, written by
+    /// `Params::sync_palw_class_seating` and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_class_seating(mut self, seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingMirrorV1>) -> Self {
+        self.class_seating = seating;
+        self
+    }
+
+    /// `Params::palw_class_seating`'s height, floor and raise, if the network arms it (the mirror).
+    pub fn class_seating(&self) -> Option<crate::palw_class_seating_fence_v1::PalwClassSeatingMirrorV1> {
+        self.class_seating
+    }
+
+    /// **The seating rule's terms in force at `daa_score`** — `None` below the fence, on every shipped preset.
+    pub fn class_seating_terms_at(&self, daa_score: u64) -> Option<crate::palw_class_seating_fence_v1::PalwClassSeatingTermsV1> {
+        self.class_seating.and_then(|mirror| mirror.terms_at(daa_score))
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -10002,6 +10028,13 @@ pub enum PalwStateV2Error {
          Params::palw_readiness_v2_max_age_spans"
     )]
     ReadinessProofNotNewer { bond: PalwBondKeyV2, class_id: Hash64, span: u64, row_span: u64 },
+    // ---- RFC-0002 Part II §II.7.5 Proposal A (`palw_class_seating`) ----
+    /// **A claim of a class that is not seated for its executor** (past `Params::palw_class_seating`): fewer than `seat_count`
+    /// distinct operators besides the executor hold the class ready (`Possession`), or fewer than the fence's
+    /// `independent_floor` of them are independent of the registrant and the executor and in the network's base population
+    /// (`Independence`). Refused before any reservation is taken, so no `NoCapablePanel` void follows.
+    #[error("class {class} is not seated for this executor: {floor:?} floor, {have} of {need} (RFC-0002 Part II Proposal A)")]
+    ClassNotSeated { class: Hash64, floor: PalwSeatingFloorV1, have: u32, need: u32 },
     // ---- RFC-0002 Phase F ----
     /// **An IR class registration (tag 61) the fold does not take**: below `Params::palw_tir_v1`, and
     /// until admission v10 lands above it. The acceptance walk drops it first; this is the second lock.
@@ -16960,6 +16993,21 @@ pub fn palw_class_admits_claim_v1(
     PalwFoldReadV1::outside(state, params, extras).check_class_admits_claim(class_id, now_daa, PalwGatedClaimV1::Attempt)
 }
 
+/// **RFC-0002 Part II Proposal A: would the fold at a block with these `extras` find `class_id` seated for `executor`?**
+/// The fold's own seating door (`check_class_seated_v1`, past `Params::palw_class_seating`; `Ok` below it), for a producer's
+/// pre-check — asked beside [`palw_class_admits_claim_v1`], so a producer does not spend an inference on a claim the chain
+/// would refuse with `ClassNotSeated`.
+pub fn palw_class_seated_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    executor: &PalwBondKeyV2,
+    class_id: &Hash64,
+    now_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    PalwFoldReadV1::outside(state, params, extras).check_class_seated_v1(class_id, executor, now_daa)
+}
+
 /// **Would the fold at a block with these `extras` let `bond` take one more claim of `class_id`
 /// under ADR-0152 T-2(a)'s per-bond share?** (S-6.) The fold's own check
 /// (`PalwFoldReadV1::check_bond_class_share`), asked from outside it — the producer's pre-check
@@ -23005,43 +23053,20 @@ impl<'a> TransitionBuilder<'a> {
         } else {
             palw_admission_jury_seed_v1(class_id, span_now, &anchor.block, &anchor.execution_key)
         };
-        let cutoff = span_now.saturating_sub(1).saturating_mul(fold.span_daa.max(1));
-        let base = self.params.base_class_id;
-        // **P2 (ADR-0152-adjacent: Activation Pool, user decision 2026-09-25): past the pool's fence
-        // the jury is drawn from the bonds a panel can draw** — collateral at the panel floor (ten
-        // network floors, 130,000 MSK on testnet-12), the predicate the panel draw and (a)'s payee
-        // test read. Below it a bond between the network floor and the readiness bar (three floors
-        // free) was drawable and could never be ready — a structural NO vote, so a Candidate on a
-        // network of floor bonds almost never seated. Below the fence: the network floor, as before.
-        let floor = if self.extras.activation_pool.is_some() {
-            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi())
-        } else {
-            self.params.min_collateral_sompi()
-        };
-        let registrant = self.state.classes.get(class_id).and_then(|record| record.registrant_bond);
-        let registrant_operator = registrant.and_then(|key| self.state.bonds.get(&key)).map(|bond| bond.operator_id);
-        // **Lane maturity-ext (post-launch, 2026-09-26): past `palw_bond_maturity_early` the
-        // population is ADR-0065 D1's too** — a bond is drawn only once the draw itself could seat it
-        // (`registered_daa <= registered_by`, the draw's floor at THIS block's DAA), the stricter of
-        // that and the span cutoff above. Without it a bond registered minutes ago sat on the jury the
-        // draw keeps it off, voting a Candidate in (or, never ready, holding one out); the readiness
-        // clause alone would leave it drawn as a structural NO. `None` below the fence: the release.
-        let matured_by =
-            fold.bond_maturity.map(|maturity| maturity.registered_by_daa(&self.state, self.params.window_court(), ctx.daa_score));
-        let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = self
-            .state
-            .bonds
-            .iter()
-            .filter(|(key, bond)| {
-                matches!(bond.status, PalwBondStatusV2::Active)
-                    && palw_bond_may_take_work_v2(bond, floor)
-                    && palw_bond_may_judge_class_v2(bond, &base)
-                    && bond.registered_daa < cutoff
-                    && matured_by.is_none_or(|by| bond.registered_daa <= by)
-                    && Some(**key) != registrant
-                    && Some(bond.operator_id) != registrant_operator
-            })
-            .collect();
+        // **The base population** — one function (`palw_base_population_v1`), the jury's filter extracted, so the jury, the
+        // per-claim outsider draw and the seating floor (RFC-0002 Part II Proposal A) read ONE population: past the Activation
+        // Pool the bonds a panel can draw (collateral at the panel floor, 130,000 MSK on testnet-12), serving the liveness
+        // floor's class, registered before the span's cut, matured past `palw_bond_maturity_early`, and the class's
+        // registrant's bond and operator removed. Below the pool: the network floor, as before.
+        let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = palw_class_seating_v1::palw_base_population_v1(
+            &self.state,
+            self.params,
+            fold,
+            class_id,
+            ctx.daa_score,
+            span_now,
+            self.extras.activation_pool.is_some(),
+        );
         let seats = fold.globals.seat_count.max(1);
         let jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &population, seats);
         if jury.len() < seats as usize {
@@ -23681,7 +23706,26 @@ impl<'a> TransitionBuilder<'a> {
             let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
             let profile =
                 palw_lifecycle_profile_v1(&row.work, expected, &fold.globals, self.extras.seat_gate_possession_at(ctx.daa_score));
-            let ready = self.model_registry_ready_seats(class_id, ctx.daa_score, &fold);
+            // **RFC-0002 Part II Proposal A (`palw_class_seating`)**: past the fence a class's seats are counted as distinct
+            // OPERATORS, once each however many bonds they hold, by the one seating function (executor-less: nothing
+            // excluded), and the independence floor is read beside them; below it the bond count the registry always read.
+            let (ready, independence_floor_met) = match self.params.class_seating_terms_at(ctx.daa_score) {
+                Some(terms) if *class_id != base => {
+                    let seating = palw_class_seating_v1(
+                        &self.state,
+                        self.params,
+                        &fold,
+                        class_id,
+                        None,
+                        ctx.daa_score,
+                        terms,
+                        self.extras.activation_pool.is_some(),
+                    )
+                    .expect("a seating without an executor always reads");
+                    (seating.ready_operators, seating.independence_floor_met())
+                }
+                _ => (self.model_registry_ready_seats(class_id, ctx.daa_score, &fold), true),
+            };
             let inflight = self.model_registry_inflight(class_id);
             // ADR-0132 Upgrade C / ADR-0133 Fence 3: the class's cap utilization at this boundary,
             // and whether it is under the fence's ceiling (always, where nothing prices it).
@@ -23720,6 +23764,7 @@ impl<'a> TransitionBuilder<'a> {
                         PalwManifestVerdictV1Flag::Invalid
                     },
                     ready_seats: ready,
+                    independence_floor_met,
                     probes_passed_this_span: row.probes_passed_this_span,
                     probes_failed_this_span: row.probes_failed_this_span,
                     utilization_permille: if utilization_gates { utilization } else { 0 },
@@ -34916,6 +34961,8 @@ fn apply_object(
             if builder.extras.audit_2026_09_23_active {
                 builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: 1 })?;
             }
+            // **RFC-0002 Part II Proposal A (`palw_class_seating`), on this lane too**: the one seating function every door asks.
+            builder.read().check_class_seated_v1(class_id, bond, ctx.daa_score)?;
             // **ADR-0152 v3.1 T-2(a), on this lane too** (S-6): the executor's share of the class's
             // unlicensed claims, one per commitment whatever its quanta — a commitment draws a
             // panel of its own, as an attempt does. Past `Params::palw_rcore_plus` only; a
@@ -37303,6 +37350,9 @@ fn apply_attempt(
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
+    // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
+    // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.
+    builder.read().check_class_seated_v1(&attempt.class_id, &bond_key, ctx.daa_score)?;
     // **ADR-0152 v3.1 T-2(a): and no bond holds more than its share of the class's unlicensed
     // claims** (S-6), past `Params::palw_rcore_plus` only. Before any write in this function, so
     // step 4 may skip the own attempt on it (`BondClassShareExceeded` joins the finding-17 skip

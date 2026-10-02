@@ -440,6 +440,7 @@ mod tests {
         let calm = |seats: u32, jury: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: seats,
+            independence_floor_met: true,
             probes_passed_this_span: 0,
             probes_failed_this_span: 0,
             utilization_permille: 300,

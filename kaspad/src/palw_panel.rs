@@ -18099,6 +18099,7 @@ mod seat_r_tests {
             is_base_class: false,
             row,
             ready_seats_now: 0,
+            seating: None,
             inflight_now: 0,
             share_permille: None,
             no_capable_panel_voids: 0,

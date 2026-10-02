@@ -5750,6 +5750,23 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for the named bond**, the fold's
+        // seating door asked before an inference is spent (`Ok` below the fence).
+        if facts.class_admission_refusal.is_none()
+            && let Some(outpoint) = bond
+        {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_class_seated_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &key,
+                &class_id,
+                candidate_daa,
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // **ADR-0152 v3.1 T-2(a) (S-6): and the named bond's share of the class**, which the fold
         // asks right after the class gate and skips the block's own attempt on — the attempt's
         // inference spent and its worker carve withheld and burned (`palw_v2_skipped_own_attempt_carve`).

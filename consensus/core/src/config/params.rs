@@ -2915,6 +2915,17 @@ pub struct Params {
     /// without `palw_tir_v1` and `palw_held_context` in force at or below it. Tag 62's live semantics
     /// below the height are untouched.
     pub palw_held_close_chunks_v1: Option<ForkActivation>,
+    /// **RFC-0002 Part II §II.7.5 Proposal A — one seating rule for every class kind**
+    /// ([`crate::palw_class_seating_fence_v1`]; `palw_class_seating_v1.rs` is the predicate): past it a claim of any class kind
+    /// (an IR or legacy attempt class, a generative class, a composite class) is admitted only if the class is *seated* for its
+    /// executor — `seat_count` distinct ready operators besides the executor, and `independent_floor` of them independent of the
+    /// registrant and the executor and of the network's base population — and the lifecycle leaves `Prefetching`/`Held` only on
+    /// the same count. The value carries `independent_floor`. Dormant: `None` on every preset and in no flag-day list; hashed
+    /// Some-only in both fingerprints with its value, only the activations visited by `for_each_fence`, the whole option collapsed
+    /// from `Some(never())` — `palw_gen_v1`'s shape. Mirrored on the V2 bundle's state params
+    /// (`PalwStateParamsV2::class_seating`, [`Self::sync_palw_class_seating`]); [`Self::validate_palw_class_seating`] holds its
+    /// refusals.
+    pub palw_class_seating: Option<crate::palw_class_seating_fence_v1::PalwClassSeatingFenceV1>,
 
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
@@ -3931,6 +3942,8 @@ impl Params {
         self.validate_palw_improvement_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
+        // **RFC-0002 Part II §II.7.5: the class-seating fence's refusals** (`crate::palw_class_seating_fence_v1`).
+        self.validate_palw_class_seating()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6181,6 +6194,10 @@ impl Params {
         // RFC-0003's held leaf challenge, likewise.
         if self.palw_held_close_chunks_v1 == Some(ForkActivation::never()) {
             self.palw_held_close_chunks_v1 = None;
+        }
+        // RFC-0002 Part II's class-seating fence, likewise: the WHOLE option collapses from `Some(never())`.
+        if self.palw_class_seating.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_class_seating = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9461,6 +9478,7 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_class_seating,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9701,6 +9719,7 @@ impl Params {
             ("palw_tir_fence2", *palw_tir_fence2),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
+            ("palw_class_seating", palw_class_seating.map(|fence| fence.activation)),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9969,6 +9988,12 @@ impl Params {
         if let Some(activation) = self.palw_held_close_chunks_v1 {
             h.write(b"palw_held_close_chunks_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0002 Part II's class-seating fence, NAMED likewise, with its value (the independence floor).
+        if let Some(fence) = self.palw_class_seating {
+            h.write(b"palw_class_seating");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10486,6 +10511,7 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_class_seating,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11196,6 +11222,13 @@ impl Params {
         if let Some(activation) = palw_held_close_chunks_v1.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0002 Part II's class-seating fence. Some-only, and the ACTIVATION only (the value is a floor).
+        if let Some(fence) = palw_class_seating.as_mut() {
+            fork(&mut fence.activation, visit);
+            if let Some(raise) = fence.raise.as_mut() {
+                fork(&mut raise.activation, visit);
+            }
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11632,6 +11665,7 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_class_seating,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -12393,6 +12427,12 @@ impl Params {
             h.write(b"palw_held_close_chunks_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0002 Part II's class-seating fence, Some-only for the same reason, with its value.
+        if let Some(fence) = palw_class_seating {
+            h.write(b"palw_class_seating");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -13048,6 +13088,7 @@ impl Params {
             palw_tir_fence2: self.palw_tir_fence2,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
+            palw_class_seating: self.palw_class_seating,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -14112,6 +14153,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_class_seating: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14372,6 +14414,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_class_seating: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14614,6 +14657,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_class_seating: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21676,6 +21720,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
     params.sync_palw_held_close_chunks_v1();
+    // RFC-0002 Part II's class-seating fence, likewise.
+    params.sync_palw_class_seating();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21934,6 +21980,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_class_seating: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

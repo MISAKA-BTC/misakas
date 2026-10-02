@@ -94,6 +94,8 @@ pub struct PalwDrillExtraFencesV1 {
     /// testnet-12's fourth post-launch flag day (P0a, the GDN key-head count; `palw_gdn_key_heads`), `--palw-drill-fence4-at`: its own
     /// list, no prerequisite among the other fences.
     pub fence4_at: Option<u64>,
+    /// RFC-0002 Part II Proposal A's seating fence (`palw_class_seating`), `--palw-drill-class-seating-at`: over the generative fence.
+    pub class_seating_at: Option<u64>,
 }
 
 impl PalwDrillExtraFencesV1 {
@@ -114,6 +116,7 @@ impl PalwDrillExtraFencesV1 {
             improve_at: args.palw_drill_improve_at,
             int11_at: args.palw_drill_int11_at,
             fence4_at: args.palw_drill_fence4_at,
+            class_seating_at: args.palw_drill_class_seating_at,
         }
     }
 
@@ -129,6 +132,7 @@ impl PalwDrillExtraFencesV1 {
             || self.improve_at.is_some()
             || self.int11_at.is_some()
             || self.fence4_at.is_some()
+            || self.class_seating_at.is_some()
     }
 
     /// Does any capacity step flag stand?
@@ -144,6 +148,7 @@ impl PalwDrillExtraFencesV1 {
     fn first_named(&self) -> Option<(&'static str, u64, &'static str)> {
         [
             ("--palw-drill-fence4-at", self.fence4_at, "testnet-12's fourth post-launch flag day (palw_gdn_key_heads, P0a)"),
+            ("--palw-drill-class-seating-at", self.class_seating_at, "RFC-0002 Part II's class-seating fence (palw_class_seating)"),
             ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's DAA-3,600 flag day (palw_tir_fence2)"),
             ("--palw-drill-model-court-at", self.model_court_at, "the per-model court-window fence (palw_model_court_window)"),
             (
@@ -257,6 +262,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
+        if let Some(at) = self.class_seating_at {
+            moves.extend(d::palw_drill_class_seating_at_v1(params, at).map_err(|e| format!("--palw-drill-class-seating-at: {e}"))?);
+        }
         Ok(moves)
     }
 
@@ -296,6 +304,7 @@ impl PalwDrillExtraFencesV1 {
             ("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at)),
             ("int11_at=", "--palw-drill-int11-at", palw_drill_marker_fence_text_v1(self.int11_at)),
             ("fence4_at=", "--palw-drill-fence4-at", palw_drill_marker_fence_text_v1(self.fence4_at)),
+            ("class_seating_at=", "--palw-drill-class-seating-at", palw_drill_marker_fence_text_v1(self.class_seating_at)),
         ]
     }
 
@@ -918,6 +927,7 @@ pub fn palw_drill_write_keyring_v4(
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "fence4_at": extra.fence4_at,
+        "class_seating_at": extra.class_seating_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),

@@ -135,6 +135,7 @@ fn admit(
         shape.held,
         shape.kimi_family,
         params.palw_audit_2026_09_23_active_at(daa),
+        params.palw_gdn_key_heads_active_at(daa),
     )
     .map(|e| e.canonical_step_leaf_count)
 }

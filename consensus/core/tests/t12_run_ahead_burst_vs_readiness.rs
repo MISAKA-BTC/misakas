@@ -125,6 +125,7 @@ fn run(rule: Rule, phases: &[u64], s0: u64, b: u64, required: u32) -> Run {
             let obs = PalwLifecycleObservationV1 {
                 manifest: PalwManifestVerdictV1Flag::Valid,
                 ready_seats: fresh as u32,
+                independence_floor_met: true,
                 collateral_ok: true,
                 cap_ok: true,
                 window_fits_receipt: true,
