@@ -5,7 +5,7 @@
 //! panic hook (core/src/panic.rs) exits the process, so on a network where the V1 `PanelFalseValid`
 //! gate is live (testnet-11/RC from DAA 8,500) one carried object would stop every validating node.
 //!
-//! Audit PoC: origin/audit-q6vnqe:docs/security/audits/2026-09-claude-pre-freeze/poc/MSK-26A-PALW-19.rs
+//! Audit PoC: origin/audit-q6vnqe:docs/archive/security/audits/2026-09-claude-pre-freeze/poc/MSK-26A-PALW-19.rs
 //! (commit 3d2bd6dc; reproduced on the testnet-12 release 0e8ec984e, both panic tests passed there).
 //!
 //! Now:

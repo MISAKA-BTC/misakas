@@ -1,4 +1,4 @@
-//! MISAKA Compute Token Program — what is left of it (`docs/misaka-compute-token-program-design-v0.1.md`).
+//! MISAKA Compute Token Program — what is left of it (`docs/design/misaka-compute-token-program-design-v0.1.md`).
 //!
 //! The token overlay is removed: the ledger fold, emission settlement, the token stores and the
 //! token RPC reads are gone. No shipped network ever armed them — every preset carries

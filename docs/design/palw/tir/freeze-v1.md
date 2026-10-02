@@ -261,7 +261,7 @@ The test `a_recurrent_program_is_calibrated_as_long_as_its_context` pins the rul
 **Recurrence drift** (corpus-v1 §9: KL at position 4,096 ≤ 1.5 × KL at 128, for C4–C7). It is
 measured as the mean KL over positions 64–192 against positions 3,968–4,096 of one held-out
 4,096-token sequence (`docs/palw-rc-threat-model.md`), on the typed backend. "Long" calibration is
-the 8 × 128 set plus one held-out 4,096-token sequence (`docs/palw-mainnet-audit-2026-08-28.md`, a
+the 8 × 128 set plus one held-out 4,096-token sequence (`docs/archive/palw-mainnet-audit-2026-08-28.md`, a
 different document from the evaluation's).
 
 | family | checkpoint | lowering, calibration | KL 64–192 | KL 3,968–4,096 | ratio | over all 4,096 positions | meets |
@@ -448,7 +448,7 @@ were accepted as inert (tir/lower `9ff0fc899`: the Mamba conversions' `d_model`/
 `docs/crescendo-guide.md`, `docs/connecting-ethereum-tooling.md`, `docs/node-liveness-probe.md`, two
 chunks each), evaluation 2 × 128 (`docs/README.md`, `docs/evm-differences-from-ethereum.md`), drift
 1 × 4,096 (`docs/palw-rc-threat-model.md`), the long calibration's added 1 × 4,096
-(`docs/palw-mainnet-audit-2026-08-28.md`), each with the checkpoint's own `tokenizer.json`, offline.
+(`docs/archive/palw-mainnet-audit-2026-08-28.md`), each with the checkpoint's own `tokenizer.json`, offline.
 
 ## Appendix A. The primitives of every lowered architecture
 

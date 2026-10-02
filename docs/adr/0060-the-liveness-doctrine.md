@@ -2,7 +2,7 @@
 
 - Status: Accepted as doctrine; **implemented 2026-08-30, SHIPPED OFF the same day, and
   RE-IMPLEMENTED 2026-08-31 per ADR-0066** — the mainnet audit
-  (`docs/palw-mainnet-audit-2026-08-30.md`) found four structural defects in Decisions 1–2 and one
+  (`docs/archive/palw-mainnet-audit-2026-08-30.md`) found four structural defects in Decisions 1–2 and one
   in Decision 4. ADR-0066 closes F1, F3b and F4 (the lane's price left `header.bits`; the evidence
   walk is deleted) and records F3a as open and F2 as staged. **Both features still ship OFF, but
   they are now `Params::palw_heartbeat` and `Params::palw_inactivity_leak` — top-level fences an

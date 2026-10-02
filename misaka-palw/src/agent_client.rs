@@ -1,5 +1,5 @@
 //! Client for the `palw-agent` UDS protocol `misaka-palw-agent-borsh/v1`
-//! (docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §5, §10.3).
+//! (docs/design/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §5, §10.3).
 //!
 //! One connection carries one framed request and one framed response; per the wire contract the
 //! client **half-closes its write side after the request frame** so the agent can verify no

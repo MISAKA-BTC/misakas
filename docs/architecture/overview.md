@@ -6,13 +6,13 @@ ADR only when you need the reasoning behind a rule. Each topic below links **onl
 currently govern it**. Superseded ones are named once, so you can recognise them when older
 documents cite them.
 
-"Now" means **testnet-12** at release commit `0e8ec984e`, its node-only update `8a0810992` of 2026-09-26, the post-launch fence release `c3dbaee3c` whose 13 fences activated at DAA 750 on 2026-09-27, and the second flag day's release `587cab2b0` whose 2 fences activate at DAA 1,300 (see [Release status](../../README.md#release-status)).
-testnet-12 arms every consensus rule this binary knows at DAA 0 (`palw_t12_arm_every_rule_from_genesis`
+"Now" means **testnet-12** at release commit `0e8ec984e`, its node-only update `8a0810992` of 2026-09-26, and the post-launch flag days on the same chain: DAA 750 (the post-launch fence list, `c3dbaee3c`), DAA 1,300 (the second flag day, `587cab2b0`), DAA 1,700 (the capacity fences at ρ = 10), DAA 2,000 (the IR flag day, `palw_tir_v1`) and DAA 3,600 (`palw_tir_fence2`). The identity the current release prints is in [`release.json`](../../release.json) and [Release status](../../README.md#release-status).
+testnet-12 arms every consensus rule its launch binary knew at DAA 0 (`palw_t12_arm_every_rule_from_genesis`
 in `consensus/core/src/config/params.rs`). The exceptions are one rule that arms at DAA 1,000 (bond
 maturity) and six that stay dormant because consensus refuses them or they cannot be built
 (`palw_inactivity_leak`, `palw_frontier_provenance`, `palw_beacon_fold`, `palw_shard_licensing`,
-`palw_fp_decode_rules`, `palw_fp_decode_constraint`). So a rule that was "scheduled" or "dormant" on
-testnet-11 is live here, from genesis.
+`palw_fp_decode_rules`, `palw_fp_decode_constraint`). Rules added after launch arm at the flag-day
+heights above (the `PALW_T12_*_DAA` constants in the same file).
 
 > [!WARNING]
 > **Two gaps in the record.**
@@ -21,8 +21,8 @@ testnet-11 is live here, from genesis.
 >   Pool. The launch note, the launch checklist and many code comments cite it. Until it is
 >   committed, the code in `consensus/core/src/config/params.rs` (`palw_rcore_plus`) and the
 >   [launch note](../t12-launch-2026-09-25.md) are the only written record of it.
-> * **The [ADR index](../adr/README.md) is not current past ADR-0149.** Its activation map is
->   testnet-11's. The topic map below is the current view.
+> * **The [ADR index](../adr/README.md) does not track testnet-12's activations.** The topic map
+>   below is the current view.
 
 ## 1. The system in one picture
 
@@ -77,9 +77,10 @@ signer are separate processes.
 ### 2.1 Post-quantum transactions and identity
 Transactions are authorized only by ML-DSA-87. Addresses are keyed BLAKE2b-512 hashes of the
 verification key. Every consensus identity (block, txid, merkle roots, UTXO commitment) is a
-64-byte `Hash64`. secp256k1 is not linked into the node.
+64-byte `Hash64`. secp256k1 is not linked into the consensus crate; the default `kaspad` links a
+secp curve only for the EVM lane's `ecrecover`.
 - **Governing:** [0019](../adr/0019-mldsa87-migration.md) ML-DSA-87 migration · [0002](../adr/0002-mldsa65-p2pkh.md) P2PKH structure (its ML-DSA-65 scheme is superseded by 0019) · [0008](../adr/0008-hash64-consensus-identity.md) Hash64 identity · [0003](../adr/0003-lthash-utxo-accumulator.md) LtHash UTXO accumulator · [0004](../adr/0004-utxo-commitment64.md) 64-byte UTXO commitment · [0005](../adr/0005-mass-policy.md) mass / DoS policy · [0006](../adr/0006-rpc-wasm-sdk-types.md) RPC / WASM / SDK types
-- **Spec:** [kaspa-pq-spec.md](../kaspa-pq-spec.md), [kaspa-pq-design-mldsa87.md](../kaspa-pq-design-mldsa87.md)
+- **Spec:** [kaspa-pq-spec.md](../kaspa-pq-spec.md), [kaspa-pq-design-mldsa87.md](../design/kaspa-pq-design-mldsa87.md)
 - **Code:** `crypto/hashes/src/hash64.rs`, `crypto/addresses/`, `crypto/txscript/`, `consensus/core/src/mldsa87_primitives.rs`, `consensus/core/src/hashing/`
 
 ### 2.2 Block production: the PALW lottery and the clock
@@ -89,7 +90,7 @@ input to it. Heartbeats keep the DAA clock moving when nothing is produced, but 
 bonded work. The cadence is frozen at 120 s.
 - **Governing:** [0038](../adr/0038-palw-is-the-consensus-work.md) PALW is the consensus work · [0039](../adr/0039-palw-only-block-production.md) PALW-only block production · [0042](../adr/0042-palw-mainnet-candidate-ruleset.md) one ruleset, one fork choice · [0058](../adr/0058-palw-merged-work-is-counted.md) merged work is counted · [0060](../adr/0060-the-liveness-doctrine.md) the liveness doctrine · [0072](../adr/0072-the-ticket-is-the-execution.md) the ticket is the execution · [0083](../adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md) the difficulty window counts only rows priced by `bits` · [0105](../adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md) a heartbeat never turns a bonded block red · [0117](../adr/0117-a-draw-is-one-forward.md) a draw is one forward · [0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md) one unit of work from any model · [0138](../adr/0138-the-daa-score-is-the-anchors-clock.md) the DAA score is the anchor's clock · [0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) the clock is a cursor · [0149](../adr/0149-an-attempts-pwu-is-the-derivation.md) an attempt's pwu is the derivation · [0151](../adr/0151-liveness-is-structural-collateral-covers-fraud.md) liveness is structural
 - **Superseded, often cited:** 0021 and 0036 D4 → [0039](../adr/0039-palw-only-block-production.md) · 0066 D2 (slot rule) → [0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) · 0054, 0076, 0107 and 0135 D5 (share as a lottery input) → [0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md)
-- **Open on testnet-12:** the heartbeat-transparency double spend (CRITICAL, fix pending, [launch note §2](../t12-launch-2026-09-25.md))
+- **Fixed on testnet-12 by a post-launch fence:** the heartbeat-transparency double spend (CRITICAL; `palw_heartbeat_transparent_same_chain`, DAA 750; [launch note §2](../t12-launch-2026-09-25.md))
 - **Code:** `consensus/core/src/palw_attempt_v2.rs`, `palw_work_target_v1.rs`, `palw_heartbeat_v1.rs`, `palw_clock_cursor_v1.rs`, `palw_fork_choice.rs`; node side `kaspad/src/palw_producer.rs`, `palw_heartbeat_miner.rs`
 
 ### 2.3 Verification: panels, seats, receipts
@@ -98,7 +99,7 @@ signed receipt, which is evidence and not a vote. Seats must prove they hold a m
 before they are counted. The panel is paid out of the claim's reward, and a seat carries exposure
 for what it attests.
 - **Governing:** [0028](../adr/0028-palw-challenge-sampling-protocol.md) sampling is a scheduler · [0098](../adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md) coverage is a number · [0099](../adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md) a seat holds a shard · [0108](../adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md) a receipt is evidence, not a vote · [0111](../adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) a seat may demand the committed leaf · [0124](../adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md) the panel is paid out of the claim · [0130](../adr/0130-bps1-is-hardened-before-it-is-widened.md) BPS 1 hardened (λ = 5 on testnet-12) · [0133](../adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md) verification on its own clock · [0135](../adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md) the panel is proven · [0147](../adr/0147-independence-is-drawn-not-declared.md) independence is drawn · ADR-0152 (not committed) stake-weighted draw, readiness horizon 24
-- **Open on testnet-12:** panel-seed grinding (CRITICAL, fence within 36 h of launch), and licences stuck behind claim-id order (V04) ([launch note §2](../t12-launch-2026-09-25.md))
+- **Fixed on testnet-12 by post-launch fences:** panel-seed grinding (CRITICAL; `palw_panel_seed_execution` and the `palw_operator_anchor` stopgap, DAA 750). Licences stuck behind claim-id order (V04) are a node-side fix; status and the other known issues are in [launch note §2](../t12-launch-2026-09-25.md)
 - **Code:** `consensus/core/src/palw_panel_v2.rs`; node side `kaspad/src/palw_panel.rs`, `palw_receipt_pool.rs`, `palw_readiness_escalation.rs`
 
 ### 2.4 Disputes: the court and slashing
@@ -175,7 +176,7 @@ through activation fences at DAA heights. testnet-12 arms them at 0.
 
 ## 3. Code map
 
-The workspace has 94 crates. They sit side by side at the repository root because Cargo does not
+The workspace has 100 crates. They sit side by side at the repository root because Cargo does not
 care about hierarchy, but they fall into six groups. Directory names are unchanged from upstream
 where they came from Kaspa (`kaspa-*`).
 
@@ -239,7 +240,6 @@ where they came from Kaspa (`kaspa-*`).
 | read the reasoning behind a rule | the ADR linked above, and the [ADR index](../adr/README.md) |
 | check the byte-level PQ spec | [kaspa-pq-spec.md](../kaspa-pq-spec.md) |
 | see how the provenance fields map to code | [palw-registry-map.md](../palw-registry-map.md) |
-| read testnet-11's history | [history/testnet-11.md](../history/testnet-11.md) |
 
 **Keep this page current.** When an ADR is accepted, superseded or armed, update its topic here in
 the same PR. This page is the current view, and an out-of-date current view is worse than none.

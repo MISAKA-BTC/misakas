@@ -436,7 +436,7 @@ mod tests {
     /// build the redeem script, wrap in P2SH, sign the sighash with M of the N
     /// keys, and execute. Exercises `OP_CHECKMULTISIGMLDSA87` (0xa7).
     ///
-    /// kaspa-pq PQ-only (ADR-0019 §6.5 / docs/kaspa-pq-design-mldsa87.md §11.1):
+    /// kaspa-pq PQ-only (ADR-0019 §6.5 / docs/design/kaspa-pq-design-mldsa87.md §11.1):
     /// P2SH/multisig is **out of launch scope**. With ML-DSA-87 a 2-of-3 unlock
     /// is ~17 KB (2 × (3 + 4628) sig pushes + (3 + 7788) redeem push), exceeding
     /// the P2PKH-only `MAX_SCRIPTS_SIZE` (10_000), and the `redeem.len() == 5868`

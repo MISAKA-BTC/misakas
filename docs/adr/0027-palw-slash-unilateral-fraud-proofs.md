@@ -10,9 +10,9 @@ what a slash *bounds*: on the V2 lineage block production is bonded
 per-job credit price.
 Date: 2026-08-15
 Relates to: ADR-0026 (v2 verification architecture — amended here in §3/§4/§5),
-[`misaka-palw-slash-protocol-design-v0.1.md`](../misaka-palw-slash-protocol-design-v0.1.md)
+[`misaka-palw-slash-protocol-design-v0.1.md`](../design/misaka-palw-slash-protocol-design-v0.1.md)
 (the input specification this ADR adopts and amends),
-[`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) (§10 economics,
+[`palw-full-logits-trace-v2-design.md`](../design/palw-full-logits-trace-v2-design.md) (§10 economics,
 §12 gates), `consensus/core/src/vlt.rs` (`ComputeFraudKind` — the existing enforcement of the same
 rule at the VLT layer).
 

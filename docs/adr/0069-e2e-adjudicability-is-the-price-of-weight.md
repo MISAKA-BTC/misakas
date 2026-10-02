@@ -314,7 +314,7 @@ Everything the tracking list named, and two things the review found it had not s
   amended). Pricing that block at zero `pwu` for a zero-share class would make §1's sentence
   literally true; it is a fork-choice rule change and is not done here.
 * The ADR-0067 sidecar fence (`--palw-chain-classes`) and the deployment of the ruleset this ADR
-  moved are operator decisions, recorded in `docs/palw-step-space-deployment-notes.md` and the
+  moved are operator decisions, recorded in `docs/archive/palw-step-space-deployment-notes.md` and the
   Relaunch 5 runbook.
 
 ## Security amendment (2026-09-02) — the open item is a fork-choice hole, closed as Decision 7

@@ -1,7 +1,7 @@
 //! PALW-S — the ADR-0027 slash objects: unilateral, objectively-checkable evidence.
 //!
 //! Normative sources: `docs/adr/0027-palw-slash-unilateral-fraud-proofs.md` (premises and
-//! adjudication semantics), `docs/misaka-palw-slash-protocol-design-v0.1.md` as amended by that
+//! adjudication semantics), `docs/design/misaka-palw-slash-protocol-design-v0.1.md` as amended by that
 //! ADR's §4 table, and `consensus/core/src/palw_v2.rs` for every reused preimage.
 //!
 //! # Scope and stage — read this before wiring anything to consensus

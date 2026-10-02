@@ -529,7 +529,7 @@ impl A16Cache {
     /// * anything else — `None`. A map that describes neither is a map for a different class.
     ///
     /// Written this way because the class's map is currently the one-byte one and its state does
-    /// not fit (see `docs/palw-fp-on-registered-classes.md`): whichever way that is resolved —
+    /// not fit (see `docs/archive/palw-fp-on-registered-classes.md`): whichever way that is resolved —
     /// narrowing the cache, or registering a class with a four-byte map — this function is already
     /// correct for it, and refuses in the meantime rather than committing a lie.
     pub fn state_chunk_bytes_v1(&self, entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>> {

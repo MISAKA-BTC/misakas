@@ -14,7 +14,7 @@
 #                         under bond 0, reading the chain over node-0's RPC (Decision 3).
 #
 # Why it is a chain and not a harness: the in-harness finding stands — a single-chain
-# `TestConsensus` does not accrue the DAA the windows need (`docs/palw-fp-on-registered-classes.md`
+# `TestConsensus` does not accrue the DAA the windows need (`docs/archive/palw-fp-on-registered-classes.md`
 # measured a sink DAA of 63 after 2,000 sequential blocks) — and a multi-node chain does. The
 # devnet preset carries the minutes-scale lattice for exactly this reason
 # (`palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1`, selected by network type at

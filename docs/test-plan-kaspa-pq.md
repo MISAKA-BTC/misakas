@@ -1,8 +1,10 @@
 # kaspa-pq Test Plan — Pure PQ-PoW · ML-DSA · LtHash · Hash64 · DNS Overlay
 
 Purpose: verify that **every kaspa-pq change relative to upstream rusty-kaspa**
-behaves to spec, and that each item is **reproducible on simnet / devnet /
-testnet / staging-mainnet**. This plan is the gate before any network promotion.
+behaves to spec ([`kaspa-pq-spec.md`](kaspa-pq-spec.md)), and that each item is
+**reproducible on simnet / devnet / testnet / staging-mainnet**. This plan is the
+gate before any network promotion. PALW (the LLM proof-of-work that produces
+testnet-12's blocks) has its own test and certification docs and is out of scope here.
 
 > Status legend per item: ☐ not started · ◐ partial (unit only) · ☑ done.
 > "C==V" = the construction path (block template) and the validation path
@@ -22,16 +24,17 @@ testnet / staging-mainnet**. This plan is the gate before any network promotion.
 **Network matrix** (every functional item must pass on each, unless gated):
 | net | role | overlay (`dns_params`) | gate (`dns_activation_daa_score`) |
 |---|---|---|---|
-| simnet | fast in-proc / CI | `None` (or test-injected `Some`) | n/a / 0 in harness |
-| devnet | integration mesh | `Some` (visibility-only) | `u64::MAX` (dormant) |
-| testnet | public test | `None` today → `Some` pre-activation | TBD height |
-| staging-mainnet | release candidate | `Some` | real activation height |
+| simnet | fast in-proc / CI | `Some(GENESIS_ACTIVE_DNS_PARAMS)` | 0 |
+| devnet | integration mesh | `Some(GENESIS_ACTIVE_DNS_PARAMS)` | 0 |
+| testnet-12 | public test (current) | `Some(PALW_T12_DNS_PARAMS)` (production set, testnet `required_work_depth`) | 0 |
+| staging-mainnet | release candidate | `Some(PRODUCTION_DNS_PARAMS)` | 0 |
+
+(Values from `consensus/core/src/config/params.rs`; every shipped preset is genesis-active.)
 
 **Pass bar baseline (must stay green every PR):**
 `cargo check --workspace --exclude muhash-fuzz --all-targets` clean +
 `kaspa-consensus-core` (dns_finality) + `kaspa-consensus` + `kaspa-pow` +
-`kaspa-txscript` + `rpc-core` suites pass. (Note: `kaspa-wallet-core --lib` is
-pre-existing-red from Phase-2 prefix debt — NOT a regression; see memory.)
+`kaspa-txscript` + `rpc-core` suites pass, and `bash scripts/pq-ci-guard.sh` is green.
 
 ---
 
@@ -60,24 +63,24 @@ Spec: PoW = BLAKE2b-512 Layer-0 (`POW_ALGO_ID_KHEAVYHASH`), µs verify, NOT Argo
 | POW-4 | Miner (`pq-miner`) finds blocks at target BPS | L3 | blocks accepted |
 | POW-5 | `--min-block-interval-ms` throttle (split-brain mitigation) | L4 | vDaa monotonic, tips 1–3 |
 
-## C. ML-DSA-65 — post-quantum signatures, P2PKH, multisig
+## C. ML-DSA-87 — post-quantum signatures, P2PKH, multisig
 
-Spec: ML-DSA-65 (libcrux); `OpCheckSigMlDsa65`=0xa6, `OpCheckMultiSigMlDsa65`=0xa7; P2PKH-ML-DSA (`misaka*` prefix); raised script/element/sig-script size limits.
+Spec: ML-DSA-87 (libcrux); `OpCheckSigMlDsa87`=0xa6, `OpCheckMultiSigMlDsa87`=0xa7, `OpBlake2b512`=0xc4; P2PKH-ML-DSA-87 (`misaka*` prefix); raised script/element/sig-script size limits (spec §2, §6). P2SH is consensus-disabled in PQ-only mode, so multisig is exercised at the opcode level only.
 
 | id | item | level | pass criteria |
 |---|---|---|---|
-| MLDSA-1 | keygen/sign/verify + context binding (`MLDSA65_TX_CONTEXT`) | L1 | round-trip ok |
-| MLDSA-2 | `OpCheckSigMlDsa65` P2PKH spend round-trip | L2 | `test_mldsa65_p2pkh_spend_roundtrip` |
-| MLDSA-3 | `OpCheckMultiSigMlDsa65` 2-of-3 | L2 | `test_multisig_mldsa65_2_of_3` |
+| MLDSA-1 | keygen/sign/verify + context binding (`MLDSA87_TX_CONTEXT`); NIST ACVP vectors (`cargo test -p kaspa-txscript --lib mldsa87`) | L1 | round-trip ok |
+| MLDSA-2 | `OpCheckSigMlDsa87` P2PKH spend round-trip | L2 | `test_mldsa87_p2pkh_spend_roundtrip` |
+| MLDSA-3 | `OpCheckMultiSigMlDsa87` 2-of-3 (opcode level) | L2 | `test_multisig_mldsa87_2_of_3` |
 | MLDSA-4 | script/element/sig-script size limits (16384/8192/16384) | L2 | large spends accepted |
-| MLDSA-5 | mempool standardness (sig-script ≤ 8192→ raised; mass ≤ 480k) | L3 | ML-DSA tx admitted |
+| MLDSA-5 | mempool standardness + mass limits for an ML-DSA-87 P2PKH tx | L3 | ML-DSA tx admitted |
 | MLDSA-6 | address codec (`misaka`/`misakatest`/`misakasim`/`misakadev`) | L1/L2 | encode/decode, prefix isolation |
-| MLDSA-7 | **e2e ML-DSA send on-chain** (WASM `signTransactionMlDsa65` → submit → mined) | L5 | recipient UTXO confirmed |
+| MLDSA-7 | **e2e ML-DSA send on-chain** (WASM `signTransactionMlDsa87` → submit → mined) | L5 | recipient UTXO confirmed |
 | MLDSA-8 | 16-input ML-DSA send (transient-mass bound) | L5 | accepted + mined |
 
-## D. UTXO commitment — homomorphic accumulator (LtHash per design)
+## D. UTXO commitment — homomorphic accumulator (LtHash32_1024)
 
-Spec: homomorphic UTXO-set commitment. **Verify current backend (LtHash vs MuHash)** and that genesis `utxo_commitment` matches.
+Spec: homomorphic UTXO-set commitment. The backend is LtHash32_1024 (`crypto/muhash/src/lib.rs`; the `MuHash` struct name is kept for API compatibility), finalized to a 64-byte keyed BLAKE2b-512 `Hash64`.
 
 | id | item | level | pass criteria |
 |---|---|---|---|
@@ -85,23 +88,24 @@ Spec: homomorphic UTXO-set commitment. **Verify current backend (LtHash vs MuHas
 | UTXO-2 | genesis `utxo_commitment` == hash(premine set) all nets | L2 | const == computed |
 | UTXO-3 | commitment matches after a chain of blocks (C==V) | L2/L4 | header commitment verifies |
 | UTXO-4 | reorg: commitment rolls back + replays correctly | L4 | post-reorg == recomputed |
-| UTXO-5 | LtHash migration (if/when from MuHash): no consensus split | L4 | gated/forked cleanly |
 
-## E. Tokenomics — 30B cap (15B premine + 15B/20yr 5%-decay)
+## E. Tokenomics — 25B cap (10B premine + 15B/20yr 5%-decay)
+
+Spec: `MAX_SOMPI` (`consensus/core/src/constants.rs`), `MISAKA_PREMINE_CAP_SOMPI` (`consensus/core/src/config/premine.rs`).
 
 | id | item | level | pass criteria |
 |---|---|---|---|
 | TOK-1 | emission table sums to ~15B over 20yr (`verify_total_emission`) | L1 | within budget |
 | TOK-2 | per-block subsidy schedule (`subsidy_test`, decay 0.95/yr) | L1 | matches table |
-| TOK-3 | premine: single 15B UTXO → 2-of-3 P2SH at genesis | L2/L3 | UTXO present, spendable |
-| TOK-4 | circulating-supply RPC == `MISAKA_PREMINE_SOMPI` + emitted | L3 | matches |
-| TOK-5 | `MAX_SOMPI` = 30B never exceeded (incl. bps rounding surplus) | L1/L4 | ≤ cap |
+| TOK-3 | premine: genesis totals exactly 10B; one main-wallet ML-DSA-87 P2PKH UTXO, with every carve-out (bond collateral, floats, community) paid out of it | L2/L3 | UTXOs present, spendable, sum == cap |
+| TOK-4 | circulating-supply RPC == `MISAKA_PREMINE_CAP_SOMPI` + emitted | L3 | matches |
+| TOK-5 | `MAX_SOMPI` = 25B never exceeded (incl. bps rounding surplus) | L1/L4 | ≤ cap |
 
 ## F. DNS Overlay (ADR-0009 / 0017 / 0018) — the BFT-free PoS finality layer
 
-All items below are **gated** (`dns_activation_daa_score`); on current nets they
-must be **INERT / byte-identical**. The Active behavior is exercised via the §G
-harness (overlay-active config) and pure-fn tests.
+The overlay is gated by `dns_activation_daa_score`, which is `0` on every shipped
+preset (testnet-12 included), so the items below are live behavior, exercised via
+pure-fn tests, the §G harness and the running network.
 
 ### F1 — StakeBonds (lifecycle, reorg, spend-gate)
 | id | item | level | pass |
@@ -135,7 +139,7 @@ harness (overlay-active config) and pure-fn tests.
 | DNS-H1 | `check_dns_reorg_rule` TwoDimensionalDominance arm (pure) | L1 | out-Work AND out-Stake required |
 | DNS-H2 | `dns_reorg_allows`: candidate exiting confirmed prefix → gate engages | L4 | forge rejected |
 | DNS-H3 | per-branch bond views (candidate=in-loop, canonical=store@prev_sink) | L4 | deterministic, no split |
-| DNS-H4 | `reorg_mode` per net (mainnet TwoDim, devnet HardCheckpoint) | L2 | rule selected by param |
+| DNS-H4 | `reorg_mode` selected by param (every shipped preset is `TwoDimensionalDominance`; `HardCheckpoint` is test-only) | L2 | rule selected by param |
 | DNS-H5 | censorship CANNOT forge dominance (can't fake StakeScore) | L4 | reorg attack fails |
 
 ### F5 — DnsHealth (degrade, never forge)
@@ -179,9 +183,11 @@ harness (overlay-active config) and pure-fn tests.
 
 ## G. DAG integration test harness (the pre-mainnet gap)
 
-The carve / reorg-gate / reward paths are **dead code on current nets**; their
-correctness today rests on pure-fn tests + C==V-by-construction. This harness
-makes the **Active overlay** executable over a real BlockDAG.
+The carve / reorg-gate / reward paths run on every genesis-active network; beyond
+pure-fn tests + C==V-by-construction, this harness exercises the **Active overlay**
+over a real BlockDAG in-process. Existing anchors: `dns_overlay_active_chain_validates`
+(DAG-1) and `pos_v2_reward_bearing_attestation_validates` (DAG-2) in
+`consensus/src/pipeline/virtual_processor/tests.rs`.
 
 **G-HARNESS spec**
 - Build a `kaspa-consensus` test fixture with `dns_params = Some(..)` and
@@ -220,17 +226,15 @@ makes the **Active overlay** executable over a real BlockDAG.
 ## I. Per-stage exit criteria
 
 - **simnet/CI:** L1+L2 + DAG-1..6 green; baseline bar green.
-- **devnet:** L3 single-node + L4 mesh (DAG-7); overlay visibility-only stable.
-- **testnet:** all above + overlay `Some` injected, activation rehearsal at a test height; staged-rollout transition observed.
+- **devnet:** L3 single-node + L4 mesh (DAG-7); genesis-active overlay stable.
+- **testnet (testnet-12):** all above, observed on the genesis-active public network; staged-rollout transition observed.
 - **staging-mainnet:** full F (Active) over the harness + a mesh, finality argument restated (ADR-0017 full-participation stake-weighted), reward value-conservation audited, slashing drill, then set the real `dns_activation_daa_score` / `full_reward_split_daa_score`.
 
 ---
 
 ## J. Known gaps / follow-ups (tracked)
 
-- DAG harness DAG-2..6 (reward-bearing + reorg + slashing in-DAG) — **not yet built** (this plan's main new work).
+- DAG harness DAG-3..6 (staged transition + reorg + censorship + slashing in-DAG) — not confirmed in tree (this plan's main new work).
 - §D quality-gate bonus + §E quality-bonus + urgency multiplier — deferred (need epoch-cumulative inclusion accumulator; gated on the burn-vs-SecurityRollover decision).
 - DNS finality fee class — unwired (post-subsidy concern).
-- LtHash backend status — confirm vs MuHash.
 - Finality argument restatement (ADR-0017) before mainnet.
-- Redeploy kaspad to devnet mesh (deployed binary predates Phase 10+).

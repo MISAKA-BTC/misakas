@@ -18,7 +18,7 @@ job summary (`scripts/misaka-ci-summary.py`), next to the test counts of that ru
 toolchain, post-quantum isolation enforced by the build, many audits published with their fixes,
 and an activation-fence upgrade path that has run on a live network. What keeps MISAKA from being a
 mainnet candidate is **how fast the rules still change**. testnet-12 launched with two known
-CRITICAL issues whose fixes arrive as post-launch fences, and the release has no tag, no
+CRITICAL issues whose fixes arrived as post-launch fences, and the release has no tag, no
 signatures and no SBOM. The next phase is to freeze the rules and prove they hold. It is not to
 add more rules.
 
@@ -30,12 +30,12 @@ add more rules.
 |---|---|---|
 | **PASS** | Consensus tests run on every push | `Test Suite` job in [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) (`cargo nextest run`, doctests, devnet-prealloc); `Context vectors (release)` runs the ADR-0110 4,096- and 32,768-position vectors in release mode |
 | **PASS** | Consensus identity is explicit | every node prints its consensus params fingerprint and fence schedule at startup, and the handshake refuses a peer on a different ruleset (`consensus_params_id`). The release workflow starts every platform's binary and fails unless it prints the identity [`release.json`](../release.json) declares |
-| **PASS** | Activation-fence upgrade path exercised live | testnet-11 crossed fences at DAA 1150, 1900, 2150, 2400, 3500, 4000, 7100 and more on a public network ([history](history/testnet-11.md)) |
+| **PASS** | Activation-fence upgrade path exercised live | testnet-12 crossed its post-launch fences at DAA 750 and 1,300 (and bond maturity at 1,000) on the public network, with more scheduled at 1,700, 2,000 and 3,600 (`PALW_T12_*_DAA` in `consensus/core/src/config/params.rs`; [launch note](t12-launch-2026-09-25.md) §00/§000); its predecessor networks crossed many before it |
 | **PASS** | Genesis constants guarded | a change to the premine constants (`consensus/core/src/config/premine.rs`) moves every network's genesis hash and is refused at startup until re-pinned (audit M-07) |
 | **PARTIAL** | Pinned fingerprints in tests | `shipped_presets_have_pinned_fingerprints` exists, but `scripts/ci-gates.sh --list` declares it a known red until the next single re-pin |
 | **PARTIAL** | Launch gate (ADR-0152 §8.3) | [t12-rcore-launch-checklist.md](t12-rcore-launch-checklist.md) §1.0 recorded the gate as not met on 2026-09-25; testnet-12 launched with the gaps listed in [the launch note §2](t12-launch-2026-09-25.md) |
-| **TODO** | **Consensus rules frozen** | testnet-12's two CRITICAL fixes (heartbeat transparency, panel-seed grinding) land as post-launch fences, and more are scheduled (launch note §2.5–2.7) |
-| **TODO** | Mainnet genesis and parameters final | the `mainnet` parameter set is defined, but it is not declared final and no mainnet card is minted ([palw-mainnet-audit-2026-09-06.md](palw-mainnet-audit-2026-09-06.md) lists what must be true first) |
+| **TODO** | **Consensus rules frozen** | testnet-12's two CRITICAL fixes (heartbeat transparency, panel-seed grinding) landed as post-launch fences at DAA 750, and further flag days followed at 1,300, 1,700, 2,000 and 3,600 (`release.json`'s fence schedule) |
+| **TODO** | Mainnet genesis and parameters final | the `mainnet` parameter set is defined, but it is not declared final and no mainnet card is minted ([palw-mainnet-audit-2026-09-06.md](archive/palw-mainnet-audit-2026-09-06.md) lists what must be true first) |
 | **TODO** | The running ruleset's design is on record | testnet-12 runs R-core+ (ADR-0152 v3.1), which is cited throughout the code but not committed to `docs/adr/`; the [architecture overview](architecture/overview.md) is the current map until it is |
 | **TODO** | Consensus differential testing | no second implementation or reference model is run against the node's consensus in CI |
 
@@ -43,10 +43,10 @@ add more rules.
 
 | status | item | evidence / what is missing |
 |---|---|---|
-| **PASS** | Post-quantum isolation enforced | `scripts/pq-ci-guard.sh` fails CI if `kaspa-consensus` or `kaspad` links secp256k1 |
+| **PASS** | Post-quantum isolation enforced | `scripts/pq-ci-guard.sh` fails CI if `kaspa-consensus`, the wallet and validator crates, or a `--no-default-features` `kaspad` links a secp curve. The default `kaspad` links one for the EVM lane's `ecrecover` by decision ([`kaspad/Cargo.toml`](../kaspad/Cargo.toml)) |
 | **PASS** | Dependency advisories gated | `cargo-deny` runs in the `pq-guard` gate ([`deny.toml`](../deny.toml)) |
-| **PASS** | Internal audits, fixed in the open | e.g. [palw-audit-2026-09-18-6001.md](palw-audit-2026-09-18-6001.md) (2 Critical / 6 High, all fixed), [palw-daa-clock-audit-2026-09-18.md](palw-daa-clock-audit-2026-09-18.md), the mainnet audits of [08-28](palw-mainnet-audit-2026-08-28.md), [08-30](palw-mainnet-audit-2026-08-30.md), [09-05](palw-mainnet-audit-2026-09-05.md) and [09-06](palw-mainnet-audit-2026-09-06.md), and the release report [palw-release-6001-verdict-2026-09-18.md](palw-release-6001-verdict-2026-09-18.md) |
-| **PARTIAL** | External review | commissioned static reviews of code snapshots: the 2026-06-22 Kaspa-diff and EVM/NFT packages (answered in [security/MISAKA-Audit-Remediation-Response-2026-06-23.md](security/MISAKA-Audit-Remediation-Response-2026-06-23.md)) and the 2026-08-21 PALW review ([palw-external-audit-2026-08-21.md](palw-external-audit-2026-08-21.md), which could not build or run the code). None of them covers a release. The reviewers are not named in the tree |
+| **PASS** | Internal audits, fixed in the open | e.g. the mainnet audits of [08-28](archive/palw-mainnet-audit-2026-08-28.md), [08-30](archive/palw-mainnet-audit-2026-08-30.md), [09-05](archive/palw-mainnet-audit-2026-09-05.md) and [09-06](archive/palw-mainnet-audit-2026-09-06.md) |
+| **PARTIAL** | External review | commissioned static reviews of code snapshots: the 2026-06-22 Kaspa-diff and EVM/NFT packages (answered in [security/MISAKA-Audit-Remediation-Response-2026-06-23.md](archive/security/MISAKA-Audit-Remediation-Response-2026-06-23.md)) and the 2026-08-21 PALW review ([palw-external-audit-2026-08-21.md](archive/palw-external-audit-2026-08-21.md), which could not build or run the code). None of them covers a release. The reviewers are not named in the tree |
 | **TODO** | Independent audit of a release candidate | a named third party, a tagged commit, and a published report for at least one of: consensus, cryptography, PALW economics and security, network and RPC attack surface |
 | **PARTIAL** | Fuzzing | only the upstream arithmetic harnesses (`math/fuzz`, `crypto/muhash/fuzz`), not run in CI. Nothing fuzzes block, transaction, P2P message or RPC decoding |
 | **PARTIAL** | Threat model | [palw-rc-threat-model.md](palw-rc-threat-model.md) covers PALW; there is none for the network and RPC surface |
@@ -56,9 +56,9 @@ add more rules.
 
 | status | item | evidence / what is missing |
 |---|---|---|
-| **PASS** | Node, CLI and validator runbooks | [testnet12-join-mining.md](testnet12-join-mining.md), [validator-runbook.md](validator-runbook.md), `misaka node doctor` |
-| **PARTIAL** | Recovery from real incidents | testnet-11 recovered from a partition, stale-build arms and re-mints ([history](history/testnet-11.md), [testnet11-regenesis-2026-08-30.md](testnet11-regenesis-2026-08-30.md)). Recovery was done by hand; no automated test proves that the same failure cannot recur |
-| **PARTIAL** | Drills | [palw-court-round-trip-drill.md](palw-court-round-trip-drill.md), [palw-economy-studio-drill-2026-09-20.md](palw-economy-studio-drill-2026-09-20.md). The testnet-12 drill kit ([contrib/t12-drill-kit](../contrib/t12-drill-kit/README.md), D-1…D-10) is ready but has not run yet |
+| **PASS** | Node, CLI and validator runbooks | [node-operator.md](node-operator.md), [testnet12-join-mining.md](testnet12-join-mining.md), [validator-runbook.md](validator-runbook.md), `misaka node doctor` |
+| **PARTIAL** | Recovery from real incidents | testnet-12 recovered from the DAA 198 fork of 2026-09-26 (one node's minority branch, resynced; node fix `8a0810992`, [launch note §0](t12-launch-2026-09-25.md)), and earlier networks from partitions, stale-build arms and re-mints. Recovery was done by hand; no automated test proves that the same failure cannot recur |
+| **PARTIAL** | Drills | [palw-court-round-trip-drill.md](palw-court-round-trip-drill.md), [palw-economy-studio-drill-2026-09-20.md](archive/palw-economy-studio-drill-2026-09-20.md). The testnet-12 drill kit ([contrib/t12-drill-kit](../contrib/t12-drill-kit/README.md), D-1…D-10) is ready but has not run yet |
 | **TODO** | Recovery drills run and published | fresh sync from genesis, crash and restart mid-IBD, DB corruption, network partition and heal, validator loss, seeder loss. Each should run as a CI job or scheduled job, and its result should be published |
 | **TODO** | Large-scale simulation | `simpa` exists, but no published multi-node (e.g. 1,000-node) PALW simulation result |
 
@@ -84,7 +84,7 @@ add more rules.
 | **PASS** | Component digests | [components manifest](components-manifest.md) (`misaka/components/v1`) is written on release |
 | **PARTIAL** | Reproducible binaries | testnet-12's build matched byte-for-byte across two checkouts; nobody else has reproduced it, and CI does not check it |
 | **PARTIAL** | Multi-platform binaries | CI builds and smoke-runs Windows. `deploy.yaml` builds x86_64 Linux, ARM64 Linux, x86_64 Windows and ARM64 macOS when a release is published. The ARM64 Linux leg has not run yet, and testnet-12 ships x86_64 Linux only |
-| **TODO** | Tagged releases | testnet-12 shipped as commit `0e8ec984e` with no tag and no GitHub release; the last release is testnet-11's `testnet-main-e65ccf20` (2026-09-07) |
+| **TODO** | Tagged releases | testnet-12 shipped as commit `0e8ec984e` with no tag and no GitHub release; the releases on GitHub are retired networks' |
 | **PARTIAL** | Signed artifacts | `deploy.yaml`'s `sign` job writes `SHA256SUMS`, signs it with Sigstore (`SHA256SUMS.sigstore.json`) and attests provenance for every file, and its `verify` job checks all of it from a clean runner ([release-process.md](release-process.md)). It has not had its first dry run yet, and no release has been cut with it |
 | **TODO** | Signed tags | no release tag is signed yet; [release-process.md](release-process.md) §2 makes it a step |
 | **PARTIAL** | SBOM | `deploy.yaml` writes an SPDX SBOM of the source tree on release; no release carries one yet |

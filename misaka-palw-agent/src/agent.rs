@@ -1,5 +1,5 @@
 //! `palw-agent` — the VPS runtime supervisor for the pinned `palw-worker`
-//! (docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §4.2, §5, §8; Phase A).
+//! (docs/design/misaka-palw-vps-canonical-worker-design-v0.1-ja.md §4.2, §5, §8; Phase A).
 //!
 //! One Unix domain socket, transport `misaka-palw-agent-borsh/v1`: per connection, one framed
 //! [`PalwAgentRequestV1`] in, one framed [`PalwAgentResponseV1`] out. The agent supervises the

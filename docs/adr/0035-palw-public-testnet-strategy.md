@@ -2,9 +2,9 @@
 
 - Status: Accepted (implemented 2026-08-17; operator items listed in §6)
 - Track A gate 5. Evidence base: gates 1–4 —
-  `docs/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
-  `docs/palw-algo4-crosshost-determinism-2026-08-16.md` (gate 2),
-  `docs/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
+  `docs/archive/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
+  `docs/archive/palw-algo4-crosshost-determinism-2026-08-16.md` (gate 2),
+  `docs/archive/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
   `docs/palw-testnet11-soak-2026-08-16.md` (gate 4, running).
 
 > **Superseded in part (index reconciliation, 2026-09-02).** Decision 1 — "the chain the fleet is
@@ -159,7 +159,7 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
 | ≥ 48 h clean soak | 44.7 h, 0 panics — met on schedule, nothing to do |
 | a fresh node's from-genesis IBD join | **IBD half PASSED: 7 h 45 m** for a ~1,300-block chain. The *participation* half failed — see below |
 | calibration-gated binary deployed fleet-wide | **NOT met.** The fleet kaspad is from 2026-08-16 13:05 and predates both the remote-panic fix and the switch-counter fix |
-| node-operator doc | **published:** `docs/testnet11-node-operator.md` |
+| node-operator doc | **published:** `docs/node-operator.md` |
 | discovery (item 1) | **NOT met.** `n11-seed*.misakascan.com` do not resolve |
 
 **The join measured a cost this ADR did not carry, and an announcement must.** 7 h 45 m for 1.5 days

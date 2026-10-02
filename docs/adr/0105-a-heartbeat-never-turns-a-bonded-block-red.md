@@ -5,7 +5,7 @@
   preset** — no fingerprint, identity, schedule or fork id moves on any network, and arming it on
   testnet-11 is a flag day (§7). **Decision 2 IMPLEMENTED in the heartbeat miner** — node policy,
   no rule, safe to roll out host by host today. **Decision 3** is operator guidance, written into
-  [`testnet11-node-operator.md`](../testnet11-node-operator.md) §7a.
+  [`testnet11-node-operator.md`](../node-operator.md) §7a.
 * **Amended 2026-09-25 — F1 (§11), a post-launch flag day**: past
   `Params::palw_heartbeat_transparent_same_chain` transparency stops at the merging block's own
   selected chain; the rule as written (and as testnet-12 launched with it, from genesis) lets a
@@ -258,7 +258,7 @@ as before, and such a miner can keep the chain heartbeat-led (Decision 1 is what
 
 ### 5.3 Decision 3 (operators)
 
-[`testnet11-node-operator.md`](../testnet11-node-operator.md) §7a: how to recognise the mode (every
+[`testnet11-node-operator.md`](../node-operator.md) §7a: how to recognise the mode (every
 block algo-8; `getDnsConfirmation` with `pow_confirmed = false` and `workDepth` below
 `requiredWorkDepth`), how to escape it on a build without Decision 2 (stop every heartbeat miner for
 one draw), and how not to enter it (check the last bonded chain block's TIMESTAMP before restarting
@@ -379,7 +379,7 @@ fence name, the code and every test are unchanged. **The next free number is 010
     `ConsensusApi` method, its `Consensus` impl and the session proxy.
   * `kaspad/src/palw_heartbeat_miner.rs` — the yield and its budget.
   * `consensus/src/pipeline/virtual_processor/tests.rs` — the three pipeline tests above.
-  * `docs/testnet11-node-operator.md` §7a; `docs/testnet11-relaunch5-runbook.md` (correction note);
+  * `docs/node-operator.md` §7a; `docs/testnet11-relaunch5-runbook.md` (correction note);
     a pointer in ADR-0066.
 
   Verified on that tree with `MISAKA_PALW_POW_FIXTURE=1`: `cargo test -p kaspa-consensus-core --lib`

@@ -8,7 +8,7 @@ design rather than inventing three.
 Date: 2026-08-16
 Relates to: ADR-0028 §1 (the predicate), §4 (the economics, with the 2026-08-16 leverage
 amendment), ADR-0029 (the Stage-1 carriage and store the gate reads), ADR-0027 §6 (the stage
-ladder), ADR-0032 (fee/bounty value flows), `docs/palw-class-activation-gate-status.md` (the
+ladder), ADR-0032 (fee/bounty value flows), `docs/archive/palw-class-activation-gate-status.md` (the
 §12 ledger this promotion answers to), the capability credit walk in
 `consensus/src/pipeline/virtual_processor/processor.rs` (the template).
 

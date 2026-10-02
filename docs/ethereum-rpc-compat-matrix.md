@@ -1,10 +1,13 @@
 # Ethereum JSON-RPC compatibility matrix (MISAKA eth-rpc adapter)
 
-Status 2026‑06‑27. The adapter is the `kaspa-eth-rpc` crate (`rpc/eth`) served by kaspad on
-`--evm-rpc-listen` (default `:8545`), HTTP JSON‑RPC 2.0 (+ batch + CORS). It is a thin front end
-over the node‑side `EthProvider` (`kaspad/src/eth_rpc.rs`); all consensus reads + the read‑only
-revm simulation live node‑side. EVM spec = **Shanghai**, `EVM_CHAIN_ID = 0x4D534B` (5067595),
-native = 18 decimals (1e10 wei/sompi). Tx types: **Legacy / EIP‑2930 / EIP‑1559** only.
+Status 2026‑10‑02 (rechecked against `rpc/eth/src/lib.rs`; current network testnet‑12). The
+adapter is the `kaspa-eth-rpc` crate (`rpc/eth`) served by kaspad on `--evm-rpc-listen`
+(port 8545 by default; how to enable it is in
+[`connecting-ethereum-tooling.md`](connecting-ethereum-tooling.md)), HTTP JSON‑RPC 2.0 (+ batch +
+CORS) and WebSocket on the same listener. It is a thin front end over the node‑side `EthProvider`
+(`kaspad/src/eth_rpc.rs`); all consensus reads + the read‑only revm simulation live node‑side.
+Chain id, EVM spec, tx types and units are pinned in
+[`evm-differences-from-ethereum.md`](evm-differences-from-ethereum.md).
 
 Legend: **✓** full · **◑** works with a documented limitation · **·** stubbed constant · **✗** not implemented (returns JSON‑RPC `-32601`).
 
@@ -34,15 +37,15 @@ Legend: **✓** full · **◑** works with a documented limitation · **·** stu
 | `eth_getBlockByHash` | ◑ | same as by‑number; the 32‑byte block id = first 32 bytes of the 64‑byte L1 hash |
 | `eth_getBlockTransactionCountByNumber` | ✓ | |
 | `eth_getBlockTransactionCountByHash` | ✓ | |
-| `eth_getLogs` | ◑ | `address` + `topics` (OR/wildcard) + `blockHash`/`fromBlock`/`toBlock`; **10 000‑block range cap** + 10 000‑result cap; **forward‑populated index** (blocks committed after the node ran this binary; a historical backfill is a follow‑up) |
+| `eth_getLogs` | ◑ | `address` + `topics` (OR/wildcard) + `blockHash`/`fromBlock`/`toBlock`; **10 000‑block range cap** (`-32000`) + 10 000‑result cap (exceeding it is an **error**, not a silent truncation — narrow the range/filter). An address filter uses the posting index when the range is at/above the index floor; otherwise the node falls back to a canonical block scan |
 | `eth_feeHistory` | ◑ | real base fees + `gasUsedRatio` over the range (+1 projection); reward percentiles are `0x0` (no priority‑fee market). Enables default EIP‑1559 tooling (Foundry/ethers/viem/MetaMask) |
 | `debug_traceTransaction` | ◑ | re‑executes an **accepted** tx against its exact pre‑state. Tracer selector (param #2 `{tracer}`): omit ⇒ the Geth default opcode/struct logger (memory/storage omitted by §11.5); `callTracer` ⇒ the call‑frame tree (with `misakaOriginatingPayloadBlock`/`misakaAcceptingBlock` on the root); `prestateTracer` ⇒ the diffMode pre/post state. `null` for an unknown / not‑accepted (skipped/pending) tx — use `misaka_getEvmTxStatus`/`misaka_traceEvmCandidate` to diagnose those. Any other tracer name ⇒ `-32602` |
 | `trace_transaction` | ◑ | the Parity/OpenEthereum flat‑call list (`[{action,result\|error,subtraces,traceAddress,type}]`) of the SAME accepted‑tx replay as `debug_traceTransaction`'s `callTracer`. `null` for a non‑accepted tx |
 | `misaka_traceEvmCandidate` | ✓ | MISAKA extension (§11.6): diagnoses a tx with **no receipt** (skipped class 2/3/5 or still pending) by replaying it against the current head — returns `executed`/`accepted`/`status`/`gasUsed`/`reason`/`recordedSkipClass` + the call tree. `null` if the raw tx is unknown to the node |
 | `misaka_getEvmTxStatus` | ✓ | MISAKA extension: the full EVM‑lane lifecycle of a tx (`pending`/`included`/`accepted`/`skipped`/`unknown`) — strictly more than `eth_getTransactionReceipt`'s accepted‑or‑null. `acceptedIn` is reported ONLY for a canonical (non‑reorgable) acceptance (audit H‑06) |
 
-> The `debug_*`/`trace_*`/`misaka_*` trace methods require an `--features evm` node (the
-> read‑only revm executor). A non‑EVM node returns `-32601` for them.
+> The whole adapter exists only in an `evm`‑feature kaspad (the default build; `--no-default-features`
+> drops it, and such a binary refuses to start on testnet‑12, which activates the EVM lane at DAA 0).
 
 **WebSocket** (`ws://<node-host>:8545`, same listener): ordinary JSON‑RPC requests work
 over the socket, plus `eth_subscribe`/`eth_unsubscribe` for the subscription kinds
@@ -56,12 +59,3 @@ per connection; a slow consumer (bounded outbound queue) is disconnected.
 `eth_getProof`, `eth_getBlockReceipts`, `eth_getTransactionByBlock*AndIndex`, and the
 `personal_*` / `admin_*` / `engine_*` / `txpool_*` namespaces (and any `debug_*` /
 `trace_*` method other than the rows above).
-
-### Verified live (testnet, 2026‑06‑20)
-- Identity + state: `eth_chainId 0x4d534b`, `eth_getBalance` returned a bridge‑credited
-  `0xde0b6b3a7640000` (1 MSK = 1e18 wei), `eth_estimateGas` = `0x5208` (21000 intrinsic).
-- Block/log index: `eth_getBlockByNumber("latest")` / by‑N / by‑hash resolve the same canonical
-  block; `eth_getLogs` range‑cap returns `-32000`.
-- Full contract deploy: `eth_sendRawTransaction` deployed a CREATE tx whose constructor emits
-  `LOG0` → `eth_getTransactionReceipt` returned `status 0x1` + `contractAddress` + `from` + the
-  log; `eth_getLogs({address})` returned the event; `eth_getTransactionByHash` returned the tx.

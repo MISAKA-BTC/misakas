@@ -236,7 +236,7 @@ pub const SUBNETWORK_ID_EVM_WITHDRAW_CLAIM: SubnetworkId = SubnetworkId::from_by
 pub const SUBNETWORK_ID_EVM_ADMIN: SubnetworkId = SubnetworkId::from_byte(0x22);
 
 // MISAKA Compute Token Program token-op band 0x30-0x33 (design
-// `docs/misaka-compute-token-program-design-v0.1.md` §4.3). Above the EVM
+// `docs/design/misaka-compute-token-program-design-v0.1.md` §4.3). Above the EVM
 // bridge band (0x20-0x22) as that band sits above the finality overlay
 // (0x10-0x1a). Phase A defines transfer/burn; 0x32 (`CreateMint`) and 0x33
 // (`MintTo`) are reserved for Phase B and intentionally not defined yet — the

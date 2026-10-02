@@ -15,8 +15,8 @@ alone. Every activation gate in the v2 design §12 still stands; this ADR moves 
 Date: 2026-08-15
 Relates to: ADR-0007 (layered PoW), ADR-0021 (superseded PALW PoW record — kept as history),
 ADR-0024 (verified-LLM token-weighted BFT),
-[`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) (operative
-safety model), [`ambient-pol-binary-audit-2026-08-15.md`](../ambient-pol-binary-audit-2026-08-15.md)
+[`palw-full-logits-trace-v2-design.md`](../design/palw-full-logits-trace-v2-design.md) (operative
+safety model), [`ambient-pol-binary-audit-2026-08-15.md`](../archive/ambient-pol-binary-audit-2026-08-15.md)
 (the evidence this ADR rests on), the detailed / VPS-canonical-worker / secure-OTA design set,
 `consensus/core/src/palw_v2.rs` (frozen preimages).
 
@@ -332,7 +332,7 @@ Ambient is wrong.
   > 4/4 golden jobs unmoved on both the Metal and CPU classes, roots reproducible across runs,
   > 0 of 592 captured rows all-zero. A backend that fails this gate is a distinct determinism
   > class, not a bug to suppress. Evidence and run recipe:
-  > `docs/palw-legs-capture-measurement-2026-08-15.md`.
+  > `docs/archive/palw-legs-capture-measurement-2026-08-15.md`.
   >
   > **Opening production landed 2026-08-16 (same doc, §6):** commitments are now answerable —
   > `v2-legs-open` re-executes and opens named leaves, refusing any root it cannot reproduce

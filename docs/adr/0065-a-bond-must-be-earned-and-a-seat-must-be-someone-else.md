@@ -6,7 +6,7 @@ names what survived.)*
 
 Status: **D1, D2 and D4 LANDED (all dormant); D3 and D5 decided** (2026-08-30). **D1 made
 ARMABLE 2026-08-31** — see the correction below. Closes the CRITICAL recorded in the two addenda to
-`docs/palw-mainnet-audit-2026-08-30.md`. **Mainnet blocker.** Consensus-affecting, but **no
+`docs/archive/palw-mainnet-audit-2026-08-30.md`. **Mainnet blocker.** Consensus-affecting, but **no
 re-mint for the RULES**: both landed rules sit behind top-level `ForkActivation` fences, `None` on
 every preset, so no shipped fingerprint moves and either can be armed by rolling deploy. The earlier
 "fingerprint move and a re-mint on every network" in §Consequences was written before the placement

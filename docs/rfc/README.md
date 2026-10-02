@@ -1,8 +1,8 @@
 # RFC index
 
-An RFC is a proposal under discussion. [INDEX.md](../INDEX.md) §3 explains how an RFC becomes an ADR
-and a Spec change. Take the next number from this table, not from `ls`: an RFC can live on a branch
-before it reaches `main`.
+An RFC is a proposal under discussion; a decision taken from it is recorded as an ADR
+([ADR index](../adr/README.md)). Take the next number from this table, not from `ls`: an RFC can live
+on a branch before it reaches `main`.
 
 | RFC | Title | Status | Where |
 | --- | --- | --- | --- |

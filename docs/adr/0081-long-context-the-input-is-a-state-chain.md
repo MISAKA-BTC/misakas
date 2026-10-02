@@ -349,4 +349,4 @@ rebinding, the interval checkers. The court's `PalwCourtVerdictProofV2::Arithmet
 carries the one tile the disputed gather read, verified against the job context's root before any
 id is read; `check_close_speaks_the_networks_prompt_form` admits exactly one spelling per network.
 Armed on a carded mainnet from genesis; testnet-11 keeps trace format 3. Design record:
-`docs/palw-private-prompts-design-2026-09-05.md`.
+`docs/archive/palw-private-prompts-design-2026-09-05.md`.

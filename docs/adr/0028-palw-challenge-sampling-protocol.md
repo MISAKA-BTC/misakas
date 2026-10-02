@@ -18,11 +18,11 @@ credited-job ceiling (§3), and the funding mechanics are concrete (§4a–4e).
 Date: 2026-08-16
 Relates to: ADR-0027 (premises P1–P3, the refutation model this ADR schedules work for),
 ADR-0026 §4/§5 (the PRF-positions flow demoted there is given its surviving role here),
-[`misaka-palw-slash-protocol-design-v0.1.md`](../misaka-palw-slash-protocol-design-v0.1.md)
+[`misaka-palw-slash-protocol-design-v0.1.md`](../design/misaka-palw-slash-protocol-design-v0.1.md)
 (§9 dynamic inputs, §10 DA, §17 objective offenses, §18 economics, §23 deadlines),
-[`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) (§10 economics,
+[`palw-full-logits-trace-v2-design.md`](../design/palw-full-logits-trace-v2-design.md) (§10 economics,
 §12 gates, §13 staging, §15 prohibited claims),
-[`palw-legs-capture-measurement-2026-08-15.md`](../palw-legs-capture-measurement-2026-08-15.md)
+[`palw-legs-capture-measurement-2026-08-15.md`](../archive/palw-legs-capture-measurement-2026-08-15.md)
 (its §6 is the opening seam this ADR's §5 consumes), `consensus/core/src/vlt.rs` (`select_verifiers` — the assignment
 shape adopted in §2), ADR-0012 (superseded commit-reveal sortition — deliberately **not**
 revived; see "What this ADR deliberately does not decide").
@@ -234,7 +234,7 @@ root safe, because the refutation right is permissionless.
 slash floor of a large multiple of the forgone fee (placeholder: `≥ 100 · ρ_v · base`,
 Stage-1-measured like every number here).
 
-> **Amendment 2026-08-16 (B15 simulation, `docs/palw-economic-parameters-2026-08-16.md`):**
+> **Amendment 2026-08-16 (B15 simulation, `docs/archive/palw-economic-parameters-2026-08-16.md`):**
 > at live parameters the placeholder is **uncollectible** — `100 · ρ_v · base` = 444 562 MSK
 > against a 20 000 MSK bond, 22× more than exists to slash. The floor is therefore
 > `min(100 · ρ_v · base, bond)`: below ~222 k MSK bonds, **the bond IS the floor**. The
@@ -304,7 +304,7 @@ economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
 > the printed (10 blocks, 0.2 %). The real lever set is
 > `(min_credit_interval_daa, base_subsidy_permille, q, ρ_v)`; shrinking `ρ_v` to 200‰ restores
 > 0.2 % at one job per 13 blocks. Corrected table and derivation:
-> `docs/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
+> `docs/archive/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
 > `consensus/core/src/palw_schedule.rs`.
 
 > **SUPERSEDED 2026-08-20 — the remedy set above priced an overlay mint that no longer exists.**
@@ -455,7 +455,7 @@ Stage 3 Full         wider exposure; requires the second independent reference
   > fleet, whose 0.75–1.6 s/token measurement remains the operative sizing basis.
   >
   > **Fleet-measured (2026-08-16, all four t10 hosts,
-  > `docs/palw-stage0-fleet-replay-bench-2026-08-16.md`):** D=512 p99 37.3–90.7 s,
+  > `docs/archive/palw-stage0-fleet-replay-bench-2026-08-16.md`):** D=512 p99 37.3–90.7 s,
   > 59–165 ms/token, worst κ·p99 = 272 s — every host fits `w_replay` = 1 h with ≥ 13×
   > margin, and the cross-host logits roots are identical 4/4 at both depths (the pairwise
   > class property, measured). The old 0.75–1.6 s/token basis was F16; the pinned Q4 artifact

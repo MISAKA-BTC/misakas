@@ -3,7 +3,7 @@
 `MisakaPqSmartAccount` — an EVM account whose **unrestricted authority is a
 post-quantum ML-DSA-87 key**, not secp256k1. A root operation is authorized by an
 ML-DSA-87 signature verified **on-chain** by the MISAKA **F003 `MLDSA87_VERIFY`
-precompile** (`0x…F003`, version `0x02`). See `docs/misaka-prea-design-v1.1.md`
+precompile** (`0x…F003`, version `0x02`). See `docs/design/misaka-prea-design-v1.1.md`
 §13 for the full design.
 
 **Implemented:** the ML-DSA root path (`executeRoot`), the offline **Vault Owner**

@@ -1,5 +1,11 @@
 # testnet-12 regenesis — deployment record, 2026-09-23
 
+> **この記録の後（2026-10-02 追記）:** testnet-12 は新 genesis `a27f8f44…` で 2026-09-25/26 JST に公開された
+> （[`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md)）。下の「TBD」の fingerprint と binary の sha256 は
+> 公開ノートに記録してあり、その後の flag day で動いた **現在の fingerprint と schedule id は repo root の
+> [`release.json`](../release.json)** にある。参加手順は [`testnet12-join-mining.md`](testnet12-join-mining.md)。
+> 以下は記録時点の内容のまま残す（表の genesis 系の値は `scripts/t12_repin.py` が管理する）。
+
 > **状態（2026-09-24 更新）: 新しい genesis `a27f8f44…` で起動し直す準備中（`f6cc9576…` は
 > replay 分離で置き換え、`d73dbf44…` は運用者の 100M 追加で置き換えた。下の「replay 分離」）。consensus params fingerprint と出荷 binary の
 > sha256 は未確定（TBD）。** 別 session が実装中の DoS 監査修正
@@ -22,19 +28,19 @@
 | | |
 |---|---|
 | genesis hash | `a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23`（`f6cc9576…`、`d73dbf44…` を置き換え。`d73dbf44…` との違いは community 表の 17 行目だけ） |
-| genesis timestamp | `1788220800000`（2026-09-01T00:00:00Z）。t11 などが共有していた参照 timestamp `1748390400000` ではない |
+| genesis timestamp | `1788220800000`（2026-09-01T00:00:00Z）。他の network が共有する参照 timestamp `1748390400000` ではない |
 | hash_merkle_root | `5ef04d1b9a6cb09e728a970d2e0b75a0142ecacc4a373c9b719e47d6a0d2058cb048fa240e13f1bbb094dd4e195919ea041db2ee338f21de34364f885317f805`（初回配備と同じ。coinbase marker `misaka-palw-t12` も同じ） |
 | utxo commitment | `6ee51571a65164fb60dad8428e4a0f42584e8453bf6d029038459efe9279b265ad470ee5c42f2d90450ce37824418590b30fe36193cc37d2038fcf75ecb84eed` |
 | premine txid | `5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669`（`premine_txid_for(testnet-12)`。index は従来どおり: collateral 0〜7、main wallet 40、fee float 41〜48） |
 | community txid | `e3d638e58827755bdc78b362b499495c9607275b50a3ec2e1941f4ea75d38eda1c010f7796c637bd0b343d811a729291869c4658f36d6ca8d959baf8ed85064b`（`testnet12_community_txid()`、index 0〜16） |
-| consensus params fingerprint | **TBD**（DoS 修正の merge 後に確定。起動ログの `Consensus params fingerprint: … (network testnet-12)` 行と照合） |
-| release binary | **TBD**（`kaspad` / `misaka` / seeder の sha256。merge 後の release build） |
-| fence schedule | `1000`。ADR-0065 D1 の bond maturity window で、他の rule はすべて DAA 0 で武装している（`palw_t12_arm_every_rule_from_genesis`）。起動ログの `Consensus fence schedule:` 行でも確かめる |
+| consensus params fingerprint | 記録時点では **TBD**。公開時の値は [公開ノート](t12-launch-2026-09-25.md)、現在の値は [`release.json`](../release.json)（起動ログの `Consensus params fingerprint: … (network testnet-12)` 行と照合） |
+| release binary | 記録時点では **TBD**。公開時と post-launch リリースの sha256 は [公開ノート](t12-launch-2026-09-25.md) |
+| fence schedule | 記録時点では `1000`（ADR-0065 D1 の bond maturity window。他の rule はすべて DAA 0 で武装、`palw_t12_arm_every_rule_from_genesis`）。公開後の flag day を加えた現在の schedule は `750, 1000, 1300, 1700, 2000, 3600`（[join 手順書 §3](testnet12-join-mining.md#3-start-a-node)） |
 | premine | 34 outputs、合計はちょうど 10B MSK。内訳は collateral 8 + fee float 8 + **community 17（858M）** + main wallet。17 行目（index 16）は運用者の指示で追加した `misakatest:qffaadrf…tsfy` への 100M（2026-09-24）。community の総額は main wallet から切り出すので、cap は動かない |
 | bond collateral | **939,063.21001040 MSK / seat**。8 seats で 7,512,505.68 MSK（cap の 0.0751 %） |
 | genesis bond cards | card 0〜6 は `PALW_RC_GENESIS_BONDS` 0〜6 のまま（鍵は変わらない）。**card 7 は testnet-12 専用に鍵を替えた**（下記） |
 | classes | BASE-0 floor + dense Qwen2.5-1.5B graph-v7 @8,192 + @2,097,152。**hybrid 行は無い**（下記） |
-| P2P port | 26311（t11 と同じ。運用者の決定） |
+| P2P port | 26311（運用者の決定。`NetworkId::default_p2p_port`） |
 
 ### replay 分離（2026-09-24、ユーザー決定）
 
@@ -45,7 +51,7 @@
 
 * **premine txid を network ごとに分けた。** `premine_txid_for(testnet-12)` は
   `BLAKE2b-512(key = "misaka-premine-txid/v1", sentinel ‖ "testnet-12" ‖ PALW_T12_PREMINE_SALT)`。
-  他の network（testnet-11、testnet-10、devnet、simnet、mainnet）は sentinel のままで、genesis と
+  他の network（devnet、simnet、mainnet など）は sentinel のままで、genesis と
   fingerprint は動かない（`palw_the_release_did_not_move`、`every_genesis_commits_to_the_premine_this_build_mints`、
   `test_genesis_hashes` がそれを確かめる）。
 * **community txid も同じ方法で分けた**（`testnet12_community_txid()`）。`misaka-t12-community`
@@ -97,7 +103,7 @@ genesis 後の登録なので `Candidate` から始まり、admission audit を�
 （`/etc/misaka/t12/t12-bond-7.key`、`t12-operator-7.key`、0600、ホスト外には一度も出していない）。
 それを同じホスト上の `palw-rc-genesis --emit-row` で `PALW_T12_GENESIS_BOND_7` にした。この
 コマンドが出力するのは公開値だけ。payout は bond 鍵自身のアドレスなので、premine index 48 の
-float は card 7 に署名する鍵で使える。testnet-11 の table には手を入れていない
+float は card 7 に署名する鍵で使える。card 0〜6 の元の table（`PALW_RC_GENESIS_BONDS`）には手を入れていない
 （`testnet_12s_registry_is_seven_carried_cards_and_one_new_key`）。
 
 bond と float の対応は `premine_outpoint(i)` ↔ `41 + i` のまま（card 0 ↔ 41 … card 7 ↔ 48）。
@@ -106,17 +112,17 @@ bond と float の対応は `premine_outpoint(i)` ↔ `41 + i` のまま（card 
 
 | | testnet-12 | 備考 |
 |---|---|---|
-| producer（miner）floor | **13,000 MSK**（`PALW_MAINNET_MIN_COLLATERAL_SOMPI`。mainnet の値も 10,000 → 13,000） | bundle の `min_collateral_sompi`。testnet-11 と devnet は 0.004 MSK のまま |
+| producer（miner）floor | **13,000 MSK**（`PALW_MAINNET_MIN_COLLATERAL_SOMPI`。mainnet の値も 10,000 → 13,000） | bundle の `min_collateral_sompi` |
 | panel seat floor | **130,000 MSK**（producer floor の 10 倍、`palw_panel_collateral_floor_v1`） | |
 | readiness に要る空き担保 | 39,000 MSK（floor × 3） | genesis card 939,063.21 MSK はすべての floor を満たす |
 | option A での floor claim 1 本の予約 | **3,200.95 MSK**（escrow 3,200.85 + weight 0.11） | 13,000 MSK の bond（上限 500 ‰ = 6,500 MSK）には **2 本**入り、3 本は入らない。依頼時の想定は「ちょうど 1 本」だったが、実測では 2 本（ちょうど 1 本にするには floor を 6,401.91〜12,803.82 MSK 未満にする必要がある）。`t12_mainnet_assumed_bonds.rs` が実測値を固定 |
 | DNS validator bond | **20,000,000 MSK 以上** | `PALW_T12_DNS_PARAMS`（`PRODUCTION_DNS_PARAMS` から導出）。2026-09-25 から production（mainnet）も同じ値 |
 | DNS finality の起動条件 | **validator 6 以上、active stake 120,000,000 MSK 以上** | 2026-09-25 から production も 6 validator（12 から変更）。validator 数 × bond の関係は同じ |
 | unbonding period | 10,083 block = **約 14 日 6 分**（120 s cadence） | `at_two_minute_cadence` で変換。10 bps の 14 日ではない |
-| coinbase の long maturity | 600 DAA（約 20 時間） | Decision A（coinbase は DAA だけで成熟）のため testnet-11 の値を維持 |
+| coinbase の long maturity | 600 DAA（約 20 時間） | Decision A（coinbase は DAA だけで成熟）のため従来の PALW chain の値を維持 |
 
 DNS set は production から次の点だけ変えている。120 s cadence への窓の変換と `required_work_depth`
-（testnet-11 の値。production の値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が
+（従来の PALW chain の値。production の値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が
 永久に起きないため）。validator 数・bond・stake の 3 値と coinbase long maturity（600）は、2026-09-25 に
 production（mainnet）側がこの値に移ったので、上書きではなく production から継承している（t12 の値は不変）。
 それ以外（`required_stake_depth`、`min_anchor_attesters` = 2、報酬、stake preference 無効、VLT inert）は
@@ -131,11 +137,11 @@ production のまま。
 | max_block_level | 250 | **225** | mainnet の値。t12 は全 block が level 0（single lottery）なので header は不変。pruning proof の header 予算が 502,000 → 452,000。level 0 の proof は pruning point より下の全履歴なので、予算に届くのは 2 block/slot で pruning point の下に約 314 日分（250 では約 348 日）。pruning point 自体は最初の claim が Final になるまで genesis から動かない（PALW safe frontier）。225 で pruning point を動かした proof の作成・検証・適用を `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225` で確認 |
 | mainnet card の overlay carve | なし（validator 30 %、escrow 620 ‰） | — | mainnet card が validator 20 %・escrow 720 ‰ を genesis から宣言（t12 と同じ）。`the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim` が固定 |
 
-fingerprint: testnet-11・devnet は動かない（`palw_the_release_did_not_move` と preset の fingerprint pin で確認）。
+fingerprint: devnet などほかの preset は動かない（`palw_the_release_did_not_move` と preset の fingerprint pin で確認）。
 mainnet は 2026-09-25 に DNS 値（validator 6・bond 20,000,000 MSK・active stake 120,000,000 MSK・coinbase long
 maturity 600）を t12 と同じにしたので、params id が `badaa8e9…` → `eb866c61…` に移動した（schedule id は不変）。
 
-**open（1,620 s の burst、公開前にユーザー判断）**: (a) clock を進める beat の stamp だけを受信側時計 + 1 interval
+**open（1,620 s の burst、公開前にユーザー判断）** — *決着: (a) の beat の先行時刻の上限（受信側の時計 + 132 s）が公開リリースに入った（[公開ノート](t12-launch-2026-09-25.md) §1、`consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs`）。以下は記録時点の選択肢*: (a) clock を進める beat の stamp だけを受信側時計 + 1 interval
 程度で上限にする t12 規則を足し、通常 block の 1,620 s は残す（consensus 変更。beat の skew 許容が 132 s 時代並みに戻る）、
 (b) readiness の再証明を row の年齢が horizon − (14 + 2) を超えた時点で行う（horizon 24 なら 13 DAA ごとが 9 DAA ごとになり、
 proof の量は約 1.4 倍。node の policy だけの変更。horizon を上げるだけでは足りず、上限の 30 でも揃って証明した fleet は落ちる。
@@ -197,7 +203,8 @@ weight は raw の MAC-eq で、その差は 5,620 倍ある（ADR-0151 D1 の w
 
 ## 起動判定（新 genesis）
 
-初回配備の反省から、「heartbeat が刻む」は成功条件に含めない。
+初回配備の反省から、「heartbeat が刻む」は成功条件に含めない。lane watch の運用者向けの説明は
+[join 手順書 §7「The lane-mix alarm」](testnet12-join-mining.md#the-lane-mix-alarm) にある。
 
 1. **lane の内訳を見る。** どの ConsensusV2 ノードも、selected chain の直近 600 block を 60 s ごとに
    lane 別に数え、各 chain block が merge した algo-10 round block も数える（round block は selected
@@ -327,12 +334,12 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 |---|---|
 | genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` — **superseded by `f6cc9576…`, then by `d73dbf44…` (replay separation, 2026-09-24), then by `a27f8f44…` (the operator's 100M community row, 2026-09-24)** |
 | params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` at first deploy; the live public nodes later ran `c746f07c…` |
-| fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
+| fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
 | premine | 33 outputs, exactly 10B MSK: 8 collateral + 8 fee floats + **16 community (758M)** + main wallet |
 | bond collateral | 60,088.18407600 MSK a seat at first deploy, then 516,429.79663480 (`2bd134ec`) — **now 939,063.21001040** |
 | classes | BASE-0 floor + held Qwen3.6 `e108e736…`@512 + held Qwen2.5 `74c67e63…`@2,097,152 — **now floor + dense @8,192 + @2,097,152** |
-| P2P port | 26311 — unchanged from t11, by the operator's decision |
+| P2P port | 26311, by the operator's decision |
 
 ### Hosts (first deployment)
 
@@ -344,9 +351,6 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 | 95.111.236.186 | seeder only | — | — | — |
 
 Seeders, all four: `misaka-dnsseeder-t12` (`--network-id testnet-12`), binary `1174b965…`.
-
-**The t11 units, launch scripts and datadirs are all still in place.** Rollback is: stop the t12 unit,
-`systemctl enable --now` the t11 one.
 
 ### What the switch did NOT change, and why that matters
 
@@ -378,7 +382,7 @@ one it cannot now refuses to start.*
    drill: the node logged `SIGTERM - shutting down…`, stopped its P2P/gRPC/wRPC servers, and then sat
    in state `S` for 19 minutes ignoring both SIGTERM and SIGINT — a process that looks alive and
    serves nothing. The live units are already protected (`KillSignal=SIGINT` + `TimeoutStopSec`, which
-   escalates to SIGKILL), and the switch confirmed it: **no hung t11 node was left on any host.** A
+   escalates to SIGKILL), and the switch confirmed it: **no hung node was left on any host.** A
    bare `kill` in a script is not protected.
 
 ### Drill evidence (first deployment)
@@ -412,15 +416,11 @@ producing model blocks.
 
 ### Operational notes (first deployment)
 
-* **External t11 users are now refused, by design.** ibm logged
-  `handshake failed … Network mismatch - local: misaka-testnet-12, remote: misaka-testnet-11` from
-  three Japanese IPs within minutes of the switch. The network-id gate is working; those participants
-  need this build. **An announcement is the operator's to make.** The new genesis refuses first-
-  deployment t12 nodes the same way (genesis mismatch), so it needs its own announcement.
+* **Nodes of another network or genesis are refused, by design.** The network-id gate refused
+  peers of the previous network within minutes of the switch. The new genesis refuses
+  first-deployment t12 nodes the same way (genesis mismatch).
 * Only `169.58.232.113:26311` is reachable at the default P2P port. ibm's node listens on 26321, so a
   client that picks it from a seeder answer and dials the default port fails and must retry.
-* `/root/misakas-stale-consensus-diagnosis` is still running a t11 fixture node on 5.104.81.23 on its
-  own ports and datadir. It belongs to another session's work and was left alone.
 
 ### Fleet state at the end of the switch (first deployment)
 

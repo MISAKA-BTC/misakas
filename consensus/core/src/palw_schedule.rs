@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(credited_ceiling_tokens_v1(&hopeless, &params, 120_000), 0);
     }
 
-    /// The B15 live facts (`docs/palw-economic-parameters-2026-08-16.md`): the 120 s subsidy
+    /// The B15 live facts (`docs/archive/palw-economic-parameters-2026-08-16.md`): the 120 s subsidy
     /// rate-preserved from the 10 BPS genesis value, the 20 000 MSK bond, unbonding 10 083.
     fn b15_facts() -> PalwEconomicFactsV1 {
         PalwEconomicFactsV1 {

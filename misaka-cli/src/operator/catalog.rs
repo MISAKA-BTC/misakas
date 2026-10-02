@@ -13,17 +13,17 @@ use kaspa_consensus_core::palw_producer_v2::{
     PALW_NOT_READY_EXPOSURE_FULL_V2, PALW_NOT_READY_ISSUANCE_CAPPED_V1, PALW_NOT_READY_KEY_MISMATCH_V2,
 };
 
-const JOIN: &str = "docs/testnet11-join-mining.md";
-const DOCS_KEY: &str = "docs/testnet11-join-mining.md#2-key-address-funds";
-const DOCS_BOND: &str = "docs/testnet11-join-mining.md#3-register-a-bond";
-const DOCS_PRODUCE: &str = "docs/testnet11-join-mining.md#4-produce";
-const DOCS_CLASS: &str = "docs/testnet11-join-mining.md#5-which-class-you-are-mining";
-const DOCS_COST: &str = "docs/testnet11-join-mining.md#6-what-a-bond-costs-you";
-const DOCS_STOP: &str = "docs/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight";
-const DOCS_RUN: &str = "docs/testnet11-node-operator.md#3-running-the-node";
-const DOCS_QUARANTINE: &str = "docs/testnet11-node-operator.md#7-if-your-node-says-quarantined";
-const DOCS_FP_ARTIFACT: &str = "docs/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere";
-const DOCS_FP_RUN: &str = "docs/testnet11-free-prompt-mining.md#4-run-it-node-gateway-watcher";
+const JOIN: &str = "docs/testnet12-join-mining.md";
+const DOCS_KEY: &str = "docs/testnet12-join-mining.md#2-keys";
+const DOCS_BOND: &str = "docs/testnet12-join-mining.md#5-register-a-bond";
+const DOCS_PRODUCE: &str = "docs/testnet12-join-mining.md#6-start";
+const DOCS_CLASS: &str = "docs/testnet12-join-mining.md#declare-what-the-bond-judges";
+const DOCS_COST: &str = "docs/testnet12-join-mining.md#how-much-collateral";
+const DOCS_STOP: &str = "docs/testnet12-join-mining.md#9-stop-safely";
+const DOCS_RUN: &str = "docs/testnet12-join-mining.md#3-start-a-node";
+const DOCS_QUARANTINE: &str = "docs/node-operator.md#if-your-node-says-quarantined";
+const DOCS_FP_ARTIFACT: &str = "docs/palw-freeprompt-gateway.md#the-artifact-bound-and-the-same-file-everywhere";
+const DOCS_FP_RUN: &str = "docs/palw-freeprompt-gateway.md#run-it-node-identity-gateway-watcher";
 
 /// Nothing on this host mines: no `mining.toml`, no running `kaspad`, no bond named.
 pub(crate) fn not_set_up() -> Finding {
@@ -39,7 +39,7 @@ pub(crate) fn several_nodes(network: &str, pids: &[u32]) -> Finding {
         .reason("the status of one miner cannot be read off several nodes")
         .current(format!("pids {}", pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")))
         .fix("name one: --appdir <the node's --appdir>, or set [advanced] appdir in ~/.misaka/mining.toml")
-        .docs("docs/testnet11-node-operator.md#6-running-more-than-one-node-on-a-host")
+        .docs("docs/node-operator.md#more-than-one-node-on-a-host")
 }
 
 /// A mining configuration exists and its node is not running.
@@ -79,7 +79,7 @@ pub(crate) fn not_synced(daa: u64) -> Finding {
         .current(format!("virtual DAA {daa}, not synced"))
         .required("synced")
         .fix("wait: the node mines by itself once it is synced (misaka mining status shows when)")
-        .docs("docs/testnet11-node-operator.md#5-how-long-the-first-sync-takes--measured-on-the-algo-4-lane")
+        .docs("docs/testnet12-join-mining.md#3-start-a-node")
 }
 
 pub(crate) fn no_peers() -> Finding {
@@ -389,7 +389,7 @@ pub(crate) fn fingerprint_mismatch(node: &str, cli: &str, network: &str, peers: 
         .current(format!("node {node} · this CLI {cli}"))
         .required("one release: the same fingerprint on the node, this CLI and the network")
         .fix("rebuild kaspad and misaka from the release commit, then restart the node")
-        .docs("docs/testnet11-node-operator.md")
+        .docs("docs/node-operator.md")
 }
 
 pub(crate) fn schedule_mismatch(node: &[u64], cli: &[u64]) -> Finding {

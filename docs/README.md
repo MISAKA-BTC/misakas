@@ -1,58 +1,63 @@
 # Documentation map
 
-The code, current `main` CLI `--help` and ADR decisions are authoritative. This index separates live operator instructions from dated engineering evidence.
+The code, the current `main` CLI `--help`, `release.json` and the ADR decisions are authoritative. When a document disagrees with them, the document is wrong.
 
-## Current Testnet-12 documents
+The current network is **testnet-12**. Its identity (network, consensus fingerprint, schedule id, genesis) is in [`release.json`](../release.json); documents link there instead of repeating it.
+
+## Start here
 
 - [Architecture overview](architecture/overview.md) — the protocol as it is now, topic by topic, with the ADRs that govern each part and where its code lives
-- [Mainnet readiness](mainnet-readiness.md) — what is done, partly done and not done before a mainnet genesis, with the evidence for each
+- [Mainnet readiness](mainnet-readiness.md) — what is done, partly done and not done before a mainnet genesis (its PASS / PARTIAL / TODO marks feed the CI summary)
 - [Release process](release-process.md) — how a release is cut, signed and verified
-- [testnet-12 launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
-- [Join testnet-12 as a PALW producer](testnet12-join-mining.md)
-- [testnet-12 regenesis record](testnet-12-regenesis-2026-09-23.md)
 
-## Testnet-11 documents (previous network; build `1f98d3bf4` to run it)
+## Operating on testnet-12
 
-- [testnet-11 history](history/testnet-11.md) — the flag days, fingerprints and rollout notes that used to head the README
-
-- [Join as a PALW producer](testnet11-join-mining.md)
-- [Run a full node](testnet11-node-operator.md)
-- [The DAA 7,101 PALW upgrade and Verification V2 at 7,200](testnet11-7101-upgrade-announcement.md) — what fires at 7,100, 7,101, 7,200, 7,300, 7,301 and 6,900, and how to diagnose the execution lane
-- [Pre-arming security audit of the DAA 7,101 bundle (2026-09-18)](palw-audit-2026-09-18-6001.md) — two Critical and six High findings, the seven release blockers and their fixes, and what is left as residual risk
-- [The DAA clock under the 7,101 bundle (2026-09-18)](palw-daa-clock-audit-2026-09-18.md) — every lane's effect on the DAA score, `bits` and blue work; the window arithmetic at 120 s / measured / max lane load; the blocker and its fix (ADR-0138)
+- [Join as a PALW producer](testnet12-join-mining.md) — the canonical operator guide: build, keys, node, funds, bond, start, observe, stop
+- [Run a node](node-operator.md) — roles and where each is documented
 - [Run a DNS-finality validator](validator-runbook.md)
-- [Operate model classes](palw-public-testnet-classes-runbook.md)
-- [Add a model through the SDK](palw-model-onboarding-sdk.md)
-- [Free-prompt mining](testnet11-free-prompt-mining.md)
-- [EVM flat backend migration](misaka-evm-flat-backend-runbook-v0.1.md)
-- [Node liveness probe](node-liveness-probe.md)
+- [Operate model classes](palw-classes-runbook.md)
+- [Free-prompt gateway](palw-freeprompt-gateway.md) — run your own LLM and mine with the same inference
+- [Ask the network for a file](ask-for-a-file.md)
+- [Node liveness probe](node-liveness-probe.md), [`--override-params-file`](override-params.md), [archive nodes](archival.md)
+- [EVM flat backend](misaka-evm-flat-backend-runbook-v0.1.md)
+- Japanese operator memos: [misaka-probe](misaka-probe-usage-ja.md), [miner address check](misaka-miner-address-check-ja.md)
+- [Wiki pages](wiki/Home.md) (mirrored to the GitHub wiki) — quick start, verification participation (JA), operations notes, FAQ
+
+## testnet-12 records
+
+- [Launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
+- [Regenesis record (2026-09-23)](testnet-12-regenesis-2026-09-23.md)
+- [R-core+ launch checklist](t12-rcore-launch-checklist.md)
+- [Lane F1 panel seed (2026-09-25)](t12-panel-seed-2026-09-25.md)
+- [Capacity stages (ADR-0160)](capacity/) — stage status and the flag-day integration notes
+
+## Models
+
+- [Requesting a model](model-requests.md) — what happens to a request, step by step
+- [Model-onboarding SDK](palw-model-onboarding-sdk.md) and [converting an existing model to `.palwart` (JA)](palw-add-a-model-runbook.md)
+- [Certifying a new model](palw-certify-a-new-model.md) and [mainnet certification objects](mainnet-palw-certification-runbook.md)
+- [Model adjudicability guide (JA)](misaka-palw-model-adjudicability-guide-v0.1-ja.md)
+- [Registry map](palw-registry-map.md), [extension envelope](palw-extension-envelope.md) (example manifests in [`extension-manifests/`](extension-manifests/)), [derived artifacts](palw-derived-artifacts.md), [components manifest](components-manifest.md)
+- Held-context artifacts: [Qwen2.5 A16 2M](qwen25-a16-2m-held-artifact.md), [Qwen3.6 2M](qwen36-2m-held-artifact.md)
+- Engineering notes: [court round-trip drill](palw-court-round-trip-drill.md), [BASE-0 PTQ pipeline scope](palw-base0-ptq-pipeline-scope.md), [threat model and red-test register](palw-rc-threat-model.md)
+
+## EVM and Ethereum tooling
+
+- [Connecting Ethereum tooling](connecting-ethereum-tooling.md)
+- [Differences from Ethereum](evm-differences-from-ethereum.md) — the compat profile
+- [JSON-RPC compatibility matrix](ethereum-rpc-compat-matrix.md)
+- [Wallet profile `misaka-evm-hd-v1`](misaka-evm-wallet-profile-v1.md)
+- [OpenAI-compatible surface](openai-surface/v1/README.md)
 
 ## Governing design
 
-- [ADR index](adr/README.md)
-- [PQ specification](kaspa-pq-spec.md)
-- [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
-- [PALW registry map](palw-registry-map.md)
-- [PALW extension envelope](palw-extension-envelope.md)
+- [ADR index](adr/README.md) — the decisions; [RFCs](rfc/README.md) — proposals not yet decided
+- [PQ specification](kaspa-pq-spec.md) and [test plan](test-plan-kaspa-pq.md)
+- [Tensor IR spec](spec/palw/04b-tensor-ir.md)
+- [`design/`](design/) — design documents (ML-DSA-87, EVM, PALW PoW/OTA/slash, PQ deposit, TIR). Each records the design at the version in its name; where it differs from an ADR or the code, the ADR and the code win.
 
-## Historical evidence
+## History
 
-Files whose names contain a date, audit, launch record, old relaunch, testnet-10, testnet-21, shadow drill or transition are retained as engineering evidence. Their measured hashes, peers, DAA scores, class IDs and commands describe that historical run and are not current operator defaults.
-
-In particular, do not derive a current command from:
-
-- `testnet10-*.md`
-- `testnet11-relaunch2-*.md`, `relaunch5*.md` or old genesis cards
-- dated `palw-*-2026-*.md` audits and measurements
-- archived mainnet-readiness or drill reports (not [mainnet-readiness.md](mainnet-readiness.md), which is kept current)
-
-When a historical report conflicts with a current operator document, use the current operator document and verify against `--help` and chain RPC.
-
-## Current invariants worth checking
-
-- network: `testnet-11`
-- fingerprint: `400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8` (the current main build; DAA 7,100 is the held/deep-audit boundary, 7,101 is the `6001`-named PALW upgrade bundle including ADR-0125's 1-BPS execution lane, 7,200 arms ADR-0133 Verification V2/readiness multiproofs, 7,300 shortens the execution span 5 DAA → 1 DAA, and 7,301 retires the compute overlay)
-- PALW cadence: 120 seconds per block
-- class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
-- DNS Testnet-11 minimum stake Bond: 10 MSK
-- ADR-0123 epoch-budget release: implemented, dormant on shipped presets
+- [`archive/`](archive/README.md) — dated audits, measurements, drills, superseded plans and completed migrations. Values in them are not current.
+- [`evidence/`](evidence/), [`testing/`](testing/), [`transcription-sources/`](transcription-sources/), [`explorer/`](explorer/README.md) — supporting material cited by ADRs and code.
+- testnet-10 and testnet-11 documents were removed; they remain in git history.

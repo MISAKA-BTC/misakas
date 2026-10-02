@@ -1,5 +1,12 @@
 # The DAA-1,500 flag day: what the integrator needs from rcore/cap-s1
 
+> **Status (2026-10-02).** The DAA-1,500 release was never rolled out. The same eight-entry package
+> (`PALW_T12_CAPACITY_RHO10_FENCES_V1`) is testnet-12's third post-launch list, armed at **DAA 1,700**
+> (`PALW_T12_POST_LAUNCH_FENCE_V3_DAA` in `consensus/core/src/config/params.rs`), and the dormant-package
+> test is now `palw_capacity_stage3_rho10.rs::testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release`.
+> Read "1,500" below as that flag day. Fingerprints quoted below are the values at the time; the current
+> identity is in [`release.json`](../../release.json).
+
 The capacity lane's part of the 1,500 flag day is `rcore/cap-s1` at `03ae8a31b`: stages 1, 2 and 4 plus
 stage 3's fixed ρ = 10. It is all DORMANT at that commit, and testnet-12's pins are int-5's
 (`24e1aec3…` / `5de80e64…` / `d263d7f2…`). Stages 5–7 (riders, the breaker, ρ 1000) are NOT on the

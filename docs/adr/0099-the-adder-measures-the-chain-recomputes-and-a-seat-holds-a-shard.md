@@ -53,7 +53,7 @@ build a graph for, never a K3-specific path.
 
 Read on `feat/adr-0098-seat-coverage` at `44758a0b` on 2026-09-10; every figure is what
 `misaka-palw-base0 --bin palw-shard-plan` printed on that tree (recorded in
-`docs/palw-shard-plan-2026-09-10.md`). The binary is the authority (ADR-0092 §5).
+`docs/archive/palw-shard-plan-2026-09-10.md`). The binary is the authority (ADR-0092 §5).
 
 ### 1.1 What the tree already gives a shard
 
@@ -344,6 +344,6 @@ coverage measurement, which this ADR builds on. A concurrent claimant renumbers 
   * `consensus/core/src/config/params.rs`, `fork_id_v1.rs` — Decision 5's fence, dormant and
     refused, with its tests.
   * `misaka-palw-base0/src/bin/palw-shard-plan.rs` — the generator, with `--manifest`,
-    `--measured-out`, `--verify`, `--replay-ms`; `docs/palw-shard-plan-2026-09-10.md` its output
+    `--measured-out`, `--verify`, `--replay-ms`; `docs/archive/palw-shard-plan-2026-09-10.md` its output
     as a dated record; `docs/model-manifests/kimi-k3-stand-in.json` the manifest example.
   * `consensus/core/tests/palw_adr0099_shard_plan.rs` — Invariants 1–9.

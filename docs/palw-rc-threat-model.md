@@ -5,7 +5,7 @@ ruleset must defeat, and the tests that prove each is defeated. It exists so tha
 condition — *"the attack tests are red on the current implementation"* — is a concrete, reviewable
 artifact rather than a claim.
 
-Baseline: audit `9cfcbf99` / `docs/palw-critical-audit-2026-08-19-ja.md`. Every P0 below is quoted
+Baseline: audit `9cfcbf99` / `docs/archive/palw-critical-audit-2026-08-19-ja.md`. Every P0 below is quoted
 against that audit's file:line evidence, carried forward to the `palw-v2` branch.
 
 ## How to read the status column
@@ -520,7 +520,7 @@ rest are recorded here. Fixes landed on `palw-rc-audit-fixes`.
 
 | # | Where | Defect | Status |
 |---|---|---|---|
-| **L1** | `misaka-palw-pow-driver/src/lib.rs:377` | Every fork/exec errno — EAGAIN, ENOMEM, EMFILE — became `PalwUnavailable`, which `run_worker_with_retry` returns without spending an attempt and which both consumers price as a **failed PoW**. A node under momentary memory or fd pressure rejected an HONEST block and never retried. Live on testnet-11 and devnet (`pow_palw_activation: always()`); the same file's doc and both call sites already claimed the opposite. | **fixed** — `classify_spawn_error` classifies by errno; only `NotFound` / `PermissionDenied` stay permanent, everything else (unrecognized included) is retryable. 4 regression tests. |
+| **L1** | `misaka-palw-pow-driver/src/lib.rs:377` | Every fork/exec errno — EAGAIN, ENOMEM, EMFILE — became `PalwUnavailable`, which `run_worker_with_retry` returns without spending an attempt and which both consumers price as a **failed PoW**. A node under momentary memory or fd pressure rejected an HONEST block and never retried. Live at the time on testnet-11 (since retired) and devnet (`pow_palw_activation: always()`); the same file's doc and both call sites already claimed the opposite. | **fixed** — `classify_spawn_error` classifies by errno; only `NotFound` / `PermissionDenied` stay permanent, everything else (unrecognized included) is retryable. 4 regression tests. |
 | **L2** | `kaspa-pq-validator-core/src/lib.rs:1541,1631` | Both anti-equivocation stores inserted into the in-memory index BEFORE the durable write and never rolled back. After a flush error the store believed a record existed that disk did not have; being cached for the process lifetime, the lie was never re-read, and the next request for the same key took `AllowRebroadcast`, released a signature and recorded nothing. A restart forgot the commitment entirely. The live instance is the `kaspa-pq-validator run` sidecar's `SignedEpochStore`. | **fixed** — the index becomes a function of what is durable in both stores. Regression test fails the write with EISDIR and asserts `Allow`, not `AllowRebroadcast`; mutation-checked. |
 
 ### Reachable the moment `ConsensusV2` is switched on

@@ -3,7 +3,7 @@
 //! The 2026-09-19 audit (`docs/adr/STATUS-AUDIT-2026-09-19-llm-mining-reward.md`) found nine of
 //! eleven reward invariants violated, and built five counterexamples to prove it. Those
 //! counterexamples lived in a scratchpad crate that links this one
-//! (`docs/audit/2026-09-19-llm-mining/`). A probe outside the test suite is a probe that rots: it
+//! (`docs/archive/audit/2026-09-19-llm-mining/`). A probe outside the test suite is a probe that rots: it
 //! is not run by CI, it is not run by a bisect, and the day somebody changes a cost table it
 //! reports nothing. This module brings all five in-tree, and adds the property suite ADR-0145 §8
 //! asks for.
@@ -297,7 +297,7 @@ fn declared_leaves_per_giga_executed_v1(profile: &PalwShapeProfileV3, canonical:
 //
 // Each is a PASSING test pinning today's numbers, followed by an `#[ignore]`d assertion of what the
 // fence must make true. The pinned numbers are the ones in
-// `docs/audit/2026-09-19-llm-mining/counterexample-table.txt` and `close-output.txt`; pinning them
+// `docs/archive/audit/2026-09-19-llm-mining/counterexample-table.txt` and `close-output.txt`; pinning them
 // here is what stops the scratchpad crate from being the only place they exist.
 
 /// **Counterexample 1 — the decode declaration.** Audit family (b)/(d), F1's larger lever.

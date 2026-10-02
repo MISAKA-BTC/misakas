@@ -13,8 +13,8 @@
   (economic compute), [0130](0130-bps1-is-hardened-before-it-is-widened.md) (spans, the shadow-first discipline),
   [0125](0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md)
   (credits from `Final`s), [0124](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
-  (seat exposure), [0112](0112-the-weight-residency-budget.md) (residency), [0098](0098-a-panels-coverage-of-one-claim-is-a-number.md)
-  (what sampling catches), [0071](0071-hash-coupling-and-the-remainder.md) SA-3 (capability by production).
+  (seat exposure), [0112](0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md) (residency), [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)
+  (what sampling catches), [0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) SA-3 (capability by production).
 
 ## 0. The sentence this ADR is
 

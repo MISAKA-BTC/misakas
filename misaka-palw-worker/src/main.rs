@@ -12,7 +12,7 @@
 //!   SHA-256 and model load.
 //!
 //! and the **v2 full-logits-trace interface** (`kaspa_consensus_core::palw_v2`,
-//! docs/palw-full-logits-trace-v2-design.md — Land stage, devnet/shadow/zero-credit only):
+//! docs/design/palw-full-logits-trace-v2-design.md — Land stage, devnet/shadow/zero-credit only):
 //!
 //! * `--mode v2-job` → one framed Borsh `PalwJobEnvelopeV2` on stdin, one framed Borsh
 //!   `PalwJobResultV2` on stdout. Token IDs are the input identity (the worker never

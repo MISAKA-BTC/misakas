@@ -1,0 +1,317 @@
+# 実用 LLM ランタイム計画 — 検証で一致する Qwen 実行系
+
+目標: **llama.cpp のような実用ランタイムを、GPU を介しても検証でビット一致するように作る。**
+
+llama.cpp が構造的にできないことを狙っている。float 実行では lane 分割・スレッド数・タイル形状・
+FMA の縮約が全部答えを変えるので、二台のマシンが一致することを約束できない。だから float 系の
+検証方式は reduction order とスレッド数と FMA ポリシーを全部 pin する羽目になる（Gensyn RepOps、
+Thinking Machines の batch-invariant kernel は約 34〜61% のスループットを払っている）。
+**整数実行はこのカテゴリごと消す** — ADR-0040 Decision E。
+
+## Qwen3.6-35B-A3B の到達点（2026-08-26）
+
+**動く**: GGUF から変換した実重みで、40層のハイブリッドグラフ（GatedDeltaNet 30 + gated-attention 10、
+各層 256-expert MoE）が整数エンジン上で完走する。アーティファクトは mmap で、
+33 GiB のクラスをヘッダ分のコストで開ける。
+
+**モデルとして正しい**: f32 参照が自分の較正テキストを **top-1 111/154 (72.1%)、真の次トークンの
+median rank 0**（チャンスは 124,160）で予測する。これがアーキテクチャ写像が正しいことの証拠。
+
+**整数エンジンが参照に忠実**: 40層フル・155 位置で
+**コサイン 0.9967 / rank 相関 0.9598 / top-1 151/155 / top-5 155/155**、`FAITHFUL`。
+
+**テキストが入ってテキストが出る**（2026-08-26 の実測ログ。`qwen36-chat` はこの記録の後、
+ADR-0077 W0 — 捕捉なしに答えるバイナリをツリーに残さない — により削除された。同じ推論を今日
+走らせるなら `palw-qwen36-fp-worker --mode v3-serve` を `misaka-palw-gateway` の下に置く。
+下の「今日の走らせ方」を参照）:
+
+```
+$ qwen36-chat --artifact q36-40L.palwq36 --gguf <header> \
+    --prompt "What is the capital of Japan? Answer in one short sentence."
+The capital of Japan is Tokyo.
+
+$ qwen36-chat ... --prompt "日本で二番目に高い山は何ですか。一文で答えてください。"
+日本で二番目に高い山は北岳です。
+```
+
+どちらも stop token で停止。トークナイザは GGUF ヘッダ内（248,320 語彙・247,587 マージ、
+リポジトリに `tokenizer.json` は無い）。33.27 GiB のアーティファクトを 24 GB のマシンで mmap して
+**prefill 1.7 / decode 1.75 tok/s**（初版 0.4-0.6 の 3.4 倍）。
+
+### ブロック生成 到達（同日）
+
+**実 33 GiB アーティファクトによるブロックが実 consensus に受理された。**
+`palw_rc_the_real_qwen36_artifact_produces_a_block`（`--ignored`、`MISAKA_QWEN36_ARTIFACT` で実行）:
+
+```
+mapped 40 layers / 33.27 GiB in 1.43 s
+artifact root (1 pass, cold)     116.6 s   ← ノード起動時に1回
+canonical job (8 prefill + 2 decode = 実推論10 passes)   9.02 s
+lottery + ML-DSA-87 + acceptance → UTXO tip、クラス別に計数、bond に exposure 予約
+```
+
+CI 版 `palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts` は同一経路を
+dev fixture の重みで常時実行（差は重みだけ — engine/ops/commitment/全 consensus チェックは本物）。
+genesis は `palw_rc_params_with_qwen36`（floor + Qwen3.6 の2クラス、entrant は最小 1‰）。
+kaspad 側も配線済み: `--palw-class-artifact` が `.palwq36` を file magic で受け、起動時に
+root を**計算**して chain の登録と照合（宣言ではなく導出）。
+
+per-class DAA は実現産出の share へ retarget するので、9 秒/job はブロック生成として実用域 —
+job の大きさは遅延を買うだけで weight は産出に比例する。
+
+### court 側も閉じた（ADR-0039 の前提条件）
+
+`palw_step_refute` に **A16 tier 9 + Qwen3.6 固有 14 の計 23 descriptor** を追加し、裁定は
+エンジンと同じ関数を呼ぶ（裁定器が算術を再実装したら、裁定器自身のバグを持つ）。
+`palw_qwen36_profile` はエンジンの実行順を transcribe した IR から射影（手書きテーブルが
+27 vs 38 nodeでずれた qwen25 の教訓）。MoE はエキスパート連結で 6 node（256 個別 node ではなく、
+同一入力への 8 行列 = 1 つの [4096×2048] と算術同値; どの 8 個かは committed router 行が決める）。
+**`the_coverage_gate_certifies_this_class` が gate 自身のコンストラクタで通過** — 到達可能 kernel
+全てが裁定可能。court catalog root は consensus の一部なので testnet-11 の fingerprint が移動
+（coordinated upgrade として pin を更新済み）。
+
+### FreeToken 型の最適化（expert LRU + mmap + 配置政策）
+
+page cache は「エキスパート」を知らないページ LRU なので、毎トークン 8/256 のランダム読みが
+**全トークンが必要とする重み**（norm・GDN 射影・attention・router・共有エキスパート・508 MiB の
+unembedding）を追い出す。→ 常駐制御をエンジン側に:
+
+- **always-set は pin**（routed expert 以外を open 時に MADV_WILLNEED、返さない）
+  — **2026-09-11 に ADR-0112 で置き換え**: MADV_WILLNEED はフリートの virtio ディスクでは何も先読みしなかった(draw は 4 KiB fault ×300 万で 20 分)。always-set は open 時に fd 経由で読み切って所有、routed expert は router が選んだ瞬間に並列 pread して LRU、予算の既定は artifact の 1/5。
+- **routed expert はバイト予算つき LRU**（admission=WILLNEED, eviction=DONTNEED —
+  private read-only map では無損失でページを落とすだけ）
+- **router が commit した瞬間に選ばれた 8 個 × 3 tensor の range を一括 prefetch**
+  （8 個目の読みが 1 個目の算術と重なる）
+- 10 GiB 予算で **84.6 % hit**（155 token）。算術は 1 bit も動かない（配置はどこにバイトが
+  あるかの決定で、クラスの主張は「答えがそれに依存しない」こと）。`--expert-cache-gib` で指定
+
+同時に、全射影が通る `q36_matmul_grouped`（Q4_K の per-32 scale を per-32 指数で保持）が
+唯一スカラー参照のままだったので NEON + block 並列化（`q36_matmul_grouped_fast`）。
+検証は**参照側を 1 channel probe で走らせる**ので fast path は参照が拒むものを通せない;
+differential test がビット一致を固定（端数グループ含む）。
+
+### モデル全体が「チャンス」だったこと、そしてなぜ cosine では見えなかったか
+
+**サイトごとの cosine が全部 0.99+ でも、参照側がアーキテクチャを間違えていればモデルは動かない。**
+実際に起きた: 40層フルで真の次トークンの **median rank 123,653 / 248,320**（＝チャンス）、
+貪欲デコードは 1 トークンの無限反復。残差ストリームの層ごとの成長も logits の分布も健全に見えた。
+整数エンジンは壊れた参照を忠実に再現していただけだった。
+
+→ **変換のたびに参照自身の next-token top-1 と median rank を印字する**ようにした。
+両実装が共有する誤りを見抜けるのはこれだけ。`--reference-only` は 33 GiB を書かずに 5 分で回るので、
+レイアウト仮説の検証が安い。
+
+### 忠実さを止めていた欠陥（発見順、どれもエラーを出さなかった）
+
+**チェックポイントの読み違い 6 件** — 「モジュールが持っているもの」ではなく
+「ファイルに書いてあるもの」を測って見つかった。最後の 2 件の出典は
+チェックポイント側リポジトリ自身の `docs/canonical-integer-qwen36-design.md`（vendored llama.cpp に
+対して書かれている）。
+
+0a. **`attn_q.weight` は q と gate が head 毎インターリーブ** — head h は q が `[512h, 512h+256)`、
+    gate が `[512h+256, 512h+512)`。前半 4096 = q・後半 4096 = gate と読むと head 1 以降が全部混ざる。
+0b. **v-head h が読む k-head は `h % 16`**（`h / 2` ではない）— 32 の value head は
+    16 の key head を**タイル**する。30 の GDN 層すべてで全 head が誤った key と組んでいた。
+
+1. **`ssm_a` は `A_log` ではなく `-exp(A_log)`** — GGUF ライタが符号反転と指数化を済ませている。
+   ディスク上の値は -72.33〜-0.0186 で全部負、`A_log` は決して負にならない。`A_log` として読むと
+   係数 0.036 が 0.965 になる（27 倍）。30 線形層 × 32 ヘッド全部で。
+2. **`ssm_dt` を読んでいなかった** — これが `dt_bias`。値は -5.3〜+15.6 で **softplus の引数を支配する**。
+   落とすと decay が「ずれる」のではなく「別物になる」。
+3. **`1/√d_k`** — デルタ則はクエリをスケールする。ノルムの後では見えないが、コードのグリッドには効く。
+4. **回転の対（pairing）を並べ替えていなかった** — `convert.rs` は Qwen2.5 で最初からやっている。
+   ここは 256 次元中 64 次元だけが回るので、並べ替えは先頭 64 行に閉じ、QK-norm のゲインも一緒に動く。
+
+`sigmoid(-dt)^c` という恒等式では (2) を表現できない: `dt = 15.6` のとき Q24 グリッド上の
+`σ(-dt)` は整数 **3** で、`dt ≳ 18` では 0 になり「decay」が状態リセットになる。
+→ `q36_softplus` + `q36_decay` に置換（大きい引数を大きいまま持ち、指数は最後に 1 回だけ）。
+
+**共有指数はヘッドが静かなところで誤差になる 3 件** — 全部「ヘッドごとの大きさが狂い、直後の
+ヘッド単位ノルムがそれを O(1) の誤差に増幅する」という同じ形。
+
+5. **conv 出力の指数が行で 1 つ** — 8,192 レーンに q 16 ヘッド・k 16 ヘッド・v 32 ヘッドが同居し、
+   一番大きいものが指数を決める。**value ヘッド 17 のコードは 64（6 ビット）** で、デルタ則は
+   そのヘッドの状態全部をそこから作っていた。しかもデルタ則が知らされている指数（`e_v`）とも
+   食い違っていた（そのヘッドで 128 倍）。
+6. **wide RMS ノルムの `eps`** — `eps` は「真の二乗平均」に対してだけ意味を持つのに、op はコードを渡される。
+   ヘッド 17 の行は rms 1.9e-5 なので `eps = 1e-6` は安定化項ではなく**分母そのもの**:
+   参照はそのヘッドを単位行の 52 分の 1 に正規化し、op は単位行を返していた。
+   → `eps` を仮数＋シフトで受け取り、`eps · 2^(2e+K)` を i64 の外まで表現できるようにした。
+7. **`int_rsqrt` 自身の指数** — 内部で正規化してから `y >> e` で戻す。**切り捨てシフト**なので、
+   二乗平均が 2^62 付近だと有効ビットが 5 になって返ってくる。[1,4) に正規化して積の側で戻せば厳密。
+
+ヘッド単位が安全なのは、下流の reduction が全部ヘッドの内側で閉じるから（L2Norm はヘッド内、
+再帰は d_k 上、ノルムは head_dim 上）。**レーン単位は依然として誤り** — 理由は `qwen36_calibrate` に記録済み。
+
+8. **出力射影が自分のグループ指数を無視していた** — この変換器が書く重みは全部 32 要素ごとの
+   グループ指数を持ち、行スケールは最大グループ ÷ 2^20 に置かれている。`full_arm` の出力射影だけが
+   密行列版を呼んでいた。近似が悪くなるのではなく、内積が 100 万分の 1 になって行全体が **0** に丸まる。
+   gated-attention 層が残差に何も足さず、4層のコサインは 0.0012 だった。
+
+### 較正が測っていない範囲
+
+再帰状態は等比和なので、`n` 位置で測った波高は `context` 位置では
+`(1 - decay^context) / (1 - decay^n)` 倍まで、それ以上にはならない。**測定値を上界に変える
+唯一の補正**で、これを入れないと 56 位置の実行で `linear_state_out` が `i32::MAX` に飽和する
+（8 位置の較正は余裕があると報告していた）。生の縮小境界 `1/(1-decay)` は測定を無視して
+`decay = 0.99937` のヘッドに 100 万を要求し、初トークンで飽和させる。
+
+残る過剰は 40 サイト中 2 つ — conv の `silu` 出力と 1 層のゲート積で、どちらも
+**波高が入力の波高の関数ではない**積。ヘッドルーム 3 ビットで全部止まるが 4層のコサインが
+0.9952 → 0.9829 に落ち、2 ビットでも 0.9860 で止まりきらない。
+解像度で範囲を買うのは較正が 8 トークンの間は割に合わない → 155 トークンの実テキスト較正に変更。
+
+## Qwen2.5-1.5B の到達点（2026-08-26 実測、M4 Pro / 24 GB）
+
+**Qwen2.5-1.5B が BASE-0 上で普通にチャットできる状態になった。**
+
+```
+$ base0-chat --artifact qwen25-1.5b-a16.palwart --tokenizer tokenizer.json \
+             --prompt "What is the capital of Japan?"
+The capital of Japan is Tokyo.
+prefill 15 tok (32.7 tok/s) | decode 7 tok (28.8 tok/s)
+```
+
+（`base0-chat` も同じ理由で削除済み。同じ経路は
+`palw-a16-fp-worker --mode v3-serve` + `misaka-palw-gateway`。）
+
+日本語（`日本の首都は東京です。`）・俳句・`17 * 23 = 391` も正しい。
+実重みの忠実度は float 参照に対し **top-1 一致 45/57、top-5 56/57、rank 相関 0.893**、
+層ごとの残差ストリーム cosine 0.98–1.00。
+
+| 段階 | decode | prefill(360) | decode after 360 |
+| --- | ---: | ---: | ---: |
+| 着手時（スカラー） | 2.2 tok/s | — | — |
+| NEON vmlal + rayon(per-channel) | 29.9 | 24.2 | 2.5 |
+| block 化 + sdot/usdot | 36.2 | 31.8 | 2.5 |
+| **バッチ prefill + アテンション並列** | **36.2** | **43.6** | **25.3** |
+
+学んだこと 2 つ:
+
+1. **速いカーネルが遅くした。** sdot/usdot 単体では 25.2→23.2 tok/s と**遅くなった**。
+   原因は rayon にチャネルを 1 個ずつ渡していたこと（unembed は 151,936 タスク）。
+   block 化してから測ると vmlal 27.1 / sdot 36.2。カーネルではなくスケジューラが律速だった。
+2. **長文脈の壁はアテンションだった。** 360 履歴からの decode が 2.5 tok/s。
+   `a16_attn_scores` は heads×kv_len 個の独立 dot を 1 本の逐次ループで回していた
+   （1 層 1 トークンあたり 4,320 dot）。プールに載せるだけで 10×。
+
+## 出発点（着手前の実測）
+
+`cargo run --release -p misaka-palw-base0 --example base0-throughput -- 28 16 <tier>`
+
+Qwen2.5-1.5B 実寸（28層・hidden 1536・ffn 8960・GQA 12/2・vocab 151,936、重み 1.65 GiB）:
+
+| 段階 | ms/token | tok/s | GMAC/s | 備考 |
+| --- | ---: | ---: | ---: | --- |
+| W8A8 スカラー（着手前の BASE-0） | 458 | 2.18 | 3.35 | 単一スレッド |
+| W8A16 スカラー（A16 tier 移植直後） | 439 | 2.28 | 3.52 | i64 累算は scalar bound では無料 |
+| **W8A16 + NEON + rayon**（現状） | **33** | **29.9** | **46.1** | **13.5×**、ビット一致を assert 済み |
+
+参考: メモリ帯域からの上限は CPU 実測ベースで ~70 tok/s、M4 Pro の unified 273 GB/s まで使えれば
+~165 tok/s。**現状はまだ帯域の 1/6 しか使っていない**ので、GPU 以前に CPU 側にも伸び代がある。
+
+## 現在の構成
+
+| 層 | 実体 | 状態 |
+| --- | --- | --- |
+| 算術仕様 | ADR-0040（int8 tier）+ ADR-0047（A16 = W8A16 tier） | 凍結、KAT 17,881 ベクタで外部化済み |
+| 参照実装 | `consensus/core/src/palw_base0{,_ops,_a16}.rs` | 裁定器が走らせるコード |
+| 第 2 実装 | `misaka-palw-base0-ref2`（構造独立）+ vendored gemmlowp（著者独立） | 差分テスト済み |
+| エンジン | `misaka-palw-base0/src/engine{,_a16}.rs` | A16 は本流へ移植済み |
+| **高速カーネル** | `misaka-palw-base0/src/kernels.rs` | **NEON + rayon、本項で新設** |
+| GPU | なし（ADR-0053 で Metal 経路ごと撤去。float は裁定不能で、整数 GPU カーネルは 1 行も無い） | **未着手** |
+
+## 高速化が「安全である」根拠
+
+`kernels.rs` が置き換えるのは 2 つの射影（`MatMulRequant` / `MatMulRescale`）だけで、
+ビット一致は 3 段で assert している:
+
+1. **ベクタ vs スカラー** — 16 要素ブロックと 512 要素チャンクの前後全アラインメント
+2. **各射影 vs カタログ op** — 実ジオメトリの長さ（1536 / 8960 を含む）× コード両端
+3. **前方伝播まるごと vs カタログ版エンジン** — 残差ストリームと KV cache を通しても一致
+
+### 唯一のコスト: Decision E の前提
+
+Decision E（順序自由）は**溢れないこと**が前提。参照は i64 で累算するので余裕があるが、
+SIMD は i32 レーンで累算したい。`|w| ≤ 128`、`|x| ≤ 32767` なので 1 積が 4.19e6 に達し、
+**i32 レーンは 128 項しか持てない**。よって縮約を 512 要素チャンク（4 レーン × 128 項、
+4 倍のマージン）で切り、チャンク和を i64 に広げてから合算する。
+これは参照の左畳み込みとは別の結合順序であり、**同じ数**になる。
+
+チャンクを間違えても**リリースでは無言で wrap する**。`const _: () = assert!(...)` で
+ビルド時に止め、上の差分テストが最後の砦。
+
+## 次の段階
+
+### 1. CPU の残り（帯域まで）— 主要 3 件は完了
+- ~~sdot/usdot~~ 完了（inline asm、intrinsic は Rust 1.94 で未安定）
+- ~~attention アーム~~ 完了（並列化。ただし SIMD はまだ入れていない — i16×i16 なので sdot 不可）
+- ~~バッチ prefill~~ 完了
+- 残: `forward_token` が毎トークン trace を clone している（27 行 × 28 層）、
+  `tile()` が unembed 用に 151,936 要素を毎トークン確保している。合わせて約 10% の無駄
+
+### 2. Metal バックエンド（決定済みの GPU 第一目標）
+- Metal に `dp4a` 相当は無いので自前 MSL の i32 mad ループ。**整数なので bit-exact は保証される**
+- threadgroup ごとの縮約も同じチャンク規則に従わせる（i32 レーンの 128 項制約は GPU でも同じ）
+- 検証: CPU 参照との全前方一致を、GPU 実行の受領証について実行する
+
+### 3. 実重み（品質）— **完了**
+- A16 PTQ 経路と float 参照較正器を本流へ移植済み。実 Qwen2.5-1.5B で FAITHFUL
+- 未測定なのは perplexity（top-1/top-5/rank 相関では測った）
+
+### 4. Qwen3.6 の残り
+- **較正**: 155 トークンの実テキストへ変更済み。40層フル変換はこれで焼く
+- **ヘッドルーム**: 積サイトの過剰は較正を代表的にしてから測り直す（上の測定値つき）
+- **エキスパート選択**: 委託行が 16 ビットに丸められた後の top-8 は、float 参照と
+  8 番目で割れることがある（`ffn_choice` / `ffn_weight` プローブで可視化済み）。
+  `ffn_routed` のコサインが 0.94 まで落ちるが、共有エキスパートが大きさの大半を持つので
+  `ffn_moe_out` では 0.999。**クラスの定義は committed な行の側**なので実装間では割れない
+- **アーティファクトにトークナイザは入れない**（PALW は token id のハッシュで prompt を束縛する）
+
+### 5. court 側の reconcile（実行とは独立）
+- `palw_step_refute`（+1147 行）と `palw_qwen25_profile`（+967 行）が両ブランチで動いており、
+  A16 の裁定経路を本流に持ってくるのは別作業。**走らせるのに必要ではない**ので後回しにした
+
+## 移植で踏んだ罠（再発防止）
+
+1. **A16 ブランチの全マージは禁止。** `palw_admission_v2` の衝突が、b57adc83 で
+   「走っているチェーンには出せない」として意図的に revert された mid-epoch budget 導出を
+   引き戻す内容だった。40 commit を一括で入れると consensus が巻き戻る
+2. **`a16_params` を上流のまま入れると全 class id が変わる。** 上流は他の optional field と同じく
+   `None` に presence byte を吸わせている。digest は class id なので、既に登録済みのクラスが
+   全部解決しなくなる。上流は再 mint できたが本流はできない。→ **不在なら 1 バイトも吸わない**形に変更し、
+   フィールド追加前に実測した digest を pin して証明
+3. **`rustfmt <lib.rs>` はモジュール木ごと整形する。** さらに `--edition 2021` を渡すと
+   import 順が 2021 様式に書き換わり、無関係な 9 ファイルが差分に出た。
+   lib.rs には掛けない・edition は 2024
+4. **fixture の退化は差分テストを素通りする。** 全サイト同一ゲインの store は logit を全ゼロにしたが、
+   高速版と参照版は「両方ゼロ」で一致するので差分テストは緑だった。
+   捕まえたのは「別のトークンは別の行を出すか」という非退化テスト
+
+---
+
+## 今日の走らせ方（2026-09-03 追記）
+
+このページの `qwen36-chat` / `base0-chat` の実行例は 2026-08-26 の**測定記録**であって、
+今日の手順ではない。両バイナリは ADR-0077 Decision 1 / 不変条件 W0 で削除された：
+「捕捉のない答えを返すバイナリはツリーに残さない」。`court_capable: false` は、もはや
+このツリーのランタイムが取りうる状態ではない。
+
+同じモデルを同じ整数エンジンで走らせる今日の経路は、ファミリ・ワーカーを
+`misaka-palw-gateway` の下に常駐させることだけである。数字（tok/s、忠実度、mmap のコスト）は
+そのまま有効で、変わったのは**答えが必ず捕捉され、コミットメントになりうる**という一点。
+
+```bash
+MISAKA_PALW_ARTIFACT=/srv/misaka/qwen36.palwq36 \
+MISAKA_PALW_GGUF=/srv/misaka/qwen36-header.bin \
+MISAKA_PALW_NETWORK_ID=testnet-11 \
+./target/release/misaka-palw-gateway \
+  --worker ./target/release/palw-qwen36-fp-worker \
+  --outbox ~/.misaka/fp-outbox --identity ~/.misaka/fp-identity.json --rpc 127.0.0.1:26312
+```
+
+* 常駐（`--mode v3-serve`）なので、33 GiB の mmap・ダイジェスト・検証は**プロセスにつき 1 回**。
+  ジョブごとに 8 分かけていたのはこの部分だった。
+* 同じジョブの 4 つの root は `v3-job` と `v3-serve` で**バイト一致**する（W6）。常駐は
+  コストの決定であって、意味論の決定ではない。
+* 手順・フラグ・露出の上限は testnet11-join-mining.md §7。

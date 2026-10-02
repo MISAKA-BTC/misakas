@@ -50,23 +50,27 @@ Both drill flags are refused on mainnet at daemon start, and both log what they 
 # producer: commit a corrupted execution in every block
 kaspad ... --palw-produce --palw-drill-tamper-leaf=0
 # challenger: re-run every licensed claim, dispute what it cannot reproduce
-kaspad ... --palw-panel --palw-challenge --palw-fee-outpoint=<txid>:<i>
+kaspad ... --palw-producer-key=<seed> --palw-producer-bond=<txid>:<i> --palw-challenge --palw-fee-outpoint=<txid>:<i>
 ```
 
 **Innocent.** Everyone honest; one seat disputes anyway and must lose.
 
 ```bash
 kaspad ... --palw-produce                       # no tamper flag
-kaspad ... --palw-panel --palw-drill-challenge-all --palw-fee-outpoint=<txid>:<i>
+kaspad ... --palw-producer-key=<seed> --palw-producer-bond=<txid>:<i> --palw-drill-challenge-all --palw-fee-outpoint=<txid>:<i>
 ```
+
+A node's seat duties run whenever it holds `--palw-producer-key` and `--palw-producer-bond`;
+`--palw-panel` is accepted but does nothing. Each bond runs in exactly one process (a second process
+on the same bond double-signs round permits and is slashed).
 
 ## What to watch, in order
 
 ```
 [palw-panel] claim <id> committed an execution this node does not reproduce — opening a court
-[palw-panel] submitted CourtOpened for court session <sid> round 0
-[palw-panel] submitted CourtDisclosed for court session <sid> round 0     ← the responder answers
-[palw-panel] submitted CourtVerdictPosted for court session <sid> round 0 ← the challenger judges
+[palw-panel] submitted CourtOpened for court session <sid> round 0 in tx <txid>
+[palw-panel] submitted CourtDisclosed for court session <sid> round 0 in tx <txid>     ← the responder answers
+[palw-panel] submitted CourtVerdictPosted for court session <sid> round 0 in tx <txid> ← the challenger judges
    … one pair per rung, the interval halving each time …
 [palw-panel] session <sid> closes as ExecutorGuilty on step <N>
 ```

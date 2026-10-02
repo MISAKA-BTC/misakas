@@ -2,15 +2,20 @@
 
 このドキュメントは、`scripts/misaka-probe.sh` をVPSに入れて、IPからMISAKA node / DNS seeder / validator状態を確認するための手順です。
 
+**testnet-12 では `--network testnet-12 --p2p-port 26311` を必ず付けてください。** スクリプトの既定値は
+退役済みの testnet-10(`--network testnet-10`、P2P `26211`)のままです。testnet-12 の P2P port は
+`26311` です(`consensus/core/src/network.rs` の `default_p2p_port`)。環境変数
+`MISAKA_NETWORK` / `MISAKA_PROBE_P2P_PORT` でも指定できます。
+
 ## できること
 
 `misaka-probe` で確認できることは以下です。
 
 | 確認項目 | IPだけで確認できるか | 内容 |
 |---|---:|---|
-| node参加 | かなり可能 | `26211/tcp` に到達できるか、seedに載っているか |
+| node参加 | かなり可能 | P2P port(testnet-12 は `26311/tcp`)に到達できるか、seedに載っているか |
 | DNS seeder動作 | 可能 | `53/udp` と `53/tcp` が複数Aレコードを返すか |
-| local service状態 | 可能 | VPS上の `systemctl` と `misaka node doctor` を見る |
+| local service状態 | 可能 | VPS上の `systemctl`(`misaka-kaspad` / `misaka-dnsseeder` / `misaka-validator`)と `misaka node doctor` を見る |
 | validator登録状態 | bondが必要 | `--stake-bond <txid>:0` があれば確認可能 |
 | validator実稼働の完全証明 | IPだけでは不可 | validatorはIPではなく `validator_id` / `stake bond` で識別されるため |
 
@@ -18,7 +23,8 @@
 
 このスクリプトは読み取り専用です。
 
-以下は行いません。
+行うのは TCP connect 確認、DNS query、systemd status 確認、`misaka node doctor`、
+`kaspa-pq-validator status` だけです。以下は行いません。
 
 - node再起動
 - DNS seeder再起動
@@ -51,10 +57,11 @@ helpが表示されればOKです。
 自分のVPS IPを確認します。
 
 ```bash
-misaka-probe --ip 217.76.57.217
+misaka-probe --ip <VPS_IP> --network testnet-12 --p2p-port 26311
 ```
 
-あなたのVPSでは、まずこの形で使えば大丈夫です。
+まずこの形で使えば大丈夫です。以下の例では `--network testnet-12 --p2p-port 26311` を省略していますが、
+毎回付けてください。
 
 ## 出力例
 
@@ -85,7 +92,7 @@ Validator verdict               UNKNOWN: IP alone cannot prove validator partici
 validatorのbond作成後は、`bond_outpoint` を渡します。
 
 ```bash
-misaka-probe --ip 217.76.57.217 --stake-bond <txid>:0
+misaka-probe --ip <VPS_IP> --stake-bond <txid>:0
 ```
 
 `<txid>:0` は、`kaspa-pq-validator bond` 実行後に表示された `bond_outpoint` に置き換えます。
@@ -114,15 +121,16 @@ misaka-probe
 明示した方が確実なので、通常は以下がおすすめです。
 
 ```bash
-misaka-probe --ip 217.76.57.217
+misaka-probe --ip <VPS_IP>
 ```
 
 ### 2. network / RPC / seedを明示して確認
 
 ```bash
 misaka-probe \
-  --ip 217.76.57.217 \
-  --network testnet-10 \
+  --ip <VPS_IP> \
+  --network testnet-12 \
+  --p2p-port 26311 \
   --rpc 127.0.0.1:27210 \
   --seed seeder1.misakascan.com
 ```
@@ -130,7 +138,7 @@ misaka-probe \
 ### 3. local checkを飛ばして外部確認だけ行う
 
 ```bash
-misaka-probe --ip 217.76.57.217 --skip-local
+misaka-probe --ip <VPS_IP> --skip-local
 ```
 
 これは、手元PCや別サーバーから軽く確認したい場合に便利です。
@@ -152,24 +160,23 @@ dig @ns1.xdomain.ne.jp ns-seeder1.misakascan.com A +short   # → 委任先の I
 dig @<その IP> seeder1.misakascan.com A +short              # → 委任先が答えるか
 ```
 
-**seeder2 / seeder4 は 2026-09-06 時点で SERVFAIL。** 委任 (`ns-seeder2` → `217.76.57.217`、
-`ns-seeder4` → `217.178.101.111`) は生きているが、どちらのホストも :53 に応答しない。
-どちらも当プロジェクトが管理していないホストで、既知の状態
-(`docs/testnet11-relaunch5-runbook.md` 項目 2)。**答えるのは seeder1 / seeder3 の 2 本**で、
-新規ノードの discovery はその 2 本で足りる。
+node に組み込まれている seed は `seeder1`〜`seeder4.misakascan.com` の 4 本です。
+`misaka-probe` の既定の `--seed` は `seeder1.misakascan.com` です(スクリプトのコメントでは
+seeder2 / seeder4 は当プロジェクトが管理していないホストに委任されていて応答しない、とされています。
+現在の状態は上の `dig` で確認してください)。
 
 `misaka-probe` の中でも同じ系統の確認をしています。
 
 ### 5. P2P portだけを確認
 
 ```bash
-nc -vz -w 5 217.76.57.217 26211
+nc -vz -w 5 <VPS_IP> 26311
 ```
 
 成功例です。
 
 ```text
-Connection to 217.76.57.217 port 26211 [tcp/*] succeeded!
+Connection to <VPS_IP> port 26311 [tcp/*] succeeded!
 ```
 
 ## 判定の意味
@@ -197,3 +204,19 @@ Connection to 217.76.57.217 port 26211 [tcp/*] succeeded!
 | `UNKNOWN` | `--stake-bond` がないため判定不可 | bond後に `--stake-bond` を付ける |
 | `VALIDATOR_REGISTERED_ACTIVE` | bondがactive | validator registry上はOK |
 | `BOND_NOT_ACTIVE_OR_UNKNOWN` | bondがactiveではない、または確認失敗 | `kaspa-pq-validator status` で詳細確認 |
+
+## 今後: Rust CLI 化の案
+
+このスクリプトは、`misaka` CLI に入れる前に運用確認の UX を試すための PoC です。`misaka node probe` は
+まだ実装されていません。取り込む場合は次の形が自然です。
+
+```bash
+misaka node probe --ip <ipv4>
+misaka node probe --ip <ipv4> --stake-bond <txid>:0
+```
+
+- `misaka-cli/src/main.rs` の `NodeCmd` に `Probe` を追加し、`misaka-cli/src/node.rs` に実装する。
+- P2P 到達性は `TcpStream::connect_timeout` で見る。
+- 既知 peer の判定は `getPeerAddresses`、接続中 peer の判定は `getConnectedPeerInfo` を使う。
+- validator 判定は `--stake-bond` がある場合だけ `getStakeBond` を使う。`--validator-id` を足すなら
+  `getStakeBonds` をページングして探す。

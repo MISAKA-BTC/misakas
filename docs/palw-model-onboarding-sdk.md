@@ -1,10 +1,10 @@
 # The PALW model-onboarding SDK (`misaka-palw-sdk`)
 
-> **Current operator entry point (Testnet-11 Relaunch 5f):** use
-> `misaka --network testnet-11 model add` to inspect the catalog, then
-> `misaka --network testnet-11 model add <catalog-model> --artifact <file>` to run the resumable
-> registration and lane-certification flow. The lower-level SDK and `kaspad` flags documented
-> below remain the developer interfaces, but are not the recommended first-time operator path.
+> **This page is for developers.** It covers the SDK crate and what changes in the tree when a
+> model is added. To convert, register, certify and seat a model on testnet-12 as an operator, follow
+> [palw-add-a-model-runbook.md](palw-add-a-model-runbook.md) (Japanese); the certification objects
+> are described in [palw-certify-a-new-model.md](palw-certify-a-new-model.md), and what a public
+> model request is in [model-requests.md](model-requests.md).
 
 **One interface every model class passes through.** Adding an LLM to a MISAKA network is four
 agreements that must hold at once — a graph the court can walk (whose id IS the class id), an
@@ -24,6 +24,9 @@ The SDK is the seam:
   `registration_candidate`, `preflight_admission`, `build_post_genesis_registration`, `resolve`.
   The kaspad panel, the producer's backend registry and the `palw-class` CLI all hold one of these
   and nothing lineage-specific.
+* **Built-in lineages** — `builtin_lineages_v1` carries three: `dense.rs` (the A16 container),
+  `qwen36.rs` (the hybrid mmap tier) and `tir.rs` (RFC-0002 IR classes, whose classes are the
+  `PALWTIR1` artifacts the node has loaded rather than a table).
 * **`conformance`** — the standard battery, one call (`check_lineage_v1` / `check_sdk_v1`):
   the profile validates, every reference points backwards, both coverage gates certify (kernel ids
   AND per-node shape service), the canonical job counts, fits the worst case and the declared
@@ -51,29 +54,20 @@ No SDK code changes. The class is data:
 5. **Dry-run the pairing and the gate** — no node, no keys, no coin:
 
    ```
-   palw-class inspect   --network testnet-11 /path/to/artifact
-   palw-class preflight --network testnet-11 /path/to/artifact --model-id <model-id>
+   palw-class inspect   --network testnet-12 /path/to/artifact
+   palw-class preflight --network testnet-12 /path/to/artifact --model-id <model-id>
    ```
 
    `inspect` shows which class the file pairs with, under which root, and why not the others.
    `preflight` runs the real admission gate (`verify_class_admission_v2`) against that network's
    bundle. Its genesis view is static — a live chain may hold more classes — but a REFUSED here
    is a refusal the chain would also give, before any fee is spent.
-6. **Register from the host that holds the artifact**, using the current operator flow:
-
-   ```bash
-   misaka --network testnet-11 model add
-   misaka --network testnet-11 model add <catalog-model> --artifact /absolute/path/to/artifact
-   ```
-
-   It resumes from live chain and local state, uses the bonded key selected by the wizard, reads
-   live terms, applies the known-weights rule and sibling filters, and reruns admission preflight
-   before anything is signed or funded. Developers automating the primitive directly may still
-   use `kaspad --palw-class-artifact <file> --palw-register-class <model-id>` with that Bond key;
-   the primitive is not the recommended first-time workflow. That `kaspad` must be the ONLY
-   process running the bond: since 2026-09-25 it runs the bond's duties, round blocks included,
-   and a second process beside a live node double-signs its round permits and is slashed
-   (`docs/palw-add-a-model-runbook.md` §5).
+6. **Write the sidecar, register, certify and seat it** — the operator steps, from
+   `palw-class manifest` to `misaka model add`, are
+   [palw-add-a-model-runbook.md](palw-add-a-model-runbook.md) §4–§6. `misaka model add` reads live
+   terms, applies the known-weights rule and sibling filters, and reruns admission preflight before
+   anything is signed or funded. The `kaspad --palw-register-class` primitive is for automation and
+   has a one-process-per-bond rule (runbook §5).
 
 ## Adding a new model family (a new lineage)
 

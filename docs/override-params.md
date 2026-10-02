@@ -4,7 +4,10 @@ The `--override-params-file` flag lets you run `kaspad` with a custom set of
 consensus parameters loaded from a JSON file. This is primarily useful for
 local development, testing alternative fork schedules, or simulating extreme
 network conditions. **Overriding consensus parameters on mainnet is blocked
-and will make the node exit at startup.**
+and will make the node exit at startup.** On a testnet the node runs, but on a
+different ruleset from the public network (e.g. testnet-12), so use it on
+`--devnet`, `--simnet` or a private network. It is also refused on a
+testnet-12 drill (`--palw-drill-genesis-salt`).
 
 ## Quick start
 
@@ -15,7 +18,7 @@ and will make the node exit at startup.**
 3. Launch `kaspad` with the flag:
 
 	 ```bash
-	 kaspad --devnet --override-params-file /path/to/overrides.json
+	 kaspad --devnet --override-params-file=/path/to/overrides.json
 	 ```
 
 If the file cannot be read or parsed, `kaspad` prints the error and exits.
@@ -58,8 +61,9 @@ If the file cannot be read or parsed, `kaspad` prints the error and exits.
 ```
 
 All high level (non-nested) fields are optional, and if omitted, their default values in the respective network will be used. 
-The `blockrate` field must either be absent or provided in full with all subfields (missing subfields will default to zero and not to default network params). This is
-because they have logical relations and should be modified as a unit.  
+The `blockrate` field must either be absent or provided in full with all subfields (a missing subfield is a parse error; it does not fall back to the network's value). This is
+because they have logical relations and should be modified as a unit.
+The flag requires `=` (`--override-params-file=<path>`), like the other `kaspad` value flags.
 
 ## Available parameters
 | Field                                       | Description                |
@@ -121,15 +125,15 @@ And then launch kaspad with:
 kaspad --simnet
 ```
 
-and immedeiately close it. This will create the simnet datadir at `~/.rusty-kaspa/kaspa-simnet`.
+and immediately close it. This will create the simnet datadir at `~/.rusty-kaspa/misaka-simnet`.
 
 You can then override it with the simpa database by running:
 ```bash
-rm -rf ~/.rusty-kaspa/kaspa-simnet/datadir/consensus/consensus-001/
-mv /path/to/simpa/database ~/.rusty-kaspa/kaspa-simnet/datadir/consensus/consensus-001/
+rm -rf ~/.rusty-kaspa/misaka-simnet/datadir/consensus/consensus-001/
+mv /path/to/simpa/database ~/.rusty-kaspa/misaka-simnet/datadir/consensus/consensus-001/
 ```
 
 And finally launch kaspad with:
 ```bash
-kaspad --simnet --override-params-file overrides.json
+kaspad --simnet --override-params-file=overrides.json
 ```

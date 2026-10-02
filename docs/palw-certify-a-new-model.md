@@ -1,5 +1,10 @@
 # Certifying a new model on chain (ADR-0075)
 
+*The reference for the certification objects: which families this build drills, how the objects
+are made, carried and graded. The end-to-end operator walkthrough (convert, register, certify,
+seat) is [palw-add-a-model-runbook.md](palw-add-a-model-runbook.md), where `misaka model add` does
+these steps for you; the steps below are what it does.*
+
 A class holds weight only when a family the court has drilled end to end covers every kernel its
 graph reaches (ADR-0069). Since ADR-0075 that family, and the free-prompt certification of a
 class, are chain state carried by ordinary transactions. Nobody's permission is involved: the
@@ -18,21 +23,16 @@ family covered it: it could register only weightless and never carry a free-prom
 ## What you need
 
 * A node of this build synced to the network (`kaspad`), with a funded key file for fees.
-* The model's catalog id (a row `misaka-palw-sdk` can express; `palw-class list` shows them).
+* The model's catalog id (a row `misaka-palw-sdk` can express; `palw-class ledger --network <net>` shows them).
 * The `palw-certify` and `misaka` binaries (the crate is `misaka-cli`; the BINARY it builds is `misaka`) from the same build.
 
 ## Steps
 
-**Never start a second `kaspad` with a bond that a node already runs.** Since 2026-09-25 a node's
-duties have no off switch. A `kaspad` given a bond's key and outpoint runs that bond's seat duties
-and its execution-lane round blocks, even when it was started only to register. Two such processes
-at once sign the same round permit twice, and the chain slashes the bond
-(`RoundPermitEquivocated`). Register in one of these ways:
-
-* through the running node, with `misaka model add` (RPC only, no second process);
-* by restarting that node itself with the flag, and removing the flag once the class is on the
-  chain (`docs/palw-add-a-model-runbook.md` §5);
-* with a bond that no process runs yet. The registration run then stays that bond's node.
+**Never start a second `kaspad` with a bond that a node already runs.** A `kaspad` given a bond's
+key and outpoint runs that bond's seat duties and its execution-lane round blocks, even when it was
+started only to register, and two such processes are slashed (`RoundPermitEquivocated`). Register
+through the running node with `misaka model add`, or follow the one-process rules in
+[palw-add-a-model-runbook.md](palw-add-a-model-runbook.md) §5.
 
 ```bash
 # 1. Register the class. Weightless (0‰) if no certified family covers it yet; at the floor
@@ -40,6 +40,8 @@ at once sign the same round permit twice, and the chain slashes the bond
 #    that runs the bond (see above): never a second process beside it.
 kaspad ... --palw-register-class "<model id>" --palw-producer-bond <txid>:<index> ...
 
+# 2–3 apply only to a weightless registration: a class a pinned family already covers is seated
+#    at registration, and an attempt-lane bind is then refused ClassAlreadyWeighted.
 # 2. Post the drill of the family that covers the model's kernels (once per family per lane).
 palw-certify drill --model-id "<model id>" --lane attempt --out family-attempt.obj
 misaka palw submit-object --key-file <seed> --object family-attempt.obj --yes
@@ -48,7 +50,8 @@ misaka palw submit-object --key-file <seed> --object family-attempt.obj --yes
 palw-certify bind --model-id "<model id>" --lane attempt --out class-attempt.obj
 misaka palw submit-object --key-file <seed> --object class-attempt.obj --yes
 
-# 4. (Optional) The free-prompt lane, the same way.
+# 4. (Optional) The free-prompt lane, the same way. Always drill first: a lane binds to a family
+#    certified ON CHAIN, and the families this build pins at genesis do not count (ADR-0075 D10).
 palw-certify drill --model-id "<model id>" --lane fp --out family-fp.obj
 misaka palw submit-object --key-file <seed> --object family-fp.obj --yes
 palw-certify bind --model-id "<model id>" --lane fp --out class-fp.obj
@@ -120,5 +123,5 @@ gateway at it.
   court serves it.
 * There is no revocation. A misbehaving class is frozen by contradiction (`ClassFrozen`), as
   before.
-* Mainnet ships PALW off; the bundle it activates is built by the same code path, so the route is
-  the same there.
+* A mainnet bundle is built by the same code path, so the route is the same there; the mainnet
+  deployment and verification steps are [mainnet-palw-certification-runbook.md](mainnet-palw-certification-runbook.md).

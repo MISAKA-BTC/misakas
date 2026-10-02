@@ -5,7 +5,7 @@ engineering spec the `palw-v2` branch implements before any public PALW-RC or ma
 
 Date: 2026-08-20
 Branch: `palw-v2` (cut from `palw-only-v4` @ `26469061`, which carries the external NO-GO audit).
-Audit baseline: `9cfcbf99` / `docs/palw-critical-audit-2026-08-19-ja.md` (10 P0s + 2 blockers).
+Audit baseline: `9cfcbf99` / `docs/archive/palw-critical-audit-2026-08-19-ja.md` (10 P0s + 2 blockers).
 
 Relates to / builds on:
 

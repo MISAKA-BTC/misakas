@@ -7,7 +7,7 @@
 //! # What is measured and what is chosen
 //!
 //! The geometry is MEASURED, from Hugging Face's own `config.json` and from the `safetensors`
-//! header of the real weight file (`docs/palw-qwen25-class-phase0.md` records the readings and
+//! header of the real weight file (`docs/archive/palw-qwen25-class-phase0.md` records the readings and
 //! the date). A profile that disagrees with the file describes an execution that never ran, and
 //! the court would then adjudicate steps against it.
 //!

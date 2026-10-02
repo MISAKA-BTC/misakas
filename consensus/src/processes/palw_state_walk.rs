@@ -18,7 +18,7 @@
 //!
 //! **Nothing calls this yet.** The virtual-processor wiring is the rest of Unit C; landing the
 //! primitive with its equivalence test first means that wiring is written against a test that is
-//! red on regression (`docs/palw-fp-wiring-atomicity.md`).
+//! red on regression (`docs/archive/palw-fp-wiring-atomicity.md`).
 
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, apply_delta_v2, revert_delta_v2};

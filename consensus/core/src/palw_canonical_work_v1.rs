@@ -15,7 +15,7 @@
 //! exactly the ratio between the declared job and the executed one, and the 2026-09-19 reward audit
 //! measured it on one artifact, one graph and one kernel set: **7.8× the fork-choice weight for
 //! identical arithmetic and identical pay, 24,572× the weight per unit of arithmetic at the
-//! admissible extreme** (`docs/audit/2026-09-19-llm-mining/counterexample-table.txt`, families (b)
+//! admissible extreme** (`docs/archive/audit/2026-09-19-llm-mining/counterexample-table.txt`, families (b)
 //! and (d)). All of those rows pass every check the chain performs.
 //!
 //! **So the defect is not the choice of unit.** Leaves are a court fact — a tile of a committed

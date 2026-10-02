@@ -183,7 +183,7 @@ pub struct Header {
     /// (`= 1`); ASIC-hard variants are Phase 2+ hard-fork ADRs
     /// (ADR-0007). Placed after `nonce` and before `daa_score` to
     /// keep the `(timestamp, bits, nonce)` PoW triple contiguous
-    /// (docs/hash64-migration-inventory.md §"Header hashing byte
+    /// (docs/archive/hash64-migration-inventory.md §"Header hashing byte
     /// order").
     pub pow_algo_id: u8,
     pub daa_score: u64,

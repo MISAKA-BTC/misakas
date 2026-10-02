@@ -10,7 +10,7 @@
   its host can spare it (Decision 2, amended the same day).
 * Builds on: [0052](0052-palw-qwen36-hybrid-class.md) (the mapped container: a 33 GiB file the
   runtime maps rather than reads, and the note that residency was left to the page cache),
-  [0067](0067-a-registered-class-is-served-by-any-node-that-holds-its-artifact.md) (a node holds
+  [0067](0067-classes-are-chain-data-kernels-are-the-build.md) (a node holds
   what it chooses; `--palw-class-cache-bytes` bounds which artifacts load — this ADR bounds what
   of one artifact is in memory), [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (every chain term at 2M is constant or logarithmic; the model's cost is the host's), and
@@ -268,7 +268,7 @@ the host; it is a line an operator watches now.
 |---|---|
 | ADR-0052's note that expert residency "remains the page cache's, with a measured note" and the `Qwen36Residency` LRU (`MADV_WILLNEED` admission, `MADV_DONTNEED` eviction, on the engine, used only by the bench tool) | Decisions 1, 3, 4: residency is the artifact's, owned buffers read through the file descriptor, on every engine over the artifact. The `MADV` advice stays in `mmap.rs` as a utility nobody calls. |
 | the root pass's rule "per-token expert access stays on the map, whose resident-set behavior is the reason the map exists" (`mmap.rs`) | withdrawn: the resident-set behaviour was the reason the draw took twenty minutes. The map's reason is now the header and the embedding row. |
-| `docs/palw-practical-runtime-plan-2026-08-26.md`'s residency line ("always-set は pin, routed expert 以外を open 時に MADV_WILLNEED") | Decision 3, with the pin an owned read. |
+| `docs/archive/palw-practical-runtime-plan-2026-08-26.md`'s residency line ("always-set は pin, routed expert 以外を open 時に MADV_WILLNEED") | Decision 3, with the pin an owned read. |
 
 Nothing in consensus moves. `PalwExecutionBackendV1` is unchanged; the lineage contract gains one
 parameter.

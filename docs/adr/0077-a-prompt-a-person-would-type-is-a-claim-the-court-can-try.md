@@ -40,7 +40,7 @@ The three classes testnet-11 registers, read off `canonical_classes_v1` /
 | PALW-QWEN36 `5bd9ae3d…` | Qwen3.6-35B-A3B, graph-v3 | 8 | `palw-qwen36-fp-worker` | (7, 2) | 2,685,360 |
 
 Against those widths, the gateway's frozen plain-marker template costs ~9 tokens by itself
-(`docs/palw-fp-on-registered-classes.md`, measured on the A16 tokenizer). On the hybrid the
+(`docs/archive/palw-fp-on-registered-classes.md`, measured on the A16 tokenizer). On the hybrid the
 template alone does not fit and `palw-qwen36-fp-worker` refuses the job at its own length check;
 on the dense tier a browser prompt is "a few tokens each way — the pipeline proof, not the product
 width". The worker binaries map the artifact **per job** (`load()` inside `run_job`; ~8 minutes
@@ -567,7 +567,7 @@ interval's opening carries the prompt's embeddings). The gateway files mode-2 un
 `--privacy panel-da`, refused where `panel_da_armed` is false, with the disclosure sentence printed
 verbatim at boot; the commitment builder carries no ids on chain and the submitter stages the
 worker's beside the material. Armed on a carded mainnet from genesis; dormant on testnet-11 and
-devnet. Design record: `docs/palw-private-prompts-design-2026-09-05.md`.
+devnet. Design record: `docs/archive/palw-private-prompts-design-2026-09-05.md`.
 
 ## ADR-0144 alignment (2026-09-21)
 

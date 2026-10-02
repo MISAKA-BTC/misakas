@@ -1,23 +1,23 @@
 # DNS-finality validator runbook
 
-Verified against current `main` / Testnet-11 Relaunch 5f on 2026-09-13. The precommit section describes the build that schedules Testnet-11's DAA 7,101 flag day (ADR-0128).
+Written for testnet-12. The DNS-finality numbers below are `PALW_T12_DNS_PARAMS` in `consensus/core/src/config/params.rs` (mainnet's set at the 120-second cadence).
 
 This validator is separate from a PALW producer/panel Bond. It signs DNS-finality attestations through `kaspa-pq-validator`.
 
 ## Requirements
 
-- synced Testnet-11 node
+- synced testnet-12 node
 - `--utxoindex`
 - wRPC Borsh enabled with `--rpclisten-borsh=default`
 - validator seed stored on one host
 - mature funds at the seed's funding address
 
-Testnet-11's DNS stake minimum is **10 MSK = 1,000,000,000 sompi**. This is not the PALW class collateral amount.
+testnet-12's DNS stake minimum is **20,000,000 MSK = 2,000,000,000,000,000 sompi** per bond. DNS finality activates only once **at least 6 validators** hold **at least 120,000,000 MSK** of active stake between them; until then no anchor is DNS-confirmed. This is not the PALW producer or panel collateral (see [`testnet12-join-mining.md`](testnet12-join-mining.md) §4).
 
 ## Recommended setup
 
 ```bash
-misaka --network testnet-11 validator setup
+misaka --network testnet-12 validator setup
 ```
 
 The wizard checks the node, creates or loads the key, checks funds, creates/fetches the stake Bond and writes validator configuration. Re-running resumes.
@@ -25,30 +25,30 @@ The wizard checks the node, creates or loads the key, checks funds, creates/fetc
 ## Direct sidecar flow
 
 ```bash
-kaspa-pq-validator keygen --out validator.seed --network testnet
+kaspa-pq-validator keygen --out validator.seed --network testnet-12
 
 kaspa-pq-validator bond \
   --node-rpc 127.0.0.1:27210 \
   --validator-key validator.seed \
-  --amount 1000000000 \
-  --network testnet-11
+  --amount 20000000MSK \
+  --network testnet-12
 
 kaspa-pq-validator run \
   --node-rpc 127.0.0.1:27210 \
   --validator-key validator.seed \
   --stake-bond <txid>:<index> \
   --signed-epoch-db validator.state \
-  --network testnet-11 \
+  --network testnet-12 \
   --attest-poll-secs 3
 ```
 
-Omit a manually guessed fee when the command supports automatic mass-based sizing.
+`bond` prints `bond_outpoint: <txid>:0`; pass that to `run`. Leave `--fee` out: `bond`, `unbond` and `run` size fees from the network's mass parameters. Consensus raises a bond's unbonding period to the network floor (10,083 blocks on testnet-12) whatever `--unbonding-period-blocks` says. `misaka validator keygen|bond|unbond|run` forwards to the same sidecar with `--network` and `--rpc` filled in.
 
 ## Status
 
 ```bash
-misaka --network testnet-11 validator status
-misaka --network testnet-11 validator bonds --all
+misaka --network testnet-12 validator status
+misaka --network testnet-12 validator bonds --all
 ```
 
 Healthy operation means:
@@ -56,11 +56,11 @@ Healthy operation means:
 - node synced to the current fingerprint
 - stake Bond active
 - current canonical-ready epoch attested
-- from the BFT gate's height, a `precommit: LOCKED epoch …` line for the epochs the duty names
+- a `precommit: LOCKED epoch …` line for the epochs the duty names
 - anti-equivocation state (both logs) writable
 - DNS-confirmed anchor advances
 
-Testnet-11 has a 120-second PALW block cadence and a DNS attestation epoch of 2 blue-score. The sidecar polls every 3 seconds by default; old testnet-21 heartbeat advice does not apply.
+testnet-12 has a 120-second PALW block cadence and a DNS attestation epoch of 2 blue-score. The sidecar polls every 3 seconds by default (`--attest-poll-secs`).
 
 ## Anti-equivocation state
 
@@ -73,7 +73,7 @@ Testnet-11 has a 120-second PALW block cadence and a DNS attestation epoch of 2 
 
 ## Precommits (round two, ADR-0128)
 
-From the height a network schedules ADR-0128's BFT gate (Testnet-11: **DAA 7,101**), an epoch's anchor is DNS-final only when validators holding more than two thirds of the counted bonded stake have both **attested** to it and **precommitted** to it, and the DNS stake reorg gate then refuses any chain that abandons that anchor until it goes stale. Voting power is the bond amount.
+testnet-12 arms ADR-0128's BFT gate from DAA 0. An epoch's anchor is DNS-final only when validators holding more than two thirds of the counted bonded stake have both **attested** to it and **precommitted** to it, and the DNS stake reorg gate then refuses any chain that abandons that anchor until it goes stale. Voting power is the bond amount.
 
 - `kaspa-pq-validator run` precommits by itself on such a network, after each poll's attestations; the in-node validator does the same. Neither needs a flag. Both read what to sign from the node (`getPrecommitDuty`), so the node must be a build that has it; against an older node the sidecar logs a warning and asks again every 10 minutes.
 - Each precommit declares the lock the chain shows for your bond and is signed only after it is written to the **precommit safety log**, `<signed-epoch-db>.precommits.json` beside the attestation log (`validator.state` → `validator.precommits.json`). The in-node validator uses the same name next to its state file, so moving a validator between the two keeps it.
@@ -83,10 +83,10 @@ From the height a network schedules ADR-0128's BFT gate (Testnet-11: **DAA 7,101
 
 ## Unbonding
 
-Stopping the process does not unbond. Unbonding has a waiting/evidence period during which protocol obligations can remain relevant. Inspect current `kaspa-pq-validator unbond --help` before submitting the transaction.
+Stopping the process does not unbond. Unbonding has a waiting/evidence period during which protocol obligations can remain relevant: on testnet-12 the stake is spendable 10,083 blocks after the unbond request (about 14 days and 6 minutes at 120 seconds per block). Inspect current `kaspa-pq-validator unbond --help` before submitting the transaction.
 
 ## Relationship to PALW
 
-Validators attest and precommit for the DNS stake reorg gate and are paid 20 % of the block subsidy from the height the network schedules (ADR-0126, revised; Testnet-11: DAA 7,101, previously 30 %). PALW block production and settlement do not depend on validators: a PALW payment's confirmations are settled PALW anchors (`misaka palw settlement`, ADR-0127/0129), and the gate is a veto layered on top.
+Validators attest and precommit for the DNS stake reorg gate and are paid 20 % of the block subsidy (ADR-0126). PALW block production and settlement do not depend on validators: a PALW payment's confirmations are settled PALW anchors (`misaka palw settlement`, ADR-0127/0129), and the gate is a veto layered on top.
 
 Validator downtime affects DNS confirmation and its consumers such as the EVM bridge. It is not the same service as `misaka mining` or `misaka verifier`, and its Bond outpoint cannot substitute for a PALW producer Bond.

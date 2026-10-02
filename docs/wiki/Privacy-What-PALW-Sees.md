@@ -41,6 +41,6 @@ gateway / runtime が作る private bundle、state database、audit material に
 
 ## 正本
 
-- [Private prompts design](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-private-prompts-design-2026-09-05.md)
+- [Private prompts design](https://github.com/MISAKA-BTC/misakas/blob/main/docs/archive/palw-private-prompts-design-2026-09-05.md)
 - [PALW extension envelope](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-extension-envelope.md)
 - [PALW registry map](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-registry-map.md)

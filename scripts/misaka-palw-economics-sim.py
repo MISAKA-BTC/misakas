@@ -9,7 +9,7 @@ constraint cannot be satisfied the script says so instead of picking a number.
 Measured inputs (all cited, none invented):
   * per-block subsidy, 120 s network — `SUBSIDY_BY_MONTH_TABLE[0]` rescaled by the
     rate-preserving rule (docs: 4445.62 MSK/block at 120 s; genesis-rate cross-check below)
-  * replay costs — docs/palw-stage0-fleet-replay-bench-2026-08-16.md (D=512 p99 per host)
+  * replay costs — docs/archive/palw-stage0-fleet-replay-bench-2026-08-16.md (D=512 p99 per host)
   * bond size — 20 000 MSK, live on t10 (t10-bond-registered-2026-08-15)
   * windows — ADR-0028 §3 two-minute defaults (w_replay 30 blocks = 1 h, W_challenge 720 = 24 h)
   * mass/fee floor — mass_per_tx_byte = 1, standard cap 480 000; carriage sizes from ADR-0029 §3

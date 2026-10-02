@@ -47,7 +47,7 @@ impl TransactionValidator {
         check_transaction_version(tx)
     }
 
-    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): on a
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/kaspa-pq-design-mldsa87.md): on a
     /// PQ-active network **every** transaction output — native spend, coinbase
     /// (miner payout *and* validator-reward), and DNS-overlay — must use the sole
     /// standard ML-DSA-87 P2PKH script class, so no non-PQ output (legacy
@@ -983,7 +983,7 @@ mod tests {
 
 #[cfg(test)]
 mod pq_output_class_enforcement_tests {
-    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/kaspa-pq-design-mldsa87.md): the
+    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/design/kaspa-pq-design-mldsa87.md): the
     //! consensus output-class rule. On a PQ-active network every transaction
     //! output — native, coinbase (miner + validator-reward), and DNS-overlay —
     //! must be ML-DSA P2PKH; there are no exemptions. Drives the private

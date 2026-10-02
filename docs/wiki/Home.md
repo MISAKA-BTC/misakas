@@ -1,52 +1,44 @@
 # misakas Wiki
 
-この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開されました。内容は 2026-09-25 に [公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)、[参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)、`Params` と照合しました。
+この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開され、その後の post-launch fence で更新されています。
 
-仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。この Wiki と食い違う場合は、node の表示と `misaka bond status` を正としてください。
+仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。producer の詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。この Wiki と食い違う場合は、node の表示と `misaka bond status` を正としてください。
 
 > [!IMPORTANT]
-> 公開前に、[testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を必ず読んでください。リリースの中身、既知の問題(CRITICAL が 2 件あり、公開後の fence で修正)、入金を確定とみなしてよい基準が書いてあります。**testnet-12 では、block 数・blue score の深さ・DAA の差で入金を確定とみなさないでください。**
+> 参加する前に、[testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を必ず読んでください。リリースの中身、post-launch fence、既知の問題、入金を確定とみなしてよい基準が書いてあります。**testnet-12 では、block 数・blue score の深さ・DAA の差で入金を確定とみなさないでください。**
 
 ## まず読むページ
 
-1. [Quick Start](Quick-Start) — ビルド、ノード、Bond、Floor producer
-2. [Testnet-12 Operator UI](Testnet-12-Operator-UI-JA) — セットアップウィザードと dashboard
-3. [FAQ / Troubleshooting](FAQ-Troubleshooting) — よくある停止理由
-4. [Operations Notes](Operations-Notes) — ポート、サービス化、更新
-5. [PALW Participation](PALW-Participation-JA) — node / Producer / Panel seat
-6. [検証参加ガイド](Testnet-12-Verification-Participation-JA) — panel seat の用意、起動、監視、停止
-7. [Adding a Model](Adding-a-Model-JA) — モデル class と lifecycle
-8. [PALW の役割とネットワーク範囲](PALW-Roles-and-Network-Scope-JA) — 公開ロールと DNS の範囲
-9. [Privacy: What PALW Sees](Privacy-What-PALW-Sees) — prompt と receipt
-10. [EVM Pruned Node](EVM-Pruned-Node) — EVM state の保持
+1. [Quick Start](Quick-Start) — ビルド、ノード、Bond、Floor / 8k producer、状態の確認、dashboard、停止
+2. [FAQ / Troubleshooting](FAQ-Troubleshooting) — よくある停止理由
+3. [Operations Notes](Operations-Notes) — ポート、更新、サービス化、1 bond = 1 process
+4. [PALW Participation](PALW-Participation-JA) — ロール、model class、Bond と exposure、課金、報酬、DNS の位置づけ
+5. [検証参加ガイド](Testnet-12-Verification-Participation-JA) — panel seat の用意、起動、監視、停止
+6. [Adding a Model](Adding-a-Model-JA) — モデル class と lifecycle
+7. [Privacy: What PALW Sees](Privacy-What-PALW-Sees) — prompt と receipt
+8. [EVM Pruned Node](EVM-Pruned-Node) — EVM state の保持
 
 ## 現行ネットワーク
 
 | 項目 | 値 |
 |---|---|
 | network | `testnet-12`(R-core+) |
-| release commit | `587cab2b0`(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になる。DAA 1,300 より前に動かしておくこと) |
-| consensus params fingerprint | `24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff`(`587cab2b0`。`c3dbaee3c` は `dbbc9104…`、それ以前のビルドは `b8564b88…`) |
-| fence schedule | `750, 1000, 1300`(schedule id `d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a`) |
-| genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
+| consensus params fingerprint | `254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1` |
+| fence schedule | `750, 1000, 1300, 1700, 2000, 3600`(schedule id `1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593`) |
+| genesis | `a27f8f44fe4d91a5…`(全体はリポジトリの `release.json`) |
 | premine txid | `5e0d5f1b37a71288…`(genesis の bond と fee float はこの txid の上にある) |
 | node の起動 | `kaspad --testnet --netsuffix=12` |
 | CLI | `misaka --network testnet-12`(何も指定しないときの既定も testnet-12) |
-| P2P | `26311` |
-| node gRPC | `26210` |
-| wRPC Borsh | `27210` |
-| wRPC JSON | `28210` |
-| dashboard | `127.0.0.1:8791` |
+| ポート | [Operations Notes](Operations-Notes#network-and-ports) |
 | PALW cadence | 1 block 120 秒。1 DAA = 1 execution span なので、1,000 DAA は約 33 時間 |
 | Explorer | [misakascan.com](https://misakascan.com/)(testnet-12 を表示) |
 | Faucet | **未定**(testnet-12 の資金はまだ入っていない) |
 
-testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch fence(`c3dbaee3c`、公開ノート §00)、DAA 1,300 で有効になる 2 本(`587cab2b0`、公開ノート §000)と DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**DAA 0 から有効**です。古いビルド(`0e8ec984e`・`8a0810992`)のノードは DAA 750 から handshake で拒否されるので、`c3dbaee3c` に入れ替えてください。
+識別値の正本はリポジトリ直下の `release.json` です。上の値は 2026-10-02 時点のもので、post-launch fence が追加されると fingerprint と schedule id が変わります。古いビルドのノードは、まだ持っていない fence の高さから handshake で拒否されるので、告知があったら `main` から再ビルドしてください([Operations Notes](Operations-Notes#updating))。
 
 ## 重要な区別
 
-- **現行 `main` のビルドでは testnet-11 に参加できません。** testnet-11 のノードを動かし続ける場合は、旧 `main` の commit `1f98d3bf4` をビルドします(詳細は [README](https://github.com/MISAKA-BTC/misakas#readme))。
-- testnet-12 は新しいチェーンです。testnet-11 の bond はありません。key file は流用できますが、bond は testnet-12 で登録し直します。
+- testnet-12 は新しいチェーンです。旧ネットワークの bond はありません。key file は流用できますが、bond は testnet-12 で登録し直します。
 - Bond の額は mainnet 想定です: producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上**。
 - Bond の UTXO が locked でも、registry に正式登録済みとは限りません(`misaka bond status` で確認します)。
 - 1 つの key で登録できる bond は、チェーンの存続期間を通じて 1 つだけです。登録後に collateral を追加することもできません。
@@ -64,5 +56,3 @@ testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch
 - [Validator runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/validator-runbook.md)
 - [Explorer](https://misakascan.com/)
 - [Releases](https://github.com/MISAKA-BTC/misakas/releases)
-
-旧ネットワーク testnet-11 向けのページ([Operator UI](Testnet-11-Operator-UI-JA)、[検証参加ガイド](Testnet-11-Verification-Participation-JA))は記録として残しています。

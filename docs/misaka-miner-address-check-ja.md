@@ -36,14 +36,17 @@ jq
 ## 基本コマンド
 
 ```bash
-misaka-miner-address-check --address misakatest:...
+misaka-miner-address-check --address misakatest:... --network testnet-12
 ```
 
 Discord bot 向けの1行表示:
 
 ```bash
-misaka-miner-address-check --address misakatest:... --discord
+misaka-miner-address-check --address misakatest:... --network testnet-12 --discord
 ```
+
+スクリプトの `--network` の既定値は退役済みの `testnet-10` のままなので、`--network testnet-12`
+(または `MISAKA_NETWORK=testnet-12`)を必ず指定してください。
 
 サンプルJSONで表示だけ確認（node不要）:
 
@@ -57,7 +60,7 @@ misaka-miner-address-check --self-test --discord
 | オプション | 内容 | 既定 |
 |---|---|---|
 | `--address <addr>` | 報酬 / ウォレットアドレス（必須） | — |
-| `--network <id>` | ネットワークID | `testnet-10` |
+| `--network <id>` | ネットワークID(testnet-12 では `testnet-12` を指定) | `testnet-10`(スクリプトの既定値。退役済み) |
 | `--rpc <host:port>` | node wRPC Borsh エンドポイント | `127.0.0.1:27210` |
 | `--discord` | Discord bot 向けのコンパクト1行表示 | off |
 | `--self-test` | 埋め込みサンプルJSONで表示確認 | off |
@@ -96,5 +99,10 @@ MISAKA miner | Address:misakatest:q...00000000 | Reward:RECENT_REWARD_SEEN (rece
 | `RECENT_REWARD_SEEN` | recent reward, immature coinbase present | 未成熟UTXOあり。直近で報酬を受け取れている可能性が高い |
 | `REWARD_HISTORY_SEEN` | past reward, mature only | 成熟UTXOのみ。過去に報酬受領の履歴あり |
 | `NO_REWARD_UTXO` | no reward UTXO for this address | このアドレスに報酬UTXOなし |
+
+testnet-12 では、PALW の producer / seat の報酬はまず vesting に入り、conviction window が閉じてから
+coinbase の UTXO になります。そのため報酬を受け取っていても、しばらくは `NO_REWARD_UTXO` になります
+(`--network testnet-12` のときは表示にもその旨が出ます)。vesting 中の報酬は
+`misaka --network testnet-12 palw vesting --address <addr>` で確認できます。
 
 `immature` UTXO が増えている、または `mature` 残高が増えているなら、報酬を受け取れている可能性が高いです。ただし前述の通り、これは miner プロセスがリアルタイムで稼働している証明ではありません。

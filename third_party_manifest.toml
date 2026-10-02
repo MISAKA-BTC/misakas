@@ -3,7 +3,7 @@
 # Declares the UNMODIFIED upstream crates the EVM lane + the Ethereum JSON-RPC
 # adapter pull in, so an audit can treat them as a dependency review (version
 # pin + call-site) rather than custom code. The MISAKA-custom surface (the audit
-# target) is enumerated in docs/audit-scope-evm-rpc.md. Project license: ISC.
+# target) is enumerated in docs/archive/audit-scope-evm-rpc.md. Project license: ISC.
 #
 # Status 2026-06-20.
 
@@ -104,4 +104,4 @@ audit = "dependency review only; custom contracts that USE them are in Scope D"
 
 # Misaka-custom (the audit target — NOT third-party): kaspa-evm/src, rpc/eth/src,
 # kaspad/src/eth_rpc.rs, consensus/src/processes/evm, crypto/txscript deposit-lock,
-# the EVM DB stores (database/src/registry.rs 201-213). See docs/audit-scope-evm-rpc.md.
+# the EVM DB stores (database/src/registry.rs 201-213). See docs/archive/audit-scope-evm-rpc.md.

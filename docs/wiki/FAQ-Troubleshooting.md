@@ -10,13 +10,12 @@ misaka --network testnet-12 bond status --bond <txid>:<index>
 
 ## bond の額はいくらか
 
-testnet-12 は mainnet 想定の額です。producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上** です。testnet-11 の少額 bond(0.004 MSK)は通りません。
+testnet-12 は mainnet 想定の額です。producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上** です。同時に持てる claim の本数は [PALW Participation](PALW-Participation-JA#bond-and-exposure) を見てください。
 
 ## REGISTERED なのに UNDERSIZED / holding
 
-登録されていることと、生産できる量は別です。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight、floor claim 1 本で約 3,200.95 MSK)が bond に予約されます。予約できる上限は `collateral × 500‰` です。
+登録されていることと、生産できる量は別です。claim ごとに escrow + weight が bond に予約され、予約できる上限は `collateral × 500‰` です(詳しくは [PALW Participation](PALW-Participation-JA#bond-and-exposure))。
 
-- 1 つの bond が同時に持てる floor claim は、collateral 約 6,402 MSK ごとに 1 本です(13,000 MSK なら 2 本)。
 - 上限に達すると、producer は `the bond's exposure ceiling leaves no room for another claim` で待ちます。止まったままになるわけではありません。panel を引き直さずに全 seat が `Valid` を返した claim は、licence の時点で escrow 分が先に解放されます(2M class を除く)。それ以外は claim が `Final` になるか void になると空きます。
 - ノードが出す「may then hold forever」の警告と `bond status` の `UNDERSIZED` は、古い weight だけの式(Floor で約 31,191 MSK)との比較です。testnet-12 の実際の空きとは別物なので、`exposure_ceiling` と `reserved_exposure` を見てください。
 - 登録後に collateral を追加することはできません。容量を増やすには、新しい producer key と新しい Bond を作ります。
@@ -51,17 +50,7 @@ Floor は artifact が要りません。`misaka mining setup --model floor` を�
 
 ## Connection refused / WebSocket error
 
-用途ごとにポートが違います。
-
-| 接続 | 既定 |
-|---|---|
-| P2P | `26311` |
-| gRPC | `26210` |
-| wRPC Borsh | `27210` |
-| wRPC JSON | `28210` |
-| EVM JSON-RPC | `8545` |
-
-`misaka`、wallet、validator は wRPC Borsh を使います。node を `--rpclisten-borsh=default` を付けて起動してください。bind 先を変えた場合は `--rpc host:port` を明示します。
+用途ごとにポートが違います([Operations Notes](Operations-Notes#network-and-ports) の表)。`misaka`、wallet、validator は wRPC Borsh を使います。node を `--rpclisten-borsh=default` を付けて起動してください。bind 先を変えた場合は `--rpc host:port` を明示します。
 
 ## peers が増えない / genesis mismatch
 
@@ -73,8 +62,8 @@ misaka --network testnet-12 doctor
 
 - node は `--testnet --netsuffix=12` で起動します。`--netsuffix` を省略しないでください。
 - DNS で peer が見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。
-- genesis mismatch で起動しない場合は、最初の testnet-12(`a8cabac4…`)か testnet-11 の datadir を使っています。削除せずに退避し、新しい datadir で同期します。
-- 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
+- fingerprint mismatch や fork-id mismatch で peer に拒否される場合は、バイナリが古いか新しすぎます。`main` から再ビルドし、起動ログの fingerprint をリポジトリの `release.json` と比べます。
+- genesis mismatch で起動しない場合は、最初の testnet-12(`a8cabac4…`)か旧ネットワークの datadir を使っています。削除せずに退避し、新しい datadir で同期します。
 
 ## hash miner が block を作らない
 
@@ -82,7 +71,7 @@ testnet-12 の producer は `kaspad --palw-produce` です。`kaspa-pq-miner` �
 
 ## bond が slash された(`RoundPermitEquivocated`)
 
-同じ bond の key と outpoint で `kaspad` が 2 つ動いていました。standby の node、別ホストのコピー、動いている node の横で起動した `kaspad --palw-register-class`、新しい app dir で起動し直した node は、どれも 2 つ目の process になります。1 つの bond は 1 つの process だけで動かし、app dir は消さずに保ってください。
+同じ bond の key と outpoint で `kaspad` が 2 つ動いていました。何が 2 つ目の process になるかは [Operations Notes](Operations-Notes#1-bond--1-process) を見てください。1 つの bond は 1 つの process だけで動かし、app dir は消さずに保ってください。
 
 ## `--palw-panel` / `--palw-round-lane` の警告
 
@@ -100,7 +89,7 @@ Bond collateral と fee outpoint は別の UTXO です。fee outpoint は、成�
 misaka --network testnet-12 mining stop --drain
 ```
 
-testnet-12 では、消えた producer は課金されます(`ProducerWithholding` の void と 2 回目の `ReceiptTimeout` は weight + escrow を没収)。`--force` は claim を失う可能性がある緊急停止です。
+testnet-12 では、消えた producer は課金されます([PALW Participation](PALW-Participation-JA#停止と課金))。`--force` は claim を失う可能性がある緊急停止です。
 
 ## 入金はいつ確定とみなせるか
 
@@ -112,8 +101,4 @@ testnet-12 の faucet はまだ資金が入っていません(未定)。
 
 ## dashboard が開かない
 
-```bash
-misaka --network testnet-12 dashboard --listen 127.0.0.1:8791
-```
-
-リモートのホストなら SSH tunnel を使います。`8790` は gateway、`8791` は dashboard です。
+`misaka --network testnet-12 dashboard --listen 127.0.0.1:8791` で起動します。リモートのホストなら SSH tunnel を使います。`8790` は gateway、`8791` は dashboard です([Quick Start](Quick-Start#dashboard))。

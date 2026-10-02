@@ -548,7 +548,7 @@ block, not a loss.
 ### External audit, 2026-08-19: NO-GO — and what the status table below does not mean
 
 An independent audit of this commit returned **NO-GO with ten independent activation blockers**
-(`docs/palw-critical-audit-2026-08-19-ja.md`). Four were re-verified on this side by running the
+(`docs/archive/palw-critical-audit-2026-08-19-ja.md`). Four were re-verified on this side by running the
 code the auditor could not run, and all four hold. **Three of them are lines written the same day as
 the status table below**, and a fourth invalidates a safety claim made in that day's commits:
 
