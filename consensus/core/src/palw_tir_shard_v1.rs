@@ -668,6 +668,72 @@ pub fn palw_tir_shard_part_verdict_v1(
     PalwTirShardPartVerdictV1::Licensed { cell_counts: palw_tir_shard_cell_counts_v1(s_p, &all_masks), signers }
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// The claim's record (RFC §4.4, §4.5, §6)
+// ---------------------------------------------------------------------------------------------
+
+/// **What the chain keeps of a claim drawn per shard**, written when its panel binds and read by every part, the lock,
+/// the pay and the recount. It is rooted state (`tir_shard_claims`), empty on every network that never armed the fence.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirShardClaimV1 {
+    /// The plan the panel was drawn under (frozen at the bind: a later declaration cannot move it).
+    pub s_l: u16,
+    pub s_p: u16,
+    /// Whether the claim was outsider-judged at the bind: each shard's slice then leads with the outsider's seat.
+    pub outsider: bool,
+    /// Which shards have licensed (a part landed).
+    pub progress: crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1,
+    /// Distinct counted signers covering each cell (capped at three), `s_l × s_p`, shard-major; 0 until the shard's
+    /// part lands. [`palw_tir_shard_basis_k_v1`] of it, once every shard landed, is the claim's `basis_k`.
+    pub cell_counts: Vec<u8>,
+    /// The counted `Valid` signers of the parts landed so far: `(bond, shard, attested mask)` — what a lock records and
+    /// what Q-6 reads a fault against.
+    pub counted: Vec<(PalwBondKeyV2, u16, PalwSegmentMaskV2)>,
+    /// Each drawn seat's share of the claim's work, permille of its assigned cells, in stored panel order — the weights
+    /// the lock and the pay scale by, fixed at the bind.
+    pub drawn_permille: Vec<u32>,
+    /// A part carried an abstention (`Unavailable`, `Incapable`): the licence's latch (C1), as `unserved_seen` is.
+    pub unserved_seen: bool,
+}
+
+impl PalwTirShardClaimV1 {
+    /// A fresh record for a claim whose panel just bound: nothing licensed.
+    pub fn bound(s_l: u16, s_p: u16, outsider: bool, drawn_permille: Vec<u32>) -> Option<Self> {
+        Some(Self {
+            s_l,
+            s_p,
+            outsider,
+            progress: crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1::new(u32::from(s_l)).ok()?,
+            cell_counts: vec![0; usize::from(s_l) * usize::from(s_p)],
+            counted: Vec::new(),
+            drawn_permille,
+            unserved_seen: false,
+        })
+    }
+
+    /// The recount of the cells landed so far.
+    pub fn basis_k(&self) -> u8 {
+        palw_tir_shard_basis_k_v1(&self.cell_counts)
+    }
+}
+
+/// **Each stored seat's share of the claim's work**, from the plan's cell table and the S1 assignment of the claim's own
+/// seed: the class seats by their assigned masks, the outsider by the whole shard.
+pub fn palw_tir_shard_drawn_permille_v1(plan: &PalwTirShardPlanV1, seed: &Hash64, claim_id: &Hash64, outsider: bool) -> Vec<u32> {
+    let mut out = Vec::with_capacity(usize::from(plan.s_l) * usize::from(palw_tir_panel_stride_v1(outsider)));
+    for shard in 0..plan.s_l {
+        let masks = palw_tir_shard_assignment_v1(seed, claim_id, shard, plan.s_p);
+        if outsider {
+            out.push(palw_tir_cells_share_permille_v1(&plan.cell_permille, plan.s_p, shard, palw_tir_shard_outsider_mask_v1(plan.s_p)));
+        }
+        for mask in masks {
+            out.push(palw_tir_cells_share_permille_v1(&plan.cell_permille, plan.s_p, shard, mask));
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // The class room (RFC §6.2)
 // ---------------------------------------------------------------------------------------------

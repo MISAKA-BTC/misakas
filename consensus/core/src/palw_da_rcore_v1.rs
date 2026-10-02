@@ -131,6 +131,12 @@ pub enum PalwDaUnitV1 {
     /// ([`crate::palw_pipeline_da_v1::PalwPipelineStepNodeDisclosureV1`]), or, past the tree, by the
     /// binding proving so.
     PipelineStepNode { stage: u8, level: u8, index: u64 },
+    /// **A run of committed step leaves of an IR claim** (past `Params::palw_tir_shard_v1`; appended, tag 7): the
+    /// contiguous leaves `[first, first + count)` — a cell's carry-in rows, one per position — answered by their
+    /// preimages and one range opening ([`crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1`]), or, past the
+    /// execution, by the claim's binding proving so. One demand serves a segment's boundary rows where a
+    /// `TirStepLeaf` per position could not be demanded within a seat's four sessions (RFC-0006 §3, decision 4).
+    TirStepRun { first: u64, count: u32 },
 }
 
 impl PalwDaUnitV1 {
@@ -142,12 +148,18 @@ impl PalwDaUnitV1 {
 
     /// Is this a unit of an IR claim's step tree?
     pub fn is_tir_step_v1(&self) -> bool {
-        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. })
+        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. } | Self::TirStepRun { .. })
     }
 
-    /// Is this a unit only the second IR fence names — the step tree's, or the trace's rows tree's?
+    /// Is this a unit only the second IR fence names — the step tree's, or the trace's rows tree's? (A run is the
+    /// second fence's too: it needs it at the least; RFC-0006's own fence is [`Self::is_tir_shard_v1`].)
     pub fn is_tir_fence2_v1(&self) -> bool {
-        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. } | Self::TirRowNode { .. })
+        matches!(self, Self::TirStepLeaf { .. } | Self::TirStepNode { .. } | Self::TirRowNode { .. } | Self::TirStepRun { .. })
+    }
+
+    /// Is this the unit only layer-sharded panels make legal (`Params::palw_tir_shard_v1`)?
+    pub fn is_tir_shard_v1(&self) -> bool {
+        matches!(self, Self::TirStepRun { .. })
     }
 
     /// Is this a unit of a pipeline claim's stage trees (spec 17 §17.14)? A unit only
@@ -253,6 +265,10 @@ pub enum PalwDaAnswerV1 {
     /// execution** (appended, tag 9) — a leaf at or past its stage's leaf count, a node past its tree, a
     /// stage past its stages.
     PipelineStepOutOfRange(Box<crate::palw_pipeline_da_v1::PalwPipelineOutOfRangeV1>),
+    /// **RFC-0006: a run of committed step leaves of an IR claim** (appended, tag 10), answering a
+    /// `TirStepRun { first, count }` unit: the preimages and one range opening. Dropped by name below
+    /// `palw_tir_shard_v1`.
+    TirStepRun(Box<crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1>),
 }
 
 impl PalwDaAnswerV1 {
@@ -269,7 +285,8 @@ impl PalwDaAnswerV1 {
             | Self::TirStepOutOfRange(_)
             | Self::PipelineStepLeaf(_)
             | Self::PipelineStepNode(_)
-            | Self::PipelineStepOutOfRange(_) => None,
+            | Self::PipelineStepOutOfRange(_)
+            | Self::TirStepRun(_) => None,
         }
     }
 
@@ -281,6 +298,7 @@ impl PalwDaAnswerV1 {
             Self::TirStepNode(disclosure) => Some(&disclosure.binding),
             Self::TirRowNode(disclosure) => Some(&disclosure.binding),
             Self::TirStepOutOfRange(binding) => Some(binding),
+            Self::TirStepRun(disclosure) => Some(&disclosure.binding),
             _ => None,
         }
     }
@@ -289,13 +307,23 @@ impl PalwDaAnswerV1 {
     pub fn is_tir_v1(&self) -> bool {
         matches!(
             self,
-            Self::TirEvent(_) | Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_)
+            Self::TirEvent(_)
+                | Self::TirStepLeaf(_)
+                | Self::TirStepNode(_)
+                | Self::TirRowNode(_)
+                | Self::TirStepOutOfRange(_)
+                | Self::TirStepRun(_)
         )
     }
 
     /// Is this the second IR fence's answer? A move only past `palw_tir_fence2`.
     pub fn is_tir_fence2_v1(&self) -> bool {
-        matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_))
+        matches!(self, Self::TirStepLeaf(_) | Self::TirStepNode(_) | Self::TirRowNode(_) | Self::TirStepOutOfRange(_) | Self::TirStepRun(_))
+    }
+
+    /// Is this the answer only layer-sharded panels make legal (`Params::palw_tir_shard_v1`)?
+    pub fn is_tir_shard_v1(&self) -> bool {
+        matches!(self, Self::TirStepRun(_))
     }
 
     /// Is this a pipeline claim's answer (spec 17 §17.14)? A move only past `palw_improvement_v1`.
@@ -656,8 +684,9 @@ pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &Palw
         (PalwDaUnitV1::TirStepLeaf { .. }, PalwDaAnswerV1::TirStepLeaf(_))
         | (PalwDaUnitV1::TirStepNode { .. }, PalwDaAnswerV1::TirStepNode(_))
         | (PalwDaUnitV1::TirRowNode { .. }, PalwDaAnswerV1::TirRowNode(_))
+        | (PalwDaUnitV1::TirStepRun { .. }, PalwDaAnswerV1::TirStepRun(_))
         | (
-            PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. },
+            PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. } | PalwDaUnitV1::TirStepRun { .. },
             PalwDaAnswerV1::TirStepOutOfRange(_),
         ) => {
             if answer.tir_binding().is_some_and(|binding| binding.class.program.is_empty()) {
@@ -1021,7 +1050,17 @@ pub fn palw_tir_step_unit_is_admissible_v1(unit: &PalwDaUnitV1, ladder: u64) -> 
             Some(width) if index < width => Ok(()),
             _ => Err("a rows-tree node past every trace's tree"),
         },
-        _ => Err("an IR step demand names a step leaf, a step node or a rows-tree node"),
+        // RFC-0006: a run is non-empty, bounded, and starts inside the widest execution.
+        PalwDaUnitV1::TirStepRun { first, count } => {
+            if count == 0 || count > crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1 {
+                Err("a step run names between one and PALW_TIR_STEP_RUN_MAX_LEAVES_V1 leaves")
+            } else if first >= widest {
+                Err("a step run past every execution's leaves")
+            } else {
+                Ok(())
+            }
+        }
+        _ => Err("an IR step demand names a step leaf, a step node, a step run or a rows-tree node"),
     }
 }
 

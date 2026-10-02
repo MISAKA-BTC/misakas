@@ -440,6 +440,48 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        // **RFC-0006 (tags 91–93): the layer-sharded panels' objects ride at every height** (A-2: a block carrying one must be
+        // valid on this build and on an older one that skips it undecoded), signed where they name a party and shaped: a plan
+        // carries its registrant's signature and an `(S_L, S_P)` the chain's shape rule accepts (the class-relative bound, the
+        // seat budget, is the fold's, where the program is in hand); a part carries between one receipt and a shard's worth,
+        // each for the shard it names; a readiness proof carries its seat's signature and opens something. Whether the fence is
+        // armed is the acceptance layer's, for the k-ary court's reason.
+        PalwConsensusObjectV2::TirShardPlanDeclared { signature, .. } if signature.is_empty() => {
+            Err("a layer-shard plan must carry its registrant's signature")
+        }
+        PalwConsensusObjectV2::TirShardPlanDeclared { s_l, s_p, .. } => {
+            if !(2..=crate::palw_tir_shard_v1::PALW_TIR_SHARD_MAX_SHARDS_V1).contains(s_l) {
+                Err("a layer-shard plan's shard count is outside the range the chain accepts")
+            } else if *s_p != crate::palw_tir_shard_v1::PALW_TIR_SHARD_POSITION_SEGMENTS_LAYERS_ONLY_V1
+                && *s_p != crate::palw_tir_shard_v1::PALW_TIR_SHARD_POSITION_SEGMENTS_S1_V1
+            {
+                Err("a layer-shard plan's position segments are one (layers only) or s_shard - 1")
+            } else {
+                Ok(())
+            }
+        }
+        PalwConsensusObjectV2::TirShardReceiptLicensed { part } => {
+            if part.receipts.is_empty() || part.receipts.len() > crate::palw_tir_shard_v1::PALW_TIR_SHARD_PART_MAX_RECEIPTS_V1 {
+                return Err("a layer-shard part carries between one receipt and a shard's worth");
+            }
+            if part.shard >= crate::palw_tir_shard_v1::PALW_TIR_SHARD_MAX_SHARDS_V1 || part.receipts.iter().any(|r| r.shard != part.shard) {
+                return Err("a layer-shard part's receipts are each for the shard it names");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::TirSeatReadinessProved { signature, proof, .. } => {
+            if signature.is_empty() {
+                Err("a shard possession proof must carry the seat's signature — unsigned, a relayer could volunteer another bond's collateral")
+            } else if proof.opened.is_empty() {
+                Err("a possession proof that opens nothing shows nothing")
+            } else if proof.opened.len() > crate::palw_model_registry_v1::PALW_READINESS_V2_CHUNKS_V1 as usize
+                || proof.operand_bytes() > crate::palw_model_registry_v1::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
+            {
+                Err("a shard possession proof opens the challenged leaves within the operand cap")
+            } else {
+                Ok(())
+            }
+        }
         // **ADR-0103: the held regime's three objects ride signed and bounded**, for the shard
         // court's reasons: the signature is checked at acceptance against the registered key (the
         // accuser's, or the claim's producer's for an answer), each object answers to the close
