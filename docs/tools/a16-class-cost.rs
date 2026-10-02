@@ -1,14 +1,13 @@
 // **Archived source, not part of this crate's build.**
 //
-// This measured the A16 court costs quoted in `docs/archive/palw-second-class-weight-2026-08-26.md` §4.
-// It cannot compile on `main`: `qwen25_a16_profile_v1` and `PALW_RC_QWEN25_1_5B` live on
-// `palw-mainnet-rc-integration`, which is where the A16 decomposition is. To re-run it, drop this
-// file into `misaka-palw-base0/examples/` on that branch and:
+// This measured the A16 court costs quoted in `docs/archive/palw-second-class-weight-2026-08-26.md` §4,
+// and it is kept as the record of that measurement. It does not compile on this tree: the
+// `PALW_RC_QWEN25_1_5B` geometry it imports no longer exists (the other items it imports do). It was
+// run from `misaka-palw-base0/examples/` on `palw-mainnet-rc-integration` with
 //
 //     cargo run --release -p misaka-palw-base0 --example a16-class-cost
 //
-// It is archived here rather than committed there because that branch belongs to other work in
-// flight; a measurement tool should not arrive in somebody else's tree unannounced.
+// The "t11" columns compare against the court ceilings of the retired testnet-11 bundle.
 
 //! **What the A16 Qwen class costs a court** — the half of the weight decision that only this
 //! branch can answer, because only this branch has the A16 decomposition.

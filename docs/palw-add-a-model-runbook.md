@@ -2,9 +2,10 @@
 
 > 対象: 手元に Qwen 系の checkpoint（HF safetensors か GGUF）があり、それを MISAKA の PALW
 > クラスとして **変換 → 検証 → 登録 → 認証 → 着席** まで持っていきたい運用者。
-> 2026-09-23 時点の `feat/testnet-12-regenesis` の build で実在するコマンドだけで書いてある。
+> 対象ネットワークは testnet-12。この build に実在するコマンドだけで書いてある（実測値には測った日を付けた）。
 > 開発者向けの下層（SDK の trait、lineage の追加）は [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md)、
-> 認証オブジェクトの詳細は [palw-certify-a-new-model.md](palw-certify-a-new-model.md)。
+> 認証オブジェクトの詳細と手動の認証手順は [palw-certify-a-new-model.md](palw-certify-a-new-model.md)、
+> モデルの公開リクエストが辿る経路は [model-requests.md](model-requests.md)。
 
 ## 0. 先に知っておくこと（ここを読めば残りは作業）
 
@@ -27,7 +28,7 @@
 3. **4 つの合意が同時に成り立って初めて class は動く**: court が歩ける graph（= class id）、
    チェーンが pin する artifact の **root**、class が対価を受ける canonical job、graph 通りに
    実行する engine。手順の各ステップはこの 4 つを 1 つずつ確かめる。
-4. **root は 2 種類あり、混ぜると事故になる**（testnet-11/12 の dense 行を止めた実事故）。
+4. **root は 2 種類あり、混ぜると事故になる**（dense 行を止めた実事故がある）。
    ファイル全体の digest と、graph ごとの **operand-inventory root** は別物で、held 行
    （`graph-v7@…`）や graph-v6 行が登録するのは inventory root。人が root を手で書き写す場面を
    無くすために **sidecar `.palwmanifest`** がある（§3）。
@@ -46,9 +47,10 @@
    直すには新しい map 版と class の再登録が要る。それまで held hybrid 行は block を作らない。
    testnet-12 の genesis から hybrid 行を外したのはこのため（genesis は floor + dense
    `graph-v7@8192` + dense `graph-v7@2097152`）。
-6. **登録者は自分の class を自分では活かせない**（ADR-0145 §7）: 登録直後の状態 `Registered` は
-   「登録者**以外**の operator の seat が ready になる」まで `Prefetching` にも進まない。着席
-   （§6）を他人に頼めることが前提。
+6. **登録者は自分の class を自分では活かせない**（ADR-0145 §7、ADR-0147）: 登録直後の状態
+   `Candidate` は、admission audit が floor の母集団から引いた jury の過半数がその class を持つまで
+   `Prefetching` に進まない（`palw_model_registry_v1.rs` の `Candidate` 分岐）。着席（§6）を他人に
+   頼めることが前提。
 
 ## 1. 用意するもの
 
@@ -207,36 +209,26 @@ kaspad --testnet --netsuffix=12 --utxoindex --appdir=<稼働中の node の appd
 ```
 
 ノードは artifact を読み、`--palw-register-class` の行と pair し、live terms で
-`ClassRegistered` を 1 回だけ組んで fee 出力から carrier を出す（ログ `[palw-panel] class
-registration carrier …`）。artifact の形状が複数の行に合うときは model id を必ず与える。
+`ClassRegistered` を 1 回だけ組んで fee 出力から carrier を出す（ログ `[palw-panel] submitted
+the class registration in tx …`）。artifact の形状が複数の行に合うときは model id を必ず与える。
 起動時には `PALW bond …: run it in exactly ONE process …` が WARN で出る。
 
 ### 認証を手でやる場合（`misaka model add` がやっていること）
 
-```bash
-# family（lane ごとに 1 回。chain に既にあれば FamilyAlreadyCertified で拒否される）
-palw-certify drill --model-id "Qwen3.6-35B-A3B/graph-v7@2097152" --lane fp --out fam-fp.obj
-#   -> fam-fp.obj.chunk0 .chunk1 … が書かれたら chunk を index 順に
-misaka --network testnet-12 --rpc 127.0.0.1:<borsh-port> palw submit-object --key-file <seed> --object fam-fp.obj.chunk* --yes
-# class を family に bind
-palw-certify bind --model-id "Qwen3.6-35B-A3B/graph-v7@2097152" --lane fp --out cls-fp.obj
-misaka --network testnet-12 --rpc 127.0.0.1:<borsh-port> palw submit-object --key-file <seed> --object cls-fp.obj --yes
-palw-certify inspect --object cls-fp.obj     # 何を運ぶか、この build の court が grade するか
-```
+`palw-certify drill` / `bind` で作ったオブジェクトを `misaka palw submit-object` で投げる手順、chunk の
+扱い、chain が見る条件と拒否名は [palw-certify-a-new-model.md](palw-certify-a-new-model.md) にまとめてある。
+ここでは運用上の要点だけ:
 
 * **block（attempt）lane**: 登録時に pin 済み family（この build の 5 family）が class を被覆して
   いれば **登録そのものが floor share で着席させる**ので attempt lane の bind は不要
   （投げると `ClassAlreadyWeighted` で落ちる）。被覆が無い weightless 登録だけが後から
   `FamilyCertified` + `ClassLaneCertified(attempt)` で座る。
-* **prompt（fp）lane**: chain 上の certified family（`FamilyCertified` で運ばれたもの）が要る。
-  genesis の pin は chain の集合には数えられない（新しい identity の chain 集合は空から始まる、
-  ADR-0075 D10）ので、**fp lane は必ず drill を filing してから bind** する。
+* **prompt（fp）lane**: chain 上の certified family が要るので、**fp lane は必ず drill を filing
+  してから bind** する。
 * `misaka model certify <class-id> --yes` は「この build の drill で family を filing する」だけを
   行う CLI 形（activation ではなく fence でもない）。
 * 拒否は carrier が落ちる形で現れ、fee は戻らず、理由は**ノードのログ**（`[palw-lifecycle]`）に
-  だけ出る: `FamilyAlreadyCertified`, `NoCertifiedFamilyCovers`, `CertificationNeedsActiveClass`
-  （class が Active でない）, `ClassAlreadyWeighted`。`submit-object` は投げる前にローカルで
-  grade して同じ拒否を先に言う。
+  だけ出る。`submit-object` は投げる前にローカルで grade して同じ拒否を先に言う。
 
 ## 6. 座席を集めて lifecycle を歩かせる（Step 5）
 
@@ -249,15 +241,13 @@ misaka --network testnet-12 model readiness <class-id>            # 各 seat の
 misaka --network testnet-12 model registration <class-id|object|tx>  # 登録オブジェクトが constructed / submitted / accepted / included / folded のどこか
 ```
 
-状態遷移（すべて chain が見える事実の関数）:
+状態遷移（`Candidate` → `Prefetching` → `Probation` → `ActiveLimited` → `Active`、どこからでも
+`Held`）は、条件と admission audit の周期を含めて
+[testnet12-join-mining.md §8](testnet12-join-mining.md#8-the-model-lifecycle) の表にある。すべて
+chain が見える事実の関数（`palw_model_registry_v1.rs`）。
 
-```
-Registered ──(登録者以外の operator の seat が ready)──> Prefetching ──(ready ≥ required)──> Probation(probe 10 件 all pass)
-  ──> ActiveLimited(3 epoch 安定) ──> Active          どこからでも Held（panel を引けない / 利用率超過）→ 自分の新規 claim だけ止まる
-```
-
-* `required_ready_seats` は既定 `max(seat_count 5 + spare 2, …)` = **7**（possession gate 下）。
-  seat は **operator が別**でなければ数えられない。
+* `required_ready_seats` は既定 **7**（possession gate 下）。seat は **operator が別**でなければ
+  数えられない。
 * seat 側の起動（`misaka verifier setup` → `verifier start`、または直接）:
   ```bash
   kaspad --testnet --netsuffix=12 --palw-class-artifact=/path/to/same.palwart \
@@ -310,7 +300,8 @@ bond が同時に持てる claim 数は `担保 × 50 % ÷ (escrow + weight)` �
 genesis の seat は floor 64 本 + 各 model 行 4 本で 939,063.21 MSK。
 
 market（任意、ADR-0087〜0090）: `misaka model market open <model> [--seed <MSK>]` で class の
-founding line を seed する（最小 seed 100,000 MSK、分割払い可）。position の売買は
+founding line を seed する（最小 seed は ADR-0090 の 100,000 MSK か、`palw_model_seed_v2` が有効なら
+ADR-0120 の 1,000,000 MSK。分割払い可）。position の売買は
 `misaka position list|quote|buy|sell`。登録・認証とは独立で、後からでよい。
 
 ## 8. 実例: Qwen3.6-35B-A3B @ 2,097,152（2026-09-23、ibm）
@@ -333,18 +324,19 @@ catalog row  Qwen3.6-35B-A3B/graph-v7@2097152   class id b4b891afe49a59f5…
 | `THIS NETWORK REGISTERED A DIFFERENT ROOT FOR THIS CLASS` | genesis が pin した root と手元の inventory root が違う。converter の版か入力が違う（README の SHA を照合）。root 形式（digest vs inventory）の取り違えなら card 側の欠陥 |
 | 登録が `class registration is built and waiting: no fee UTXO resolves` | `--palw-fee-outpoint` が bond 鍵のアドレス宛てで未使用の UTXO か確認。`misaka wallet send` で自分の pay address に送って作る |
 | carrier が落ちて fee だけ消えた | ノードの `[palw-lifecycle]` 行に理由。`submit-object` を先に走らせれば同じ拒否をローカルで言う |
-| ready seats が増えない | 各 seat の `misaka model readiness`。予算不足（「a replay needs X GiB」）なら `--palw-host-memory-share`、operator が登録者と同じなら数えられない、proof が古い（`PALW_READINESS_LANDING_SPANS_V1` = 8 span） |
+| ready seats が増えない | 各 seat の `misaka model readiness`。予算不足（「a replay needs X GiB」）なら `--palw-host-memory-share`、operator が別でなければ数えられない、proof が古い（`PALW_READINESS_LANDING_SPANS_V1` = 8 span） |
 | OOM で seat/producer が落ちる | 1 host の node 数と share を宣言する（`--palw-host-memory-budget`/`--palw-host-node-count`）。2M 行は attempt 1 回で ≈ 11.6 GiB（dense）〜 43 GB（hybrid K/V）を要求する |
 | `HeldMapNeedsItsFence` 等 | そのネットで fence が武装されていない。testnet-12 は全 fence が genesis から有効 |
 | hybrid の attempt が prefill の position 15 で `ConvIsNotTheGeometrys` | held map の欠陥（§0 の 5）。登録や artifact の問題ではない。新しい map 版が出るまで held hybrid 行は動かない |
 
 ## 10. 参照
 
-* ADR-0135（registry と lifecycle）、ADR-0136（mmap と host 予算）、ADR-0145 §7（`Registered` は
-  登録者以外の seat が要る）、ADR-0075（認証は consensus object）、ADR-0069（weight は認証が買う）、
+* ADR-0135（registry と lifecycle）、ADR-0136（mmap と host 予算）、ADR-0145 §7・ADR-0147（`Candidate`
+  と admission audit）、ADR-0075（認証は consensus object）、ADR-0069（weight は認証が買う）、
   ADR-0103/0119（held 行）、ADR-0108（manifest 経路）、ADR-0122（`misaka model add` と運用者 UX）、
   ADR-0087〜0090（market）。
 * [palw-certify-a-new-model.md](palw-certify-a-new-model.md) — 5 family と手動の認証手順。
+* [testnet12-join-mining.md](testnet12-join-mining.md) — producer / seat としての参加手順と lifecycle の表。
 * [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md) — 新しい checkpoint / 新しい lineage を
   SDK に載せる開発者手順。
 * [testnet-12-regenesis-2026-09-23.md](testnet-12-regenesis-2026-09-23.md) — testnet-12 の genesis 行と fingerprint。

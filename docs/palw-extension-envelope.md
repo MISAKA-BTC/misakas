@@ -68,7 +68,7 @@ change it; a changed field does. The `model-class` example below is 795 canonica
   "kind": "model-class" | "context-profile" | "family-certification" | "lane-certification"
         | "derived-transformer" | "ruleset-candidate",
   "name": "a name you chose — never an identity",
-  "network": "testnet-11",
+  "network": "testnet-12",
   "source":   { "digest": "<64 hex>", "note": "what made it" },   // carried; read by nothing
   "artifact": { "root": "<128 hex>", "bytes": 1795427276, "path": "qwen25-1.5b.palwart" },
   "requires": { "ruleset_id": "<64 hex>", "fences": { "palw_kary_court": "active" },
@@ -125,6 +125,12 @@ that is exit `23`. The verdict above it still stands; what is missing is the byt
 Every example is in [`extension-manifests/`](extension-manifests) and is run by
 `misaka-palw-extension/tests/doc_examples.rs`, so a stale example is a failing test rather than a
 document nobody executes. Run them from that directory.
+
+**The examples are a fixture pinned to the retired testnet-11 genesis.** Every manifest carries
+`"network": "testnet-11"` and the test verifies them against that genesis
+(`PalwExtensionEnvV1::genesis(testnet-11)`), so the commands below name `--network testnet-11`: the
+CLI refuses a manifest whose `network` differs from the profile's. The procedure is the same on
+testnet-12; the ids, roots and verdicts printed are testnet-11's.
 
 ### 1. `model-class` — a class of an architecture the chain already prices
 
@@ -290,8 +296,8 @@ the arming build *would* print beside what this build prints:
 
 * a **future height** moves `consensus_params_id` and `consensus_schedule_id`, leaves
   `consensus_identity_id` — and is still a flag day, because the fork-id gate compares heights the
-  moment the schedule is announced (this is what cut un-upgraded nodes at DAA ≈2,241 against a fence
-  at 2,400);
+  moment the schedule is announced (on testnet-11 this cut un-upgraded nodes at DAA ≈2,241 against a
+  fence at 2,400);
 * **genesis** moves the identity — refused at the handshake by every un-upgraded peer;
 * a fence this build does not have says so: *the candidate needs a build before it needs a height*;
 * a combination the build refuses (`validate_palw_v2`) is reported with its refusal verbatim.
@@ -345,7 +351,7 @@ Four properties the tool holds up:
   report produce the same receipt id;
 * a **report byte changed after signing** fails verification, naming `signature_hex`;
 * a receipt **made on another ruleset** is refused naming `verifier.ruleset_id` (SA-3) — a devnet
-  receipt is not evidence about testnet-11, because the same object can be expressible on one and a
+  receipt is not evidence about testnet-12, because the same object can be expressible on one and a
   ruleset change on the other;
 * the context is the receipt's **own** (SA-4) and is deliberately not a member of the chain's
   signature-context set, so nothing signed for the chain verifies as a receipt and no receipt
@@ -359,12 +365,13 @@ this file says it is — nobody vouches for it"*.
 
 * **No `service-descriptor` kind.** `main` has no chain object for a service, so the name is reserved
   and refused as unknown until there is one.
-* **No registration-terms RPC.** `PalwRegistrationTermsV2` has no RPC on `main`, so `preflight`
-  judges against the network's **genesis** terms and every report says so:
-  `terms  genesis only — the node exposes no terms RPC`. A live chain may hold classes, shares and
-  certified families the genesis does not — which is why a lane binding's refusal is phrased "judged
-  at the genesis state". A `getPalwRegistrationTerms` RPC is the natural next step; the library
-  already takes live terms (`PalwExtensionEnvV1::chain_terms`) when a caller can supply them.
+* **Reports are judged at genesis terms.** `verify` and `preflight` build the report with no live
+  terms, so every report says `terms  genesis only — the node exposes no terms RPC`. A live chain
+  may hold classes, shares and certified families the genesis does not — which is why a lane
+  binding's refusal is phrased "judged at the genesis state". `submit` of a class does read the
+  node's `getPalwRegistrationTerms` (ADR-0122 §8.2) and builds the registration from the live terms,
+  falling back to genesis terms with a warning only when the node does not serve them; the library
+  takes live terms (`PalwExtensionEnvV1::chain_terms`) when a caller supplies them.
 * **The chain-class seal stays** (ADR-0067 Decision 5). The report tells you it is there;
   lifting it is an economics decision about paid seats that this ADR does not make.
 * **One rule no offline verifier can check**: whether the registrant's bond affords the

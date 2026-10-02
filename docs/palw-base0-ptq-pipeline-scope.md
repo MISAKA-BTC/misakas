@@ -1,8 +1,12 @@
 # PALW-BASE-0 PTQ pipeline — scope
 
-**Status:** scoping only. Nothing here is a decision; §9 lists the decisions this document exists
-to surface. Measured against `misaka-palw-base0` and `consensus/core/src/palw_base0*.rs` at
-`palw-mainnet-rc-integration` HEAD, 2026-08-20.
+**Status:** historical scoping document. Nothing here is a decision; §9 lists the decisions this
+document exists to surface. Measured against `misaka-palw-base0` and
+`consensus/core/src/palw_base0*.rs` at `palw-mainnet-rc-integration` HEAD, 2026-08-20; line counts and
+code references describe the tree at that date. The pipeline it scoped has since been built as
+`qwen25-convert` (`misaka-palw-base0/src/bin/qwen25-convert.rs`), which targets the A16 activation
+tier (ADR-0047) rather than the pure-`i8` engine analysed below; for converting a model today see
+[palw-add-a-model-runbook.md](palw-add-a-model-runbook.md).
 
 **Why this exists.** `artifact.rs` states the gap in one sentence — *"Producing weights that are
 good — quantising a trained model into `i8` at these shapes — is a separate data pipeline and is
