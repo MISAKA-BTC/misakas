@@ -869,7 +869,8 @@ class Drive:
                 art = ["--artifact", f"{MODEL}/{asset}.palwtirs", "--parent", f"{MODEL}/head.class.palwtir"]
             else:
                 art = ["--artifact", f"{MODEL}/{asset}.class.palwtir"]
-            cmd = cli_prefix("new3") + ["palw", "tir-registration", *art, "--bond", bond_of(7), "--key-file", seed_of(7), "--out", out]
+            cmd = cli_prefix("new3") + ["palw", "tir-registration", *art, "--bond", bond_of(7), "--key-file", seed_of(7), "--out", out,
+                                                                   "--skip-pack-verify"]   # the release layer gates registration on a runtime pack (RFC-0002 preflight); the drill classes have none, the chain does not enforce it
             rc, text = run(cmd, home=UHOME)
             if rc != 0:
                 log(f"register {cls}: cannot build ({text.strip()[-200:]})")
