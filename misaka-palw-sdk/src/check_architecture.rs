@@ -1506,6 +1506,74 @@ mod tests {
         }
     }
 
+    /// A one-layer program normalising a `[rows, n]` row of `i16` codes by the form `wide` names (the 39-node wide RMS the library
+    /// keeps, which no fused kernel covers once its operands are not the kernel's) or by the 21-node unit row.
+    fn norm_program(unit: bool, rows: u32, n: u32) -> TirProgramV1 {
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN};
+        use misaka_palw_tir::{DType, Ref, TensorType};
+        let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
+        let table = pb.param("x.table", DType::I16, &[16, rows * n], false);
+        let eps = pb.param("eps", DType::I64, &[1], false);
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let v = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+            b.finish(&[v])
+        };
+        let layer = {
+            let mut b = pb.block("layer", vec![TensorType::fixed(DType::I16, &[rows * n])]);
+            let x = b.reshape_fixed(Ref::CarryIn(0), &[rows, n]);
+            // The unit row is a fused kernel's pattern; the same value spelled with an extra wide pass is not.
+            let y = if unit {
+                b.rms_unit_q24(x, eps)
+            } else {
+                let u = b.rms_unit_q24(x, eps);
+                let wide = b.mul(u, u, DType::I128);
+                let one = b.c(DType::I64, 1 << 20);
+                let wide = b.div(wide, one, misaka_palw_tir::Rounding::Floor, DType::I128);
+                b.clamp(wide, i32::MIN as i64, i32::MAX as i64, DType::I32)
+            };
+            let y = b.reshape_fixed(y, &[rows * n]);
+            let y = b.clamp(y, -32768, 32767, DType::I16);
+            let y = b.commit(y);
+            b.finish(&[y])
+        };
+        let post = {
+            let mut b = pb.block("post", vec![TensorType::fixed(DType::I16, &[rows * n])]);
+            let l = b.reshape_fixed(Ref::CarryIn(0), &[rows * n]);
+            b.commit(l);
+            b.finish(&[])
+        };
+        pb.finish(pre, vec![layer], post, 0)
+    }
+
+    #[test]
+    fn a_program_whose_wide_patterns_are_all_fused_is_admissible_and_one_with_unfused_wide_work_is_admissible_generic() {
+        let (params, _, _) = network("testnet-11");
+        let fused = check_ir_program_v1(&params, &norm_program(true, 8, 256));
+        assert!(fused.admission_json["admitted"] == serde_json::json!(true), "{}", fused.verdict);
+        assert!(matches!(fused.verdict, ArchVerdictV1::Admissible { .. }), "a fused wide pattern leaves nothing generic: {}", fused.verdict);
+        let generic = check_ir_program_v1(&params, &norm_program(false, 8, 256));
+        let ArchVerdictV1::AdmissibleGeneric { slowdown_permille, patterns } = &generic.verdict else {
+            panic!("unfused wide work is ADMISSIBLE_GENERIC, got {}", generic.verdict)
+        };
+        assert!(*slowdown_permille > 1_020 && *slowdown_permille < 3_000, "{slowdown_permille}");
+        assert!(patterns.iter().any(|p| p.starts_with("Mul") || p.starts_with("Div")), "{patterns:?}");
+        assert!(generic.verdict.is_admissible(), "speed only: it registers");
+        assert!(generic.verdict.to_string().starts_with("ADMISSIBLE_GENERIC (estimated slowdown 1."), "{}", generic.verdict);
+    }
+
+    #[test]
+    fn a_remote_code_architecture_is_lowerable_unverified_and_keeps_the_programs_own_verdict() {
+        let (params, _, _) = network("testnet-11");
+        let text = std::fs::read_to_string(lower_dir("tools/corpus/specs/internlm2/config.json")).expect("a remote-code config");
+        let r = check_ir_config_v1(&params, &text, false);
+        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else { panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict) };
+        assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
+        assert!(r.verdict.is_admissible());
+        assert!(r.verdict.to_string().starts_with("LOWERABLE_UNVERIFIED ("), "{}", r.verdict);
+    }
+
     #[test]
     fn legacy_mode_projects_a_new_geometry_and_names_a_missing_kernel() {
         let (params, bundle, sdk) = network("testnet-11");

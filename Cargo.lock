@@ -6278,6 +6278,7 @@ version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
+ "cc",
  "kaspa-consensus-core",
  "libc",
  "misaka-palw-base0",
