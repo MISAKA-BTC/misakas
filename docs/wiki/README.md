@@ -1,17 +1,20 @@
-# Wiki pages (testnet-12 sync)
+# Wiki pages (testnet-12)
 
-This directory mirrors the GitHub wiki (<https://github.com/MISAKA-BTC/misakas/wiki>) after it was
-re-checked against the public testnet-12 (release `0e8ec984e`) on 2026-09-25. The session that made
-the change could not push to `misakas.wiki.git`, so the pages are staged here.
+This directory is the source of the GitHub wiki (<https://github.com/MISAKA-BTC/misakas/wiki>). Edit the
+pages here; the wiki is a copy. Links between pages use the wiki's page names (`[Quick Start](Quick-Start)`),
+so they resolve on the wiki, not in this tree.
 
-To publish them:
+To publish them, copy every page except this README and remove the pages that no longer exist here:
 
 ```bash
 git clone https://github.com/MISAKA-BTC/misakas.wiki.git
 cd misakas.wiki
-git am /path/to/misakas/docs/wiki/wiki-t12-sync.patch   # or: cp /path/to/misakas/docs/wiki/*.md . (not README.md)
+for f in /path/to/misakas/docs/wiki/*.md; do [ "$(basename "$f")" = README.md ] || cp "$f" .; done
+# pages merged or retired here (2026-10-02): Testnet-12-Operator-UI-JA → Quick-Start,
+# PALW-Roles-and-Network-Scope-JA → PALW-Participation-JA, and the testnet-11 pages
+git rm -q --ignore-unmatch Testnet-12-Operator-UI-JA.md PALW-Roles-and-Network-Scope-JA.md \
+  Testnet-11-Operator-UI-JA.md Testnet-11-Verification-Participation-JA.md
+git add -A
+git commit -m "wiki: sync from docs/wiki"
 git push origin master
 ```
-
-The patch applies on wiki commit `bd205c8`. It predates the 2026-09-26 node update and the 2026-09-27 DAA-750 fence release: `Home.md`, `Quick-Start.md`, `Operations-Notes.md`, `Testnet-12-Operator-UI-JA.md`, `Testnet-12-Verification-Participation-JA.md` and `PALW-Roles-and-Network-Scope-JA.md` here were updated afterwards to name `c3dbaee3c`, so publish with the `cp` form (or apply the patch, then copy those pages). Once the wiki carries these pages, this directory can
-be deleted.

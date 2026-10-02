@@ -10,7 +10,8 @@
 | gRPC | `127.0.0.1:26210` |
 | wRPC Borsh | `127.0.0.1:27210` |
 | wRPC JSON | `127.0.0.1:28210` |
-| dashboard | `127.0.0.1:8791` |
+| EVM JSON-RPC | `8545` |
+| dashboard | `127.0.0.1:8791`(gateway は `8790`) |
 | 公開エントリポイント | `169.58.232.113:26311`(DNS seeder `seeder1.misakascan.com` と同じホスト) |
 
 RPC は原則 loopback のままにして、リモートからの操作は SSH tunnel で行います。
@@ -25,39 +26,14 @@ DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:263
 
 ## Identity の確認
 
-起動ログの次の 2 行を確認します。
+起動ログの次の 2 行を、リポジトリ直下の `release.json`(`consensus_params_fingerprint`、`consensus_schedule_id`)と比べます。
 
 ```text
-Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
+Consensus params fingerprint: 254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1 (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600 (schedule id 1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593)
 ```
 
-2026-09-27 19:37 JST からの release バイナリ(`587cab2b0`、x86_64 Linux、glibc 2.39 floor)の sha256:
-
-| binary | sha256 |
-|---|---|
-| kaspad | `84b8c8c931de24ed57a9197b26e11692989ce4c15e2029c8e99aef0121926f2e` |
-| misaka | `2d35a649a964a166b04b857f096458c37e86931a777652021ca59a0e9a40ceae` |
-| palw-class | `1e3db7b72a099cfd633b5df6052be7fd4202a98a2143649200effa88968780d4` |
-| misaka-dnsseeder | `fa76fa856191fd6f78887ad4d2cec104c4ce44610a2ad6133c787a52874e771e`(公開 fleet の DNS seeder は入れ替えていない) |
-
-2026-09-26 の node 更新(`8a0810992`、x86_64 Linux、glibc 2.39 floor)の sha256:
-
-| binary | sha256 |
-|---|---|
-| kaspad | `07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b` |
-| misaka | `bf847721df14b7646b284cc89de21fe998315b83141b618c0fc08ba178ffb901` |
-| palw-class | `0a3346be3616eb727a59f4c89e35036280a5eaa82720d6484a9e8106f89c23b1` |
-| misaka-dnsseeder | `de36ec0053247c24d61e0e1924792c52d1103454265f9a91f108078730f7dfe3`(公開 fleet の DNS seeder はこの更新で入れ替えていない) |
-
-公開時の release バイナリ(`0e8ec984e`、x86_64 Linux、glibc 2.39 floor)の sha256:
-
-| binary | sha256 |
-|---|---|
-| kaspad | `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149` |
-| misaka | `c80e608aea340cd81eea83a503594568d9c109e271a360a40667b9f50ad4c176` |
-| palw-class | `918c3554ef6ed29dff3383963e43289fc6752cf9de51a73e3dc9f2aed6a895ee` |
-| misaka-dnsseeder | `8ff837efa2c8fce4bd758f5d29806af6c47ad2f80aa48649bb9f285fa68812ce` |
+上は 2026-10-02 時点の値です。post-launch fence が追加されると両方が変わります。
 
 ## Updating
 
@@ -67,9 +43,9 @@ Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b
 4. バイナリを入れ替え、**同じ app dir** で起動し直す。
 5. fingerprint、fence schedule、peer、同期、サービスの状態を確認する。
 
-既知の問題(公開ノート §2)は、公開後に fence またはノードの更新で直す予定です。更新の告知があったら、上の手順でバイナリを入れ替えてください。
+既知の問題(公開ノート §2)は、公開後に fence またはノードの更新で直します。更新の告知があったら、fence の高さより前に上の手順でバイナリを入れ替えてください。古いビルドのノードは、その高さから handshake で拒否されます。
 
-最初の testnet-12(genesis `a8cabac4…`)や testnet-11 の datadir は genesis が違うので使えません。削除せずに別名へ退避します。バイナリを更新するだけのときは、現在の app dir をそのまま使います。
+最初の testnet-12(genesis `a8cabac4…`)や旧ネットワークの datadir は genesis が違うので使えません。削除せずに別名へ退避します。バイナリを更新するだけのときは、現在の app dir をそのまま使います。
 
 **app dir は消さないでください。** app dir には、この bond が最後に署名した round の記録(`palw-round-last-signed`)があります。消して再同期すると、まだ merge されていない permit にもう一度署名し、bond が slash される可能性があります。ホストを移すときは app dir ごと移すか、復元します。
 
@@ -133,4 +109,4 @@ producer を止める前に:
 misaka --network testnet-12 mining stop --drain
 ```
 
-panel や court の義務がある場合は、drain が終わるまで待ってからサービスを止めます。testnet-12 では、消えた producer は課金されます(`ProducerWithholding` の void と 2 回目の `ReceiptTimeout`)。
+panel や court の義務がある場合は、drain が終わるまで待ってからサービスを止めます。testnet-12 では、消えた producer は課金されます([PALW Participation](PALW-Participation-JA#停止と課金))。

@@ -1,4 +1,9 @@
-# The explorer's copy of what it may show
+# The explorer's copy of what it may show (testnet-11 era, archived)
+
+> Archived 2026-10-02. This is the record of the testnet-11 `misakascan.com` of 2026-09-06 to
+> 2026-09-21 and the patches applied to it. The testnet-12 explorer is
+> [`contrib/misakascan-t12/`](../../../contrib/misakascan-t12/DEPLOY.md); its current rule is
+> [`docs/explorer/README.md`](../../explorer/README.md).
 
 `misakascan.com` is a hand-patched `app.js` on `.113` (`/var/www/misaka-explorer`), not a build
 product of this tree, so the tree keeps the two things that decide what a reader sees:

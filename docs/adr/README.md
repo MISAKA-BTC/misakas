@@ -29,15 +29,6 @@ can be found again. **0144-alignment pass: 2026-09-21** — unimplemented ADRs b
 constitution were amended the same way (dated banner + end section, bodies not rewritten). The
 implementation order is in "What to build next" below.
 
-> [!IMPORTANT]
-> **Current testnet-11 activation map (reconciled 2026-09-20).** `Params` is the executable
-> source of truth: DAA **7,100** activates the held regime and deep-audit fixes; DAA **7,101**
-> activates the PALW upgrade bundle, including ADR-0125's one-permit-per-one-second execution lane;
-> DAA **7,200** activates ADR-0133 Verification V2 and readiness multiproofs; DAA **7,300** shortens
-> the execution lane's schedule span 5 DAA → 1 DAA (ADR-0130's f+2 seed delay is kept); DAA **7,301**
-> retires the compute overlay. Historical **`6000` / `6001` / `6100` / `6201`** rollout labels do not
-> name current DAA heights; `6001` is the 7,101 bundle's internal label, not an independent fence.
-
 ## The direction that governs the PALW lineage (2026-09-02)
 
 **PALW is the consensus work, and PALW produces the blocks.** The load-bearing chain is:
@@ -233,9 +224,10 @@ column's absence that let six of them go unrecorded. **Re-read it against `palw_
 `a_carded_mainnet_arms_every_fence_testnet_11_arms` fails if the card's armed set changes without
 this table being re-read.**
 
-The long testnet-11 table row immediately below is retained as the pre-fourth-move release record;
-its `7000` / `7001` / `7201` values are historical and must not be used as a live activation map.
-Use the 7,100 / 7,101 / 7,200 / 7,300 / 7,301 map above and the startup fence schedule for current operation.
+The table is the 2026-09-06 snapshot. testnet-10 and testnet-11 are retired, and the current network,
+testnet-12, is not in it: for what testnet-12 arms, read `palw_t12_shipped_params` and the node's
+startup `Consensus fence schedule:` line (the [architecture overview](../architecture/overview.md)
+maps it to the ADRs).
 
 | Preset | PALW mode | Armed from genesis | Scheduled | Not armed |
 | --- | --- | --- | --- | --- |
@@ -244,8 +236,6 @@ Use the 7,100 / 7,101 / 7,200 / 7,300 / 7,301 map above and the startup fence sc
 | **mainnet** | `Disabled` — the genesis card (`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`, `PALW_MAINNET_GENESIS_BONDS`) is unset | when the card is set: the set `mainnet_card_base_v1` states (`palw_capability_bound`, `palw_context_ladder`, `palw_court_ladder`, `palw_difficulty_priced_rows`, `palw_receipt_rows_unpriced`, `palw_attempt_header_pins`, `palw_certification_rent`, `palw_chunk_cap_charge`, `palw_prompt_ids_merkle`, `palw_panel_da`, `palw_da_court`, `palw_fp_da_pins`, `palw_validator_payout_bounds`, `palw_epoch_boundary_budget`, `palw_fp_ruleset_caps`, `palw_signature_contexts_v2`, `palw_share_growth_final` (ADR-0107 / audit B-2 — the share census counts only Final work; testnet-11 leaves it dormant, arming there is a flag day), `palw_panel_economy` and `palw_work_priced_reward` (ADR-0124 — the panel is paid out of the claim's reward, a seat holds exposure, a claim is paid for the compute it certifies; testnet-11 schedules both at 6,001), `palw_overlay_carve` (ADR-0126 — validators 20 %, escrow 720‰, testnet-12's numbers; stated since 2026-09-25, testnet-11 schedules it at 6,001), `palw_clock_lead_cap` (the 2026-09-25 mainnet-values review — a heartbeat or a clock step is admitted at most 132 s past the receiving node's clock, beside the card's 1,620 s tolerance; testnet-12 arms it too), plus `palw_kary_court`, `palw_fused_dissectable` and `palw_attn_anchored_root` when the dense tier is pinned (AC-D8: the court and the two fences that complete it)) and the three `palw_rc_arm_phase1` installs (`palw_heartbeat`, `palw_attempt_work`, `palw_unavailable_abstains`) plus `palw_uncertified_weightless`. **A card arms MORE than the RC, not the same**: the RC leaves most of these to a live chain's flag day or a re-mint. `a_carded_mainnet_arms_every_fence_testnet_11_arms` asserts the containment AND pins the exact set | — | `palw_bond_maturity`, `palw_inactivity_leak`, `palw_bootstrap_activation`, `palw_frontier_provenance`, `palw_attempt_activation`, `palw_beacon_fold`, `palw_court_responder_coverage`, `palw_fp_decode_rules`, `palw_heartbeat_transparent` (ADR-0105; free at a card's genesis, not yet stated — see its §7), and the three model fences (`palw_model_market`, `palw_model_lines`, `palw_model_evm`) — testnet-11 schedules those three and a card states none of them, because arming a market, a registry and an EVM from block one on a network with value is ADR-0087 D6's measured decision and the operator's. **One absence is permanent:** `palw_uncertified_weightless` (ADR-0069 D7) can only ever be armed IN a genesis, so the day the card is set is the only day it could be added — the card does state it |
 | testnet-10, simnet | `Disabled` | — | — | everything |
 
-testnet-12 is retired into 11 (`--netsuffix=12` is refused by name). The `LegacyTn11` algo-4 lane
-survives only as the unrouted `TESTNET11_PARAMS` constant.
 
 ## What the current direction still owes (open items recorded in the ADRs)
 
