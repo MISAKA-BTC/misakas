@@ -451,6 +451,9 @@ pub struct Args {
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
     pub palw_tir_fused_kernels: bool,
+    /// **Run the fused unit-row kernels on the GPU** (RFC-0002 §7 F-6; implies `--palw-tir-fused-kernels`): bit-identical to the CPU
+    /// kernels, node software only. Needs a build with `--features palw-tir-metal` on macOS and a Metal device, else refused at startup.
+    pub palw_tir_metal: bool,
     /// **Do not run the executor self-test before a seat's first possession proof** (RFC-0002 Part II §II.7.5 Proposal B, node
     /// software, no fence). By default a seat runs, once per (class, artifact root), its own executor against the class's reference
     /// evaluator on a few positions — the reference streamed from the artifact — and posts a proof only if they agree; a failure
@@ -723,6 +726,7 @@ impl Default for Args {
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
+            palw_tir_metal: false,
             palw_no_seat_conformance: false,
             palw_drill_fence4_at: None,
             palw_drill_tamper_leaf: None,
@@ -1945,6 +1949,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-metal")
+                .long("palw-tir-metal")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 §7 F-6): run the fused unit-row kernels (l2_unit_q15, rms_unit_q24) on the Metal GPU — bit-identical to \
+                     the CPU kernels, node software in no consensus object; implies --palw-tir-fused-kernels. Needs a macOS build with \
+                     --features palw-tir-metal and a Metal device, else the node refuses to start.",
+                ),
+        )
+        .arg(
             Arg::new("palw-no-seat-conformance")
                 .long("palw-no-seat-conformance")
                 .action(clap::ArgAction::SetTrue)
@@ -2993,6 +3007,7 @@ impl Args {
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
+            palw_tir_metal: m.get_one::<bool>("palw-tir-metal").copied().unwrap_or(defaults.palw_tir_metal),
             palw_no_seat_conformance: m.get_one::<bool>("palw-no-seat-conformance").copied().unwrap_or(defaults.palw_no_seat_conformance),
             palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),

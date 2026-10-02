@@ -99,6 +99,9 @@ semaphore-trace = ["kaspa-utils/semaphore-trace"]
 # the revm executor runs IN this process — there is no separate EVM daemon.
 evm = ["kaspa-consensus/evm", "kaspa-mining/evm", "kaspa-p2p-flows/evm", "dep:kaspa-eth-rpc", "dep:kaspa-evm"]
 
+# RFC-0002 Phase G F-6: the Metal backend of the fused kernels (macOS), switched on by `--palw-tir-metal`.
+palw-tir-metal = ["misaka-palw-sdk/metal"]
+
 [lints]
 workspace = true
 

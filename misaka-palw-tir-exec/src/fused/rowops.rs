@@ -75,17 +75,20 @@ impl FusedKernelV1 for L2UnitQ15 {
     fn run(&self, _bound: &Bound, io: &mut FusedIo<'_, '_>) -> TirResult<()> {
         let x = values(&io.holes[0]);
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = vec![0i128; x.len()];
-        run_rows(&x, n, &mut out, |x, o| {
-            let sum: i128 = x.iter().map(|v| v * v).sum();
-            let h = half_exponent(sum, 20);
-            let m = sum >> (2 * h).clamp(0, 40);
-            let r = int_rsqrt_i64(m as i64) as i128;
-            let sh = (h + 21).clamp(0, 41);
-            for (o, v) in o.iter_mut().zip(x) {
-                *o = ((v * r) >> sh).clamp(-32767, 32767);
-            }
-        });
+        let mut out = super::metal::unit_rows(0, &x, n, 0).unwrap_or_default();
+        if out.is_empty() {
+            out = vec![0i128; x.len()];
+            run_rows(&x, n, &mut out, |x, o| {
+                let sum: i128 = x.iter().map(|v| v * v).sum();
+                let h = half_exponent(sum, 20);
+                let m = sum >> (2 * h).clamp(0, 40);
+                let r = int_rsqrt_i64(m as i64) as i128;
+                let sh = (h + 21).clamp(0, 41);
+                for (o, v) in o.iter_mut().zip(x) {
+                    *o = ((v * r) >> sh).clamp(-32767, 32767);
+                }
+            });
+        }
         store(&mut out, io.out, io.out_store, io.fault, 32767);
         Ok(())
     }
@@ -127,18 +130,21 @@ impl FusedKernelV1 for RmsUnitQ24 {
         let x = values(&io.holes[0]);
         let eps = values(&io.holes[1]).first().copied().unwrap_or(0).clamp(0, i64::MAX as i128);
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = vec![0i128; x.len()];
-        run_rows(&x, n, &mut out, |x, o| {
-            let sum: i128 = x.iter().map(|v| v * v).sum();
-            let mean = ((sum * arith::ONE).div_euclid(n as i128)) + eps;
-            let h = half_exponent(mean, 51);
-            let m = (mean >> (2 * h).clamp(0, 102)).clamp(0, i64::MAX as i128);
-            let r = int_rsqrt_i64(m as i64) as i128;
-            let p = h.clamp(0, 51);
-            for (o, v) in o.iter_mut().zip(x) {
-                *o = ((v * r) >> p).clamp(i32::MIN as i128, i32::MAX as i128);
-            }
-        });
+        let mut out = super::metal::unit_rows(1, &x, n, eps).unwrap_or_default();
+        if out.is_empty() {
+            out = vec![0i128; x.len()];
+            run_rows(&x, n, &mut out, |x, o| {
+                let sum: i128 = x.iter().map(|v| v * v).sum();
+                let mean = ((sum * arith::ONE).div_euclid(n as i128)) + eps;
+                let h = half_exponent(mean, 51);
+                let m = (mean >> (2 * h).clamp(0, 102)).clamp(0, i64::MAX as i128);
+                let r = int_rsqrt_i64(m as i64) as i128;
+                let p = h.clamp(0, 51);
+                for (o, v) in o.iter_mut().zip(x) {
+                    *o = ((v * r) >> p).clamp(i32::MIN as i128, i32::MAX as i128);
+                }
+            });
+        }
         store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
         Ok(())
     }

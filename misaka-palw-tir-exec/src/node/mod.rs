@@ -21,13 +21,13 @@ pub use annex::{
     palw_tir_leaf_annex_verify_v1, tir_annex_trace_v1, tir_first_divergence_from_opening_v1,
 };
 pub use artifact::TirArtifactV1;
-pub use conformance::{
-    LazyContainerParams, TIR_CONFORMANCE_POSITIONS_V1, TirConformanceV1, tir_conformance_prompt_v1, tir_executor_conformance_against_v1,
-    tir_executor_conformance_of_file_v1, tir_executor_conformance_v1,
-};
 pub use backend::{
-    TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
+    TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1, set_tir_metal_v1,
     tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
+};
+pub use conformance::{
+    LazyContainerParams, TIR_CONFORMANCE_POSITIONS_V1, TirConformanceV1, tir_conformance_prompt_v1,
+    tir_executor_conformance_against_v1, tir_executor_conformance_of_file_v1, tir_executor_conformance_v1,
 };
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,

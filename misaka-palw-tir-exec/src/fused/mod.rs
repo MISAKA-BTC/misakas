@@ -31,6 +31,7 @@
 mod pattern;
 
 pub mod gdn_step;
+pub mod metal;
 pub mod rowops;
 
 use misaka_palw_tir::builder::BlockBuilder;

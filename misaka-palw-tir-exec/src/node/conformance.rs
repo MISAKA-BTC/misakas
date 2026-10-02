@@ -152,7 +152,11 @@ pub fn tir_executor_conformance_against_v1(
                     "position {pos}: the executor's commit point {i} (slot {}, block {}, node {}) is not the reference evaluator's",
                     expected[i].0, expected[i].1, expected[i].3
                 ),
-                None => format!("position {pos}: the executor commits {} points where the reference evaluator commits {}", got.len(), expected.len()),
+                None => format!(
+                    "position {pos}: the executor commits {} points where the reference evaluator commits {}",
+                    got.len(),
+                    expected.len()
+                ),
             });
         }
         commits += expected.len() as u64;

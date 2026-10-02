@@ -9,6 +9,10 @@ include.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The fused unit-row kernels on the GPU (macOS), behind the node's `--palw-tir-metal`.
+metal = ["misaka-palw-tir-exec/metal"]
+
 [dependencies]
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true

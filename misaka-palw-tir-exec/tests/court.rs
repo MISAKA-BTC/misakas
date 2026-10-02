@@ -382,7 +382,12 @@ fn the_inventory_tree_opens_as_the_consensus_inventory() {
             assert_eq!(proof, palw_artifact_multiproof_v1(held.tree.leaves(), &operands).unwrap(), "{name}: {} leaves", set.len());
             verify_artifact_multiproof_v1(&proof, root).unwrap_or_else(|e| panic!("{name}: {e}"));
             let run = set.windows(2).all(|w| w[1] == w[0] + 1);
-            assert!(!run || proof.siblings.len() <= 2 * depth, "{name}: a run of {} paid {} siblings", set.len(), proof.siblings.len());
+            assert!(
+                !run || proof.siblings.len() <= 2 * depth,
+                "{name}: a run of {} paid {} siblings",
+                set.len(),
+                proof.siblings.len()
+            );
         }
         assert!(held.param_multiproof(&[]).is_none() && held.param_multiproof(&[count]).is_none());
         assert!(count < 2 || held.param_multiproof(&[1, 1]).is_none(), "{name}: a repeated leaf");

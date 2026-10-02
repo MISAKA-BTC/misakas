@@ -58,7 +58,11 @@ fn every_program_of_the_node_suites_conforms_streamed_and_sampled() {
         }
         // Streamed: the reference never held more than one tensor at a time — the largest one, in its i128 form.
         let largest = params.tensors.values().map(|t| t.data.len() * 16).max().unwrap_or(0) as u64;
-        assert!(got.reference_peak_tensor_bytes <= largest, "{name}: held {} bytes at once, the largest tensor is {largest}", got.reference_peak_tensor_bytes);
+        assert!(
+            got.reference_peak_tensor_bytes <= largest,
+            "{name}: held {} bytes at once, the largest tensor is {largest}",
+            got.reference_peak_tensor_bytes
+        );
     }
 }
 

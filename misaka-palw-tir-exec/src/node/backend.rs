@@ -72,6 +72,17 @@ pub fn set_tir_fused_kernels_default_v1(on: bool) {
     TIR_FUSED_KERNELS_DEFAULT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// **The Metal backend of the fused unit-row kernels** — the node's `--palw-tir-metal` (RFC-0002 §7 F-6): bit-identical to the CPU
+/// kernels, node software in no consensus object. Turning it on turns the fused kernels on (it is one of their implementations);
+/// `Err` names why this node cannot (no `metal` build, no device).
+pub fn set_tir_metal_v1(on: bool) -> Result<(), String> {
+    crate::fused::metal::set_metal_backend(on)?;
+    if on {
+        set_tir_fused_kernels_default_v1(true);
+    }
+    Ok(())
+}
+
 /// What a new [`TirBackendV1`] starts with ([`set_tir_fused_kernels_default_v1`]).
 pub fn tir_fused_kernels_default_v1() -> bool {
     TIR_FUSED_KERNELS_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
@@ -1085,7 +1096,8 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         }
         let artifact = self.artifact.clone();
         Some(Box::new(move || {
-            super::conformance::tir_executor_conformance_v1(&artifact, super::conformance::TIR_CONFORMANCE_POSITIONS_V1).map(|c| c.summary())
+            super::conformance::tir_executor_conformance_v1(&artifact, super::conformance::TIR_CONFORMANCE_POSITIONS_V1)
+                .map(|c| c.summary())
         }))
     }
 
