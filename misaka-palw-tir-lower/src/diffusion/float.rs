@@ -81,6 +81,8 @@ impl Sd3Config {
 pub struct Dit {
     pub cfg: Sd3Config,
     w: BTreeMap<String, (Vec<usize>, Vec<f64>)>,
+    /// The tensors the float run and the lowering have read (a checkpoint tensor nothing read is a feature this reading lacks).
+    touched: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 /// One denoiser call's inputs.
@@ -103,7 +105,7 @@ impl Dit {
             let t = src.load(&n).map_err(|e| e.to_string())?;
             w.insert(n, (t.shape, t.data.iter().map(|v| *v as f64).collect()));
         }
-        Ok(Self { cfg, w })
+        Ok(Self { cfg, w, touched: Default::default() })
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -111,7 +113,17 @@ impl Dit {
     }
 
     pub fn t(&self, name: &str) -> &(Vec<usize>, Vec<f64>) {
-        self.w.get(name).unwrap_or_else(|| panic!("the checkpoint has no tensor {name:?}"))
+        let t = self.w.get(name).unwrap_or_else(|| panic!("the checkpoint has no tensor {name:?}"));
+        if let Ok(mut s) = self.touched.lock() {
+            s.insert(name.to_string());
+        }
+        t
+    }
+
+    /// The checkpoint's tensors nothing has read (after a float run and a lowering: the ones this reading does not account for).
+    pub fn untouched(&self) -> Vec<String> {
+        let s = self.touched.lock().map(|g| g.clone()).unwrap_or_default();
+        self.w.keys().filter(|k| !s.contains(*k)).cloned().collect()
     }
 
     /// The `f32` copy of a tensor (the quantisers take `f32` rows).
@@ -124,7 +136,7 @@ impl Dit {
         let (ws, wd) = self.t(&format!("{prefix}.weight"));
         let (out, inn) = (ws[0], ws[1]);
         assert_eq!(x.len(), rows * inn, "{prefix}: input is [{rows}, {inn}]");
-        let bias = self.w.get(&format!("{prefix}.bias")).map(|b| &b.1);
+        let bias = if self.has(&format!("{prefix}.bias")) { Some(&self.t(&format!("{prefix}.bias")).1) } else { None };
         let mut y = vec![0f64; rows * out];
         for r in 0..rows {
             for o in 0..out {

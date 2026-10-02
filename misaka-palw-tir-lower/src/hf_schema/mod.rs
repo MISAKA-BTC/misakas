@@ -18,8 +18,10 @@
 //! [`read_model`] is the entry point; [`crate::model::analyze`] wraps it in the report
 //! `palw-class check-architecture` prints.
 
+pub mod diffusers;
 pub mod tensors;
 
+pub use diffusers::{DiffusersRead, DiffusersRoute, diffusers_class, is_diffusers, read_diffusers};
 pub use tensors::{HeaderSource, TensorEntry, TensorIndex};
 
 use crate::adapter::{self, Adapter, Origin, builtin, eval};
@@ -39,6 +41,8 @@ pub enum AdapterSource {
     BuiltIn { id: String, hash: String },
     /// A data file the caller supplied.
     UserFile { id: String, hash: String },
+    /// A reader this crate ships as Rust, not data (a diffusers component's route: [`diffusers`]).
+    CoreReader { id: String },
 }
 
 impl AdapterSource {
@@ -48,6 +52,7 @@ impl AdapterSource {
             AdapterSource::None => "none (Level A: the standard keys and tensor names)".into(),
             AdapterSource::BuiltIn { id, hash } => format!("built-in data file `{id}` ({})", &hash[..16.min(hash.len())]),
             AdapterSource::UserFile { id, hash } => format!("user-supplied data file `{id}` ({})", &hash[..16.min(hash.len())]),
+            AdapterSource::CoreReader { id } => format!("built-in reader `{id}` (Rust, not a data file)"),
         }
     }
 }

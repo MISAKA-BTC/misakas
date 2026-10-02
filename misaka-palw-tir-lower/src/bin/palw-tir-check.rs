@@ -170,7 +170,9 @@ fn main() {
         let cfg: Result<serde_json::Value, _> = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text));
         let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
         let encdec = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
-        let vision = cfg.as_ref().ok().is_some_and(|c| misaka_palw_tir_lower::hf_schema::is_vision_tower(c) || misaka_palw_tir_lower::hf_schema::is_cnn(c));
+        let vision = cfg.as_ref().ok().is_some_and(|c| {
+            misaka_palw_tir_lower::hf_schema::is_vision_tower(c) || misaka_palw_tir_lower::hf_schema::is_cnn(c) || misaka_palw_tir_lower::hf_schema::is_diffusers(c)
+        });
         (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), (encdec, vision))
     };
     // An encoder-decoder lowers to TWO programs (the encoder over the padded source, the decoder's text stage): this
@@ -185,7 +187,7 @@ fn main() {
         }
         std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
     }
-    // A vision tower (or a convolutional network) is one position over a fixed image, not a decoder: the feature report is the
+    // A diffusers component is read by its own route (`hf_schema::diffusers`). A vision tower (or a convolutional network) is one position over a fixed image, not a decoder: the feature report is the
     // answer here too (the program is lowered and admitted by `lower::vision` / `lower::cnn`, which `palw-class
     // check-architecture` runs).
     if vision && let Some(r) = &arch {

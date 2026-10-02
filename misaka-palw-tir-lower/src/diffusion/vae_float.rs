@@ -92,6 +92,8 @@ pub struct Fm {
 pub struct Vae {
     pub cfg: VaeConfig,
     w: BTreeMap<String, (Vec<usize>, Vec<f64>)>,
+    /// The tensors the float run and the lowering have read.
+    touched: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl Vae {
@@ -101,7 +103,7 @@ impl Vae {
             let t = src.load(&n).map_err(|e| e.to_string())?;
             w.insert(n, (t.shape, t.data.iter().map(|v| *v as f64).collect()));
         }
-        Ok(Self { cfg, w })
+        Ok(Self { cfg, w, touched: Default::default() })
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -109,7 +111,18 @@ impl Vae {
     }
 
     pub fn t(&self, name: &str) -> &(Vec<usize>, Vec<f64>) {
-        self.w.get(name).unwrap_or_else(|| panic!("the VAE checkpoint has no tensor {name:?}"))
+        let t = self.w.get(name).unwrap_or_else(|| panic!("the VAE checkpoint has no tensor {name:?}"));
+        if let Ok(mut s) = self.touched.lock() {
+            s.insert(name.to_string());
+        }
+        t
+    }
+
+    /// The checkpoint's tensors nothing has read. The decoder reads `decoder.*` and `post_quant_conv.*`: the encoder's tensors
+    /// (`encoder.*`, `quant_conv.*`) are unread by design.
+    pub fn untouched(&self) -> Vec<String> {
+        let s = self.touched.lock().map(|g| g.clone()).unwrap_or_default();
+        self.w.keys().filter(|k| !s.contains(*k)).cloned().collect()
     }
 
     pub fn f32s(&self, name: &str) -> Vec<f32> {

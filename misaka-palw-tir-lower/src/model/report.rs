@@ -6,8 +6,11 @@
 //! same data serialises as JSON (`--json`) for the tools that wrap it (header-only preflight, the t12
 //! admission conditions).
 
-use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, vision_features};
-use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_encoder_decoder, is_vision_tower, read_cnn, read_encdec, read_model, read_vision};
+use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, sd3_features, vae_features, vision_features};
+use crate::hf_schema::{
+    AdapterSource, DiffusersRoute, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_diffusers, is_encoder_decoder, is_vision_tower, read_cnn, read_diffusers, read_encdec,
+    read_model, read_vision,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -388,8 +391,72 @@ pub fn analyze_cnn(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOpt
     analyze_data(config, tensors, read)
 }
 
+/// [`analyze`] for a diffusers component (`_class_name`): the lowering that exists for its class (the MMDiT denoiser, the VAE
+/// decoder: Level B through a built-in Rust reader, never an adapter file) or Level C naming what its lowering lacks. The tensors
+/// are accounted for by the probe that has the weights ([`crate::diffusion::probe`]), not here.
+pub fn analyze_diffusers(config: &Value, _tensors: Option<&TensorIndex>, _opts: &ReadOptions) -> ArchitectureReport {
+    let class = crate::hf_schema::diffusers_class(config).unwrap_or("").to_string();
+    let architectures = vec![class.clone()];
+    match read_diffusers(config) {
+        Ok(r) => {
+            let features: Vec<FeatureReport> = match &r.route {
+                DiffusersRoute::Sd3Transformer(c) => sd3_features(c),
+                DiffusersRoute::VaeDecoder(c) => vae_features(c),
+            }
+            .iter()
+            .map(feature_report)
+            .collect();
+            ArchitectureReport {
+                schema: REPORT_SCHEMA_V1,
+                model_type: None,
+                architectures,
+                adapter: AdapterSource::CoreReader { id: r.route.id().to_string() },
+                overrides_refusal: None,
+                level: Level::B,
+                level_label: label_of(Level::B, false),
+                reference_confirmed: false,
+                features,
+                assumed_defaults: r.assumed_defaults,
+                unmapped_config_keys: Vec::new(),
+                unread_tensors: Vec::new(),
+                weight_errors: Vec::new(),
+                missing: Vec::new(),
+                new_consensus_primitive_required: false,
+                new_court_kernel_required: false,
+                result: ReportResult::Lowerable,
+                notes: vec![
+                    "a diffusers component (`_class_name`) is read by a built-in Rust route, lowered from its weights and a calibration set; `diffusion::probe` lowers and admits it from a checkpoint and names any tensor nothing reads".to_string(),
+                ],
+            }
+        }
+        Err(f) => ArchitectureReport {
+            schema: REPORT_SCHEMA_V1,
+            model_type: None,
+            architectures,
+            adapter: f.adapter,
+            overrides_refusal: None,
+            level: Level::C,
+            level_label: label_of(Level::C, false),
+            reference_confirmed: false,
+            features: Vec::new(),
+            assumed_defaults: Vec::new(),
+            unmapped_config_keys: f.unmapped_config_keys,
+            unread_tensors: Vec::new(),
+            weight_errors: Vec::new(),
+            missing: f.missing,
+            new_consensus_primitive_required: false,
+            new_court_kernel_required: false,
+            result: ReportResult::NotLowerable { reason: f.error.to_string() },
+            notes: Vec::new(),
+        },
+    }
+}
+
 /// Read a configuration (and, if given, its tensor names) and report what it needs.
 pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    if is_diffusers(config) {
+        return analyze_diffusers(config, tensors, opts);
+    }
     if is_encoder_decoder(config) {
         return analyze_encdec(config, tensors, opts);
     }

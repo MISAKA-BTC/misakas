@@ -248,6 +248,24 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ACT_CLAMP_FIXED_UNIT_V1", Ffn, "ReLU6 as a narrowing into the fixed unit 6/32767 whose clamp at 0 and at 32767 is min(max(x, 0), 6)", Implemented, [], NoReq, ["cnn::a_mobilenet_v2_matches_its_hf_fixture"], "MobileNet v1/v2: the output scale is not calibrated but fixed (the range is exactly [0, 6]); the narrowing's clamp is the activation."),
     feature!("NORM_GROUP_SPATIAL_V1", Norm, "GroupNorm over spatial positions with committed row partials", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "No cone reads a whole tensor."),
     feature!("GEN_STAGE_VAE_V1", Model, "a VAE decoder as a chain of single-position stages (resnet, mid attention, nearest x2 upsample, RGB head)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Image output ImageRgb8 HWC; each stage's float reference is checked."),
+    // The capabilities the diffusers read path names when a component's lowering lacks them (`hf_schema::diffusers`): each is
+    // expressible with the existing primitives once described; none is in the vocabulary yet.
+    feature!("POS_ROPE_AXES_V1", Embedding, "a rotary embedding over several position axes", Missing, [], NoReq, [], "FLUX: axes_dims_rope splits the head dimension over the ids of the text tokens (zeros) and the image tokens (row, column)."),
+    feature!("ATTN_QK_NORM_JOINT_V1", Attention, "an RMS norm of q and k per stream inside a joint-stream attention", Missing, [], NoReq, [], "FLUX and SD3.5's MMDiT; the decoder's ATTN_QK_NORM_V1 lowering is not wired into the diffusion block."),
+    feature!("GEN_ATTN_DUAL_V1", Attention, "dual-attention layers: a second self-attention over the image stream", Missing, [], NoReq, [], "SD3.5 (dual_attention_layers)."),
+    feature!("GEN_BLOCK_SINGLE_STREAM_V1", Model, "single-stream transformer blocks: attention and MLP in parallel over the concatenated streams", Missing, [], NoReq, [], "FLUX's single_transformer_blocks."),
+    feature!("EMBED_GUIDANCE_V1", Embedding, "the guidance scalar's embedding added to the conditioning", Missing, [], NoReq, [], "FLUX.1-dev (guidance_embeds)."),
+    feature!("EMBED_CLASS_LABEL_V1", Embedding, "a class-label embedding with an unconditional row", Missing, [], NoReq, [], "DiT (num_embeds_ada_norm)."),
+    feature!("GEN_BLOCK_ADALN_ZERO_V1", Model, "single-stream transformer blocks under adaLN-Zero (self-attention and MLP)", Missing, [], NoReq, [], "DiT; MOD_ADALN_V1 is the modulation, the single-stream block is not assembled."),
+    feature!("EMBED_POSITION_SINCOS_V1", Embedding, "fixed 2-D sinusoidal positions", Missing, [], NoReq, [], "DiT."),
+    feature!("GEN_OUTPUT_LEARNED_SIGMA_V1", Model, "a denoiser output of twice the channels: the noise prediction and a variance", Missing, [], NoReq, [], "DiT; lower_dit_stage refuses an output of other channels than the input's."),
+    feature!("GEN_SAMPLER_EPS_V1", Model, "a noise-prediction sampler (DDPM, DDIM, PNDM, Euler-discrete) with classifier-free guidance", Missing, [], NoReq, [], "DiT and the UNets; GEN_SAMPLER_AFFINE_V1 is the flow-matching velocity Euler update."),
+    feature!("GEN_UNET_SKIP_V1", Model, "skip connections from a UNet's down path to its up path", Missing, [], NoReq, [], "A stage output read by a later stage: the pipeline's bindings carry it; the lowering of the graph is not written."),
+    feature!("GEN_RESNET_TIME_COND_V1", Model, "a ResNet block that adds the projected timestep embedding between its convolutions", Missing, [], NoReq, [], "UNet2DConditionModel; the VAE's resnet (GEN_STAGE_VAE_V1) has no conditioning."),
+    feature!("GEN_SPATIAL_TRANSFORMER_V1", Model, "a Transformer2DModel: GroupNorm, proj_in, self- and cross-attention blocks, GEGLU, proj_out", Missing, [], NoReq, [], "UNet2DConditionModel; needs ATTN_CROSS_V1."),
+    feature!("EMBED_ADDITION_TEXT_TIME_V1", Embedding, "SDXL's added text and time conditioning", Missing, [], NoReq, [], "addition_embed_type = text_time."),
+    feature!("GEN_VAE_LATENT_NORM_V1", Model, "a per-channel latent mean and std applied before the decode", Missing, [], NoReq, [], "AutoencoderKL variants with latents_mean / latents_std."),
+    feature!("GEN_VAE_ATTN_UP_BLOCK_V1", Model, "a VAE decoder up block that is not UpDecoderBlock2D", Missing, [], NoReq, [], "AutoencoderKL variants."),
     feature!("GEN_SAMPLER_AFFINE_V1", Model, "an Euler sampler step as an integer affine update over pinned sigma tables", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The schedule is data; the latent update is one affine map."),
     feature!("IMAGE_INIT_NOISE_V1", Model, "the initial latent noise drawn from a seed by the pinned Gaussian (PALW_GAUSS_Q24_V1)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Deterministic from the job's seed."),
     // ───────────────────────────── known gaps (Level C): named, not implemented ─────────────────────────────
@@ -726,6 +744,32 @@ pub fn vision_features(s: &crate::lower::vision::VisionSpec) -> Vec<FeatureUse> 
         VisionOut::SiglipHead => u.add("HEAD_POOL_ATTENTION_V1", None, ""),
         VisionOut::Merger { .. } | VisionOut::Projector { .. } => u.add("OUTPUT_EMBEDDING_V1", None, "rows"),
     }
+    u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
+}
+
+/// The features an `SD3Transformer2DModel` uses, by id (the denoise stage of RFC-0003 §6).
+pub fn sd3_features(c: &crate::diffusion::float::Sd3Config) -> Vec<FeatureUse> {
+    let mut u = Uses::default();
+    u.add("PATCH_EMBED_V1", None, format!("{} channels, patch {}, grid {}x{}", c.in_channels, c.patch_size, c.grid(), c.grid()));
+    u.add("EMBED_TIMESTEP_TABLE_V1", None, "the timestep sinusoid and the pooled text projection");
+    u.add("MOD_ADALN_V1", None, format!("{} blocks, the last context-pre-only", c.num_layers));
+    u.add("ATTN_JOINT_STREAMS_V1", None, format!("{} heads x {} over both streams", c.heads, c.head_dim));
+    u.add("ACT_TABLE_V1", None, "SiLU, GELU-tanh");
+    u.add("GEN_SAMPLER_AFFINE_V1", None, "the flow-matching Euler update");
+    u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
+}
+
+/// The features an `AutoencoderKL` decoder uses, by id.
+pub fn vae_features(c: &crate::diffusion::vae_float::VaeConfig) -> Vec<FeatureUse> {
+    let mut u = Uses::default();
+    u.add("CONV_DENSE_V1", None, "3x3 and 1x1");
+    u.add("NORM_GROUP_SPATIAL_V1", None, format!("{} groups", c.groups));
+    u.add("ACT_TABLE_V1", None, "SiLU");
+    u.add(
+        "GEN_STAGE_VAE_V1",
+        None,
+        format!("{} levels, {} resnets each{}", c.block_out_channels.len(), c.layers_per_block + 1, if c.mid_attention { ", a mid attention" } else { "" }),
+    );
     u.0.into_iter().map(|(id, (layers, details))| FeatureUse { id: FeatureId(id), layers, detail: details.join("; ") }).collect()
 }
 

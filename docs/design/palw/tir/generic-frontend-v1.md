@@ -607,6 +607,35 @@ values, Apertus 1,893 and 93, 17 primitives each, all evaluated). The real confi
 B and ADMITTED at a 4,096-position window: BitNet 358 nodes, 3.05·10⁹ MACs, 28,784 step leaves, cone work 970; Apertus 341 nodes,
 8.6·10⁹ MACs (24.7·10⁹ at its 65,536 window), 42,112 step leaves, cone work 923.
 
+### 9.11 The diffusers read path (`hf_schema::diffusers`, `diffusion::probe`)
+
+A transformers configuration names its class in `architectures`; a diffusers component (a denoiser, a VAE, a UNet) names it in
+`_class_name`. Until this reader existed the architecture report and the corpus saw "config has no `architectures`: the reference
+implementation cannot be identified" for every image-generation component — a reader gap, not a capability one (the first image profile of
+RFC-0003 §6 lowers an SD3 pipeline end to end, `tests/diffusers_sd3.rs`). `read_diffusers` routes the class to what exists:
+
+* `SD3Transformer2DModel` → the MMDiT denoise stage (`diffusion::dit`), `Sd3Config::from_json`; features `PATCH_EMBED_V1`,
+  `EMBED_TIMESTEP_TABLE_V1`, `MOD_ADALN_V1`, `ATTN_JOINT_STREAMS_V1`, `ACT_TABLE_V1`, `GEN_SAMPLER_AFFINE_V1`;
+* `AutoencoderKL` → the decoder's chain of stages (`diffusion::vae`), `VaeConfig::from_json`; features `CONV_DENSE_V1`,
+  `NORM_GROUP_SPATIAL_V1`, `ACT_TABLE_V1`, `GEN_STAGE_VAE_V1`;
+
+both Level B through a **built-in Rust route** (`AdapterSource::CoreReader`: these lowerers are functions of `(weights, calibration,
+configuration)`, not data), and every other class a Level C refusal that **names what its lowering lacks as registry capabilities** — sixteen
+new `Missing` entries, each expressible with the existing primitives once described: SD3.5's per-stream qk norm and dual attention;
+FLUX's three-axis rotary embedding, qk norm in the joint attention, single-stream blocks and guidance embedding; the class-conditional
+DiT's label embedding, single-stream adaLN-Zero blocks, sinusoidal positions, learned-sigma output and noise-prediction sampler; a UNet's
+skip connections, time-conditioned resnets, spatial transformers with cross-attention (`ATTN_CROSS_V1`, FR-21) and, for SDXL, the added text
+and time conditioning; a VAE with a latent normalisation or attention up blocks. An unknown key of a supported class is refused as an
+unmapped key (the rule of every reader of this crate).
+
+The check that needs the weights is `diffusion::probe`: it reads a component, calibrates on seeded random inputs (admission depends on the
+shapes, not the scales), lowers it and admits each stage, and it names every checkpoint tensor nothing read (the float references now note
+the tensors they read; a decoder reads no `encoder.*` or `quant_conv.*` by design). A checkpoint that does not fit is a refusal by message,
+not a panic. On the reduced SD3 fixture the denoise stage is 958 nodes in 4 blocks, admitted (2.4·10⁶ MACs, 351 step leaves), and the decoder
+is a chain of 10 admitted stages of 18 – 205 nodes. **Not done:** admission at real sizes (SD3-medium is a 2 B-parameter checkpoint and the
+float references widen it to `f64`; the probe is for the reduced and the mid-size components) and the other classes' lowerings — the table
+above is the list of what each needs.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |
