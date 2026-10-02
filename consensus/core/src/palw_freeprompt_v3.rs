@@ -2533,7 +2533,22 @@ pub enum PalwFpWorkerFrameV1 {
     /// [`PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1`]): the ids the decoder selected, with no commitment.
     /// Node-local; no consensus object is built from it.
     Answered(Box<PalwFpWorkerAnswerV1>) = 4,
+    /// **RFC-0001 §2.7 stage 2 — the answers of a batch request** ([`PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1`]),
+    /// in request order, each bound to its own request bytes.
+    AnsweredBatch(Vec<PalwFpWorkerAnswerV1>) = 5,
+    /// One id of one request of a batch, as it is selected (`index` is the request's place in the
+    /// batch frame) — what lets the gateway run each candidate's own display rule over its own ids.
+    BatchToken { index: u32, token_id: u32, rendered: Vec<u8> } = 6,
 }
+
+/// A `v3-serve` frame that asks for SEVERAL answers decoded together (RFC-0001 §2.7 stage 2): this
+/// magic, then a Borsh `Vec<Vec<u8>>` of ordinary [`PalwFpWorkerRequestV3`] encodings. Answered by
+/// one [`PalwFpWorkerFrameV1::AnsweredBatch`]; nothing streams (the candidates of an `n` request
+/// are not streamed). Same collision argument as [`PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1`].
+pub const PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1: [u8; 4] = *b"MPAB";
+
+/// The most requests one batch frame may carry.
+pub const PALW_FP_WORKER_ANSWER_BATCH_MAX_V1: usize = 16;
 
 /// The first four bytes of a `v3-serve` request frame that asks for the ANSWER ONLY — no fold, no
 /// retention, no commitment (RFC-0001 §2.6). The rest of the frame is a [`PalwFpWorkerRequestV3`]

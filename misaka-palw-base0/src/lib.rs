@@ -54,6 +54,7 @@ pub mod context_vector;
 /// it returns is the fact that the court convicted a planted fault and acquitted the honest run.
 pub mod e2e_drill;
 pub mod engine;
+pub mod decode_scheduler;
 pub mod engine_a16;
 pub mod fp_capture;
 pub mod fp_interval;

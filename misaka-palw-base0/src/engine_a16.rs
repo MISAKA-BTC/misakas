@@ -1947,6 +1947,15 @@ impl<'a> A16Engine<'a> {
     }
 }
 
+/// **One sequence's decode step in a batch** ([`A16Engine::forward_decode_batch_planned`]): the
+/// token to feed, the position it lands at, and the sequence's own cache, which must hold exactly
+/// the `position` positions before it and which the step appends one row to.
+pub struct A16DecodeRowV1<'c> {
+    pub cache: &'c mut A16Cache,
+    pub token: usize,
+    pub position: usize,
+}
+
 impl A16ProfilePlanV1 {
     /// **Whether this plan's layer can be walked a prompt at a time** (ADR-0117 Decision 2 on the
     /// dense tier): every cache read after the cache write it reads. A position's walk writes its
@@ -2187,6 +2196,175 @@ impl<'a> A16Engine<'a> {
                 Role::VCacheWrite => {
                     for (i, out) in outs.iter().enumerate() {
                         cache.push_value(li, &self.drill_cache_row(li, first_position + i, 1, out))?;
+                    }
+                }
+                Role::Plain => {}
+            }
+            for (i, out) in outs.into_iter().enumerate() {
+                rows[i].push(out);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// **RFC-0001 §2.7 stage 2: one decode step for a BATCH of independent sequences.** Each row is
+    /// one sequence at its own position with its own cache; every layer's projections (and the LM
+    /// head) run once over all the rows — the weights are read once for the batch instead of once a
+    /// sequence — while attention reads each row's own cache and nothing else.
+    ///
+    /// **Batch-invariant by construction**: a batched projection is the single-row one on each row
+    /// (`the_batched_projections_are_the_single_row_ones`), every other node is
+    /// [`Self::eval_node`] on the row's own inputs, and a cache write goes to the row's own cache. So
+    /// a row's logits and the cache it leaves are exactly what [`Self::forward_token_planned`] gives
+    /// it alone, whoever else is in the batch and whatever order they are in
+    /// (`a_batched_decode_step_is_each_sequences_own_step`). Refused before anything is read: an empty
+    /// batch; a plan whose layer reads the cache before writing it; a token outside the vocabulary;
+    /// position 0 (the sink position runs alone, on its own parameters); a cache that does not hold
+    /// exactly the positions before the row's.
+    pub fn forward_decode_batch_planned(
+        &self,
+        plan: &A16ProfilePlanV1,
+        rows: &mut [A16DecodeRowV1<'_>],
+    ) -> Result<Vec<Vec<i32>>, A16EngineError> {
+        if plan.layer_count != self.artifact.shape.n_layers {
+            return Err(A16EngineError::MalformedParams("plan/artifact layer count"));
+        }
+        if rows.is_empty() {
+            return Err(A16EngineError::OpRefused("an empty decode batch"));
+        }
+        if !plan.one_pass_prefill_supported() {
+            return Err(A16EngineError::OpRefused("the plan reads the cache before this position writes it"));
+        }
+        for row in rows.iter() {
+            if row.token >= self.artifact.shape.vocab {
+                return Err(A16EngineError::OpRefused("a token outside the vocabulary"));
+            }
+            if row.position == 0 {
+                return Err(A16EngineError::OpRefused("the sink position is never batched"));
+            }
+            if (0..plan.layer_count).any(|li| row.cache.rows_in(li) != row.position || row.cache.value_rows_in(li) != row.position) {
+                return Err(A16EngineError::OpRefused("a batched row's cache does not hold exactly the positions before it"));
+            }
+        }
+        let ropes: Vec<(&[i32], &[i32])> = rows
+            .iter()
+            .map(|r| self.artifact.rope.row(r.position).ok_or(A16EngineError::PositionOutOfRange))
+            .collect::<Result<_, _>>()?;
+        let tokens: Vec<usize> = rows.iter().map(|r| r.token).collect();
+        let mut hs: Vec<Vec<i32>> = Vec::with_capacity(rows.len());
+        for (i, token) in tokens.iter().enumerate() {
+            let pre = self.walk_table(&plan.pre, None, *token, false, ropes[i].0, ropes[i].1, None, plan.attn_history)?;
+            hs.push(pre.last().cloned().unwrap_or_default());
+        }
+        for li in 0..plan.layer_count {
+            let per_row = self.walk_table_multi(&plan.layer, Some(&hs), &tokens, &ropes, li, Some(rows), plan.attn_history)?;
+            for (i, out) in per_row.into_iter().enumerate() {
+                hs[i] = out.last().cloned().ok_or(A16EngineError::MalformedParams("an empty layer table"))?;
+            }
+        }
+        let post = self.walk_table_multi(&plan.post, Some(&hs), &tokens, &ropes, 0, None, plan.attn_history)?;
+        post.into_iter()
+            .map(|out| out.last().cloned().ok_or(A16EngineError::MalformedParams("an empty post table")))
+            .collect()
+    }
+
+    /// One table of the plan over a batch of rows that are NOT one sequence: node by node, every
+    /// row's output. A projection runs once over the batch; a cache write goes to the row's own
+    /// cache (`caches`, layer table only) and a cache read is handed the row's own series.
+    #[allow(clippy::too_many_arguments)]
+    fn walk_table_multi(
+        &self,
+        table: &[PlanNode],
+        table_in: Option<&[Vec<i32>]>,
+        tokens: &[usize],
+        rope: &[(&[i32], &[i32])],
+        li: usize,
+        mut caches: Option<&mut [A16DecodeRowV1<'_>]>,
+        attn_history: usize,
+    ) -> Result<Vec<Vec<Vec<i32>>>, A16EngineError> {
+        use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
+        let n = tokens.len();
+        let refuse =
+            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
+        // The rows each row's own cache held before this walk: a row sees them and its own write.
+        let before: Vec<(usize, usize)> = match &caches {
+            Some(c) => c.iter().map(|r| (r.cache.rows_in(li), r.cache.value_rows_in(li))).collect(),
+            None => vec![(0, 0); n],
+        };
+        let mut rows: Vec<Vec<Vec<i32>>> = vec![Vec::with_capacity(table.len()); n];
+        for node in table {
+            let resolve = |i: usize, input: &PlanInput, rows: &[Vec<Vec<i32>>]| -> Result<Vec<i32>, A16EngineError> {
+                match input {
+                    PlanInput::Row(k) => rows[i].get(*k).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
+                    PlanInput::LayerIn => table_in
+                        .and_then(|t| t.get(i).cloned())
+                        .ok_or(A16EngineError::MalformedParams("layer input outside a layer")),
+                    PlanInput::CachedK | PlanInput::CachedV => Err(A16EngineError::MalformedParams("a cache series is not a row input")),
+                }
+            };
+            let kv_for = |i: usize| -> Result<(KvSeriesRef<'_>, KvSeriesRef<'_>), A16EngineError> {
+                let rows_of = caches.as_ref().ok_or(A16EngineError::MalformedParams("a cache read outside a layer"))?;
+                let cache = &*rows_of[i].cache;
+                Ok((cache.keys_visible(li, before[i].0 + 1)?, cache.values_visible(li, before[i].1 + 1)?))
+            };
+            let outs: Vec<Vec<i32>> = match node.op {
+                PlanOp::MatMulRequant(slot) | PlanOp::MatMulRescale(slot) if self.fast => {
+                    let xs: Vec<Vec<i32>> = (0..n).map(|i| resolve(i, &node.inputs[0], &rows)).collect::<Result<_, _>>()?;
+                    let (w, params) = self.projection_operands(node.op, slot, li, false)?;
+                    match node.op {
+                        PlanOp::MatMulRequant(_) => crate::kernels::a16_matmul_requant_batch(w, &xs, &params),
+                        _ => crate::kernels::a16_matmul_rescale_batch(w, &xs, &params),
+                    }
+                    .map_err(refuse("matmul_batch"))?
+                }
+                PlanOp::AttnFused
+                    if self.fast
+                        && matches!(node.inputs.get(1), Some(PlanInput::CachedK))
+                        && matches!(node.inputs.get(2), Some(PlanInput::CachedV)) =>
+                {
+                    let p = &self.layers[li];
+                    (0..n)
+                        .into_par_iter()
+                        .map(|i| {
+                            let q = resolve(i, &node.inputs[0], &rows)?;
+                            let (k, v) = kv_for(i)?;
+                            a16_attn_fused_fast(
+                                &q,
+                                k,
+                                v,
+                                self.artifact.shape.n_heads,
+                                self.artifact.shape.n_kv_heads,
+                                self.artifact.shape.d_head,
+                                p.logits,
+                                p.softmax_up,
+                                p.probs,
+                                p.values,
+                                attn_history,
+                            )
+                            .map_err(refuse("attn_fused"))
+                        })
+                        .collect::<Result<_, _>>()?
+                }
+                _ => (0..n)
+                    .into_par_iter()
+                    .map(|i| {
+                        let reads_cache = node.inputs.iter().any(|input| matches!(input, PlanInput::CachedK | PlanInput::CachedV));
+                        let kv = if reads_cache { Some(kv_for(i)?) } else { None };
+                        self.eval_node(node, &|k| resolve(i, &node.inputs[k], &rows), kv, tokens[i], false, rope[i].0, rope[i].1, li, attn_history)
+                    })
+                    .collect::<Result<_, _>>()?,
+            };
+            match node.role {
+                Role::KCacheWrite => {
+                    let rows_of = caches.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
+                    for (i, out) in outs.iter().enumerate() {
+                        rows_of[i].cache.push_key(li, out)?;
+                    }
+                }
+                Role::VCacheWrite => {
+                    let rows_of = caches.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
+                    for (i, out) in outs.iter().enumerate() {
+                        rows_of[i].cache.push_value(li, out)?;
                     }
                 }
                 Role::Plain => {}

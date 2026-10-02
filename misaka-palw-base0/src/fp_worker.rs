@@ -1027,21 +1027,7 @@ pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
         answer.output_token_ids.len(),
         job.decode_token_limit
     );
-    let stop_sequence_len = job.decode.as_ref().filter(|_| job.is_v4()).and_then(|decode| {
-        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
-            decode,
-            job.decode_token_limit,
-            u32::MAX,
-            &answer.output_token_ids,
-        )
-        .ok()?;
-        match stop.reason {
-            kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
-                decode.stop_sequences.get(index as usize).map(|s| s.len() as u32)
-            }
-            _ => None,
-        }
-    });
+    let stop_sequence_len = answer_stop_len_v1(&job, &answer.output_token_ids);
     Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
         request_hash,
         prompt_token_ids: prompt_ids,
@@ -1051,6 +1037,76 @@ pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
         ended_on_stop_id: answer.ended_on_stop_id,
         stop_sequence_len,
         execute_ms,
+    })
+}
+
+/// **RFC-0001 §2.7 stage 2: several requests answered in one batched decode** — each request
+/// builds its own job by the same `prepare_job_v1`, the backend decodes them together, and every
+/// answer is bound to its own request bytes. In request order.
+pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    requests: &[(PalwFpWorkerRequestV3, Hash64)],
+    on_token: &mut dyn FnMut(usize, u32, &[u8]),
+) -> Result<Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1>, String> {
+    if requests.is_empty() || requests.len() > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1 {
+        return Err(format!(
+            "a batch carries 1..={} requests, not {}",
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1,
+            requests.len()
+        ));
+    }
+    let mut prepared = Vec::with_capacity(requests.len());
+    for (request, _) in requests {
+        let (job, ids) = prepare_job_v1(rt, request)?;
+        let usize_ids: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        prepared.push((job, ids, usize_ids));
+    }
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let jobs: Vec<kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1<'_>> = prepared
+        .iter()
+        .map(|(job, _, usize_ids)| kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1 { job, prompt_tokens: usize_ids })
+        .collect();
+    let answers = rt
+        .backend
+        .answer_batch_free_prompt_v1(&jobs, &rt.manifest.eog_token_ids, &mut |i, id| {
+            on_token(i, id, &rt.tokenizer.token_bytes(id).unwrap_or_default())
+        })
+        .map_err(|e| format!("execution refused: {e}"))?;
+    let execute_ms = started.elapsed().as_millis() as u64;
+    eprintln!("[{}] answer-batch: {} jobs in {execute_ms}ms", rt.retention_family, answers.len());
+    Ok(prepared
+        .into_iter()
+        .zip(answers)
+        .zip(requests)
+        .map(|(((job, ids, _), answer), (_, request_hash))| {
+            let stop_sequence_len = answer_stop_len_v1(&job, &answer.output_token_ids);
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
+                request_hash: *request_hash,
+                prompt_token_ids: ids,
+                rendered: render_answer_v1(&rt.tokenizer, &answer.output_token_ids),
+                output_token_ids: answer.output_token_ids,
+                cached_prefix_tokens: answer.cached_prefix_tokens,
+                ended_on_stop_id: answer.ended_on_stop_id,
+                stop_sequence_len,
+                execute_ms,
+            }
+        })
+        .collect())
+}
+
+/// The length of the stop sequence that ended `ids`, by the job's own decode config (V4 only).
+fn answer_stop_len_v1(job: &PalwFreePromptJobV3, ids: &[u32]) -> Option<u32> {
+    job.decode.as_ref().filter(|_| job.is_v4()).and_then(|decode| {
+        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(decode, job.decode_token_limit, u32::MAX, ids).ok()?;
+        match stop.reason {
+            kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
+                decode.stop_sequences.get(index as usize).map(|s| s.len() as u32)
+            }
+            _ => None,
+        }
     })
 }
 
@@ -1185,6 +1241,9 @@ where
     write_framed(output, &bytes).map_err(|e| format!("cannot write the result frame: {e}"))
 }
 
+/// Marks a batch error that was the OUTPUT stream failing (a dead gateway), not a bad job.
+const STREAM_BROKEN: &str = "\u{0}stream-broken:";
+
 enum WorkerOutcome {
     Committed(PalwFpWorkerResultV3),
     Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
@@ -1208,6 +1267,44 @@ where
             Some(payload) => payload,
             None => return Ok(()),
         };
+        // **RFC-0001 §2.7 stage 2: a batch of answer-only requests** — decoded together.
+        if payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1) {
+            let frame = (|| -> Result<PalwFpWorkerFrameV1, String> {
+                let payloads: Vec<Vec<u8>> =
+                    borsh::from_slice(&payload[4..]).map_err(|e| format!("the batch frame is not a list of requests: {e}"))?;
+                let mut requests = Vec::with_capacity(payloads.len());
+                for p in &payloads {
+                    let request: PalwFpWorkerRequestV3 =
+                        borsh::from_slice(p).map_err(|e| format!("a batched frame is not a v3 request: {e}"))?;
+                    requests.push((request, fp_worker_request_hash_v3(p)));
+                }
+                let mut stream_error: Option<String> = None;
+                let answers = run_answer_batch_v1(rt, &requests, &mut |index, token_id, rendered| {
+                    if stream_error.is_none()
+                        && let Err(e) = write_frame_v1(
+                            output,
+                            &PalwFpWorkerFrameV1::BatchToken { index: index as u32, token_id, rendered: rendered.to_vec() },
+                        )
+                    {
+                        stream_error = Some(e);
+                    }
+                })?;
+                match stream_error {
+                    Some(e) => Err(format!("{STREAM_BROKEN}{e}")),
+                    None => Ok(PalwFpWorkerFrameV1::AnsweredBatch(answers)),
+                }
+            })();
+            match frame {
+                Ok(frame) => write_frame_v1(output, &frame)?,
+                // A dead gateway is not a bad job: end the session, as the single path does.
+                Err(reason) if reason.starts_with(STREAM_BROKEN) => return Err(reason[STREAM_BROKEN.len()..].to_string()),
+                Err(reason) => {
+                    eprintln!("[{}] v3-serve refused a batch: {reason}", rt.retention_family);
+                    write_frame_v1(output, &PalwFpWorkerFrameV1::Refused { reason })?;
+                }
+            }
+            continue;
+        }
         // **RFC-0001 §2.6: an answer-only frame** — magic, then an ordinary request.
         let answer_only = payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1);
         let payload = if answer_only { payload[4..].to_vec() } else { payload };
@@ -1841,6 +1938,138 @@ mod tests {
         assert_eq!(result.decode_tokens_executed, 4, "the run goes to the DECLARED budget, EOG or not");
         assert_eq!(tokens.iter().map(|(id, _)| *id).collect::<Vec<_>>(), result.output_token_ids, "one frame per committed id");
         assert_eq!(tokens.iter().flat_map(|(_, bytes)| bytes.clone()).collect::<Vec<u8>>(), result.rendered);
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// A V4 request with the no-op decode config under a sampler: the form a sampled job takes.
+    fn sampled_request_v1(manifest: &PalwFpWorkerManifestV1, ids: Vec<u32>, seed_byte: u8, limit: u32) -> PalwFpWorkerRequestV3 {
+        let mut request = fixture_request_v1(manifest, PalwFpWorkerInputV3::TokenIds(ids));
+        request.version = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+        request.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        request.sampling_seed = [seed_byte; 32];
+        request.temperature_q = 1 << 24;
+        request.decode_token_limit = limit;
+        request
+    }
+
+    fn answer_framed(request: &PalwFpWorkerRequestV3) -> Vec<u8> {
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(request).expect("a request serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    fn batch_framed(requests: &[PalwFpWorkerRequestV3]) -> Vec<u8> {
+        let payloads: Vec<Vec<u8>> = requests.iter().map(|r| borsh::to_vec(r).expect("a request serializes")).collect();
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(&payloads).expect("the batch serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    /// **RFC-0001 §2.6, through the worker's frames: an answer-only request returns the ids the
+    /// SAME request commits when run as a job** — sampled and greedy — streams them once, binds its
+    /// answer to the request bytes (not including the magic), and a worker session mixing both
+    /// kinds of frame keeps working.
+    #[test]
+    fn an_answer_only_frame_answers_with_the_ids_the_committed_job_commits() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-answer-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let sampled = sampled_request_v1(&manifest, vec![3, 5, 8, 13, 21], 7, 5);
+        let mut greedy = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![2, 4, 6]));
+        greedy.decode_token_limit = 4;
+        let mut input = Vec::new();
+        for request in [&sampled, &greedy] {
+            input.extend(answer_framed(request));
+            input.extend(framed(request));
+        }
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let (mut answers, mut results, mut streamed) = (Vec::new(), Vec::new(), 0usize);
+        for frame in &frames {
+            match frame {
+                PalwFpWorkerFrameV1::Answered(a) => answers.push(a.clone()),
+                PalwFpWorkerFrameV1::Result(r) => results.push(r.clone()),
+                PalwFpWorkerFrameV1::Token { .. } => streamed += 1,
+                PalwFpWorkerFrameV1::Manifest(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!((answers.len(), results.len()), (2, 2));
+        for (k, request) in [&sampled, &greedy].into_iter().enumerate() {
+            let payload = borsh::to_vec(request).unwrap();
+            assert_eq!(answers[k].request_hash, fp_worker_request_hash_v3(&payload), "the answer binds the request without the magic");
+            assert_eq!(answers[k].output_token_ids, results[k].output_token_ids, "answer-only == committed");
+            assert_eq!(answers[k].rendered, results[k].rendered);
+            assert_eq!(answers[k].prompt_token_ids, results[k].prompt_token_ids);
+            assert_eq!(answers[k].cached_prefix_tokens, 0);
+        }
+        assert_eq!(streamed, answers.iter().map(|a| a.output_token_ids.len()).sum::<usize>() * 2, "each id streams once per mode");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// **RFC-0001 §2.7 stage 2, through the worker's frames: a batch frame's answers are the ones each
+    /// request gets alone**, bound to their own request bytes, with each id streamed under its
+    /// request's index; a malformed or oversized batch is one `Refused` and the worker stays up.
+    #[test]
+    fn a_batch_frame_answers_each_request_as_it_would_be_answered_alone() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-batch-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let requests: Vec<PalwFpWorkerRequestV3> = (0..4u8)
+            .map(|k| sampled_request_v1(&manifest, (0..(3 + 2 * k as u32)).map(|i| 2 + i * 3).collect(), k + 1, 3 + k as u32))
+            .collect();
+        let mut input = batch_framed(&requests);
+        for r in &requests {
+            input.extend(answer_framed(r));
+        }
+        // A batch frame that is not a list, and one with too many requests.
+        let mut junk = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        junk.extend_from_slice(&[1, 2, 3]);
+        input.extend((junk.len() as u32).to_le_bytes());
+        input.extend(junk);
+        let too_many = vec![requests[0].clone(); kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1 + 1];
+        input.extend(batch_framed(&too_many));
+        // And the worker is still serving afterwards.
+        input.extend(answer_framed(&requests[0]));
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let mut batch = None;
+        let mut batch_tokens: Vec<Vec<u32>> = vec![Vec::new(); requests.len()];
+        let mut singles = Vec::new();
+        let mut refusals = Vec::new();
+        let mut in_batch = true;
+        for frame in &frames {
+            match frame {
+                PalwFpWorkerFrameV1::BatchToken { index, token_id, .. } => batch_tokens[*index as usize].push(*token_id),
+                PalwFpWorkerFrameV1::AnsweredBatch(a) => {
+                    batch = Some(a.clone());
+                    in_batch = false;
+                }
+                PalwFpWorkerFrameV1::Answered(a) => singles.push(a.clone()),
+                PalwFpWorkerFrameV1::Refused { reason } => refusals.push(reason.clone()),
+                PalwFpWorkerFrameV1::Token { .. } => assert!(!in_batch, "a batch streams BatchTokens only"),
+                PalwFpWorkerFrameV1::Manifest(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        let batch = batch.expect("the batch was answered");
+        assert_eq!(batch.len(), requests.len());
+        for k in 0..requests.len() {
+            assert_eq!(batch[k].request_hash, fp_worker_request_hash_v3(&borsh::to_vec(&requests[k]).unwrap()), "answer {k} binds its own request");
+            assert_eq!(batch[k].output_token_ids, singles[k].output_token_ids, "request {k}: in-batch == alone");
+            assert_eq!(batch[k].rendered, singles[k].rendered);
+            assert_eq!(batch_tokens[k], batch[k].output_token_ids, "request {k}: its ids streamed under its own index");
+        }
+        assert_eq!(refusals.len(), 2, "{refusals:?}");
+        assert!(refusals[0].contains("not a list of requests"), "{}", refusals[0]);
+        assert!(refusals[1].contains("a batch carries 1..=16 requests, not 17"), "{}", refusals[1]);
+        assert_eq!(singles.len(), 5, "the worker kept serving after both refusals");
         let _ = std::fs::remove_dir_all(&temp);
     }
 

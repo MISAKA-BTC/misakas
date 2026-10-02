@@ -957,6 +957,8 @@ pub struct Qwen25A16Backend {
     /// **RFC-0001 §2.6 stage 1: the node-only KV prefix cache** the answer-only path resumes from
     /// (`None`: no cache, every answer prefills fresh). Never read by a committed run.
     prefix_cache: Option<std::sync::Mutex<crate::prefix_cache::PrefixKvCacheV1>>,
+    /// RFC-0001 §2.7 stage 2: the widest batched decode step.
+    decode_batch_width: usize,
     /// **How many prompt positions this instance's prefill walks a layer at a time** (int-10.2 A2):
     /// [`A16_PREFILL_RUN_POSITIONS`] unless a node narrowed it for the memory it could reserve. Read by
     /// the resource profile (the trace scratch it prices) and by every execution this instance runs —
@@ -1056,7 +1058,143 @@ impl Qwen25A16Backend {
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
             prefix_cache: None,
+            decode_batch_width: 8,
         })
+    }
+
+    /// **Everything an answer does before its first selection**: the committed path's own checks,
+    /// the prefix-cache lookup (with the sampled verification), the prefill of what the cache did
+    /// not hold, and the cache fill. Returns the cache holding the whole prompt, how many leading
+    /// positions came from the prefix cache, and the last prompt position's logits.
+    fn answer_prefill_v1(
+        &self,
+        engine: &A16Engine<'_>,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+    ) -> Result<(A16Cache, usize, Vec<i32>), String> {
+        self.artifact_read_probe_v1()?;
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
+            && decode.bans_cover_vocab(vocab as u32)
+        {
+            return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
+        }
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let prefill = prompt_tokens.len();
+        let limit = job.decode_token_limit as usize;
+        let (class_id, tokenizer_id) = (job.class_id, job.tokenizer_id);
+        let mut resumed: Option<(usize, A16Cache)> = None;
+        let mut verify = false;
+        if let Some(lock) = &self.prefix_cache {
+            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(hit) = cache.lookup_v1(class_id, tokenizer_id, &prompt_ids) {
+                verify = cache.wants_verification_v1();
+                resumed = Some((hit.positions as usize, hit.cache));
+            }
+        }
+        let (mut kv, mut reused, mut logits) = match resumed {
+            Some((positions, mut kv)) => {
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = self.answer_prefill_run_v1(engine, &mut kv, &prompt_tokens[positions..], positions)?;
+                (kv, positions, logits)
+            }
+            None => {
+                let mut kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = self.answer_prefill_run_v1(engine, &mut kv, prompt_tokens, 0)?;
+                (kv, 0, logits)
+            }
+        };
+        // Sampled verification: the resumed logits against a fresh prefill's. A difference turns the
+        // cache off for the life of the process and the answer is served from the fresh run.
+        if verify && reused > 0 {
+            let mut fresh_kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+            fresh_kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+            let fresh_logits = self.answer_prefill_run_v1(engine, &mut fresh_kv, prompt_tokens, 0)?;
+            if fresh_logits != logits || fresh_kv.contents_as_i32() != kv.contents_as_i32() {
+                eprintln!("[prefix-cache] a resumed prefill differed from a fresh one: the cache is DISABLED and this answer is served fresh");
+                if let Some(lock) = &self.prefix_cache {
+                    lock.lock().unwrap_or_else(|e| e.into_inner()).disable_v1();
+                }
+                (kv, logits, reused) = (fresh_kv, fresh_logits, 0);
+            }
+        }
+        if let Some(lock) = &self.prefix_cache {
+            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &prompt_ids, &kv);
+        }
+        Ok((kv, reused, logits))
+    }
+
+    /// Prefill `tokens` into `cache` from `first`, in runs of this node's own width exactly as the
+    /// committed prefill walks them; the last position's logits.
+    fn answer_prefill_run_v1(&self, engine: &A16Engine<'_>, cache: &mut A16Cache, tokens: &[usize], first: usize) -> Result<Vec<i32>, String> {
+        match self.plan.as_ref() {
+            Some(plan) if plan.one_pass_prefill_supported() => {
+                let mut last = Vec::new();
+                let mut at = 0usize;
+                while at < tokens.len() {
+                    let end = (at + self.prefill_run_positions.max(1)).min(tokens.len());
+                    let is_last = end == tokens.len();
+                    let (logits, _) = engine
+                        .forward_prefill_planned(plan, cache, &tokens[at..end], first + at, is_last)
+                        .map_err(|e| format!("the prefill run at {}: {e:?}", first + at))?;
+                    if is_last {
+                        last = logits;
+                    }
+                    at = end;
+                }
+                Ok(last)
+            }
+            Some(plan) => {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_planned(plan, cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                }
+                Ok(last)
+            }
+            None => {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_traced(cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                }
+                Ok(last)
+            }
+        }
+    }
+
+    /// The whole conversation so far — prompt plus every answer id whose K/V the cache holds (the
+    /// last selected id was never fed forward) — is what the next turn most often extends.
+    fn remember_conversation_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+        generated: &[u32],
+        kv: &A16Cache,
+    ) {
+        if let Some(lock) = &self.prefix_cache
+            && generated.len() > 1
+        {
+            let mut ids = prompt_ids.to_vec();
+            ids.extend_from_slice(&generated[..generated.len() - 1]);
+            if kv.rows() == ids.len() {
+                lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(job.class_id, job.tokenizer_id, &ids, kv);
+            }
+        }
+    }
+
+    /// How many sequences one batched decode step carries at most (`--decode-batch`; default 8).
+    pub fn with_decode_batch_width_v1(mut self, width: usize) -> Self {
+        self.decode_batch_width = width.max(1);
+        self
     }
 
     /// **Give this backend a KV prefix cache** of at most `budget_bytes` (RFC-0001 §2.6 stage 1;
@@ -1375,6 +1513,7 @@ impl Qwen25A16Backend {
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
             prefix_cache: None,
+            decode_batch_width: 8,
         })
     }
 
@@ -2811,105 +2950,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         stop_ids: &[u32],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpAnswerV1, String> {
-        self.artifact_read_probe_v1()?;
-        if job.prompt_tokens as usize != prompt_tokens.len() {
-            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
-        }
-        if prompt_tokens.is_empty() {
-            return Err("a job with no prompt tokens is not a job".to_string());
-        }
-        let vocab = self.artifact.shape.vocab;
-        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
-            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
-        }
-        if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
-            && decode.bans_cover_vocab(vocab as u32)
-        {
-            return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
-        }
-        let plan = self.plan.as_ref();
         let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let plan = self.plan.as_ref();
+        let (mut kv, reused, mut logits) = self.answer_prefill_v1(&engine, job, prompt_tokens)?;
         let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
         let prefill = prompt_tokens.len();
         let limit = job.decode_token_limit as usize;
-        let (class_id, tokenizer_id) = (job.class_id, job.tokenizer_id);
-
-        // Resume from the longest cached prefix, when the cache is on.
-        let mut resumed: Option<(usize, A16Cache)> = None;
-        let mut verify = false;
-        if let Some(lock) = &self.prefix_cache {
-            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(hit) = cache.lookup_v1(class_id, tokenizer_id, &prompt_ids) {
-                verify = cache.wants_verification_v1();
-                resumed = Some((hit.positions as usize, hit.cache));
-            }
-        }
-        let forward_run = |cache: &mut A16Cache, tokens: &[usize], first: usize| -> Result<Vec<i32>, String> {
-            match plan {
-                Some(plan) if plan.one_pass_prefill_supported() => {
-                    let mut last = Vec::new();
-                    // Runs of the node's own width, exactly as the committed prefill walks them.
-                    let mut at = 0usize;
-                    while at < tokens.len() {
-                        let end = (at + self.prefill_run_positions.max(1)).min(tokens.len());
-                        let is_last = end == tokens.len();
-                        let (logits, _) = engine
-                            .forward_prefill_planned(plan, cache, &tokens[at..end], first + at, is_last)
-                            .map_err(|e| format!("the prefill run at {}: {e:?}", first + at))?;
-                        if is_last {
-                            last = logits;
-                        }
-                        at = end;
-                    }
-                    Ok(last)
-                }
-                Some(plan) => {
-                    let mut last = Vec::new();
-                    for (k, t) in tokens.iter().enumerate() {
-                        last = engine.forward_token_planned(plan, cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
-                    }
-                    Ok(last)
-                }
-                None => {
-                    let mut last = Vec::new();
-                    for (k, t) in tokens.iter().enumerate() {
-                        last = engine.forward_token_traced(cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
-                    }
-                    Ok(last)
-                }
-            }
-        };
-        let (mut kv, reused, mut logits) = match resumed {
-            Some((positions, mut kv)) => {
-                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
-                let logits = forward_run(&mut kv, &prompt_tokens[positions..], positions)?;
-                (kv, positions, logits)
-            }
-            None => {
-                let mut kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
-                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
-                let logits = forward_run(&mut kv, prompt_tokens, 0)?;
-                (kv, 0, logits)
-            }
-        };
-        // Sampled verification: the resumed logits against a fresh prefill's. A difference turns the
-        // cache off for the life of the process and the answer is served from the fresh run.
-        let mut reused = reused;
-        if verify && reused > 0 {
-            let mut fresh_kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
-            let fresh_logits = forward_run(&mut fresh_kv, prompt_tokens, 0)?;
-            if fresh_logits != logits || fresh_kv.contents_as_i32() != kv.contents_as_i32() {
-                eprintln!("[prefix-cache] a resumed prefill differed from a fresh one: the cache is DISABLED and this answer is served fresh");
-                if let Some(lock) = &self.prefix_cache {
-                    lock.lock().unwrap_or_else(|e| e.into_inner()).disable_v1();
-                }
-                (kv, logits, reused) = (fresh_kv, fresh_logits, 0);
-            }
-        }
-        if let Some(lock) = &self.prefix_cache {
-            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &prompt_ids, &kv);
-        }
-
         let mut decoder = job.decoder_v1();
         let mut generated: Vec<u32> = Vec::new();
         let mut ended_on_stop_id = false;
@@ -2934,22 +2980,74 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 None => engine.forward_token_traced(&mut kv, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?.0,
             };
         }
-        // The whole conversation so far — prompt plus every answer id whose K/V the cache holds
-        // (the last selected id was never fed forward) — is what the next turn most often extends.
-        if let Some(lock) = &self.prefix_cache
-            && generated.len() > 1
-        {
-            let mut ids = prompt_ids.clone();
-            ids.extend_from_slice(&generated[..generated.len() - 1]);
-            if kv.rows() == ids.len() {
-                lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &ids, &kv);
-            }
-        }
+        self.remember_conversation_v1(job, &prompt_ids, &generated, &kv);
         Ok(kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
             output_token_ids: generated,
             cached_prefix_tokens: reused as u32,
             ended_on_stop_id,
         })
+    }
+
+    /// **RFC-0001 §2.7 stage 2: several answers in ONE decode loop.** Each job prefills (resuming
+    /// from the prefix cache where it can) and joins a [`crate::decode_scheduler::DecodeSchedulerV1`];
+    /// their decode steps then run batched, the weights read once for the batch. Every answer is
+    /// the one [`Self::answer_free_prompt_v1`] gives the job alone — batch invariance, held by
+    /// `in_batch_equals_alone` — and `on_token(job index, id)` is called as each id is selected.
+    fn answer_batch_free_prompt_v1(
+        &self,
+        jobs: &[kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1<'_>],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(usize, u32),
+    ) -> Result<Vec<kaspa_consensus_core::palw_backend::PalwFpAnswerV1>, String> {
+        let Some(plan) = self.plan.as_ref().filter(|plan| plan.one_pass_prefill_supported()) else {
+            // A class whose plan cannot batch answers its jobs one at a time.
+            return jobs
+                .iter()
+                .enumerate()
+                .map(|(i, j)| self.answer_free_prompt_v1(j.job, j.prompt_tokens, stop_ids, &mut |id| on_token(i, id)))
+                .collect();
+        };
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let mut scheduler = crate::decode_scheduler::DecodeSchedulerV1::new(self.decode_batch_width);
+        let mut reused = vec![0u32; jobs.len()];
+        let mut prompts: Vec<Vec<u32>> = Vec::with_capacity(jobs.len());
+        for (i, j) in jobs.iter().enumerate() {
+            let (kv, hit, logits) = self.answer_prefill_v1(&engine, j.job, j.prompt_tokens)?;
+            reused[i] = hit as u32;
+            prompts.push(j.prompt_tokens.iter().map(|t| *t as u32).collect());
+            scheduler.admit(crate::decode_scheduler::DecodeSequenceV1::start(
+                i as u64,
+                kv,
+                j.prompt_tokens.len(),
+                &logits,
+                j.job.decoder_v1(),
+                j.job.decode_token_limit as usize,
+                stop_ids.to_vec(),
+            ));
+            for (id, token) in scheduler.drain_events() {
+                on_token(id as usize, token);
+            }
+        }
+        let mut answers: Vec<Option<kaspa_consensus_core::palw_backend::PalwFpAnswerV1>> = vec![None; jobs.len()];
+        loop {
+            for done in scheduler.take_finished() {
+                let i = done.id as usize;
+                self.remember_conversation_v1(jobs[i].job, &prompts[i], &done.output_token_ids, &done.cache);
+                answers[i] = Some(kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+                    output_token_ids: done.output_token_ids,
+                    cached_prefix_tokens: reused[i],
+                    ended_on_stop_id: done.ended_on_stop_id,
+                });
+            }
+            if scheduler.is_idle() {
+                break;
+            }
+            scheduler.step(&engine, plan)?;
+            for (id, token) in scheduler.drain_events() {
+                on_token(id as usize, token);
+            }
+        }
+        answers.into_iter().map(|a| a.ok_or_else(|| "a batched job finished with no answer".to_string())).collect()
     }
 
     /// DRILL ONLY: the honest run with the committed tile at `leaf` made a lie, in the stream of
@@ -9092,5 +9190,157 @@ mod prefix_cache_serving {
         let mut outside = p.clone();
         outside[0] = 5_000;
         assert!(b.answer_free_prompt_v1(&j, &outside, &[], &mut |_| {}).unwrap_err().contains("outside this class's vocabulary"));
+    }
+
+    use kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1;
+
+    /// **ENGINE: a batched decode step is each sequence's own step** — the logits a row gets and the
+    /// cache it leaves are exactly what `forward_token_planned` gives it alone, for sequences at
+    /// different positions with different caches, in every order the rows can be in.
+    #[test]
+    fn a_batched_decode_step_is_each_sequences_own_step() {
+        use crate::engine_a16::A16DecodeRowV1;
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = b.plan.as_ref().unwrap();
+        let prompts = [prompt(9, 1), prompt(17, 2), prompt(5, 3), prompt(12, 4)];
+        let tokens = [11usize, 99, 3, 64];
+        let mut base: Vec<A16Cache> = Vec::new();
+        for p in &prompts {
+            let mut c = A16Cache::with_storage(artifact.shape.n_layers, b.runtime_profile);
+            engine.forward_prefill_planned(plan, &mut c, p, 0, true).unwrap();
+            base.push(c);
+        }
+        // Each alone.
+        let mut alone_logits = Vec::new();
+        let mut alone_caches = Vec::new();
+        for (i, c) in base.iter().enumerate() {
+            let mut c = c.clone();
+            alone_logits.push(engine.forward_token_planned(plan, &mut c, tokens[i], prompts[i].len()).unwrap().0);
+            alone_caches.push(c);
+        }
+        for order in [[0usize, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let mut caches: Vec<A16Cache> = order.iter().map(|i| base[*i].clone()).collect();
+            let mut rows: Vec<A16DecodeRowV1<'_>> = caches
+                .iter_mut()
+                .zip(order)
+                .map(|(cache, i)| A16DecodeRowV1 { cache, token: tokens[i], position: prompts[i].len() })
+                .collect();
+            let logits = engine.forward_decode_batch_planned(plan, &mut rows).unwrap();
+            drop(rows);
+            for (k, i) in order.iter().enumerate() {
+                assert_eq!(logits[k], alone_logits[*i], "order {order:?}: row {k} (sequence {i}) has its own logits");
+                assert_eq!(caches[k].contents_as_i32(), alone_caches[*i].contents_as_i32(), "order {order:?}: and its own cache");
+            }
+        }
+        // A batch of one is the single step.
+        let mut c = base[1].clone();
+        let one = engine
+            .forward_decode_batch_planned(plan, &mut [A16DecodeRowV1 { cache: &mut c, token: tokens[1], position: prompts[1].len() }])
+            .unwrap();
+        assert_eq!(one[0], alone_logits[1]);
+        // Refusals, by name.
+        let mut wrong = base[0].clone();
+        let err = engine
+            .forward_decode_batch_planned(plan, &mut [A16DecodeRowV1 { cache: &mut wrong, token: 1, position: 3 }])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("does not hold exactly the positions before it"), "{err:?}");
+        assert!(engine.forward_decode_batch_planned(plan, &mut []).is_err());
+    }
+
+    /// **BACKEND, GOLDEN: in-batch == alone.** Jobs of different prompt lengths, budgets, seeds,
+    /// temperatures and a V4 stop sequence, answered together (batch width 2, so five jobs are served
+    /// round-robin and finish at different times), each give the ids, the stop and the K/V the job
+    /// gives alone — and the batching is real (more rows than steps).
+    #[test]
+    fn in_batch_equals_alone() {
+        let (artifact, profile) = fixture();
+        let alone = backend(&artifact, &profile);
+        let batched = backend(&artifact, &profile).with_decode_batch_width_v1(2);
+        let prompts: Vec<Vec<usize>> = (0..5).map(|k| prompt(6 + 3 * k, 10 * k)).collect();
+        let mut jobs: Vec<PalwFreePromptJobV3> = Vec::new();
+        for (k, p) in prompts.iter().enumerate() {
+            let mut j = job(&profile, p.len(), 3 + 2 * k as u32);
+            j.sampling_seed = [k as u8 + 1; 32];
+            j.temperature_q = if k % 2 == 0 { 1 << 24 } else { 0 };
+            jobs.push(j);
+        }
+        // Job 3 carries a stop sequence taken from its own greedy answer.
+        let greedy3 = alone.answer_free_prompt_v1(&jobs[3], &prompts[3], &[], &mut |_| {}).unwrap().output_token_ids;
+        jobs[3].version = PALW_FP_V4_VERSION;
+        jobs[3].decode = Some(DecodeConfigV4 { stop_sequences: vec![vec![greedy3[1], greedy3[2]]], ..DecodeConfigV4::NOOP });
+        let expected: Vec<_> = jobs
+            .iter()
+            .zip(&prompts)
+            .map(|(j, p)| alone.answer_free_prompt_v1(j, p, &[], &mut |_| {}).unwrap())
+            .collect();
+        let batch: Vec<PalwFpAnswerJobV1<'_>> =
+            jobs.iter().zip(&prompts).map(|(job, prompt_tokens)| PalwFpAnswerJobV1 { job, prompt_tokens }).collect();
+        let mut streamed: Vec<Vec<u32>> = vec![Vec::new(); jobs.len()];
+        let got = batched.answer_batch_free_prompt_v1(&batch, &[], &mut |i, id| streamed[i].push(id)).unwrap();
+        for k in 0..jobs.len() {
+            assert_eq!(got[k].output_token_ids, expected[k].output_token_ids, "job {k}: in-batch == alone");
+            assert_eq!(streamed[k], expected[k].output_token_ids, "job {k}: and it streamed exactly those ids");
+        }
+        assert_eq!(got[3].output_token_ids.len(), 3, "the stop sequence ended job 3's answer");
+        // The same again with every job in a different position and a wider batch.
+        let wide = backend(&artifact, &profile).with_decode_batch_width_v1(8);
+        let reversed: Vec<PalwFpAnswerJobV1<'_>> = batch.iter().rev().copied().collect();
+        let got = wide.answer_batch_free_prompt_v1(&reversed, &[], &mut |_, _| {}).unwrap();
+        for (k, g) in got.iter().rev().enumerate() {
+            assert_eq!(g.output_token_ids, expected[k].output_token_ids, "job {k}: order does not matter");
+        }
+    }
+
+    /// The scheduler batches (rows > steps), is fair when the set is wider than the batch, and a
+    /// sequence admitted mid-flight gets exactly its own answer.
+    #[test]
+    fn the_scheduler_batches_is_fair_and_admits_mid_flight() {
+        use crate::decode_scheduler::{DecodeSchedulerV1, DecodeSequenceV1};
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = b.plan.as_ref().unwrap();
+        let start = |id: u64, p: &[usize], limit: u32| {
+            let j = job(&profile, p.len(), limit);
+            let (kv, _, logits) = b.answer_prefill_v1(&engine, &j, p).unwrap();
+            DecodeSequenceV1::start(id, kv, p.len(), &logits, j.decoder_v1(), limit as usize, vec![])
+        };
+        let alone = |p: &[usize], limit: u32| b.answer_free_prompt_v1(&job(&profile, p.len(), limit), p, &[], &mut |_| {}).unwrap().output_token_ids;
+        let (pa, pb, pc) = (prompt(8, 1), prompt(10, 2), prompt(7, 3));
+        let mut sched = DecodeSchedulerV1::new(2);
+        sched.admit(start(0, &pa, 6));
+        sched.admit(start(1, &pb, 6));
+        let mut seen: std::collections::BTreeMap<u64, Vec<u32>> = Default::default();
+        let mut collect = |sched: &mut DecodeSchedulerV1| {
+            for (id, tok) in sched.drain_events() {
+                seen.entry(id).or_default().push(tok);
+            }
+        };
+        collect(&mut sched);
+        assert_eq!(sched.step(&engine, plan).unwrap(), 2);
+        collect(&mut sched);
+        // A third sequence arrives while two are mid-answer; the batch is 2 wide so it waits its turn.
+        sched.admit(start(2, &pc, 6));
+        collect(&mut sched);
+        assert_eq!(sched.running(), 3);
+        let mut guard = 0;
+        while !sched.is_idle() {
+            sched.step(&engine, plan).unwrap();
+            collect(&mut sched);
+            guard += 1;
+            assert!(guard < 64, "the scheduler makes progress");
+        }
+        let finished: std::collections::BTreeMap<u64, Vec<u32>> =
+            sched.take_finished().into_iter().map(|f| (f.id, f.output_token_ids)).collect();
+        assert_eq!(finished[&0], alone(&pa, 6));
+        assert_eq!(finished[&1], alone(&pb, 6));
+        assert_eq!(finished[&2], alone(&pc, 6));
+        for (id, ids) in &finished {
+            assert_eq!(&seen[id], ids, "sequence {id}: the events are the answer");
+        }
+        let (steps, rows) = sched.counters();
+        assert!(rows > steps, "the steps were batched: {rows} rows in {steps} steps");
     }
 }

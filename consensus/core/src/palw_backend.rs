@@ -185,6 +185,13 @@ pub struct PalwFpAnswerV1 {
     pub ended_on_stop_id: bool,
 }
 
+/// One job of an answer batch ([`PalwExecutionBackendV1::answer_batch_free_prompt_v1`]).
+#[derive(Clone, Copy)]
+pub struct PalwFpAnswerJobV1<'a> {
+    pub job: &'a crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    pub prompt_tokens: &'a [usize],
+}
+
 /// What a seat concluded about ONE opened checkpoint interval (ADR-0077 Decision 8).
 ///
 /// Four outcomes, because they are four different accusations: `Valid` is every replayed row
@@ -877,6 +884,22 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _on_token: &mut dyn FnMut(u32),
     ) -> Result<PalwFpAnswerV1, String> {
         Err("this backend serves no answer-only path".to_string())
+    }
+
+    /// **RFC-0001 §2.7 stage 2: several answers at once.** A backend with a batch-invariant decode
+    /// runs them in one loop (each answer exactly the one [`Self::answer_free_prompt_v1`] gives the
+    /// job alone); the default answers them one after another. `on_token(i, id)` reports job `i`'s
+    /// ids as they are selected.
+    fn answer_batch_free_prompt_v1(
+        &self,
+        jobs: &[PalwFpAnswerJobV1<'_>],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(usize, u32),
+    ) -> Result<Vec<PalwFpAnswerV1>, String> {
+        jobs.iter()
+            .enumerate()
+            .map(|(i, j)| self.answer_free_prompt_v1(j.job, j.prompt_tokens, stop_ids, &mut |id| on_token(i, id)))
+            .collect()
     }
 
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each

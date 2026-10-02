@@ -587,7 +587,7 @@ impl ResidentWorker {
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
                 }
-                PalwFpWorkerFrameV1::Answered(_) => {
+                PalwFpWorkerFrameV1::Answered(_) | PalwFpWorkerFrameV1::AnsweredBatch(_) | PalwFpWorkerFrameV1::BatchToken { .. } => {
                     return Err("the worker answered a committed job with an answer-only frame".to_string());
                 }
             }
@@ -629,8 +629,8 @@ impl ResidentWorker {
                         Err(format!("the worker refused the job: {reason}"))
                     };
                 }
-                PalwFpWorkerFrameV1::Result(_) => {
-                    return Err("the worker answered an answer-only request with a committed result".to_string());
+                PalwFpWorkerFrameV1::Result(_) | PalwFpWorkerFrameV1::AnsweredBatch(_) | PalwFpWorkerFrameV1::BatchToken { .. } => {
+                    return Err("the worker answered an answer-only request with a frame of another kind".to_string());
                 }
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
@@ -638,6 +638,58 @@ impl ResidentWorker {
             }
         }
     }
+
+    /// **RFC-0001 §2.7 stage 2: `requests` answered in ONE batched decode.** Answers come back in
+    /// request order, each bound to its own request bytes.
+    fn run_answer_batch(
+        &mut self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String> {
+        let payloads: Vec<Vec<u8>> =
+            requests.iter().map(|r| borsh::to_vec(r).map_err(|e| format!("cannot serialize a worker request: {e}"))).collect::<Result<_, _>>()?;
+        let hashes: Vec<Hash64> = payloads.iter().map(|p| fp_worker_request_hash_v3(p)).collect();
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&borsh::to_vec(&payloads).map_err(|e| format!("cannot serialize the batch: {e}"))?);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the batch frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the batch frame: {e}"))?;
+        loop {
+            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+                return Err("the worker stream ended before a terminator frame".to_string());
+            };
+            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+                PalwFpWorkerFrameV1::BatchToken { index, token_id, rendered } => {
+                    if index as usize >= hashes.len() {
+                        return Err("the worker streamed an id for a request the batch does not have".to_string());
+                    }
+                    on_token(index as usize, token_id, &rendered)
+                }
+                PalwFpWorkerFrameV1::AnsweredBatch(answers) => {
+                    if answers.len() != hashes.len() || answers.iter().zip(&hashes).any(|(a, h)| a.request_hash != *h) {
+                        return Err("the worker's batch does not bind the requests it was asked".to_string());
+                    }
+                    return Ok(AnswerBatchRun::Answered(answers));
+                }
+                PalwFpWorkerFrameV1::Refused { reason } => {
+                    return if reason.contains("serves no answer-only path")
+                        || reason.contains("not a v3 request")
+                        || reason.contains("not a list of requests")
+                    {
+                        Ok(AnswerBatchRun::Unsupported)
+                    } else {
+                        Err(format!("the worker refused the job: {reason}"))
+                    };
+                }
+                _ => return Err("the worker answered a batch with a frame of another kind".to_string()),
+            }
+        }
+    }
+}
+
+/// What a batch request came to.
+enum AnswerBatchRun {
+    Answered(Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1>),
+    Unsupported,
 }
 
 /// What an answer-only request came to.
@@ -761,6 +813,31 @@ impl WorkerSupervisor {
         let outcome = slot.as_mut().expect("just spawned").run_answer(request, on_token);
         match &outcome {
             Ok(AnswerRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
+            Err(e) if !e.starts_with("the worker refused the job") => {
+                *slot = None;
+                eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+            }
+            _ => {}
+        }
+        outcome
+    }
+}
+
+impl WorkerSupervisor {
+    /// RFC-0001 §2.7 stage 2: a batch of answers on the next idle worker, decoded together.
+    fn run_answer_batch(
+        &self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_answer_batch(requests, on_token);
+        match &outcome {
+            Ok(AnswerBatchRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
             Err(e) if !e.starts_with("the worker refused the job") => {
                 *slot = None;
                 eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
@@ -1065,22 +1142,24 @@ fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64
 /// `chat` is the parsed request and `admitted` is what `surface::admit_request` made of it: every
 /// refusal the surface can raise has already been raised, before the queue and before the worker
 /// (ADR-0096 invariant 6). `facts` were read once, by the caller, for this job.
-#[allow(clippy::too_many_arguments)]
-fn handle_chat(
+/// Everything a job needs before any worker is asked: the prompt plan, the decode limit and the
+/// worker request, built once for a single choice and once per candidate (RFC-0001 §2.4).
+struct PreparedJob {
+    plan: PromptPlan,
+    decode_limit: u32,
+    request: PalwFpWorkerRequestV3,
+    anchor_block: Hash64,
+    anchor_daa: u64,
+}
+
+fn prepare_request(
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
-    budget: &Mutex<PublicJobBudget>,
+    manifest: &PalwFpWorkerManifestV1,
     facts: &chain::ChainFacts,
-    chain_source: &chain::ChainSource,
-    chat: &ChatRequest,
     admitted: &AdmittedRequest,
-    // ADR-0082 Decision 11's `(sampling_seed, temperature_q)` THIS job runs under — the request's
-    // own for a single choice, `H(base_seed ‖ i)` for candidate `i` of `n` (RFC-0001 §2.4).
     sampling: ([u8; 32], u32),
-    sink: &mut dyn ChatSink,
-) -> Result<serde_json::Value, String> {
-    let manifest = worker.manifest();
+) -> Result<PreparedJob, String> {
     // ADR-0096 Decision 2: tool turns and the tool list become the model's own text; Decision 3:
     // the format instruction rides the system turn as text. Both BEFORE the template, which then
     // sees plain turns and nothing else.
@@ -1105,17 +1184,6 @@ fn handle_chat(
         return Err(facts.read_error.clone().unwrap_or_else(|| "no anchor is available for this job".to_string()));
     }
     let (anchor_block, anchor_daa) = (facts.anchor_block, facts.anchor_daa);
-    expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
-
-    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
-    // the inference whether this one may spend exposure — the answer is produced either way; only
-    // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
-    // outage, and what makes an uncertified class an answer rather than a refusal.
-    let mut price = ExposurePrice::resolve(config, facts);
-    let mut commit_refusal = facts.commit_refusal();
-    if commit_refusal.is_none() {
-        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
-    }
     let mut job_nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
 
@@ -1153,6 +1221,39 @@ fn handle_chat(
         decode: admitted.decode.clone(),
         stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
     };
+    Ok(PreparedJob { plan, decode_limit, request, anchor_block, anchor_daa })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_chat(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    budget: &Mutex<PublicJobBudget>,
+    facts: &chain::ChainFacts,
+    chain_source: &chain::ChainSource,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    // ADR-0082 Decision 11's `(sampling_seed, temperature_q)` THIS job runs under — the request's
+    // own for a single choice, `H(base_seed ‖ i)` for candidate `i` of `n` (RFC-0001 §2.4).
+    sampling: ([u8; 32], u32),
+    sink: &mut dyn ChatSink,
+) -> Result<serde_json::Value, String> {
+    let manifest = worker.manifest();
+    let PreparedJob { plan, decode_limit, request, anchor_daa, .. } =
+        prepare_request(config, identity, manifest, facts, admitted, sampling)?;
+    expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
+
+    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
+    // the inference whether this one may spend exposure — the answer is produced either way; only
+    // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
+    // outage, and what makes an uncertified class an answer rather than a refusal.
+    let mut price = ExposurePrice::resolve(config, facts);
+    let mut commit_refusal = facts.commit_refusal();
+    if commit_refusal.is_none() {
+        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
+    }
+    let (sampling_seed, temperature_q) = sampling;
 
     // **RFC-0001 §2.6/§2.7: a job that will not be committed is answered, not folded.** The refusal
     // is known before the run (the chain's facts, the budget, `--answer-never-commit`), so the
@@ -1609,6 +1710,25 @@ fn answer_only_response(
             AnswerRun::Unsupported => return Ok(None),
         }
     };
+    Ok(Some(answer_only_body(config, worker, chat, admitted, request, plan, why_not_committed, &mut stream, answer, sink)?))
+}
+
+/// The body of an answer-only response, from the run's stream and the worker's answer — one
+/// spelling for the single answer and for each candidate of a batch.
+#[allow(clippy::too_many_arguments)]
+fn answer_only_body(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    request: &PalwFpWorkerRequestV3,
+    plan: &PromptPlan,
+    why_not_committed: &str,
+    stream: &mut AnswerStream,
+    answer: kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1,
+    sink: &mut dyn ChatSink,
+) -> Result<serde_json::Value, String> {
+    let manifest = worker.manifest();
     let stop_len = answer.stop_sequence_len.map(|n| n as usize);
     if let Some(delta) = stream.finish_with_stop(stop_len) {
         sink.delta(&delta);
@@ -1659,7 +1779,7 @@ fn answer_only_response(
         &answer_id[..16],
         answer.cached_prefix_tokens
     );
-    Ok(Some(serde_json::json!({
+    Ok(serde_json::json!({
         "id": format!("palwcmpl-{}", &answer_id[..24]),
         "object": "chat.completion",
         "model": chat.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
@@ -1701,7 +1821,53 @@ fn answer_only_response(
                 "clamped": admitted.max_tokens.is_some_and(|asked| asked != request.decode_token_limit),
             },
         },
-    })))
+    }))
+}
+
+/// **RFC-0001 §2.7 stage 2 for the `n` candidates of one request**: every candidate's request is
+/// built (its own seed, `H(base_seed ‖ i)`), the worker decodes them in one batch, and each answer
+/// gets the same response body a single answer-only job would. `Ok(None)` when the worker serves no
+/// batch path (the caller runs the candidates as separate jobs).
+fn answer_batch_candidates(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    facts: &chain::ChainFacts,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    why_not_committed: &str,
+) -> Result<Option<Vec<serde_json::Value>>, String> {
+    let manifest = worker.manifest();
+    let (base_seed, temperature_q) = admitted.sampling;
+    let mut prepared = Vec::with_capacity(admitted.candidates as usize);
+    for i in 0..admitted.candidates {
+        prepared.push(prepare_request(config, identity, manifest, facts, admitted, (surface::candidate_seed_v1(&base_seed, i), temperature_q))?);
+    }
+    let requests: Vec<PalwFpWorkerRequestV3> = prepared.iter().map(|p| p.request.clone()).collect();
+    let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
+    let new_stream = || {
+        if admitted.stop_texts.is_empty() {
+            AnswerStream::new()
+        } else {
+            AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
+        }
+    };
+    let mut streams: Vec<AnswerStream> = (0..requests.len()).map(|_| new_stream()).collect();
+    let answers = {
+        let mut on_token = |index: usize, token_id: u32, rendered: &[u8]| {
+            let _ = streams[index].push(token_id, rendered, &eog);
+        };
+        match worker.run_answer_batch(&requests, &mut on_token)? {
+            AnswerBatchRun::Answered(answers) => answers,
+            AnswerBatchRun::Unsupported => return Ok(None),
+        }
+    };
+    let mut bodies = Vec::with_capacity(answers.len());
+    for ((answer, prepared), stream) in answers.into_iter().zip(&prepared).zip(streams.iter_mut()) {
+        let mut sink = BufferedSink;
+        bodies.push(answer_only_body(config, worker, chat, admitted, &prepared.request, &prepared.plan, why_not_committed, stream, answer, &mut sink)?);
+    }
+    Ok(Some(bodies))
 }
 
 /// **RFC-0001 §2.4: `n` candidates are `n` jobs.** Each candidate is its own inference, its own
@@ -1723,7 +1889,21 @@ fn handle_chat_candidates(
 ) -> Result<serde_json::Value, String> {
     let (base_seed, temperature_q) = admitted.sampling;
     let n = admitted.candidates;
-    let results: Vec<Result<serde_json::Value, String>> = std::thread::scope(|scope| {
+    // **RFC-0001 §2.7 stage 2: when the refusal to commit is static** (the chain's facts, or
+    // `--answer-never-commit` — not the budget, which moves per job) every candidate is an answer
+    // and none a claim, so the worker decodes them TOGETHER, each in its own sequence.
+    let static_refusal = facts.commit_refusal().or_else(|| {
+        config.answer_never_commit.then(|| "this gateway runs in `answer, never commit` mode (ADR-0077 SA-1c)".to_string())
+    });
+    let bodies_from_batch = match static_refusal {
+        Some(why) if config.answer_fast_path && worker.answer_only_supported() => {
+            answer_batch_candidates(config, identity, worker, facts, chat, admitted, &why)?
+        }
+        _ => None,
+    };
+    let results: Vec<Result<serde_json::Value, String>> = match bodies_from_batch {
+        Some(bodies) => bodies.into_iter().map(Ok).collect(),
+        None => std::thread::scope(|scope| {
         let handles: Vec<_> = (0..n)
             .map(|i| {
                 let seed = surface::candidate_seed_v1(&base_seed, i);
@@ -1734,7 +1914,8 @@ fn handle_chat_candidates(
             })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
-    });
+        }),
+    };
     let mut bodies = Vec::with_capacity(results.len());
     for (i, result) in results.into_iter().enumerate() {
         bodies.push(result.map_err(|e| {
