@@ -3107,3 +3107,42 @@ number of distinct ready operators and `independence_floor_met` is `|(Ready ∩ 
 (`true` below the fence); `Prefetching → Probation`, `Held → Probation` and `Probation → ActiveLimited` require it. The registry
 read serves the class's seating (`PalwModelRegistryClassReadV1::seating`) to the RPC (`blocking`: `INDEPENDENT_OPERATORS`,
 `have / need`; the class's licensable share) and the preflight.
+
+## 17. Node-side fused kernels, the Metal backend and the architecture verdicts (RFC-0002 §7 and §8; informative)
+
+Nothing in this section reaches a consensus object, a class id or a fingerprint (F-3): it is node software and tool output.
+
+**The kernels of this build** (`misaka_palw_tir_exec::fused::kernels_v1`), each a `tir_library_v1` template matched structurally over
+the canonical program (F-5) and run only where the refined plan proves no node of the region can fail:
+
+| Kernel | Template | Operands | Output |
+| --- | --- | --- | --- |
+| `gdn_step_q36` | the gated delta rule over a `Fixed` state | key, value, query, gates, narrowing triples, write shift | `i32` |
+| `l2_unit_q15` | `x / ‖x‖` along the last axis, 17 nodes | `i16` rows `[n]` or `[rows, n]` | `i16`, ±32767 |
+| `rms_unit_q24` | `x / √(mean(x²) + ε)` in Q24, 21 nodes | `i16`/`i32` rows, one `i64` ε | `i32` |
+| `rms_norm_wide_q36` (and `_exact`) | the 39-node wide RMS, ε = `eps_zero · 2^eps_shift` | `i16`/`i32` rows, two ε scalars | `i32` |
+
+Measured and **not** fused, because the generic kernels are as fast: `a16_matmul`, `moe_combine_q36` and (not present in any program this
+tree lowers) `a16_attn_fused`. The gate is `tests/fused_gate.rs` of `misaka-palw-tir-lower` (F-4): per kernel, random and range-extreme
+operands against the reference evaluator, the independent second implementation and the generic backend, at more than one shape, with the
+check that the kernel ran, and the deliberately broken variant (`TirExecutor::set_fused_fault`) that the gate must refuse.
+
+**The Metal backend** (cargo feature `metal`, macOS; node flag `--palw-tir-metal`, which implies `--palw-tir-fused-kernels`). `l2_unit_q15`
+and `rms_unit_q24` run on the GPU: one row per threadgroup, the exact sum of squares by a tree reduction, the scalar chain once, the outputs
+strided, all in 64-bit words. The one place the template needs more than a word (`Σx² · 2^24 / n` in `i128`) is split into a quotient and a
+remainder, and a row whose result leaves the word raises a flag: the call is then answered by the CPU kernel, so the GPU never answers a value
+it did not compute exactly. A call under 32,768 elements stays on the CPU (a dispatch costs more than the work). The kernel source is
+compiled by the system's Metal runtime at first use. The gate (`misaka-palw-tir-exec/tests/metal_gate.rs`) holds the GPU path to the reference,
+the generic backend and the CPU fused kernels on random and extreme rows, including rows beyond the kernel's word, and requires the broken
+variant to be refused with the GPU path in front of it. A node whose build or machine lacks the backend refuses `--palw-tir-metal` by name.
+
+**The architecture verdicts** (`palw-class check-architecture`, `misaka-palw-sdk/src/check_architecture.rs`). Besides `ADMISSIBLE`:
+
+* `ADMISSIBLE_GENERIC (estimated slowdown S on generic kernels: patterns)`: admissible, and more than 2 % of the position's estimated work is
+  in wide (`i128`-working) nodes that no kernel of this build matches. `generic_slowdown_v1` counts a node's work as its output's elements
+  (`MatMul`: `m·k·n / 8`, never a fusion target), and a wide node outside every matched region as `GENERIC_WIDE_PASS_FACTOR_V1 = 3` fused passes;
+  `S` is the generic total over the all-fused total. It is an estimate from the program alone (before any params exist, so matching is
+  optimistic about the ranges an artifact decides) and the weight is assumed, not measured; `tir-exec-bench --fused-kernels` measures a kernel
+  on a given machine. The verdict is a statement about speed and blocks no registration.
+* `LOWERABLE_UNVERIFIED (the program's own verdict: V)`: the architecture's float reference is remote code this tool cannot run offline, so
+  the fidelity column is empty; `V` is the verdict the program earned, which holds.
