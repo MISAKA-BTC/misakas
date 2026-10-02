@@ -86,11 +86,13 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                 Op::Wkv4 => c.elementwise += 12 * out,
                 Op::Wkv6 { heads, head_size } => c.macs_fixed += 3 * (*heads * *head_size * *head_size) as u64,
                 Op::Wkv7 { heads, head_size } => c.macs_fixed += 4 * (*heads * *head_size * *head_size) as u64,
-                Op::MoeExperts { top_k, .. } => {
-                    if let (Ref::Param(g), Ref::Param(d)) = (n.inputs[3], n.inputs[5]) {
+                Op::MoeExperts { top_k, gated, .. } => {
+                    // A gated expert reads gate, up, down (inputs 3, 4, 5); a plain one up and down (3, 4).
+                    let (first, last, projections) = if *gated { (3, 5, 2) } else { (3, 4, 1) };
+                    if let (Ref::Param(g), Ref::Param(d)) = (n.inputs[first], n.inputs[last]) {
                         let gs = &p.params[g as usize].shape;
                         let ds = &p.params[d as usize].shape;
-                        let m = *top_k as u64 * (2 * numel(&gs[1..]) + numel(&ds[1..]));
+                        let m = *top_k as u64 * (projections * numel(&gs[1..]) + numel(&ds[1..]));
                         c.macs_fixed += m;
                         c.routed_expert_macs += m;
                     }

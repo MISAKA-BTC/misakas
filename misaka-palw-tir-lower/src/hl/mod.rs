@@ -25,6 +25,10 @@ use serde::Serialize;
 
 pub use build::build_program;
 
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 pub type NodeId = u32;
 
 /// An operand.
@@ -313,13 +317,16 @@ pub enum Op {
     },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
     /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.
-    /// In: `[x, ids, weights, gate [E,I,D], up [E,I,D], down [E,D,I], (gate_b, up_b, down_b)]`.
+    /// In: `[x, ids, weights, gate [E,I,D], up [E,I,D], down [E,D,I], (gate_b, up_b, down_b)]`. A plain expert (`gated: false`,
+    /// `MOE_EXPERTS_PLAIN_V1`) is `down_e(act(up_e x))`: In `[x, ids, weights, up [E,I,D], down [E,D,I]]`, no biases.
     MoeExperts {
         top_k: usize,
         act: Act,
         glu: Glu,
         bias: bool,
         input_scaled: bool,
+        #[serde(skip_serializing_if = "is_true")]
+        gated: bool,
     },
 }
 

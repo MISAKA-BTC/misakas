@@ -1588,13 +1588,15 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
             ])
         }
-        Op::MoeExperts { top_k, act, glu, bias, input_scaled } => {
+        Op::MoeExperts { top_k, act, glu, bias, input_scaled, gated } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let idx = operand(lb, node.inputs[1])?;
             let w = operand(lb, node.inputs[2])?;
-            let ps: Vec<u32> = (3..if *bias { 9 } else { 6 }).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, &site, &want)?;
+            // Gated: gate, up, down (+ three biases); plain: up, down.
+            let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+            let ps: Vec<u32> = (3..3 + n_params).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, *gated, &site, &want)?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -3467,12 +3469,15 @@ fn lower_moe(
     act: Act,
     glu: crate::spec::Glu,
     input_scaled: bool,
+    gated: bool,
     site: &str,
     want: &Want,
 ) -> Result<Val> {
     let hl = cx.hl;
-    let (gp, upp, dp) = (ps[0], ps[1], ps[2]);
-    let (e, i, d) = (hl.params[gp as usize].shape[0], hl.params[gp as usize].shape[1], hl.params[gp as usize].shape[2]);
+    // `ps`: gate, up, down (+ biases) — or, a plain expert, up, down.
+    let (gp, upp, dp) = if gated { (Some(ps[0]), ps[1], ps[2]) } else { (None, ps[0], ps[1]) };
+    let shape = &hl.params[upp as usize].shape;
+    let (e, i, d) = (shape[0], shape[1], shape[2]);
     let pl = per_layer(lb);
     let sub = |s: &str| format!("{site}.{s}");
     let kx = x.key.clone();
@@ -3540,7 +3545,7 @@ fn lower_moe(
         let sk = b.gather(s, idx.r, 0, 0);
         Ok(narrow(b, acc, mk, sk, z, dt))
     };
-    let (gb, ub, db) = if ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
+    let (gb, ub, db) = if gated && ps.len() > 3 { (Some(ps[3]), Some(ps[4]), Some(ps[5])) } else { (None, None, None) };
     // Llama-4: every selected expert reads `w_j · x`, exact to 2^-16 of a code in `i32`
     // (`(x · w_j) >> 8` of a Q24 weight), and the outputs are summed at unit weight.
     let (xb, kx) = if input_scaled {
@@ -3553,29 +3558,41 @@ fn lower_moe(
         (b.reshape_fixed(x.r, &[d as u32, 1]), kx)
     };
     let (gk, uk) = (ScaleKey::site(vec![sub("gate")], false), ScaleKey::site(vec![sub("up")], false));
-    let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
-    b.commit(g16);
-    let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
-    b.commit(u16_);
-    let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
-    let (a16, u16_, uk) = match glu {
-        crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
-        // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
-        // clamped up half lies in `[1 − l, 1 + l]`.
-        crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {
-            let a = lower_table_keyed(b, cx, lb, &gv, TableFn::ClampedGlu { alpha, limit }, &sub("glu"), gk.clone())?;
-            let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
-            let ukey = ScaleKey { base: Base::Fixed((limit + 1.0) * 2.0 / crate::quant::CODE16_MAX), factor: 1.0 };
-            let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampedUp { limit }, &sub("up1"), ukey.clone())?;
-            (a, u.r, ukey)
-        }
+    // The hidden vector of the selected experts and its scale key.
+    let (hid, hk) = if let Some(gp) = gp {
+        let g16 = proj(b, cx, lb, gp, gb, xb, kx.clone(), &sub("gate"), gk.clone(), DType::I16)?;
+        b.commit(g16);
+        let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
+        b.commit(u16_);
+        let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
+        let (a16, u16_, uk) = match glu {
+            crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
+            // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
+            // clamped up half lies in `[1 − l, 1 + l]`.
+            crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {
+                let a = lower_table_keyed(b, cx, lb, &gv, TableFn::ClampedGlu { alpha, limit }, &sub("glu"), gk.clone())?;
+                let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+                let ukey = ScaleKey { base: Base::Fixed((limit + 1.0) * 2.0 / crate::quant::CODE16_MAX), factor: 1.0 };
+                let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampedUp { limit }, &sub("up1"), ukey.clone())?;
+                (a, u.r, ukey)
+            }
+        };
+        let hk = ScaleKey::site(vec![sub("hidden")], false);
+        let p = b.mul(a16.r, u16_, DType::I32);
+        let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
+        let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
+        let hid = narrow(b, p, m, s, None, DType::I16);
+        b.commit(hid);
+        (hid, hk)
+    } else {
+        // A plain expert (`MOE_EXPERTS_PLAIN_V1`): `down(act(up(x)))` — the activation table over the up projection IS the hidden vector.
+        let u16_ = proj(b, cx, lb, upp, ub, xb, kx.clone(), &sub("up"), uk.clone(), DType::I16)?;
+        b.commit(u16_);
+        let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+        let a16 = lower_table_named(b, cx, lb, &uv, TableFn::Act(act), &sub("act"))?;
+        b.commit(a16.r);
+        (a16.r, a16.key.clone())
     };
-    let hk = ScaleKey::site(vec![sub("hidden")], false);
-    let p = b.mul(a16.r, u16_, DType::I32);
-    let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
-    let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
-    let hid = narrow(b, p, m, s, None, DType::I16);
-    b.commit(hid);
     let hb = b.reshape_fixed(hid, &[k as u32, i as u32, 1]);
     let ok = ScaleKey::site(vec![sub("out")], true);
     let y = proj(b, cx, lb, dp, db, hb, hk, &sub("out"), ok.clone(), DType::I32)?;
@@ -4064,6 +4081,14 @@ fn ssm_patterns(blk: &hl::Block, lb: &mut Lb) -> Result<()> {
             absorbed.push(at);
             at = node_of(*a).ok_or_else(bad)?;
         }
+        // A constant multiplier on the projection (`MAMBA2_MUP_V1`'s dt chunk): `Op::Scale` is a change of scale key, so the projection is
+        // asked for at `Q24 / c` and its codes ARE the Q24 of the scaled value.
+        let mut scale = 1.0;
+        if let Op::Scale { c } = blk.nodes[at].op {
+            scale = c;
+            absorbed.push(at);
+            at = node_of(blk.nodes[at].inputs[0]).ok_or_else(bad)?;
+        }
         if !matches!(blk.nodes[at].op, Op::Linear { .. }) || consumers[at] != 1 {
             return Err(bad());
         }
@@ -4073,7 +4098,7 @@ fn ssm_patterns(blk: &hl::Block, lb: &mut Lb) -> Result<()> {
             }
             lb.absorbed[j] = true;
         }
-        lb.wants[at] = Some(Want { dt: DType::I32, key: ScaleKey::q24() });
+        lb.wants[at] = Some(Want { dt: DType::I32, key: ScaleKey::q24().times(1.0 / scale) });
         lb.ssm.insert(i, SsmDt { proj: at as u32, bias, clamp });
     }
     Ok(())

@@ -269,6 +269,24 @@
     "params": 62,
     "program": "45b65e52a6aeb1332738895b20078a4cc8dc5b249a1cc897b73d30c9759d7dcd5f4b3091c23d66eb0d48f44865db3d0dfe21591b980c0ef88e6699bb134d225d"
   },
+  "hf/falcon_h1": {
+    "artifact": "e35dcd80b2dd0f509ae375b5e82a187ef055c6d6b5de6a185254907519ca290b5cebc6da3d15896d469145a039ee4945555520b634767f9b9ddfc3f6aeae7ad1",
+    "nodes": 467,
+    "params": 109,
+    "program": "c3bd46da8f9f3c353f097778a29ccc8f1c0dcfce2d0fcb0c565b4ee8bda93de4788254a97ad7ad2345daea9f55eb6f4962a7f525c51d4f1ff9715e3e8ecf87f5"
+  },
+  "hf/falcon_h1_gate": {
+    "artifact": "1595ba10e140af58263b6baa927ee96c04990756541b98d39adc46107c8dfce1260b61e0d15ea32a34a87ac9aeb25db095baa6d163b6317871a390f5b01f25ed",
+    "nodes": 503,
+    "params": 112,
+    "program": "878a2f0be635bfaa556ba9f7e63a5c4299ba00631ce169076344ffb1936d428175a1cde11c6d1a1e4ddda32eced908ad8fe47d9408e2ed28238eaa02fb634ed8"
+  },
+  "hf/falcon_h1_norm": {
+    "artifact": "4a925e839745a70abbb2c0cca2e81ff393e3c35e34536f02a7bb6a10da8f2ae49d1f1af101d4db5e35ddca6a382b419c2dbb5a59cef05d681434897b16a74532",
+    "nodes": 520,
+    "params": 123,
+    "program": "16c8644924f02722d630ac70e37af4dcb60d1a62768e41dad8ad91235718b8983c6e8df4de6b06aef61e9a0a35d92a853ff0b64f1d81170e649f6c0524af1b85"
+  },
   "hf/falcon_mamba": {
     "artifact": "d8062269676eafe8aaae1247e8bb51e8c7334598354e44f3bbd28cab4b0fee0fc9d6bb6a47b662167f7c91e1be22d1eaf9f5da9c601ad78ba5611ebe82842109",
     "nodes": 308,
@@ -496,6 +514,18 @@
     "nodes": 312,
     "params": 63,
     "program": "aca5c15dbe0cab15cb55d8a6dfe962e9dcd577881eb9d27714b9e870b47ad5e867ccca5ad0c128b7b3b5a854ed6aa3d130dbb2612e0d5bd514aef7171512c1a1"
+  },
+  "hf/nemotron_h": {
+    "artifact": "d32d91622f10cf527679365633e146e058413ea22215ec48a68db46e3a94963f09e2d2be7312c1166fdfd5081e42fd4a9e573e7d844e86288849b80af036dc59",
+    "nodes": 576,
+    "params": 127,
+    "program": "c980483f28def51b854c0cc91007fa04db6d09cab4df9c1ba9124c4d79e8bfcdb4fe936267081afa2015720c2a042fd36c66de753e1bd0e2fff28f96cde574df"
+  },
+  "hf/nemotron_h_latent": {
+    "artifact": "949ddbb9ad199439f7da2fe44d8677bfe30f624697b28a9384466aae2924f68e5d3033ee2f7d082571fdea931f36dfa89ae9821ffc8cbc1bcfdb4b1f4fe8721a",
+    "nodes": 562,
+    "params": 125,
+    "program": "88c20a555ce858c6347cab859475aaf97e04105d509d393ccc9f6f55ef7e9bdd52a374598823917a1f3cf42a5ee76f324b894c9000dbd8c6b043332be5661f5e"
   },
   "hf/olmo": {
     "artifact": "156ded08fa20e4b09abe19973b8446a4c0c29aac179e64f4d4e6cc0b8d3fe9a620674f8f41715fe8e2f987d5e6f4bfa001e46497f4a0606b6d532c2c350280ec",
@@ -805,6 +835,11 @@
     "params": 55,
     "program": "3354e577ede40afaaa4ba4972ce245624eb4782ca6f400fab49354a75db264665ee7631c44e09d5899e1017c16b2df9c58cf73c804185198e595c3babc2a17af"
   },
+  "real/falcon-h1-0.5b-instruct.json": {
+    "nodes": 530,
+    "params": 129,
+    "program": "1c21e994398c8e79bdf339e6ebaa4fdff111dc5d5960d958ecca2d4b4946ad2f25787729363bafdf1623ddbd28dc5a04665937c767a59bc4e676a130403dd0ea"
+  },
   "real/falcon-mamba-7b.json": {
     "nodes": 317,
     "params": 67,
@@ -945,6 +980,16 @@
     "nodes": 249,
     "params": 53,
     "program": "d52e6370ccb3306f29586af9c77ee9e3406ad07249d70d83035ba86ed18870b1076b50cac9722740cc0f26d9bafdb8c3eb418a74d5de066c69ff30d3b6b43b2b"
+  },
+  "real/nemotron-3-nano-30b-a3b.json": {
+    "nodes": 513,
+    "params": 110,
+    "program": "f3ecd0c7d88d4d464762f5280ab9fd8d1599d2fa31074f78189d29f21cea0c09bc28c5dbe44580af2711f2f082f800be6214d8a7746b4d003b4b1b5b9c8a5189"
+  },
+  "real/nemotron-h-8b-base-8k.json": {
+    "nodes": 449,
+    "params": 100,
+    "program": "6412fbf564d47f93a107afbb2412cbb063d36e2fae144b3fa9b34a9c5c4bdcf0152bd6824073dd741ea3fe5a4c9f0352df6b669add6bf02a6b0642474e2783f9"
   },
   "real/olmo-1b-hf.json": {
     "nodes": 323,

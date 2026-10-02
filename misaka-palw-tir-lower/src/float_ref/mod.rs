@@ -798,19 +798,22 @@ impl<'a> Session<'a> {
                 self.sub_site(prefix, &node.site, "logits", &logits);
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }
-            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled } => {
+            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled, gated } => {
                 let xv = x(0)?.to_vec();
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
-                let g = self.param(ins[3], layer)?;
-                let u = self.param(ins[4], layer)?;
-                let d = self.param(ins[5], layer)?;
+                // A gated expert: gate, up, down (inputs 3, 4, 5); a plain one (`MOE_EXPERTS_PLAIN_V1`): up, down (3, 4).
+                let (g, u, d) = if *gated {
+                    (Some(self.param(ins[3], layer)?), self.param(ins[4], layer)?, self.param(ins[5], layer)?)
+                } else {
+                    (None, self.param(ins[3], layer)?, self.param(ins[4], layer)?)
+                };
                 let biases = if *bias {
                     Some((self.param(ins[6], layer)?, self.param(ins[7], layer)?, self.param(ins[8], layer)?))
                 } else {
                     None
                 };
-                let (e_i, e_d) = (g.shape[1], g.shape[2]);
+                let (e_i, e_d) = (u.shape[1], u.shape[2]);
                 let mut y = vec![0f64; e_d];
                 // Sub-sites over the selected experts: what a lowering scales each stage by.
                 let (mut gate_all, mut up_all, mut act_all, mut hidden_all, mut out_all) =
@@ -820,25 +823,36 @@ impl<'a> Session<'a> {
                         let per: usize = t.shape[1..].iter().product();
                         t.data[e * per..(e + 1) * per].to_vec()
                     };
-                    let (gw, uw, dw) = (slice(g, e), slice(u, e), slice(d, e));
+                    let (uw, dw) = (slice(u, e), slice(d, e));
+                    let gw = g.map(|g| slice(g, e));
                     let gb = biases.map(|(a, _, _)| slice(a, e));
                     let ub = biases.map(|(_, b, _)| slice(b, e));
                     let db = biases.map(|(_, _, c)| slice(c, e));
                     // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
                     let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
-                    let gv = linear_raw(&xs, &gw, e_i, gb.as_deref());
                     let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
-                    let hv: Vec<f32> = match glu {
-                        Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
-                        Glu::ClampedSwiGlu { alpha, limit } => {
-                            gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
+                    let (gv, hv): (Vec<f32>, Vec<f32>) = match &gw {
+                        Some(gw) => {
+                            let gv = linear_raw(&xs, gw, e_i, gb.as_deref());
+                            let hv = match glu {
+                                Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
+                                Glu::ClampedSwiGlu { alpha, limit } => {
+                                    gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
+                                }
+                            };
+                            (gv, hv)
                         }
+                        // A plain expert: the activation of the up projection is the hidden vector.
+                        None => (Vec::new(), uv.iter().map(|u| act(*a, *u)).collect()),
                     };
                     let ov = linear_raw(&hv, &dw, e_d, db.as_deref());
                     if self.sites.is_some() {
                         gate_all.extend_from_slice(&gv);
                         up_all.extend_from_slice(&uv);
-                        act_all.extend(gv.iter().map(|g| act(*a, *g)));
+                        match gw {
+                            Some(_) => act_all.extend(gv.iter().map(|g| act(*a, *g))),
+                            None => act_all.extend_from_slice(&hv),
+                        }
                         hidden_all.extend_from_slice(&hv);
                         out_all.extend_from_slice(&ov);
                     }
@@ -848,7 +862,9 @@ impl<'a> Session<'a> {
                     }
                 }
                 for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {
-                    self.sub_site(prefix, &node.site, sub, v);
+                    if !(v.is_empty() && !*gated && sub == "gate") {
+                        self.sub_site(prefix, &node.site, sub, v);
+                    }
                 }
                 one(y.into_iter().map(|v| v as f32).collect())
             }

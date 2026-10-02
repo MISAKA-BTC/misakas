@@ -1,7 +1,7 @@
 {
   "format": "misaka.palw.model-adapter.v1",
   "id": "lfm2",
-  "doc": "LFM2 (Lfm2ForCausalLM; LiquidAI/LFM2-*): Llama's pre-norm residual (operator_norm, ffn_norm), a gated SiLU MLP (feed_forward.w1 gate, w3 up, w2 down; its width adjusted by block_auto_adjust_ff_dim, block_ffn_dim_multiplier and block_multiple_of exactly as HF does), and per layer either a gated SHORT CONVOLUTION (layer type `conv`: [B|C|x] = in_proj(x), a causal depthwise convolution of B*x of kernel conv_L_cache with NO activation, out_proj of C times it; conv_bias gives biases to all three, MIXER_SHORT_CONV_V1) or grouped-query attention with a per-head RMS norm on q and k before the rotation (`full_attention`; q_layernorm, k_layernorm, out_proj). The FINAL norm is `embedding_norm`; the head is tied (`tie_embedding`, the legacy spelling HF still reads, or `tie_word_embeddings`; the legacy `block_ff_dim` likewise names `intermediate_size`; the other legacy `block_*`/`conv_dim*`/`num_heads`/`use_pos_enc` keys are ones HF's class never reads). The layer types come from `layer_types` or, in older configs, from full_attn_idxs. Features: MIXER_SHORT_CONV_V1, CONV_DEPTHWISE_CAUSAL_V1, ATTN_GQA_V1, ATTN_QK_NORM_V1, ROPE_DEFAULT_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
+  "doc": "LFM2 (Lfm2ForCausalLM; LiquidAI/LFM2-*): Llama's pre-norm residual (operator_norm, ffn_norm), a gated SiLU MLP, no biases anywhere (feed_forward.w1 gate, w3 up, w2 down; its width adjusted by block_auto_adjust_ff_dim, block_ffn_dim_multiplier and block_multiple_of exactly as HF does), and per layer either a gated SHORT CONVOLUTION (layer type `conv`: [B|C|x] = in_proj(x), a causal depthwise convolution of B*x of kernel conv_L_cache with NO activation, out_proj of C times it; conv_bias gives biases to all three, MIXER_SHORT_CONV_V1) or grouped-query attention with a per-head RMS norm on q and k before the rotation (`full_attention`; q_layernorm, k_layernorm, out_proj). The FINAL norm is `embedding_norm`; the head is tied (`tie_embedding`, the legacy spelling HF still reads, or `tie_word_embeddings`; the legacy `block_ff_dim` likewise names `intermediate_size`; the other legacy `block_*`/`conv_dim*`/`num_heads`/`use_pos_enc` keys are ones HF's class never reads). The layer types come from `layer_types` or, in older configs, from full_attn_idxs. Features: MIXER_SHORT_CONV_V1, CONV_DEPTHWISE_CAUSAL_V1, ATTN_GQA_V1, ATTN_QK_NORM_V1, ROPE_DEFAULT_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
   "extends": [
     "decoder-core"
   ],
@@ -46,19 +46,16 @@
   },
   "vars": [
     {
-      "name": "no_mlp_bias",
-      "value": {
-        "$let": [
-          "_",
-          {
-            "$forbid": [
-              "mlp_bias",
-              "Lfm2MLP has no biases"
-            ]
-          },
-          false
-        ]
-      }
+      "name": "act",
+      "value": "Silu"
+    },
+    {
+      "name": "abias",
+      "value": false
+    },
+    {
+      "name": "mbias",
+      "value": false
     },
     {
       "name": "tied",

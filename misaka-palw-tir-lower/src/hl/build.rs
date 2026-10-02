@@ -546,18 +546,26 @@ impl Builder<'_> {
         let x = Ref::Carry(0);
         let mut h = match &ls.residual {
             Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, multiplier } => {
-                let n1 = match pre_mixer {
-                    Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
-                    None => x,
+                // `LAYER_FFN_ONLY_V1`: no mixer — the layer is `x + ffn(norm(x))`.
+                let mut h = if matches!(ls.mixer, Mixer::None) {
+                    if ls.ffn == Ffn::None || pre_mixer.is_some() || post_mixer.is_some() {
+                        return Err(LowerError::eval("internal: a layer with no mixer needs an FFN and no mixer norms"));
+                    }
+                    x
+                } else {
+                    let n1 = match pre_mixer {
+                        Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
+                        None => x,
+                    };
+                    let mut m = self.mixer(&mut bk, &ls.mixer, n1)?;
+                    if let Some(n) = post_mixer {
+                        m = self.full_norm(&mut bk, m, *n, "norm.post_mix", d, true)?;
+                    }
+                    if *multiplier != 1.0 {
+                        m = bk.f(Op::Scale { c: *multiplier }, vec![m], d, "mix.scaled");
+                    }
+                    bk.f(Op::Add, vec![x, m], d, "resid.mix")
                 };
-                let mut m = self.mixer(&mut bk, &ls.mixer, n1)?;
-                if let Some(n) = post_mixer {
-                    m = self.full_norm(&mut bk, m, *n, "norm.post_mix", d, true)?;
-                }
-                if *multiplier != 1.0 {
-                    m = bk.f(Op::Scale { c: *multiplier }, vec![m], d, "mix.scaled");
-                }
-                let mut h = bk.f(Op::Add, vec![x, m], d, "resid.mix");
                 if ls.ffn != Ffn::None {
                     let n2 = match pre_ffn {
                         Some(n) => self.full_norm(&mut bk, h, *n, "norm.ffn", d, true)?,
@@ -663,7 +671,44 @@ impl Builder<'_> {
             Mixer::Mamba2(mm) => self.mamba2(bk, mm, x),
             Mixer::RwkvTime(r) => self.rwkv_time(bk, r, x),
             Mixer::ShortConv(c) => self.short_conv(bk, c, x),
+            Mixer::None => Err(LowerError::eval("internal: a mixer was asked of a layer with none")),
+            Mixer::Parallel(branches) => self.parallel(bk, branches, x),
         }
+    }
+
+    /// **`MIXER_PARALLEL_BRANCH_V1`**: `Σ out_scale · mixer(in_scale · x)` over the branches, in order. The scales are
+    /// `Op::Scale` — a change of the value's scale key, not a node of the integer program. A branch of a kind a layer already has would share
+    /// its param names, so at most one of each is accepted; KV sharing across layers does not reach into a branch.
+    fn parallel(&mut self, bk: &mut Bk, branches: &[Branch], x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        if branches.len() < 2 || branches.len() > 4 {
+            return Err(LowerError::not_lowerable(format!("MIXER_PARALLEL_BRANCH_V1: {} branches (2 to 4 are modelled)", branches.len())));
+        }
+        let kind = |m: &Mixer| std::mem::discriminant(m);
+        for (i, b) in branches.iter().enumerate() {
+            if matches!(b.mixer, Mixer::None | Mixer::Parallel(_)) {
+                return Err(LowerError::not_lowerable("MIXER_PARALLEL_BRANCH_V1: a branch is a mixer, not an empty layer or another parallel mix"));
+            }
+            if matches!(&b.mixer, Mixer::Attention(a) if a.kv_share.is_some()) {
+                return Err(LowerError::not_lowerable("MIXER_PARALLEL_BRANCH_V1: KV sharing inside a branch"));
+            }
+            if branches[..i].iter().any(|o| kind(&o.mixer) == kind(&b.mixer)) {
+                return Err(LowerError::not_lowerable("MIXER_PARALLEL_BRANCH_V1: two branches of one kind share their params"));
+            }
+        }
+        let mut sum: Option<Ref> = None;
+        for (i, b) in branches.iter().enumerate() {
+            let xi = if b.in_scale != 1.0 { bk.f(Op::Scale { c: b.in_scale }, vec![x], d, &format!("branch{i}.in")) } else { x };
+            let mut y = self.mixer(bk, &b.mixer, xi)?;
+            if b.out_scale != 1.0 {
+                y = bk.f(Op::Scale { c: b.out_scale }, vec![y], d, &format!("branch{i}.out"));
+            }
+            sum = Some(match sum {
+                None => y,
+                Some(acc) => bk.f(Op::Add, vec![acc, y], d, &format!("branches.{i}")),
+            });
+        }
+        sum.ok_or_else(|| LowerError::eval("internal: no branches"))
     }
 
     fn ffn(&mut self, bk: &mut Bk, f: &Ffn, x: Ref) -> Result<Ref> {
@@ -1276,13 +1321,31 @@ impl Builder<'_> {
         let inner = m.heads * m.head_dim;
         let gn = m.groups * m.state;
         let conv_dim = inner + 2 * gn;
-        let z = self.linear(bk, x, "mamba2.in.z", inner, d, m.proj_bias, true, "mamba2.z")?;
-        let xbc = self.linear(bk, x, "mamba2.in.xbc", conv_dim, d, m.proj_bias, true, "mamba2.xbc")?;
-        let dt = self.linear(bk, x, "mamba2.in.dt", m.heads, d, m.proj_bias, true, "mamba2.dt_in")?;
-        let xbc = self.conv(bk, xbc, conv_dim, m.conv_kernel, m.conv_bias, "mamba2.conv")?;
-        let xs = bk.st(Op::Slice { start: 0, len: inner }, vec![xbc], inner);
-        let bb = bk.st(Op::Slice { start: inner, len: gn }, vec![xbc], gn);
-        let cc = bk.st(Op::Slice { start: inner + gn, len: gn }, vec![xbc], gn);
+        let (z, xs, bb, cc, dt) = if let Some(cs) = m.chunk_scales {
+            // `MAMBA2_MUP_V1`: each of the five chunks of the projection `[z | x | B | C | dt]` is scaled before the convolution. A depthwise
+            // convolution is channel-wise, so the x | B | C channels run as three convolutions of their own (the same function), each on its
+            // chunk's scaled input; `Op::Scale` is a change of scale key, not a node of the integer program.
+            let z = self.linear(bk, x, "mamba2.in.z", inner, d, m.proj_bias, true, "mamba2.z")?;
+            let z = bk.f(Op::Scale { c: cs[0] }, vec![z], inner, "mamba2.z_scaled");
+            let mut parts = Vec::with_capacity(3);
+            for (k, (name, ch)) in [("x", inner), ("b", gn), ("c", gn)].into_iter().enumerate() {
+                let p = self.linear(bk, x, &format!("mamba2.in.{name}"), ch, d, m.proj_bias, true, &format!("mamba2.{name}_in"))?;
+                let p = bk.f(Op::Scale { c: cs[k + 1] }, vec![p], ch, &format!("mamba2.{name}_scaled"));
+                parts.push(self.conv(bk, p, ch, m.conv_kernel, m.conv_bias, &format!("mamba2.conv.{name}"))?);
+            }
+            let dt = self.linear(bk, x, "mamba2.in.dt", m.heads, d, m.proj_bias, true, "mamba2.dt_in")?;
+            let dt = bk.f(Op::Scale { c: cs[4] }, vec![dt], m.heads, "mamba2.dt_scaled");
+            (z, parts[0], parts[1], parts[2], dt)
+        } else {
+            let z = self.linear(bk, x, "mamba2.in.z", inner, d, m.proj_bias, true, "mamba2.z")?;
+            let xbc = self.linear(bk, x, "mamba2.in.xbc", conv_dim, d, m.proj_bias, true, "mamba2.xbc")?;
+            let dt = self.linear(bk, x, "mamba2.in.dt", m.heads, d, m.proj_bias, true, "mamba2.dt_in")?;
+            let xbc = self.conv(bk, xbc, conv_dim, m.conv_kernel, m.conv_bias, "mamba2.conv")?;
+            let xs = bk.st(Op::Slice { start: 0, len: inner }, vec![xbc], inner);
+            let bb = bk.st(Op::Slice { start: inner, len: gn }, vec![xbc], gn);
+            let cc = bk.st(Op::Slice { start: inner + gn, len: gn }, vec![xbc], gn);
+            (z, xs, bb, cc, dt)
+        };
         let dtb = self.param("mamba2.dt_bias", vec![m.heads], true, Init::Uniform(-2.0, 0.0))?;
         let dt = bk.f(Op::Add, vec![dt, dtb], m.heads, "mamba2.dt_biased");
         let mut dt = bk.f(Op::Act(Act::Softplus), vec![dt], m.heads, "mamba2.dt");
@@ -1299,9 +1362,18 @@ impl Builder<'_> {
             Some("mamba2.scan"),
             vec![sid(st)],
         );
-        let w = self.param("mamba2.norm.gain", vec![inner], true, Init::Uniform(0.6, 1.4))?;
-        let y =
-            bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first: true, act: Act::Silu }, vec![y, z, w], inner, "mamba2.normed");
+        // `MAMBA2_GATE_NORM_VARIANTS_V1`: the gate and the norm in either order, or the gate alone.
+        let y = match m.norm_mode {
+            Mamba2Norm::GateFirst | Mamba2Norm::NormFirst => {
+                let w = self.param("mamba2.norm.gain", vec![inner], true, Init::Uniform(0.6, 1.4))?;
+                let gate_first = m.norm_mode == Mamba2Norm::GateFirst;
+                bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first, act: Act::Silu }, vec![y, z, w], inner, "mamba2.normed")
+            }
+            Mamba2Norm::Ungated => {
+                let g = bk.f(Op::Act(Act::Silu), vec![z], inner, "mamba2.gate");
+                bk.f(Op::Mul, vec![y, g], inner, "mamba2.gated")
+            }
+        };
         self.linear(bk, y, "mamba2.out", d, inner, m.proj_bias, true, "mamba2.out")
     }
 
@@ -1414,6 +1486,15 @@ impl Builder<'_> {
         let d = self.s.hidden_size;
         let (e, i) = (m.experts, m.intermediate);
         plain_act(m.act, "an expert MLP")?;
+        // `MOE_EXPERTS_PLAIN_V1`: a plain expert is `down(act(up(x)))`; the gated-only options do not apply to it.
+        if !m.gated && (m.expert_bias || m.input_scaled || !matches!(m.glu, Glu::Standard)) {
+            return Err(LowerError::not_lowerable("MOE_EXPERTS_PLAIN_V1: plain experts carry no biases, no clamped GLU and no input scaling"));
+        }
+        // `MOE_LATENT_PROJ_V1`: the routed experts work in a latent space; the router and the shared expert read the layer's input.
+        let dl = m.latent.unwrap_or(d);
+        if m.latent == Some(0) {
+            return Err(LowerError::not_lowerable("MOE_LATENT_PROJ_V1: a latent width of zero"));
+        }
         // A spec flag the lowering would not apply is a refusal, never a silent no-op (FR-26): a model whose router
         // carries one of these would otherwise compute a different function with no error anywhere.
         let r = &m.router;
@@ -1445,26 +1526,35 @@ impl Builder<'_> {
             Some("moe.route"),
             vec![],
         );
-        let gp = self.param("moe.experts.gate", vec![e, i, d], true, Init::Normal(W_STD))?;
-        let up = self.param("moe.experts.up", vec![e, i, d], true, Init::Normal(W_STD))?;
-        let dp = self.param("moe.experts.down", vec![e, d, i], true, Init::Normal(W_STD))?;
-        let mut ins = vec![x, Ref::Node(route, 0), Ref::Node(route, 1), gp, up, dp];
+        let xe = match m.latent {
+            Some(l) => self.linear(bk, x, "moe.latent_in", l, d, false, true, "moe.latent_in")?,
+            None => x,
+        };
+        let mut ins = vec![xe, Ref::Node(route, 0), Ref::Node(route, 1)];
+        if m.gated {
+            ins.push(self.param("moe.experts.gate", vec![e, i, dl], true, Init::Normal(W_STD))?);
+        }
+        ins.push(self.param("moe.experts.up", vec![e, i, dl], true, Init::Normal(W_STD))?);
+        ins.push(self.param("moe.experts.down", vec![e, dl, i], true, Init::Normal(W_STD))?);
         if m.expert_bias {
             ins.push(self.param("moe.experts.gate_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
             ins.push(self.param("moe.experts.up_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
-            ins.push(self.param("moe.experts.down_b", vec![e, d], true, Init::Uniform(-0.1, 0.1))?);
+            ins.push(self.param("moe.experts.down_b", vec![e, dl], true, Init::Uniform(-0.1, 0.1))?);
         }
         let mut y = bk.f(
-            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled },
+            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated },
             ins,
-            d,
+            dl,
             "moe.routed",
         );
+        if let Some(l) = m.latent {
+            y = self.linear(bk, y, "moe.latent_out", d, l, false, true, "moe.latent_out")?;
+        }
         if let Some(sh) = &m.shared {
             let spec = MlpSpec {
                 intermediate: sh.intermediate,
                 act: m.act,
-                gated: true,
+                gated: m.gated,
                 glu: Glu::Standard,
                 up_bias: false,
                 down_bias: false,
@@ -1483,8 +1573,8 @@ impl Builder<'_> {
     }
 }
 
-fn block_name(ls: &LayerSpec) -> String {
-    let mix = match &ls.mixer {
+fn mixer_name(m: &Mixer) -> String {
+    match m {
         Mixer::Attention(a) => {
             let mut s = "attn".to_string();
             match &a.position {
@@ -1503,7 +1593,13 @@ fn block_name(ls: &LayerSpec) -> String {
         Mixer::Mamba2(_) => "mamba2".into(),
         Mixer::ShortConv(_) => "shortconv".into(),
         Mixer::RwkvTime(r) => format!("rwkv{}", r.version),
-    };
+        Mixer::None => String::new(),
+        Mixer::Parallel(bs) => bs.iter().map(|b| mixer_name(&b.mixer)).collect::<Vec<_>>().join("|"),
+    }
+}
+
+fn block_name(ls: &LayerSpec) -> String {
+    let mix = mixer_name(&ls.mixer);
     let ffn = match &ls.ffn {
         Ffn::None => String::new(),
         Ffn::Mlp(_) => "+mlp".into(),
@@ -1511,7 +1607,8 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::RwkvChannel(_) => "+cmix".into(),
         Ffn::MlpMoe(_) => "+mlp|moe".into(),
     };
-    format!("{mix}{ffn}")
+    // A layer with no mixer is its FFN alone: `mlp`, `moe`.
+    if mix.is_empty() { ffn.trim_start_matches('+').to_string() } else { format!("{mix}{ffn}") }
 }
 
 /// An activation a node applies to its input alone. xIELU reads parameters of the layer (`Op::Xielu`, built only by a dense MLP's

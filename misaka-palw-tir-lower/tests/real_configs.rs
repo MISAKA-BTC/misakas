@@ -239,6 +239,89 @@ fn lfm2_short_convolutions_and_six_attention_layers() {
     assert!(parse_config_str(&both).is_err());
 }
 
+/// **Nemotron-H** (data adapter; `LAYER_FFN_ONLY_V1`, `MOE_EXPERTS_PLAIN_V1`): the 8B's legacy `hybrid_override_pattern` string (24 Mamba-2, 4 attention
+/// without rotary embedding, 24 plain relu^2 MLPs; every layer ONE block under ONE norm), and the Nano's MoE layers: DeepSeek-V3's sigmoid router over
+/// 128 PLAIN experts with a plain shared expert, no latent projection.
+#[test]
+fn nemotron_h_is_one_block_per_layer() {
+    let (s, p) = ok("nemotron-h-8b-base-8k");
+    assert_eq!(s.layers.len(), 52);
+    let kinds = |f: &dyn Fn(&LayerSpec) -> bool| s.layers.iter().filter(|l| f(l)).count();
+    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Mamba2(m) if m.groups == 8 && m.norm_groups == 8 && m.norm_mode == Mamba2Norm::GateFirst && m.dt_min == 0.0 && !m.proj_bias)), 24);
+    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::None) && a.heads == 32 && a.kv_heads == 8)), 4);
+    assert_eq!(kinds(&|l| matches!((&l.mixer, &l.ffn), (Mixer::None, Ffn::Mlp(m)) if !m.gated && m.act == Act::Relu2 && m.intermediate == 21504)), 24);
+    // A mixer layer has one pre-norm before its mixer and none before an FFN it does not have; an FFN-only layer has the norm before its FFN.
+    assert!(s.layers.iter().all(|l| match (&l.mixer, &l.residual) {
+        (Mixer::None, Residual::Sequential { pre_mixer, pre_ffn, .. }) => pre_mixer.is_none() && pre_ffn.is_some(),
+        (_, Residual::Sequential { pre_mixer, pre_ffn, .. }) => pre_mixer.is_some() && pre_ffn.is_none() && l.ffn == Ffn::None,
+        _ => false,
+    }));
+    assert!(!s.head.tied);
+    assert_eq!(s.hf.names["embed"], "backbone.embeddings");
+    assert_eq!(s.hf.names["norm.mix"], s.hf.names["norm.ffn"]);
+    assert!(s.hf.ignored_prefixes.iter().any(|p| p == "mtp."));
+    assert_eq!(kinds(&|_| true), 52);
+    assert_eq!(kinds(&|l| matches!(l.mixer, Mixer::None)), 24);
+    assert_eq!(p.blocks.len() - 2, 3, "three block kinds: Mamba-2, attention, MLP");
+    let (s, p) = ok("nemotron-3-nano-30b-a3b");
+    let moes = || s.layers.iter().filter_map(|l| if let Ffn::Moe(m) = &l.ffn { Some(m) } else { None });
+    assert_eq!(moes().count(), 23);
+    let m = moes().next().expect("a MoE layer");
+    assert!(!m.gated && m.latent.is_none());
+    assert_eq!((m.experts, m.top_k, m.intermediate), (128, 6, 1856));
+    assert_eq!(m.shared.as_ref().map(|sh| (sh.intermediate, sh.sigmoid_gate)), Some((3712, false)));
+    assert!(m.router.selection_bias && m.router.normalize && m.router.groups.is_none() && m.router.scale == 2.5);
+    assert_eq!(m.act, Act::Relu2);
+    assert!(p.params.iter().any(|d| d.name == "moe.experts.up") && !p.params.iter().any(|d| d.name == "moe.experts.gate"));
+    // The latent projection widens the routed experts' params to the latent width and adds two linears.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/nemotron-3-nano-30b-a3b.json")).unwrap();
+    let latent = parse_config_str(&cfg.replace("\"n_group\": 1,", "\"n_group\": 1, \"moe_latent_size\": 1024,")).unwrap();
+    let hl = hl::build_program(&latent).unwrap();
+    let shape = |n: &str| hl.params.iter().find(|d| d.name == n).map(|d| d.shape.clone());
+    assert_eq!(shape("moe.experts.up"), Some(vec![128, 1856, 1024]));
+    assert_eq!(shape("moe.experts.down"), Some(vec![128, 1024, 1856]));
+    assert_eq!(shape("moe.latent_in.w"), Some(vec![1024, 2688]));
+    assert_eq!(shape("moe.latent_out.w"), Some(vec![2688, 1024]));
+    hf_weights::bind(&latent, &hl).unwrap();
+    // A pattern character the architecture does not have is refused, and so is a pattern that disagrees with an explicit list.
+    assert!(parse_config_str(&cfg.replace("MEMEM*", "MEMEMX")).is_err());
+}
+
+/// **Falcon-H1** (data adapter; `MIXER_PARALLEL_BRANCH_V1`, `SCALE_MUP_V1`): a Mamba-2 mixer and attention in parallel in every layer, each with its own
+/// input and output scale; the muP multipliers placed where the model applies them (embedding, logits, the five chunks of the Mamba-2 projection, the
+/// attention key folded into the score scale, the MLP's gate and down folded into the weights).
+#[test]
+fn falcon_h1_parallel_mamba_and_attention_with_mup() {
+    let (s, p) = ok("falcon-h1-0.5b-instruct");
+    assert_eq!(s.layers.len(), 36);
+    assert_eq!(s.embedding.scale, 5.656854249492381);
+    assert_eq!(s.head.logit_scale, 0.0390625);
+    assert!(s.head.tied);
+    let Mixer::Parallel(bs) = &s.layers[0].mixer else { panic!("{:?}", s.layers[0].mixer) };
+    assert_eq!(bs.len(), 2);
+    let Mixer::Mamba2(m) = &bs[0].mixer else { panic!("{:?}", bs[0].mixer) };
+    assert_eq!((m.heads, m.head_dim, m.groups, m.state, m.conv_kernel), (24, 64, 1, 128, 4));
+    assert_eq!(m.norm_mode, Mamba2Norm::Ungated);
+    assert_eq!(m.chunk_scales, Some([0.3535533905932738, 0.25, 0.3535533905932738, 0.5, 0.3535533905932738]));
+    assert_eq!((bs[0].in_scale, bs[0].out_scale), (1.0, 0.23570226039551587));
+    let Mixer::Attention(a) = &bs[1].mixer else { panic!("{:?}", bs[1].mixer) };
+    assert_eq!((a.heads, a.kv_heads, a.head_dim), (8, 2, 64));
+    // The key multiplier is folded into the score scale: k·0.17677… is `scale = 0.17677… / √64`.
+    assert!((a.scale - 0.1767766952966369 / 8.0).abs() < 1e-15, "{}", a.scale);
+    assert_eq!((bs[1].in_scale, bs[1].out_scale), (1.0, 0.9375));
+    // The MLP's multipliers are weights expressions on the gate and down projections.
+    assert!(s.hf.weights.contains_key("mlp.gate.w") && s.hf.weights.contains_key("mlp.down.w"), "{:?}", s.hf.weights.keys().collect::<Vec<_>>());
+    // Split projections for the chunk scales: z, x, B, C, dt and three convolutions.
+    for n in ["mamba2.in.z.w", "mamba2.in.x.w", "mamba2.in.b.w", "mamba2.in.c.w", "mamba2.in.dt.w", "mamba2.conv.x.w", "mamba2.conv.b.w", "mamba2.conv.c.w"] {
+        assert!(p.params.iter().any(|d| d.name == n), "{n}");
+    }
+    // Disagreeing biases of the two Mamba-2 projections are refused.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/falcon-h1-0.5b-instruct.json")).unwrap();
+    assert!(parse_config_str(&cfg.replace("\"projectors_bias\": false", "\"projectors_bias\": true")).is_err());
+    // A non-default dt clamp is refused (HF's prefill clamps, its decode does not).
+    assert!(parse_config_str(&cfg.replace("\"vocab_size\"", "\"time_step_limit\": [0.01, 100.0], \"vocab_size\"")).is_err());
+}
+
 /// **PaliGemma as its text decoder** (`ATTN_PREFIX_LM_V1`, the text-only path): a Gemma-1 decoder (MQA, head_dim 256, GeGLU, (1+w) norms,
 /// tied head) under `language_model.`; the spec says it is the prefix-LM model's text-only causal path, and binding image rows to it is
 /// refused by name.

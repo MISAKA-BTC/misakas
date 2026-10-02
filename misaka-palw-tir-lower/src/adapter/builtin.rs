@@ -51,6 +51,8 @@ pack!(
     "bitnet",
     "apertus",
     "lfm2",
+    "nemotron-h",
+    "falcon-h1",
     "bert",
     "bloom",
     "clip-text",

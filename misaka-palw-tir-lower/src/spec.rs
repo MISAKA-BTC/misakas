@@ -19,6 +19,14 @@ fn silu() -> Act {
     Act::Silu
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn infinity() -> f64 {
     f64::INFINITY
 }
@@ -471,6 +479,32 @@ pub struct Mamba2Spec {
     pub dt_max: f64,
     /// Leading `2·d_mlp` rows of `in_proj` that HF discards.
     pub d_mlp: usize,
+    /// **`MAMBA2_GATE_NORM_VARIANTS_V1`**: how the output gate and the RMS norm combine ([`Mamba2Norm`]).
+    #[serde(default, skip_serializing_if = "Mamba2Norm::is_default")]
+    pub norm_mode: Mamba2Norm,
+    /// **`MAMBA2_MUP_V1`** (Falcon-H1): multipliers of the five chunks of the projection `[z | x | B | C | dt]`, applied before the convolution
+    /// (HF's `mup_vector`). The convolution is channel-wise, so with scales the x, B and C channels are three linears and three convolutions
+    /// of their own, each on its scaled chunk (the same function); the scales are `Op::Scale`, a change of scale key and no node of the integer program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_scales: Option<[f64; 5]>,
+}
+
+/// How a Mamba-2 mixer's output gate `z` and its RMS norm combine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mamba2Norm {
+    /// `norm(y · silu(z))` — the gate first (Mamba-2, Zamba2, Bamba, Nemotron-H, Granite-hybrid).
+    #[default]
+    GateFirst,
+    /// `norm(y) · silu(z)` — the norm first (Falcon-H1 with `mamba_norm_before_gate`).
+    NormFirst,
+    /// `y · silu(z)`, no norm and no gain (Falcon-H1 without `mamba_rms_norm`).
+    Ungated,
+}
+
+impl Mamba2Norm {
+    pub fn is_default(&self) -> bool {
+        *self == Mamba2Norm::GateFirst
+    }
 }
 
 /// A gated short convolution (LFM2's `Lfm2ShortConv`): the kernel of the depthwise causal convolution, and one flag that gives biases to
@@ -513,6 +547,22 @@ pub enum Mixer {
     /// **`MIXER_SHORT_CONV_V1`** (LFM2): `[B | C | x] = in_proj(x)`, `u = B ⊙ x`, `v = causal_depthwise_conv(u)` (no activation),
     /// `out_proj(C ⊙ v)`.
     ShortConv(ShortConvSpec),
+    /// **`LAYER_FFN_ONLY_V1`** (Nemotron-H's `mlp` and `moe` layers): no mixer — the layer is its FFN under its own pre-norm. Only under
+    /// [`Residual::Sequential`] with no mixer norms, and the layer must have an FFN.
+    None,
+    /// **`MIXER_PARALLEL_BRANCH_V1`** (Falcon-H1): the layer's mixer is the sum of several branches reading the same normed input,
+    /// each with its own input and output scale. At most one branch of each kind; no KV sharing inside.
+    Parallel(Vec<Branch>),
+}
+
+/// One branch of a [`Mixer::Parallel`]: `out_scale · mixer(in_scale · x)`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Branch {
+    pub mixer: Mixer,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub in_scale: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub out_scale: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -644,6 +694,14 @@ pub struct MoeSpec {
     /// outputs are summed unweighted.
     #[serde(default)]
     pub input_scaled: bool,
+    /// **`MOE_EXPERTS_PLAIN_V1`** (Nemotron-H): `false` — the experts (and the shared expert) are plain MLPs, `down(act(up(x)))`, with no gate
+    /// projection. Experts have no biases then.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub gated: bool,
+    /// **`MOE_LATENT_PROJ_V1`** (Nemotron-H's `moe_latent_size`): the routed experts run in a latent space of this width — `fc1_latent_proj`
+    /// before them, `fc2_latent_proj` after — while the router and the shared expert read the layer's input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latent: Option<usize>,
 }
 
 /// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,

@@ -311,15 +311,7 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             }
         }
     }
-    match &ls.mixer {
-        Mixer::Attention(a) => attention(m, a)?,
-        Mixer::Mla(a) => mla(m, a)?,
-        Mixer::GatedDeltaNet(g) => gdn(m, g)?,
-        Mixer::Mamba(mm) => mamba(m, mm)?,
-        Mixer::Mamba2(mm) => mamba2(m, mm)?,
-        Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
-        Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
-    }
+    bind_mixer(m, spec, &ls.mixer, rescale)?;
     match &ls.ffn {
         Ffn::None => {}
         Ffn::Mlp(mm) => mlp(m, mm, "mlp", m.st.mlp)?,
@@ -334,6 +326,26 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             // Gemma-4 stores the router's gain as a bare vector (`router.scale`).
             if mm.router_norm.gain != Gain::None {
                 m.put("moe.router_norm.gain", Src::t(m.role("moe.router_norm")?))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The params of one mixer (a [`Mixer::Parallel`]'s branches each in turn; [`Mixer::None`] has none).
+fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>) -> Result<()> {
+    match mixer {
+        Mixer::Attention(a) => attention(m, a)?,
+        Mixer::Mla(a) => mla(m, a)?,
+        Mixer::GatedDeltaNet(g) => gdn(m, g)?,
+        Mixer::Mamba(mm) => mamba(m, mm)?,
+        Mixer::Mamba2(mm) => mamba2(m, mm)?,
+        Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
+        Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
+        Mixer::None => {}
+        Mixer::Parallel(bs) => {
+            for b in bs {
+                bind_mixer(m, spec, &b.mixer, rescale)?;
             }
         }
     }
@@ -594,11 +606,23 @@ fn mamba(m: &mut M, s: &MambaSpec) -> Result<()> {
 
 fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
     let inner = s.heads * s.head_dim;
-    let conv_dim = inner + 2 * s.groups * s.state;
+    let gn = s.groups * s.state;
+    let conv_dim = inner + 2 * gn;
     let off = 2 * s.d_mlp;
     let w = m.w("mamba2.in")?;
-    let parts =
-        [("mamba2.in.z", off, inner), ("mamba2.in.xbc", off + inner, conv_dim), ("mamba2.in.dt", off + inner + conv_dim, s.heads)];
+    // `MAMBA2_MUP_V1` (chunk scales): x, B and C are three linears and three convolutions of their own (see the HL builder).
+    let split = s.chunk_scales.is_some();
+    let parts: Vec<(&str, usize, usize)> = if split {
+        vec![
+            ("mamba2.in.z", off, inner),
+            ("mamba2.in.x", off + inner, inner),
+            ("mamba2.in.b", off + 2 * inner, gn),
+            ("mamba2.in.c", off + 2 * inner + gn, gn),
+            ("mamba2.in.dt", off + inner + conv_dim, s.heads),
+        ]
+    } else {
+        vec![("mamba2.in.z", off, inner), ("mamba2.in.xbc", off + inner, conv_dim), ("mamba2.in.dt", off + inner + conv_dim, s.heads)]
+    };
     for (name, start, len) in parts {
         m.put(format!("{name}.w"), w.clone().rows(Pick::Range { start, len }))?;
         if s.proj_bias {
@@ -606,11 +630,24 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
             m.put(format!("{name}.b"), b.rows(Pick::Range { start, len }))?;
         }
     }
-    conv(m, "mamba2.conv", conv_dim, s.conv_kernel, s.conv_bias)?;
+    if split {
+        let r = m.role("mamba2.conv")?;
+        for (name, start, ch) in [("x", 0, inner), ("b", inner, gn), ("c", inner + gn, gn)] {
+            let pick = Pick::Range { start, len: ch };
+            m.put(format!("mamba2.conv.{name}.w"), Src::t(format!("{r}.weight")).rows(pick.clone()).reshape(vec![ch, s.conv_kernel]))?;
+            if s.conv_bias {
+                m.put(format!("mamba2.conv.{name}.b"), Src::t(format!("{r}.bias")).rows(pick))?;
+            }
+        }
+    } else {
+        conv(m, "mamba2.conv", conv_dim, s.conv_kernel, s.conv_bias)?;
+    }
     m.put("mamba2.dt_bias", Src::t(m.role("mamba2.dt_bias")?))?;
     m.put("mamba2.A", Src::t(m.role("mamba2.A_log")?).map(MapFn::NegExp))?;
     m.put("mamba2.D", Src::t(m.role("mamba2.D")?))?;
-    m.put("mamba2.norm.gain", Src::t(format!("{}.weight", m.role("mamba2.norm")?)))?;
+    if s.norm_mode != Mamba2Norm::Ungated {
+        m.put("mamba2.norm.gain", Src::t(format!("{}.weight", m.role("mamba2.norm")?)))?;
+    }
     m.lin("mamba2.out", "mamba2.out", s.proj_bias)
 }
 
@@ -706,6 +743,13 @@ fn mlp(m: &mut M, s: &MlpSpec, pfx: &str, layout: MlpLayout) -> Result<()> {
 fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     let (e, i) = (s.experts, s.intermediate);
     m.lin("moe.router", "moe.router", s.router.linear_bias)?;
+    if s.latent.is_some() {
+        m.lin("moe.latent_in", "moe.latent_in", false)?;
+        m.lin("moe.latent_out", "moe.latent_out", false)?;
+    }
+    if !s.gated && m.st.experts != MlpLayout::Separate {
+        return Err(LowerError::not_lowerable("MOE_EXPERTS_PLAIN_V1: plain experts are read from one stored module per expert (the `Separate` layout)"));
+    }
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;
     }
@@ -715,6 +759,9 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     match m.st.experts {
         MlpLayout::Separate => {
             for (name, role) in [("moe.experts.gate", "moe.gate"), ("moe.experts.up", "moe.up"), ("moe.experts.down", "moe.down")] {
+                if !s.gated && role == "moe.gate" {
+                    continue;
+                }
                 let r = m.role(role)?;
                 // Pre-quantised experts keep their integers, one stored module per expert.
                 let src = match m.quantised(role)? {
@@ -758,7 +805,7 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         let spec = MlpSpec {
             intermediate: sh.intermediate,
             act: s.act,
-            gated: true,
+            gated: s.gated,
             glu: Glu::Standard,
             up_bias: false,
             down_bias: false,

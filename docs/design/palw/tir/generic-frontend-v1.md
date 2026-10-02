@@ -662,6 +662,56 @@ the T5 fixtures), and the real long-t5-local-base lowers and is ADMITTED at 512 
 dense `[h, L, L]` score is the lowering's, whatever the band: at the model's own 4,096 – 16,384 tokens the leaf cap refuses it by name, and the
 banded form (`[L, 2r + 1]` scores through a gather) is the lever.
 
+### 9.13 LFM2, Nemotron-H and Falcon-H1 (`MIXER_SHORT_CONV_V1`, `LAYER_FFN_ONLY_V1`, `MOE_EXPERTS_PLAIN_V1`, `MOE_LATENT_PROJ_V1`, `MIXER_PARALLEL_BRANCH_V1`, `SCALE_MUP_V1`, `MAMBA2_GATE_NORM_VARIANTS_V1`, `MAMBA2_MUP_V1`; FR-15, FR-14, FR-11)
+
+Three hybrid families, each a data adapter (`lfm2`, `nemotron-h`, `falcon-h1`; their refusals deleted from `refusals.json`) over spec features
+that lower to the existing ops: **no primitive, no court kernel, no consensus change**, and every earlier golden row byte-identical (the
+Mamba-2 and MoE builders were generalised, not rewritten: the old paths produce the same nodes).
+
+**LFM2** (`Mixer::ShortConv`). `[B | C | x] = in_proj(x)`, `u = B ⊙ x`, a causal depthwise convolution of `u` with NO activation,
+`out_proj(C ⊙ v)`. The three chunks of `in_proj` are three linears (their rows sliced at load), the convolution is the existing
+`CausalConv1d { act: None }`, the two products are `Mul`. The adapter derives the MLP width as HF does (`block_auto_adjust_ff_dim`,
+`block_ffn_dim_multiplier`, `block_multiple_of`) and reads the legacy spellings the published configs carry (`tie_embedding`,
+`block_ff_dim`; the other legacy `block_*`/`conv_dim*` keys are ones HF's class never reads). Evidence: tiny HF LFM2 (float `1.0·10⁻⁵` on
+logits of scale 20.7, integer top-1 0.986, KL 6·10⁻⁴), the real 1.2B configuration (10 short-convolution layers and 6 attention layers, MLP
+width 8192) ADMITTED at its real window (7.6·10⁹ MACs a position at `H = W = 262,144`, 14,208 step leaves, 3.0 GiB of state).
+
+**Nemotron-H** (`Mixer::None`, `MoeSpec.gated`, `MoeSpec.latent`). EVERY layer is one block under ONE norm: Mamba-2, attention with no rotary
+embedding, a plain relu² MLP, or a routed MoE. `Mixer::None` is a layer that is its FFN (`x + ffn(norm(x))`); a mixer layer has no FFN. The
+MoE is DeepSeek-V3's router (sigmoid, a selection-only correction bias, renormalised, `routed_scaling_factor`; groups only when `n_group >
+1`) over PLAIN experts `down(relu²(up(x)))` — `Op::MoeExperts { gated: false }`, whose lowering skips the gate projection and the product (the
+table over the up projection is the hidden vector) — with a plain shared expert, and an optional latent space (`moe_latent_size`: two linears
+around the routed experts; the router and the shared expert read the layer's input). The layer types come from `layers_block_type` or the legacy
+string `hybrid_override_pattern` (`M E * -`): two small adapter-language additions, `$chars` (a string as the list of its characters) and a
+`key` for `$layer_types`. The checkpoint's per-expert tensors are read as they are stored; its `mtp.*` tensors are ones HF's class does not load.
+*The dt clamp.* transformers 5.17's chunked prefill — and the first token of a cached decode, which has no previous state — clamps the Mamba-2
+step size at `time_step_min` (0.001), while its recurrent decode and the original code do not. The program is per position, so it follows the
+decode and the original: `dt_min = 0`. The fixtures take HF's decode logits as the reference and a `dt_bias` that keeps the step size above the
+clamp (the models' own init puts `softplus(dt_bias)` in 0.001 – 0.1, where the prefill clamp is live and moves the logits by `3·10⁻⁴`, found by
+bisecting the latent fixture); a model whose step sizes sit below 0.001 differs from HF's prefill, as from its own decode. Evidence: tiny HF
+models (the plain one: float `1.7·10⁻⁶` on logits of scale 3.3, integer top-1 0.972, KL 1.3·10⁻⁴; the latent, grouped-routing one:
+`1.4·10⁻⁶`, 0.972, 8·10⁻⁵), the real Nemotron-H-8B (24 Mamba-2, 4 attention, 24 MLP layers) and an MoE-shaped Nano configuration (23 Mamba-2, 23
+MoE of 128 plain experts, 6 attention) ADMITTED at the window 262,144 (1.62·10¹⁰ and 1.61·10¹⁰ MACs a position, 45,616 and 35,123 step leaves,
+4.1 and 1.55 GiB of state).
+
+**Falcon-H1** (`Mixer::Parallel`, `Mamba2Spec.{norm_mode, chunk_scales}`). Every layer runs a Mamba-2 mixer and attention IN PARALLEL on the
+layer's one normed input and adds them to the residual, then a gated MLP under its own norm. Each branch carries an input and an output scale
+(`Op::Scale`: a change of scale key, no node of the integer program), which is where the muP multipliers go, one feature each: the embedding
+and the logits (the existing scalars), the branches (`ssm_in/out_multiplier`, `attention_in/out_multiplier`), the Mamba-2 projection's five chunks
+`[z | x | B | C | dt]` (`ssm_multipliers`, before the convolution: a depthwise convolution is channel-wise, so with chunk scales x, B and C are
+three linears and three convolutions of their own, the same function), the attention key (`key_multiplier`, folded into the score scale: the
+rotation is linear), and the MLP's gate and down (`mlp_multipliers`, folded exactly into the weights and biases by the adapter's weights
+expressions: data only). The Mamba-2 output gate has three forms (`MAMBA2_GATE_NORM_VARIANTS_V1`): `norm(y · silu(z))`, `norm(y) · silu(z)`,
+or `y · silu(z)` with no norm. The scan's step-size pattern absorbs a constant scale on its projection (the dt chunk's). Evidence: three tiny HF
+models, one per gate form, every multiplier away from 1 in the first (float `3.6·10⁻⁷`, `1.3·10⁻⁶`, `1.6·10⁻⁶`; integer top-1 0.986, KL ≤ 2·10⁻⁴),
+and the real Falcon-H1-0.5B configuration ADMITTED (1.0·10¹⁰ MACs a position, 14,621 step leaves, 4.5 GiB of state; one layer is a block of
+488 nodes under the limit of 512, and the layer's mixer half / FFN half split of §9.6 is the lever if a family needs more).
+
+*Honest scope.* The real-checkpoint configurations are written from the published ones (hand-written, as the other `tests/configs/real`
+files); no weights beyond the tiny HF fixtures were run. Falcon-H1's `mamba_proj_bias` and `projectors_bias` that differ, a non-default
+`time_step_limit` (HF's prefill clamps, its decode does not) and `hidden_act` other than silu are refused by name; Nemotron-H's `mlp_bias`
+with a MoE layer is refused (the shared expert's and the latent projections' biases are not modelled).
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

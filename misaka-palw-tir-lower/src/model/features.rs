@@ -278,11 +278,15 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Missing, [], NoReq, [], "Mllama's decoder layers reading vision states; needs a second history input."),
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
     feature!("ATTN_BLOCKSPARSE_PATTERN_V1", Attention, "a fixed block-sparse pattern of visible keys", Missing, [], NoReq, [], "Phi-3-small."),
-    feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches and logits", Missing, [], NoReq, [], "Per-model constants over existing multiplier features; an adapter once a rule names them."),
+    feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches, projection chunks and logits", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1's multipliers, each realised by the feature that already scales that place: the embedding and the logits (EMBED_SCALE_V1, the head's logit scale), a branch's input and output (an `Op::Scale` on the branch, a change of scale key and no node of the integer program), the Mamba-2 projection's five chunks (MAMBA2_MUP_V1), the MLP's gate and down (folded exactly into the gate and down weights by the adapter's weights expressions) and the attention key (folded into the score scale)."),
     feature!("REFERENCE_REMOTE_CODE_V1", Storage, "a reference implementation that is remote Python code outside transformers", Missing, [], NoReq, [], "The semantics cannot be pinned to a library version; confirm against the module before an adapter may claim it."),
     feature!("WEIGHTS_QKV_MP_PARTITIONED_V1", Storage, "mp_num-partitioned fused qkv weight layout", Missing, [], NoReq, [], "CodeGen."),
-    feature!("LAYER_FFN_ONLY_V1", Mixer, "layers that are a single block (a mixer or an FFN, not both)", Missing, [], NoReq, [], "Nemotron-H."),
-    feature!("MIXER_PARALLEL_BRANCH_V1", Mixer, "two mixers in parallel in one layer, summed", Missing, [], NoReq, [], "Falcon-H1."),
+    feature!("LAYER_FFN_ONLY_V1", Mixer, "layers that are a single block (a mixer or an FFN, not both)", Implemented, [], NoReq, ["fidelity_tiny::nemotron_h", "hf_fixtures::nemotron_h"], "Nemotron-H: each layer is Mamba-2, attention, an MLP or a MoE under ONE pre-norm and its residual add; an FFN-only layer is `x + ffn(norm(x))`, a mixer-only layer `x + mixer(norm(x))`. `Mixer::None` with an FFN; no node of its own."),
+    feature!("MIXER_PARALLEL_BRANCH_V1", Mixer, "several mixers in parallel in one layer, summed", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1: x + (ssm_out · mamba2(ssm_in · n) + attn_out · attention(attn_in · n)), n the layer's one normed input, then the layer's MLP. Each branch has its own input and output scale; a sum of the branch outputs (an Add) and nothing else."),
+    feature!("MOE_EXPERTS_PLAIN_V1", Ffn, "routed experts (and the shared expert) that are plain MLPs, down(act(up(x))), with no gate projection", Implemented, [], NoReq, ["fidelity_tiny::nemotron_h", "hf_fixtures::nemotron_h"], "Nemotron-H's experts (relu^2): the lowering skips the gate projection and the product; the table over the up projection is the hidden vector."),
+    feature!("MOE_LATENT_PROJ_V1", Ffn, "the routed experts run in a latent space: a projection before them and one after, the router and the shared expert on the layer's input", Implemented, [], NoReq, ["fidelity_tiny::nemotron_h_latent", "hf_fixtures::nemotron_h_latent"], "Nemotron-H's moe_latent_size (fc1_latent_proj, fc2_latent_proj): two linears around the MoE experts; the experts' width is the latent width."),
+    feature!("MAMBA2_GATE_NORM_VARIANTS_V1", Mixer, "the Mamba-2 gate and RMS norm in either order, or the gate alone", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "norm(y*silu(z)) (Mamba-2, Nemotron-H), norm(y)*silu(z) (Falcon-H1 with mamba_norm_before_gate) or y*silu(z) with no norm (Falcon-H1 without mamba_rms_norm): the existing gated RMS norm with its order flag, or an activation and a Mul."),
+    feature!("MAMBA2_MUP_V1", Mixer, "a multiplier on each of the five chunks [z | x | B | C | dt] of the Mamba-2 projection, before the convolution", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1's mup_vector (ssm_multipliers). The depthwise convolution is channel-wise, so x, B and C run as three linears and three convolutions of their own, each on its scaled chunk: the same function, with `Op::Scale` (a scale-key change) for the multipliers."),
     feature!("ATTN_SHARED_BLOCK_V1", Attention, "one attention block's weights reused at several depths", Missing, [], NoReq, [], "Zamba2."),
     // ───────────────────────────── storage ─────────────────────────────
     feature!("QUANT_GPTQ_V1", Storage, "GPTQ-quantised projections, lowered from the stored integers", Implemented, [], NoReq, ["quantized::gptq_b4_g128_act_asym"], "Grouped integer matmul with the checkpoint's scales."),
@@ -369,6 +373,122 @@ fn rope_features(u: &mut Uses, r: &crate::rope::RopeSpec, head_dim: usize, layer
     }
 }
 
+/// The features one mixer uses (a [`Mixer::Parallel`] recurses into its branches).
+fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
+    match m {
+        Mixer::Attention(a) => {
+            let ratio = if a.kv_heads == 0 { 0 } else { a.heads / a.kv_heads };
+            u.add("ATTN_GQA_V1", lay, format!("{}q/{}kv × {} (group {ratio})", a.heads, a.kv_heads, a.head_dim));
+            if let Some(w) = a.window {
+                u.add("ATTN_SLIDING_V1", lay, format!("window {w}"));
+            }
+            if let Some(c) = a.chunk {
+                u.add("ATTN_CHUNKED_V1", lay, format!("chunk {c}"));
+            }
+            if a.softcap.is_some() {
+                u.add("ATTN_SOFTCAP_V1", lay, "");
+            }
+            if a.sinks {
+                u.add("ATTN_SINKS_V1", lay, "");
+            }
+            if a.output_gate {
+                u.add("ATTN_OUTPUT_GATE_V1", lay, "");
+            }
+            if let Some(g) = &a.gate {
+                u.add("ATTN_OUTPUT_GATE_SEPARATE_V1", lay, format!("{:?}{}", g.act, if g.per_head { " per head" } else { "" }));
+            }
+            if a.v_scale != 1.0 {
+                u.add("ATTN_VALUE_SCALE_V1", lay, "");
+            }
+            if let Some(n) = &a.o_norm {
+                u.add("SUBLAYER_NORMS_V1", lay, "the attention output");
+                norm_features(u, n, lay);
+            }
+            if let Some(q) = &a.qk_norm {
+                u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
+                norm_features(u, &q.norm, lay);
+                u.add("NORM_GROUPED_V1", lay, "");
+                if a.qk_norm_after_rope {
+                    u.add("ATTN_QK_NORM_POST_ROPE_V1", lay, "");
+                }
+            }
+            if let Some(v) = &a.v_norm {
+                u.add("ATTN_V_NORM_V1", lay, "");
+                norm_features(u, &v.norm, lay);
+            }
+            if a.clip_qkv.is_some() {
+                u.add("ATTN_CLIP_QKV_V1", lay, "");
+            }
+            if a.q_temperature.is_some() {
+                u.add("ATTN_QUERY_TEMPERATURE_V1", lay, "");
+            }
+            if a.kv_share.is_some() {
+                u.add("ATTN_KV_SHARE_V1", lay, "");
+            }
+            if a.v_from_k {
+                u.add("ATTN_K_EQ_V_V1", lay, "");
+            }
+            if a.q_bias || a.k_bias || a.v_bias || a.o_bias {
+                u.add("ATTN_BIAS_V1", lay, "");
+            }
+            if let Some(sp) = &a.sparse {
+                u.add("ATTN_SPARSE_BLOCK_V1", lay, format!("block {} × top {} of {}×{} index", sp.ratio, sp.top_blocks, sp.index_heads, sp.index_dim));
+                norm_features(u, &sp.q_norm, lay);
+                norm_features(u, &sp.k_norm, lay);
+            }
+            match &a.position {
+                Position::Rope(r) => rope_features(u, r, a.head_dim, l),
+                Position::Alibi(_) => u.add("POS_ALIBI_V1", lay, ""),
+                Position::None => u.add("POS_NOPE_V1", lay, ""),
+            }
+        }
+        Mixer::Mla(m) => {
+            u.add("MIXER_MLA_V1", lay, format!("{} heads, latent {}", m.heads, m.kv_lora_rank));
+            if let Some(ix) = &m.indexer {
+                u.add("ATTN_TOKEN_INDEXER_V1", lay, format!("{} heads x {}, top {}", ix.heads, ix.head_dim, ix.topk));
+            }
+            rope_features(u, &m.rope, m.qk_rope_head_dim, l);
+            norm_features(u, &m.kv_a_norm, lay);
+        }
+        Mixer::GatedDeltaNet(g) => {
+            u.add("MIXER_GDN_V1", lay, format!("k:v heads {}:{}", g.k_heads, g.v_heads));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", g.conv_kernel));
+        }
+        Mixer::Mamba(m) => {
+            u.add("MIXER_MAMBA_V1", lay, format!("inner {} state {}", m.inner, m.state));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", m.conv_kernel));
+        }
+        Mixer::Mamba2(m) => {
+            u.add("MIXER_MAMBA2_V1", lay, format!("{} heads × {}", m.heads, m.head_dim));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", m.conv_kernel));
+            if m.norm_mode != Mamba2Norm::GateFirst {
+                u.add("MAMBA2_GATE_NORM_VARIANTS_V1", lay, format!("{:?}", m.norm_mode));
+            }
+            if m.chunk_scales.is_some() {
+                u.add("MAMBA2_MUP_V1", lay, "");
+                u.add("SCALE_MUP_V1", lay, "the projection's five chunks");
+            }
+        }
+        Mixer::ShortConv(c) => {
+            u.add("MIXER_SHORT_CONV_V1", lay, format!("kernel {}", c.kernel));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", c.kernel));
+        }
+        Mixer::RwkvTime(r) => {
+            u.add(if r.version == 4 { "MIXER_RWKV4_V1" } else if r.version == 7 { "MIXER_RWKV7_V1" } else { "MIXER_RWKV56_V1" }, lay, format!("RWKV-{}", r.version));
+        }
+        Mixer::None => u.add("LAYER_FFN_ONLY_V1", lay, ""),
+        Mixer::Parallel(bs) => {
+            u.add("MIXER_PARALLEL_BRANCH_V1", lay, format!("{} branches", bs.len()));
+            for b in bs {
+                if b.in_scale != 1.0 || b.out_scale != 1.0 {
+                    u.add("SCALE_MUP_V1", lay, "a branch's input and output scale");
+                }
+                mixer_features(u, lay, l, &b.mixer);
+            }
+        }
+    }
+}
+
 fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     let mut u = Uses::default();
     // embedding
@@ -406,101 +526,7 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     // layers
     for (l, ls) in s.layers.iter().enumerate() {
         let lay = Some(l);
-        match &ls.mixer {
-            Mixer::Attention(a) => {
-                let ratio = if a.kv_heads == 0 { 0 } else { a.heads / a.kv_heads };
-                u.add("ATTN_GQA_V1", lay, format!("{}q/{}kv × {} (group {ratio})", a.heads, a.kv_heads, a.head_dim));
-                if let Some(w) = a.window {
-                    u.add("ATTN_SLIDING_V1", lay, format!("window {w}"));
-                }
-                if let Some(c) = a.chunk {
-                    u.add("ATTN_CHUNKED_V1", lay, format!("chunk {c}"));
-                }
-                if a.softcap.is_some() {
-                    u.add("ATTN_SOFTCAP_V1", lay, "");
-                }
-                if a.sinks {
-                    u.add("ATTN_SINKS_V1", lay, "");
-                }
-                if a.output_gate {
-                    u.add("ATTN_OUTPUT_GATE_V1", lay, "");
-                }
-                if let Some(g) = &a.gate {
-                    u.add("ATTN_OUTPUT_GATE_SEPARATE_V1", lay, format!("{:?}{}", g.act, if g.per_head { " per head" } else { "" }));
-                }
-                if a.v_scale != 1.0 {
-                    u.add("ATTN_VALUE_SCALE_V1", lay, "");
-                }
-                if let Some(n) = &a.o_norm {
-                    u.add("SUBLAYER_NORMS_V1", lay, "the attention output");
-                    norm_features(&mut u, n, lay);
-                }
-                if let Some(q) = &a.qk_norm {
-                    u.add("ATTN_QK_NORM_V1", lay, format!("{:?}", q.scope));
-                    norm_features(&mut u, &q.norm, lay);
-                    u.add("NORM_GROUPED_V1", lay, "");
-                    if a.qk_norm_after_rope {
-                        u.add("ATTN_QK_NORM_POST_ROPE_V1", lay, "");
-                    }
-                }
-                if let Some(v) = &a.v_norm {
-                    u.add("ATTN_V_NORM_V1", lay, "");
-                    norm_features(&mut u, &v.norm, lay);
-                }
-                if a.clip_qkv.is_some() {
-                    u.add("ATTN_CLIP_QKV_V1", lay, "");
-                }
-                if a.q_temperature.is_some() {
-                    u.add("ATTN_QUERY_TEMPERATURE_V1", lay, "");
-                }
-                if a.kv_share.is_some() {
-                    u.add("ATTN_KV_SHARE_V1", lay, "");
-                }
-                if a.v_from_k {
-                    u.add("ATTN_K_EQ_V_V1", lay, "");
-                }
-                if a.q_bias || a.k_bias || a.v_bias || a.o_bias {
-                    u.add("ATTN_BIAS_V1", lay, "");
-                }
-                if let Some(sp) = &a.sparse {
-                    u.add("ATTN_SPARSE_BLOCK_V1", lay, format!("block {} × top {} of {}×{} index", sp.ratio, sp.top_blocks, sp.index_heads, sp.index_dim));
-                    norm_features(&mut u, &sp.q_norm, lay);
-                    norm_features(&mut u, &sp.k_norm, lay);
-                }
-                match &a.position {
-                    Position::Rope(r) => rope_features(&mut u, r, a.head_dim, l),
-                    Position::Alibi(_) => u.add("POS_ALIBI_V1", lay, ""),
-                    Position::None => u.add("POS_NOPE_V1", lay, ""),
-                }
-            }
-            Mixer::Mla(m) => {
-                u.add("MIXER_MLA_V1", lay, format!("{} heads, latent {}", m.heads, m.kv_lora_rank));
-                if let Some(ix) = &m.indexer {
-                    u.add("ATTN_TOKEN_INDEXER_V1", lay, format!("{} heads x {}, top {}", ix.heads, ix.head_dim, ix.topk));
-                }
-                rope_features(&mut u, &m.rope, m.qk_rope_head_dim, l);
-                norm_features(&mut u, &m.kv_a_norm, lay);
-            }
-            Mixer::GatedDeltaNet(g) => {
-                u.add("MIXER_GDN_V1", lay, format!("k:v heads {}:{}", g.k_heads, g.v_heads));
-                u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", g.conv_kernel));
-            }
-            Mixer::Mamba(m) => {
-                u.add("MIXER_MAMBA_V1", lay, format!("inner {} state {}", m.inner, m.state));
-                u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", m.conv_kernel));
-            }
-            Mixer::Mamba2(m) => {
-                u.add("MIXER_MAMBA2_V1", lay, format!("{} heads × {}", m.heads, m.head_dim));
-                u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", m.conv_kernel));
-            }
-            Mixer::ShortConv(c) => {
-                u.add("MIXER_SHORT_CONV_V1", lay, format!("kernel {}", c.kernel));
-                u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", c.kernel));
-            }
-            Mixer::RwkvTime(r) => {
-                u.add(if r.version == 4 { "MIXER_RWKV4_V1" } else if r.version == 7 { "MIXER_RWKV7_V1" } else { "MIXER_RWKV56_V1" }, lay, format!("RWKV-{}", r.version));
-            }
-        }
+        mixer_features(&mut u, lay, l, &ls.mixer);
         let mlp = |u: &mut Uses, m: &MlpSpec| {
             u.add(if m.gated { "MLP_DENSE_GATED_V1" } else { "MLP_DENSE_PLAIN_V1" }, lay, format!("{}", m.intermediate));
             if matches!(m.glu, Glu::ClampedSwiGlu { .. }) {
@@ -551,6 +577,12 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             }
             if m.input_scaled {
                 u.add("MLP_MOE_INPUT_SCALED_V1", lay, "");
+            }
+            if !m.gated {
+                u.add("MOE_EXPERTS_PLAIN_V1", lay, "");
+            }
+            if let Some(l) = m.latent {
+                u.add("MOE_LATENT_PROJ_V1", lay, format!("latent {l}"));
             }
             if m.expert_bias {
                 u.add("MLP_MOE_EXPERT_BIAS_V1", lay, "");
