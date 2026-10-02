@@ -2452,7 +2452,8 @@ image is not among the job facts.
 
 ### 15.11 Open items
 
-Built in consensus, dormant on every network: the `palw_gen_v1` fence (`palw_gen_v1.rs`); the pipeline
+Built in consensus, dormant on every network but testnet-12 (whose int-11 flag day arms it at DAA 5,300, at the provisional ceilings
+`PALW_T12_GEN_CEILINGS_V1`): the `palw_gen_v1` fence (`palw_gen_v1.rs`); the pipeline
 class, its identity, its registration object (tag 68 — renumbered from 67, which the second IR fence's
 `DefaultAccusedTirLeaf` takes — dropped by name below `palw_gen_v1`) and its
 preflight (`palw_gen_class_v1.rs`); and the court's answers — `R` recomputed, job facts, PALW-TIR-33
@@ -2896,7 +2897,7 @@ never reaches `Final`, its reservation is released when its receipt window lapse
 time and no collateral. Tag 62's semantics below the fence are not changed to close it.
 
 *The mechanism.* One generic object, for IR and pipeline classes alike, under one dormant fence
-**`palw_held_close_chunks_v1`** (a bare height; `None` on every preset and in no testnet-12 list; Some-only in
+**`palw_held_close_chunks_v1`** (a bare height; `None` on every preset but testnet-12, whose int-11 flag day arms it at DAA 5,300; Some-only in
 both fingerprints, collapsed from `never()`; requires `palw_tir_v1` and `palw_held_context` at or below it; the
 V2 bundle mirrors it, borsh-skipped, written by `sync_palw_gen_v1`; armed by the drill's gen list). It carries no
 new table: it opens a session at the named leaf as ADR-0103 Decision 5 does and writes **the challenger-side
