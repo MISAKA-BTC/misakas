@@ -1099,7 +1099,7 @@ pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
 
 /// The length of the stop sequence that ended `ids`, by the job's own decode config (V4 only).
 fn answer_stop_len_v1(job: &PalwFreePromptJobV3, ids: &[u32]) -> Option<u32> {
-    job.decode.as_ref().filter(|_| job.is_v4()).and_then(|decode| {
+    job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).and_then(|decode| {
         let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(decode, job.decode_token_limit, u32::MAX, ids).ok()?;
         match stop.reason {
             kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {

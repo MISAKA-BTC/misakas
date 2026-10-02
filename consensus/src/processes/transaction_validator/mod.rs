@@ -129,6 +129,12 @@ pub struct TransactionValidator {
     /// refuses one below the height. `None` on every shipped preset, which keeps every network's
     /// transaction validity byte for byte.
     palw_fp_job_v5_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **RFC-0001 §2.6 stage 2: `Params::palw_fp_prefix_state_fence()`** (`never()` read as absence). Isolation asks the
+    /// height-free question (`.is_some()`: a prefix-state claim, FP job version 11, passes the door's stateless rules where
+    /// the ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one
+    /// below the height. `None` on every shipped preset.
+    palw_fp_prefix_state_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -187,6 +193,7 @@ impl TransactionValidator {
             palw_model_sink_bound_fence: None,
             palw_fp_decode_rules_fence: None,
             palw_fp_job_v5_fence: None,
+            palw_fp_prefix_state_fence: None,
         }
     }
 
@@ -204,6 +211,14 @@ impl TransactionValidator {
     /// fence's height in the header context.
     pub fn with_fp_job_v5_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_job_v5_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0001 §2.6 stage 2: declare the prefix-state claim's fence (`Params::palw_fp_prefix_state_fence()`), which admits a
+    /// version-11 commitment's stateless rules at isolation and refuses one below the fence's height in the header context.
+    pub fn with_fp_prefix_state_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_prefix_state_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
         self
     }
 
@@ -288,6 +303,7 @@ impl TransactionValidator {
             palw_fp_decode_rules_fence: None,
             // Every shipped preset's door: the tensor claim is dormant, so version 10 is refused at isolation.
             palw_fp_job_v5_fence: None,
+            palw_fp_prefix_state_fence: None,
         }
     }
 

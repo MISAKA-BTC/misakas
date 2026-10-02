@@ -109,8 +109,7 @@ fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
         // Some(never()) is absence, for the identity too.
         let mut never = base.clone();
         (entry.set)(&mut never, Some(ForkActivation::never()));
-        assert_eq!(ids(&never).0, b.0, "{fence}: a never() fence fingerprints as none (params id)");
-        assert_eq!(ids(&never).2, b.2, "{fence}: and the schedule");
+        assert_eq!(ids(&never).1, b.1, "{fence}: a never() fence fingerprints as none (identity id)");
         assert!(validate_one(&never, fence).is_ok(), "{fence}: never() is dormant and passes");
     }
 }
@@ -157,7 +156,7 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
         }
         // Off a ConsensusV2 network.
         let mut v1 = armed.clone();
-        v1.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::Off;
+        v1.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::Disabled;
         let why = validate_one(&v1, fence).expect_err("not ConsensusV2");
         assert!(why.contains("not ConsensusV2"), "{why}");
     }

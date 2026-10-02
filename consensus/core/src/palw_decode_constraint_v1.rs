@@ -175,9 +175,16 @@ impl PalwDecodeConstraintV1 {
     /// validated automaton cannot index out of range, cannot shift a key bit out of the mask, and
     /// serializes under the ceiling.
     pub fn validate(&self) -> Result<(), PalwDecodeConstraintError> {
+        self.validate_form(PALW_DECODE_CONSTRAINT_VERSION_V1, PALW_CONSTRAINT_MAX_NODES_V1, PALW_CONSTRAINT_MAX_BYTES_V1)
+    }
+
+    /// [`Self::validate`] under a form's own header version and bounds: version 1's (the shipped form) or the second
+    /// form's ([`crate::palw_fp_constraint_v2`], RFC-0001 §2.5). The structural rules are the same; only the version word, the
+    /// automaton's node ceiling and its byte ceiling differ.
+    pub fn validate_form(&self, version: u16, max_nodes: usize, max_bytes: usize) -> Result<(), PalwDecodeConstraintError> {
         let bad = PalwDecodeConstraintError::Invalid;
-        if self.version != PALW_DECODE_CONSTRAINT_VERSION_V1 {
-            return Err(bad("the header version is not 1"));
+        if self.version != version {
+            return Err(bad("the header version is not the form's"));
         }
         if self.frames.is_empty() {
             return Err(bad("an automaton has at least one frame"));
@@ -197,7 +204,7 @@ impl PalwDecodeConstraintV1 {
                 return Err(bad("a frame has more nodes than a u16 can name"));
             }
             total_nodes += frame.nodes.len();
-            if total_nodes > PALW_CONSTRAINT_MAX_NODES_V1 {
+            if total_nodes > max_nodes {
                 return Err(bad("more nodes than the automaton ceiling"));
             }
             if frame.start as usize >= frame.nodes.len() {
@@ -242,7 +249,7 @@ impl PalwDecodeConstraintV1 {
             }
         }
         let len = self.to_bytes().len();
-        if len > PALW_CONSTRAINT_MAX_BYTES_V1 {
+        if len > max_bytes {
             return Err(PalwDecodeConstraintError::TooLarge(len));
         }
         Ok(())
@@ -258,11 +265,21 @@ impl PalwDecodeConstraintV1 {
     /// bytes), an automaton that fails [`Self::validate`], and bytes that are not the canonical
     /// serialization of what they parsed to — so one automaton has one id.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PalwDecodeConstraintError> {
-        if bytes.len() > PALW_CONSTRAINT_MAX_BYTES_V1 {
+        Self::from_bytes_form(bytes, PALW_DECODE_CONSTRAINT_VERSION_V1, PALW_CONSTRAINT_MAX_NODES_V1, PALW_CONSTRAINT_MAX_BYTES_V1)
+    }
+
+    /// [`Self::from_bytes`] under a form's own header version and bounds ([`Self::validate_form`]).
+    pub fn from_bytes_form(
+        bytes: &[u8],
+        version: u16,
+        max_nodes: usize,
+        max_bytes: usize,
+    ) -> Result<Self, PalwDecodeConstraintError> {
+        if bytes.len() > max_bytes {
             return Err(PalwDecodeConstraintError::TooLarge(bytes.len()));
         }
         let parsed: Self = borsh::from_slice(bytes).map_err(|e| PalwDecodeConstraintError::Malformed(e.to_string()))?;
-        parsed.validate()?;
+        parsed.validate_form(version, max_nodes, max_bytes)?;
         if parsed.to_bytes() != bytes {
             return Err(PalwDecodeConstraintError::NotCanonical);
         }

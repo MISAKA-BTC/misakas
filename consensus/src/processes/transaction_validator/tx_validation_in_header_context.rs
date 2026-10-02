@@ -56,7 +56,8 @@ impl TransactionValidator {
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)
     }
 
     /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation
@@ -90,6 +91,32 @@ impl TransactionValidator {
             Some(PalwFpEvalHeightRefusalV1::WorkLeavesBeforeHeld(leaves)) => {
                 Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score))
             }
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0001 §2.6 stage 2, the height-indexed half of the prefix-state claim's door.** Isolation admits a version-11
+    /// commitment's stateless rules wherever the ruleset carries `Params::palw_fp_prefix_state` at all, because it holds no
+    /// height; here, at the containing block's DAA, one below the fence — or below the V4 decode rules its job carries — is
+    /// refused by name. So a build that schedules the fence and one that does not agree on every transaction below it. Inert
+    /// on every preset without the fence: returns on its first line.
+    fn check_palw_fp_prefix_state_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_prefix_state_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let decode_rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(
+            self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ctx_daa_score,
+        );
+        match kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+        ) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
             None => Ok(()),
         }

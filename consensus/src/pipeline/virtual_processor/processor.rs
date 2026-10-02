@@ -582,6 +582,12 @@ pub struct VirtualStateProcessor {
     /// version 10) may be accepted, over `palw_gen_v1` ([`Self::palw_gen_lane_open_at`]); read by the
     /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
     pub(super) palw_fp_job_v5: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.6 stage 2: `Params::palw_fp_prefix_state_fence()`** — the height from which a prefix-state claim (FP job
+    /// version 11) may be accepted. `None` on every shipped preset.
+    pub(super) palw_fp_prefix_state: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.9: `Params::palw_fp_tokenizer_match_fence()`** — the height from which a commitment's tokenizer must be its
+    /// class's listed one. `None` on every shipped preset.
+    pub(super) palw_fp_tokenizer_match: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1146,6 +1152,8 @@ impl VirtualStateProcessor {
             palw_held_context: params.palw_held_context_fence(),
             palw_fp_decode_rules: params.palw_fp_decode_rules_fence(),
             palw_fp_job_v5: params.palw_fp_job_v5_fence(),
+            palw_fp_prefix_state: params.palw_fp_prefix_state_fence(),
+            palw_fp_tokenizer_match: params.palw_fp_tokenizer_match_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
@@ -6955,6 +6963,12 @@ impl VirtualStateProcessor {
                 },
                 // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
                 logits_q24: state.class_commits_q24_logits_v1(class_id),
+                // RFC-0001 §2.6 stage 2 and §2.9, at the ACCEPTING block's DAA.
+                prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
+                tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                    self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                    state.class_tokenizer_listing_v1(class_id),
+                ),
             },
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_held_context_at(block_daa),
@@ -15317,6 +15331,12 @@ impl VirtualStateProcessor {
                 },
                 // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
                 logits_q24: state.class_commits_q24_logits_v1(class_id),
+                // RFC-0001 §2.6 stage 2 and §2.9, at the ACCEPTING block's DAA.
+                prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
+                tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                    self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                    state.class_tokenizer_listing_v1(class_id),
+                ),
             },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside
@@ -15361,6 +15381,12 @@ impl VirtualStateProcessor {
                     // The class's logit unit, as the FP walk asks it (RFC-0001 §A.3): an evaluation claim's
                     // stand-in job meets the same decode-control offer as any V4 job on its class.
                     logits_q24: state.class_commits_q24_logits_v1(class_id),
+                    // An evaluation claim is not a prefix-state claim; its class's tokenizer listing binds it as any job's.
+                    prefix_state_armed: false,
+                    tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                        self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                        state.class_tokenizer_listing_v1(class_id),
+                    ),
                 },
                 self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
                 self.palw_held_context_at(block_daa),

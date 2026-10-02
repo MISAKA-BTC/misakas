@@ -1083,7 +1083,7 @@ impl Qwen25A16Backend {
         if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
             return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
         }
-        if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
+        if let Some(decode) = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())
             && decode.bans_cover_vocab(vocab as u32)
         {
             return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
@@ -2985,6 +2985,65 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             output_token_ids: generated,
             cached_prefix_tokens: reused as u32,
             ended_on_stop_id,
+        })
+    }
+
+    /// **RFC-0001 §2.6 stage 2: the prefix state of `prefix_ids`** — the K/V state after the prefix, digested (BLAKE2b-512
+    /// over every layer's keys then values as little-endian `i32`s, in layer order) and named under the class and the
+    /// prefix's length ([`kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1`]). Taken from the prefix
+    /// cache when it holds exactly this prefix, by a fresh prefill otherwise — and the two agree bit for bit, which the
+    /// golden test holds.
+    fn prefix_state_v1(
+        &self,
+        class_id: Hash64,
+        tokenizer_id: Hash64,
+        prefix_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        if prefix_ids.is_empty() {
+            return Err("a prefix of no ids has no state".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prefix_ids.iter().find(|t| **t as usize >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let tokens: Vec<usize> = prefix_ids.iter().map(|t| *t as usize).collect();
+        // The cache holds a snapshot of exactly this prefix when an earlier run ended its prefill here; otherwise walk it.
+        let held = self.prefix_cache.as_ref().and_then(|lock| {
+            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
+            // `lookup_v1` leaves one token to run, so ask with one more id than the prefix.
+            let mut probe = prefix_ids.to_vec();
+            probe.push(0);
+            cache.lookup_v1(class_id, tokenizer_id, &probe).filter(|hit| hit.positions as usize == prefix_ids.len()).map(|hit| hit.cache)
+        });
+        let cache = match held {
+            Some(cache) => cache,
+            None => {
+                let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+                cache.reserve_positions(tokens.len(), self.artifact.shape.kv_dim());
+                self.answer_prefill_run_v1(&engine, &mut cache, &tokens, 0)?;
+                cache
+            }
+        };
+        let (keys, values) = cache.contents_as_i32();
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/qwen25-a16/prefix-kv-digest/v1").to_state();
+        state.update(&(keys.len() as u64).to_le_bytes());
+        for (k, v) in keys.iter().zip(values.iter()) {
+            for x in k.iter().chain(v.iter()) {
+                state.update(&x.to_le_bytes());
+            }
+        }
+        let mut digest = [0u8; 64];
+        digest.copy_from_slice(state.finalize().as_bytes());
+        let prefix_tokens = u32::try_from(prefix_ids.len()).map_err(|_| "a prefix past u32".to_string())?;
+        Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+            state_root: kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(
+                &class_id,
+                prefix_tokens,
+                &Hash64::from_bytes(digest),
+            ),
+            prefix_tokens,
+            class_id,
         })
     }
 

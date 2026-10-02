@@ -1083,7 +1083,7 @@ pub fn palw_fp_decode_run_v1<R>(
     mut run: impl FnMut(u32, &mut dyn FnMut(&[i32]) -> u32, &mut dyn FnMut(u32)) -> Result<R, String>,
     committed_of: impl Fn(&R) -> &[u32],
 ) -> Result<(R, PalwFpDecodeStopV1), String> {
-    if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
+    if let Some(decode) = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())
         && decode.bans_cover_vocab(vocab)
     {
         return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
@@ -1162,7 +1162,7 @@ impl PalwFpReplayRuleV1 {
     /// The rule of a V4 job over its committed answer; `None` for a V3 job, whose replay keeps the
     /// shipped rule (the V3 verifier) byte for byte.
     pub fn of_job(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, committed: &[u32]) -> Option<Self> {
-        let config = job.decode.as_ref().filter(|_| job.is_v4())?.clone();
+        let config = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())?.clone();
         Some(Self { kind: PalwFpReplayKindV1::Pipeline { config, sampling: job.sampling_v2(), committed: committed.to_vec() } })
     }
 

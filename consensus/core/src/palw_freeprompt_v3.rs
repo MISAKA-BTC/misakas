@@ -361,6 +361,9 @@ pub enum PalwFpJobTailV1 {
     V5(crate::palw_fp_job_v5::PalwFpV5TailV1),
     /// An evaluation job (version 9, RFC-0004 §7.2): the job the chain derives the claim's context from.
     Eval(Box<crate::palw_improve_eval_v1::PalwEvalJobV1>),
+    /// **A prefix-state job (version 11, RFC-0001 §2.6 stage 2)**: the KV prefix state the run consumed — a V4 job
+    /// whose credit is the new positions only ([`crate::palw_fp_prefix_v1`]).
+    Prefix(PalwFpPrefixStateV1),
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -400,6 +403,7 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
             Some(PalwFpJobTailV1::Gen(tail)) => borsh::BorshSerialize::serialize(tail.as_ref(), writer)?,
             Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
+            Some(PalwFpJobTailV1::Prefix(state)) => borsh::BorshSerialize::serialize(state, writer)?,
             None => {}
         }
         Ok(())
@@ -437,8 +441,12 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         // §I.4) at its seed and body, with no decode rules between.
         let (v5, eval) = (crate::palw_fp_job_v5::PALW_FP_V5_VERSION, crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION);
         let gen_version = crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION;
-        if version == PALW_FP_V4_VERSION || version == v5 || version == eval {
+        let prefix = crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        if version == PALW_FP_V4_VERSION || version == v5 || version == eval || version == prefix {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        }
+        if version == prefix {
+            job.tail = Some(PalwFpJobTailV1::Prefix(borsh::BorshDeserialize::deserialize_reader(reader)?));
         }
         if version == v5 {
             job.tail = Some(PalwFpJobTailV1::V5(borsh::BorshDeserialize::deserialize_reader(reader)?));
@@ -476,6 +484,18 @@ impl PalwFreePromptJobV3 {
         self.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION
     }
 
+    /// **Does this job decode under FP Job V4's rules** — its `DecodeConfigV4` and the V4 pipeline? A V4 job, and the
+    /// prefix-state job (version 11), which embeds one unchanged. What every seat's replay rule and every engine's
+    /// pre-run check asks, so a prefix-state claim is replayed as it was decoded.
+    pub fn decodes_under_v4_rules(&self) -> bool {
+        self.is_v4() || self.is_prefix_state()
+    }
+
+    /// Is this a prefix-state job (RFC-0001 §2.6 stage 2: version 11, a V4 job naming the KV prefix it consumed)?
+    pub fn is_prefix_state(&self) -> bool {
+        self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
+    }
+
     /// Is this a tensor job (RFC-0003 §I.4: FP job version 10, an image or an embedding)?
     pub fn is_gen_tensor(&self) -> bool {
         self.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION
@@ -492,7 +512,7 @@ impl PalwFreePromptJobV3 {
     pub fn decoder_v1(&self) -> crate::palw_decode_pipeline_v4::PalwFpDecoderV1 {
         // A V5 job decodes under its V4 rules (RFC-0003 §II.2.1: V5 embeds V4 unchanged), and so does an
         // evaluation job (RFC-0004 §7.2).
-        match (&self.decode, self.is_v4() || self.is_v5() || self.is_eval()) {
+        match (&self.decode, self.is_v4() || self.is_v5() || self.is_eval() || self.is_prefix_state()) {
             (Some(decode), true) => {
                 crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
             }
@@ -516,6 +536,10 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     // RFC-0004 §7.2: an evaluation job, under its own.
     if job.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION {
         return crate::palw_improve_eval_v1::fp_job_id_eval_carried_v1(job);
+    }
+    // RFC-0001 §2.6 stage 2: a prefix-state job, under its own domain.
+    if job.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION {
+        return crate::palw_fp_prefix_v1::fp_job_id_prefix_v1(job);
     }
     // RFC-0003 §I.4: a tensor job is named by the generative job's own id.
     if job.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION {
@@ -1554,6 +1578,9 @@ pub enum PalwFpV3Error {
     /// own reason.
     #[error("the evaluation claim is refused: {0}")]
     EvaluationClaim(String),
+    /// A prefix-state claim (version 11) the lane's rules refuse, by name ([`crate::palw_fp_prefix_v1`]).
+    #[error("prefix-state claim: {0}")]
+    PrefixStateClaim(String),
     /// **RFC-0003 §I.4: a tensor claim the generative lane refuses**, by the lane's own reason
     /// (`palw_gen_claim_v1`).
     #[error("the tensor claim is refused: {0}")]
@@ -2833,10 +2860,15 @@ impl PalwFpCommitmentTxPayloadV3 {
     }
 
     /// **ADR-0145 §6: the prefix-STATE this payload names.** V3 names none, so this is genesis.
-    /// A later payload version that carries [`PalwFpPrefixStateV1`] overrides it; omitting the
+    /// A prefix-state job (version 11) carries [`PalwFpPrefixStateV1`] and overrides it; omitting the
     /// object is still genesis, which is how a miner cannot raise its pay by staying silent.
     pub fn consumed_prefix_state_v1(&self) -> PalwFpPrefixStateV1 {
-        PalwFpPrefixStateV1::genesis(self.commitment.job.class_id)
+        // **RFC-0001 §2.6 stage 2**: a prefix-state job (version 11) carries the object in its tail, inside the
+        // claim id; every other version names none.
+        match &self.commitment.job.tail {
+            Some(PalwFpJobTailV1::Prefix(state)) if self.commitment.job.is_prefix_state() => *state,
+            _ => PalwFpPrefixStateV1::genesis(self.commitment.job.class_id),
+        }
     }
 }
 

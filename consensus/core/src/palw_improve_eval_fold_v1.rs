@@ -1841,6 +1841,8 @@ mod tests {
                     held: false,
                     derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
+            prefix_state_armed: false,
+            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,

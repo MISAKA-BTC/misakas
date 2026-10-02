@@ -176,6 +176,8 @@ fn walk(
                 None => PalwFpDerivedWorkCapV1::Unpublished,
             },
             logits_q24: s.class_commits_q24_logits_v1(class_id),
+            prefix_state_armed: false,
+            tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
         },
         true,
         false,

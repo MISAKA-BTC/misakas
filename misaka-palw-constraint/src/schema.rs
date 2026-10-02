@@ -53,8 +53,19 @@ const KNOWN_KEYWORDS: &[&str] = &[
     "minimum",
     "maximum",
 ];
+/// **RFC-0001 §2.5: the second subset's additions** ([`parse_v2`]): a non-recursive `$ref` into the root's `$defs`, a
+/// discriminated `anyOf`/`oneOf`, and exclusive numeric bounds. Everything else the first subset refuses stays refused.
+const V2_KEYWORDS: &[&str] = &["$ref", "$defs", "anyOf", "oneOf", "exclusiveMinimum", "exclusiveMaximum"];
 /// Keywords that say nothing about an answer and are ignored, by name, rather than refused.
 const IGNORED_KEYWORDS: &[&str] = &["description", "title", "$schema"];
+
+/// The most `$ref`s one schema may expand (each is an inlined copy of its definition): the bound that keeps a diamond of
+/// references from compiling to an exponential automaton.
+pub const MAX_REF_EXPANSIONS_V2: usize = 64;
+/// The most branches one discriminated union may have.
+pub const MAX_UNION_BRANCHES_V2: usize = 16;
+/// The most integers a numeric range may admit and still be compiled (each is a literal of the automaton).
+pub const MAX_INTEGER_RANGE_VALUES_V2: u64 = 1024;
 
 /// A JSON type name the subset admits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,11 +173,66 @@ pub struct Schema {
     pub max_length: Option<u64>,
     pub minimum: Option<f64>,
     pub maximum: Option<f64>,
+    /// **RFC-0001 §2.5 (second subset only)**: `exclusiveMinimum` / `exclusiveMaximum`.
+    pub exclusive_minimum: Option<f64>,
+    pub exclusive_maximum: Option<f64>,
+    /// **RFC-0001 §2.5 (second subset only)**: a discriminated `anyOf`/`oneOf` — an object whose FIRST member names the
+    /// branch ([`UnionSpec`]).
+    pub union: Option<UnionSpec>,
+}
+
+/// **A discriminated union** (RFC-0001 §2.5): `branches` are closed object schemas that each declare the same property
+/// `discriminator` as a one-value string `const`, with that value distinct per branch. The automaton selects the branch by
+/// that member, which must be the object's first — "which branch" is then decided by bytes already read, so the union is
+/// exact (nothing is approximated) and deterministic.
+#[derive(Clone, Debug)]
+pub struct UnionSpec {
+    pub discriminator: String,
+    pub branches: Vec<UnionBranch>,
+}
+
+/// One branch: the discriminator's value and the branch's whole object schema (which still declares the discriminator).
+#[derive(Clone, Debug)]
+pub struct UnionBranch {
+    pub value: String,
+    pub schema: Schema,
+}
+
+/// What a parse is allowed to read: the first subset, or the second with the root's `$defs`.
+struct Ctx<'a> {
+    v2: bool,
+    defs: &'a serde_json::Map<String, Value>,
+    /// The `$ref` names being expanded, innermost last: a name already on it is a recursion.
+    stack: Vec<String>,
+    expansions: &'a std::cell::Cell<usize>,
 }
 
 /// Parse a schema, refusing anything outside the subset by name and path.
 pub fn parse(value: &Value) -> Result<Schema, String> {
-    parse_at(value, "", 0)
+    let empty = serde_json::Map::new();
+    let expansions = std::cell::Cell::new(0);
+    parse_at(value, "", 0, &Ctx { v2: false, defs: &empty, stack: Vec::new(), expansions: &expansions })
+}
+
+/// **Parse a schema in the second subset** (RFC-0001 §2.5, `Params::palw_fp_constraint_v2`): the first subset's keywords,
+/// plus a non-recursive `$ref` to the root's `$defs` (inlined; a recursion, a missing name, a reference outside
+/// `#/$defs/` and more than [`MAX_REF_EXPANSIONS_V2`] expansions are each refused by name), a discriminated
+/// `anyOf`/`oneOf` ([`UnionSpec`]) and `exclusiveMinimum`/`exclusiveMaximum`. A schema the first subset parses parses to
+/// the same [`Schema`] here.
+pub fn parse_v2(value: &Value) -> Result<Schema, String> {
+    let empty = serde_json::Map::new();
+    let defs = match value.as_object().and_then(|m| m.get("$defs")) {
+        None => &empty,
+        Some(Value::Object(defs)) => {
+            if let Some(name) = defs.keys().find(|n| n.is_empty() || n.contains('/') || n.contains('~')) {
+                return Err(format!("`$defs` names {name:?}: a definition name is a non-empty token with no `/` or `~`"));
+            }
+            defs
+        }
+        Some(other) => return Err(format!("`$defs` is {} where an object of schemas was expected", kind_of(other))),
+    };
+    let expansions = std::cell::Cell::new(0);
+    parse_at(value, "", 0, &Ctx { v2: true, defs, stack: Vec::new(), expansions: &expansions })
 }
 
 /// RFC 6901: `~` is `~0` and `/` is `~1` inside a reference token.
@@ -174,7 +240,7 @@ fn pointer_token(name: &str) -> String {
     name.replace('~', "~0").replace('/', "~1")
 }
 
-fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
+fn parse_at(value: &Value, path: &str, depth: usize, ctx: &Ctx<'_>) -> Result<Schema, String> {
     if depth > MAX_SCHEMA_DEPTH {
         return Err(format!(
             "the schema nests deeper than {MAX_SCHEMA_DEPTH} at {path:?} (ADR-0096 Decision 7 pins the depth; a decode constraint is a bounded object)"
@@ -188,8 +254,38 @@ fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
     })?;
     // Every keyword is classified BEFORE any is read: a schema that carries `oneOf` beside `type`
     // must not validate against `type` alone.
+    // **A `$ref` is its definition and nothing beside it** (second subset): a sibling keyword would have to be merged
+    // with the definition's, which is a second semantics the subset does not carry.
+    if ctx.v2
+        && let Some(reference) = members.get("$ref")
+    {
+        if let Some(extra) = members.keys().find(|k| k.as_str() != "$ref" && !(k.as_str() == "$defs" && path.is_empty()) && !IGNORED_KEYWORDS.contains(&k.as_str())) {
+            return Err(format!("`{extra}` sits beside `$ref` at {path:?}: a reference carries no sibling keyword in the second subset"));
+        }
+        let target = reference
+            .as_str()
+            .and_then(|r| r.strip_prefix("#/$defs/"))
+            .ok_or_else(|| format!("`$ref` at {path:?} is not a `#/$defs/<name>` reference: references outside the root's `$defs` are refused"))?;
+        if ctx.stack.iter().any(|n| n == target) {
+            return Err(format!(
+                "`$ref` {target:?} at {path:?} is recursive: a recursive schema is a pushdown the sixteen-frame depth cannot bound, so                  only non-recursive references compile"
+            ));
+        }
+        if ctx.expansions.get() >= MAX_REF_EXPANSIONS_V2 {
+            return Err(format!("the schema expands more than {MAX_REF_EXPANSIONS_V2} references: a diamond of references is an exponential automaton"));
+        }
+        ctx.expansions.set(ctx.expansions.get() + 1);
+        let definition = ctx.defs.get(target).ok_or_else(|| format!("`$ref` {target:?} at {path:?} names no entry of `$defs`"))?;
+        let mut stack = ctx.stack.clone();
+        stack.push(target.to_string());
+        return parse_at(definition, path, depth + 1, &Ctx { v2: true, defs: ctx.defs, stack, expansions: ctx.expansions });
+    }
     for key in members.keys() {
-        if !KNOWN_KEYWORDS.contains(&key.as_str()) && !IGNORED_KEYWORDS.contains(&key.as_str()) {
+        let v2_keyword = ctx.v2 && V2_KEYWORDS.contains(&key.as_str());
+        if v2_keyword && key == "$defs" && !path.is_empty() {
+            return Err(format!("`$defs` at {path:?}: definitions live at the schema's root only"));
+        }
+        if !KNOWN_KEYWORDS.contains(&key.as_str()) && !IGNORED_KEYWORDS.contains(&key.as_str()) && !v2_keyword {
             return Err(format!(
                 "`{key}` at {path:?} is outside the JSON-Schema subset this lane compiles (ADR-0096 Decision 7): $ref, $defs, oneOf, \
                  anyOf, allOf, not, if/then/else, format, patternProperties, dependentRequired, prefixItems and every other keyword \
@@ -231,7 +327,7 @@ fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
         let mut parsed: Vec<(String, Schema)> = Vec::with_capacity(props.len());
         for (name, sub) in props {
             let sub_path = format!("{path}/properties/{}", pointer_token(name));
-            parsed.push((name.clone(), parse_at(sub, &sub_path, depth + 1)?));
+            parsed.push((name.clone(), parse_at(sub, &sub_path, depth + 1, ctx)?));
         }
         parsed.sort_by(|a, b| a.0.cmp(&b.0));
         schema.properties = parsed;
@@ -255,7 +351,7 @@ fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
             Value::Bool(true) => AdditionalProperties::Allowed,
             Value::Bool(false) => AdditionalProperties::Forbidden,
             Value::Object(_) => {
-                AdditionalProperties::Schema(Box::new(parse_at(a, &format!("{path}/additionalProperties"), depth + 1)?))
+                AdditionalProperties::Schema(Box::new(parse_at(a, &format!("{path}/additionalProperties"), depth + 1, ctx)?))
             }
             other => {
                 return Err(format!(
@@ -272,7 +368,7 @@ fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
                 kind_of(i)
             ));
         }
-        schema.items = Some(Box::new(parse_at(i, &format!("{path}/items"), depth + 1)?));
+        schema.items = Some(Box::new(parse_at(i, &format!("{path}/items"), depth + 1, ctx)?));
     }
     schema.min_items = count_keyword(members, "minItems", path)?;
     schema.max_items = count_keyword(members, "maxItems", path)?;
@@ -316,7 +412,101 @@ fn parse_at(value: &Value, path: &str, depth: usize) -> Result<Schema, String> {
     {
         return Err(format!("`minimum` {lo} exceeds `maximum` {hi} at {path:?}, which admits nothing"));
     }
+    if ctx.v2 {
+        schema.exclusive_minimum = number_keyword(members, "exclusiveMinimum", path)?;
+        schema.exclusive_maximum = number_keyword(members, "exclusiveMaximum", path)?;
+        let low = [schema.minimum, schema.exclusive_minimum].into_iter().flatten().fold(f64::NEG_INFINITY, f64::max);
+        let high = [schema.maximum, schema.exclusive_maximum].into_iter().flatten().fold(f64::INFINITY, f64::min);
+        if low > high || (low == high && (schema.exclusive_minimum == Some(low) || schema.exclusive_maximum == Some(high))) {
+            return Err(format!("the numeric bounds at {path:?} admit no number"));
+        }
+        schema.union = parse_union(members, &schema, path, depth, ctx)?;
+    }
     Ok(schema)
+}
+
+/// **A discriminated `anyOf`/`oneOf`** (second subset): see [`UnionSpec`]. Refused by name: both keywords at once; a
+/// union that carries any other keyword than `type: object`; fewer than two or more than [`MAX_UNION_BRANCHES_V2`]
+/// branches; a branch that is not a closed object (`type: object`, `additionalProperties: false`); no property declared as
+/// a one-value string `const`/`enum` in every branch under ONE name, required in each; two branches with one value.
+fn parse_union(
+    members: &serde_json::Map<String, Value>,
+    own: &Schema,
+    path: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Result<Option<UnionSpec>, String> {
+    let (keyword, list) = match (members.get("anyOf"), members.get("oneOf")) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => return Err(format!("`anyOf` and `oneOf` both at {path:?}: pick one")),
+        (Some(a), None) => ("anyOf", a),
+        (None, Some(o)) => ("oneOf", o),
+    };
+    let own_has_other = own.properties.len() + own.required.len() > 0
+        || own.additional_properties.is_some()
+        || own.items.is_some()
+        || own.min_items.is_some()
+        || own.max_items.is_some()
+        || own.enumeration.is_some()
+        || own.constant.is_some()
+        || own.pattern.is_some()
+        || own.min_length.is_some()
+        || own.max_length.is_some()
+        || own.minimum.is_some()
+        || own.maximum.is_some()
+        || own.exclusive_minimum.is_some()
+        || own.exclusive_maximum.is_some()
+        || own.types.as_ref().is_some_and(|t| t.as_slice() != [JsonType::Object]);
+    if own_has_other {
+        return Err(format!("`{keyword}` at {path:?} carries a sibling keyword other than `type: \"object\"`: a union is its branches and nothing else"));
+    }
+    let items = list.as_array().ok_or_else(|| format!("`{keyword}` at {path:?} is {} where a list of schemas was expected", kind_of(list)))?;
+    if items.len() < 2 || items.len() > MAX_UNION_BRANCHES_V2 {
+        return Err(format!("`{keyword}` at {path:?} has {} branches: a discriminated union has 2..={MAX_UNION_BRANCHES_V2}", items.len()));
+    }
+    let mut branches: Vec<Schema> = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let branch = parse_at(item, &format!("{path}/{keyword}/{i}"), depth + 1, ctx)?;
+        if branch.types.as_deref() != Some(&[JsonType::Object][..]) {
+            return Err(format!("`{keyword}` branch {i} at {path:?} is not `type: \"object\"`: a branch is a closed object"));
+        }
+        if !matches!(branch.additional_properties, Some(AdditionalProperties::Forbidden)) {
+            return Err(format!("`{keyword}` branch {i} at {path:?} is not closed (`additionalProperties: false`): an open branch could repeat the discriminator"));
+        }
+        branches.push(branch);
+    }
+    // The discriminator: the one property name every branch declares as a one-value string const.
+    let value_of = |schema: &Schema, name: &str| -> Option<String> {
+        let (_, sub) = schema.properties.iter().find(|(n, _)| n == name)?;
+        match (&sub.constant, &sub.enumeration) {
+            (Some(Value::String(s)), None) => Some(s.clone()),
+            (None, Some(values)) if values.len() == 1 => values[0].as_str().map(str::to_string),
+            _ => None,
+        }
+    };
+    let candidates: Vec<&String> =
+        branches[0].properties.iter().map(|(n, _)| n).filter(|n| branches.iter().all(|b| value_of(b, n).is_some() && b.required.contains(n))).collect();
+    let discriminator = match candidates.as_slice() {
+        [one] => (*one).clone(),
+        [] => {
+            return Err(format!(
+                "`{keyword}` at {path:?} is not discriminated: no property is a one-value string `const` required in every branch under one name \
+                 (a union that is not discriminated is a nondeterministic automaton, and nothing is approximated)"
+            ));
+        }
+        many => {
+            return Err(format!("`{keyword}` at {path:?} has {} candidate discriminators ({many:?}): exactly one property may play the role", many.len()));
+        }
+    };
+    let mut out = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let value = value_of(&branch, &discriminator).expect("every branch declared it");
+        if out.iter().any(|b: &UnionBranch| b.value == value) {
+            return Err(format!("`{keyword}` at {path:?}: two branches share the discriminator value {value:?}"));
+        }
+        out.push(UnionBranch { value, schema: branch });
+    }
+    Ok(Some(UnionSpec { discriminator, branches: out }))
 }
 
 fn count_keyword(members: &serde_json::Map<String, Value>, keyword: &str, path: &str) -> Result<Option<u64>, String> {
@@ -356,6 +546,25 @@ fn json_equal(a: &Value, b: &Value) -> bool {
 }
 
 fn validate_at(schema: &Schema, value: &Value, path: &str, errors: &mut Vec<String>) {
+    // A discriminated union (second subset): the object's discriminator names its branch, and the answer is that
+    // branch's — an unknown value, a missing discriminator and a non-object are each refused by name.
+    if let Some(union) = &schema.union {
+        match value {
+            Value::Object(members) => match members.get(&union.discriminator) {
+                Some(Value::String(tag)) => match union.branches.iter().find(|b| &b.value == tag) {
+                    Some(branch) => validate_at(&branch.schema, value, path, errors),
+                    None => errors.push(format!(
+                        "at {path:?}: `{}` is {tag:?}, which no branch of the union names ({})",
+                        union.discriminator,
+                        union.branches.iter().map(|b| b.value.as_str()).collect::<Vec<_>>().join(", ")
+                    )),
+                },
+                _ => errors.push(format!("at {path:?}: the union's discriminator `{}` is missing or not a string", union.discriminator)),
+            },
+            other => errors.push(format!("at {path:?}: expected object, got {}", kind_of(other))),
+        }
+        return;
+    }
     if let Some(types) = &schema.types
         && !types.iter().any(|t| t.matches(value))
     {
@@ -445,6 +654,16 @@ fn validate_at(schema: &Schema, value: &Value, path: &str, errors: &mut Vec<Stri
                 && f > max
             {
                 errors.push(format!("at {path:?}: {n} is above the maximum {}", crate::canonical::es_number_to_string(max)));
+            }
+            if let Some(min) = schema.exclusive_minimum
+                && f <= min
+            {
+                errors.push(format!("at {path:?}: {n} is not above the exclusive minimum {}", crate::canonical::es_number_to_string(min)));
+            }
+            if let Some(max) = schema.exclusive_maximum
+                && f >= max
+            {
+                errors.push(format!("at {path:?}: {n} is not below the exclusive maximum {}", crate::canonical::es_number_to_string(max)));
             }
         }
         Value::Bool(_) | Value::Null => {}

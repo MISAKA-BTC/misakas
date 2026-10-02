@@ -207,7 +207,10 @@ impl ConsensusServices {
         .with_fp_decode_rules_fence(params.palw_fp_decode_rules_fence())
         // RFC-0003 §I.4.4 (the tensor claim, FP job version 10): its two doors, where the ruleset carries
         // `palw_fp_job_v5`. `None` on every shipped preset.
-        .with_fp_job_v5_fence(params.palw_fp_job_v5_fence());
+        .with_fp_job_v5_fence(params.palw_fp_job_v5_fence())
+        // RFC-0001 §2.6 stage 2 (the prefix-state claim, FP job version 11): its two doors, where the ruleset carries
+        // `palw_fp_prefix_state`. `None` on every shipped preset.
+        .with_fp_prefix_state_fence(params.palw_fp_prefix_state_fence());
 
         let pruning_point_manager = PruningPointManager::new(
             params.pruning_depth(),

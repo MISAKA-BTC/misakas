@@ -10495,7 +10495,7 @@ impl PalwPanelService {
                             // and commit no banned id. Pure in the job and the answer, which the chain
                             // already bound; an answer that fails it is not one this seat vouches for.
                             if let Some(output_ids) = output_ids.as_ref()
-                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.is_v4())
+                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.decodes_under_v4_rules())
                                 && let Err(why) = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
                                     decode,
                                     material.job.decode_token_limit,
@@ -14735,7 +14735,7 @@ impl PalwPanelService {
                 let interval = *index;
                 // RFC-0001 §A (G5): a V4 claim's rows are replayed under the claim's rule — its job's
                 // pipeline over the committed answer — and a V3 claim's under the V3 verifier.
-                let v4 = fp_job.filter(|job| job.is_v4()).cloned().map(|job| (job, output_ids.to_vec()));
+                let v4 = fp_job.filter(|job| job.decodes_under_v4_rules()).cloned().map(|job| (job, output_ids.to_vec()));
                 let Ok((returned, verdict)) = offload(backend, move |b| match &v4 {
                     Some((job, answer)) => {
                         b.verify_fp_interval_opening_under_job_v1(&candidate, roots, interval, &prompt_owned, work_leaves, job, answer)

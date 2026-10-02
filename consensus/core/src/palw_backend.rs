@@ -895,6 +895,42 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this backend serves no answer-only path".to_string())
     }
 
+    /// **RFC-0001 §2.6 stage 2: the prefix STATE of a prompt's first `prefix_ids.len()` ids** — the object a
+    /// prefix-state claim (FP job version 11) names ([`crate::palw_fp_prefix_v1`]): the family's digest of the K/V state
+    /// after the prefix, under the class's id and the prefix's length. Deterministic in the ids, so a producer that holds
+    /// the state and a seat that recomputes (or holds it in a cache) agree. The default serves nothing.
+    fn prefix_state_v1(
+        &self,
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _prefix_ids: &[u32],
+    ) -> Result<crate::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        Err("this backend serves no prefix-state path".to_string())
+    }
+
+    /// **A seat's check of a prefix-state claim's state**: the job's named state against the one this backend derives for
+    /// the claim's own prompt prefix (from its cache or by recomputation). `Ok(())` is agreement; the error names the
+    /// disagreement. A job that is not a prefix-state job is `Ok(())` (it names no state).
+    fn verify_prefix_state_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+    ) -> Result<(), String> {
+        let Some(named) = crate::palw_fp_prefix_v1::palw_fp_prefix_tail_v1(job) else { return Ok(()) };
+        let k = named.prefix_tokens as usize;
+        if k == 0 || k >= prompt_ids.len() {
+            return Err("the named prefix is not a proper prefix of the prompt".to_string());
+        }
+        let derived = self.prefix_state_v1(job.class_id, job.tokenizer_id, &prompt_ids[..k])?;
+        if derived != *named {
+            return Err(format!(
+                "the job names prefix state {} over {} positions and this backend derives {} for the prompt's first {k} ids",
+                named.state_root, named.prefix_tokens, derived.state_root
+            ));
+        }
+        Ok(())
+    }
+
     /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt** — the local embeddings
     /// service. Node-only and never a claim; the pooling and the normalization are
     /// [`crate::palw_embedding_pool_v1`]'s. The default serves nothing.

@@ -12795,6 +12795,17 @@ impl PalwChainStateV2 {
         !self.tir_classes.contains_key(class_id) && !self.gen_classes.contains_key(class_id)
     }
 
+    /// **RFC-0001 §2.9: the tokenizer commitment a class's registry row lists** — an IR class's record's `tokenizer_id`, a
+    /// generative class's row's — or `None` for a class whose row lists none (a dense legacy class: its tokenizer
+    /// commitment is inside an artifact digest the chain cannot read). The one read `palw_fp_tokenizer_match` compares a
+    /// job against.
+    pub fn class_tokenizer_listing_v1(&self, class_id: &Hash64) -> Option<Hash64> {
+        self.tir_classes
+            .get(class_id)
+            .map(|record| record.tokenizer_id)
+            .or_else(|| self.gen_classes.get(class_id).map(|record| record.tokenizer_id))
+    }
+
     /// **RFC-0003 §II.2.1: a V5 claim's class, resolved against the generative registry** — the row
     /// its job names, holding the job to it (`palw_fp_v5_resolve_class_v1`). `armed` is
     /// `Params::palw_fp_job_v5` in force at the judged height.
