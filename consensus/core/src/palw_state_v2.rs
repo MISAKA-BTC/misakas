@@ -1615,6 +1615,10 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **RFC-0006: `Params::palw_tir_shard_v1`'s height**, mirrored by `Params::sync_palw_tir_shard_v1` for
+    /// `tir_fence2_from_daa`'s reason (the fold's shard objects read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_shard_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1831,6 +1835,7 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            tir_shard_from_daa: None,
         })
     }
 
@@ -2066,6 +2071,23 @@ impl PalwStateParamsV2 {
     pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.tir_fence2_from_daa = from_daa;
         self
+    }
+
+    /// **RFC-0006: the layer-sharded panels' mirror** — written by `Params::sync_palw_tir_shard_v1` and by nothing else
+    /// (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_shard_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_shard_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_shard_v1`'s height, if the network arms it (the mirror).
+    pub fn tir_shard_from_daa(&self) -> Option<u64> {
+        self.tir_shard_from_daa
+    }
+
+    /// **Are layer-sharded panels in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_shard_active_at(&self, daa_score: u64) -> bool {
+        self.tir_shard_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).

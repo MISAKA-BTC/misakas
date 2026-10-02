@@ -1289,6 +1289,50 @@ pub fn derive_panel_v2_with_policy(
     capability_proof: bool,
     policy: PalwPanelDrawPolicyV1,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    derive_panel_v2_with_policy_judged_v1(
+        state,
+        params,
+        claim_id,
+        anchor_block,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy,
+        None,
+    )
+}
+
+/// **RFC-0006 §4.1: what a shard's draw judges** — the readiness class its seats must be ready for (the class
+/// and the shard, [`crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1`]), how many seats it seats (the
+/// class seats, plus the outsider where the claim is outsider-judged) and the operators that already hold the
+/// claim's outsider seat in an earlier shard (one operator holds at most one outsider seat of a claim).
+#[derive(Clone, Copy, Debug)]
+pub struct PalwShardJudgedV1<'a> {
+    pub judged_class: Hash64,
+    pub seats: u16,
+    pub excluded_outsider_operators: &'a [Hash64],
+}
+
+/// [`derive_panel_v2_with_policy`] for a SHARD's draw (RFC-0006) when `shard` is `Some`: the same eligibility,
+/// lottery or stake race and outsider rule, over the shard's readiness class, with the shard's seat count and
+/// the claim's earlier outsiders left out of the outsider's population.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_panel_v2_with_policy_judged_v1(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    policy: PalwPanelDrawPolicyV1,
+    shard: Option<&PalwShardJudgedV1<'_>>,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    // RFC-0006: a shard's draw judges the shard's readiness class and seats `shard.seats`; the flat draw is `shard: None`.
+    let judged_class = shard.map(|j| j.judged_class).unwrap_or_else(|| state.claim(claim_id).map(|c| c.class_id).unwrap_or_default());
+    let seat_total = shard.map(|j| j.seats).unwrap_or(params.seat_count);
+    let no_operators: &[Hash64] = &[];
+    let excluded_outsiders = shard.map(|j| j.excluded_outsider_operators).unwrap_or(no_operators);
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     // **ADR-0147.** A governed claim's population is fixed before its anchor, and a governed claim
     // of a BOUGHT class sits an outsider first. Neither applies to a claim accepted below the
@@ -1303,7 +1347,7 @@ pub fn derive_panel_v2_with_policy(
     // `None` carries no floor and this is the call it always was.
     let (outsider, outsider_floor) = match independence {
         Some(independence) if crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, Some(independence.from_daa)) => {
-            let (seat, floor) = palw_panel_outsider_draw_v1(
+            let (seat, floor) = palw_panel_outsider_draw_excluding_v1(
                 state,
                 params,
                 claim_id,
@@ -1313,6 +1357,7 @@ pub fn derive_panel_v2_with_policy(
                 capability_proof,
                 &policy,
                 &independence,
+                excluded_outsiders,
             )?;
             (Some(seat), floor)
         }
@@ -1324,7 +1369,7 @@ pub fn derive_panel_v2_with_policy(
     let eligible = palw_panel_eligible_bonds_judging_v2(
         state,
         claim_id,
-        &claim.class_id,
+        &judged_class,
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
@@ -1344,9 +1389,9 @@ pub fn derive_panel_v2_with_policy(
     let (eligible, needed) = match &outsider {
         Some(outsider) => (
             eligible.into_iter().filter(|(_, bond)| bond.operator_id != outsider.operator_id).collect::<Vec<_>>(),
-            params.seat_count.saturating_sub(1),
+            seat_total.saturating_sub(1),
         ),
-        None => (eligible, params.seat_count),
+        None => (eligible, seat_total),
     };
     // **ADR-0130: past the panel economy, one lottery entry per operator.** The eligibility is the
     // same list; only how it is ticketed changes.
@@ -1359,7 +1404,7 @@ pub fn derive_panel_v2_with_policy(
         let base = palw_panel_stake_base_bonds_judging_v1(
             state,
             claim_id,
-            &claim.class_id,
+            &judged_class,
             min_collateral_sompi,
             registered_by_daa,
             capability_proof,
@@ -1376,7 +1421,7 @@ pub fn derive_panel_v2_with_policy(
         let executor = palw_panel_stake_executor_bonds_judging_v1(
             state,
             claim_id,
-            &claim.class_id,
+            &judged_class,
             min_collateral_sompi,
             registered_by_daa,
             capability_proof,
@@ -1529,6 +1574,33 @@ fn palw_panel_outsider_draw_v1(
     policy: &PalwPanelDrawPolicyV1,
     independence: &PalwPanelIndependenceV1,
 ) -> Result<(PalwPanelSeatV2, Option<(u128, u128)>), PalwPanelV2Error> {
+    palw_panel_outsider_draw_excluding_v1(
+        state,
+        params,
+        claim_id,
+        anchor_block,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy,
+        independence,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn palw_panel_outsider_draw_excluding_v1(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    policy: &PalwPanelDrawPolicyV1,
+    independence: &PalwPanelIndependenceV1,
+    excluded_operators: &[Hash64],
+) -> Result<(PalwPanelSeatV2, Option<(u128, u128)>), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let population = palw_panel_eligible_bonds_judging_v2(
         state,
@@ -1544,8 +1616,10 @@ fn palw_panel_outsider_draw_v1(
     )?;
     let registrant = state.class(&claim.class_id).and_then(|record| record.registrant_bond);
     let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
-    let not_registrant =
-        |(key, bond): &(&PalwBondKeyV2, &PalwBondStateV2)| Some(**key) != registrant && Some(bond.operator_id) != registrant_operator;
+    // RFC-0006 §4.2: one operator holds at most one outsider seat of a claim, so an earlier shard's outsider is left out.
+    let not_registrant = |(key, bond): &(&PalwBondKeyV2, &PalwBondStateV2)| {
+        Some(**key) != registrant && Some(bond.operator_id) != registrant_operator && !excluded_operators.contains(&bond.operator_id)
+    };
     let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population
         .into_iter()
         .filter(not_registrant)

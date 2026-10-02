@@ -536,6 +536,8 @@ pub mod palw_pipeline_da_v1;
 pub mod palw_tir_step_v1;
 /// RFC-0002 Phase F step F8: an IR class's canonical work vector, classified and priced by structure alone.
 pub mod palw_tir_work_v1;
+/// RFC-0006: layer-sharded panels for IR classes — the plan, the partition, the cells, the V4 receipt, the recount, the fence.
+pub mod palw_tir_shard_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
