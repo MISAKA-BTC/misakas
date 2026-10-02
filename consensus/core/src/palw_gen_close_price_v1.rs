@@ -36,8 +36,9 @@ use crate::palw_fp_job_v5::PalwFreePromptJobV5;
 use crate::palw_freeprompt_v3::{PALW_FP_V4_VERSION, PalwFreePromptJobV3};
 use crate::palw_gen_class_v1::{PalwGenClassV1, PalwGenImageInputRefV1, PalwGenSourceRefV1};
 use crate::palw_gen_close_v1::{
-    PALW_GEN_CLOSE_VERSION_V1, PalwGenBindingV1, PalwGenConeCloseV1, PalwGenLeafOpeningV1, PalwGenRootClaimV1, PalwGenStepBindingV1,
-    PalwGenTensorBindingV1, palw_gen_stage_reads_negative_v1, palw_gen_stage_reads_prompt_v1, palw_gen_stage_reads_source_v1,
+    PALW_GEN_CLOSE_VERSION_V1, PalwGenBindingV1, PalwGenConeCloseV1, PalwGenDecodeCloseV1, PalwGenLeafOpeningV1, PalwGenOutputCloseV1,
+    PalwGenRootClaimV1, PalwGenStepBindingV1, PalwGenTensorBindingV1, palw_gen_stage_reads_negative_v1, palw_gen_stage_reads_prompt_v1,
+    palw_gen_stage_reads_source_v1,
 };
 use crate::palw_gen_job_v1::{PALW_GEN_JOB_VERSION_V1, PalwGenBodyV1, PalwGenImageBodyV1, PalwGenJobV1, PalwJobEnvelopeV1};
 use crate::palw_gen_step_v1::{PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenStepSpaceV1};
@@ -55,17 +56,20 @@ use crate::palw_v2::PalwJobContextV2;
 use crate::tx::{TransactionId, TransactionOutpoint};
 use misaka_palw_tir::demand_v2::post_writers_v2;
 use misaka_palw_tir::pipeline::{Binding, TirPipelineV1, TripRule};
-use misaka_palw_tir::program_v2::{InputSource, TirProgramV2};
+use misaka_palw_tir::program_v2::{InputSource, OutputDecl, TirProgramV2};
 use misaka_palw_tir::validate_v2::validate_v2;
 
-/// **The most work one generative class's close sizing may do**, in the twin's steps
-/// ([`crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`] counts them): the whole class, every stage — twice an IR
-/// class's (`2^26`), which the reduced SD3 pipeline (13 stages, 168 commit points) sizes in 66.9 M steps — three quarters of it the ten
-/// VAE stages, a fifth the denoiser, the text stages almost nothing (the sizing walks every tile of a node at its widest position, and
-/// a tile of a convolution's output reads `3 · Cin` input leaves). A registration's CPU is bounded before it is spent; a class whose
-/// sizing would do more is refused by name — a real-size image stack is past any cap until the sizing walks a tile CLASS, not every
-/// tile (recorded as the follow-up).
-pub const PALW_GEN_CLOSE_SIZING_WORK_CAP_V1: u64 = 1 << 27;
+/// **The most work one generative class's close sizing may do**, in the twin's steps: **the IR's own cap**
+/// ([`crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1`], `2^26`) — the generative gate is no looser than the IR one,
+/// by construction. A registration's CPU is bounded before it is spent; a class whose sizing would do more is refused by name.
+///
+/// The reduced SD3 pipeline (13 stages, 168 commit points) sizes in **66,871,506 steps — 237,358 (0.35 %) under it**: three quarters of
+/// it the ten VAE stages, a fifth the denoiser, the text stages almost nothing (the sizing walks every tile of a node at its widest
+/// position, and a tile of a convolution's output reads `3 · Cin` input leaves). That margin is the drill class's, and it is pinned
+/// (`misaka-palw-sdk/tests/gen_sd3_class.rs`, `the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap`): a lowering change that
+/// eats it fails there, by name, before the gate refuses the class. A real-size image stack is past any cap until the sizing walks a tile
+/// CLASS rather than every tile (the recorded follow-up).
+pub const PALW_GEN_CLOSE_SIZING_WORK_CAP_V1: u64 = crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1;
 
 /// The most elements of a decode rule's logit bias, and the stop sequences and their ids (`DecodeConfigV4`'s own bounds): the
 /// widest a text job's decode config rides in a binding.
@@ -457,4 +461,107 @@ pub fn palw_gen_worst_closes_of_class_v1(
         }
     }
     Ok((all, work_cap - remaining))
+}
+
+// =================================================================================================
+// The closes that are not cone closes
+// =================================================================================================
+
+/// **A close of a generative class that no cone close stands for** (RFC-0003 PALW-GEN-20): the other two proofs a one-move accusation
+/// may carry (`palw_gen_one_move_proof_is_admissible_v1`), each a whole object of the class's own shape rather than the units one cone
+/// reads — so each is priced from the class alone, in closed form, and an admitted class's every close kind is priced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwGenWholeCloseKindV1 {
+    /// **`GenDecodeToken`** (tag 11), a text class's: a generated id against the committed logits row it was selected from — EVERY tile of
+    /// the row, each opened under the text stage's root (the decode rule selects over all the lanes). The bytes are the vocabulary's four
+    /// bytes a lane plus, per tile, a coordinate and a whole path: `4 · V + ⌈V / T⌉ · (23 + 64 · depth)` beside the frame and the
+    /// binding with its generated ids.
+    Decode,
+    /// **`GenOutputTile`** (tag 16), a tensor class's: one output tile of the canonical output, proven under the claim's `output_root`,
+    /// against the output node's committed step tile of the same lanes under its stage's root: `T · (element bytes + 4)` and two paths
+    /// beside the frame and the binding.
+    Output,
+}
+
+impl PalwGenWholeCloseKindV1 {
+    /// The name a refusal carries.
+    pub fn what(self) -> &'static str {
+        match self {
+            Self::Decode => "generative decode close bytes as carried",
+            Self::Output => "generative output close bytes as carried",
+        }
+    }
+}
+
+/// **The whole closes of a class and what each weighs as carried** (the close object, serialized at the widest binding, and every unit it
+/// opens at its widest): the decode close of a text class, the output close of a tensor class. Cheap — closed form, no twin — so the gate
+/// asks it before the sizing.
+pub fn palw_gen_whole_closes_v1(
+    class: &PalwGenClassV1,
+    pipeline: &TirPipelineV1,
+    programs: &[TirProgramV2],
+) -> Result<Vec<(PalwGenWholeCloseKindV1, u64)>, PalwClassAdmissionError> {
+    let refused = |why: String| PalwClassAdmissionError::GenClass(format!("the close sizing refuses the class: {why}"));
+    let tables = PalwGenClassSizingV1::new(class, pipeline, programs)?;
+    let out = pipeline.output_stage as usize;
+    let stage = pipeline.stages.get(out).ok_or_else(|| refused("no output stage".into()))?;
+    let program = &programs[stage.program as usize];
+    let depth = tables.stage_depths[out];
+    let zero = Hash64::from_bytes([0; 64]);
+    let (tile, elements) = upstream_output(programs, pipeline, &class.layouts, out).map_err(&refused)?;
+    match program.output {
+        OutputDecl::Logits { .. } => {
+            let PalwGenBindingV1::Text(binding) = &tables.binding else {
+                return Err(refused("a logits output stage is a text class's".into()));
+            };
+            let close = PalwGenDecodeCloseV1 { version: PALW_GEN_CLOSE_VERSION_V1, binding: binding.clone(), t: 0, row: Vec::new() };
+            let frame = object_len(&PalwConsensusObjectV2::CourtClosed {
+                session_id: zero,
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: PalwCourtVerdictProofV2::GenDecodeToken { close: Box::new(close) },
+            })
+            .map_err(&refused)?;
+            // The binding carries the generated ids too (up to the text stage's `max_trip`, four bytes each).
+            let generated = 4 * stage.max_trip as u64;
+            let tiles = elements.div_ceil(tile.max(1) as u64);
+            let row = tiles.saturating_mul(23 + 64 * depth).saturating_add(4 * elements);
+            Ok(vec![(PalwGenWholeCloseKindV1::Decode, frame + generated + row)])
+        }
+        OutputDecl::Rows { .. } | OutputDecl::Final { .. } => {
+            let PalwGenBindingV1::Tensor(binding) = &tables.binding else {
+                return Err(refused("a rows or final output stage is a tensor class's".into()));
+            };
+            let layout = class.output.layout().map_err(|e| refused(format!("the output header: {e:?}")))?;
+            let step_tile = PalwGenLeafOpeningV1 {
+                coord: PalwGenLeafCoordV1 { stage: out as u8, pos: 0, kind: PalwGenLeafKindV1::State { state: 0, layer: Some(0) }, tile: 0 },
+                lanes_le: Vec::new(),
+                path: vec![zero; depth as usize],
+            };
+            let close = PalwGenOutputCloseV1 {
+                version: PALW_GEN_CLOSE_VERSION_V1,
+                binding: binding.clone(),
+                tile: 0,
+                output_tile: Vec::new(),
+                output_proof: Vec::new(),
+                step_tile,
+            };
+            let frame = object_len(&PalwConsensusObjectV2::CourtClosed {
+                session_id: zero,
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) },
+            })
+            .map_err(&refused)?;
+            // The output tile is the step tile's lanes (the output node's commit tile) at the kind's width; its path is the output
+            // tree's, over `⌈E / T⌉` tiles.
+            let out_tile = palw_gen_output_tile_len(class, pipeline, programs).unwrap_or(tile).max(1) as u64;
+            let lanes = out_tile.min(layout.elements.max(1));
+            let proof = 64 * ceil_log2(layout.elements.div_ceil(out_tile));
+            Ok(vec![(PalwGenWholeCloseKindV1::Output, frame + lanes * (layout.element_bytes as u64 + 4) + proof)])
+        }
+    }
+}
+
+/// The output node's commit tile (PALW-OUT-3's alignment: the output tile is the step tile).
+fn palw_gen_output_tile_len(class: &PalwGenClassV1, pipeline: &TirPipelineV1, programs: &[TirProgramV2]) -> Option<u32> {
+    crate::palw_gen_class_v1::palw_gen_output_tile_len_v1(pipeline, programs, &class.layouts)
 }
