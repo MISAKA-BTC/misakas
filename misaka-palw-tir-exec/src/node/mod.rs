@@ -27,7 +27,8 @@ pub use backend::{
 };
 pub use cell::{
     CpuKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1, TirCellV1,
-    TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, verify_cell_v1,
+    TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, tir_shard_cells_v1, tir_shard_geometry_v1, tir_verify_capture_cells_v1,
+    tokens_of_capture_v1, verify_cell_v1,
 };
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,

@@ -695,3 +695,104 @@ pub fn cell_runs_v1(
     }
     Ok(runs)
 }
+
+// ---------------------------------------------------------------------------------------------
+// A seat's duty: the cells of a plan over a class backend (RFC-0006 §4)
+// ---------------------------------------------------------------------------------------------
+
+use super::backend::{TirBackendV1, TirCaptureV1};
+use kaspa_consensus_core::palw_tir_shard_v1 as shard_rules;
+use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+
+/// The layer partition of a class under `s_l` shards, exactly as the fold derives it (`palw_tir_shard_weights_v1` over the class's
+/// `max_context`, `palw_tir_shard_partition_v1`), and the segment alignment `lcm(C, h_tile)`.
+pub fn tir_shard_geometry_v1(tir: &TirBackendV1, s_l: u16) -> Result<(Vec<Range<usize>>, u32), String> {
+    let space = tir.space();
+    let weights = shard_rules::palw_tir_shard_weights_v1(&space.program, tir.class().layout.max_context);
+    let parts = shard_rules::palw_tir_shard_partition_v1(&weights, s_l)
+        .ok_or_else(|| format!("a plan of {s_l} shards over {} layers", weights.layer_bytes.len()))?;
+    let align = shard_rules::palw_tir_shard_segment_align_v1(space.layout.checkpoint_interval, space.layout.h_tile)
+        .ok_or("the class's checkpoint interval and history tile have no alignment")?;
+    Ok((parts, align))
+}
+
+/// **The cells of one seat's duty**: shard `shard` of an `s_l`-shard plan, over the segments of `mask` of an `s_p`-segment cut of a
+/// job of `positions` positions. Empty segments (a job shorter than the alignment) are not cells.
+pub fn tir_shard_cells_v1(
+    tir: &TirBackendV1,
+    positions: u32,
+    shard: u16,
+    s_l: u16,
+    s_p: u16,
+    mask: PalwSegmentMaskV2,
+) -> Result<Vec<TirCellV1>, String> {
+    let (parts, align) = tir_shard_geometry_v1(tir, s_l)?;
+    let layers = tir.space().program.schedule.layers.len();
+    let part = parts.get(usize::from(shard)).ok_or_else(|| format!("shard {shard} of {s_l}"))?;
+    let occ = shard_rules::palw_tir_shard_occurrences_v1(part, layers);
+    let mut cells = Vec::new();
+    for j in 0..s_p {
+        if !mask.covers(j) {
+            continue;
+        }
+        let seg = shard_rules::palw_tir_shard_segment_positions_v1(positions, align, s_p, j).ok_or("a segment out of range")?;
+        if seg.is_empty() {
+            continue;
+        }
+        cells.push(TirCellV1 { shard, occ: occ.clone(), positions: seg });
+    }
+    Ok(cells)
+}
+
+/// **Verify a seat's cells over a dense capture** (the claim's material, already matched to the claim's roots by
+/// `verify_material`): the capture's leaves are authenticated against its own step root, then each cell is run on `backend`
+/// (a refusal falls back to the CPU). The first cell that is not `Verified` is the answer; otherwise the sum.
+pub fn tir_verify_capture_cells_v1(
+    tir: &TirBackendV1,
+    material: &[u8],
+    cells: &[TirCellV1],
+    backend: &mut dyn KernelBackendV1,
+) -> Result<TirCellVerdictV1, String> {
+    let capture = tir.decode_capture(material)?;
+    if !capture.is_dense() {
+        return Err("a fold carries no preimages: a cell needs the committed rows".into());
+    }
+    let ctx = &capture.binding.job_context;
+    let class_id = tir.class_id();
+    let inputs = TirCaptureInputsV1::new(&capture.leaves, ctx, &class_id, &capture.binding.step_merkle_root, u64::MAX)?;
+    let tokens = tokens_of_capture_v1(&capture);
+    let params = tir.artifact().params();
+    let mut total = (0u64, 0u32);
+    for cell in cells {
+        let req = TirCellRequestV1 {
+            space: tir.space(),
+            plan: tir.artifact().plan(),
+            params,
+            class_id,
+            ctx,
+            cell,
+            tokens: &tokens,
+            inputs: &inputs,
+            fused: tir.fused_kernels(),
+        };
+        let verdict = match backend.verify_cell(&req) {
+            Ok(v) => v,
+            Err(_) => CpuKernelBackendV1.verify_cell(&req).expect("the CPU backend runs every cell"),
+        };
+        match verdict {
+            TirCellVerdictV1::Verified { leaves, positions } => {
+                total.0 += leaves;
+                total.1 += positions;
+            }
+            other => return Ok(other),
+        }
+    }
+    Ok(TirCellVerdictV1::Verified { leaves: total.0, positions: total.1 })
+}
+
+/// The committed token of every position: the prompt's ids, then the generated ids (the last generated id feeds no position).
+pub fn tokens_of_capture_v1(capture: &TirCaptureV1) -> Vec<u32> {
+    let mut t = capture.prompt.clone();
+    t.extend(capture.generated.iter().copied());
+    t
+}

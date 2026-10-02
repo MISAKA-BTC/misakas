@@ -412,3 +412,91 @@ fn a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_
     assert!(matches!(CpuKernelBackendV1.verify_cell(&req).unwrap(), TirCellVerdictV1::Unavailable { .. }));
     let _ = NoSink;
 }
+
+/// **A seat's duty over a class backend** (what the node runs): each admissible program is written as a container, served by
+/// [`TirBackendV1`], and a producer's honest dense capture is verified shard by shard from the plan's own geometry and
+/// segment cuts — every shard and segment `Verified`, a moved boundary leaf found by the shard that computed it, a fold
+/// (no preimages) refused by name, and the cuts of a duty (`tir_shard_cells_v1`) partition the job exactly.
+#[test]
+fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use misaka_palw_tir::interval::analyze_ranges;
+    use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, TirCaptureV1, tir_shard_cells_v1, tir_verify_capture_cells_v1};
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!("tir-exec-cell-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut classes, mut cells_run) = (0usize, 0usize);
+    for (k, (name, program, params)) in programs().into_iter().enumerate() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() || program.schedule.layers.len() < 2 {
+            continue;
+        }
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap_or_else(|e| panic!("{name}: {e}")));
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let form = if k % 2 == 0 { PalwPromptIdsFormV1::Flat } else { PalwPromptIdsFormV1::MerkleV1 };
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
+        let outcome = backend.execute(&job, &prompt).unwrap();
+        let positions = backend.space().job_shape(&job).unwrap().positions;
+        let layers = program.schedule.layers.len();
+        for (s_l, s_p) in [(2u16, 1u16), (2, 2)] {
+            if usize::from(s_l) > layers {
+                continue;
+            }
+            // The duty's cells partition the job: every shard's segments tile 0..positions once, whole shards cover the occurrences.
+            let mut occ_seen = Vec::new();
+            for shard in 0..s_l {
+                let full = tir_shard_cells_v1(&backend, positions, shard, s_l, s_p, PalwSegmentMaskV2::full(s_p)).unwrap();
+                let mut cut = 0u32;
+                for c in &full {
+                    assert_eq!(c.positions.start, cut, "{name}: segments are contiguous");
+                    cut = c.positions.end;
+                    let v = tir_verify_capture_cells_v1(&backend, &outcome.material, std::slice::from_ref(c), &mut CpuKernelBackendV1).unwrap();
+                    assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name} S_L {s_l} S_P {s_p} shard {shard}: {v:?}");
+                    cells_run += 1;
+                }
+                if let Some(first) = full.first() {
+                    occ_seen.push(first.occ.clone());
+                }
+                if positions > 0 && !full.is_empty() {
+                    assert_eq!(cut, positions, "{name}: the segments end at the job's last position");
+                }
+            }
+            assert_eq!(occ_seen.first().map(|r| r.start), Some(0));
+            assert_eq!(occ_seen.last().map(|r| r.end), Some(layers + 2));
+            for w in occ_seen.windows(2) {
+                assert_eq!(w[0].end, w[1].start, "{name}: shards are contiguous in occurrences");
+            }
+            // The whole duty of one shard in one call equals its cells one by one.
+            let whole = tir_shard_cells_v1(&backend, positions, 0, s_l, s_p, PalwSegmentMaskV2::full(s_p)).unwrap();
+            let v = tir_verify_capture_cells_v1(&backend, &outcome.material, &whole, &mut CpuKernelBackendV1).unwrap();
+            assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name}: {v:?}");
+        }
+        // A leaf moved after commitment is not the capture's root: refused as no capture rather than a verdict.
+        let mut tampered = TirCaptureV1::decode(&outcome.material).unwrap();
+        tampered.leaves[1].values_le[0] ^= 1;
+        let cells = tir_shard_cells_v1(&backend, positions, 0, 2, 1, PalwSegmentMaskV2::full(1)).unwrap();
+        assert!(tir_verify_capture_cells_v1(&backend, &tampered.encode(), &cells, &mut CpuKernelBackendV1).is_err(), "{name}");
+        // A fold has no preimages to read.
+        let folding = TirBackendV1::new(name.clone(), backend.artifact().clone(), root, backend.canonical().clone(), form, 1 << 26)
+            .unwrap()
+            .with_dense_capture_bytes(0);
+        let fold = folding.execute(&job, &prompt).unwrap();
+        let why = tir_verify_capture_cells_v1(&folding, &fold.material, &cells, &mut CpuKernelBackendV1).unwrap_err();
+        assert!(why.contains("fold"), "{name}: {why}");
+        classes += 1;
+    }
+    eprintln!("{classes} classes, {cells_run} cells verified through the backend");
+    assert!(classes >= 5);
+}
