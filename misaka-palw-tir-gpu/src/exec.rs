@@ -132,10 +132,46 @@ impl<'a> GpuExecutor<'a> {
     /// uploaded (in its packed form) now.
     pub fn new(dev: &'a GpuDevice, plan: &'a TirPlan, params: &'a TirParams<'a>) -> TirResult<Self> {
         params.check_complete(plan)?;
+        Self::build(dev, plan, params, None)
+    }
+
+    /// **An executor for the occurrences `occ` only** (RFC-0006, a cell's): the params those occurrences read are uploaded, and
+    /// nothing else — a shard seat holds its own layers' weights. An instance an occurrence outside `occ` reads is never read
+    /// by [`Self::step_cell`] over `occ`.
+    pub fn new_cell(dev: &'a GpuDevice, plan: &'a TirPlan, params: &'a TirParams<'a>, occ: std::ops::Range<usize>) -> TirResult<Self> {
+        let mut only: std::collections::BTreeSet<(u16, Option<u16>)> = Default::default();
+        for (o, &(block, layer)) in plan.occurrences.iter().enumerate() {
+            if !occ.contains(&o) {
+                continue;
+            }
+            for n in &plan.program.blocks[block as usize].nodes {
+                for r in &n.inputs {
+                    if let Ref::Param(j) = r {
+                        let l = if plan.program.params[*j as usize].per_layer { layer } else { None };
+                        if !params.has(*j, l) {
+                            return Err(missing(format!("param {} (layer {l:?}): the cell's occurrence {o} reads it", plan.program.params[*j as usize].name)));
+                        }
+                        only.insert((*j, l));
+                    }
+                }
+            }
+        }
+        Self::build(dev, plan, params, Some(&only))
+    }
+
+    fn build(
+        dev: &'a GpuDevice,
+        plan: &'a TirPlan,
+        params: &'a TirParams<'a>,
+        only: Option<&std::collections::BTreeSet<(u16, Option<u16>)>>,
+    ) -> TirResult<Self> {
         let occ_plans = plan.refine(&|j, l| params.range(j, l));
         let max = dev.limits.max_storage_buffer_binding_size as usize;
         let mut dparams = BTreeMap::new();
         for &(j, layer) in &plan.param_instances {
+            if only.is_some_and(|set| !set.contains(&(j, layer))) {
+                continue;
+            }
             let s = params.get(j, layer).ok_or_else(|| missing(format!("param {j} at {layer:?}")))?;
             let decl = &plan.program.params[j as usize];
             let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
@@ -225,6 +261,85 @@ impl<'a> GpuExecutor<'a> {
     /// exactly as before. The sink receives the committed values (every node's, when it asks) in
     /// slot order once the step has succeeded.
     pub fn step(&mut self, token: u32, sink: &mut dyn StepSink) -> TirResult<()> {
+        let n = self.plan.occurrences.len();
+        self.step_range(token, 0..n, Vec::new(), sink).map(|_| ())
+    }
+
+    /// **One position of a cell** (RFC-0006): occurrences `occ` of the position [`Self::pos`], from `carry_in` (the committed
+    /// carry-out lanes of occurrence `occ.start − 1`, one vector per carry; empty when `occ` starts at `pre`). On success the state
+    /// advances and the LAST occurrence's carry-out is returned (empty when `occ` ends at `post`: its logits are
+    /// [`Self::logits`]); on failure the state is exactly as before. The reference is `TirExecutor::step_cell`.
+    pub fn step_cell(
+        &mut self,
+        token: u32,
+        occ: std::ops::Range<usize>,
+        carry_in: &[Vec<i128>],
+        sink: &mut dyn StepSink,
+    ) -> TirResult<Vec<Vec<i128>>> {
+        let n = self.plan.occurrences.len();
+        if occ.start >= occ.end || occ.end > n {
+            return Err(TirError::new(TirErrorKind::Operand, format!("a cell of occurrences {occ:?} of {n}")));
+        }
+        let mut initial: Vec<Val> = Vec::new();
+        if occ.start > 0 {
+            let (block, _) = self.plan.occurrences[occ.start];
+            let want = &self.plan.program.blocks[block as usize].carry_in;
+            if carry_in.len() != want.len() {
+                return Err(TirError::new(
+                    TirErrorKind::Operand,
+                    format!("{} carry-ins for an occurrence that takes {}", carry_in.len(), want.len()),
+                ));
+            }
+            for (t, lanes) in want.iter().zip(carry_in) {
+                let shape: Vec<usize> = t.shape.iter().map(|d| d.at(1)).collect();
+                if lanes.len() != numel(&shape) {
+                    return Err(TirError::new(
+                        TirErrorKind::Operand,
+                        format!("a carry-in of {} lanes for a type of {}", lanes.len(), numel(&shape)),
+                    ));
+                }
+                let buf = Buf::from_i128s(t.dtype, lanes);
+                initial.push(match Form::computed(t.dtype) {
+                    Some(f) => Val::Dev(self.dev.upload(buf.slice(), f, &shape)),
+                    None => Val::Host(Arc::new(buf), Layout::contiguous(&shape)),
+                });
+            }
+        }
+        let carry = self.step_range(token, occ.clone(), initial, sink)?;
+        if occ.end == n {
+            // The cell ends at `post`: nothing is carried on (its logits are `Self::logits`).
+            return Ok(Vec::new());
+        }
+        Ok(carry
+            .into_iter()
+            .map(|v| match v {
+                Val::Dev(t) => self.dev.download(&t).to_i128s(),
+                Val::Host(b, l) => host_gather(&b, &l).to_i128s(),
+            })
+            .collect())
+    }
+
+    /// The `Fixed` instance of `(state, layer)` after the last successful step, on the host.
+    pub fn fixed_value(&self, state: u16, layer: Option<u16>) -> Option<Buf> {
+        let k = self.plan.instance(state, layer)? as usize;
+        self.fixed[k].as_ref().map(|t| self.dev.download(t))
+    }
+
+    /// The newest `n` rows of the history instance of `(state, layer)` after the last successful step, oldest first, as `i32` lanes;
+    /// `None` when fewer than `n` rows are held on the device (the window keeps `window − 1`).
+    pub fn hist_tail_rows(&self, state: u16, layer: Option<u16>, n: usize) -> Option<Vec<Vec<i32>>> {
+        let k = self.plan.instance(state, layer)? as usize;
+        let h = self.hist[k].as_ref()?;
+        if h.rows < n {
+            return None;
+        }
+        let first = h.start + h.rows - n;
+        let bytes = self.dev.read_bytes(&h.buf, (first * h.row) as u64 * 4, (n * h.row) as u64 * 4);
+        let lanes = unpack(&bytes, h.form, n * h.row);
+        Some(lanes.chunks(h.row).map(|r| r.iter().map(|v| *v as i32).collect()).collect())
+    }
+
+    fn step_range(&mut self, token: u32, occ: std::ops::Range<usize>, carry0: Vec<Val>, sink: &mut dyn StepSink) -> TirResult<Vec<Val>> {
         let p = &self.plan.program;
         let pos = self.pos;
         if pos >= p.history_bound {
@@ -235,10 +350,10 @@ impl<'a> GpuExecutor<'a> {
         }
         // The plans are read while the run state is written: hold them apart for the step.
         let occ_plans = std::mem::take(&mut self.occ_plans);
-        let r = self.step_inner(token, pos, sink, &occ_plans);
+        let r = self.step_inner(token, pos, sink, &occ_plans, occ, carry0);
         self.occ_plans = occ_plans;
         match r {
-            Ok(()) => {
+            Ok(carry) => {
                 for k in 0..self.written.len() {
                     if std::mem::replace(&mut self.written[k], false) {
                         std::mem::swap(&mut self.fixed[k], &mut self.fixed_next[k]);
@@ -254,7 +369,7 @@ impl<'a> GpuExecutor<'a> {
                 }
                 self.pos += 1;
                 self.stats.steps += 1;
-                Ok(())
+                Ok(carry)
             }
             Err(e) => {
                 self.written.iter_mut().for_each(|w| *w = false);
@@ -264,7 +379,15 @@ impl<'a> GpuExecutor<'a> {
         }
     }
 
-    fn step_inner(&mut self, token: u32, pos: u32, sink: &mut dyn StepSink, occ_plans: &[BlockPlan]) -> TirResult<()> {
+    fn step_inner(
+        &mut self,
+        token: u32,
+        pos: u32,
+        sink: &mut dyn StepSink,
+        occ_plans: &[BlockPlan],
+        occ_range: std::ops::Range<usize>,
+        carry0: Vec<Val>,
+    ) -> TirResult<Vec<Val>> {
         let plan = self.plan;
         let dev = self.dev;
         let every = sink.every_node();
@@ -275,7 +398,7 @@ impl<'a> GpuExecutor<'a> {
         let inputs = dev.upload(misaka_palw_tir_exec::elem::Slice::Idx(&[token, pos]), Form::U32, &[2]);
         // The committed lanes of this step, staged on the device for one readback.
         let mut lanes_total = 0usize;
-        for (occ, &(block, _)) in plan.occurrences.iter().enumerate() {
+        for (occ, &(block, _)) in plan.occurrences.iter().enumerate().take(occ_range.end).skip(occ_range.start) {
             let bp = &occ_plans[occ];
             let h = bp.window.map(|w| (pos as usize + 1).min(w as usize)).unwrap_or(1);
             for n in &plan.blocks[block as usize].nodes {
@@ -288,9 +411,9 @@ impl<'a> GpuExecutor<'a> {
         let mut lanes_at = 0usize;
         let mut logits_lanes: Option<usize> = None;
         let mut pending: Vec<Pending> = Vec::new();
-        let mut carry: Vec<Val> = Vec::new();
+        let mut carry: Vec<Val> = carry0;
         let mut host_failure: Option<(u32, TirError)> = None;
-        'occurrences: for (occ, &(block, layer)) in plan.occurrences.iter().enumerate() {
+        'occurrences: for (occ, &(block, layer)) in plan.occurrences.iter().enumerate().take(occ_range.end).skip(occ_range.start) {
             let bp = &occ_plans[occ];
             let h = bp.window.map(|w| (pos as usize + 1).min(w as usize)).unwrap_or(1);
             let base = plan.slot_bases[occ];
@@ -399,7 +522,7 @@ impl<'a> GpuExecutor<'a> {
                 data: buf.slice(),
             });
         }
-        Ok(())
+        Ok(carry)
     }
 
     /// The value a `Ref` names in the running occurrence.

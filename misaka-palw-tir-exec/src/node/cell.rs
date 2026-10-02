@@ -37,6 +37,7 @@ use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::program::StateKind;
 use misaka_palw_tir::{DType, Prim, RunState, Tensor};
 
+use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1};
 use crate::elem::Slice;
 use crate::exec::{NodeValue, StepSink, TirExecutor};
 use crate::params::TirParams;
@@ -140,7 +141,7 @@ fn values_of_lanes(dtype: DType, le: &[u8]) -> Vec<i128> {
 }
 
 fn lanes_of(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
-    super::run::lanes_le_v1(data, from, n, out);
+    crate::cellstep::lanes_le_of_v1(data, from, n, out);
 }
 
 /// What the cell's sink collected at one position: every committed tile, by `(node slot, tile)`.
@@ -199,101 +200,6 @@ fn written_instances(space: &PalwTirStepSpaceV1, occ: &Range<usize>) -> (Vec<usi
             .collect()
     };
     (owned(space.fixed_instances()), owned(space.hist_instances()))
-}
-
-/// **What the cell verifier asks of an executor** — the CPU executor ([`CpuCellStepperV1`]) or a device's (`misaka-palw-tir-gpu`).
-/// A backend implements the stepping and the reading of the state it holds, and refuses (`resume`) what it cannot do; the
-/// verifier ([`verify_cell_stepping_v1`]) is one function over both, so a device's verdict is the CPU's by construction.
-pub trait TirCellStepperV1 {
-    /// One position of the cell (see [`TirExecutor::step_cell`]): the committed values reach `sink`, the last occurrence's
-    /// carry-out is returned (empty at `post`).
-    fn step_cell(
-        &mut self,
-        token: u32,
-        occ: std::ops::Range<usize>,
-        carry_in: &[Vec<i128>],
-        sink: &mut dyn StepSink,
-    ) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>>;
-    /// The last step's logits row, as `i32` lanes (the last shard's).
-    fn logits_lanes(&self) -> Vec<i32>;
-    /// `n` lanes of the `Fixed` instance of `(state, layer)` from `first`, appended little-endian (`i32`/`u32`, PALW-TIR-5).
-    fn fixed_lanes(&self, state: u16, layer: Option<u16>, first: usize, n: usize, out: &mut Vec<u8>) -> Result<(), String>;
-    /// The newest `h_tile` rows of the history instance of `(state, layer)`, lanes `first_lane .. first_lane + row_lanes` of
-    /// each, oldest row first, appended little-endian.
-    fn hist_tile_lanes(
-        &self,
-        state: u16,
-        layer: Option<u16>,
-        h_tile: usize,
-        first_lane: usize,
-        row_lanes: usize,
-        out: &mut Vec<u8>,
-    ) -> Result<(), String>;
-    /// Resume at the start of position `st.pos` for the instances `keep` names (a segment after the first). A backend that
-    /// cannot resume refuses; the caller then verifies the cell on the CPU.
-    fn resume(
-        &mut self,
-        _st: &RunState,
-        _keep: &dyn Fn(u16, Option<u16>) -> bool,
-        _tails: &[(u16, Option<u16>, Vec<Vec<i32>>)],
-    ) -> Result<(), String> {
-        Err("this backend does not resume a segment".to_string())
-    }
-}
-
-/// The CPU executor as a cell stepper.
-pub struct CpuCellStepperV1<'a>(pub TirExecutor<'a>);
-
-impl TirCellStepperV1 for CpuCellStepperV1<'_> {
-    fn step_cell(
-        &mut self,
-        token: u32,
-        occ: std::ops::Range<usize>,
-        carry_in: &[Vec<i128>],
-        sink: &mut dyn StepSink,
-    ) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>> {
-        self.0.step_cell(token, occ, carry_in, sink)
-    }
-    fn logits_lanes(&self) -> Vec<i32> {
-        self.0.logits().1.to_i128s().into_iter().map(|v| v as i32).collect()
-    }
-    fn fixed_lanes(&self, state: u16, layer: Option<u16>, first: usize, n: usize, out: &mut Vec<u8>) -> Result<(), String> {
-        let v = self.0.fixed_value(state, layer).ok_or_else(|| format!("no Fixed instance {:?}", (state, layer)))?;
-        lanes_of(v, first, n, out);
-        Ok(())
-    }
-    fn hist_tile_lanes(
-        &self,
-        state: u16,
-        layer: Option<u16>,
-        h_tile: usize,
-        first_lane: usize,
-        row_lanes: usize,
-        out: &mut Vec<u8>,
-    ) -> Result<(), String> {
-        let tail = self.0.hist_tail(state, layer).ok_or_else(|| format!("no history instance {:?}", (state, layer)))?;
-        if tail.len() < h_tile {
-            return Err(format!("history {:?}: {} rows kept for a tile of {h_tile}", (state, layer), tail.len()));
-        }
-        for row in tail.iter().skip(tail.len() - h_tile) {
-            for x in &row[first_lane..first_lane + row_lanes] {
-                out.extend_from_slice(&x.to_le_bytes());
-            }
-        }
-        Ok(())
-    }
-    fn resume(
-        &mut self,
-        st: &RunState,
-        keep: &dyn Fn(u16, Option<u16>) -> bool,
-        tails: &[(u16, Option<u16>, Vec<Vec<i32>>)],
-    ) -> Result<(), String> {
-        self.0.import_cell_state(st, keep).map_err(|e| e.to_string())?;
-        for (j, layer, rows) in tails {
-            self.0.set_hist_tail_rows(*j, *layer, rows).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
 }
 
 /// **Verify one cell** on the CPU (the module doc). Pure given its inputs: the same request, the same verdict, on any build.
@@ -903,27 +809,49 @@ pub fn tokens_of_capture_v1(capture: &TirCaptureV1) -> Vec<u32> {
 // The device plug-in (gpu-integer-backend.md §8)
 // ---------------------------------------------------------------------------------------------
 
-/// A factory of device backends, registered once by a binary that links one (`misaka-palw-tir-gpu` is an isolated workspace: a
-/// release node does not carry it, a node built with it calls [`register_kernel_backend_v1`] at start-up).
-pub type TirKernelBackendFactoryV1 = Box<dyn Fn() -> Option<Box<dyn KernelBackendV1 + Send>> + Send + Sync>;
+/// **A registered device as a [`KernelBackendV1`]**: it refuses a cell of a segment after the first (a device keeps no committed
+/// boundary state to resume from) and any cell its stepper cannot carry out, and otherwise runs the node's one verifier over the
+/// device's stepper — so its verdict is the CPU's by construction.
+pub struct DeviceKernelBackendV1(pub std::sync::Arc<dyn TirDeviceV1>);
 
-static KERNEL_BACKEND_FACTORY_V1: std::sync::OnceLock<TirKernelBackendFactoryV1> = std::sync::OnceLock::new();
-
-/// Register the device backend. Once per process; a second registration is refused (`false`).
-pub fn register_kernel_backend_v1(factory: TirKernelBackendFactoryV1) -> bool {
-    KERNEL_BACKEND_FACTORY_V1.set(factory).is_ok()
+impl KernelBackendV1 for DeviceKernelBackendV1 {
+    fn name(&self) -> String {
+        self.0.name()
+    }
+    fn verify_cell(&mut self, req: &TirCellRequestV1<'_>) -> Result<TirCellVerdictV1, KernelRefusedV1> {
+        if req.cell.positions.start != 0 {
+            return Err(KernelRefusedV1("a cell of a segment after the first: the device does not resume".to_string()));
+        }
+        let mut stepper = self.0.cell_stepper(req.plan, req.params, req.cell.occ.clone()).map_err(KernelRefusedV1)?;
+        match verify_cell_stepping_v1(req, stepper.as_mut()) {
+            // The device could not carry the cell out (a history short of rows, a step it refused): the CPU runs it.
+            TirCellVerdictV1::Refused(why) => Err(KernelRefusedV1(why)),
+            verdict => Ok(verdict),
+        }
+    }
+    fn device_capacity_bytes(&self) -> Option<u64> {
+        self.0.capacity_bytes()
+    }
 }
 
-/// **The backend a node runs its cells on**: the registered device backend when `want_device` and one is registered and builds,
-/// otherwise the CPU. The `bool` is whether the answer is a device backend — a node that asked for one and got the CPU says so.
+static DEVICE_V1: std::sync::OnceLock<std::sync::Arc<dyn TirDeviceV1>> = std::sync::OnceLock::new();
+
+/// Register the device. Once per process; a second registration is refused (`false`).
+pub fn register_device_v1(device: std::sync::Arc<dyn TirDeviceV1>) -> bool {
+    DEVICE_V1.set(device).is_ok()
+}
+
+/// **The backend a node runs its cells on**: the registered device when `want_device` and one is registered, otherwise the CPU. The
+/// `bool` is whether the answer is a device — a node that asked for one and got the CPU says so.
 pub fn tir_kernel_backend_v1(want_device: bool) -> (Box<dyn KernelBackendV1 + Send>, bool) {
-    if want_device && let Some(factory) = KERNEL_BACKEND_FACTORY_V1.get() && let Some(device) = factory() {
-        return (device, true);
+    if want_device && let Some(device) = DEVICE_V1.get() {
+        return (Box::new(DeviceKernelBackendV1(std::sync::Arc::clone(device))), true);
     }
     (Box::new(CpuKernelBackendV1), false)
 }
 
-/// Whether a device backend is registered in this process.
+/// Whether a device is registered in this process.
 pub fn tir_kernel_backend_registered_v1() -> bool {
-    KERNEL_BACKEND_FACTORY_V1.get().is_some()
+    DEVICE_V1.get().is_some()
 }
+

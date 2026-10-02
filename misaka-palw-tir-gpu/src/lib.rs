@@ -25,6 +25,7 @@
 //! root workspace depends on this crate or sees its dependencies.
 
 pub mod batch;
+pub mod cell;
 pub mod device;
 pub mod exec;
 pub mod fixtures;
@@ -33,6 +34,7 @@ pub mod tensor;
 pub mod wgsl;
 
 pub use batch::{BatchReplay, BatchStats, ReplayOut, ReplaySink};
+pub use cell::{GpuCellStepper, GpuDeviceV1};
 pub use device::{DeviceError, GpuDevice};
 pub use exec::{ExecStats, GpuExecutor};
 pub use kernels::{DeviceFailure, Ragged, Recorder, Unsupported};

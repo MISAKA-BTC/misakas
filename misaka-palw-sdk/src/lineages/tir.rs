@@ -40,8 +40,8 @@ pub use misaka_palw_tir_exec::node::{
 };
 /// RFC-0006: a seat's cells over a class backend, and the device plug-in.
 pub use misaka_palw_tir_exec::node::{
-    CpuKernelBackendV1, KernelBackendV1, TirCellV1, tir_shard_weight_bytes_v1, TirCellVerdictV1, TirKernelBackendFactoryV1, register_kernel_backend_v1,
-    tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1, tir_shard_geometry_v1, tir_verify_capture_cells_v1,
+    CpuKernelBackendV1, KernelBackendV1, TirCellV1, TirCellVerdictV1, TirDeviceV1, register_device_v1, tir_kernel_backend_registered_v1,
+    tir_kernel_backend_v1, tir_shard_cells_v1, tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
     tokens_of_capture_v1,
 };
 
