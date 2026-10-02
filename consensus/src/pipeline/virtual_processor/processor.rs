@@ -5018,6 +5018,15 @@ impl VirtualStateProcessor {
         state.claim(&claim).map(|c| (c.execution_root, c.trace_root, c.work_leaves))
     }
 
+    /// **RFC-0006: the layer-shard plans at the tip** (`palw_tir_shard_plans_v1`).
+    pub fn palw_tir_shard_plans_v1_impl(
+        &self,
+    ) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        state.tir_shard_plans_iter().map(|(class, plan)| (*class, plan.clone())).collect()
+    }
+
     /// The payout payload the chain has registered for `bond`, if it is registered at all.
     pub fn palw_bond_payout_payload_v2_impl(
         &self,

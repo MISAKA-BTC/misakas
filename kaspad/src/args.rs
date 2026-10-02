@@ -432,6 +432,19 @@ pub struct Args {
     /// evaluation claim it is drawn onto is a duty and is never optional. Needs `--palw-producer-key`,
     /// `--palw-producer-bond` and a fee float.
     pub palw_improve_evaluate: bool,
+    /// **RFC-0006: the layer shards this node answers and proves possession of** (`--palw-tir-shard-hold=0,2`); none named means all.
+    #[serde(skip)]
+    pub palw_tir_shard_hold: Vec<u16>,
+    /// **RFC-0006: declare a class's layer-shard plan** (`--palw-tir-shard-declare=<class>:<S_L>:<S_P>`), signed by this node's
+    /// bond when it is the class's registrant. Carried once.
+    #[serde(skip)]
+    pub palw_tir_shard_declare: Option<String>,
+    /// **RFC-0006: run the cells on a device backend** (`--palw-tir-shard-gpu`, default off); the CPU where this build has none.
+    #[serde(skip)]
+    pub palw_tir_shard_gpu: bool,
+    /// **RFC-0006: shadow mode** (`--palw-tir-shard-shadow`): the cells are verified and the verdicts logged; nothing is filed.
+    #[serde(skip)]
+    pub palw_tir_shard_shadow: bool,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact.** A seat holding a line's parent
     /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
     /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
@@ -706,6 +719,10 @@ impl Default for Args {
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
+            palw_tir_shard_hold: Vec::new(),
+            palw_tir_shard_declare: None,
+            palw_tir_shard_gpu: false,
+            palw_tir_shard_shadow: false,
             palw_improve_artifact_dir: None,
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
@@ -1874,6 +1891,44 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-shard-hold")
+                .long("palw-tir-shard-hold")
+                .require_equals(true)
+                .value_delimiter(',')
+                .value_parser(clap::value_parser!(u16))
+                .help(
+                    "RFC-0006: the layer shards of a sharded IR class this node answers and proves possession of (comma-separated \
+                     indices). None named: every shard of every class it holds.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-declare")
+                .long("palw-tir-shard-declare")
+                .require_equals(true)
+                .help(
+                    "RFC-0006: declare a layer-shard plan for an IR class this node's bond registered: <class-id-hex>:<S_L>:<S_P>. \
+                     Signed by the bond and carried once; refused by the chain unless the fence is armed and the shape fits the class.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-gpu")
+                .long("palw-tir-shard-gpu")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: run a sharded duty's cells on the device backend this binary registered (default off; the CPU where \
+                     there is none — the verdicts are the same).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-shadow")
+                .long("palw-tir-shard-shadow")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: shadow mode — verify the cells of every sharded duty and log the verdicts; sign, gossip, accuse and \
+                     carry nothing (the node-only period before the fence is armed).",
+                ),
+        )
+        .arg(
             Arg::new("palw-improve-evaluate")
                 .long("palw-improve-evaluate")
                 .action(clap::ArgAction::SetTrue)
@@ -2952,6 +3007,10 @@ impl Args {
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
+            palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),
+            palw_tir_shard_declare: m.get_one::<String>("palw-tir-shard-declare").cloned(),
+            palw_tir_shard_gpu: m.get_one::<bool>("palw-tir-shard-gpu").copied().unwrap_or(false),
+            palw_tir_shard_shadow: m.get_one::<bool>("palw-tir-shard-shadow").copied().unwrap_or(false),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
@@ -3714,4 +3773,16 @@ mod ibd_checkpoint_arg_tests {
         assert!(merge_ibd_checkpoints(t12.clone(), &[format!("300:{}", hash(1))]).is_err(), "another block at a built-in score");
         assert_eq!(merge_ibd_checkpoints(t12.clone(), &[t12[2].to_string()]).unwrap(), t12, "the built-in entry itself folds");
     }
+}
+
+/// **`--palw-tir-shard-declare=<class-id-hex>:<S_L>:<S_P>`, parsed** (RFC-0006): a 128-hex class id and the plan's two counts.
+pub fn parse_palw_tir_shard_declare_v1(spec: &str) -> Result<(kaspa_hashes::Hash64, u16, u16), String> {
+    let mut it = spec.split(':');
+    let (Some(class), Some(s_l), Some(s_p), None) = (it.next(), it.next(), it.next(), it.next()) else {
+        return Err("expected <class-id-hex>:<S_L>:<S_P>".to_string());
+    };
+    let class: kaspa_hashes::Hash64 = class.parse().map_err(|_| "the class id is not 128 hex characters".to_string())?;
+    let s_l: u16 = s_l.parse().map_err(|_| "S_L is not a number".to_string())?;
+    let s_p: u16 = s_p.parse().map_err(|_| "S_P is not a number".to_string())?;
+    Ok((class, s_l, s_p))
 }

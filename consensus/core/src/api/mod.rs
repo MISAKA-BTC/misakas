@@ -1155,6 +1155,13 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0006: the layer-shard plans the chain holds** — `(class, plan)` for every IR class that declared one; empty on every
+    /// chain that never armed `palw_tir_shard_v1`. A node asks it before declaring a plan of its own and when it chooses
+    /// which shards to hold.
+    fn palw_tir_shard_plans_v1(&self) -> Vec<(crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        Vec::new()
+    }
+
     /// **Where a bond's rewards are paid — the payload, not a script.**
     ///
     /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change

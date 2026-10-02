@@ -1886,6 +1886,13 @@ Do you confirm? (y/n)";
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,
                         improve_evaluate: args.palw_improve_evaluate,
+                        tir_shard_hold: args.palw_tir_shard_hold.clone(),
+                        tir_shard_declare: match args.palw_tir_shard_declare.as_deref() {
+                            None => None,
+                            Some(spec) => Some(crate::args::parse_palw_tir_shard_declare_v1(spec).unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}"))),
+                        },
+                        tir_shard_gpu: args.palw_tir_shard_gpu,
+                        tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
                         improve_tamper: match args.palw_drill_tamper_eval.as_deref() {

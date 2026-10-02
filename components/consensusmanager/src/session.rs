@@ -332,6 +332,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_receipt_pool_facts_v1(claims, bonds)
     }
 
+    /// RFC-0006: the layer-shard plans at the tip.
+    pub fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        self.consensus.palw_tir_shard_plans_v1()
+    }
+
     /// A claim's committed roots and price at the tip (ADR-0111 Decision 2).
     pub fn palw_claim_roots_v2(
         &self,

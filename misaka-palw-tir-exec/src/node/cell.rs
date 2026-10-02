@@ -796,3 +796,32 @@ pub fn tokens_of_capture_v1(capture: &TirCaptureV1) -> Vec<u32> {
     t.extend(capture.generated.iter().copied());
     t
 }
+
+// ---------------------------------------------------------------------------------------------
+// The device plug-in (gpu-integer-backend.md §8)
+// ---------------------------------------------------------------------------------------------
+
+/// A factory of device backends, registered once by a binary that links one (`misaka-palw-tir-gpu` is an isolated workspace: a
+/// release node does not carry it, a node built with it calls [`register_kernel_backend_v1`] at start-up).
+pub type TirKernelBackendFactoryV1 = Box<dyn Fn() -> Option<Box<dyn KernelBackendV1 + Send>> + Send + Sync>;
+
+static KERNEL_BACKEND_FACTORY_V1: std::sync::OnceLock<TirKernelBackendFactoryV1> = std::sync::OnceLock::new();
+
+/// Register the device backend. Once per process; a second registration is refused (`false`).
+pub fn register_kernel_backend_v1(factory: TirKernelBackendFactoryV1) -> bool {
+    KERNEL_BACKEND_FACTORY_V1.set(factory).is_ok()
+}
+
+/// **The backend a node runs its cells on**: the registered device backend when `want_device` and one is registered and builds,
+/// otherwise the CPU. The `bool` is whether the answer is a device backend — a node that asked for one and got the CPU says so.
+pub fn tir_kernel_backend_v1(want_device: bool) -> (Box<dyn KernelBackendV1 + Send>, bool) {
+    if want_device && let Some(factory) = KERNEL_BACKEND_FACTORY_V1.get() && let Some(device) = factory() {
+        return (device, true);
+    }
+    (Box::new(CpuKernelBackendV1), false)
+}
+
+/// Whether a device backend is registered in this process.
+pub fn tir_kernel_backend_registered_v1() -> bool {
+    KERNEL_BACKEND_FACTORY_V1.get().is_some()
+}

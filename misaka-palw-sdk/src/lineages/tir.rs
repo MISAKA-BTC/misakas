@@ -38,6 +38,12 @@ pub use misaka_palw_tir_exec::node::{
     tir_dissect_choice_v1, tir_drill_covering_leaves_v1, tir_first_divergence_from_opening_v1, tir_fused_kernels_default_v1,
     tir_row_tile_leaves_v1, tir_rows_tree_v1, tir_terminal_close_sizes_v1, tir_trace_event_disclosure_of_capture_v1,
 };
+/// RFC-0006: a seat's cells over a class backend, and the device plug-in.
+pub use misaka_palw_tir_exec::node::{
+    CpuKernelBackendV1, KernelBackendV1, TirCellV1, TirCellVerdictV1, TirKernelBackendFactoryV1, register_kernel_backend_v1,
+    tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1, tir_shard_geometry_v1, tir_verify_capture_cells_v1,
+    tokens_of_capture_v1,
+};
 
 /// The lineage's id.
 pub const TIR_LINEAGE_ID_V1: &str = "palw-tir-v1";

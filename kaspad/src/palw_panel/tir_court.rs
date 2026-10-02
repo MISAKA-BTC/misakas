@@ -1259,7 +1259,7 @@ impl super::PalwPanelService {
 
     /// **Sign and queue an IR one-move accusation** — the session id over the network domain, the
     /// accuser's signature, the carrier check, and the court's priority lane at `due`.
-    fn file_tir_one_move_v1(
+    pub(super) fn file_tir_one_move_v1(
         &self,
         target: &PalwDisputableClaimV2,
         due: u64,
