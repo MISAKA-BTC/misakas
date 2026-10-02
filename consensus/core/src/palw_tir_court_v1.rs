@@ -2661,6 +2661,46 @@ pub fn check_tir_step_run_disclosure_v1(
     Ok(())
 }
 
+/// **A `TirStepRun` answer, built from what the answering node holds** (its own capture, or the accused's through the
+/// store): the preimages of `[first, first + count)` and their range opening, checked with
+/// [`check_tir_step_run_disclosure_v1`] before it is returned, the program stripped — so a node never pays a carrier
+/// for an answer the fold refuses.
+pub fn build_tir_step_run_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    first: u64,
+    count: u32,
+    store: &dyn PalwTirEvidenceStoreV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirStepRunDisclosureV1, PalwTirEvidenceErrorV1> {
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count)
+        .map_err(|_| PalwTirEvidenceErrorV1::Store("the binding does not verify".into()))?;
+    let mut preimages = Vec::with_capacity(count as usize);
+    for index in first..first.saturating_add(u64::from(count)) {
+        preimages.push(store.step_leaf(index).ok_or_else(|| PalwTirEvidenceErrorV1::Store(format!("step leaf {index}")))?);
+    }
+    let leaf_hashes: Vec<Hash64> =
+        preimages.iter().map(|preimage| step_tile_leaf_hash_v1(&v.context_hash, &v.class_id, preimage)).collect();
+    let siblings = store
+        .step_range_siblings(first, u64::from(count))
+        .ok_or_else(|| PalwTirEvidenceErrorV1::Store(format!("the siblings of the run [{first}, +{count})")))?;
+    let mut disclosure = PalwTirStepRunDisclosureV1 {
+        binding: binding.clone(),
+        preimages,
+        range: crate::palw_step_leg::PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings },
+    };
+    check_tir_step_run_disclosure_v1(
+        binding.full_logits_trace_root,
+        binding.committed_execution_root,
+        first,
+        count,
+        &disclosure,
+        max_step_leaf_count,
+    )
+    .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's run [{first}, +{count}) does not answer: {e}")))?;
+    disclosure.strip_program_v1();
+    Ok(disclosure)
+}
+
 /// **A `TirStepNode` answer, built from what the answering node holds**, checked before it is
 /// returned; the program stripped.
 pub fn build_tir_step_node_disclosure_v1(
