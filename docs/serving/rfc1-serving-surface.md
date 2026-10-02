@@ -13,8 +13,10 @@ Everything here changes what a gateway/worker serves and nothing a block contain
 
 ## Dormant fences this lane added (all `None` on every preset, in no t12 flag-day list)
 
-`palw_fp_prefix_state` (FP job version 11, prefix-state claim; credit side only), `palw_fp_tokenizer_match` (a job's tokenizer must be the class's
+`palw_fp_decode_constraint` (ADR-0096 D6-8, FP job version 6: a constrained job whose committed token is the admitted argmax; the gateway commits a `response_format` where it is armed; `--palw-drill-fp-constraint-at`), `palw_fp_prefix_state` (FP job version 11, prefix-state claim; credit side only), `palw_fp_tokenizer_match` (a job's tokenizer must be the class's
 listed one), `palw_fp_constraint_v2` (the second constraint form: bigger bounds, JSON Schema `$ref` / `anyOf` / integer ranges compiled by
-`misaka-palw-constraint::compile_v2`; **cannot be armed**: its prerequisite `palw_fp_decode_constraint` is not buildable), `palw_adapter_class_v1`
+`misaka-palw-constraint::compile_v2`; rides `palw_fp_decode_constraint`, now armable), `palw_adapter_class_v1`
 (ADR-0163, object tag 94). Salted drills arm them with `--palw-drill-fp-prefix-at`, `--palw-drill-fp-tokenizer-at`, `--palw-drill-fp-constraint2-at`,
 `--palw-drill-adapter-at` (each over its prerequisites, refused by name otherwise).
+
+Drill: `scripts/misaka-palw-rfc1-drill.sh dry|wait-lock|run` (never takes a held `DRILL.lock`).
