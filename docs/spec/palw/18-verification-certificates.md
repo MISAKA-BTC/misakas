@@ -345,9 +345,42 @@ Nothing in this section is a rule: the fold judges whatever arrives, and below t
 
 ## 18.13 Carriage, measured
 
-(Filled from the drill, `~/Downloads/MISAKA-wt-b/lanes/evidence/rfc7-vertex/`; see §18.14.)
+**Sizes** (borsh, consensus-core `palw_vertex_v1`): a vertex header with its signature is 4,808 bytes; a `Verdict` leaf 67 bytes with a `Full`
+reference and 23 with a `Compact` one (`Unavailable` adds 12); the lifecycle payload adds 3 bytes. A five-receipt coverage licence is 125,768
+transient mass (≈ 24 KB of payload; ADR-0160 V-T2).
 
----
+**On a real testnet-12 chain through real blocks** (`t12_capacity_verify::rfc7_vertex_carriage_per_licence`, debug build, testnet-12's params,
+real ML-DSA-87 by the registered keys, 100 DAA, one planted 1M bond beside the eight cards, the capacity fences armed; every round the eight seats
+sign one vertex over the claims bound and unanswered; evidence in `~/Downloads/MISAKA-wt-b/lanes/evidence/rfc7-vertex/carriage-measure.jsonl`):
+
+| run | claims licensed by tally | vertices | payload bytes per licence | transient mass per licence | five-receipt licence |
+| --- | --- | --- | --- | --- | --- |
+| compact references, ≈ 5 claims a DAA | 425 | 461 | 5,329 | 53,821 | 125,768 |
+| whole ids, ≈ 5 claims a DAA | 425 | 460 | 5,579 | 54,749 | 125,768 |
+| compact references, 60 asked a DAA (the room admits ≈ 5) | 434 | 422 | 4,791 | 48,301 | 125,768 |
+
+At this issuance a round holds a few claims, so the eight headers dominate (≈ 4.9 KB each): **2.3 – 2.6 × less transient mass per licence than the
+receipt path, ≈ 4.5 × less payload**, with licence latency unchanged (accept → licence 22 DAA at p50, p90 and max, the bind's own delay).
+
+**What the headers amortise to.** A claim sits on five of the eight seats, so a licence takes five leaves; per licence, payload ≈ `5 × leaf + 8 × 4,808 / N`
+for `N` claims licensed in a round:
+
+| claims a DAA (`round_daa` = 1) | ×1 (5.3) | ×10 (53) | ×100 (530) | ×1000 (5,300) |
+| --- | --- | --- | --- | --- |
+| receipts, bytes a licence | 24,000 | 24,000 | 24,000 | 24,000 |
+| vertices, compact: bytes a licence | 7,300 | 840 | 190 | 120 |
+| vertices, whole ids: bytes a licence | 7,500 | 1,060 | 410 | 340 |
+| vertices, compact: carriage a DAA | 38.5 KB | 44.5 KB | 100 KB | 636 KB |
+
+(At ×1000 the 5,300 leaves a seat holds more than 1,024: a seat signs several vertices a round only through the next round's — a seat whose round
+exceeds the leaf cap carries the excess into its next round, so at that rate `round_daa` = 1 and the cap bind and the headers repeat per 1,024 leaves.)
+
+**The drill's row** (RFC-0007 activation table): licences by receipts below the fence and by tally above it, the cross-fence claim on the old path,
+the equivocating seat slashed, and the carriage per licence — `t12_capacity_verify::rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally`
+(real blocks, in process; fence at DAA 70: one vertex dropped by name below it, four claims bound below it of which one licenses by receipts below and
+one licenses by receipts **after** the fence, six bound at or after it all licensed by eight vertices, a leaf naming a pre-fence claim counting for
+nothing, the receipt path refused by name for a post-fence claim and by the assemblers, and the seat that signed a round twice slashed 100 ‰ — 93,906,321,001,040 → 84,491,676,088,216
+sompi — and ejected), and the multi-node drill of §18.10 (`audit-vertex/dv.sh`).
 
 ## 18.14 Tests
 
