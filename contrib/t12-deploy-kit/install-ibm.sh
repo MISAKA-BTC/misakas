@@ -41,6 +41,7 @@ HOST_LEDGER_DIR=/run/misaka-palw
 NODES=(
   "0|misaka-t12-node0|new|0.0.0.0:26311|26313|26314|-|-|10496|20|8k|1|1|127.0.0.1:26321,169.58.232.113:26311"
   "1|misaka-t12-node1|dropin|0.0.0.0:26321|26323|26324|-|-|8192|16|floor|0|1|127.0.0.1:26311,169.58.232.113:26311"
+  "3|misaka-t12-seat3|new|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26321,169.58.232.113:26311"
 )
 # old chain data: .t12 = the old node0 appdir (1.6 GB, unused since t11 node0 failed), .t12b = node1's
 OLD_APPDIRS=(/root/.t12 /root/.t12b)

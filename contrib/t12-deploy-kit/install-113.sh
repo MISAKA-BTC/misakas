@@ -37,8 +37,12 @@ BINARIES=(kaspad misaka palw-class)
 # int-10.2 D1: one seat here (b6) pins the class artifacts in its own process — no pinner, no host ledger. When b7
 # moves here (t12-panel-backlog-1001.md §7) this is a two-seat host: add HOST_PINNER=1 and
 # HOST_LEDGER_DIR=/run/misaka-palw as in install-5104.sh, with b7's spec in NODES, and re-stage.
+# int-10.2 D1: a two-seat host since b7 moved here (2026-10-02) — the host pinner and the host ledger, as on 5.104 and ibm.
+HOST_PINNER=1
+HOST_LEDGER_DIR=/run/misaka-palw
 NODES=(
   "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|17|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
+  "7|misaka-t12-seat7|new|127.0.0.1:26351|26353|26354|-|-|3584|9|none|0|1|127.0.0.1:26311,169.58.39.220:26311,169.58.39.220:26321"
 )
 OLD_APPDIRS=(/root/.t12)
 EXPLORER_DB=${EXPLORER_DB:-kaspa_t12r}

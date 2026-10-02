@@ -1,12 +1,18 @@
 # int-11 drill flags — the frozen set
 
-Status: **frozen 2026-10-01 by lane A** for lane C's drill scripts. Everything here is in the tree on the int-11 line
-(`kaspad/src/args.rs`, `kaspad/src/palw_drill.rs`, `consensus/core/src/config/drill.rs`); a flag that is not in this file is
-not part of the int-11 drill. Lane F's class-seating flag is **reserved** (its row is below) and is added to the tree by lane A
-when lane F's mover lands.
+Status: **frozen 2026-10-01 by lane A** for lane C's drill scripts; **row 18 and the release layer added 2026-10-02**. Everything
+here is in the tree on the int-11 line (`kaspad/src/args.rs`, `kaspad/src/palw_drill.rs`, `consensus/core/src/config/drill.rs`); a
+flag that is not in this file is not part of the int-11 drill. Lane F's class-seating flag is **reserved** (its row is below) and is
+added to the tree by lane A when lane F's mover lands.
 
-The rule of the set is **one flag per fence**: a drill arms or moves exactly one fence (or, for the three flag-day flags, the
-whole fence list of that flag day), through that fence's own `set`, so every fold mirror follows, and moves nothing else.
+The rule of the set is **one flag per fence**: a drill arms or moves exactly one fence (or, for the three flag-day flags and the
+int-11 flag `--palw-drill-int11-at`, the whole fence list of that flag day), through that fence's own `set`, so every fold mirror
+follows, and moves nothing else.
+
+**Since the release layer, the int-11 list is armed on every testnet-12 ruleset — a drill's included — at the release's height H
+(`PALW_T12_INT11_FLAG_DAY_DAA`, DAA 5,300; ρ = 100 at H + 95).** A per-fence flag of rows 8–11, 12–15 and 17 therefore *moves*
+an armed entry to the drill's low height (the move reports the height it had), and an entry the drill does not move stays at 5,300,
+beyond any drill's life. A move that leaves a prerequisite above its dependent is refused by name, as before.
 
 ## 1. Rules every flag shares
 
@@ -50,11 +56,12 @@ flag's own height; arm them first (a lower height) or the node refuses the flag 
 | 15 | `--palw-drill-held-chunks-at=H` | arms RFC-0003's held leaf challenge (object tag 90) | `palw_held_close_chunks_v1` | `palw_tir_v1`, `palw_held_context` | `held_chunks_at=` | `held_chunks_at` |
 | 16 | `--palw-drill-class-seating-at=H` | **reserved** — lane F's class-seating fence (the possession floor and the independence read) | `palw_class_seating` (name fixed by lane F) | lane F states them | `class_seating_at=` | `class_seating_at` |
 | 17 | `--palw-drill-improve-at=H` | arms RFC-0004's improvement fence (pipeline-claim data availability, spec 17 §17.14, rides with it) | `palw_improvement_v1` | `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court`, `palw_fp_decode_rules` | `extra_at=…improve:` | `improve_at` |
+| 18 | `--palw-drill-int11-at=H'` | **moves the int-11 flag day's whole list** to H' — decode rules, gen, FP Job V5, the held leaf challenge, improvement, `L_ver`, ρ = 25 — and ρ = 100 to **H' + 95**, as the release arms them; **instead of** rows 8–11, 12–15 and 17, never with them (refused by name) | `PALW_T12_INT11_FENCES_V1` + `PALW_T12_INT11_RHO100_FENCES_V1` | rows 1, 3, 4, 5 below it (`palw_tir_v1`, `palw_tir_fence2`, the capacity flag day: ρ = 10 and F-N) | `int11_at=` | `int11_at` |
 
 Marker lines. The release line's own `tir2_at=` and `model_court_at=` are unchanged. The capacity flags share `capacity_at=`
 (`none` when none stands, else `room:…,verify:…,step2:…,step3:…,rho100:…`). The four RFC-0003 / RFC-0004 flags of 12–14 and 17
 share `extra_at=` (`gen:…,decode_rules:…,fp_v5:…,improve:…`). Every flag added after `extra_at=` has a line of its own
-(`held_chunks_at=`, and `class_seating_at=` when it lands), so no earlier line changes its text.
+(`held_chunks_at=`, `int11_at=`, and `class_seating_at=` when it lands), so no earlier line changes its text.
 
 ## 3. The height layout (lane C's drill D, frozen)
 
@@ -83,11 +90,20 @@ apart (any height at or above F-R and F-S, and at or below 400 when the verify f
 
 ## 4. What the int-11 flag day arms, and what has no drill flag
 
-The production flag day (a height the coordinator names) arms, each through the fence's own `set`: `palw_improvement_v1`,
-`palw_gen_v1`, `palw_fp_decode_rules`, `palw_fp_job_v5`, `palw_held_close_chunks_v1`, `palw_class_seating` (when it lands),
-`palw_capacity_network_verify`, and the capacity steps the release names. Rows 12–17 drill exactly those, one flag each. The
-sub-features of `palw_improvement_v1` (the evaluation court, the pipeline-claim DA units and objects 83–86, 89) are not fences of
-their own and have no flag: they are in force when row 17 is.
+**The release layer** (`PALW_T12_INT11_FENCES_V1` and `PALW_T12_INT11_RHO100_FENCES_V1`, `consensus/core/src/config/params.rs`)
+arms, each through the fence's own `set`, at **one height H = `PALW_T12_INT11_FLAG_DAY_DAA` (DAA 5,300, tentative: the user names
+the final one)**: `palw_fp_decode_rules`, `palw_gen_v1`, `palw_fp_job_v5`, `palw_held_close_chunks_v1`, `palw_improvement_v1`,
+`palw_capacity_network_verify` (`L_ver` = 435 at the shipped 600 / 20: "at or before" ρ = 25's height — at it) and the capacity ramp's
+ρ = 25 step (F-L's second step); **ρ = 100 (F-L's third step) at H + 95** (`PALW_T12_INT11_RHO100_OFFSET_DAA`), its own entry.
+`palw_class_seating` joins the list when lane F's fence lands. `palw_model_court_window` (armed nowhere) and ADR-0162's
+`palw_model_virtual_v1` (the user has not decided) are **not** scheduled. Rows 12–17 drill exactly those entries, one flag each, and
+row 18 drills the list as the release arms it. The sub-features of `palw_improvement_v1` (the evaluation court, the pipeline-claim DA
+units and objects 83–86, 89) are not fences of their own and have no flag: they are in force when row 17 is.
+
+The shipped ceilings are **provisional until the first corpus is measured** (the coordinator's decision of 2026-10-02): the
+generative fence's (`PALW_T12_GEN_CEILINGS_V1`) are the IR's where the IR bounds the same dimension (2^37 MACs a position, 2^16 cone
+work) and the first drills' elsewhere; the improvement fence's (`PALW_T12_IMPROVE_CEILINGS_V1`) are the drill's, by value. A drill
+arms the same values (`drill_v1` is `testnet12_v1`): a drill drills what ships.
 
 ## 5. Fault injection (not fences)
 
@@ -118,6 +134,15 @@ kaspad --testnet --netsuffix=12 --nodnsseed --palw-drill-genesis-salt=<64 hex> \
   --palw-drill-model-court-at=36 --palw-drill-improve-at=40 --palw-drill-fp-v5-at=104 \
   --palw-drill-held-chunks-at=140 --palw-drill-capacity-network-verify-at=400 \
   --palw-drill-capacity-step2-at=560 --palw-drill-capacity-step3-at=655
+```
+
+The combined crossing, as the release arms it (the earlier flag days and the IR fences low, then the whole int-11 list at H' and
+ρ = 100 at H' + 95 — the capacity ramp needs the ρ = 10 flag day below it):
+
+```
+kaspad --testnet --netsuffix=12 --nodnsseed --palw-drill-genesis-salt=<64 hex> \
+  --palw-drill-fence-at=6 --palw-drill-fence2-at=10 --palw-drill-fence3-at=14 \
+  --palw-drill-tir-at=20 --palw-drill-tir2-at=24 --palw-drill-int11-at=28
 ```
 
 The keyring export takes the same fence flags: `kaspad … --palw-drill-write-keyring=DIR` (add them all, or the manifest

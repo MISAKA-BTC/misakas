@@ -6,7 +6,7 @@
 #   b3  misaka-t12-seat3 (drop-in)  127.0.0.1:26321  borsh 26323  json 26324   8k seat
 #   b4  misaka-t12-seat4 (drop-in)  127.0.0.1:26331  borsh 26333  json 26334   8k seat
 #   b5  misaka-t12-seat5 (drop-in)  127.0.0.1:26341  borsh 26343  json 26344   8k seat
-#   b7  misaka-t12-seat7 (NEW unit) 127.0.0.1:26351  borsh 26353  json 26354   8k seat (card 7, re-keyed here 09-23)
+#   (b7 moved to .113 on 2026-10-02 — install-113.sh)  was: misaka-t12-seat7 (NEW unit) 127.0.0.1:26351  borsh 26353  json 26354   8k seat (card 7, re-keyed here 09-23)
 # borsh 26313 is what misaka-dnsseeder-t12 here already asks for peers.
 # Shares (R-core+, PLAN.md §2): five nodes on 24,033 MiB leave no room for the ideal, so every node here
 # is a SEAT ONLY with the minimum that runs one duty at a time: 3,584 MiB = one 8k seat duty 3,500 (+ 84);
@@ -40,16 +40,18 @@ BINARIES=(kaspad misaka palw-class)
 # The seats keep their MemoryMax and share. Either line off: empty HOST_LEDGER_DIR / HOST_PINNER=0 (then re-stage).
 HOST_PINNER=1
 HOST_LEDGER_DIR=/run/misaka-palw
+# One replay per seat here (restored 2026-10-02 ~09:00, release tag phaseh1s1): with two slots the second replay is granted
+# only what the first leaves of the seat's share, so A2 narrows it as far as W=1 (2.5x slower stepped path), and the host's
+# 8 vCPUs run 20-25 runnable threads (97 % busy). One slot gives every replay its whole share (W=64) and halves the CPU fight.
+HOST_EXTRA_ARGS=(--palw-seat-replay-slots=1)
 PUB="169.58.232.113:26311,169.58.39.220:26311,169.58.39.220:26321"
 # upgrade: before each seat here stops, the three public nodes (b6, b0, b1) must take a TCP connection — five
 # seats here plus a public node down at once would leave the 8k class under its 7 ready seats (PLAN.md §15)
 UPGRADE_REQUIRE_UP=(169.58.232.113:26311 169.58.39.220:26311 169.58.39.220:26321)
 NODES=(
-  "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26321,127.0.0.1:26331,127.0.0.1:26341,127.0.0.1:26351,$PUB"
-  "3|misaka-t12-seat3|dropin|127.0.0.1:26321|26323|26324|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,127.0.0.1:26341,127.0.0.1:26351,$PUB"
-  "4|misaka-t12-seat4|dropin|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26321,127.0.0.1:26341,127.0.0.1:26351,$PUB"
-  "5|misaka-t12-seat5|dropin|127.0.0.1:26341|26343|26344|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26321,127.0.0.1:26331,127.0.0.1:26351,$PUB"
-  "7|misaka-t12-seat7|new|127.0.0.1:26351|26353|26354|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26321,127.0.0.1:26331,127.0.0.1:26341,$PUB"
+  "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26331,127.0.0.1:26341,$PUB"
+  "4|misaka-t12-seat4|dropin|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26341,$PUB"
+  "5|misaka-t12-seat5|dropin|127.0.0.1:26341|26343|26344|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,$PUB"
 )
 # the first regenesis deploy's seat appdirs (a few MB each). NOT the route-matrix session's
 # /root/.t12f-b* or /root/t12-private/run/* — those are its to clear.
