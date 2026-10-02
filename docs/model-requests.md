@@ -10,7 +10,7 @@ moves no consensus object.
 ## What you are asking for
 
 A model on a MISAKA network is a **class**, and a class is four agreements that hold at once
-(`docs/palw-model-onboarding-sdk.md`): a graph the court can walk, whose id IS the class id; an
+([palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md)): a graph the court can walk, whose id IS the class id; an
 artifact whose root the chain pins; a canonical job the class is paid per; and an engine that
 executes what the graph describes. A request names the weights; everything else is made from
 them by people, with tools this tree ships, and priced by the chain. Nothing in the list below is
@@ -22,13 +22,13 @@ a permission — the court grades the evidence in the transition, and the fee is
 | # | step | who | governed by |
 |---|---|---|---|
 | 1 | **Request.** The issue form asks what a class needs known up front: weights, license, architecture, parameter count, quantization, the context the request needs, which lanes, who converts, who bonds, and what machine the requester has. The Studio's Network tab has a "Request a model" button that opens the form with the machine block filled in from what it knows (RAM, accelerator, the classes it holds); any field can be prefilled by its id as a query parameter. | the requester | ADR-0096 Decision 13 |
-| 2 | **Conversion to an artifact.** The family's converter turns the public weights into the integer container the runtime maps: `qwen25-convert … --a16` for the dense tier, `qwen36-convert --url <gguf> --header … --context 512` for the hybrid tier. A known lineage is data (a geometry constant, a table row, `cargo test -p misaka-palw-sdk`); a new architecture is code first — a profile whose kernels the court catalogs, an engine, a container, a converter, then one `PalwModelLineageV1` impl. Before any node or coin: `palw-class inspect` (which class the file pairs with, under which root) and `palw-class preflight --network … --model-id …` (the SDK's `registration_candidate` / `preflight_admission` — the real admission gate, `verify_class_admission_v2`, run offline). | the converter (the requester, or whoever picks the request up) | `docs/palw-model-onboarding-sdk.md`; ADR-0056 Decision 1 (admission is arithmetic) |
-| 3 | **The class id and the artifact root.** The class id is the graph's, computed by the node (`shape_profile_id()`); the root the chain pins is the artifact's INVENTORY root — what `qwen36-run --artifact … --root-only` prints on the hybrid tier and `palw-class inspect` on both, and what `getPalwProducerFacts.artifactRoot` reports once registered. It is not the file's sha256. Rebuilding the artifact from the same weights lands on the same root, which is the only reason downloading someone else's conversion is safe: the Studio's `PalwClassSpec` pins that root and the file's sha256 side by side, and the components manifest carries both as `artifact_root` and `sha256` (`docs/components-manifest.md`). | the converter | ADR-0056 Decision 6 (duplicate roots are priced, not policed) |
-| 4 | **Registration.** From the node that holds the artifact: `misaka model add <model id>` against it, or `kaspad --palw-class-artifact <file> --palw-register-class <model id> --palw-producer-bond <txid>:<index> …` with a bonded key. **That `kaspad` must be the only process running the bond.** Since 2026-09-25 it runs the bond's duties, round blocks included, and a second process beside a live node double-signs its round permits and is slashed (`docs/palw-add-a-model-runbook.md` §5). The node reads live terms, applies the known-weights rule (weights the chain already has never candidate for a new class) and the sibling filters, runs the admission preflight again, and only then signs and funds. Entry is priced in bonded collateral by the chain's own terms — share, target, slash value are the chain's, never the registrant's to choose — and a class registers weightless (0‰) until a certified family covers it. | the registrant (a bonded key) | ADR-0056 Decision 3 (registration exposure); ADR-0075 Decision 4 (every gate reads genesis ∪ chain) |
-| 5 | **Certification.** `palw-certify drill --model-id … --lane attempt\|fp --out …` writes the family's evidence (once per family per lane; chunked when it exceeds one carrier), `misaka palw submit-object` carries it, the transition grades it (`FamilyCertified`), then `palw-certify bind` seats the class at the floor share, weight-bearing (`ClassLaneCertified`). A drill certifies kernels, not weights: a model whose graph reaches a kernel no shipped family drills is a new architecture and needs a build whose court serves it. | anyone with a funded key; usually the registrant | ADR-0075 Decisions 1, 2, 5, 7; `docs/palw-certify-a-new-model.md` |
-| 6 | **The line and its owner.** A line is `(class, owner bond, name)`; every class's founding line has `line_id = class_id` and its owner is the registrant's bond — so the owner of what a request becomes is whoever bonded it. Versions are signed objects the line's developer publishes (`ModelVersionPublished`: root, parent, declared hashes, preview flag), history is kept whole, and the owner sets roles or hands the line over; positions never move with it. On testnet-11 the model fences arm at DAA 1,900 (the second flag day, 2026-09-06); on every other preset they are `None`. | the line's owner and developer | ADR-0088 Decisions 1, 2, 6, 9 |
-| 7 | **The seeded pair.** A line's market opens only on a seed of at least 100,000 MSK locked for good — no fee, no position for the seeder, the reserve never falls under it; 500,000 whole positions on a curve whose product never falls. The seed may precede the class's approval, no buy may. ADR-0094 (resident on `feat/adr-0094-accumulating-seed`, not on `main`) lets the seed accumulate over several transactions instead of one; ADR-0091 has the miner's reward buy the pair, 5 % of the escrow, and pays no holder. | a bonder with the MSK | ADR-0090 §0; ADR-0094; ADR-0091 |
-| 8 | **What the Studio then shows.** A class row with its readiness — `ReadyBuiltIn` for the floor, `ArtifactPresent { verified }`, `ArtifactMissing { downloadable }`, `ArtifactMismatch` — and, for a downloadable class, the artifact row from the components manifest (`url`, `sha256`, `size`, `class_id`, `artifact_root`), installed through the download manager that verifies the digest. The offline copy in `PalwClassSpec.artifact` is pinned to the manifest's sha256 by a test. | the Studio, from the manifest | ADR-0096 Decision 10; `docs/components-manifest.md` |
+| 2 | **Conversion to an artifact.** The family's converter (`qwen25-convert` for the dense tier, `qwen36-convert` for the hybrid tier) turns the public weights into the integer container the runtime maps, and `palw-class inspect` / `preflight` check the pairing and the real admission gate offline, before any node or coin (runbook §2–§3). A known lineage is data (a geometry constant, a table row); a new architecture is code first — a profile whose kernels the court catalogs, an engine, a container, a converter, then one `PalwModelLineageV1` impl ([palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md)). | the converter (the requester, or whoever picks the request up) | [palw-add-a-model-runbook.md](palw-add-a-model-runbook.md); ADR-0056 Decision 1 (admission is arithmetic) |
+| 3 | **The class id and the artifact root.** The class id is the graph's, computed by the node (`shape_profile_id()`); the root the chain pins is the artifact's INVENTORY root — what `qwen36-run --artifact … --root-only` prints on the hybrid tier and `palw-class inspect` on both, and what `getPalwProducerFacts.artifactRoot` reports once registered. It is not the file's sha256. Rebuilding the artifact from the same weights lands on the same root, which is the only reason downloading someone else's conversion is safe: a downloader pins that root and the file's sha256 side by side, and the components manifest carries both as `artifact_root` and `sha256` ([components-manifest.md](components-manifest.md)). The `.palwmanifest` sidecar (`palw-class manifest`) records both beside the file. | the converter | ADR-0056 Decision 6 (duplicate roots are priced, not policed) |
+| 4 | **Registration.** From the node that holds the artifact, with `misaka model add` (runbook §5). The node reads live terms, applies the known-weights rule (weights the chain already has never candidate for a new class) and the sibling filters, runs the admission preflight again, and only then signs and funds. Share, target and slash value are the chain's terms, never the registrant's to choose, and a class registers weightless (0‰) until a certified family covers it. A registered class starts as `Candidate` and admits nothing until an admission jury drawn from the floor's operators holds it (ADR-0147). | the registrant (a bonded key) | ADR-0056 Decision 3 (registration exposure); ADR-0075 Decision 4 (every gate reads genesis ∪ chain) |
+| 5 | **Certification.** A family's drill evidence rides the chain as `FamilyCertified` (once per family per lane), and a `ClassLaneCertified` binds the class to it, weight-bearing. A drill certifies kernels, not weights: a model whose graph reaches a kernel no shipped family drills is a new architecture and needs a build whose court serves it. | anyone with a funded key; usually the registrant | ADR-0075 Decisions 1, 2, 5, 7; [palw-certify-a-new-model.md](palw-certify-a-new-model.md) |
+| 6 | **The line and its owner.** A line is `(class, owner bond, name)`; every class's founding line has `line_id = class_id` and its owner is the registrant's bond — so the owner of what a request becomes is whoever bonded it. Versions are signed objects the line's developer publishes (`ModelVersionPublished`: root, parent, declared hashes, preview flag), history is kept whole, and the owner sets roles or hands the line over; positions never move with it. | the line's owner and developer | ADR-0088 Decisions 1, 2, 6, 9 |
+| 7 | **The seeded pair.** A line's market opens only on a seed of at least the least seed (100,000 MSK under ADR-0090; 1,000,000 MSK once ADR-0120's `palw_model_seed_v2` is in force) locked for good — no fee, no position for the seeder, the reserve never falls under it; 500,000 whole positions on a curve whose product never falls. The seed may precede the class's approval, no buy may. ADR-0094 lets the seed accumulate over several transactions instead of one (`misaka model market open --seed`); ADR-0091 has the miner's reward buy the pair, 5 % of the escrow, and pays no holder. | a bonder with the MSK | ADR-0090 §0; ADR-0094; ADR-0120; ADR-0091 |
+| 8 | **What the Studio then shows.** The Studio (a separate application, not in this repository) shows a class row with its readiness and, for a downloadable class, the artifact row from the components manifest (`url`, `sha256`, `size`, `class_id`, `artifact_root`), installed through a download manager that verifies the digest. | the Studio, from the manifest | ADR-0096 Decision 10; [components-manifest.md](components-manifest.md) |
 
 ## What a request cannot do
 
@@ -39,27 +39,29 @@ a permission — the court grades the evidence in the transition, and the fee is
 * **It buys no priority.** The queue is the tracker, in the open. A request's age, its author, its
   reactions or its comments change nothing about what the chain prices or admits — admission is
   arithmetic (ADR-0056 Decision 1) and certification is graded evidence (ADR-0075 Decision 2).
-* **It moves no consensus object and widens no row.** The shipped rows are 512 tokens; a wider
-  row is a new class at mint, never a raised ceiling on a running chain (ADR-0092 Decision 4), so
-  a request for more context is a request for the next mint and says so in its `context` field.
+* **It moves no consensus object and widens no row.** A row's context width is part of its class
+  id, so a wider context is a different class — another rung of the ladder, registered as its own
+  class — never a raised ceiling on a running chain (ADR-0092 Decision 4). A request for more
+  context names the width it needs in its `context` field.
 
 ## How long it takes
 
 Honest numbers, from what has been run:
 
-* **Conversion** is hours on a workstation. The dense 1.5 B artifact is 1.8 GB (1,795,427,276
-  bytes); the hybrid QWEN36 artifact is 34 GiB converted from a Q4_K_M GGUF, and the hybrid
-  runtime maps it whole, which is why the Studio prints a memory note when it is larger than the
-  machine's RAM. A new lineage is not hours; it is a profile, an engine, a container and a
+* **Conversion** is minutes to hours on a workstation. The dense 1.5 B artifact is about 1.8 GB
+  (1,799,359,436 bytes at `n_ctx` 8,192, 2,868,906,956 at 2,097,152); the hybrid QWEN36 artifact is
+  34–39 GB converted from a Q4_K_M GGUF (the 2M conversion took 1,024 s), and the hybrid runtime maps
+  it whole. A new lineage is not hours; it is a profile, an engine, a container and a
   converter before the first `inspect` can run.
 * **Certification** is a drill per family per lane, and the drill's evidence rides the chain in
   chunks (the integer floor's free-prompt family object was 214,243 bytes against a 100,000-byte
   carrier). A family that is already certified for a lane needs only the `bind`.
 * **Registration and the pair** wait on money and on a person: a bonded key with the collateral
-  the live terms name, and a bonder willing to lock at least 100,000 MSK for good. A request
+  the live terms name, and a bonder willing to lock the least seed for good. A request
   whose `bonder` field says "undecided" is at this step until it does not.
-* **A wider context** is a mint, which is the operator's decision and a flag day, not a step
-  anyone on this page can take.
+* **A wider context** is a different class: a width the network's context ladder admits is
+  registered like any other row; a width outside it is a ruleset change, which is a release, not a
+  step anyone on this page can take.
 
 ## Where to watch
 
@@ -67,7 +69,8 @@ Honest numbers, from what has been run:
   values that make the model a class — the model id, the class id, the artifact root, the
   registration transaction, the drill and bind objects — belong in its comments, with what
   produced them.
-* **The chain.** `palw-class ledger --network testnet-11` prints the classes the bundle knows; a
+* **The chain.** `palw-class ledger --network testnet-12` prints the classes the bundle knows;
+  `misaka model list` and `misaka palw registry` read the live set and each class's lifecycle; a
   synced node's `getPalwProducerFacts` reports the live set with each class's artifact root; the
   explorer's class rows read the same. `[palw-lifecycle]` lines in a node's log say what the
   transition accepted or refused, by name.
@@ -80,15 +83,16 @@ Related: [ADR-0096](adr/0096-the-app-you-already-use-is-the-entrance-and-the-sha
 [ADR-0090](adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md),
 [ADR-0075](adr/0075-certification-is-a-consensus-object.md),
 [ADR-0056](adr/0056-palw-permissionless-class-admission-and-share-economy.md),
-[docs/palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md),
-[docs/palw-certify-a-new-model.md](palw-certify-a-new-model.md),
-[docs/components-manifest.md](components-manifest.md).
+[palw-add-a-model-runbook.md](palw-add-a-model-runbook.md) (the operator walkthrough),
+[palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md),
+[palw-certify-a-new-model.md](palw-certify-a-new-model.md),
+[components-manifest.md](components-manifest.md).
 
 ## A model too large for one seat (ADR-0099)
 
 A request for a model no single seat can hold is answered by the same tool that prices any
 model: write the manifest — the family and the geometry's public numbers, as
-`docs/model-manifests/kimi-k3-stand-in.json` does for Kimi K3 — and run
+[`model-manifests/kimi-k3-stand-in.json`](model-manifests/kimi-k3-stand-in.json) does for Kimi K3 — and run
 
 ```bash
 cargo run -p misaka-palw-base0 --bin palw-shard-plan -- --manifest <model.json> --measured-out <dir>
@@ -106,11 +110,11 @@ geometry is read off the file, the bytes off its inventory, and the document car
 class registers —
 
 ```bash
-cargo run -p misaka-palw-sdk --bin palw-class -- measure --network testnet-11 --key-file <bond seed> --out <model>.measured.json <model>.palwart
+cargo run -p misaka-palw-sdk --bin palw-class -- measure --network testnet-12 --key-file <bond seed> --out <model>.measured.json <model>.palwart
 ```
 
-and anyone recomputes it with `palw-class verify --network testnet-11 [--artifact <model>.palwart] <model>.measured.json`
+and anyone recomputes it with `palw-class verify --network testnet-12 [--artifact <model>.palwart] <model>.measured.json`
 (without the artifact, the artifact's own fields are named as needing one; with it, every field
-and the signature). On the shipped A16 artifact this reproduces the genesis class id and the
+and the signature). On a genesis A16 artifact this reproduces the genesis class id and the
 registered root; an artifact of an architecture this tree has no graph for is refused by name.
 
