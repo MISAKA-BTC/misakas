@@ -421,6 +421,11 @@ pub struct Args {
     /// `--palw-drill-gen-at`, `--palw-drill-fence-at`, `--palw-drill-decode-rules-at`). Command line only.
     #[serde(skip)]
     pub palw_drill_improve_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0006's layer-sharded panels (`palw_tir_shard_v1`) at this DAA**
+    /// (`config::drill::palw_drill_tir_shard_at_v1`). It needs `palw_tir_v1`, `palw_tir_fence2`, `palw_kary_court` and
+    /// the other fences `validate_palw_v2` names in force at or below it. In no release. Command line only.
+    #[serde(skip)]
+    pub palw_drill_tir_shard_at: Option<u64>,
     /// **RFC-0004 (A10): evaluate** — run the evaluation jobs of every governed line's open epoch whose
     /// subject class this node holds, and carry their claims under the producer bond (an open market: the
     /// first valid claim per job takes its fee at `Final`). Off by default; the seat's replay of an
@@ -699,6 +704,7 @@ impl Default for Args {
             palw_drill_held_chunks_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
+            palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
             palw_improve_artifact_dir: None,
             palw_improve_capture_dir: None,
@@ -1857,6 +1863,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-tir-shard-at")
+                .long("palw-drill-tir-shard-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0006's layer-sharded panels (palw_tir_shard_v1) at this DAA on the \
+                     drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and unless the \
+                     fences validate_palw_v2 names (palw_tir_v1, palw_tir_fence2, palw_kary_court, ...) are in force at or below it.",
+                ),
+        )
+        .arg(
             Arg::new("palw-improve-evaluate")
                 .long("palw-improve-evaluate")
                 .action(clap::ArgAction::SetTrue)
@@ -2934,6 +2951,7 @@ impl Args {
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
+            palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
