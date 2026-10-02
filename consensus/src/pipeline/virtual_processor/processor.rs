@@ -7434,11 +7434,19 @@ impl VirtualStateProcessor {
             }
             // **RFC-0004 A5: a composite candidate's admission sizes an IR program too**, so it shares the
             // block's one place at admission sizing with the IR registrations: a second is dropped by name.
+            // **RFC-0001 §2.10: an adapter class listing sizes one too** (the same admission, over the class's
+            // composite), so below `palw_adapter_class_v1` it is dropped by name first and past it it shares the place.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_adapter_class_v1(&object)
+                && !self.palw_adapter_class_at(point.daa_score)
+            {
+                info!("Block {block}: an adapter class listing was dropped by name below palw_adapter_class_v1, and the block stands (RFC-0001 §2.10)");
+                continue;
+            }
             let sizes_a_composite = matches!(
                 &object,
                 kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, .. }
                     if payload.artifact.composite().is_some()
-            );
+            ) || kaspa_consensus_core::palw_state_v2::palw_object_is_adapter_class_v1(&object);
             if tir_registration_gated && sizes_a_composite {
                 info!(
                     "Block {block}: a second composite candidate or IR registration was dropped by name, and the block stands: one a \
@@ -7998,6 +8006,13 @@ impl VirtualStateProcessor {
                 if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } =
                     &object
                     && let Err(why) = self.palw_improvement_candidate_is_signed(&folded, payload, submitter, signature)
+                {
+                    info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                    continue;
+                }
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature } =
+                    &object
+                    && let Err(why) = self.palw_adapter_listing_is_signed(&folded, payload, lister, signature)
                 {
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                     continue;
@@ -12151,6 +12166,26 @@ impl VirtualStateProcessor {
                         .improvement_candidate_acceptance_v1(payload, rules)
                         .map_err(|why| format!("candidate {} is not admissible: {why} (RFC-0004 §6)", payload.class_id))?;
                 }
+                // **RFC-0001 §2.10 (ADR-0163): an adapter class's listing** — the lister's signature, then the same
+                // acceptance half a composite candidate meets (the parent's family, the composite rule, the
+                // reference, every terminal close carriable in the composite form).
+                Obj::AdapterClassListed { payload, lister, signature } => {
+                    if !self.palw_adapter_class_at(point.daa_score) {
+                        return Err("an adapter class listing is refused: palw_adapter_class_v1 is not in force at this block (RFC-0001 §2.10)".to_string());
+                    }
+                    self.palw_adapter_listing_is_signed(state, payload.as_ref(), lister, signature)?;
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err("an adapter class listing on a network with no V2 bundle".to_string());
+                    };
+                    let rules = kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeAdmissionV1 {
+                        court: self.palw_kary_court_active_at(point.daa_score),
+                        carriable: kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court),
+                        work_cap: kaspa_consensus_core::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+                    };
+                    state
+                        .adapter_class_acceptance_v1(payload, rules)
+                        .map_err(|why| format!("adapter class {} is not admissible: {why} (RFC-0001 §2.10)", payload.class_id))?;
+                }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
                 // the signature is verified under the declared executor key, over the object's own
@@ -12369,6 +12404,29 @@ impl VirtualStateProcessor {
             signature,
             kaspa_consensus_core::palw_improve_candidate_v1::PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1,
             "a candidate",
+        )
+    }
+
+    /// **RFC-0001 §2.10: the lister bond's signature over an adapter class listing.**
+    fn palw_adapter_listing_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        payload: &kaspa_consensus_core::palw_adapter_class_v1::PalwAdapterClassListingV1,
+        lister: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let message = kaspa_consensus_core::palw_adapter_class_v1::palw_adapter_listing_message_v1(
+            &self.palw_network_domain_v2(),
+            payload,
+            lister,
+        );
+        self.palw_improvement_check_bond_signature(
+            state,
+            lister,
+            &message,
+            signature,
+            kaspa_consensus_core::palw_adapter_class_v1::PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1,
+            "an adapter class listing",
         )
     }
 
@@ -13725,6 +13783,10 @@ impl VirtualStateProcessor {
 
     /// **RFC-0003 decision 22's held leaf challenge, read off the bundle's mirror**
     /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
+    fn palw_adapter_class_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.adapter_class_active_at(daa_score))
+    }
+
     fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
     }
@@ -19761,6 +19823,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         O::GenShardCourtAccused { .. } => "GenShardCourtAccused",
         O::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
+        O::AdapterClassListed { .. } => "AdapterClassListed",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

@@ -122,6 +122,9 @@ mod palw_class_seating_v1;
 // RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
 #[path = "palw_held_close_fold_v1.rs"]
 mod palw_held_close_fold_v1;
+// RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
+#[path = "palw_adapter_class_fold_v1.rs"]
+mod palw_adapter_class_fold_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -1615,6 +1618,11 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **RFC-0001 §2.10 (ADR-0163): `Params::palw_adapter_class_v1`'s height**, mirrored by
+    /// `Params::sync_palw_adapter_class_v1` for the same reason (the fold's adapter listing arm reads it).
+    /// `None` on every shipped preset.
+    #[borsh(skip)]
+    adapter_class_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1831,6 +1839,7 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            adapter_class_from_daa: None,
         })
     }
 
@@ -2151,6 +2160,23 @@ impl PalwStateParamsV2 {
     /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
     pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
         self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0001 §2.10: the adapter class listing's mirror** — written by `Params::sync_palw_adapter_class_v1` and
+    /// by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_adapter_class_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.adapter_class_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_adapter_class_v1`'s height, if the network arms it (the mirror).
+    pub fn adapter_class_from_daa(&self) -> Option<u64> {
+        self.adapter_class_from_daa
+    }
+
+    /// **Is the adapter class listing in force at `daa_score`?** `false` on every shipped preset.
+    pub fn adapter_class_active_at(&self, daa_score: u64) -> bool {
+        self.adapter_class_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7763,6 +7789,25 @@ pub enum PalwConsensusObjectV2 {
     HeldLeafChallengeDeclared {
         challenge: Box<crate::palw_held_close_v1::PalwHeldLeafChallengeV1>,
     } = 90,
+    // Tags 91–93 are RFC-0006's and RFC-0007's (declared on their own branches, integrated there).
+    /// **RFC-0001 §2.10 (ADR-0163): an adapter class's listing** — a registered IR class whose artifact is a
+    /// composite (its parent's inventory plus an adapter section, RFC-0004 §6.3) is entered in the registry of
+    /// composite classes, the only classes a composite opening may name and the record a seat proves possession
+    /// of the adapter section against. Signed by the lister's bond. **Its tag is 94, declared explicitly** (spec 17
+    /// section 17.0: a lane asks the core lane before taking one; this lane took the next free one after 93 and
+    /// says so in ADR-0163). Below `palw_adapter_class_v1` the acceptance walk drops it by name and the fold
+    /// refuses it as the second lock.
+    AdapterClassListed {
+        payload: Box<crate::palw_adapter_class_v1::PalwAdapterClassListingV1>,
+        lister: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 94,
+}
+
+/// **Is this object the adapter class listing (RFC-0001 §2.10, `palw_adapter_class_v1`)?** Below the fence the
+/// acceptance walk drops it by name before any slot is charged, and the fold refuses it as the second lock.
+pub fn palw_object_is_adapter_class_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::AdapterClassListed { .. })
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -10029,6 +10074,11 @@ pub enum PalwStateV2Error {
     /// fence, off the held regime, a leaf outside the claim's step space, a claim of no IR or pipeline class).
     #[error("a held leaf challenge is refused: {0}")]
     HeldLeafChallengeRefused(String),
+    /// **RFC-0001 §2.10 (ADR-0163): an adapter class listing the fold refuses**, by the rule's own reason (below the
+    /// fence, an unregistered class or parent, a composite that is not the class's artifact, a class already listed,
+    /// a lister with no bond).
+    #[error("an adapter class listing is refused: {0}")]
+    AdapterClassRefused(String),
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -32082,6 +32132,11 @@ fn apply_object(
             return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
         }
     }
+    // **RFC-0001 §2.10, likewise**: below `palw_adapter_class_v1` the adapter class listing is a payload an older
+    // build cannot decode; the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_adapter_class_v1(object) && !builder.params.adapter_class_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::AdapterClassRefused("an adapter class listing before palw_adapter_class_v1 is in force".into()));
+    }
     // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
     // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
     if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
@@ -32402,6 +32457,11 @@ fn apply_object(
         // `Terminal` on the leaf and the challenger-side group, in one step (`palw_held_close_fold_v1`).
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
             palw_held_close_fold_v1::apply_held_leaf_challenge_v1(builder, ctx, challenge)?;
+        }
+        // **RFC-0001 §2.10: an adapter class's listing** — the registry entry a composite opening and a seat's
+        // possession proof read (`palw_adapter_class_fold_v1::apply_adapter_class_listed_v1`).
+        PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature: _ } => {
+            palw_adapter_class_fold_v1::apply_adapter_class_listed_v1(builder, ctx, payload, lister)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {

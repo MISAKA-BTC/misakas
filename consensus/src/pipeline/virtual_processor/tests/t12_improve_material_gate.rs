@@ -160,3 +160,76 @@ async fn t12_material_objects_are_signed_by_their_signers() {
     let err = gate(&submitted(3)).expect_err("a signed candidate for a line nobody governs");
     assert!(err.contains("not governed"), "past the signature, the acceptance half asks the line: {err}");
 }
+
+/// **RFC-0001 §2.10 (ADR-0163) at the processor: an adapter class listing** — dormant unless `palw_adapter_class_v1` is
+/// armed (a copy of testnet-12 here), signed by its lister bond's key, and judged by the composite candidate's own
+/// acceptance after the signature.
+#[tokio::test]
+async fn t12_an_adapter_class_listing_is_gated_by_its_fence_its_signature_and_its_acceptance() {
+    use kaspa_consensus_core::palw_adapter_class_v1::{
+        PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1, PalwAdapterClassListingV1, palw_adapter_listing_message_v1,
+    };
+    use kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1;
+    let (config, _, premine, floats) = t12_with_harness_cards();
+    let build = |arm_adapter: bool| {
+        let mut params = config.params.clone();
+        params.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(0)));
+        params.sync_palw_tir_v1();
+        params.palw_tir_fence2 = Some(ForkActivation::new(0));
+        params.sync_palw_tir_fence2();
+        params.palw_gen_v1 = Some(PalwGenFenceV1::drill_v1(ForkActivation::new(0)));
+        params.sync_palw_gen_v1();
+        params.palw_fp_decode_rules = Some(ForkActivation::new(0));
+        params.sync_palw_fp_decode_rules();
+        params.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(0)));
+        params.sync_palw_improvement_v1();
+        if arm_adapter {
+            (kaspa_consensus_core::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_ENTRY.set)(&mut params, Some(ForkActivation::new(0)));
+        }
+        let armed = ConfigBuilder::new(params).skip_proof_of_work().build();
+        armed.params.validate_palw_v2().expect("a runnable ruleset");
+        armed
+    };
+    for arm in [false, true] {
+        let config = build(arm);
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+        let chain = t12_genesis_chain(&config, bundle, &premine, &floats);
+        let vp = chain.vp();
+        let (block, state) = chain.tip_state();
+        let point = PalwBlockContextV2 { block, daa_score: chain.daa_of(block), blue_score: 1, subsidy: 0 };
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            config.params.net.to_string().as_bytes(),
+            Some(config.params.genesis.hash),
+        );
+        let gate = |object: &Obj| vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(object));
+        let accepted = |objects: Vec<Obj>| vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, objects, block);
+        let payload = PalwAdapterClassListingV1 {
+            class_id: h(0x31),
+            artifact: PalwTirCompositeRefV1 { parent_class: h(0x30), parent_root: h(0x32), adapter_root: h(0x33), p: 4 },
+            layout: kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1 {
+                version: kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: 8,
+                checkpoint_interval: 1,
+                h_tile: 1,
+                commit_tiles: Vec::new(),
+                state_tiles: Vec::new(),
+            },
+        };
+        let message = palw_adapter_listing_message_v1(&domain, &payload, &chain.bonds[3]);
+        let listing = |key: usize| Obj::AdapterClassListed {
+            payload: Box::new(payload.clone()),
+            lister: chain.bonds[3],
+            signature: sign(&TestConsensus::palw_v2_registry_keypair(key as u64).signing_key, &message, PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1),
+        };
+        if !arm {
+            let err = gate(&listing(3)).expect_err("below the fence");
+            assert!(err.contains("palw_adapter_class_v1 is not in force"), "{err}");
+            assert!(accepted(vec![listing(3)]).is_empty(), "and the walk drops it by name");
+            continue;
+        }
+        assert!(gate(&listing(4)).unwrap_err().contains("does not verify"), "another card's key");
+        let err = gate(&listing(3)).expect_err("a signed listing of a class nobody registered");
+        assert!(err.contains("not a registered IR class"), "past the signature, the acceptance half asks the class: {err}");
+        assert!(accepted(vec![listing(3)]).is_empty(), "and the walk drops it");
+    }
+}

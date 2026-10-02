@@ -13289,6 +13289,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::GenShardCourtAccused { .. } => "GenShardCourtAccused",
         // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
+        PalwConsensusObjectV2::AdapterClassListed { .. } => "AdapterClassListed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

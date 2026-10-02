@@ -185,6 +185,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::TeachingArtifactRevealed { .. }
         | O::TeacherLicenceRegistered { .. }
         | O::CandidateSubmitted { .. }
+        // RFC-0001 §2.10: an adapter class listing is registry traffic like a candidate's — no conviction, no
+        // court move a halt must let through.
+        | O::AdapterClassListed { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. } => false,
     }

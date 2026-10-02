@@ -21707,6 +21707,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
     params.sync_palw_held_close_chunks_v1();
+    // RFC-0001 §2.10's adapter class listing, likewise.
+    params.sync_palw_adapter_class_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
