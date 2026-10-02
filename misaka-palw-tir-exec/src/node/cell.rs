@@ -93,6 +93,11 @@ pub trait KernelBackendV1 {
     fn resident_bytes(&self) -> u64 {
         0
     }
+    /// The device memory this backend may use, when it is a device: what the node arms its ledger's device pool with
+    /// (`arm_device_share_v1`). `None` for the CPU.
+    fn device_capacity_bytes(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Everything a backend reads to verify one cell.
@@ -714,6 +719,16 @@ pub fn tir_shard_geometry_v1(tir: &TirBackendV1, s_l: u16) -> Result<(Vec<Range<
     let align = shard_rules::palw_tir_shard_segment_align_v1(space.layout.checkpoint_interval, space.layout.h_tile)
         .ok_or("the class's checkpoint interval and history tile have no alignment")?;
     Ok((parts, align))
+}
+
+/// **The bytes a shard holds** (`PalwTirShardWeightsV1::of_range` over the shard's layers: its per-layer params and state, the
+/// globals its layers read, `pre`'s and `post`'s extras where it holds them) — what the node's ledger reserves for the shard's
+/// cells, on the host or on a device.
+pub fn tir_shard_weight_bytes_v1(tir: &TirBackendV1, shard: u16, s_l: u16) -> Result<u128, String> {
+    let weights = shard_rules::palw_tir_shard_weights_v1(&tir.space().program, tir.class().layout.max_context);
+    let (parts, _) = tir_shard_geometry_v1(tir, s_l)?;
+    let part = parts.get(usize::from(shard)).ok_or_else(|| format!("shard {shard} of {s_l}"))?;
+    Ok(weights.of_range(part.start, part.end))
 }
 
 /// **The cells of one seat's duty**: shard `shard` of an `s_l`-shard plan, over the segments of `mask` of an `s_p`-segment cut of a

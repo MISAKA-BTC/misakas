@@ -37,7 +37,7 @@ use kaspa_consensus_core::palw_tir_shard_v1::{
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{
     KernelBackendV1, TirBackendV1, TirCellVerdictV1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
-    tir_shard_geometry_v1, tir_verify_capture_cells_v1,
+    tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
 };
 
 use super::tir_court::{
@@ -49,6 +49,10 @@ use crate::palw_receipt_pool::ReceiptChainFactsV1;
 
 /// How many cell-masked receipts a node holds at most: heard ones queue here until the next tick's read of the tip.
 pub(crate) const PALW_TIR_SHARD_ARRIVALS_MAX_V1: usize = 512;
+
+/// The ledger role a sharded duty's cells reserve under, and the scratch a cell run needs beyond the capture's bytes.
+pub(crate) const PALW_TIR_SHARD_CELL_ROLE_V1: &str = "tir-shard-cell";
+pub(crate) const PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1: u64 = 16 << 20;
 
 /// How many claims' receipts the pool keeps beside the claims this node's duties and filings name.
 pub(crate) const PALW_TIR_SHARD_POOL_CLAIMS_V1: usize = 128;
@@ -445,7 +449,34 @@ impl super::PalwPanelService {
             }
             let (task_tir, task_duty, task_material) = (tir.clone(), duty.clone(), material.clone());
             let outcome = tokio::task::spawn_blocking(move || {
-                let (mut device, _on_device) = tir_kernel_backend_v1(want_device);
+                // **The ledger's slots.** The cells' scratch is the host's (the capture's rows and their hashes); a device
+                // backend's shard bytes are reserved on its own pool, and a device that cannot take them is not used: the
+                // CPU runs the cells (the verdict is the same).
+                let key = crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: PALW_TIR_SHARD_CELL_ROLE_V1,
+                    class_id: task_duty.class_id,
+                    job: task_duty.claim_id,
+                };
+                let _host = crate::palw_memory_ledger::host_ledger_v1()
+                    .reserve(key.clone(), (task_material.len() as u64).saturating_mul(3).saturating_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1))
+                    .map_err(|refusal| format!("the cells' scratch is not free ({refusal})"))?;
+                let (mut device, mut on_device) = tir_kernel_backend_v1(want_device);
+                let mut _device_hold = None;
+                if on_device {
+                    if let Some(capacity) = device.device_capacity_bytes() {
+                        crate::palw_memory_ledger::arm_device_share_v1(0, capacity);
+                    }
+                    let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
+                    let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
+                    match crate::palw_memory_ledger::device_ledger_v1(0).map(|l| l.reserve(key, u64::try_from(shard_bytes).unwrap_or(u64::MAX))) {
+                        Some(Ok(held)) => _device_hold = Some(held),
+                        _ => {
+                            on_device = false;
+                            device = Box::new(misaka_palw_sdk::lineages::tir::CpuKernelBackendV1);
+                        }
+                    }
+                }
+                let _ = on_device;
                 palw_tir_shard_outcome_v1(&task_tir, &task_material, &task_duty, device.as_mut())
             })
             .await;
