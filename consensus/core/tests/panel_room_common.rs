@@ -86,10 +86,12 @@ pub fn fold_with(
     e: &PalwTransitionExtrasV1,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(Hash64, String)>), PalwStateV2Error> {
     let f = flags(p, c.daa_score);
+    // The processor hands the fold its admission params (a riders batch re-runs the stateful admission of each rider); so does this.
+    let admission = kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2::new(sp.fp_max_exposure_ratio_permille()).ok();
     apply_palw_transition_v7(
         parent,
         sp,
-        None,
+        admission.as_ref(),
         c,
         objects,
         work,

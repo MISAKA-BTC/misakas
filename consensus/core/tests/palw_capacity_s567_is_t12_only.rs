@@ -96,8 +96,11 @@ fn the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release()
 #[test]
 fn arming_each_moves_the_params_and_schedule_ids_but_not_the_identity() {
     let (_, identity, _) = ids(&palw_t12_release_v2_params());
-    for h in [1_001u64, 1_500, 5_000] {
-        let base = base_at(h);
+    for h0 in [1_001u64, 1_500, 5_000] {
+        // The capacity list stands at `h0`; the fences under test arm 10 DAA above it, a height no other fence uses (the fork id names
+        // heights, not fences).
+        let base = base_at(h0);
+        let h = h0 + 10;
         let (bp, _, bs) = ids(&base);
         let mut seen = vec![ids(&base)];
         for entry in entries() {
@@ -130,7 +133,8 @@ fn arming_each_moves_the_params_and_schedule_ids_but_not_the_identity() {
             }
             assert_eq!(ids(&back), ids(&base), "{}: set(None) gives the base back, to the id", entry.name);
         }
-        let all = all_at(h);
+        let all = all_at(h0);
+        let h = h0;
         assert_eq!(mirror(&all), (Some(h), Some(h), Some(h)));
         for (daa, want) in [(h - 1, false), (h, true)] {
             let PalwConsensusMode::ConsensusV2(b) = &all.palw_consensus_mode else { panic!("ConsensusV2") };
