@@ -983,7 +983,11 @@ impl AbsorbRun {
 /// nodes (`None`: testnet-12 as launched).
 async fn absorb(tag: &str, slots: usize, m: usize, x_in_attempt: bool, release_it: bool, same_chain: Option<u64>) -> AbsorbRun {
     kaspa_core::log::try_init_logger("warn");
-    let mut d = duel_armed(None, same_chain);
+    absorb_on(duel_armed(None, same_chain), tag, slots, m, x_in_attempt, release_it).await
+}
+
+/// [`absorb`] on a duel the caller built (any ruleset): the body, unchanged.
+async fn absorb_on(mut d: Duel, tag: &str, slots: usize, m: usize, x_in_attempt: bool, release_it: bool) -> AbsorbRun {
     let mut prefix: Vec<Block> = Vec::new();
     for _ in 0..3 {
         prefix.extend(honest_slot_mirrored(&mut d).await);
@@ -1127,8 +1131,8 @@ async fn replay_colors(tag: &str, from: &T12Chain, to: &mut T12Chain, order: &[B
 /// another order can keep another sink — the heavier tip is refused as a reorg when the PALW keys (frontier, safe weight, live total and,
 /// below `palw_reorg_strict_economic_win`, the candidate hash) rank it under the incumbent, and a node whose incumbent it IS never weighs
 /// the other. They re-converge when a later block merges both tips. This test asserted `from.sink() == to.sink()` here and failed in
-/// ~7 % of runs on the attack DAG and ~2 % on the honest crossing (P2, 2026-10-03; 150 and 100 runs); [`replay_in_order`] asserts
-/// it where the order is the one `from` saw.
+/// ~7 % of runs on the attack DAG and ~2 % on the honest crossing (P2, 2026-10-03: `sink_order_probe` measures it);
+/// [`replay_in_order`] asserts it where the order is the one `from` saw.
 async fn replay_and_compare(tag: &str, from: &T12Chain, to: &mut T12Chain) -> usize {
     let blocks = blocks_in_topological_order(from);
     let n = replay_colors(tag, from, to, &blocks).await;
@@ -1845,7 +1849,7 @@ mod strict_win_honest_race {
     /// Two nodes on testnet-12 with harness cards and whatever fences `arm` sets, both loading under
     /// the ARMED bundle (the fences with a fold mirror move it), and the two payments that spend card
     /// 1's float.
-    fn duel_on(arm: impl FnOnce(&mut Params)) -> Duel {
+    pub(super) fn duel_on(arm: impl FnOnce(&mut Params)) -> Duel {
         let (config, _, premine, floats) = t12_with_harness_cards();
         let mut params = config.params.clone();
         arm(&mut params);
@@ -1883,7 +1887,7 @@ mod strict_win_honest_race {
     /// when this was written; an entry added later is armed here too) set to `at` through its own
     /// `set`, as the release sets them at DAA 750 (every mirror follows; lane A over the genesis
     /// registry).
-    fn duel_release_set(at: u64) -> Duel {
+    pub(super) fn duel_release_set(at: u64) -> Duel {
         duel_on(|params| {
             assert!(PALW_T12_POST_LAUNCH_FENCES_V1.len() >= 12, "the release arms at least the twelve fences of int-4");
             for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
@@ -1896,7 +1900,7 @@ mod strict_win_honest_race {
     type Keys = Option<(u64, u128, u128)>;
 
     /// One exchange's outcome: whether the two sinks agree, and each sink's economic keys.
-    struct Exchange {
+    pub(super) struct Exchange {
         agree: bool,
         keys_a: Keys,
         keys_b: Keys,
@@ -1932,7 +1936,7 @@ mod strict_win_honest_race {
     /// mines an attempt (card 3) while node B mines a heartbeat, exchanged; (3) five rounds of sibling
     /// heartbeats, each node mining one on its own virtual (distinct nonces), exchanged. Returns each of
     /// the seven exchanges' outcome.
-    async fn honest_sibling_race(tag: &str, d: &mut Duel) -> Vec<Exchange> {
+    pub(super) async fn honest_sibling_race(tag: &str, d: &mut Duel) -> Vec<Exchange> {
         for _ in 0..3 {
             honest_slot_mirrored(d).await;
         }
@@ -2888,5 +2892,252 @@ async fn capacity_probe_w_t6c_lane_a_keeps_a_non_operators_private_claims_create
             assert_eq!(private_order.live_total, 0, "{tag}: the junk stays Created and weighs 0");
             assert!(!r.flipped() && x && !y, "{tag}: the keys tie deep — strict-win keeps the incumbent, X stands");
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// lane P2 (2026-10-03, p2/hb-flake): is a node's sink a function of the DAG it holds, or of the ORDER
+// the DAG arrived in? `hb_regression_below_the_fence_the_armed_build_is_the_launched_build` replays the
+// victim's final DAG into a twin in a topological order of its own (a DFS from `get_tips()`), not the
+// order the victim saw, and asserts the same sink: it fails in ~7 % of runs. This module MEASURES the
+// property on three rulesets (the launched one, the int-4 release set past `palw_reorg_strict_economic_win`,
+// and that plus ADR-0165's reserve), over an attack DAG and an honest-race DAG: two nodes holding the
+// same set of blocks, fed in two random orders (random linear extensions of a random downset), and
+// whether the next block either of them mines heals a split. Measurements, not assertions: `#[ignore]`.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+mod sink_order_probe {
+    use super::strict_win_honest_race::{duel_on, duel_release_set, honest_sibling_race};
+    use super::*;
+    use crate::model::services::reachability::ReachabilityService;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use rand::Rng;
+    use std::collections::HashMap;
+
+    /// A fresh node on the duel's own ruleset.
+    fn fresh_node(d: &Duel) -> T12Chain {
+        let (_, _, premine, floats) = t12_with_harness_cards();
+        let PalwConsensusMode::ConsensusV2(bundle) = &d.config.params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
+        t12_genesis_chain(&d.config, bundle, &premine, &floats)
+    }
+
+    /// A random linear extension of the DAG `blocks` hold: every block after all its parents that are in the set.
+    fn random_linear_extension(blocks: &[Block], rng: &mut impl Rng) -> Vec<Block> {
+        let index: HashMap<BlockHash, usize> = blocks.iter().enumerate().map(|(i, b)| (b.header.hash, i)).collect();
+        let mut indegree = vec![0usize; blocks.len()];
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
+        for (i, b) in blocks.iter().enumerate() {
+            for parent in b.header.direct_parents() {
+                if let Some(&p) = index.get(parent) {
+                    indegree[i] += 1;
+                    children[p].push(i);
+                }
+            }
+        }
+        let mut available: Vec<usize> = (0..blocks.len()).filter(|i| indegree[*i] == 0).collect();
+        let mut out = Vec::with_capacity(blocks.len());
+        while !available.is_empty() {
+            let i = available.swap_remove(rng.gen_range(0..available.len()));
+            out.push(blocks[i].clone());
+            for &c in &children[i] {
+                indegree[c] -= 1;
+                if indegree[c] == 0 {
+                    available.push(c);
+                }
+            }
+        }
+        assert_eq!(out.len(), blocks.len(), "a DAG has a linear extension");
+        out
+    }
+
+    /// A random downset (a set of blocks closed under "parent of"): the first `cut` blocks of a random linear extension.
+    fn random_downset(blocks: &[Block], rng: &mut impl Rng) -> Vec<Block> {
+        let order = random_linear_extension(blocks, rng);
+        let cut = rng.gen_range(order.len() / 3..=order.len());
+        order[..cut].to_vec()
+    }
+
+    async fn feed(node: &mut T12Chain, order: &[Block]) {
+        for b in order {
+            mirror(node, b).await;
+        }
+    }
+
+    /// Chain steps from each of `a`, `b` back to their common chain ancestor, read on `c`.
+    fn chain_split(c: &T12Chain, a: BlockHash, b: BlockHash) -> (u64, u64) {
+        let rs = &c.ctx.consensus.services.reachability_service;
+        let walk = |from: BlockHash, other: BlockHash| {
+            let (mut steps, mut x) = (0u64, from);
+            while !rs.is_chain_ancestor_of(x, other) {
+                x = c.vp().ghostdag_store.get_selected_parent(x).unwrap();
+                steps += 1;
+            }
+            steps
+        };
+        (walk(a, b), walk(b, a))
+    }
+
+    fn keys(c: &T12Chain, h: BlockHash) -> Option<(u64, u128, u128)> {
+        c.vp().palw_candidate_order_v2(h).map(|o| (o.safe_frontier_blue_score, o.safe_weight, o.live_total))
+    }
+
+    #[derive(Default)]
+    struct Tally {
+        samples: usize,
+        split: usize,
+        /// Of the splits: the two sinks' economic keys are equal / differ.
+        tie: usize,
+        econ: usize,
+        /// Of the splits: the deeper side's chain steps to the common chain ancestor (histogram by steps, capped at 6).
+        depth: [usize; 7],
+        /// Of the splits: healed by the 1st, 2nd, 3rd block mined (alternately) and mirrored; or not within three.
+        healed: [usize; 3],
+        unhealed: usize,
+        /// Beats a diverged node mined on its own virtual that its own node did NOT adopt as the sink (a liveness question, not a split).
+        not_adopted: usize,
+    }
+
+    impl Tally {
+        fn print(&self, label: &str) {
+            eprintln!(
+                "[sink-order {label}] {} samples: {} split ({:.1} %): all-economic tie {} / economic keys differ {}; deeper side {} chain steps from the fork (0..6+): {:?}; healed by the next block {} / 2nd {} / 3rd {} / not in 3: {}; own beats not adopted by their miner: {}",
+                self.samples,
+                self.split,
+                100.0 * self.split as f64 / self.samples.max(1) as f64,
+                self.tie,
+                self.econ,
+                "",
+                self.depth,
+                self.healed[0],
+                self.healed[1],
+                self.healed[2],
+                self.unhealed,
+                self.not_adopted
+            );
+        }
+    }
+
+    /// Two nodes on the same downset in two random orders; tally their sinks; on a split, let them mine alternately and mirror.
+    async fn sample(d: &Duel, dag: &[Block], t: &mut Tally) {
+        let mut rng = rand::thread_rng();
+        let set = random_downset(dag, &mut rng);
+        let (o1, o2) = (random_linear_extension(&set, &mut rng), random_linear_extension(&set, &mut rng));
+        let (mut a, mut b) = (fresh_node(d), fresh_node(d));
+        feed(&mut a, &o1).await;
+        feed(&mut b, &o2).await;
+        t.samples += 1;
+        if a.sink() == b.sink() {
+            return;
+        }
+        t.split += 1;
+        let (ka, kb) = (keys(&a, a.sink()), keys(&a, b.sink()));
+        if ka == kb {
+            t.tie += 1;
+        } else {
+            t.econ += 1;
+        }
+        let (da, db) = chain_split(&a, a.sink(), b.sink());
+        t.depth[da.max(db).min(6) as usize] += 1;
+        let mut nonce = 1u64 << 50;
+        for round in 0..3 {
+            let (miner, other) = if round % 2 == 0 { (&mut a, &mut b) } else { (&mut b, &mut a) };
+            let clock = miner.ctx.simulated_time + 1_000;
+            let block = layer(miner, &mut nonce, 1, clock, Vec::new()).await.expect("an honest beat on a diverged node").remove(0);
+            if miner.sink() != block.header.hash {
+                t.not_adopted += 1;
+            }
+            mirror(other, &block).await;
+            if a.sink() == b.sink() {
+                t.healed[round] += 1;
+                return;
+            }
+        }
+        t.unhealed += 1;
+    }
+
+    fn samples_from_env() -> usize {
+        std::env::var("HB_PROBE_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(12)
+    }
+
+    async fn run_attack(label: &str, make: impl Fn() -> Duel, shape: (usize, usize, bool)) {
+        kaspa_core::log::try_init_logger("warn");
+        let attack = absorb_on(make(), label, shape.0, shape.1, shape.2, true).await;
+        let dag = blocks_in_topological_order(&attack.duel.victim);
+        eprintln!("[sink-order {label}] attack DAG of {} blocks ({} private); double spent: {}", dag.len(), attack.private.len(), attack.double_spent());
+        let mut t = Tally::default();
+        for _ in 0..samples_from_env() {
+            sample(&attack.duel, &dag, &mut t).await;
+        }
+        t.print(label);
+    }
+
+    async fn run_honest(label: &str, make: impl Fn() -> Duel) {
+        kaspa_core::log::try_init_logger("warn");
+        let mut d = make();
+        let _ = honest_sibling_race(label, &mut d).await;
+        let dag = blocks_in_topological_order(&d.victim);
+        eprintln!("[sink-order {label}] honest-race DAG of {} blocks", dag.len());
+        let mut t = Tally::default();
+        for _ in 0..samples_from_env() {
+            sample(&d, &dag, &mut t).await;
+        }
+        t.print(label);
+    }
+
+    fn real_share_set(params: &mut kaspa_consensus_core::config::params::Params) {
+        use kaspa_consensus_core::config::params::PALW_T12_POST_LAUNCH_FENCES_V1;
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            (fence.set)(params, Some(ForkActivation::new(1)));
+        }
+        for fence in kaspa_consensus_core::palw_real_share_v1::PALW_T12_USEFUL_WORK_FENCES_V1 {
+            (fence.set)(params, Some(ForkActivation::new(1)));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement: HB_PROBE_SAMPLES=n cargo test ... sink_order_probe -- --ignored --nocapture"]
+    async fn attack_g2_launched() {
+        run_attack("attack g2, launched", || duel_on(|_| {}), (2, 2, false)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn attack_g2_release_set() {
+        run_attack("attack g2, release set (strict-win)", || duel_release_set(1), (2, 2, false)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn attack_g2_release_set_and_reserve() {
+        run_attack("attack g2, release set + reserve", || duel_on(real_share_set), (2, 2, false)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn attack_h1_launched() {
+        run_attack("attack h1, launched", || duel_on(|_| {}), (3, 2, true)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn attack_h1_release_set() {
+        run_attack("attack h1, release set (strict-win)", || duel_release_set(1), (3, 2, true)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn honest_race_launched() {
+        run_honest("honest race, launched", || duel_on(|_| {})).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn honest_race_release_set() {
+        run_honest("honest race, release set (strict-win)", || duel_release_set(1)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "a measurement"]
+    async fn honest_race_release_set_and_reserve() {
+        run_honest("honest race, release set + reserve", || duel_on(real_share_set)).await;
     }
 }
