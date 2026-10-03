@@ -1356,6 +1356,16 @@ class Drive:
             got = self.log_after("reg", int(st["cursor"]), pat)
             m = re.search(pat, got or "")
             if not m:
+                # A registrar that is stopped before it prints (the harness's 120 s start check) has still registered its bond: the next run reads
+                # "this key already holds bond T:I on this chain" and prints no "registered bond" line. The bond is the same one.
+                g2 = self.log_after("reg", int(st["cursor"]), r"this key already holds bond ([0-9a-f]{128}):(\d+) on this chain")
+                m2 = re.search(r"this key already holds bond ([0-9a-f]{128}):(\d+) on this chain", g2 or "")
+                if m2:
+                    class _M:   # same four groups as the registered-bond line; the transaction id is not printed in this form
+                        def group(self, i):
+                            return {1: m2.group(1), 2: m2.group(2), 3: str(int(st["collateral"])), 4: ""}[i]
+                    m = _M()
+            if not m:
                 if self.daa > int(st["start_daa"]) + XB_WAIT_DAA:
                     self.nodes_sh("stop", "reg")
                     st["attempts"] = int(st.get("attempts", 0)) + 1
