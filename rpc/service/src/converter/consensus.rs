@@ -790,8 +790,11 @@ mod block_kind_tests {
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_ROUND_V1, 9_999, vec![])), "EXEC");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_COMMITTED_V2, 9_999, vec![1, 2, 3])), "", "undecodable commitment");
         assert_eq!(palw_block_kind_v1(&params, &header(1, 9_999, vec![])), "", "a non-PALW header");
-        // Dormant ruleset: a floor attempt is LEGACY_FLOOR at any height.
-        let shipped = palw_t12_shipped_params();
-        assert_eq!(palw_block_kind_v1(&shipped, &attempt(floor, 9_999)), "LEGACY_FLOOR");
+        // Dormant ruleset (int-12: testnet-12 as shipped arms the fence at 5,300, so the dormant one is the int-10 baseline): a floor
+        // attempt is LEGACY_FLOOR at any height.
+        let dormant = kaspa_consensus_core::config::params::palw_t12_release_v5_params();
+        assert_eq!(palw_block_kind_v1(&dormant, &attempt(floor, 9_999)), "LEGACY_FLOOR");
+        // And the shipped ruleset reads it as FALLBACK from the flag day on.
+        assert_eq!(palw_block_kind_v1(&palw_t12_shipped_params(), &attempt(floor, 9_999)), "FALLBACK");
     }
 }
