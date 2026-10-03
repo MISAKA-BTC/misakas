@@ -149,10 +149,10 @@ The keyring export takes the same fence flags: `kaspad … --palw-drill-write-ke
 announces another ruleset's fingerprint).
 
 
-## int-12 addendum (2026-10-03): the list is now 28 entries, and the ramp has two more steps
+## int-12 addendum (2026-10-03): the list is now 29 entries, and the ramp has two more steps
 
-The user's directive of 2026-10-03 arms every RFC but 0005, the Useful Work Transition and capacity x1000 at the same height
-H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 28 entries, in prerequisite order:
+The user's directive of 2026-10-03 arms every RFC but 0005, the Useful Work Transition, capacity x1000 and ADR-0170's anchor window at the same height
+H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 29 entries, in prerequisite order:
 
 1. the int-11 five (decode rules, generative, FP Job V5, held leaf challenge, improvement);
 2. RFC-0006 — `palw_tir_shard_v1`;
@@ -162,13 +162,14 @@ H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 28 entries, in prere
 5. RFC-0002's rest — `palw_class_seating`, `palw_gdn_key_heads`;
 6. lane PL (ADR-0166) — `palw_panel_unavailable_expiry`, `palw_panel_fast_switch`, `palw_seat_availability`;
 7. lane RS (ADR-0165) — `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`;
+   lane P2 (ADR-0170) — `palw_anchor_window_v1` (after RS's pair, before the capacity entries; no drill flag of its own);
 8. F-N's `L_ver` (`palw_capacity_network_verify`), then capacity x1000's three (ADR-0164: `palw_capacity_emission_budget`,
    `palw_capacity_multi_claim`, `palw_capacity_rho_breaker`), then rho = 25.
 
 The ramp's later steps keep their own entries: rho = 100 at H + 95 (5,395), rho = 250 at H + 190 (5,490), rho = 1000 at H + 285 (5,585).
 `palw_tir_only_v1` is a MAINNET step and is on no list; `palw_model_court_window` and `palw_model_virtual_v1` stay dormant.
 
-`--palw-drill-int11-at=H'` moves all 28 to H' and the three later steps to H' + 95 / + 190 / + 285 (a per-fence flag of this file's rows
+`--palw-drill-int11-at=H'` moves all 29 to H' and the three later steps to H' + 95 / + 190 / + 285 (a per-fence flag of this file's rows
 still moves its own entry alone, on a ruleset that arms the rest — which is why `--palw-drill-capacity-step2-at` alone leaves rho = 100, 250
 and 1000 where the release has them). Lane PL's list has its own flag, `--palw-drill-panel-liveness-at`; lane RS's pair,
 `--palw-drill-useful-work-at`. Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
