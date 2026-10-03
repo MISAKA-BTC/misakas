@@ -360,6 +360,46 @@ pub struct Base0LayerWeightsV1 {
     pub ffn_gate_scale: ScaleParams,
 }
 
+/// **`artifact_digest()` of a held artifact, computed once** (the 2026-10-03 panel starvation,
+/// `docs/design/palw/t12-panel-backlog-1003.md` §6). The digest streams the embedding and unembedding slabs
+/// (~1 GB of a 1.5B class) through BLAKE2b, and the panel's duty sweep resolves a backend for every duty every
+/// tick (`dense_artifact_by_digest` compares each holding's digest with the class's root, and the backend
+/// constructors derive their shape id from it): 2 s a duty on a 5.104 seat, ~240 duties, nine minutes a tick.
+/// A held artifact is an `Arc` nothing mutates, and the registry holds a `Weak` to it: a `Weak` keeps the
+/// allocation's address reserved (so no other artifact can ever be found at it) without keeping the 1.7 GB alive
+/// (an evicted holding still frees), and `Arc::get_mut` refuses while it exists. At most [`DIGEST_MEMO_CAP`].
+const DIGEST_MEMO_CAP: usize = 16;
+static DIGEST_MEMO: std::sync::Mutex<Vec<(std::sync::Weak<Base0ArtifactV1>, Hash64)>> = std::sync::Mutex::new(Vec::new());
+
+/// The digest of `artifact`, memoised on the allocation.
+pub fn artifact_digest_shared(artifact: &std::sync::Arc<Base0ArtifactV1>) -> Hash64 {
+    if let Some(hit) = artifact_digest_if_memoised(artifact) {
+        return hit;
+    }
+    // Computed outside the lock: a first call costs a second or more.
+    let digest = artifact.artifact_digest();
+    let mut memo = DIGEST_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    memo.retain(|(held, _)| held.strong_count() > 0);
+    if !memo.iter().any(|(held, _)| std::ptr::eq(held.as_ptr(), std::sync::Arc::as_ptr(artifact))) {
+        if memo.len() >= DIGEST_MEMO_CAP {
+            memo.remove(0);
+        }
+        memo.push((std::sync::Arc::downgrade(artifact), digest));
+    }
+    digest
+}
+
+fn artifact_digest_if_memoised(artifact: &Base0ArtifactV1) -> Option<Hash64> {
+    let memo = DIGEST_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    memo.iter().find(|(held, _)| std::ptr::eq(held.as_ptr(), artifact) && held.strong_count() > 0).map(|(_, digest)| *digest)
+}
+
+/// The digest of a borrowed artifact: the memo's when it is an allocation [`artifact_digest_shared`] has seen,
+/// computed otherwise.
+pub fn artifact_digest_memoised(artifact: &Base0ArtifactV1) -> Hash64 {
+    artifact_digest_if_memoised(artifact).unwrap_or_else(|| artifact.artifact_digest())
+}
+
 /// The full artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base0ArtifactV1 {
@@ -1842,6 +1882,42 @@ mod tests {
     ///
     /// The two now answer their two questions, and the pair of assertions below is the whole
     /// point: same graph + different weights is ONE class and TWO artifacts.
+    /// The memoised digest is the digest: the same for the same allocation on every call, a different one for different
+    /// weights, and a borrowed artifact finds its `Arc`'s entry (the panel resolves a backend per duty per tick).
+    #[test]
+    fn a_held_artifacts_digest_is_memoised_on_its_allocation_and_is_always_the_digest() {
+        use kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
+        let geometry = PALW_RC_BASE0_GEOMETRY;
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let a = std::sync::Arc::new(Base0ArtifactV1::derive_deterministic(shape, 1).unwrap());
+        let b = std::sync::Arc::new(Base0ArtifactV1::derive_deterministic(shape, 2).unwrap());
+        assert!(artifact_digest_if_memoised(&a).is_none(), "nothing is memoised before the first ask");
+        let first = artifact_digest_shared(&a);
+        assert_eq!(first, a.artifact_digest(), "the memo is the digest");
+        assert_eq!(artifact_digest_shared(&a), first);
+        assert_eq!(artifact_digest_if_memoised(&a), Some(first), "the entry is there");
+        assert_eq!(artifact_digest_memoised(&a), first, "a borrow finds its Arc's entry");
+        assert_ne!(artifact_digest_shared(&b), first, "different weights, different digest");
+        // A clone is another allocation: it is computed, never read from its original's entry.
+        let copy = (*a).clone();
+        assert_eq!(artifact_digest_memoised(&copy), first, "the same bytes digest alike");
+        assert!(artifact_digest_if_memoised(&copy).is_none());
+        // The registry never pins the weights: dropping every `Arc` frees them, and the entry is pruned.
+        let weak = std::sync::Arc::downgrade(&b);
+        drop(b);
+        assert_eq!(weak.strong_count(), 0, "the memo holds a Weak, not the 1.7 GB");
+    }
+
     #[test]
     fn the_class_id_is_the_graph_and_the_digest_is_the_bytes() {
         use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};

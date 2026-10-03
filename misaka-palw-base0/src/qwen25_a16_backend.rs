@@ -1015,7 +1015,7 @@ impl Qwen25A16Backend {
             ),
             other => format!("this build cannot serve the graph this class declares: {other:?}"),
         })?;
-        let shape_id = artifact.artifact_digest();
+        let shape_id = crate::artifact::artifact_digest_shared(&artifact);
         let class_profile_id = profile.shape_profile_id();
         let court_capable = a16_court_capable_v1(&profile);
         Ok(Self {
@@ -1278,7 +1278,7 @@ impl Qwen25A16Backend {
             ),
             other => format!("this build cannot serve the registered graph: {other:?}"),
         })?;
-        let shape_id = artifact.artifact_digest();
+        let shape_id = crate::artifact::artifact_digest_shared(&artifact);
         let class_profile_id = profile.shape_profile_id();
         let court_capable = a16_court_capable_v1(&profile);
         Ok(Self {

@@ -102,3 +102,18 @@ loop and replay threads run at the speed the other hosts have. **This is a predi
 * **No code change needed for this one, and it is the larger lever: put the seats where the CPU is.** .113 runs two nodes at a load of 0.15 and files 50-64 receipts an hour per seat; 5.104 runs
   three at 7.5 and files 7-16. Moving b4 and b5 to .113 (b2 stays) with the existing `move-seat.sh` makes every panel's quorum reachable at the 50-60 an hour rate — the three seats that gate licensing become fast, and the
   .113 host is still at one core a node. `--palw-seat-replay-slots` on the seats left on 5.104: leave 1 until the VP is fixed (a floor replay is a core's worth of BLAKE2b; more slots on a saturated host starve the VP further).
+
+## 6. The duty sweep: `artifact_digest()` per resolve (found on the b2 canary, int-10.4 49c2fbb1c72b)
+
+b2 with F1 deployed: virtual-processor 0 % CPU, but `tick_last_s=592`, `tick_slowest=duty-sweep:540.8` (the warn: `setup 6.8 s, duty-sweep 540.8 s, tail 44.4 s`; an earlier tick 819 s = `duty-sweep 706 s`).
+The node is IDLE while the sweep runs (workers parked in `futex`), except ONE tokio worker at 100 % (the loop itself: no `task.rs`/spawn_blocking frame under it).
+A `perf --call-graph dwarf` of that thread (frames mapped to source through the binary's panic-location statics): BLAKE2b (`blake2b_simd`) under `palw_artifact.rs` / base0
+`artifact.rs` under `palw_panel.rs` — 385 of 385 samples. That is `Base0ArtifactV1::artifact_digest()`: it streams the embedding and unembedding slabs (~1 GB of the 1.5B class) through BLAKE2b, and the sweep
+calls it for EVERY duty, several times: `resolve_backend` → `dense_artifact_by_digest` (a digest per dense holding, to compare with the class root), the backend constructors (`shape_id`),
+`a16_inventory_digest_key_v1` (every inventory read). ~2 s a call on 5.104 x ~240 duties = the nine minutes; ~0.4 s on an ibm seat — the 0.4 s/duty slope measured in §1, and why the loop period
+rose with the duty count. On .113 b7 the hot thread is a genuine replay (`palw_step_leg` under `task.rs`: an 8k claim), because its ticks are short (64 s) — the same digest cost is there, but 4x cheaper.
+
+**F4 (this commit)**: `artifact_digest_shared` / `artifact_digest_memoised` (misaka-palw-base0): the digest is computed once per held allocation. The registry keeps a `Weak` (the allocation's address stays
+reserved, so no other artifact can be found at it; an evicted holding still frees its 1.7 GB; `Arc::get_mut` refuses while it exists), at most 16. Used at the three per-resolve sites. Test:
+`a_held_artifacts_digest_is_memoised_on_its_allocation_and_is_always_the_digest`; `misaka-palw-sdk` lib 56/0, `misaka-palw-base0` inventory 11/0. Node-only; the digest value is unchanged.
+Expected: the sweep drops from ~2 s a duty to the cost of the duty's own work (state reads, receipt-pool checks): the tick should fall to the 60 s throttle floor seen on b0/b6/b7, i.e. ~6x the receipts on a 5.104 seat.
