@@ -78,6 +78,18 @@ pub struct FetchV1 {
     pub info: InfoV1,
     pub inventory: Vec<FileV1>,
     pub items: Vec<ItemV1>,
+    /// An adapter's base, read at its pinned commit: its inventory and the items read of it are the ones above whose path starts
+    /// with `base/`.
+    pub base: Option<BaseFetchV1>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BaseFetchV1 {
+    pub repo: String,
+    pub revision: String,
+    pub info: InfoV1,
+    pub inventory: Vec<FileV1>,
 }
 
 impl FetchV1 {
@@ -405,4 +417,98 @@ pub fn diffusers_components(fx: &Fetched) -> Result<BTreeMap<String, (String, St
         out.insert(k.clone(), (lib, class, cfg));
     }
     Ok(out)
+}
+
+/// **The source of a PEFT adapter over its pinned base** (RFC-0004: a candidate is a parent plus an adapter): the base's checkpoint as
+/// [`source_of`] reads it, plus the adapter's own header as one more shard (its `lora_A`/`lora_B` tensors), the files of both
+/// repositories (an adapter may carry the tokenizer), and the adapter's configuration and tensor names for the preflight to attach.
+/// `Ok(None)` when no base was read.
+pub fn adapter_source_of(
+    l: &ListingV1,
+    sel: &SelectedV1,
+    fx: &Fetched,
+) -> Result<Option<(CensusSource, crate::preflight::LoraInput)>, Vec<Problem>> {
+    let Some(base) = &fx.fetch.base else { return Ok(None) };
+    if base.info.status != "ok" {
+        let e = base.info.error.clone().unwrap_or_else(|| "error".into());
+        let code = if e == "gated" { codes::BASE_UNPINNED } else { codes::FETCH_FAILED };
+        return Err(vec![problem(
+            code,
+            &format!("base:{}", base.repo),
+            format!("{e}: {}", base.info.detail.clone().unwrap_or_default()),
+        )]);
+    }
+    let f = &fx.fetch;
+    // The adapter's configuration and tensor names.
+    let cfg_path = sel.config.clone().unwrap_or_else(|| "adapter_config.json".into());
+    let config = match f.item(&cfg_path) {
+        Some(it) if it.status == "ok" => {
+            String::from_utf8(fx.bytes_of(it).map_err(|e| vec![problem(codes::FETCH_FAILED, &cfg_path, e)])?)
+                .map_err(|e| vec![problem(codes::HEADER_INVALID, &cfg_path, e.to_string())])?
+        }
+        Some(it) => return Err(vec![item_problem(it)]),
+        None => return Err(vec![problem(codes::FETCH_FAILED, &cfg_path, "not fetched")]),
+    };
+    let ad_path = sel
+        .weights
+        .iter()
+        .find(|w| w.ends_with(".safetensors"))
+        .cloned()
+        .ok_or_else(|| vec![problem(codes::FETCH_FAILED, "adapter_model.safetensors", "no safetensors adapter file selected")])?;
+    let ad_item = match f.item(&ad_path) {
+        Some(it) if it.status == "ok" => it,
+        Some(it) => return Err(vec![item_problem(it)]),
+        None => return Err(vec![problem(codes::FETCH_FAILED, &ad_path, "header not fetched")]),
+    };
+    let ad_bytes = fx.bytes_of(ad_item).map_err(|e| vec![problem(codes::FETCH_FAILED, &ad_path, e)])?;
+    // The base, as a fetch of its own: the items under `base/`, its inventory.
+    let base_fetch = FetchV1 {
+        schema: f.schema.clone(),
+        repo: base.repo.clone(),
+        revision: base.revision.clone(),
+        info: base.info.clone(),
+        inventory: base.inventory.clone(),
+        items: f
+            .items
+            .iter()
+            .filter_map(|it| it.path.strip_prefix("base/").map(|p| ItemV1 { path: p.to_string(), ..it.clone() }))
+            .collect(),
+        base: None,
+    };
+    let base_listing =
+        ListingV1 { id: base.repo.clone(), siblings: base.inventory.iter().map(|x| x.path.clone()).collect(), ..Default::default() };
+    let base_sel = super::listing::select(&base_listing);
+    if !matches!(base_sel.kind, ArtifactKind::Safetensors) {
+        return Err(vec![problem(
+            codes::BASE_UNPINNED,
+            &format!("base:{}", base.repo),
+            format!("the base holds no transformers safetensors checkpoint ({:?})", base_sel.kind),
+        )]);
+    }
+    let base_fx = Fetched { dir: fx.dir.clone(), fetch: base_fetch };
+    let mut cs = source_of(&base_listing, &base_sel, &base_fx)?;
+    // The adapter's header as one more shard.
+    let name = "adapter_model.safetensors";
+    std::fs::write(cs.scratch.0.join(name), &ad_bytes).map_err(|e| vec![problem(codes::FETCH_FAILED, name, e.to_string())])?;
+    let mut sh =
+        source::read_safetensors_header(&cs.scratch.0.join(name)).map_err(|e| vec![problem(codes::HEADER_INVALID, &ad_path, e)])?;
+    sh.file_bytes = f.size_of(&ad_path).unwrap_or(0);
+    if !sh.complete() {
+        return Err(vec![problem(codes::WEIGHTS_INCOMPLETE, &ad_path, "shorter than its header declares")]);
+    }
+    let tensors: Vec<String> = sh.entries.keys().cloned().collect();
+    cs.bytes_read += sh.header_bytes + config.len() as u64;
+    cs.source.shards.push(sh);
+    // The files of both repositories: the adapter's own (its tokenizer, when it carries one) over the base's.
+    let mut files = files_in(f, "");
+    for b in files_in(&base_fx.fetch, &base_sel.dir) {
+        if !files.iter().any(|x| x.name == b.name) {
+            files.push(b);
+        }
+    }
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    cs.source.files = files;
+    cs.label = format!("hf://{}@{} over hf://{}@{}", l.id, f.revision, base.repo, base.revision);
+    cs.source.label = cs.label.clone();
+    Ok(Some((cs, crate::preflight::LoraInput { config, tensors })))
 }

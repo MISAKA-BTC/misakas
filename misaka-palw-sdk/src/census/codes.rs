@@ -150,6 +150,7 @@ pub fn gate_code_of_preflight(code: &str) -> Option<(Gate, &'static str)> {
         "TENSOR_MISSING" => (Gate::Lower, "TENSOR_MISSING"),
         "TENSOR_SHAPE" => (Gate::Lower, "TENSOR_SHAPE"),
         "TOKENIZER_MISSING" => (Gate::Lower, "TOKENIZER_MISSING"),
+        "ADAPTER_REFUSED" => (Gate::Lower, "ADAPTER_REFUSED"),
         "SOURCE_INCOMPLETE" => (Gate::Source, WEIGHTS_INCOMPLETE),
         // register stage → admit
         "ADMISSION_EXCEEDS" => (Gate::Admit, "ADMISSION_EXCEEDS"),
@@ -193,6 +194,7 @@ pub fn priority(gate: Gate, code: &str) -> u32 {
             PARTIAL_TASK_ONLY,
             FORMAT_UNSUPPORTED,
             ADAPTER_UNCHECKED,
+            "ADAPTER_REFUSED",
             CONFIG_MISSING,
             "CONFIG_INVALID",
             CUSTOM_CODE_UNMODELLED,
@@ -243,6 +245,7 @@ mod tests {
             "TENSOR_MISSING",
             "TENSOR_SHAPE",
             "TOKENIZER_MISSING",
+            "ADAPTER_REFUSED",
             "SOURCE_INCOMPLETE",
             "ADMISSION_EXCEEDS",
             "ADMISSION_REFUSED",

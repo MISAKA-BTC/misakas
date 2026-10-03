@@ -302,6 +302,57 @@ fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32
     }
 }
 
+/// **The preflight of one source at the declared contexts** ([`ContextRule`]): the headers depth once; else the narrower context first
+/// and the primary only when the narrower admits (or refuses on a code a wider context could change). Returns the report the row is
+/// built from, the context record and the narrower context's admit gate.
+fn judge_at_contexts(
+    cs: &store::CensusSource,
+    ctx: &CensusContext,
+    task: &TaskV1,
+) -> (Result<Report, Found>, Option<ContextV1>, Option<GateResultV1>) {
+    let (primary, source, declared) = match ctx.context_rule {
+        ContextRule::Fixed(c) => (c, "fixed".to_string(), None),
+        ContextRule::ModelCapped { cap, .. } => match cs.source.config.as_ref().and_then(declared_positions) {
+            Some((d, at)) => (d.min(u64::from(cap)) as u32, at, Some(d)),
+            None => (cap, "assumed".to_string(), None),
+        },
+    };
+    let mut cx = ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
+    let mut admit_retry = None;
+    let report = match ctx.context_rule {
+        _ if ctx.options.depth == preflight::Depth::Headers => run_preflight(cs, ctx, primary),
+        // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the narrower context on
+        // limits that only grow with the context is refused at the primary too, so the primary is judged only for a class the
+        // narrower context admits (or refuses on a code a wider context could change).
+        ContextRule::ModelCapped { retry, .. } if primary > retry && !task.profile.is_pipeline() => {
+            cx.retry = Some(retry);
+            cx.judged_at.push(retry);
+            match run_preflight(cs, ctx, retry) {
+                Ok(r2) if r2.verdict.convert.status != StageStatus::Ok => Ok(r2),
+                Ok(r2) => {
+                    let a2 = admit_of(&r2);
+                    let implied =
+                        a2.status == GateStatus::Fail && a2.codes.iter().all(|c| IMPLIED_AT_WIDER_CONTEXT.contains(&c.as_str()));
+                    admit_retry = Some(a2);
+                    if implied {
+                        cx.primary_implied = true;
+                        Ok(r2)
+                    } else {
+                        cx.judged_at.push(primary);
+                        run_preflight(cs, ctx, primary)
+                    }
+                }
+                Err(f) => Err(f),
+            }
+        }
+        _ => {
+            cx.judged_at.push(primary);
+            run_preflight(cs, ctx, primary)
+        }
+    };
+    (report, Some(cx), admit_retry)
+}
+
 /// The admit gate of a report (the class is not a pipeline class).
 fn admit_of(r: &Report) -> GateResultV1 {
     if r.depth.reached == preflight::Depth::Headers {
@@ -420,10 +471,17 @@ fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
             Some(sel.formats.join("+")),
             vec![format!("weights only as {}", sel.formats.join(", "))],
         )),
-        ArtifactKind::Adapter => f.push(found(
+        // An adapter without a PEFT configuration (a diffusers LoRA file) is not composed by this build; a PEFT adapter is composed with
+        // its pinned base when its headers are read (RFC-0004's LoRA attachment), so the listing does not decide it.
+        ArtifactKind::Adapter if sel.config.is_none() => f.push(found(
             codes::ADAPTER_UNCHECKED,
             l.config.get("peft").and_then(|p| p.get("task_type")).and_then(|t| t.as_str()).map(str::to_string),
-            vec!["the census does not yet compose an adapter with its base".into()],
+            vec!["an adapter with no adapter_config.json: the census composes PEFT adapters only".into()],
+        )),
+        ArtifactKind::Adapter if !sel.weights.iter().any(|w| w.ends_with(".safetensors")) => f.push(found(
+            codes::FORMAT_UNSUPPORTED,
+            Some("pytorch-adapter".into()),
+            vec!["the adapter's weights are only a pickle (adapter_model.bin)".into()],
         )),
         ArtifactKind::Gguf if sel.weights.len() > 1 => f.push(found(
             codes::FORMAT_UNSUPPORTED,
@@ -635,56 +693,13 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         needs_tensor_data = cs.needs_tensor_data.clone();
                     }
                     Ok(cs) => {
-                        let (primary, source, declared) = match ctx.context_rule {
-                            ContextRule::Fixed(c) => (c, "fixed".to_string(), None),
-                            ContextRule::ModelCapped { cap, .. } => match cs.source.config.as_ref().and_then(declared_positions) {
-                                Some((d, at)) => (d.min(u64::from(cap)) as u32, at, Some(d)),
-                                None => (cap, "assumed".to_string(), None),
-                            },
-                        };
-                        let mut cx =
-                            ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
-                        match ctx.context_rule {
-                            _ if ctx.options.depth == preflight::Depth::Headers => match run_preflight(&cs, ctx, primary) {
-                                Ok(r) => report = Some(r),
-                                Err(f) => lower_extra.push(f),
-                            },
-                            // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the
-                            // narrower context on limits that only grow with the context is refused at the primary too, so the primary
-                            // is judged only for a class the narrower context admits (or refuses on a code a wider context could change).
-                            ContextRule::ModelCapped { retry, .. } if primary > retry && !task.profile.is_pipeline() => {
-                                cx.retry = Some(retry);
-                                cx.judged_at.push(retry);
-                                match run_preflight(&cs, ctx, retry) {
-                                    Ok(r2) if r2.verdict.convert.status != StageStatus::Ok => report = Some(r2),
-                                    Ok(r2) => {
-                                        let a2 = admit_of(&r2);
-                                        let implied = a2.status == GateStatus::Fail
-                                            && a2.codes.iter().all(|c| IMPLIED_AT_WIDER_CONTEXT.contains(&c.as_str()));
-                                        admit_retry = Some(a2);
-                                        if implied {
-                                            cx.primary_implied = true;
-                                            report = Some(r2);
-                                        } else {
-                                            cx.judged_at.push(primary);
-                                            match run_preflight(&cs, ctx, primary) {
-                                                Ok(r) => report = Some(r),
-                                                Err(f) => lower_extra.push(f),
-                                            }
-                                        }
-                                    }
-                                    Err(f) => lower_extra.push(f),
-                                }
-                            }
-                            _ => {
-                                cx.judged_at.push(primary);
-                                match run_preflight(&cs, ctx, primary) {
-                                    Ok(r) => report = Some(r),
-                                    Err(f) => lower_extra.push(f),
-                                }
-                            }
+                        let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
+                        match r {
+                            Ok(r) => report = Some(r),
+                            Err(f) => lower_extra.push(f),
                         }
-                        context = Some(cx);
+                        context = cx;
+                        admit_retry = ar;
                     }
                     Err(ps) => {
                         for p in ps {
@@ -693,6 +708,36 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                     }
                 }
             }
+            ArtifactKind::Adapter if lower_found_listing.is_empty() => match store::adapter_source_of(l, &sel, fx) {
+                Ok(None) => lower_extra.push(found(
+                    codes::ADAPTER_UNCHECKED,
+                    None,
+                    vec!["the adapter's base was not read (no base pinned in the snapshot)".into()],
+                )),
+                Ok(Some((cs, lora))) => {
+                    let ctx2 = CensusContext {
+                        snapshot: ctx.snapshot.clone(),
+                        policy: ctx.policy,
+                        options: preflight::Options { lora: Some(lora), ..ctx.options.clone() },
+                        ruleset: ctx.ruleset.clone(),
+                        context_rule: ctx.context_rule,
+                        cache: Default::default(),
+                        assume_task: ctx.assume_task.clone(),
+                    };
+                    let (r, cx, ar) = judge_at_contexts(&cs, &ctx2, &task);
+                    match r {
+                        Ok(r) => report = Some(r),
+                        Err(f) => lower_extra.push(f),
+                    }
+                    context = cx;
+                    admit_retry = ar;
+                }
+                Err(ps) => {
+                    for p in ps {
+                        store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
+                    }
+                }
+            },
             ArtifactKind::Diffusers | ArtifactKind::DiffusersComponent if lower_found_listing.is_empty() => {
                 let comps = if sel.kind == ArtifactKind::Diffusers {
                     store::diffusers_components(fx)
@@ -1007,6 +1052,21 @@ mod tests {
         let r = evaluate(&l, None, &ctx());
         assert_eq!(r.task.task, "text-generation");
         assert_eq!(gate(&r.technical, Gate::Source).status, GateStatus::Pass);
+        // A PEFT adapter over a pinned base is composed when its headers are read: the listing does not decide it.
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::NOT_RUN_NOT_SAMPLED));
+        let plan = super::super::listing::plan_of(&l, &r.selected);
+        assert_eq!(plan.base.as_ref().map(|b| b.repo.as_str()), Some("b/base"), "the fetch reads the base too");
+        // Its weights only as a pickle: not read.
+        let mut lb = l.clone();
+        lb.siblings = vec!["adapter_config.json".into(), "adapter_model.bin".into()];
+        let r = evaluate(&lb, None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
+        // A LoRA file with no PEFT configuration (a diffusers LoRA) is not composed by this build.
+        let mut ld = listing(Some("text-to-image"), &["pytorch_lora_weights.safetensors"]);
+        ld.base_relation = Some("adapter".into());
+        ld.base_ids = vec!["b/base".into()];
+        ld.base_resolved = l.base_resolved.clone();
+        let r = evaluate(&ld, None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::ADAPTER_UNCHECKED));
         l.base_resolved.clear();
         let r = evaluate(&l, None, &ctx());

@@ -41,7 +41,7 @@ pub struct ClassifiedV1 {
 /// The listing-depth row and the fetch plan of one repository.
 pub fn classify(l: &ListingV1, ctx: &CensusContext) -> ClassifiedV1 {
     let row = evaluate(l, None, ctx);
-    let plan = plan_of(&row.selected);
+    let plan = plan_of(l, &row.selected);
     let decided = row.technical.iter().any(|g| g.status == GateStatus::Fail);
     let rights_by_policy = [RightsPolicy::None, RightsPolicy::PermissiveCardV0]
         .into_iter()

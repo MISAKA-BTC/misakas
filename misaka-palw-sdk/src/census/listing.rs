@@ -489,10 +489,29 @@ pub struct PlanV1 {
     pub st_from_index: Option<String>,
     /// GGUF files whose metadata and tensor infos are read.
     pub gguf_headers: Vec<String>,
+    /// An adapter's base, pinned in the snapshot: its configuration, index and shard headers are read too (stored under `base/`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<BaseRefV1>,
 }
 
-pub fn plan_of(sel: &SelectedV1) -> PlanV1 {
+/// A repository at a commit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseRefV1 {
+    pub repo: String,
+    pub sha: String,
+}
+
+pub fn plan_of(l: &ListingV1, sel: &SelectedV1) -> PlanV1 {
     let mut p = PlanV1::default();
+    if sel.kind == ArtifactKind::Adapter
+        && sel.config.is_some()
+        && let [b] = l.base_resolved.as_slice()
+        && b.found
+        && !b.gated
+        && let Some(sha) = &b.sha
+    {
+        p.base = Some(BaseRefV1 { repo: b.id.clone(), sha: sha.clone() });
+    }
     match sel.kind {
         ArtifactKind::Safetensors => {
             p.files.extend(sel.config.iter().cloned());
@@ -516,7 +535,9 @@ pub fn plan_of(sel: &SelectedV1) -> PlanV1 {
             p.files.extend(sel.config.iter().cloned());
             p.st_headers.extend(sel.weights.iter().filter(|w| w.ends_with(".safetensors")).take(4).cloned());
         }
-        ArtifactKind::Gguf => p.gguf_headers.extend(sel.weights.iter().cloned()),
+        // A split GGUF set is not read by this build (FORMAT_UNSUPPORTED on the listing): its parts' headers are not fetched.
+        ArtifactKind::Gguf if sel.weights.len() == 1 => p.gguf_headers.extend(sel.weights.iter().cloned()),
+        ArtifactKind::Gguf => {}
         ArtifactKind::Other | ArtifactKind::None => {}
     }
     p
@@ -543,7 +564,7 @@ mod tests {
         assert_eq!(s.kind, ArtifactKind::Safetensors);
         assert_eq!(s.index.as_deref(), Some("model.safetensors.index.json"));
         assert_eq!(s.formats, vec!["gguf".to_string(), "safetensors".to_string()]);
-        let p = plan_of(&s);
+        let p = plan_of(&l, &s);
         assert_eq!(p.st_from_index.as_deref(), Some("model.safetensors.index.json"));
         assert!(p.files.contains(&"config.json".to_string()));
     }

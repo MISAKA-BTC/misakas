@@ -363,13 +363,21 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     if lowerable && let Some(config) = &src.config {
         let prep: Result<Prepared, String> = match &src.gguf_model {
             Some(m) => m.prepare(&lopts).map_err(|e| e.to_string()),
-            None => read_model_with(config, tindex.as_ref(), &read_opts, reg).map_err(|f| f.to_string()).and_then(|read| {
+            None => read_model_with(config, tindex.as_ref(), &read_opts, reg).map_err(|f| f.to_string()).and_then(|mut read| {
+                // A LoRA adapter over the model (RFC-0004): attached unmerged, every adapter tensor accounted for.
+                if let Some(ad) = &opts.lora {
+                    misaka_palw_tir_lower::lora::attach(&mut read.spec, &ad.config).map_err(|e| e.to_string())?;
+                    misaka_palw_tir_lower::lora::check_adapter_tensors(&read.spec, &ad.tensors).map_err(|e| e.to_string())?;
+                }
                 digest = Some(spec_digest(&read.spec));
                 prepare_spec(read.spec, &lopts).map_err(|e| e.to_string())
             }),
         };
         match prep {
             Ok(p) => prepared = Some(p),
+            Err(e) if e.contains("LoRA adapter:") => blockers.push(
+                Blocker::new(Stage::Convert, "ADAPTER_REFUSED", "the LoRA adapter is not one the lowering attaches").evidence([short(&e)]),
+            ),
             Err(e) => {
                 if !quant_refusal_in_reason(&e) {
                     blockers

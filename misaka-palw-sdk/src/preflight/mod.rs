@@ -216,6 +216,16 @@ pub struct Options {
     pub node: Option<node::NodeFacts>,
     /// The `full` depth's inputs: the runtime pack and the artifact ([`full`]).
     pub full: full::FullInputs,
+    /// A PEFT LoRA adapter over the model (RFC-0004: a candidate is a parent plus an adapter): its `adapter_config.json` and the
+    /// tensor names of its `adapter_model.safetensors`, attached to the model's spec before the shape-only lowering.
+    pub lora: Option<LoraInput>,
+}
+
+/// An adapter the preflight attaches to the model it reads ([`Options::lora`]).
+#[derive(Clone, Debug)]
+pub struct LoraInput {
+    pub config: String,
+    pub tensors: Vec<String>,
 }
 
 impl Default for Options {
@@ -235,6 +245,7 @@ impl Default for Options {
             residency_pin_below_bytes: misaka_palw_tir_exec::tiers::TIR_PIN_BELOW_BYTES_V1,
             node: None,
             full: full::FullInputs::default(),
+            lora: None,
         }
     }
 }

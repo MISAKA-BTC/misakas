@@ -289,6 +289,60 @@ def gguf_header(client, repo, rev, path):
     return raw, bytes(comp), rm.size, rm.requests, info
 
 
+# ---- an adapter's base ---------------------------------------------------------------------------------------------------------------
+def fetch_base(client, tmp: Path, repo: str, rev: str, item) -> dict:
+    """The base of an adapter at its pinned commit: the inventory, `config.json`, the safetensors index and the shard headers (or
+    `model.safetensors`'s), stored under `base/`. Returns the base record for `fetch.json`."""
+    rec = {"repo": repo, "revision": rev, "info": {}, "inventory": []}
+    try:
+        r = client.get_api(f"{hfc_http.ENDPOINT}/api/models/{repo}/revision/{rev}?blobs=true")
+        if r.status_code != 200:
+            e = hfc_http.classify(r.status_code, repo, r)
+            rec["info"] = {"status": "error", "error": e.kind, "detail": e.detail}
+            return rec
+        mi = r.json()
+        rec["info"] = {"status": "ok", "sha": mi.get("sha"), "gated": mi.get("gated", False)}
+        for s in mi.get("siblings") or []:
+            lfs = s.get("lfs") or {}
+            rec["inventory"].append({"path": s.get("rfilename"), "size": int(s.get("size") or lfs.get("size") or 0), "lfs_sha256": lfs.get("sha256"), "blob_id": s.get("blobId")})
+    except FetchError as e:
+        rec["info"] = {"status": "error", "error": e.kind, "detail": e.detail}
+        return rec
+    inv = {f["path"]: f for f in rec["inventory"]}
+    files = [p for p in ("config.json", "model.safetensors.index.json") if p in inv]
+    for p in files:
+        try:
+            body = client.get_small(repo, rev, p, inv[p]["size"])
+            dst = tmp / "f" / "base" / p
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(body)
+            item("base/" + p, "file", status="ok", store=f"f/base/{p}", bytes=len(body), sha256=hashlib.sha256(body).hexdigest(), file_size=inv[p]["size"])
+        except FetchError as e:
+            item("base/" + p, "file", status="error", error=e.kind, detail=e.detail[:300])
+    shards = []
+    if "model.safetensors.index.json" in inv and (tmp / "f" / "base" / "model.safetensors.index.json").exists():
+        try:
+            wm = json.loads((tmp / "f" / "base" / "model.safetensors.index.json").read_bytes()).get("weight_map") or {}
+            shards = sorted(set(v for v in wm.values() if isinstance(v, str) and "/" not in v))
+        except ValueError:
+            shards = []
+    elif "model.safetensors" in inv:
+        shards = ["model.safetensors"]
+    for p in shards[:256]:
+        if p not in inv:
+            continue
+        try:
+            hb, size, nreq = st_header(client, repo, rev, p)
+            name = f"h/base/{p}.hdr.gz"
+            dst = tmp / name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(gzip.compress(hb, compresslevel=6))
+            item("base/" + p, "st_header", status="ok", store=name, bytes=len(hb), sha256=hashlib.sha256(hb).hexdigest(), file_size=inv[p]["size"], header_len=len(hb))
+        except FetchError as e:
+            item("base/" + p, "st_header", status="error", error=e.kind, detail=e.detail[:300], file_size=inv[p]["size"])
+    return rec
+
+
 # ---- one repository ---------------------------------------------------------------------------------------------------------------------
 def fetch_repo(client: hfc_http.Client, root: Path, rec: dict) -> dict:
     l = rec["listing"]
@@ -396,6 +450,10 @@ def fetch_repo(client: hfc_http.Client, root: Path, rec: dict) -> dict:
                 )
             except FetchError as e:
                 item(p, "gguf_header", status="error", error=e.kind, detail=e.detail[:300], file_size=inv[p]["size"])
+        # 5. An adapter's base, at the commit the snapshot pinned: its inventory, configuration, index and shard headers (under base/).
+        b = plan.get("base")
+        if b:
+            out["base"] = fetch_base(client, tmp, b["repo"], b["sha"], item)
     out["finished_at"] = now()
     out["bytes_in"] = client.bytes_in - req0
     (tmp / "listing.json").write_text(json.dumps(l, separators=(",", ":")))
