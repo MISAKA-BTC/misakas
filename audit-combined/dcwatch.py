@@ -276,16 +276,15 @@ def eligible_windows(ws, work, producers):
 # --------------------------------------------------------------------------------------------------------------------
 # the floor rule's states (lane RS's redesign, 10-04): floors are HEADER-invalid unless the block's state is Idle
 # --------------------------------------------------------------------------------------------------------------------
-IDLE_SLOTS, PROBE_SLOTS, COOL_SLOTS = 20, 6, 20       # floor_idle_slots, probe_slots, probe_cooldown
+IDLE_SLOTS, PROBE_SLOTS, COOL_SLOTS = 20, 8, 20       # floor_idle_slots, probe_slots, probe_cooldown_slots (ADR-0165, RS 6f0cac1a3)
 
 
 def floor_states(blocks, fence=0, idle=IDLE_SLOTS, probe=PROBE_SLOTS, cool=COOL_SLOTS):
-    """MODEL of the rule as briefed (the frozen spec text decides; this is the one place to change):
-         Normal  a BLUE REAL attempt was accepted within the last `idle` slots; floors are header-invalid;
-         Idle    no BLUE REAL attempt for `idle` slots (absent = idle); floors are header-valid;
-         Probe   a REAL attempt arrived in Idle (RED or not) and the last probe began >= `cool` slots ago: floors are header-invalid for `probe` slots; a BLUE REAL
-                 inside it makes the state Normal, none returns it to Idle; a RED attempt never extends Normal or Probe.
-       Returns ({daa: state the blocks of that DAA are validated under}, [probe start DAAs]). The events of a DAA move the state from the next DAA on."""
+    """MODEL of ADR-0165's A'' state machine (RS 6f0cac1a3) — the nodes' own `[palw-floor-state]` lines win where they exist (floor_states_best):
+         Normal  a BLUE REAL attempt was accepted at last_blue; floors are refused up to DAA last_blue + `idle` and accepted again from last_blue + idle + 1;
+         Idle    floors are accepted; a RED REAL attempt accepted in Idle opens a Probe unless the previous UNANSWERED probe ended less than `cool` slots ago;
+         Probe   opened at DAA r: floors are refused until r + `probe`; a RED REAL never extends it; a BLUE REAL from ANY mode makes the state Normal{last_blue = DAA}.
+       Returns ({daa: state the blocks of that DAA are judged under}, [probe start DAAs]). The events of a DAA move the state from the next DAA on."""
     real_blue, real_any = set(), set()
     for b in blocks:
         if b["kind"] == "REAL" and b["daa"] >= fence:
@@ -295,18 +294,18 @@ def floor_states(blocks, fence=0, idle=IDLE_SLOTS, probe=PROBE_SLOTS, cool=COOL_
     if not blocks:
         return {}, []
     lo, hi = max(fence, min(b["daa"] for b in blocks)), max(b["daa"] for b in blocks)
-    state, last_blue, probe_at, last_probe = "Idle", None, None, None
+    state, last_blue, probe_at, last_probe_end = "Idle", None, None, None
     by, probes = {}, []
     for d in range(lo, hi + 1):
-        if state == "Normal" and last_blue is not None and d - last_blue >= idle:
+        if state == "Normal" and last_blue is not None and d > last_blue + idle:
             state = "Idle"
         if state == "Probe" and d - probe_at >= probe:
-            state = "Idle"
+            state, last_probe_end = "Idle", probe_at + probe          # an unanswered probe ended: the next may open `cool` slots after it
         by[d] = state
         if d in real_blue:
             state, last_blue = "Normal", d
-        elif d in real_any and state == "Idle" and (last_probe is None or d - last_probe >= cool):
-            state, probe_at, last_probe = "Probe", d, d
+        elif d in real_any and state == "Idle" and (last_probe_end is None or d >= last_probe_end + cool):
+            state, probe_at = "Probe", d
             probes.append(d)
     return by, probes
 
@@ -340,7 +339,7 @@ def gather_claims(port, work):
 def hold_lines(work, nodes=("new0",), pattern=None):
     """The compliant floor producers' own log: lines saying they hold (the policy's default: no floor attempt outside Idle)."""
     import re
-    pat = re.compile(pattern or os.environ.get("HOLD_PATTERN", r"holding[^\n]{0,120}(idle|floor)|floor[^\n]{0,120}(held|holding|not idle|hold)|FloorNotIdle"), re.I)
+    pat = re.compile(pattern or os.environ.get("HOLD_PATTERN", r"\[palw-producer\] holding:[^\n]*idle-only fallback"), re.I)    # RS's hold line, marker 'idle-only fallback'
     out = {}
     for n in nodes:
         lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
@@ -349,10 +348,10 @@ def hold_lines(work, nodes=("new0",), pattern=None):
 
 
 def node_floor_transitions(work, nodes=("new0", "new1", "new2", "new3")):
-    """The nodes' own `[palw-floor-state]` transition lines (lane RS): {node: [(daa, from, to)]}. Tolerant of the wording: a line with the tag, two state names joined by an
-    arrow (-> / → / =>) or `to`, and a DAA after `daa` / `DAA` / `slot` / `at`."""
+    """The nodes' own transition lines (RS, ADR-0165): `[palw-floor-state] daa=<N> block=<hash> <from>-><to> last_blue=<n|-> until=<n|-> last_probe_end=<n|->`, one per chain
+    block whose fold moved the state. {node: [(daa, from, to)]}."""
     import re
-    pat = re.compile(r"\[palw-floor-state\][^\n]*?\b(Idle|Probe|Normal)\b\s*(?:->|→|=>|\bto\b)\s*\b(Idle|Probe|Normal)\b[^\n]*?(?:daa|slot|\bat\b)[ =:]*(\d+)", re.I)
+    pat = re.compile(r"\[palw-floor-state\] daa=(\d+) block=\S+ (idle|probe|normal)->(idle|probe|normal)", re.I)
     out = {}
     for n in nodes:
         lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
@@ -362,7 +361,7 @@ def node_floor_transitions(work, nodes=("new0", "new1", "new2", "new3")):
         for ln in open(lg, errors="replace"):
             m = pat.search(ln)
             if m:
-                rows.append((int(m.group(3)), m.group(1).title(), m.group(2).title()))
+                rows.append((int(m.group(1)), m.group(2).title(), m.group(3).title()))
         if rows:
             out[n] = sorted(set(rows))
     return out
@@ -386,9 +385,11 @@ def floor_states_best(blocks, fence, work=None, lag=None, **kw):
     tr = node_floor_transitions(work) if work else {}
     if not tr or not model:
         return model, mprobes, "model", "no [palw-floor-state] lines in the nodes' logs: the states are RECONSTRUCTED by the model"
-    lag = int(os.environ.get("FLOOR_STATE_LAG", "1")) if lag is None else lag
     node = max(tr, key=lambda n: len(tr[n]))
-    by = states_from_transitions(tr[node], min(model), max(model), lag)
+    by1 = states_from_transitions(tr[node], min(model), max(model), 1)      # a transition logged at DAA t takes effect for the blocks of t + 1 on ...
+    by0 = states_from_transitions(tr[node], min(model), max(model), 0)      # ... or already for the blocks of t (an expiry is decided by the DAA itself)
+    # a floor is judged by the chain block that merges it, whose own events may or may not count: Idle if EITHER reading says Idle (the benefit of the doubt: no false FAIL)
+    by = {d: ("Idle" if "Idle" in (by0.get(d), by1.get(d)) else by1.get(d)) for d in by1} if lag is None else (by0 if lag == 0 else by1)
     diff = [d for d in model if model[d] != by.get(d)]
     probes = sorted({d for d, _, to in tr[node] if to == "Probe"})
     note = f"states from {node}'s [palw-floor-state] log ({len(tr[node])} transitions); the model differs at {len(diff)} of {len(model)} DAA" + (f" (first: {diff[:5]})" if diff else "")
@@ -504,9 +505,9 @@ def gate_cool(blocks, fence, st, states=None, **kw):
     if len(inside) < 2:
         return 3, f"INCOMPLETE: {len(inside)} probe(s) in the stale leg so far (need 2 to see the cooldown)"
     gaps = [b - a for a, b in zip(inside, inside[1:])]
-    if min(gaps) < cool:
-        return 1, f"FAIL: probes {inside} are closer than the cooldown {cool}"
-    return 0, f"PASS: probes at DAA {inside}, spacing {gaps} >= {cool}"
+    if min(gaps) < probe + cool:
+        return 1, f"FAIL: probes {inside} (spacing {gaps}) are closer than probe + cooldown = {probe + cool} (the cooldown runs from the END of an unanswered probe)"
+    return 0, f"PASS: probes at DAA {inside}, spacing {gaps} >= probe {probe} + cooldown {cool}"
 
 
 def gate_delay_active(work, node="new6", flag="--palw-drill-real-submit-delay-s"):
@@ -1078,14 +1079,14 @@ def recovery_verdict(blocks, st, k=20, margin=6):
     if worst[0] > 4 * SLOT_S:
         bad.append(f"(a) a slot took {worst[0]:.0f} s (> {4 * SLOT_S:.0f}: the drill's own slots reach ~270 s)")
     # (b) floors resume after K idle slots
-    early = [d for d in floors if last_real < d < last_real + k]
+    early = [d for d in floors if last_real < d <= last_real + k]       # Normal lasts up to last_blue + K; floors are accepted again from last_blue + K + 1
     first_floor = next((d for d in floors if d > last_real), None)
-    out.append(f"(b) floors: first BLUE FALLBACK after the last REAL attempt at DAA {first_floor} (expected {last_real + k}..{last_real + k + margin}); earlier than K: {early}")
+    out.append(f"(b) floors: first BLUE FALLBACK after the last REAL attempt at DAA {first_floor} (expected {last_real + k + 1}..{last_real + k + 1 + margin}); earlier than K: {early}")
     if early:
         bad.append(f"(b) floor attempts at DAA {early} came before K = {k} idle slots")
     if first_floor is None:
         (wait if restart - last_real <= k + margin else bad).append("(b) no floor attempt resumed during the stop")
-    elif first_floor > last_real + k + margin:
+    elif first_floor > last_real + k + 1 + margin:
         bad.append(f"(b) floors resumed only at DAA {first_floor}, {first_floor - last_real} slots after the last REAL attempt")
     # (c) after the restart
     after_real = [b for b in blocks if b["kind"] == "REAL" and b["daa"] > restart]
@@ -1204,7 +1205,7 @@ def selftest():
     # recovery: REAL until DAA 20, floors from 23 (K = 3) to 35, REAL again from 36, floors none after 39, clock every slot
     chain = []
     for d in range(10, 60):
-        kind = "REAL" if (d <= 20 or d >= 36) else ("LEGACY_HEARTBEAT" if d < 23 else "FALLBACK")
+        kind = "REAL" if (d <= 20 or d >= 36) else ("LEGACY_HEARTBEAT" if d < 24 else "FALLBACK")
         chain.append(_blk(f"x{d}", [f"x{d - 1}"] if d > 10 else [], d, kind, "BLUE"))
     st = {"stop_daa": 21, "restart_daa": 35, "end_daa": 55}
     code, lines = recovery_verdict(chain, st, k=3, margin=4)
@@ -1218,10 +1219,10 @@ def selftest():
     never = [dict(b) for b in chain]
     never[-3]["kind"] = "FALLBACK"          # DAA 57: a floor long after the REAL attempts resumed
     assert recovery_verdict(never, {"stop_daa": 21, "restart_daa": 35, "end_daa": 58}, k=3, margin=4)[0] == 1
-    # the release's K = 20: REAL until DAA 20, heartbeats while idle, floors from DAA 40, a 44-slot stop (21..65), REAL again from 66, no floor after 86
+    # the release's K = 20: REAL until DAA 20, heartbeats while idle, floors from DAA 41 (last BLUE + K + 1), a 44-slot stop (21..65), REAL again from 66, no floor after 86
     chain20 = []
     for d in range(10, 130):
-        kind = "REAL" if (d <= 20 or d >= 66) else ("LEGACY_HEARTBEAT" if d < 40 else "FALLBACK")
+        kind = "REAL" if (d <= 20 or d >= 66) else ("LEGACY_HEARTBEAT" if d < 41 else "FALLBACK")
         chain20.append(_blk(f"y{d}", [f"y{d - 1}"] if d > 10 else [], d, kind, "BLUE"))
     st20 = {"stop_daa": 21, "restart_daa": 65, "end_daa": 110}
     code, lines = recovery_verdict(chain20, st20)
@@ -1229,46 +1230,52 @@ def selftest():
     early20 = [dict(b) for b in chain20]
     early20[21]["kind"] = "FALLBACK"             # DAA 31: eleven idle slots after the last REAL attempt (DAA 20), well before K = 20
     assert recovery_verdict(early20, st20)[0] == 1
-    # the floor states (idle 20, probe 6, cooldown 20): Normal after BLUE REAL attempts, Idle after 20 quiet slots, a RED attempt in Idle opens a probe (floors invalid
-    # for 6 slots), a RED attempt inside the cooldown opens none, a BLUE one inside a probe makes it Normal
+    # the floor states (ADR-0165: idle 20, probe 8, cooldown 20 from the END of an unanswered probe): Normal up to last_blue + 20, Idle from last_blue + 21, a RED attempt in Idle opens a
+    # probe (floors refused for 8 slots), a RED attempt inside the cooldown opens none, a BLUE one inside a probe makes it Normal
     def build(extra_floor=(), no_floor=()):
         out = []
-        reals = {d: ("REAL", "BLUE") for d in list(range(11, 21)) + list(range(95, 131))}
-        reals.update({50: ("REAL", "RED"), 60: ("REAL", "RED"), 71: ("REAL", "RED"), 92: ("REAL", "RED"), 94: ("REAL", "BLUE")})
-        for d in range(1, 131):
+        reals = {d: ("REAL", "BLUE") for d in list(range(11, 21)) + list(range(114, 151))}
+        reals.update({50: ("REAL", "RED"), 60: ("REAL", "RED"), 79: ("REAL", "RED"), 100: ("REAL", "RED"), 110: ("REAL", "RED"), 113: ("REAL", "BLUE")})
+        for d in range(1, 151):
             out.append(_blk(f"t{d}", [f"t{d - 1}"] if d > 1 else [], d, "LEGACY_HEARTBEAT", "BLUE"))
             if d in reals:
                 out.append(_blk(f"r{d}", [f"t{d - 1}"] if d > 1 else [], d, reals[d][0], reals[d][1]))
-        for d in list(range(1, 11)) + list(range(40, 50)) + list(range(57, 72)) + list(range(78, 92)) + list(extra_floor):
+        for d in list(range(1, 11)) + list(range(41, 51)) + list(range(58, 80)) + list(range(87, 111)) + list(extra_floor):
             if d not in no_floor:
                 out.append(_blk(f"f{d}", [f"t{d - 1}"], d, "FALLBACK", "BLUE"))
         return out
     chainf = build()
     by, probes = floor_states(chainf, 0)
-    assert probes == [50, 71, 92], probes
-    assert [by[d] for d in (45, 52, 58, 61, 73, 94, 96, 125)] == ["Idle", "Probe", "Idle", "Idle", "Probe", "Probe", "Normal", "Normal"], by
+    assert probes == [50, 79, 110], probes
+    assert [by[d] for d in (40, 41, 45, 52, 57, 58, 65, 81, 87, 90, 100, 112, 114, 115, 134)] == \
+        ["Normal", "Idle", "Idle", "Probe", "Probe", "Idle", "Idle", "Probe", "Idle", "Idle", "Idle", "Probe", "Normal", "Normal", "Normal"], by
     holds_ok, holds_none = {"new0": 7}, {"new0": 0}
     assert gate_floor_policy(chainf, 0, {}, holds_ok)[0] == 0, gate_floor_policy(chainf, 0, {}, holds_ok)
     assert gate_floor_policy(chainf, 0, {}, holds_none)[0] == 3                  # no hold line: the producers' policy is not shown
-    stand = build(extra_floor=[53, 100])                                          # floors that stand in a probe and in Normal (a policy-ignoring producer)
+    stand = build(extra_floor=[53, 125])                                          # floors that stand in a probe and in Normal (a policy-ignoring producer)
     assert gate_floor_policy(stand, 0, {}, holds_ok)[0] == 0                      # they stand but earned nothing: the fold refused them
-    assert gate_floor_policy(stand, 0, {"c1": {"acceptedBlock": "f100"}}, holds_ok)[0] == 1     # one earned a claim: FAIL
-    assert gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})[0] == 0, gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})
-    assert gate_stale(build(no_floor=range(57, 71)), 0, {"start_daa": 45, "end_daa": 92})[0] == 1     # floors never came back after the first probe
-    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 92})[0] == 0
-    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 92}, states=({}, [50, 60]))[0] == 1          # two probes ten slots apart: closer than the cooldown
-    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 60})[0] == 3                                   # one probe so far
+    assert gate_floor_policy(stand, 0, {"c1": {"acceptedBlock": "f125"}}, holds_ok)[0] == 1     # one earned a claim: FAIL
+    stl = {"start_daa": 45, "end_daa": 100}
+    assert gate_stale(chainf, 0, stl)[0] == 0, gate_stale(chainf, 0, stl)
+    assert gate_stale(build(no_floor=range(58, 80)), 0, stl)[0] == 1              # floors never came back after the first probe
+    assert gate_cool(chainf, 0, stl)[0] == 0, gate_cool(chainf, 0, stl)
+    assert gate_cool(chainf, 0, stl, states=({}, [50, 70]))[0] == 1               # two probes twenty slots apart: closer than probe + cooldown = 28
+    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 60})[0] == 3         # one probe so far
     import tempfile
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "new0"))
-    open(os.path.join(d, "new0", "kaspad.out"), "w").write("x\n[palw-floor-state] Idle -> Probe at DAA 50 (RED REAL)\n[palw-floor-state] transition Probe → Idle daa=56\n[palw-floor-state] Idle => Normal slot 95\n")
+    open(os.path.join(d, "new0", "kaspad.out"), "w").write("x\n[palw-floor-state] daa=50 block=ab12 idle->probe last_blue=- until=58 last_probe_end=-\n"
+                                                           "[palw-floor-state] daa=58 block=cd34 probe->idle last_blue=- until=- last_probe_end=58\n"
+                                                           "[palw-floor-state] daa=95 block=ef56 idle->normal last_blue=95 until=- last_probe_end=58\n")
     tr = node_floor_transitions(d)
-    assert tr["new0"] == [(50, "Idle", "Probe"), (56, "Probe", "Idle"), (95, "Idle", "Normal")], tr
+    assert tr["new0"] == [(50, "Idle", "Probe"), (58, "Probe", "Idle"), (95, "Idle", "Normal")], tr
     stn = states_from_transitions(tr["new0"], 40, 100, lag=1)
-    assert stn[50] == "Idle" and stn[51] == "Probe" and stn[57] == "Idle" and stn[96] == "Normal", stn
-    assert gate_red2blue(chainf, {"restart_daa": 90})[0] == 0, gate_red2blue(chainf, {"restart_daa": 90})
-    slow = [dict(b) for b in chainf if b["hash"] not in {f"r{d}" for d in range(94, 101)}]   # the BLUE successor comes only at DAA 101: 9 slots after the first REAL attempt
-    assert gate_red2blue(slow, {"restart_daa": 90})[0] == 1
+    assert stn[50] == "Idle" and stn[51] == "Probe" and stn[58] == "Probe" and stn[59] == "Idle" and stn[96] == "Normal", stn
+    best = floor_states_best(chainf, 0, d)                                         # a node log in force: the source says so
+    assert best[2].startswith("node:"), best[2]
+    assert gate_red2blue(chainf, {"restart_daa": 108})[0] == 0, gate_red2blue(chainf, {"restart_daa": 108})
+    slow = [dict(b) for b in chainf if b["hash"] not in {f"r{d}" for d in range(113, 121)}]   # the BLUE successor comes only at DAA 121: 11 slots after the first REAL attempt
+    assert gate_red2blue(slow, {"restart_daa": 108})[0] == 1
     assert gate_states_daa(chainf, 0)[0] == 0, gate_states_daa(chainf, 0)
     # G-A1: a class registered in Normal reaches Probation inside two periods (PASS), after three (FAIL), a registration in Idle is not the condition
     wd = tempfile.mkdtemp()

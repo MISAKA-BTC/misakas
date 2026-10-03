@@ -169,6 +169,7 @@ tir|--palw-drill-tir-at|$TIR_AT
 tir2|--palw-drill-tir2-at|$TIR2_AT
 int11|--palw-drill-int11-at|$INT11_AT
 EOF
+        [ -n "${USEFUL_WORK_AT:-}" ] && echo "useful_work|--palw-drill-useful-work-at|$USEFUL_WORK_AT"
         return 0
     fi
     cat <<EOF
@@ -261,7 +262,10 @@ node_args() {
     fi
     local rid=(); [ "${RIDERS:-0}" -gt 0 ] && rid=("--palw-riders=$RIDERS")
     case $role in
-        floor) a+=(--palw-produce) ;;
+        floor) a+=(--palw-produce)
+               # ANCHOR_DUTY_AFTER_SLOTS=N (RS's --palw-drill-anchor-duty-after-slots; the release's value is 30): how long a claim waits for an operator attempt, with the floor held as the idle-only
+               # fallback, before this OPERATOR floor producer fires its anchor-duty binder (one floor the fold refuses); added only where the binary lists the flag
+               if [ -n "${ANCHOR_DUTY_AFTER_SLOTS:-}" ] && grep -q -- "--palw-drill-anchor-duty-after-slots" <<<"$(bin_help "$bin")"; then a+=("--palw-drill-anchor-duty-after-slots=$ANCHOR_DUTY_AFTER_SLOTS"); fi ;;
         # OUTSIDER_PRODUCE=1: the outsider (a NON-operator bond) also makes REAL attempts of class win, riders on (G-A3 splits bind waits by operator / non-operator bond)
         outsider) if [ "${OUTSIDER_PRODUCE:-0}" = 1 ]; then a+=(--palw-produce "${rid[@]}" "--palw-producer-class=$(model_id win)"); fi ;;
         # extfloor (OUTSIDER=1): the EXTERNAL floor producer of the combined drill (post-genesis bond 15): a floor producer that does not honour the idle rule where the build has
@@ -300,6 +304,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export USEFUL_WORK_AT ANCHOR_DUTY_AFTER_SLOTS OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

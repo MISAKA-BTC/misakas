@@ -28,9 +28,9 @@ export GEN_PARTIAL_CLASS=${GEN_PARTIAL_CLASS-toy-embed} GEN_PARTIAL_HOLDERS=${GE
 export WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-combined-drill}
 export P2P_BASE=${P2P_BASE:-51200} BORSH_BASE=${BORSH_BASE:-52200} JSON_BASE=${JSON_BASE:-53200} EVM_BASE=${EVM_BASE:-54200} GRPC_BASE=${GRPC_BASE:-50200}
 export REAL_SUBMIT_DELAY_S=${REAL_SUBMIT_DELAY_S-340}   # lane RS's --palw-drill-real-submit-delay-s on ONE REAL producer (new6): the 8k model's inference time (P2 live: p50 342 s, p95 418 s; floors 3 per slot)
-export K_SLOTS=${K_SLOTS:-20} PROBE_SLOTS=${PROBE_SLOTS:-6} COOLDOWN=${COOLDOWN:-20}   # the redesigned floor rule: floor_idle_slots 20, probe_slots 6, probe_cooldown 20 (RED never extends)
+export K_SLOTS=${K_SLOTS:-20} PROBE_SLOTS=${PROBE_SLOTS:-8} COOLDOWN=${COOLDOWN:-20}   # ADR-0165 (RS 083a93e76): floor_idle_slots 20, probe_slots 8, probe_cooldown_slots 20 (from the END of an unanswered probe; RED never extends)
 export XB_ORDER=${XB_ORDER:-"14 15"}                       # the outsider's bond (14), then the external floor producer's (15); no DG liars, no D-M3 liars in this drill
-export STALE_END_DAA=${STALE_END_DAA:-140}                 # leg S (first): only new6 makes REAL attempts, each held STALE_DELAY_S so it lands RED; new4 is a seat only; ends here (>= 2 probes)
+export STALE_END_DAA=${STALE_END_DAA:-150}                 # leg S (first): only new6 makes REAL attempts, each held STALE_DELAY_S so it lands RED; new4 is a seat only; ends here (>= 2 probes)
 export STALE_DELAY_S=${STALE_DELAY_S:-1500}                # ~12 slots: a stale attempt always lands RED
 export RESTART1_DAA=${RESTART1_DAA:-$STALE_END_DAA}        # leg B1: both REAL producers on the normal delay (the state is Idle: RED -> BLUE, then Normal)
 export RECOVERY_AT=${RECOVERY_AT:-$((INT11_AT+190+CAP_SETTLE_DAA+CAP_WINDOW_DAA+2))}   # leg A: after the rho250 window
@@ -39,6 +39,9 @@ export POST_DAA=${POST_DAA:-$((K_SLOTS+8))}                # leg B2: both back; 
 export X_DAA=${X_DAA:-0}                                   # leg X (a policy-ignoring floor producer, report-only): off; X_DAA=24 with EXT_FLOOR_FLAG turns it on
 export REGISTER_LATE=${REGISTER_LATE:-"lose:$((STALE_END_DAA+12))"}   # G-A1: a class registered with REAL flowing and floors held (the state is Normal), Probation within 2 audit periods (200 DAA)
 export O_DAA=${O_DAA:-0}                                   # leg O (report-only): the operator producers stopped, only the non-operator REAL flows; O_DAA=80 turns it on (bind wait expected near 60 slots)
+export USEFUL_WORK_AT=${USEFUL_WORK_AT:-}                 # set only if the int11 flag does NOT arm palw_floor_reserve_v1 + palw_real_clock_tick_v1 (a height of its own; 'dc.sh dry' shows the manifest)
+export ANCHOR_DUTY_AFTER_SLOTS=${ANCHOR_DUTY_AFTER_SLOTS:-}   # RS's --palw-drill-anchor-duty-after-slots=N on the operator floor producer (release: 30); unset = the release's value (G-A3 is measured under it)
+export HOLD_PATTERN=${HOLD_PATTERN:-'\[palw-producer\] holding:[^\n]*idle-only fallback'}   # RS's hold line (info level, never 'NOT PRODUCING')
 export EXT_FLOOR_FLAG=${EXT_FLOOR_FLAG:---palw-drill-floor-ignore-policy}
 export GEN_DIR=${GEN_DIR:-$HOME/Downloads/MISAKA-wt-b/gen-drill-classes}
 export OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-$HOME/Downloads/MISAKA-wt-b/lifecycle-run/bin/2483c570cea4/kaspad}
@@ -67,8 +70,8 @@ cat <<EOF
             7  rho1000 window [$((R1000+CAP_SETTLE_DAA)), +$CAP_WINDOW_DAA)
             (gates 1-4 are final by ~DAA $((STALE_END_DAA+30)) = ~$(( (STALE_END_DAA+30)*125/3600 )) h; the PANEL / BLUE windows by DAA $((R250+CAP_SETTLE_DAA+CAP_WINDOW_DAA)))
   the floor rule (5,300 as RS has it): floors are NOT rejected at the header; the fold refuses a floor unless the per-branch state is Idle (no claim, reward or weight) and honest floor producers hold by
-            policy. Idle / Probe / Normal: floor_idle_slots $K_SLOTS, probe_slots $PROBE_SLOTS, probe_cooldown $COOLDOWN; Idle + BLUE REAL -> Normal directly; a RED REAL in Idle -> Probe iff the cooldown has passed;
-            RED never extends. The nodes' [palw-floor-state] logs are the source where they exist (FLOOR_STATE_LAG sets when a logged transition takes effect); dcwatch's model (floor_states) reconstructs it
+            policy. Idle / Probe / Normal: floor_idle_slots $K_SLOTS, probe_slots $PROBE_SLOTS, probe_cooldown $COOLDOWN; a BLUE REAL from any mode -> Normal; a RED REAL accepted in Idle -> Probe iff the cooldown (counted from the END of an unanswered probe) has passed; Normal lasts to last_blue + $K_SLOTS, floors again from last_blue + $((K_SLOTS+1));
+            RED never extends. The nodes' [palw-floor-state] logs are the source where they exist (a floor counts as outside Idle only if both readings of a logged transition — in force from t or from t + 1 — say so); dcwatch's model (floor_states) reconstructs it
             otherwise and cross-checks the logs.
   RELEASE GATES (all must PASS to ship; 'dc.sh gates', exit 0 / 1 / 3):
             PANEL (no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the metric)
@@ -89,7 +92,7 @@ cat <<EOF
             ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
   goal      (supply-bound, reported, never a gate) SHARE: REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks per eligible window, PASS / FAIL as measured; REAL vs heartbeat vs floor per window
   dropped   D-M1..D-M4, D-M6 and DG-3..DG-7b need ~1,000 DAA: informational only; the lane harnesses (audit-vertex dv.sh MESH=1, rfc6 shard.sh, rfc1, rfc2r) cannot share this chain
-  needs RS  the delay flag, the hold wording (HOLD_PATTERN), the [palw-floor-state] wording (parsed tolerantly), K = floor_idle_slots 20 in the binary ('dc.sh dry' compares the source tree's constant to K_SLOTS)
+  needs RS  (given, ADR-0165 083a93e76: the three flags, the hold line, the [palw-floor-state] line); K = floor_idle_slots 20, probe 8, cooldown 20 in the binary ('dc.sh dry' compares the source tree's constants)
 EOF
 }
 
@@ -114,7 +117,7 @@ extra_checks() {
 
 case $cmd in
   plan) plan ;;
-  dry) plan; bash "$DM" dry "$@" 2>&1 | grep -vE '^  ok ' | tail -80; echo "== combined-drill checks"; extra_checks; echo "== DRY RUN done" ;;
+  dry) plan; bash "$DM" dry "$@" 2>&1 | grep -vE '^  ok ' | cut -c1-400 | tail -80; echo "== fence heights the int11 flag sets (from the keyring export; useful-work = palw_floor_reserve_v1 / palw_real_clock_tick_v1)"; bash "$DM" dry "$@" 2>&1 | grep "keyring manifest names the fences" | cut -c1-900; echo "== combined-drill checks"; extra_checks; echo "== DRY RUN done" ;;
   up) REAL_SUBMIT_DELAY_S=$STALE_DELAY_S HEAD_PRODUCE=0 bash "$DM" up "$@" ;;      # leg S first: new6 stale, new4 a seat only
   status|verdicts|down|model|keys|plan-dm) bash "$DM" "$cmd" "$@" ;;
   gen) bash "$DM" gen "$@" ;;
