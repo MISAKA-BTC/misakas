@@ -189,3 +189,25 @@ fn the_three_implementations_agree_on_both_stages() {
     let p = common::with_inputs(&s.text.program, &s.text_params, &[(XKV_PARAM, xkv)]);
     common::three_ways(&s.text.program, &p, &[s.tokens.clone()]).expect("text stage");
 }
+
+/// Both programs are admitted, and the court reproduces every node of both from the committed leaves.
+#[test]
+fn both_stages_are_admitted_and_the_court_reproduces_their_nodes() {
+    let s = stages();
+    let inputs = misaka_palw_tir_lower::admission::default_inputs();
+    for (name, p) in [("stage 0", &s.kv.program), ("text", &s.text.program)] {
+        misaka_palw_tir_lower::admission::admit(p, &inputs).unwrap_or_else(|e| panic!("{name}: admission refuses: {e}"));
+    }
+    let p0 = common::with_inputs(&s.kv.program, &s.kv_params, &[(STATES_PARAM, s.states.clone())]);
+    let r0 = common::court_coverage(&s.kv.program, &p0, &[0], &[0], &[4]).unwrap_or_else(|e| panic!("stage 0: {e}"));
+    assert!(r0.commits > 0);
+    let xkv = run_stage0(&s);
+    let p = common::with_inputs(&s.text.program, &s.text_params, &[(XKV_PARAM, xkv)]);
+    let toks: Vec<u32> = s.tokens.iter().map(|t| *t as u32).collect();
+    let last = toks.len() as u32 - 1;
+    let r = common::court_coverage(&s.text.program, &p, &toks, &[0, 3, last], &[4]).unwrap_or_else(|e| panic!("text: {e}"));
+    assert!(r.commits > 0);
+    // The version-2 programs validate (the lifted inputs).
+    misaka_palw_tir_lower::encoder::cross_kv_v2(&s.kv, i32::MIN as i64, i32::MAX as i64).expect("stage 0 v2");
+    misaka_palw_tir_lower::encoder::cross_text_v2(&s.text).expect("text v2");
+}

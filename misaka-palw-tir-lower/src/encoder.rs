@@ -353,3 +353,39 @@ pub fn encdec_pipeline(source: TokenRule, max_trip: u32) -> TirPipelineV1 {
         output_stage: 1,
     }
 }
+
+/// **The cross K/V stage of a vision cross-attention decoder** ([`crate::lower::cross`]): `input.cross_states` (`i32 [rows, hidden]`,
+/// the vision stage's projected rows at the class's fixed unit, over `[lo, hi]`) lifted into an input, the stack of every cross layer's
+/// keys and values `i16 [Dc, 2, rows, inner]` its `Final` output. `lo`/`hi` are the vision stage's output interval.
+pub fn cross_kv_v2(lw: &Lowered, lo: i64, hi: i64) -> Result<TirProgramV2> {
+    use crate::lower::cross::STATES_PARAM;
+    use tir::program_v2::InputSource;
+    lift_v2(lw, &[(STATES_PARAM, InputSource::External { lo, hi })], OutputDecl::Final { node: lw.program.logits })
+}
+
+/// **The text stage of a vision cross-attention decoder**: `input.xkv` (the stack's `i16` codes) lifted, its logits the output.
+pub fn cross_text_v2(lw: &Lowered) -> Result<TirProgramV2> {
+    use crate::lower::cross::XKV_PARAM;
+    use tir::program_v2::InputSource;
+    lift_v2(
+        lw,
+        &[(XKV_PARAM, InputSource::External { lo: -32767, hi: 32767 })],
+        OutputDecl::Logits { node: lw.program.logits, scheme_id: lw.program.logits_scheme_id },
+    )
+}
+
+/// The pipeline of a vision cross-attention class: the class's vision stage `tower` (program 0: the tower over `JobImage`, its
+/// `Final` the projected rows), the cross K/V stage (program 1, `StageFinal { 0 }`, once), then the text stage (program 2,
+/// `TextStream`, `StageFinal { 1 }`).
+pub fn cross_pipeline(tower: StageDecl, max_trip: u32) -> TirPipelineV1 {
+    use tir::pipeline::Binding;
+    TirPipelineV1 {
+        version: 1,
+        stages: vec![
+            tower,
+            StageDecl { name: "cross_kv".into(), program: 1, trip: TripRule::Fixed { n: 1 }, max_trip: 1, tokens: None, bind: vec![Binding::StageFinal { stage: 0 }] },
+            StageDecl { name: "text".into(), program: 2, trip: TripRule::TextStream, max_trip, tokens: None, bind: vec![Binding::StageFinal { stage: 1 }] },
+        ],
+        output_stage: 2,
+    }
+}
