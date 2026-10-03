@@ -591,3 +591,187 @@ fn the_block_count_and_the_fetch_bound() {
     assert!(head.div_ceil(b) <= TIR_BLOCK_FETCH_CAP_BYTES_V1, "no block exceeds the cap");
     assert!(b * 1_536 * 8 < 3_300_000, "the extra sketch is about 3 MB ({} B)", b * 1_536 * 8);
 }
+
+
+// ---- §II.8: the failed-block refetch ------------------------------------------------------------------------------------------
+
+use misaka_palw_tir::Ref;
+use misaka_palw_tir_sketch::refetch::TirFetchRefusalV1;
+use std::cell::RefCell;
+
+/// A transport over a fixture's own params: serves exactly the byte ranges asked (one piece each), whole instances, and counts bytes.
+struct MemTransport<'a> {
+    c: &'a Class,
+    withhold: bool,
+    served: RefCell<u64>,
+}
+
+impl TirBlockTransportV1 for MemTransport<'_> {
+    fn fetch_ranges(&self, param: u16, layer: Option<u16>, ranges: &[(u64, u64)]) -> Result<Vec<(u64, Vec<u8>)>, TirFetchRefusalV1> {
+        if self.withhold {
+            return Err(TirFetchRefusalV1::Withheld);
+        }
+        let t = self.c.fx.params.tensors.get(&(param, layer)).ok_or(TirFetchRefusalV1::Malformed("no such instance".into()))?;
+        let bytes = t.to_le_bytes();
+        let mut out = Vec::new();
+        for (start, len) in ranges {
+            let piece = bytes.get(*start as usize..(*start + *len) as usize).ok_or(TirFetchRefusalV1::Malformed("past the end".into()))?;
+            *self.served.borrow_mut() += *len;
+            out.push((*start, piece.to_vec()));
+        }
+        Ok(out)
+    }
+
+    fn fetch_param(&self, param: u16, layer: Option<u16>) -> Result<Vec<u8>, TirFetchRefusalV1> {
+        if self.withhold {
+            return Err(TirFetchRefusalV1::Withheld);
+        }
+        let t = self.c.fx.params.tensors.get(&(param, layer)).ok_or(TirFetchRefusalV1::Malformed("no such instance".into()))?;
+        *self.served.borrow_mut() += (t.data.len() * t.dtype.width()) as u64;
+        Ok(t.to_le_bytes())
+    }
+}
+
+impl Class {
+    /// `(occurrence, node)` of the weight product that reads the param named `name` directly (a plain static weight).
+    fn site_of_param(&self, name: &str) -> (u16, u16) {
+        for (occ, &(block, _)) in self.plan.occurrences.iter().enumerate() {
+            for site in &self.analysis.blocks[block as usize].matmuls {
+                if let TirMatMulKindV1::Weight { source: TirWeightSourceV1::Static(Ref::Param(j)), .. } = site.kind
+                    && self.fx.program.params[j as usize].name == name
+                {
+                    return (occ as u16, site.node);
+                }
+            }
+        }
+        panic!("no plain weight site reads {name}");
+    }
+
+    fn blocked<'a>(
+        &'a self,
+        blocks: usize,
+    ) -> (TirSketchStoreV1, TirSketchKeysV1, misaka_palw_tir::MapParams) {
+        let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
+        let store = TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
+        (store, keys, self.held(&served()))
+    }
+}
+
+/// A lie in the output head's product, localised to one block: the check names that block, the seat fetches only the named block's bytes, recomputes
+/// it exactly and accuses at a committed row; the honest witness of the same class never needs a fetch.
+#[test]
+fn a_lie_localised_to_one_block_is_fetched_recomputed_and_accused() {
+    let c = class(wide_v1(3));
+    let (occ, node) = c.site_of_param("output.w");
+    let (store, keys, held) = c.blocked(4);
+    let checker = TirSketchCheckerV1::new(&c.plan, &c.analysis, &store, &keys, &held, served()).expect("a checker");
+    let pos = job().positions() - 1;
+    let honest = c.honest(&served());
+    assert!(checker.check(&job(), &JOB_ID, &honest).is_ok());
+    let lie = c.produce(&served(), &mut add_at(pos, occ, node, 0, 1));
+    let failure = *checker.check(&job(), &JOB_ID, &lie).expect_err("the lie is refused");
+    assert_eq!((failure.pos, failure.occurrence, failure.node), (pos, occ, Some(node)), "{failure:?}");
+    assert_eq!(failure.blocks.len(), 1, "an error in one output element fails exactly the block that holds it: {failure:?}");
+    let transport = MemTransport { c: &c, withhold: false, served: RefCell::new(0) };
+    let outcome = checker.escalate(&job(), &JOB_ID, &lie, &failure, &transport);
+    assert!(matches!(outcome, TirEscalationV1::Accuse { pos: p, .. } if p == pos), "{outcome:?}");
+    let whole: u64 = {
+        let j = c.fx.program.params.iter().position(|d| d.name == "output.w").unwrap();
+        c.fx.params.tensors.get(&(j as u16, None)).map(|t| (t.data.len() * t.dtype.width()) as u64).unwrap()
+    };
+    let got = *transport.served.borrow();
+    assert!(got > 0 && got < whole, "only the failing block's bytes came ({got} of {whole})");
+}
+
+/// A withheld block ends in `Unavailable`, naming it; and a failure that does not reproduce clears the check.
+#[test]
+fn a_withheld_block_ends_in_unavailable_naming_it() {
+    let c = class(wide_v1(3));
+    let (occ, node) = c.site_of_param("output.w");
+    let (store, keys, held) = c.blocked(4);
+    let checker = TirSketchCheckerV1::new(&c.plan, &c.analysis, &store, &keys, &held, served()).expect("a checker");
+    let pos = job().positions() - 1;
+    let lie = c.produce(&served(), &mut add_at(pos, occ, node, 0, 1));
+    let failure = *checker.check(&job(), &JOB_ID, &lie).expect_err("the lie is refused");
+    let silent = MemTransport { c: &c, withhold: true, served: RefCell::new(0) };
+    match checker.escalate(&job(), &JOB_ID, &lie, &failure, &silent) {
+        TirEscalationV1::Unavailable { occurrence, node: n, block: Some(b), .. } => {
+            assert_eq!((occurrence, n), (occ, node));
+            assert_eq!(vec![b], failure.blocks, "the block the check named is the block named unavailable");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A failure the blocks do not reproduce (a forged failure naming a block that is fine) clears.
+    let mut forged = failure.clone();
+    forged.blocks = vec![if failure.blocks[0] == 0 { 1 } else { 0 }];
+    let honest_transport = MemTransport { c: &c, withhold: false, served: RefCell::new(0) };
+    assert_eq!(
+        checker.escalate(&job(), &JOB_ID, &lie, &forged, &honest_transport),
+        TirEscalationV1::Cleared(TirClearedV1::BlocksAgree),
+        "a block that recomputes to what was served clears"
+    );
+}
+
+/// A weight that is not a plain param (routed experts) is not block-addressable: the interval goes to a holder.
+#[test]
+fn a_routed_weight_is_not_block_addressable() {
+    let c = class(dense_moe_v1(4));
+    let moe = c.block_named("moe");
+    let occ = c.occurrence_of(moe);
+    let routed = c
+        .analysis
+        .blocks[moe as usize]
+        .matmuls
+        .iter()
+        .find(|s| matches!(s.kind, TirMatMulKindV1::Weight { source: TirWeightSourceV1::Routed { .. }, .. }))
+        .expect("a routed site")
+        .node;
+    let (store, keys, held) = c.blocked(2);
+    let checker = TirSketchCheckerV1::new(&c.plan, &c.analysis, &store, &keys, &held, served()).expect("a checker");
+    let lie = c.produce(&served(), &mut add_at(0, occ, routed, 0, 1));
+    let failure = *checker.check(&job(), &JOB_ID, &lie).expect_err("the lie is refused");
+    let transport = MemTransport { c: &c, withhold: false, served: RefCell::new(0) };
+    assert!(matches!(checker.escalate(&job(), &JOB_ID, &lie, &failure, &transport), TirEscalationV1::NotBlockAddressable(_)));
+}
+
+/// A bad witness for an honest claim: only the served product is changed, the committed rows stay the honest ones. The check fails, the blocks are
+/// fetched, the cone is recomputed and agrees with the claim's committed row — the check clears, nothing is accused.
+#[test]
+fn a_bad_witness_for_an_honest_claim_clears_and_accuses_nobody() {
+    let c = class(wide_v1(3));
+    let (occ, node) = c.site_of_param("output.w");
+    let (store, keys, held) = c.blocked(4);
+    let checker = TirSketchCheckerV1::new(&c.plan, &c.analysis, &store, &keys, &held, served()).expect("a checker");
+    let pos = job().positions() - 1;
+    let mut w = c.honest(&served());
+    let v = w.steps[pos as usize].values.iter_mut().find(|v| v.occurrence == occ && v.node == node).expect("served");
+    v.value.data[0] += 1;
+    let failure = *checker.check(&job(), &JOB_ID, &w).expect_err("the witness is refused");
+    assert!(matches!(failure.fault, TirCheckFaultV1::Freivalds { .. }), "{failure:?}");
+    let transport = MemTransport { c: &c, withhold: false, served: RefCell::new(0) };
+    let outcome = checker.escalate(&job(), &JOB_ID, &w, &failure, &transport);
+    assert!(matches!(outcome, TirEscalationV1::Cleared(TirClearedV1::ConeAgrees)), "{outcome:?}");
+}
+
+/// The wire's address of a block is derived from the program alone, the same on both ends: a plain weight reads, at one block, every byte of its
+/// instance; a routed weight has no address; an ordinal past the sites has none.
+#[test]
+fn a_block_address_is_a_function_of_the_program_alone() {
+    use misaka_palw_tir_sketch::refetch::{tir_block_address_v1, tir_weight_sites_v1};
+    let c = class(wide_v1(3));
+    let (occ, node) = c.site_of_param("output.w");
+    let sites = tir_weight_sites_v1(&c.plan, &c.analysis);
+    let ordinal = sites.iter().position(|s| *s == (occ, node)).expect("the head is a weight site") as u32;
+    let a = tir_block_address_v1(&c.plan, &c.analysis, ordinal, 0).expect("a plain weight has an address");
+    assert_eq!((a.occurrence, a.node, a.blocks, a.block), (occ, node, 1, 0));
+    let j = c.fx.program.params.iter().position(|d| d.name == "output.w").unwrap();
+    let t = &c.fx.params.tensors[&(j as u16, None)];
+    assert_eq!(a.param as usize, j);
+    assert_eq!(a.ranges.iter().map(|r| r.1).sum::<u64>(), (t.data.len() * t.dtype.width()) as u64, "one block reads the whole weight");
+    assert!(tir_block_address_v1(&c.plan, &c.analysis, ordinal, 1).is_none(), "a block past the count");
+    assert!(tir_block_address_v1(&c.plan, &c.analysis, sites.len() as u32, 0).is_none(), "an ordinal past the sites");
+    let m = class(dense_moe_v1(4));
+    let msites = tir_weight_sites_v1(&m.plan, &m.analysis);
+    let routed = (0..msites.len() as u32).filter(|o| tir_block_address_v1(&m.plan, &m.analysis, *o, 0).is_none()).count();
+    assert!(routed >= 1, "a routed or derived weight has no block address");
+}

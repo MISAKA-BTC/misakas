@@ -298,6 +298,102 @@ impl TirCheckGeomV1 {
         v.iter().enumerate().map(|(i, x)| if (i % free) / bsize == block { *x } else { 0 }).collect()
     }
 
+    /// **Can a block of this weight be fetched and recomputed alone** (§II.8)? A plain 2-D weight: no batch axes of its own, not gathered.
+    pub fn plain_weight(&self) -> bool {
+        self.wb_rank == 0 && self.routed_rank == 0
+    }
+
+    /// The byte ranges of a plain weight instance (row-major, `width` bytes an element) that free-axis block `block` of `blocks` reads:
+    /// one contiguous range of rows for a left-hand weight (`[M, K]`, free = rows), `K` strided segments for a right-hand one
+    /// (`[K, N]`, free = columns). `None` for a weight that is not plain or a block out of range.
+    pub fn block_byte_ranges(&self, blocks: usize, block: usize, width: usize) -> Option<Vec<(u64, u64)>> {
+        if !self.plain_weight() || block >= blocks.clamp(1, self.free().max(1)) {
+            return None;
+        }
+        let bsize = self.block_size(blocks);
+        let (lo, hi) = (block * bsize, ((block + 1) * bsize).min(self.free()));
+        if lo >= hi {
+            return None;
+        }
+        let w = width as u64;
+        Some(match self.side {
+            TirSideV1::Left => vec![((lo * self.k) as u64 * w, ((hi - lo) * self.k) as u64 * w)],
+            TirSideV1::Right => (0..self.k).map(|t| (((t * self.n + lo) as u64) * w, ((hi - lo) as u64) * w)).collect(),
+        })
+    }
+
+    /// **Recompute, exactly, the outputs of free-axis block `block` of a plain weight** from the activation `x` and the block's weight
+    /// elements (`weight(f, t)`: free index `f`, contraction index `t`), writing them into `out` and leaving every other element alone.
+    /// `None` if the weight is not plain, an element is missing, or the arithmetic would overflow `i128`.
+    pub fn recompute_block(
+        &self,
+        x: &[i128],
+        weight: &dyn Fn(usize, usize) -> Option<i128>,
+        blocks: usize,
+        block: usize,
+        out: &mut [i128],
+    ) -> Option<()> {
+        if !self.plain_weight() || block >= blocks.clamp(1, self.free().max(1)) {
+            return None;
+        }
+        let bsize = self.block_size(blocks);
+        let (lo, hi) = (block * bsize, ((block + 1) * bsize).min(self.free()));
+        let (m, n, k) = (self.m, self.n, self.k);
+        let mut fail = false;
+        let mut idx = vec![0usize; self.nb()];
+        for_each_index(&self.eo.clone(), |beta| {
+            if fail {
+                return;
+            }
+            for (i, slot) in idx.iter_mut().enumerate() {
+                *slot = if self.ex[i] == 1 { 0 } else { beta[i] };
+            }
+            let xbase = row_major(&self.ex, &idx);
+            let ob = row_major(&self.eo, beta) * m * n;
+            match self.side {
+                TirSideV1::Left => {
+                    for r in lo..hi {
+                        for c in 0..n {
+                            let mut acc: i128 = 0;
+                            for t in 0..k {
+                                let (Some(w), Some(xv)) = (weight(r, t), x.get(xbase * k * n + t * n + c)) else {
+                                    fail = true;
+                                    return;
+                                };
+                                let Some(next) = w.checked_mul(*xv).and_then(|p| acc.checked_add(p)) else {
+                                    fail = true;
+                                    return;
+                                };
+                                acc = next;
+                            }
+                            out[ob + r * n + c] = acc;
+                        }
+                    }
+                }
+                TirSideV1::Right => {
+                    for r in 0..m {
+                        for c in lo..hi {
+                            let mut acc: i128 = 0;
+                            for t in 0..k {
+                                let (Some(w), Some(xv)) = (weight(c, t), x.get(xbase * m * k + r * k + t)) else {
+                                    fail = true;
+                                    return;
+                                };
+                                let Some(next) = w.checked_mul(*xv).and_then(|p| acc.checked_add(p)) else {
+                                    fail = true;
+                                    return;
+                                };
+                                acc = next;
+                            }
+                            out[ob + r * n + c] = acc;
+                        }
+                    }
+                }
+            }
+        });
+        (!fail).then_some(())
+    }
+
     /// The A-rows in check order: every uncompressed batch index (compressed coordinates 0), then
     /// the activation's free index.
     fn for_each_a_row(&self, mut f: impl FnMut(&[usize], usize)) {

@@ -153,6 +153,15 @@ impl PalwBackendRegistry {
             .find(|e| e.class_id() == class_id && e.artifact_root == artifact_root)
     }
 
+    /// **The IR class entry whose artifact root begins with `tag`** (RFC-0007 §II.8's weight-block request names its class by the root's first
+    /// eight bytes, little endian — `palw_weight_block_root_tag_v1`). `None` when no held IR artifact has it. The asker verifies the answer against
+    /// the whole root, so a prefix shared by two held classes only costs a refusal.
+    pub fn tir_entry_by_root_tag_v1(&self, tag: u64) -> Option<misaka_palw_sdk::lineage::PalwTirClassEntryV1> {
+        misaka_palw_sdk::tir_registration::tir_entries_of_v1(&self.holdings)
+            .into_iter()
+            .find(|e| kaspa_consensus_core::palw_weight_block_v1::palw_weight_block_root_tag_v1(&e.artifact_root) == tag)
+    }
+
     /// **The generative backend for a chain-named pipeline class, concretely** (RFC-0003 §II.2.1) — for the
     /// verbs only a pipeline class has (the tensor worker, a seat's replay, a court's output close). `None`
     /// when no holding is a generative artifact of exactly this `(class_id, artifact_root)`: the class is not
