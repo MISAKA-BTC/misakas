@@ -150,7 +150,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_asks_nothing_below_its_heigh
     let below = palw_class_seated_admits_v1(&fx.s, sp, &room_extras(&fx.p, AT - 1), &fx.bonds()[7], &fx.class, AT - 1);
     assert!(below.is_ok(), "no seat is ready and nothing is asked below the fence: {below:?}");
     // On a ruleset that never armed it the door is `Ok` at every height.
-    let dormant = Fx::new(palw_t12_shipped_params());
+    let dormant = Fx::new(kaspa_consensus_core::config::params::palw_t12_release_v5_params());
     assert_eq!(dormant.sp.class_seating_terms_at(u64::MAX), None);
     assert!(dormant.door(7).is_ok());
 }
@@ -159,7 +159,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_asks_nothing_below_its_heigh
 fn arming_it_is_refused_without_its_prerequisites_or_with_a_floor_no_panel_could_meet() {
     let fence = PalwClassSeatingFenceV1::testnet12_v1(ForkActivation::new(AT));
     // Without the generative fence at or below it.
-    let mut p = palw_t12_shipped_params();
+    let mut p = kaspa_consensus_core::config::params::palw_t12_release_v5_params();
     p.palw_class_seating = Some(fence);
     p.sync_palw_class_seating();
     let why = p.validate_palw_v2().unwrap_err().to_string();

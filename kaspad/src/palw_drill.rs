@@ -1744,7 +1744,8 @@ mod tests {
         }
         // ρ = 25 then ρ = 100 above the ρ = 10 flag day (14), through the node's own config.
         let both = config_of(&parsed(&["--palw-drill-capacity-step2-at=30", "--palw-drill-capacity-step3-at=40"]));
-        assert_eq!(ramp(&both), vec![(14, 10), (30, 25), (40, 100)]);
+        // int-12: the release's later steps (ρ = 250 at H + 190, ρ = 1000 at H + 285) stay where the release has them.
+        assert_eq!(ramp(&both), vec![(14, 10), (30, 25), (40, 100), (5490, 250), (5585, 1000)]);
         both.params.validate_palw_v2().expect("the ramp validates");
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-step2-at=30", "--palw-drill-capacity-step3-at=40"]))
             .expect("both");
@@ -2354,8 +2355,8 @@ mod tests {
         let with = config_of(&parsed(&["--palw-drill-panel-liveness-at=60"]));
         assert_eq!(
             (without.params.palw_panel_unavailable_expiry, without.params.palw_panel_fast_switch, without.params.palw_seat_availability),
-            (None, None, None),
-            "dormant on the release drill"
+            (Some(ForkActivation::new(5_300)), Some(ForkActivation::new(5_300)), Some(ForkActivation::new(5_300))),
+            "armed at the release's height on the release drill (int-12: the flag day's list)"
         );
         let at = Some(ForkActivation::new(60));
         assert_eq!(
@@ -2468,7 +2469,8 @@ mod tests {
         assert!(refused.contains("--palw-drill-vertex-at=140") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
         let without = config_of(&parsed(&[]));
         let with = config_of(&parsed(&["--palw-drill-vertex-at=140"]));
-        assert_eq!(without.params.palw_verification_vertex_v1, None);
+        // int-12: the release drill carries the vertex at the release's height (5,300), as the flag day's list arms it.
+        assert_eq!(without.params.palw_verification_vertex_v1, Some(kaspa_consensus_core::config::params::ForkActivation::new(5_300)));
         assert_eq!(
             with.params.palw_verification_vertex_v1,
             Some(kaspa_consensus_core::config::params::ForkActivation::new(140)),

@@ -119,9 +119,13 @@ fn every_rfc1_fence_is_dormant_on_every_shipped_preset_and_named() {
 fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
     let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
     let at = h + 1_000;
-    // int-12: the baseline is the int-10 ruleset (dormant), as the int-11 flag-day tests take it; the shipped one arms these already.
-    let base = palw_t12_release_v5_params();
-    base.validate_palw_v2().expect("the baseline testnet-12 assembles");
+    // int-12: the shipped ruleset arms these at 5,300 already, so start from it with the RFC-0001 fences taken away (their
+    // prerequisites — decode rules, the improvement fence, the IR — stay armed at the flag day, as a later flag day would find them).
+    let mut base = palw_t12_shipped_params();
+    for (_, entry, _) in fences() {
+        (entry.set)(&mut base, None);
+    }
+    base.validate_palw_v2().expect("the shipped testnet-12 without the RFC-0001 fences assembles");
     for (fence, entry, _) in fences() {
         let mut armed = base.clone();
         (entry.set)(&mut armed, Some(ForkActivation::new(at)));
@@ -144,7 +148,10 @@ fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
 fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
     let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
     let at = h + 1_000;
-    let base = palw_t12_release_v5_params();
+    let mut base = palw_t12_shipped_params();
+    for (_, entry, _) in fences() {
+        (entry.set)(&mut base, None);
+    }
     for (fence, entry, prereqs) in fences() {
         let mut armed = base.clone();
         (entry.set)(&mut armed, Some(ForkActivation::new(at)));

@@ -183,6 +183,10 @@ fn the_horizon_is_genesis_only_bounded_and_mirrored() {
     let t12 = palw_t12_shipped_params();
     let refused = |edit: &dyn Fn(&mut Params), needle: &str| {
         let mut p = t12.clone();
+        // int-12: `palw_class_seating` rides the 5,300 list and reads the pool's population; take it away so the edit meets the
+        // horizon's own refusal (the list is not what this test asks about).
+        p.palw_class_seating = None;
+        p.sync_palw_class_seating();
         edit(&mut p);
         let why = p.validate_palw_v2().expect_err(needle);
         assert!(format!("{why:?}").contains(needle), "expected a refusal naming {needle:?}, got {why:?}");

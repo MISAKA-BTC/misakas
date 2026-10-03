@@ -85,7 +85,7 @@ fn armed(at: ForkActivation) -> Params {
 fn every_ruleset_leaves_it_dormant_and_no_flag_day_list_names_it() {
     for (name, p) in rulesets() {
         // int-12: testnet-12's release arms the vertex at the 5,300 flag day (the list).
-        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" {
+        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" || name == "palw_t12_drill_params_v1" {
             assert_eq!(
                 p.palw_verification_vertex_v1.map(|a| a.daa_score()),
                 kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA,

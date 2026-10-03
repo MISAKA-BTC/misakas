@@ -450,7 +450,7 @@ pub fn verify_artifact_bytes(object: &PalwDerivedArtifactV1, artifact: &[u8]) ->
 /// the whole join rests on. See [`misaka_palw_base0::fp_worker::render_answer_v1`] for why it
 /// cannot fail: an id the table cannot spell contributes no bytes, which is what the streamed
 /// pieces do too, so the rendering here and the gateway's are the same bytes by construction.
-pub use misaka_palw_base0::fp_worker::{render_answer_v1, render_answer_v2};
+pub use misaka_palw_base0::fp_worker::render_answer_v1;
 
 /// The id a job publishes for the tokenizer FILE a consumer opened.
 ///

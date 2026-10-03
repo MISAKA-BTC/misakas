@@ -68,13 +68,19 @@ fn the_manifest_verifier_the_sdk_and_the_gate_name_the_same_verdict_for_the_9b_h
         }
         // No reader charges the ladder clock.
         assert!(!manifest_says.contains("5102") && !manifest_says.contains("5,102"), "daa {daa}: the manifest verifier charged the ladder clock: {manifest_says}");
-        assert!(gate_code == "ADMITTED", "daa {daa}: the gate (the court window and every admission condition after it) admits: {gate_code}");
-        // The gate admits; the processor's attribution check beside it (C5) is the next wall, and the SDK and the manifest verifier both name it.
-        let sdk_err = sdk_v.expect_err("the SDK names the processor's refusal");
-        assert!(sdk_err.contains("HELD_CLASS_UNANSWERABLE"), "daa {daa}: {sdk_err}");
+        // int-12: testnet-12's release arms `palw_gdn_key_heads` (P0a) at the 5,300 flag day, past which the gate itself refuses this class's
+        // version-2 profile on the v5 map (16 key heads over 32 value heads: register the version-3 profile). Below it the gate admits and
+        // the processor's attribution check beside it (C5) is the next wall. Either way the three readers name the SAME wall.
+        // A Qwen3.5 profile must be rebuilt with explicit key heads (the version-3 profile on the v5 map) to register past 5,300.
+        let past_p0a = daa >= kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-12 flag day");
+        let (want_gate, want_wall) =
+            if past_p0a { ("GDN_MAP_ASSUMES_EQUAL_HEADS", "GDN_MAP_ASSUMES_EQUAL_HEADS") } else { ("ADMITTED", "HELD_CLASS_UNANSWERABLE") };
+        assert!(gate_code == want_gate, "daa {daa}: the gate says {gate_code}, wanted {want_gate}");
+        let sdk_err = sdk_v.expect_err("the SDK names the refusal");
+        assert!(sdk_err.contains(want_wall), "daa {daa}: {sdk_err}");
         let C::Refused { reason, .. } = &report.classification else { panic!("daa {daa}: the manifest verifier says {manifest_says}") };
-        assert!(reason.contains("HELD_CLASS_UNANSWERABLE"), "daa {daa}: {reason}");
+        assert!(reason.contains(want_wall), "daa {daa}: {reason}");
         seen.push(gate_code);
     }
-    assert!(seen.windows(2).all(|w| w[0] == w[1]), "the verdict moves with the height: {seen:?}");
+    assert!(seen[0] == seen[1] && seen[1] != seen[2], "the verdict moves only at the P0a flag day: {seen:?}");
 }

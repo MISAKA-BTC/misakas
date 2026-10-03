@@ -138,7 +138,10 @@ fn the_cap_moves_testnet12s_fingerprint_and_a_never_collapses() {
         "take the cap away and testnet-12 is befb59dfe's, to the id"
     );
     assert_eq!((w.0.as_str(), w.1.as_str(), w.2.as_str()), T12_WITH_THE_CAP);
-    without.validate_palw_v2().expect("the cap is independent: testnet-12 without it is the ruleset it was");
+    // int-12: the Useful Work Transition's tick rides the lead cap, so a ruleset without the cap validates only without the tick too.
+    let mut validated = without.clone();
+    (kaspa_consensus_core::palw_real_share_v1::PALW_T12_REAL_CLOCK_TICK_ENTRY.set)(&mut validated, None);
+    validated.validate_palw_v2().expect("the cap is independent: testnet-12 without it is the ruleset it was");
 
     // The identity two nodes compare normalizes `Some(never())` — and a height not yet reached — to
     // absence (the collapse in `normalize_values_a_scheduled_fence_drags_with_it`), so a node that

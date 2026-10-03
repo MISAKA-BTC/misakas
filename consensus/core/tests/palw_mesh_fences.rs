@@ -98,7 +98,7 @@ fn armed_with(witness: Option<u64>, vertex: Option<u64>, audit: Option<u64>, cap
 fn every_ruleset_leaves_all_three_dormant_and_no_flag_day_list_names_them() {
     for (name, p) in rulesets() {
         // int-12: testnet-12's release arms all three at the 5,300 flag day (the list), so its shipped rulesets are armed there.
-        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" {
+        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" || name == "palw_t12_drill_params_v1" {
             let listed = p.palw_fences_v1();
             for fence in NAMES {
                 assert!(
