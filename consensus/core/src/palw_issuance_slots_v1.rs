@@ -178,7 +178,12 @@ pub fn palw_issuance_read_at_v1(
         return None;
     }
     let outstanding = state.claims_iter().filter(|(_, claim)| claim.bond == *bond && palw_issuance_holds_slot_v1(params, claim, now_daa)).count();
-    let rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, now_daa);
+    let mut rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, now_daa);
+    // **ADR-0164 F-K: the issuance tier is `min(schedule ρ, the breaker's level)`** — the breaker only ever lowers it, and a claim in
+    // flight keeps the price it was accepted at (only the caps on NEW claims follow the tier).
+    if params.capacity_breaker_active_at(now_daa) {
+        rho = crate::palw_capacity_s567_v1::palw_breaker_tier_v1(rho, state.rho_breaker_v1());
+    }
     Some(PalwIssuanceReadV1::of_v1(collateral_sompi, rho, outstanding as u64, state.issuance_bucket_of_v1(bond), now_daa))
 }
 

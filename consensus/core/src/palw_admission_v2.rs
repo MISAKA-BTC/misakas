@@ -132,6 +132,9 @@ pub struct PalwEpochBudgetFencesV1 {
     /// refuses. Such a block carries no claim: the fold's own ceiling (`AttemptExposureCeiling`,
     /// finding 17) skips its attempt. `false` by `Default` — every other caller, byte for byte.
     pub exposure_ceiling_waived: bool,
+    /// **ADR-0164 F-M1: a rider's re-check waives F-EM's per-DAA budget** — a rider is paid out of its lead's carve, whose
+    /// acceptance charged the budget once (a rider charges nothing), so the budget is not its question. `false` by `Default`.
+    pub emission_waived: bool,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -249,6 +252,10 @@ pub enum PalwAdmissionV2Error {
     /// token in its bucket. The fold refuses (skips) the same attempt (`IssuanceCapped`).
     #[error("bond {bond:?}'s issuance is capped (ADR-0160 F-S): {refusal}")]
     IssuanceCapped { bond: PalwBondKeyV2, refusal: String },
+    /// **ADR-0164 F-EM: the DAA's PALW reward budget is spent** (16 carves a DAA). The fold refuses (skips) the same attempt
+    /// (`EmissionBudgetExhausted`).
+    #[error("the DAA's PALW reward budget is spent: {spent_milli} of {budget_milli} milli-carves (ADR-0164 F-EM)")]
+    EmissionBudgetExhausted { spent_milli: u64, budget_milli: u64 },
     /// **ADR-0160 F-Q (§5.9 (f)): the audit backlog is full**: a credited claim waits. The fold refuses
     /// (skips) the same attempt (`AuditBacklogFull`).
     #[error("{backlog} credited claims await their audit (at most {max}, ADR-0160 F-Q): a credited claim waits")]
@@ -777,6 +784,15 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, &bond_key, bond.collateral, ctx.daa_score)
     {
         read.admits_v1().map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
+    }
+    // 8b′. **ADR-0164 F-EM: the DAA's PALW reward budget**, the fold's own reading of the rooted ledger at this block's DAA.
+    if state_params.capacity_emission_active_at(ctx.daa_score)
+        && !budget_fences.emission_waived
+        && crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve) > 0
+    {
+        crate::palw_capacity_s567_v1::palw_emission_admits_v1(state.emission_spent_milli_v1(ctx.daa_score)).map_err(|refusal| {
+            PalwAdmissionV2Error::EmissionBudgetExhausted { spent_milli: refusal.spent_milli, budget_milli: refusal.budget_milli }
+        })?;
     }
     if state_params.capacity_audit_active_at(ctx.daa_score) {
         let escrow = crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve);

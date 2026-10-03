@@ -135,6 +135,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_capacity_network_verify = Some(at);
             params.sync_palw_capacity_network_verify();
         }
+        // ADR-0164 (stages 5–7): the three bare fences with their shared mirror.
+        "palw_capacity_emission_budget" => {
+            params.palw_capacity_emission_budget = Some(at);
+            params.sync_palw_capacity_s567();
+        }
+        "palw_capacity_multi_claim" => {
+            params.palw_capacity_multi_claim = Some(at);
+            params.sync_palw_capacity_s567();
+        }
+        "palw_capacity_rho_breaker" => {
+            params.palw_capacity_rho_breaker = Some(at);
+            params.sync_palw_capacity_s567();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),

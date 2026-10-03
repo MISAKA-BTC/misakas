@@ -760,6 +760,13 @@ const PALW_DRILL_FLAG_DAY_INT11_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_INT11_RHO100_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_RHO100_FENCES_V1, flag: "--palw-drill-int11-at" };
 
+/// ρ = 250 and ρ = 1000, the int-11 flag day's third and fourth entries, [`crate::config::params::PALW_T12_INT11_RHO250_OFFSET_DAA`] and
+/// [`crate::config::params::PALW_T12_INT11_RHO1000_OFFSET_DAA`] after the list's height (`--palw-drill-int11-at`).
+const PALW_DRILL_FLAG_DAY_INT11_RHO250_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_RHO250_FENCES_V1, flag: "--palw-drill-int11-at" };
+const PALW_DRILL_FLAG_DAY_INT11_RHO1000_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_RHO1000_FENCES_V1, flag: "--palw-drill-int11-at" };
+
 /// The model-specific finite court window alone (`--palw-drill-model-court-at`).
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
@@ -788,6 +795,30 @@ const PALW_DRILL_FLAG_DAY_CAPACITY_STEP2_V1: PalwDrillFlagDayV1 =
 /// ρ = 100 as F-L's third step, after ρ = 25 (`--palw-drill-capacity-step3-at`).
 const PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP3_FENCES_V1, flag: "--palw-drill-capacity-step3-at" };
+/// **ADR-0164's ready entries, one each** (drill-only lists, in no flag day's list and at no height on any ruleset): ρ = 250 as F-L's
+/// fourth step (`--palw-drill-capacity-step4-at`), ρ = 1000 as its fifth (`--palw-drill-capacity-step5-at`), F-EM
+/// (`--palw-drill-capacity-emission-at`), F-M1 (`--palw-drill-capacity-multi-claim-at`) and F-K (`--palw-drill-capacity-rho-breaker-at`).
+const PALW_DRILL_CAPACITY_STEP4_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO250_STEP_4_V1];
+const PALW_DRILL_CAPACITY_STEP5_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO1000_STEP_5_V1];
+const PALW_DRILL_CAPACITY_EMISSION_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_EMISSION_BUDGET_V1];
+const PALW_DRILL_CAPACITY_MULTI_CLAIM_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_MULTI_CLAIM_V1];
+const PALW_DRILL_CAPACITY_RHO_BREAKER_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[crate::config::params::PALW_T12_CAPACITY_RHO_BREAKER_V1];
+const PALW_DRILL_FLAG_DAY_CAPACITY_STEP4_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP4_FENCES_V1, flag: "--palw-drill-capacity-step4-at" };
+const PALW_DRILL_FLAG_DAY_CAPACITY_STEP5_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_STEP5_FENCES_V1, flag: "--palw-drill-capacity-step5-at" };
+const PALW_DRILL_FLAG_DAY_CAPACITY_EMISSION_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_EMISSION_FENCES_V1, flag: "--palw-drill-capacity-emission-at" };
+const PALW_DRILL_FLAG_DAY_CAPACITY_MULTI_CLAIM_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_MULTI_CLAIM_FENCES_V1, flag: "--palw-drill-capacity-multi-claim-at" };
+const PALW_DRILL_FLAG_DAY_CAPACITY_RHO_BREAKER_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_RHO_BREAKER_FENCES_V1, flag: "--palw-drill-capacity-rho-breaker-at" };
+
 /// ρ = 100 as F-L's second step, straight after ρ = 10 (`--palw-drill-capacity-rho100-at`).
 const PALW_DRILL_FLAG_DAY_CAPACITY_RHO100_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: PALW_DRILL_CAPACITY_RHO100_FENCES_V1, flag: "--palw-drill-capacity-rho100-at" };
@@ -878,6 +909,52 @@ pub fn palw_drill_capacity_step3_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP3_V1)
 }
 
+/// **A drill appends the ρ = 250 step after ρ = 100** (`--palw-drill-capacity-step4-at`, ADR-0164): F-L's fourth step on a ruleset
+/// whose F-L carries three, with F-EM, F-M1 and F-K at or below it (`validate_palw_v2` refuses it otherwise).
+pub fn palw_drill_capacity_step4_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP4_V1.flag)?;
+    palw_drill_capacity_step_prerequisite_v1(params, 4, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP4_V1.flag)?;
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP4_V1)
+}
+
+/// **A drill appends the ρ = 1000 step after ρ = 250** (`--palw-drill-capacity-step5-at`).
+pub fn palw_drill_capacity_step5_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_chain_refusal_v1(params, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP5_V1.flag)?;
+    palw_drill_capacity_step_prerequisite_v1(params, 5, at, PALW_DRILL_FLAG_DAY_CAPACITY_STEP5_V1.flag)?;
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_STEP5_V1)
+}
+
+/// **A drill arms F-EM, the per-DAA reward budget** (`--palw-drill-capacity-emission-at`, ADR-0164): it is dormant on every
+/// ruleset, so the move ARMS it; `validate_palw_v2` refuses a height below F-L and F-E.
+pub fn palw_drill_capacity_emission_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_EMISSION_V1)
+}
+
+/// **A drill arms F-M1, riders** (`--palw-drill-capacity-multi-claim-at`): refused below F-EM and the other fences a rider needs.
+pub fn palw_drill_capacity_multi_claim_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_MULTI_CLAIM_V1)
+}
+
+/// **A drill arms F-K, the lower-only ρ breaker** (`--palw-drill-capacity-rho-breaker-at`): refused below F-L, F-S and F-Q.
+pub fn palw_drill_capacity_rho_breaker_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPACITY_RHO_BREAKER_V1)
+}
+
 /// **A drill crosses the int-11 flag day as the release arms it** (`--palw-drill-int11-at=H'`): every entry of
 /// [`crate::config::params::PALW_T12_INT11_FENCES_V1`] at `at` and ρ = 100 at `at +`
 /// [`crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA`], on a salted drill ruleset, each through its entry's own `set` — the
@@ -891,9 +968,18 @@ pub fn palw_drill_int11_at_v1(params: &mut crate::config::params::Params, at: u6
         .checked_add(crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA)
         .filter(|rho100| *rho100 != u64::MAX)
         .ok_or_else(|| format!("--palw-drill-int11-at={at}: ρ = 100 arms {} DAA after it, past the last DAA", crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA))?;
+    let later = |offset: u64, what: &str| {
+        at.checked_add(offset)
+            .filter(|height| *height != u64::MAX)
+            .ok_or_else(|| format!("--palw-drill-int11-at={at}: {what} arms {offset} DAA after it, past the last DAA"))
+    };
+    let rho250_at = later(crate::config::params::PALW_T12_INT11_RHO250_OFFSET_DAA, "ρ = 250")?;
+    let rho1000_at = later(crate::config::params::PALW_T12_INT11_RHO1000_OFFSET_DAA, "ρ = 1000")?;
     let mut moved = params.clone();
     let mut moves = palw_drill_move_fences_v1(&mut moved, at, &PALW_DRILL_FLAG_DAY_INT11_V1)?;
     moves.extend(palw_drill_move_fences_v1(&mut moved, rho100_at, &PALW_DRILL_FLAG_DAY_INT11_RHO100_V1)?);
+    moves.extend(palw_drill_move_fences_v1(&mut moved, rho250_at, &PALW_DRILL_FLAG_DAY_INT11_RHO250_V1)?);
+    moves.extend(palw_drill_move_fences_v1(&mut moved, rho1000_at, &PALW_DRILL_FLAG_DAY_INT11_RHO1000_V1)?);
     *params = moved;
     Ok(moves)
 }

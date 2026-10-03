@@ -183,8 +183,24 @@ fn the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms() {
         "{FLEET}: INT11_RHO100_OFFSET_DAA is the preset's"
     );
     assert_eq!(PALW_T12_INT11_RHO100_DAA, Some(at + PALW_T12_INT11_RHO100_OFFSET_DAA), "ρ = 100 arms H + 95");
+    assert_eq!(
+        shell_value(FLEET, &fleet, "INT11_RHO250_OFFSET_DAA"),
+        PALW_T12_INT11_RHO250_OFFSET_DAA.to_string(),
+        "{FLEET}: INT11_RHO250_OFFSET_DAA is the preset's"
+    );
+    assert_eq!(
+        shell_value(FLEET, &fleet, "INT11_RHO1000_OFFSET_DAA"),
+        PALW_T12_INT11_RHO1000_OFFSET_DAA.to_string(),
+        "{FLEET}: INT11_RHO1000_OFFSET_DAA is the preset's"
+    );
+    assert_eq!(PALW_T12_INT11_RHO250_DAA, Some(at + PALW_T12_INT11_RHO250_OFFSET_DAA), "ρ = 250 arms H + 190");
+    assert_eq!(PALW_T12_INT11_RHO1000_DAA, Some(at + PALW_T12_INT11_RHO1000_OFFSET_DAA), "ρ = 1000 arms H + 285");
     // And the public ruleset arms the list at H and ρ = 100 at H + 95: the schedule the kit's drill rehearses names both.
     let p = Params::from(t12());
     let schedule = p.fence_schedule_v1();
     assert!(schedule.contains(&at) && schedule.contains(&(at + PALW_T12_INT11_RHO100_OFFSET_DAA)), "{schedule:?}");
+    assert!(
+        schedule.contains(&(at + PALW_T12_INT11_RHO250_OFFSET_DAA)) && schedule.contains(&(at + PALW_T12_INT11_RHO1000_OFFSET_DAA)),
+        "{schedule:?}"
+    );
 }

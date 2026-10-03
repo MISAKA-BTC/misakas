@@ -370,6 +370,21 @@ pub struct Args {
     /// slot. Command line only.
     #[serde(skip)]
     pub palw_drill_capacity_rho100_at: Option<u64>,
+    /// **DRILL ONLY: append the capacity ramp's ρ = 250 step (ADR-0164; F-L's fourth step) at this DAA** (`config::drill::palw_drill_capacity_step4_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_step4_at: Option<u64>,
+    /// **DRILL ONLY: append the capacity ramp's ρ = 1000 step (ADR-0164; F-L's fifth step) at this DAA** (`config::drill::palw_drill_capacity_step5_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_step5_at: Option<u64>,
+    /// **DRILL ONLY: arm F-EM, the per-DAA PALW reward budget (ADR-0164, `palw_capacity_emission_budget`), at this DAA** (`config::drill::palw_drill_capacity_emission_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_emission_at: Option<u64>,
+    /// **DRILL ONLY: arm F-M1, riders (ADR-0164, `palw_capacity_multi_claim`, object tag 95), at this DAA** (`config::drill::palw_drill_capacity_multi_claim_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_multi_claim_at: Option<u64>,
+    /// **DRILL ONLY: arm F-K, the lower-only rho breaker (ADR-0164, `palw_capacity_rho_breaker`), at this DAA** (`config::drill::palw_drill_capacity_rho_breaker_at_v1`). Command line only.
+    #[serde(skip)]
+    pub palw_drill_capacity_rho_breaker_at: Option<u64>,
     /// **DRILL ONLY: arm testnet-12's IR fence (`palw_tir_v1`, RFC-0002 Phase F) at this DAA** — with
     /// the salt, `PALW_T12_TIR_V1_ENTRY` is armed, or moved, to this height on the drill chain, after
     /// the flag days' moves and at a height of its own (`config::drill::palw_drill_tir_fence_at_v1`,
@@ -691,6 +706,11 @@ impl Default for Args {
             palw_drill_capacity_step2_at: None,
             palw_drill_capacity_step3_at: None,
             palw_drill_capacity_rho100_at: None,
+            palw_drill_capacity_step4_at: None,
+            palw_drill_capacity_step5_at: None,
+            palw_drill_capacity_emission_at: None,
+            palw_drill_capacity_multi_claim_at: None,
+            palw_drill_capacity_rho_breaker_at: None,
             palw_drill_tir_at: None,
             palw_drill_tir2_at: None,
             palw_drill_gen_at: None,
@@ -1784,6 +1804,51 @@ pub fn cli() -> Command {
                      (palw_capacity_aggregate_liability_step_2) at this DAA on the drill chain. Nothing else moves. Not with \
                      --palw-drill-capacity-step2-at or -step3-at (the same slot). Refused without the salt, at 0, at a height another \
                      fence uses, and unless the rho = 10 flag day stands below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-step4-at")
+                .long("palw-drill-capacity-step4-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: append the capacity ramp's rho = 250 step (palw_capacity_aggregate_liability_step_4, k_aud = 2) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, unless the ramp's three earlier steps stand below it, and without --palw-drill-capacity-emission-at, -multi-claim-at and -rho-breaker-at (or the int-11 list) at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-step5-at")
+                .long("palw-drill-capacity-step5-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: append the capacity ramp's rho = 1000 step (palw_capacity_aggregate_liability_step_5) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and unless --palw-drill-capacity-step4-at stands below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-emission-at")
+                .long("palw-drill-capacity-emission-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm F-EM, the per-DAA PALW reward budget (palw_capacity_emission_budget), at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below F-L and F-E (the rho = 10 flag day, --palw-drill-fence3-at, arms them).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-multi-claim-at")
+                .long("palw-drill-capacity-multi-claim-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm F-M1, riders (palw_capacity_multi_claim, object tag 95), at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below F-EM and the other fences a rider needs.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capacity-rho-breaker-at")
+                .long("palw-drill-capacity-rho-breaker-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm F-K, the lower-only rho breaker (palw_capacity_rho_breaker), at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and below F-L, F-S and F-Q.",
                 ),
         )
         .arg(
@@ -2926,6 +2991,11 @@ impl Args {
             palw_drill_capacity_step2_at: m.get_one::<u64>("palw-drill-capacity-step2-at").copied(),
             palw_drill_capacity_step3_at: m.get_one::<u64>("palw-drill-capacity-step3-at").copied(),
             palw_drill_capacity_rho100_at: m.get_one::<u64>("palw-drill-capacity-rho100-at").copied(),
+            palw_drill_capacity_step4_at: m.get_one::<u64>("palw-drill-capacity-step4-at").copied(),
+            palw_drill_capacity_step5_at: m.get_one::<u64>("palw-drill-capacity-step5-at").copied(),
+            palw_drill_capacity_emission_at: m.get_one::<u64>("palw-drill-capacity-emission-at").copied(),
+            palw_drill_capacity_multi_claim_at: m.get_one::<u64>("palw-drill-capacity-multi-claim-at").copied(),
+            palw_drill_capacity_rho_breaker_at: m.get_one::<u64>("palw-drill-capacity-rho-breaker-at").copied(),
             palw_drill_tir_at: m.get_one::<u64>("palw-drill-tir-at").copied(),
             palw_drill_tir2_at: m.get_one::<u64>("palw-drill-tir2-at").copied(),
             palw_drill_gen_at: m.get_one::<u64>("palw-drill-gen-at").copied(),

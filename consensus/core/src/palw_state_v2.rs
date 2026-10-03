@@ -1491,6 +1491,16 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_capacity_network_verify`. `None` on every shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
     capacity_network_verify_from_daa: Option<u64>,
+    /// **ADR-0164 F-EM: `Params::palw_capacity_emission_budget`'s height** (stage 5's per-DAA reward budget), mirrored by
+    /// `Params::sync_palw_capacity_s567`. `None` on every shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    capacity_emission_from_daa: Option<u64>,
+    /// **ADR-0164 F-M1: `Params::palw_capacity_multi_claim`'s height** (riders), mirrored likewise.
+    #[borsh(skip)]
+    capacity_riders_from_daa: Option<u64>,
+    /// **ADR-0164 F-K: `Params::palw_capacity_rho_breaker`'s height** (the lower-only breaker), mirrored likewise.
+    #[borsh(skip)]
+    capacity_breaker_from_daa: Option<u64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1814,6 +1824,9 @@ impl PalwStateParamsV2 {
             capacity_network_from_daa: None,
             capacity_network_anchor_delay: 0,
             capacity_network_verify_from_daa: None,
+            capacity_emission_from_daa: None,
+            capacity_riders_from_daa: None,
+            capacity_breaker_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2801,6 +2814,45 @@ impl PalwStateParamsV2 {
         self.capacity_network_verify_active_at(daa_score).then(|| {
             crate::palw_network_room_v1::palw_network_verify_level_v1(self.window_receipt(), self.capacity_network_anchor_delay())
         })
+    }
+
+    /// **ADR-0164: the three stage-5/6 fences' mirrors' setter** — F-EM, F-M1 and F-K heights, written by
+    /// `Params::sync_palw_capacity_s567` and by nothing else.
+    pub fn with_capacity_s567_mirror(mut self, emission: Option<u64>, riders: Option<u64>, breaker: Option<u64>) -> Self {
+        self.capacity_emission_from_daa = emission;
+        self.capacity_riders_from_daa = riders;
+        self.capacity_breaker_from_daa = breaker;
+        self
+    }
+
+    /// ADR-0164 F-EM's height, if armed (the mirror).
+    pub fn capacity_emission_from_daa(&self) -> Option<u64> {
+        self.capacity_emission_from_daa
+    }
+
+    /// **ADR-0164 F-EM: does the per-DAA reward budget judge an attempt claim accepted at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_emission_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_emission_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0164 F-M1's height, if armed (the mirror).
+    pub fn capacity_riders_from_daa(&self) -> Option<u64> {
+        self.capacity_riders_from_daa
+    }
+
+    /// **ADR-0164 F-M1: may riders attach at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_riders_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_riders_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0164 F-K's height, if armed (the mirror).
+    pub fn capacity_breaker_from_daa(&self) -> Option<u64> {
+        self.capacity_breaker_from_daa
+    }
+
+    /// **ADR-0164 F-K: does the breaker count and judge at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_breaker_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_breaker_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// ADR-0160 F-S: `Params::palw_capacity_issuance_slots`'s height, if armed (the mirror).
@@ -7763,6 +7815,18 @@ pub enum PalwConsensusObjectV2 {
     HeldLeafChallengeDeclared {
         challenge: Box<crate::palw_held_close_v1::PalwHeldLeafChallengeV1>,
     } = 90,
+    // Tags 91–93 are RFC-0006's, 94 the adapter's, 100–109 RFC-0007's (the lead's allocation of 2026-10-03).
+    /// **ADR-0164 F-M1: riders (tag 95)** — up to [`crate::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1`] further attempts of the lead
+    /// claim's own bond, each its own claim (panel, licence, slot, share, room, audit entry) and each paid out of the lead's carve:
+    /// the fold gives a rider the carve of `⌊E_lead / (1 + n)⌋` and takes exactly that out of the lead's escrow, so the Σ escrow of a
+    /// block's claims is its carve. `lead` is the lead's claim id (its attempt id); a rider's challenge is
+    /// [`crate::palw_capacity_s567_v1::palw_rider_challenge_v1`] (it has no header position), its job anchor
+    /// [`crate::palw_capacity_s567_v1::palw_rider_job_anchor_v1`]. Each rider's own signature is checked at acceptance. The fold
+    /// takes the object at the END of the block's work (step 4b′): the lead must be `Provisional`, accepted within
+    /// [`crate::palw_capacity_s567_v1::PALW_RIDERS_WINDOW_DAA_V1`] DAA, and not yet have taken riders; the whole batch is
+    /// atomic — one refused rider leaves the lead as it was. Past `Params::palw_capacity_multi_claim` only; refused by name below it
+    /// by the acceptance layer and the fold.
+    AttemptRidersV1 { lead: Hash64, riders: Vec<crate::palw_attempt_v2::PalwAttemptEnvelopeV2> } = 95,
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -8030,6 +8094,9 @@ pub struct PalwMergedWorkV1<'a> {
 ///   same carve instead of paying it (`palw_v2_merged_escrow_withheld`) — symmetric to own work, so
 ///   a merged claim that later voids forfeits its carve like any other.
 struct PalwAttemptOriginV1 {
+    /// **ADR-0164 F-M1: this claim is a RIDER** — paid out of its lead's carve, so F-EM charges it nothing (the lead's acceptance
+    /// charged the whole carve once).
+    rider: bool,
     carrying_block: BlockHash,
     escrows_reward: bool,
     /// The subsidy this claim's escrow is carved FROM when `escrows_reward` — the accepting block's
@@ -9867,6 +9934,17 @@ pub enum PalwStateV2Error {
     /// skips `AttemptExposureCeiling`), skipped for merged work.
     #[error("bond {bond:?}'s issuance is capped (ADR-0160 F-S): {refusal}")]
     IssuanceCapped { bond: PalwBondKeyV2, refusal: String },
+    /// **ADR-0164 F-EM: the DAA's PALW reward budget is spent** — `spent_milli` of `budget_milli` milli-carves are charged to the
+    /// accepting block's DAA, so one more claim-bearing block's carve would pass the budget. Non-fatal for a block's own attempt
+    /// (skipped, its carve burned as any skipped attempt's); a merged attempt is skipped generically.
+    #[error("the DAA's PALW reward budget is spent: {spent_milli} of {budget_milli} milli-carves (ADR-0164 F-EM)")]
+    EmissionBudgetExhausted { spent_milli: u64, budget_milli: u64 },
+    /// **ADR-0164 F-M1: riders below `palw_capacity_multi_claim`.**
+    #[error("an attempt-riders object below palw_capacity_multi_claim (ADR-0164 F-M1)")]
+    CapacityRidersDormant,
+    /// **ADR-0164 F-M1: a riders object the fold refuses** (its batch is skipped, the lead keeps its whole carve).
+    #[error("riders refused (ADR-0164 F-M1): {0}")]
+    CapacityRiders(String),
     /// **ADR-0160 F-Q (§5.9 (f)): the audit backlog is full** — `backlog` credited licensed claims wait
     /// for their audit, at most `max`, so a new credited claim of `class` waits too. Non-fatal for the
     /// block's own attempt; skipped for merged work.
@@ -10591,6 +10669,15 @@ pub struct PalwChainStateV2 {
     network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
     /// By DAA: the chain blocks whose own work was an operator's attempt, over the last 32 DAA (`ā_op`).
     operator_ring: BTreeMap<u64, u32>,
+
+    // ---- ADR-0164 (stages 5–7): ONE rooted ledger for F-EM's per-DAA budget, F-M1's rider marks and F-K's breaker ----
+    //
+    // ONE Some-only root block (`capacity_s567/v1`) after stage 4's, ONE carriage tail (`0xBB`), written only when the
+    // ledger holds a row — so a state holding none (every state below the three fences, the only things that write it) roots
+    // and carries exactly as before.
+    /// By [`crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1`]: the emission days' spent milli-carves, the leads that took
+    /// riders, and the breaker's row.
+    capacity_ledger: BTreeMap<crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1, crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
     /// **RFC-0002 Phase F (F6): every admitted IR class's record** — the facts its attempt jobs
     /// (J5), its data-availability draws and its court read, derived from the carried class when it
     /// registered ([`crate::palw_tir_admission_v1::palw_tir_class_record_v1`]), so no later reader
@@ -10853,6 +10940,7 @@ impl PalwChainStateV2 {
             issuance_buckets: BTreeMap::new(),
             network_demand: BTreeMap::new(),
             operator_ring: BTreeMap::new(),
+            capacity_ledger: BTreeMap::new(),
             tir_classes: BTreeMap::new(),
             tir_dissections: BTreeMap::new(),
             gen_classes: BTreeMap::new(),
@@ -12770,6 +12858,37 @@ impl PalwChainStateV2 {
         &self.operator_ring
     }
 
+    /// **ADR-0164 F-EM: the milli-carves charged in `daa`** (0 where the ledger holds no row for it).
+    pub fn emission_spent_milli_v1(&self, daa: u64) -> u64 {
+        match self.capacity_ledger.get(&crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Emission(daa)) {
+            Some(crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1::Emission { spent_milli }) => *spent_milli,
+            _ => 0,
+        }
+    }
+
+    /// **ADR-0164 F-M1: has `lead` taken its riders already?** (Its mark stands for the riders' window.)
+    pub fn rider_mark_of_v1(&self, lead: &Hash64) -> Option<(u16, u64)> {
+        match self.capacity_ledger.get(&crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::RiderLead(*lead)) {
+            Some(crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1::Riders { riders, daa }) => Some((*riders, *daa)),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0164 F-K: the breaker's row**, if the breaker has counted or judged (absent: the top level, nothing counted).
+    pub fn rho_breaker_v1(&self) -> Option<&crate::palw_capacity_s567_v1::PalwRhoBreakerV1> {
+        match self.capacity_ledger.get(&crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker) {
+            Some(crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1::Breaker(row)) => Some(row),
+            _ => None,
+        }
+    }
+
+    /// The ledger itself (read-only; tests and the node's views).
+    pub fn capacity_ledger_v1(
+        &self,
+    ) -> &BTreeMap<crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1, crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1> {
+        &self.capacity_ledger
+    }
+
     /// **RFC-0002 Phase F: an IR class's record**, or `None` for a class that is not an IR program.
     pub fn tir_class_v1(&self, class_id: &Hash64) -> Option<&crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
         self.tir_classes.get(class_id)
@@ -13144,6 +13263,12 @@ impl PalwChainStateV2 {
             state.update(b"capacity_n/v1");
             state.update(collection_root(b"network_demand", &self.network_demand).as_byte_slice());
             state.update(collection_root(b"operator_ring", &self.operator_ring).as_byte_slice());
+        }
+        // **ADR-0164 (F-EM, F-M1, F-K): the capacity ledger, ONE Some-only block** — hashed only when it holds a row, so every state
+        // below the three fences roots exactly as before.
+        if !self.capacity_ledger.is_empty() {
+            state.update(b"capacity_s567/v1");
+            state.update(collection_root(b"capacity_ledger", &self.capacity_ledger).as_byte_slice());
         }
         // **RFC-0002 Phase F (F6): the IR classes, ONE Some-only block** — empty until an IR class
         // registers, which nothing below `palw_tir_v1` can do.
@@ -13752,6 +13877,8 @@ impl PalwChainStateV2 {
         self.assert_bond_freezes_consistency_v1()?;
         // ADR-0160 stage 2 (F-Q, F-S): receipts name live claims, buckets and exclusions registered bonds.
         self.assert_capacity_qs_consistency_v1()?;
+        // ADR-0164: the capacity ledger's keys and rows agree, inside their bounds.
+        self.assert_capacity_ledger_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -14000,6 +14127,40 @@ impl PalwChainStateV2 {
         for bond in self.excluded_auditors.keys().chain(self.issuance_buckets.keys()).chain(self.network_demand.keys().map(|(bond, _)| bond)) {
             if !self.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::CarriageInconsistent(format!("{bond:?}: an exclusion or a bucket of an unregistered bond")));
+            }
+        }
+        Ok(())
+    }
+
+    /// **ADR-0164: the capacity ledger's keys and rows agree and sit inside their bounds** — an emission row is positive and within
+    /// the DAA's budget, a rider mark names 1..=`PALW_RIDERS_MAX_V1` riders, a breaker row holds a level on the ladder, at most two
+    /// clean epochs and at most three distinct short bonds. Empty on every network but a testnet-12 past F-EM / F-M1 / F-K.
+    pub(crate) fn assert_capacity_ledger_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        use crate::palw_capacity_s567_v1::{PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
+        for (key, row) in &self.capacity_ledger {
+            let bad = |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("capacity ledger {key:?}: {why}")));
+            match (key, row) {
+                (K::Emission(_), R::Emission { spent_milli }) => {
+                    if *spent_milli == 0 || *spent_milli > crate::palw_capacity_s567_v1::palw_emission_budget_milli_v1() {
+                        return bad("an emission row is positive and within the DAA's budget");
+                    }
+                }
+                (K::RiderLead(lead), R::Riders { riders, .. }) => {
+                    if *riders == 0 || usize::from(*riders) > crate::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
+                        return bad("a rider mark names between one and 64 riders");
+                    }
+                    let _ = lead;
+                }
+                (K::Breaker, R::Breaker(breaker)) => {
+                    if breaker.level > crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1
+                        || breaker.clean_epochs > 2
+                        || breaker.short_bonds.len() > crate::palw_capacity_s567_v1::PALW_BREAKER_K2_BONDS_V1
+                        || breaker.short_bonds.iter().enumerate().any(|(i, bond)| breaker.short_bonds[..i].contains(bond))
+                    {
+                        return bad("the breaker's level, clean count or short bonds are out of bounds");
+                    }
+                }
+                _ => return bad("the key and the row are of different kinds"),
             }
         }
         Ok(())
@@ -14976,6 +15137,13 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<u64>,
         new: Option<u64>,
+    },
+    /// A row of the capacity ledger was written or dropped (**101**, after the court window's 100; ADR-0164 — F-EM's per-DAA
+    /// budget, F-M1's rider marks and F-K's breaker, one entry for all three). Dormant on every network below the three fences.
+    CapacityLedger {
+        key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
+        old: Option<crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
+        new: Option<crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
     },
 }
 
@@ -17410,6 +17578,9 @@ struct TransitionBuilder<'a> {
     /// attempt's SUCCESSFUL end, so a refused attempt (which the merged loop restores) leaves no
     /// mark; read only past `palw_audit_2026_09_11_deep`, so below the fence it is never consulted.
     seen_exec: std::collections::HashSet<Hash64>,
+    /// **ADR-0164 F-M1: the riders objects this block accepted, in acceptance order** — `(lead claim id, riders)`, taken at step
+    /// 4b′ once the block's work has created every lead it names. Never state; empty below the fence.
+    pending_riders: Vec<(Hash64, Vec<PalwAttemptEnvelopeV2>)>,
     /// **2026-09-24 DoS audit #13b: the registry's claims in flight, per class, indexed once per
     /// fold instead of walked once per question.**
     ///
@@ -17915,6 +18086,7 @@ impl<'a> TransitionBuilder<'a> {
             da_court,
             extras,
             seen_exec: std::collections::HashSet::new(),
+            pending_riders: Vec::new(),
             inflight_index: std::cell::RefCell::new(None),
             panel_horizon: std::cell::Cell::new(None),
             own_attempt_class: None,
@@ -19180,6 +19352,43 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    /// **ADR-0164 F-EM: charge the accepting block's DAA** — the ledger's row for `daa` becomes `after_milli`, and every earlier day's
+    /// row leaves (DAA never falls along a chain, so an earlier day is never read again).
+    fn charge_emission_v1(&mut self, daa: u64, after_milli: u64) {
+        use crate::palw_capacity_s567_v1::{PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
+        let earlier: Vec<K> = self.state.capacity_ledger.range(..K::Emission(daa)).map(|(key, _)| *key).collect();
+        for key in earlier {
+            self.write_capacity_ledger_v1(key, None);
+        }
+        self.write_capacity_ledger_v1(K::Emission(daa), Some(R::Emission { spent_milli: after_milli }));
+    }
+
+    /// **ADR-0164 F-K: count one event in the breaker's row** (past the fence at `daa`; a no-op below it). The row starts fresh at the
+    /// epoch of the first event; every counter saturates.
+    fn note_breaker_v1(&mut self, daa: u64, event: crate::palw_capacity_s567_v1::PalwBreakerEventV1) {
+        use crate::palw_capacity_s567_v1::{PALW_BREAKER_EPOCH_DAA_V1, PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R, PalwRhoBreakerV1};
+        if !self.params.capacity_breaker_active_at(daa) {
+            return;
+        }
+        let row = self.state.rho_breaker_v1().cloned().unwrap_or_else(|| PalwRhoBreakerV1::fresh_v1(daa / PALW_BREAKER_EPOCH_DAA_V1));
+        self.write_capacity_ledger_v1(K::Breaker, Some(R::Breaker(row.noted_v1(event))));
+    }
+
+    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (101).
+    fn write_capacity_ledger_v1(
+        &mut self,
+        key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
+        new: Option<crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
+    ) {
+        let old = match &new {
+            Some(row) => self.state.capacity_ledger.insert(key, row.clone()),
+            None => self.state.capacity_ledger.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::CapacityLedger { key, old, new });
+        }
+    }
+
     /// **ADR-0160 F-S: the one writer of `issuance_buckets`**, journaled `IssuanceBucket` (85).
     fn write_issuance_bucket_v1(&mut self, key: PalwBondKeyV2, new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>) {
         let old = match new {
@@ -20012,6 +20221,21 @@ impl<'a> TransitionBuilder<'a> {
         liable: &[(PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1)],
     ) -> Result<u64, PalwStateV2Error> {
         let collected = self.conviction_collected_v1(conv, counted);
+        // **ADR-0164 F-K (K2, K1′): what this conviction asked and what it collected**, whether its bond had been forfeited whole already
+        // (a forfeited bond has nothing left to collect, so its tier is not a shortfall) and whether the claim it binds held audit
+        // receipts (a false audit). Read BEFORE the aggregate funnel moves the freeze.
+        if self.params.capacity_breaker_active_at(conv.now_daa) {
+            self.note_breaker_v1(
+                conv.now_daa,
+                crate::palw_capacity_s567_v1::PalwBreakerEventV1::Conviction {
+                    nominal: u64::try_from(nominal.min(u128::from(u64::MAX))).unwrap_or(u64::MAX),
+                    collected,
+                    forfeited_before: self.state.bond_freezes.get(&accused).is_some_and(|freeze| freeze.final_),
+                    audited: self.state.audit_status_of_v1(&claim_id).is_some(),
+                    accused,
+                },
+            );
+        }
         self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
         // **ADR-0160 F-Q (§5.9 (g)): a conviction of a claim that holds audit receipts excludes every
         // auditor that receipted it** from every pool, for good (only a flag day removes one).
@@ -25471,6 +25695,12 @@ impl<'a> TransitionBuilder<'a> {
             self.settle_anchor(daa_score, true)?;
         }
         let before = self.state.claims.get(&claim_id).cloned();
+        // **ADR-0164 F-K (K3's denominator, K6's): a first licence is a claim that reached its receipt deadline in time**; a re-licence of
+        // a claim already licensed (a supplementary or upgraded set) is not counted again.
+        if !before.as_ref().is_some_and(|before| matches!(before.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })) {
+            let credited = crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(self.params, &claim);
+            self.note_breaker_v1(daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Licensed { credited });
+        }
         let mut licensed = claim;
         licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa_score };
         if let Some(before) = &before {
@@ -25896,6 +26126,17 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
+        // **ADR-0164 F-K (K3, K4): a void for want of a quorum receipt or of a panel is a claim reaching its deadline and failing** —
+        // counted once, here, where every such void is written. The reasons that carry a conviction are the conviction funnel's (K2).
+        match reason {
+            PalwVoidReasonV2::ReceiptTimeout | PalwVoidReasonV2::UnavailableQuorum | PalwVoidReasonV2::NotReplayBacked => {
+                self.note_breaker_v1(voided_daa, crate::palw_capacity_s567_v1::PalwBreakerEventV1::ReceiptVoid)
+            }
+            PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => {
+                self.note_breaker_v1(voided_daa, crate::palw_capacity_s567_v1::PalwBreakerEventV1::BindVoid)
+            }
+            _ => {}
+        }
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
@@ -27435,6 +27676,7 @@ pub fn apply_palw_transition_v7(
                 ctx,
                 envelope,
                 PalwAttemptOriginV1 {
+                    rider: false,
                     carrying_block: ctx.block,
                     escrows_reward: true,
                     // Own work always escrows, carved from this block's own subsidy (unchanged).
@@ -27479,6 +27721,8 @@ pub fn apply_palw_transition_v7(
                     // ADR-0160 stage 2: lane S's slot and bucket, lane Q's backlog — checked before
                     // `apply_attempt`'s first write, like the ceiling; unreachable below their fences.
                     | PalwStateV2Error::IssuanceCapped { .. }
+                    // ADR-0164 F-EM: the DAA's reward budget — checked before `apply_attempt`'s first write, like the slots.
+                    | PalwStateV2Error::EmissionBudgetExhausted { .. }
                     | PalwStateV2Error::AuditBacklogFull { .. }
                     // ADR-0160 stage 4: lane N's level and share (past F-N a refusal for want of a unit
                     // registers the bond's demand for the class).
@@ -27567,6 +27811,7 @@ pub fn apply_palw_transition_v7(
                                 ctx,
                                 envelope,
                                 PalwAttemptOriginV1 {
+                                    rider: false,
                                     carrying_block: merged.carrying_block,
                                     escrows_reward,
                                     escrow_subsidy: merged.subsidy,
@@ -27605,6 +27850,11 @@ pub fn apply_palw_transition_v7(
             merged_skips.push((merged.carrying_block, reason));
         }
     }
+
+    // 4b′. **ADR-0164 F-M1: the riders of this block's leads**, after every claim the block's work creates (a merged lead is created in
+    //      4b) and before step 4c, which reads what is resolved. Each batch is atomic; a refused one is a skip and leaves its lead
+    //      with its whole carve. The rider marks past their window leave first. A no-op below the fence.
+    apply_pending_riders_v1(&mut builder, ctx, params, admission, &mut merged_skips);
 
     // 4c. **ADR-0152 SW-8 / DL-1 (M4): a claim not bound in its anchor block is due `BindTimeout`
     //     AT that block.** Past `palw_rcore_plus` a panel binds only in its anchor block — the first
@@ -27702,6 +27952,11 @@ pub fn apply_palw_transition_v7(
     if extras.round_lane.is_some() {
         builder.record_round_permits(&extras.round_permit_uses)?;
     }
+
+    // 8. **ADR-0164 F-K: the breaker's epoch evaluation** — at the END of the first chain block at or past each aligned epoch boundary,
+    //    after this block's own work was admitted at the parent's tier (admission reads the parent state), so the new level holds from
+    //    the next block. A no-op below the fence and while the breaker holds no row.
+    apply_rho_breaker_epoch_v1(&mut builder, ctx);
 
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -33530,6 +33785,8 @@ fn apply_object(
             let class_id = bound.class_id;
             let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&bound);
             builder.write_claim(*claim_id, Some(bound));
+            // ADR-0164 F-K (K4's denominator): a claim that reached its anchor with a panel.
+            builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
             builder.disarm_deadline(*claim_id);
             let deadline = ctx
                 .daa_score
@@ -34065,6 +34322,15 @@ fn apply_object(
                 return Err(PalwStateV2Error::CapacityAuditDoorDormant);
             }
             apply_audit_receipt_batch_v1(builder, ctx, auditor, entries)?;
+        }
+        // **ADR-0164 F-M1: riders (tag 95)**, past `Params::palw_capacity_multi_claim` only. The acceptance layer verified every rider's
+        // signature; the fold only QUEUES the object here — the lead it names may be created by this very block's work (a merged
+        // blue), so the batch is applied at step 4b′, after the work.
+        PalwConsensusObjectV2::AttemptRidersV1 { lead, riders } => {
+            if !builder.params.capacity_riders_active_at(ctx.daa_score) {
+                return Err(PalwStateV2Error::CapacityRidersDormant);
+            }
+            builder.pending_riders.push((*lead, riders.clone()));
         }
         // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment (tag 53).** Past
         // `Params::palw_rcore_plus` only; below it (every network but testnet-12, and testnet-12
@@ -37240,6 +37506,177 @@ fn apply_model_evaluation_posted(
     Ok(())
 }
 
+/// **ADR-0164 F-K, step 8: judge the epoch the block closes** ([`crate::palw_capacity_s567_v1::palw_breaker_evaluate_v1`]): the counters the
+/// hooks wrote, plus K6 counted over the claims (credited licences past their audit window), against the schedule's ρ at this block.
+fn apply_rho_breaker_epoch_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    use crate::palw_capacity_s567_v1 as m;
+    if !builder.params.capacity_breaker_active_at(ctx.daa_score) {
+        return;
+    }
+    let epoch = ctx.daa_score / m::PALW_BREAKER_EPOCH_DAA_V1;
+    let Some(row) = builder.state.rho_breaker_v1().cloned() else { return };
+    if row.epoch >= epoch {
+        return;
+    }
+    let overdue = crate::palw_audit_door_v1::palw_capacity_audit_overdue_v1(&builder.state, builder.params, ctx.daa_score);
+    let step_rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(builder.params, ctx.daa_score);
+    let next = m::palw_breaker_evaluate_v1(&row, step_rho, overdue, epoch, epoch - row.epoch - 1);
+    // A row at the top level with nothing counted is the absent row: drop it, so a healthy chain holds no breaker state.
+    let idle = next == m::PalwRhoBreakerV1 { level: m::PALW_BREAKER_TOP_LEVEL_V1, ..m::PalwRhoBreakerV1::fresh_v1(epoch) };
+    builder.write_capacity_ledger_v1(
+        m::PalwCapacityLedgerKeyV1::Breaker,
+        if idle { None } else { Some(m::PalwCapacityLedgerRowV1::Breaker(next)) },
+    );
+}
+
+/// **ADR-0164 F-M1, step 4b′: take this block's riders objects** (see [`PalwConsensusObjectV2::AttemptRidersV1`]). The marks whose lead's
+/// window has closed leave first; then each queued batch is attached atomically (a refusal restores the builder and the
+/// `seen_exec` marks, and is a skip: the block stands and the lead keeps its whole carve).
+fn apply_pending_riders_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    skips: &mut Vec<(BlockHash, String)>,
+) {
+    use crate::palw_capacity_s567_v1::{PALW_RIDERS_WINDOW_DAA_V1, PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
+    if !params.capacity_riders_active_at(ctx.daa_score) {
+        builder.pending_riders.clear();
+        return;
+    }
+    let expired: Vec<K> = builder
+        .state
+        .capacity_ledger
+        .iter()
+        .filter(|(key, row)| {
+            matches!((key, row), (K::RiderLead(_), R::Riders { daa, .. }) if daa.saturating_add(PALW_RIDERS_WINDOW_DAA_V1) < ctx.daa_score)
+        })
+        .map(|(key, _)| *key)
+        .collect();
+    for key in expired {
+        builder.write_capacity_ledger_v1(key, None);
+    }
+    let pending = std::mem::take(&mut builder.pending_riders);
+    for (lead_id, riders) in pending {
+        let checkpoint = builder.checkpoint();
+        let seen = builder.seen_exec.clone();
+        if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
+            builder.restore(checkpoint);
+            builder.seen_exec = seen;
+            skips.push((ctx.block, format!("riders of {lead_id}: {why}")));
+        }
+    }
+}
+
+/// **One riders batch** — the lead's escrow is split `1 + n` ways and each rider is a claim at its share. Everything below runs on the live
+/// fold state; the caller restores on `Err`.
+fn attach_riders_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    lead_id: &Hash64,
+    riders: &[PalwAttemptEnvelopeV2],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_capacity_s567_v1 as m;
+    let refuse = |why: &str| Err(PalwStateV2Error::CapacityRiders(why.to_owned()));
+    let n = riders.len();
+    if n == 0 || n > m::PALW_RIDERS_MAX_V1 {
+        return refuse("a batch holds between one and 64 riders");
+    }
+    let Some(admission) = admission else { return refuse("no admission params on this caller") };
+    let lead = builder.state.claims.get(lead_id).cloned().ok_or_else(|| PalwStateV2Error::CapacityRiders(format!("lead {lead_id} is not held")))?;
+    if !matches!(lead.source, PalwClaimSourceV2::Attempt) || !matches!(lead.phase, PalwClaimPhaseV2::Provisional) {
+        return refuse("the lead is not a Provisional attempt claim");
+    }
+    if lead.accepted_daa.saturating_add(m::PALW_RIDERS_WINDOW_DAA_V1) < ctx.daa_score {
+        return refuse("the lead was accepted more than the riders' window ago");
+    }
+    if builder.state.rider_mark_of_v1(lead_id).is_some() {
+        return refuse("the lead has taken its riders already");
+    }
+    if riders.iter().any(|rider| rider.attempt.executor_bond != lead.bond.0) {
+        return refuse("a rider is not of the lead's bond");
+    }
+    // The shares, in carve terms: a rider's subsidy `s` is the least that carves exactly `⌊E_lead / (1 + n)⌋`, so the whole admission (work
+    // floor, reservation, escrow) runs at that size and the Σ escrow is the lead's carve to the sompi.
+    let escrow_carve = builder.extras.escrow_carve;
+    let permille = worker_carve_v2(params, 1_000, escrow_carve);
+    let e0 = lead.escrowed_reward;
+    let e_r = e0 / (n as u64 + 1);
+    if permille == 0 || e_r == 0 {
+        return refuse("the lead's carve is too small to share");
+    }
+    let s_r = u64::try_from((u128::from(e_r) * 1_000).div_ceil(u128::from(permille))).map_err(|_| PalwStateV2Error::Overflow("rider subsidy"))?;
+    if worker_carve_v2(params, s_r, escrow_carve) != e_r {
+        return refuse("a rider's share does not carve exactly");
+    }
+    let remainder = e0.checked_sub(e_r.checked_mul(n as u64).ok_or(PalwStateV2Error::Overflow("riders' escrow"))?).ok_or(PalwStateV2Error::Overflow("riders' escrow"))?;
+    if remainder < e_r {
+        return refuse("the lead's remainder is below a rider's share");
+    }
+    // The lead gives its shares up FIRST (the commitment it held is released and re-reserved at what it keeps), so the riders meet the
+    // ceilings with the room the split freed.
+    let mut kept = lead.clone();
+    kept.escrowed_reward = remainder;
+    builder.release_for_claim(&lead, ctx.daa_score)?;
+    builder.reserve_for_claim(&kept)?;
+    builder.write_claim(*lead_id, Some(kept));
+    builder.write_capacity_ledger_v1(
+        m::PalwCapacityLedgerKeyV1::RiderLead(*lead_id),
+        Some(m::PalwCapacityLedgerRowV1::Riders { riders: n as u16, daa: lead.accepted_daa }),
+    );
+    let ctx_r = PalwBlockContextV2 { subsidy: s_r, ..*ctx };
+    let bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
+    let canonical = crate::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS;
+    for (index, envelope) in riders.iter().enumerate() {
+        let index = index as u32;
+        let attempt = &envelope.attempt;
+        if attempt.challenge != m::palw_rider_challenge_v1(lead_id, index) {
+            return refuse("a rider's challenge is not its lead's and its index's");
+        }
+        if attempt.trace_chunk_count != canonical
+            || attempt.trace_manifest_root != crate::palw_attempt_v2::attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count)
+            || attempt.trace_retention_daa != lead.trace_retention_daa
+        {
+            return refuse("a rider's data-availability pins are not its lead's");
+        }
+        let fences = crate::palw_admission_v2::PalwEpochBudgetFencesV1 {
+            budget_release_active: builder.extras.epoch_budget_release_active,
+            work_target_floor: builder.work_target_floor(&ctx_r),
+            canonical_work_daa: builder.extras.canonical_work_daa,
+            base_known_draw: builder.base_known_draw(),
+            audit_2026_09_23_active: builder.extras.audit_2026_09_23_active,
+            settled_anchor_depth: builder.read().settled_anchor_depth(),
+            held_accuser_charge_active: builder.extras.offence_attribution_active && builder.extras.held_context_ladder.is_some(),
+            escrow_carve,
+            emission_waived: true,
+            ..Default::default()
+        };
+        crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, &ctx_r, envelope, fences)
+            .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
+        let anchor = m::palw_rider_job_anchor_v1(lead_id, index);
+        let execution_key = crate::palw_attempt_v2::execution_commitment_v3(attempt, anchor);
+        apply_attempt(
+            builder,
+            &ctx_r,
+            envelope,
+            PalwAttemptOriginV1 {
+                rider: true,
+                carrying_block: lead.accepted_block,
+                escrows_reward: true,
+                escrow_subsidy: s_r,
+                escrow_carve,
+                execution_key,
+                carrying_bits: bits,
+                job_anchor: anchor,
+            },
+        )
+        .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
+    }
+    Ok(())
+}
+
 fn apply_attempt(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -37492,6 +37929,17 @@ fn apply_attempt(
     if let Some(read) = &issuance {
         read.admits_v1().map_err(|refusal| PalwStateV2Error::IssuanceCapped { bond: issuance_bond, refusal: format!("{refusal:?}") })?;
     }
+    // **ADR-0164 F-EM: the DAA's PALW reward budget** — a claim-bearing block's whole carve is charged to the accepting block's DAA,
+    // 16 carves at most; a rider (paid out of its lead's carve) charges nothing. Before any write, like the slots: step 4 skips a
+    // refused own attempt (its carve burned) and 4b a merged one. `None` below the fence.
+    let emission_after = if builder.params.capacity_emission_active_at(ctx.daa_score) && origin.escrows_reward && !origin.rider && claim.escrowed_reward > 0 {
+        let spent = builder.state.emission_spent_milli_v1(ctx.daa_score);
+        Some(crate::palw_capacity_s567_v1::palw_emission_admits_v1(spent).map_err(|refusal| {
+            PalwStateV2Error::EmissionBudgetExhausted { spent_milli: refusal.spent_milli, budget_milli: refusal.budget_milli }
+        })?)
+    } else {
+        None
+    };
     // **ADR-0160 stage 4 (F-N): the network level and the work-conserving share** — the last check, so
     // only an attempt every other rule admits is refused for want of a network unit (and registers its
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
@@ -37500,6 +37948,9 @@ fn apply_attempt(
     builder.write_claim(claim_id, Some(claim));
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
+    }
+    if let Some(after) = emission_after {
+        builder.charge_emission_v1(ctx.daa_score, after);
     }
     // ADR-0160 stage 4 (F-N): an expired registration leaves at its bond's next admission of the class.
     let registration = (issuance_bond, attempt.class_id);
@@ -37852,6 +38303,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.improvement_composite_classes, key, old, new)
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
+        // ADR-0164: the capacity ledger, verify-then-install.
+        PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -38306,6 +38759,9 @@ pub struct PalwStateCarriageV2 {
     /// encoded only when one of the two holds a row; rooted.
     pub network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
     pub operator_ring: BTreeMap<u64, u32>,
+    /// **ADR-0164 (F-EM, F-M1, F-K): the capacity ledger.** A tagged tail (`0xBB`, after stage 4's `0xBA`), encoded only when it
+    /// holds a row; rooted.
+    pub capacity_ledger: BTreeMap<crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1, crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
     /// **RFC-0002 Phase F (F6): the IR classes.** A tagged tail (`0xC0`, clear of the capacity
     /// package's `0xB*` run), encoded only when non-empty; rooted.
     pub tir_classes: BTreeMap<Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
@@ -38455,6 +38911,8 @@ const PALW_CARRIAGE_BOND_FREEZES_TAIL_V1: u8 = 0xB8;
 const PALW_CARRIAGE_CAPACITY_QS_TAIL_V1: u8 = 0xB9;
 /// ADR-0160 stage 4 (F-N): the registered demand and the operator ring, one tail after stage 2's.
 const PALW_CARRIAGE_CAPACITY_N_TAIL_V1: u8 = 0xBA;
+/// ADR-0164: the capacity ledger's tail (after stage 4's `0xBA`).
+const PALW_CARRIAGE_CAPACITY_S567_TAIL_V1: u8 = 0xBB;
 /// RFC-0002 Phase F (F6): the IR classes' tail, encoded only when one has registered — a carriage
 /// with none is byte-identical to one before this tail existed. `0xC0`, clear of the capacity
 /// package's sequential `0xB*` run, so the two lines cannot collide when they are integrated.
@@ -38761,6 +39219,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.network_demand.serialize(writer)?;
             self.operator_ring.serialize(writer)?;
         }
+        if !self.capacity_ledger.is_empty() {
+            PALW_CARRIAGE_CAPACITY_S567_TAIL_V1.serialize(writer)?;
+            self.capacity_ledger.serialize(writer)?;
+        }
         if !self.tir_classes.is_empty() {
             PALW_CARRIAGE_TIR_CLASSES_TAIL_V1.serialize(writer)?;
             self.tir_classes.serialize(writer)?;
@@ -38984,6 +39446,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut network_demand = BTreeMap::new();
         let mut operator_ring = BTreeMap::new();
         let mut seen_capacity_n = false;
+        let mut capacity_ledger = BTreeMap::new();
+        let mut seen_capacity_s567 = false;
         let mut tir_classes = BTreeMap::new();
         let mut seen_tir_classes = false;
         let mut tir_dissections = BTreeMap::new();
@@ -39171,6 +39635,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_capacity_n = true;
                     network_demand = BTreeMap::deserialize_reader(reader)?;
                     operator_ring = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_CAPACITY_S567_TAIL_V1 if !seen_capacity_s567 => {
+                    seen_capacity_s567 = true;
+                    capacity_ledger = BTreeMap::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_TIR_CLASSES_TAIL_V1 if !seen_tir_classes => {
                     seen_tir_classes = true;
@@ -39377,6 +39845,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             issuance_buckets,
             network_demand,
             operator_ring,
+            capacity_ledger,
             tir_classes,
             tir_dissections,
             gen_classes,
@@ -39485,6 +39954,7 @@ impl PalwStateCarriageV2 {
             issuance_buckets: state.issuance_buckets.clone(),
             network_demand: state.network_demand.clone(),
             operator_ring: state.operator_ring.clone(),
+            capacity_ledger: state.capacity_ledger.clone(),
             tir_classes: state.tir_classes.clone(),
             tir_dissections: state.tir_dissections.clone(),
             gen_classes: state.gen_classes.clone(),
@@ -39684,6 +40154,7 @@ impl PalwStateCarriageV2 {
             issuance_buckets: self.issuance_buckets,
             network_demand: self.network_demand,
             operator_ring: self.operator_ring,
+            capacity_ledger: self.capacity_ledger,
             tir_classes: self.tir_classes,
             tir_dissections: self.tir_dissections,
             gen_classes: self.gen_classes,
@@ -56699,6 +57170,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassWalk { .. } => "class_walk",
                     PalwDeltaEntryV2::Class { .. } => "class",
                     PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
+                    // ADR-0164: its round trip is the stage-5–7 suite's.
+                    PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -57090,6 +57563,8 @@ pub(crate) mod tests {
             // The release line's model-specific finite court horizon, at the END of the delta enum (spec 17 §17.0:
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
+            // ADR-0164 (the capacity ledger), after the court window's.
+            (101, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -57709,6 +58184,8 @@ pub(crate) mod tests {
             // ADR-0160 stage 4: one Some-only block of two, empty here.
             network_demand: _,
             operator_ring: _,
+            // ADR-0164: one Some-only block, empty here.
+            capacity_ledger: _,
             tir_classes: _,
             // RFC-0002 F7: its own Some-only block, empty here.
             tir_dissections: _,
@@ -57821,6 +58298,13 @@ pub(crate) mod tests {
             })),
             ("operator_ring", Box::new(|s| {
                 s.operator_ring.insert(9, 1);
+            })),
+            // ADR-0164: the capacity ledger is primary data (its one Some-only block).
+            ("capacity_ledger", Box::new(|s| {
+                s.capacity_ledger.insert(
+                    crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Emission(9),
+                    crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1::Emission { spent_milli: 1_000 },
+                );
             })),
             ("tir_classes", Box::new(|s| {
                 s.tir_classes.insert(block(0xC0), crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(block(0xC0)));

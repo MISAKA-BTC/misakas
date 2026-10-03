@@ -106,6 +106,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // ADR-0160 F-Q (tag 60): the auditor's signature is checked at acceptance against its genesis
         // key (lane A's operator rule), like a licence's.
         | PalwConsensusObjectV2::AuditReceiptBatchV1 { .. }
+        // ADR-0164 F-M1 (tag 95): each rider's signature is checked at acceptance against its bond's registered key.
+        | PalwConsensusObjectV2::AttemptRidersV1 { .. }
         | PalwConsensusObjectV2::OptimisticLicensed { .. }
         | PalwConsensusObjectV2::ProducerDefaulted { .. }
         | PalwConsensusObjectV2::CourtOpened { .. }
