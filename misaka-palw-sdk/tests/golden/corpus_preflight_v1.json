@@ -86,18 +86,16 @@
   },
   "chatglm3": {
     "convert": {
-      "blockers": [
-        "ARCH_NEEDS_FEATURE(REFERENCE_REMOTE_CODE_V1)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
-      "status": "unknown"
+      "status": "ok"
     },
     "register": {
       "blockers": [],
-      "status": "unknown"
+      "status": "ok"
     }
   },
   "clip_text": {
@@ -1436,18 +1434,16 @@
   },
   "zamba2": {
     "convert": {
-      "blockers": [
-        "ARCH_NEEDS_FEATURE(ATTN_SHARED_BLOCK_V1)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
-      "status": "unknown"
+      "status": "ok"
     },
     "register": {
       "blockers": [],
-      "status": "unknown"
+      "status": "ok"
     }
   }
 }
