@@ -68,10 +68,16 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     }
                     c.transcendental += *heads as u64; // per row, approximated below by softmax exps
                 }
-                Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, .. } => {
+                Op::MlaAttention { heads, nope, rope, v_dim, kv_lora, indexer, .. } => {
                     let (h, r_) = (*heads as u64, *kv_lora as u64);
                     c.macs_fixed += h * (*nope as u64 * r_ + *v_dim as u64 * r_);
                     c.macs_per_hist_row += h * (2 * r_ + *rope as u64);
+                    if let Some(ix) = indexer {
+                        // The scorer: one dot per (index head, history row), then the head-weighted sum; the top-k
+                        // threshold's radix passes are elementwise over the row (about 16 compares and adds a pass).
+                        c.macs_per_hist_row += (ix.heads * ix.dim + ix.heads) as u64;
+                        c.elementwise += 0;
+                    }
                 }
                 Op::GatedDelta { v_heads, dk, dv, .. } => c.macs_fixed += 4 * (*v_heads * *dk * *dv) as u64,
                 Op::SelectiveScan { inner, state } => c.macs_fixed += 3 * (*inner * *state) as u64,
@@ -80,16 +86,18 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                 Op::Wkv4 => c.elementwise += 12 * out,
                 Op::Wkv6 { heads, head_size } => c.macs_fixed += 3 * (*heads * *head_size * *head_size) as u64,
                 Op::Wkv7 { heads, head_size } => c.macs_fixed += 4 * (*heads * *head_size * *head_size) as u64,
-                Op::MoeExperts { top_k, .. } => {
-                    if let (Ref::Param(g), Ref::Param(d)) = (n.inputs[3], n.inputs[5]) {
+                Op::MoeExperts { top_k, gated, .. } => {
+                    // A gated expert reads gate, up, down (inputs 3, 4, 5); a plain one up and down (3, 4).
+                    let (first, last, projections) = if *gated { (3, 5, 2) } else { (3, 4, 1) };
+                    if let (Ref::Param(g), Ref::Param(d)) = (n.inputs[first], n.inputs[last]) {
                         let gs = &p.params[g as usize].shape;
                         let ds = &p.params[d as usize].shape;
-                        let m = *top_k as u64 * (2 * numel(&gs[1..]) + numel(&ds[1..]));
+                        let m = *top_k as u64 * (projections * numel(&gs[1..]) + numel(&ds[1..]));
                         c.macs_fixed += m;
                         c.routed_expert_macs += m;
                     }
                 }
-                Op::Act(_) | Op::Softcap { .. } | Op::DecayExpNegExp | Op::ClampedSwiGlu { .. } => {
+                Op::Act(_) | Op::Xielu | Op::Softcap { .. } | Op::DecayExpNegExp | Op::ClampedSwiGlu { .. } => {
                     c.elementwise += out;
                     c.transcendental += out;
                 }
@@ -97,7 +105,16 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += 3 * out;
                     c.transcendental += *groups as u64;
                 }
-                Op::Rope { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::Rope { heads, rotary_dim, .. } | Op::RopeAtBlock { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::StreamMean { .. } | Op::StreamOuter { .. } | Op::GroupDot { .. } | Op::GroupRepeat { .. } | Op::GatherRows { .. } | Op::BlockMean { .. } => c.elementwise += out.max(1),
+                // the hash: a few dozen elementwise ops over 63-bit vectors per order
+                Op::NgramIds { ple, .. } => c.elementwise += 63 * 6 * ple.ngram_size as u64,
+                // block scores: one dot per (head, block), the keys written back
+                Op::BlockSelect { heads, dim, blocks, .. } => {
+                    c.macs_fixed += (*heads * *dim * *blocks) as u64;
+                    c.elementwise += *blocks as u64;
+                }
+                Op::BlockWrite { blocks, .. } => c.elementwise += *blocks as u64,
                 Op::Route { experts, .. } => {
                     c.elementwise += 2 * *experts as u64;
                     c.transcendental += *experts as u64;

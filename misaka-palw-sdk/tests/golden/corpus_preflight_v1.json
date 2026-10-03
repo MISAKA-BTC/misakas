@@ -1,0 +1,146 @@
+{
+  "bart": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "clip_vision": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "longt5": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "resnet": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "sd3": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "t5": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "t5_encoder": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "vae_kl": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "vit": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "whisper": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  }
+}

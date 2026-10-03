@@ -420,6 +420,11 @@ impl PalwModelLifecycleV1 {
 pub struct PalwLifecycleObservationV1 {
     pub manifest: PalwManifestVerdictV1Flag,
     pub ready_seats: u32,
+    /// **RFC-0002 Part II Proposal A (`palw_class_seating`): the independence floor holds** — `|(Ready ∩ Base) \ {registrant}| ≥
+    /// independent_floor` (`PalwClassSeatingV1::independence_floor_met`). `true` below the fence (so no existing transition
+    /// moves), where `ready_seats` is also the bond count it always was; past it `ready_seats` is the number of distinct READY
+    /// operators and a class enters `Probation` (from `Prefetching` or `Held`), and graduates from it, only with this true.
+    pub independence_floor_met: bool,
     pub probes_passed_this_span: u32,
     pub probes_failed_this_span: u32,
     pub utilization_permille: u32,
@@ -550,7 +555,7 @@ pub fn palw_lifecycle_step_v1(
 ) -> PalwModelLifecycleV1 {
     use PalwModelLifecycleV1::*;
     let panel_drawable = obs.ready_seats >= g.seat_count as u32;
-    let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok;
+    let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok && obs.independence_floor_met;
     // ADR-0133 §11.3: a class whose replay does not fit the receipt deadline is treated as
     // overloaded for ever — it admits nothing, and it re-enters Probation only once it fits.
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
@@ -737,7 +742,7 @@ pub fn palw_lifecycle_step_resilient_v1(
 ) -> (PalwModelLifecycleV1, PalwProbationMemoryV1) {
     use PalwModelLifecycleV1::*;
     let panel_drawable = obs.ready_seats >= g.seat_count as u32;
-    let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok;
+    let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok && obs.independence_floor_met;
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     let failed = memory.probation_failed();
     // The failed bonds survive a step only inside the probation, and never the reset they caused.
@@ -1622,6 +1627,10 @@ pub struct PalwModelRegistryClassReadV1 {
     pub row: Option<PalwModelLifecycleRowV1>,
     /// Ready seats and claims in flight read NOW (the row keeps the last boundary's reading).
     pub ready_seats_now: u32,
+    /// **RFC-0002 Part II Proposal A: the class's seating NOW** (executor-less: nothing excluded), `None` below
+    /// `palw_class_seating`, for the base class and for a registry that is not in force — what the RPC's `blocking`
+    /// (`INDEPENDENT_OPERATORS`, `have / need`) and the class's licensable share are served from.
+    pub seating: Option<crate::palw_state_v2::PalwClassSeatingV1>,
     pub inflight_now: u32,
     pub share_permille: Option<u16>,
     /// Claims of the class voided as `NoCapablePanel` (the capacity's failure, counted).
@@ -2077,6 +2086,12 @@ pub fn palw_model_registry_read_v2(
             is_base_class: *class_id == base,
             row: state.model_lifecycle(class_id).cloned(),
             ready_seats_now: fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0),
+            seating: match (fold, params.class_seating_terms_at(tip_daa)) {
+                (Some(f), Some(terms)) if *class_id != base => {
+                    crate::palw_state_v2::palw_class_seating_v1(state, params, f, class_id, None, tip_daa, terms, true)
+                }
+                _ => None,
+            },
             inflight_now: inflight_of(class_id),
             share_permille: state.class_share_permille(class_id),
             reason: match (state.model_lifecycle(class_id), fold) {
@@ -2380,6 +2395,7 @@ mod tests {
         let obs = |fits: bool, state_ok: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: 7,
+            independence_floor_met: true,
             probes_passed_this_span: 1,
             probes_failed_this_span: 0,
             utilization_permille: 300,
@@ -2581,6 +2597,7 @@ mod tests {
         let calm = |ready: u32| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: ready,
+            independence_floor_met: true,
             probes_passed_this_span: 0,
             probes_failed_this_span: 0,
             utilization_permille: 300,
@@ -2667,6 +2684,7 @@ mod tests {
         let calm = |ready: u32, passed: u32, failed: u32| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: ready,
+            independence_floor_met: true,
             probes_passed_this_span: passed,
             probes_failed_this_span: failed,
             utilization_permille: 300,
@@ -2937,6 +2955,7 @@ mod tests {
         let obs = |cap_ok: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: 7,
+            independence_floor_met: true,
             probes_passed_this_span: 0,
             probes_failed_this_span: 0,
             utilization_permille: 300,

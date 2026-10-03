@@ -13,7 +13,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// `id → why`: adapters whose hash changed on purpose.
-const INTENDED: &[(&str, &str)] = &[];
+const INTENDED: &[(&str, &str)] = &[
+    // The merge of `tir/generic` into the RFC-0002 line (rfc2/rest): the adapters moved with the frontend they are read by.
+    (
+        "qwen4-exp",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk) — the adapter's weights expressions follow",
+    ),
+    (
+        "refusals",
+        "ae21eeeec: Nemotron-H, Falcon-H1 and LFM2 lower as data now, so their refusals are deleted from the shared refusal table",
+    ),
+];
 
 fn golden_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/adapter_pins_v1.json")

@@ -1,0 +1,312 @@
+{
+ "lm_head.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "lm_head.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.attention.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "wav2vec2.encoder.layers.0.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "wav2vec2.encoder.layers.0.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.0.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.k_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.k_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.out_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.out_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.q_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.q_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.v_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.attention.v_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.feed_forward.intermediate_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "wav2vec2.encoder.layers.1.feed_forward.intermediate_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.feed_forward.output_dense.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.feed_forward.output_dense.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "wav2vec2.encoder.layers.1.final_layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.final_layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.layers.1.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.pos_conv_embed.conv.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.encoder.pos_conv_embed.conv.parametrizations.weight.original0": {
+  "dtype": "F32",
+  "shape": [
+   1,
+   1,
+   8
+  ]
+ },
+ "wav2vec2.encoder.pos_conv_embed.conv.parametrizations.weight.original1": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   16,
+   8
+  ]
+ },
+ "wav2vec2.feature_extractor.conv_layers.0.conv.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   1,
+   10
+  ]
+ },
+ "wav2vec2.feature_extractor.conv_layers.0.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "wav2vec2.feature_extractor.conv_layers.0.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "wav2vec2.feature_extractor.conv_layers.1.conv.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16,
+   3
+  ]
+ },
+ "wav2vec2.feature_projection.layer_norm.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "wav2vec2.feature_projection.layer_norm.weight": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "wav2vec2.feature_projection.projection.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "wav2vec2.feature_projection.projection.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "wav2vec2.masked_spec_embed": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ }
+}

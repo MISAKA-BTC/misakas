@@ -1,0 +1,21 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "hyperclovax",
+  "doc": "HyperCLOVAX-SEED text (Naver): Granite's four multipliers (embedding, residual, attention scores, logits MULTIPLIED by logits_scaling) plus optional Peri-Layer norms: x += m*post_norm1(attn(input_layernorm x)); x += m*post_norm2(mlp(post_attention_layernorm x)), the post norms present exactly when use_post_norm. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["HyperCLOVAXForCausalLM"], "model_types": ["hyperclovax"]},
+  "config": {
+    "defaults": {"embedding_multiplier": 1.0, "residual_multiplier": 1.0, "logits_scaling": 1.0, "use_post_norm": true}
+  },
+  "vars": [
+    {"name": "emb_scale", "value": {"$cfg": "embedding_multiplier"}},
+    {"name": "res_mult", "value": {"$cfg": "residual_multiplier"}},
+    {"name": "am", "value": {"$cfg?": "attention_multiplier"}},
+    {"name": "attn_scale", "value": {"$if": [{"$ne": [{"$var": "am"}, null]}, {"$var": "am"}, {"$div": [1.0, {"$sqrt": {"$var": "hd"}}]}]}},
+    {"name": "logit_scale", "value": {"$cfg": "logits_scaling"}},
+    {"name": "post", "value": {"$cfg": "use_post_norm"}},
+    {"name": "residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": {"$if": [{"$var": "post"}, {"$var": "norm"}, null]}, "pre_ffn": {"$var": "norm"}, "post_ffn": {"$if": [{"$var": "post"}, {"$var": "norm"}, null]}, "multiplier": {"$var": "res_mult"}}}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"$if": [{"$var": "post"}, {"norm.post_mix": "{p}layers.{L}.post_norm1", "norm.post_ffn": "{p}layers.{L}.post_norm2"}, {}]}]}},
+    {"name": "model_type", "value": "hyperclovax"}
+  ]
+}

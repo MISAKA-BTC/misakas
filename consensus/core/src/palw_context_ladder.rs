@@ -1336,6 +1336,17 @@ pub fn palw_qwen36_context_row_profile_v7(n_ctx: u32) -> Result<PalwShapeProfile
 /// Decision 6's close derivation has to be evaluated over for a network that mints held rows.
 pub const PALW_LADDER_FAMILIES_V7: [PalwLadderFamilyV1; 2] = [palw_a16_context_row_profile_v7, palw_qwen36_context_row_profile_v7];
 
+/// **P0a: the hybrid tier at a ladder row, graph v8** — [`palw_qwen36_context_row_profile_v7`] at
+/// profile version 3 with the held composition that spells the key-head count (v5), as a
+/// [`PalwLadderFamilyV1`]. The row a network registers the Qwen3.6 artifact on once
+/// `palw_gdn_key_heads` is armed: the graph-v7 row's capture refuses the recurrence at 16 key / 32
+/// value heads.
+pub fn palw_qwen36_context_row_profile_v8(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    crate::palw_qwen36_profile::qwen36_profile_v8(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx, ..crate::palw_qwen36_profile::QWEN36_35B_A3B },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

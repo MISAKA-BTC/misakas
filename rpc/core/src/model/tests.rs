@@ -2864,6 +2864,7 @@ mod mockery {
                 panel_horizon_spans: mock(),
                 final_work_epochs: mock(),
                 blocking: mock(),
+                seating: mock(),
             }
         }
     }
@@ -2886,6 +2887,22 @@ mod mockery {
     }
 
     test!(RpcPalwClassBlocking);
+
+    impl Mock for RpcPalwClassSeating {
+        fn mock() -> Self {
+            RpcPalwClassSeating {
+                class_id: "cd".repeat(64),
+                ready_operators: mock(),
+                needed_operators: mock(),
+                independent_operators: mock(),
+                needed_independent: mock(),
+                base_operators: mock(),
+                licensable_share_permille: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassSeating);
 
     struct Misalign;
 

@@ -1,0 +1,26 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "siglip-vision",
+  "kind": "vision",
+  "doc": "SigLIP's vision tower (SiglipVisionModel): a biased patch convolution (as a matmul), learned positions and no class token, post-LN-free pre-LN layers (layer_norm1/2, a gelu_pytorch_tanh MLP), post_layernorm over every row and the multihead attention-pooling head whose query is the learned probe through W_q. Without the head (vision_use_head = false) it is refused. The data form of the SigLIP arm of parse_vision_rust. Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": ["SiglipVisionModel"], "model_types": ["siglip_vision_model"]},
+  "config": {"defaults": {"hidden_size": 768, "num_hidden_layers": 12, "image_size": 224, "patch_size": 16, "num_attention_heads": 12, "intermediate_size": 3072, "hidden_act": "gelu_pytorch_tanh", "layer_norm_eps": 1e-06, "vision_use_head": true}, "inert": ["attention_dropout", "num_channels"]},
+  "vars": [
+    {"name": "head_ok", "value": {"$check": [{"$eq": [{"$cfg": "vision_use_head"}, true]}, "SigLIP without its pooling head (take last_hidden_state) is not modelled"]}},
+    {"name": "d", "value": {"$cfg": "hidden_size"}},
+    {"name": "layers", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "image", "value": {"$cfg": "image_size"}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": {"$var": "image"}, "w": {"$var": "image"}, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": 1, "merge": 1,
+    "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
+    "d": {"$var": "d"}, "heads": {"$cfg": "num_attention_heads"}, "inter": {"$cfg": "intermediate_size"},
+    "layers": {"$var": "layers"}, "run": {"$var": "layers"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": false, "rms": false, "eps": {"$cfg": "layer_norm_eps"},
+    "pre_norm": false, "cls": false, "patch_bias": true, "learned_pos": true, "rope_theta": null, "window": null,
+    "out": "SiglipHead",
+    "names": {"patch.w": "embeddings.patch_embedding.weight", "patch.b": "embeddings.patch_embedding.bias", "pos": "embeddings.position_embedding.weight", "post_norm": "post_layernorm", "norm1": "encoder.layers.{L}.layer_norm1", "norm2": "encoder.layers.{L}.layer_norm2", "attn.q": "encoder.layers.{L}.self_attn.q_proj", "attn.k": "encoder.layers.{L}.self_attn.k_proj", "attn.v": "encoder.layers.{L}.self_attn.v_proj", "attn.o": "encoder.layers.{L}.self_attn.out_proj", "mlp.up": "encoder.layers.{L}.mlp.fc1", "mlp.down": "encoder.layers.{L}.mlp.fc2", "head.probe": "head.probe", "head.in_w": "head.attention.in_proj_weight", "head.in_b": "head.attention.in_proj_bias", "head.o": "head.attention.out_proj", "head.norm": "head.layernorm", "head.up": "head.mlp.fc1", "head.down": "head.mlp.fc2"}
+  }
+}

@@ -195,6 +195,7 @@ mod tests {
             kimi_family,
             // The Kimi foundation drill predates the 2026-09-23 fence: the pre-fence gate.
             false,
+            false,
         )
     }
 
@@ -439,6 +440,7 @@ mod tests {
         let calm = |seats: u32, jury: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: seats,
+            independence_floor_met: true,
             probes_passed_this_span: 0,
             probes_failed_this_span: 0,
             utilization_permille: 300,

@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "granite_swa",
+  "doc": "GraniteSWA (IBM): Granite's four multipliers plus per-layer sliding-window attention (layer_types; default one full layer in four), a learnable per-head attention sink (sigmoid(logsumexp - sink) = an extra softmax-denominator logit, gpt-oss's mechanism) and a per-layer rotary base layer_rope_theta (0 means NoPE for that layer). Third-party adapter (lane H): data only, extends the built-in granite.",
+  "extends": ["granite"],
+  "match": {"architectures": ["GraniteSWAForCausalLM"], "model_types": ["granite_swa"]},
+  "config": {"defaults": {"sliding_window": 128, "tie_word_embeddings": true}},
+  "vars": [
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 128]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$eq": [{"$mod": [{"$var": "i"}, 4]}, 0]}, "full_attention", "sliding_attention"]}}}},
+    {"name": "lrt", "value": {"$cfg?": "layer_rope_theta"}},
+    {"name": "attn_extra", "value": {"sinks": true}},
+    {"name": "l_position", "layer": true, "value": {"$if": [{"$and": [{"$ne": [{"$var": "lrt"}, null]}, {"$eq": [{"$index": [{"$var": "lrt"}, {"$var": "i"}]}, 0]}]}, "None", {"Rope": {"$if": [{"$ne": [{"$var": "lrt"}, null]}, {"$rope_plain": {"dim": {"$var": "hd"}, "theta": {"$index": [{"$var": "lrt"}, {"$var": "i"}]}, "style": {"$var": "rope_style"}}}, {"$var": "rope"}]}}]}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.sinks": "{p}layers.{L}.self_attn.sinks"}]}},
+    {"name": "model_type", "value": "granite_swa"}
+  ]
+}

@@ -88,7 +88,11 @@ fn pairs() -> Vec<(String, String, Value)> {
     }
     for (name, cfg) in cfgs {
         let arch = arch_of(&cfg);
-        if let Some(a) = builtin::all().iter().find(|a| a.architectures().contains(&arch.as_str())) {
+        // The differential oracle is the DECODER readers'; the encoder-decoder adapters have their own (tests/encdec_adapters.rs).
+        // Adapters that are DATA ONLY have no Rust parser to be an oracle for: a family added after the parsers were
+        // retired (qwen4-exp, the three FR-01 corpus families and the later corpus families) is judged by its fixtures and the corpus harness.
+        const DATA_ONLY: &[&str] = &["qwen4-exp", "dbrx", "granitemoehybrid", "ernie4-5-moe", "bitnet", "apertus", "lfm2", "kimi-linear", "nemotron-h", "falcon-h1"];
+        if let Some(a) = builtin::all().iter().find(|a| a.kind() == "decoder" && a.architectures().contains(&arch.as_str()) && !DATA_ONLY.contains(&a.id.as_str())) {
             out.push((a.id.clone(), name, cfg));
         }
     }

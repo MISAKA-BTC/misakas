@@ -545,8 +545,10 @@ impl P<'_> {
                 ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
                 quant: None,
                 table_shards: 1,
+                weights: Default::default(),
             },
             notes: std::mem::take(&mut self.notes),
+            prefix_lm: false,
         }
     }
 }
@@ -592,11 +594,11 @@ pub(crate) fn llama_names(model: &str, lm_head: &str) -> BTreeMap<String, String
 }
 
 pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
-    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, type_rows: None, rel_bias: None }
+    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, proj_after_norm: false, proj_in_bias: false, type_rows: None, rel_bias: None, disentangled: None }
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {
-    HeadSpec { tied, bias: false, pre_scale: 1.0, proj_out: false, logit_scale: 1.0, softcap: None }
+    HeadSpec { tied, bias: false, pre_scale: 1.0, proj_out: false, logit_scale: 1.0, softcap: None, transform: None }
 }
 
 pub(crate) fn pre_norm(n: NormSpec) -> Residual {
@@ -604,11 +606,11 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
+    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, name: None }
+    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.
@@ -651,6 +653,8 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         v_bias: bias.0,
         o_bias: bias.1,
         qk_norm: None,
+        qk_norm_after_rope: false,
+        o_norm: None,
         clip_qkv: None,
         position,
         scale: 1.0 / (hd as f64).sqrt(),
@@ -665,6 +669,8 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         param_prefix: None,
         kv_share: None,
         sparse: None,
+        gate: None,
+        v_scale: 1.0,
     }
 }
 

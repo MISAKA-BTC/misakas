@@ -19,7 +19,10 @@
 //! JSON form carries no timestamp and no path: the same inputs give the same bytes.
 
 pub mod chain;
+pub mod full;
 pub mod model;
+pub mod node;
+pub mod remote;
 pub mod render;
 pub mod residency;
 pub mod source;
@@ -207,6 +210,12 @@ pub struct Options {
     /// The tier rule the residency is read under: a row-addressed param under this many bytes is pinned (the node's
     /// default, `TIR_PIN_BELOW_BYTES_V1`).
     pub residency_pin_below_bytes: u64,
+    /// What a live node said (`--node`, [`node::NodeFacts`]): the tip is the default height, the registry's reading of the classes it
+    /// holds is what a class already on the chain is judged by, and the base population is what the forecast's independence is read
+    /// against.
+    pub node: Option<node::NodeFacts>,
+    /// The `full` depth's inputs: the runtime pack and the artifact ([`full`]).
+    pub full: full::FullInputs,
 }
 
 impl Default for Options {
@@ -224,6 +233,8 @@ impl Default for Options {
             held: false,
             seat_shares: Vec::new(),
             residency_pin_below_bytes: misaka_palw_tir_exec::tiers::TIR_PIN_BELOW_BYTES_V1,
+            node: None,
+            full: full::FullInputs::default(),
         }
     }
 }
@@ -294,6 +305,16 @@ pub struct ShardInfo {
     pub tensors: usize,
 }
 
+/// What the node said, as the report states it.
+#[derive(Clone, Debug, Serialize)]
+pub struct NodeInfo {
+    pub network: String,
+    pub tip_daa: u64,
+    pub classes: usize,
+    /// The largest base population any class's seating reads, if the node serves seating (past `palw_class_seating`).
+    pub base_operators: Option<u32>,
+}
+
 /// The whole report.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
@@ -314,6 +335,12 @@ pub struct Report {
     pub chain: Vec<Condition>,
     pub seat: Option<chain::SeatInfo>,
     pub forecast: Option<chain::Forecast>,
+    /// The `full` depth's findings (the pack's verification, the artifact root, the chain's reading of it); absent below it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full: Option<full::FullInfo>,
+    /// What the node was asked (`--node`): its network, tip and the classes it holds; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<NodeInfo>,
     pub verdict: Verdict,
     pub notes: Vec<String>,
     pub registries: Registries,
@@ -344,6 +371,32 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
             "a .palwtir artifact is judged by the artifact admission (palw-class preflight on it), not by the model preflight".into(),
         );
     }
+    run_input(path, kind, InputInfoOverride::default(), opts)
+}
+
+/// **Run a model preflight on a repository read by HTTP ranges** (RFC-0002 Part II §II.2.1): `base` is the repository's URL prefix
+/// (`<base>/config.json` resolves it; [`remote::hf_base_url`] spells the Hugging Face one), `fetcher` the transport
+/// ([`remote::HttpRangeFetcher`] for `http://`, a mirror or a fixture server; the lowerer's `curl` fetcher for `https://`). Only the
+/// configuration, the index and the shard headers are fetched; the report is the local directory's but for the input's kind and label.
+pub fn run_remote(base: &str, fetcher: &dyn misaka_palw_tir_lower::weights::RangeFetcher, opts: &Options) -> Result<Report, String> {
+    let scratch = remote::Scratch::new()?;
+    let stats = remote::materialize_headers(fetcher, base, &scratch.0)?;
+    run_input(
+        &scratch.0,
+        InputKind::Remote,
+        InputInfoOverride { label: Some(base.to_string()), bytes_read: Some(stats.fetched_bytes) },
+        opts,
+    )
+}
+
+/// What a remote input says about itself in place of the scratch snapshot's.
+#[derive(Default)]
+struct InputInfoOverride {
+    label: Option<String>,
+    bytes_read: Option<u64>,
+}
+
+fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Options) -> Result<Report, String> {
     let mut files: Vec<std::path::PathBuf> = opts.quant_formats.clone();
     files.sort();
     let reg_owned;
@@ -382,17 +435,36 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
             (Some(_), None) => stopped_at = Some("no program to judge: the convert stage is blocked".into()),
             (Some(id), Some(program)) => {
                 let net = chain::PreflightNetwork::parse(id)?;
+                if let Some(node) = &opts.node
+                    && !node.network.is_empty()
+                    && node.network != net.id
+                {
+                    return Err(format!("--node is on {} and --network is {}: the conditions would be judged on another chain", node.network, net.id));
+                }
                 chain_out = chain::judge(&net, opts, program, &analysis, &src);
                 network = Some(chain_out.network.clone());
                 reached = Depth::Shape;
             }
         }
     }
+    // The full depth: the pack verified and the chain's reading of the artifact root and the declared classes.
+    let mut full_info = None;
+    let mut full_register: Vec<Blocker> = Vec::new();
+    let mut full_mine: Vec<Blocker> = Vec::new();
     if opts.depth == Depth::Full && stopped_at.is_none() {
-        stopped_at = Some(
-            "full depth needs the weights and a pack: palw-tir-fidelity, palw-class pack build, then palw-class pack verify".into(),
-        );
+        let model_dir = (kind == InputKind::HfDirectory).then_some(path);
+        let (info, blockers) = full::judge_full(&opts.full, model_dir, network.as_ref().map(|n| n.id.as_str()), opts.node.as_ref());
+        for b in blockers {
+            match b.stage {
+                Stage::Register => full_register.push(b),
+                _ => full_mine.push(b),
+            }
+        }
+        reached = Depth::Full;
+        full_info = Some(info);
     }
+    chain_out.register.extend(full_register);
+    chain_out.mine.extend(full_mine);
 
     let mut convert_blockers = analysis.blockers.clone();
     convert_blockers.extend(chain_out.convert_extra.iter().cloned());
@@ -416,7 +488,11 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
     Ok(Report {
         schema: PREFLIGHT_SCHEMA_V1,
         mode: "model",
-        input: InputInfo { kind, label: src.label.clone(), bytes_read: src.bytes_read },
+        input: InputInfo {
+            kind,
+            label: over.label.unwrap_or_else(|| src.label.clone()),
+            bytes_read: over.bytes_read.unwrap_or(src.bytes_read),
+        },
         depth: DepthInfo { requested: opts.depth, reached, stopped_at },
         network,
         source: model::source_info(&src),
@@ -430,6 +506,13 @@ pub fn run(path: &Path, opts: &Options) -> Result<Report, String> {
         chain: chain_out.conditions.clone(),
         seat: chain_out.seat.clone(),
         forecast: chain_out.forecast.clone(),
+        full: full_info,
+        node: opts.node.as_ref().map(|n| NodeInfo {
+            network: n.network.clone(),
+            tip_daa: n.tip_daa,
+            classes: n.classes.len(),
+            base_operators: n.base_operators(),
+        }),
         verdict: Verdict { convert, register, mine },
         notes,
         registries: registries(reg),

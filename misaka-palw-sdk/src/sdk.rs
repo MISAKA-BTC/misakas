@@ -783,6 +783,7 @@ impl PalwClassSdk {
             shape.kimi_family,
             // 2026-09-23 audit C-4 — the fence the acceptance path passes, read into the shape.
             shape.attention_geometry_bound,
+            shape.gdn_key_heads,
         )
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)

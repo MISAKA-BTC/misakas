@@ -71,7 +71,28 @@ CONFIGS = {
     "pegasus": dict(cls="PegasusConfig", model="PegasusForConditionalGeneration", embed_mul=0.5, seed_off=1,
                     kw=dict(BART_DIMS, activation_function="gelu", scale_embedding=True, pad_token_id=0, eos_token_id=1,
                             decoder_start_token_id=0, forced_eos_token_id=None)),
+    # LongT5 with LOCAL encoder attention: T5's stages, the encoder's self-attention restricted to |i - j| <= local_radius (2 here, so
+    # a source of 10 tokens is not dense).
+    "longt5": dict(cls="LongT5Config", model="LongT5ForConditionalGeneration", embed_mul=0.3,
+                   kw=dict(vocab_size=V, d_model=32, d_kv=8, d_ff=64, num_layers=2, num_decoder_layers=2, num_heads=4,
+                           relative_attention_num_buckets=8, relative_attention_max_distance=8, feed_forward_proj="relu",
+                           encoder_attention_type="local", local_radius=2, global_block_size=4,
+                           pad_token_id=0, eos_token_id=1, decoder_start_token_id=0)),
+    # T5's encoder alone (T5EncoderModel): the text encoder of Flux, Stable Diffusion 3, PixArt, Wan and Sana. Gated-GELU.
+    "t5_encoder": dict(cls="T5Config", model="T5EncoderModel", embed_mul=0.3, encoder_only=True,
+                       kw=dict(vocab_size=V, d_model=32, d_kv=8, d_ff=64, num_layers=2, num_heads=4,
+                               relative_attention_num_buckets=8, relative_attention_max_distance=8,
+                               feed_forward_proj="gated-gelu", pad_token_id=0, eos_token_id=1)),
+    # Whisper: log-mel frames through two Conv1d, a loaded position table, pre-LN layers without a key bias, a tied head.
+    "whisper": dict(cls="WhisperConfig", model="WhisperForConditionalGeneration", embed_mul=0.3, frames=True,
+                    kw=dict(vocab_size=V, num_mel_bins=8, d_model=32, encoder_layers=2, decoder_layers=2,
+                            encoder_attention_heads=4, decoder_attention_heads=4, encoder_ffn_dim=64,
+                            decoder_ffn_dim=64, max_source_positions=16, max_target_positions=32,
+                            activation_function="gelu", pad_token_id=0, bos_token_id=1, eos_token_id=2,
+                            decoder_start_token_id=3, suppress_tokens=None, begin_suppress_tokens=None)),
 }
+
+MEL_Q = 13  # the integer program reads the frames as i16 codes at 2^-13: the references read exactly those values
 
 
 OUT_GAIN = 8.0
@@ -79,7 +100,7 @@ OUT_GAIN = 8.0
 
 def out_norm_names(spec, cfg):
     """The norm whose output is the decoder's output (the head's input)."""
-    if spec["cls"] == "T5Config":
+    if spec["cls"] in ("T5Config", "LongT5Config"):
         return {"decoder.final_layer_norm.weight"}
     if spec["cls"] in ("MBartConfig", "PegasusConfig"):
         return {"model.decoder.layer_norm.weight", "model.decoder.layer_norm.bias"}
@@ -95,8 +116,111 @@ def sinusoid_restore(model):
                 m.weight.copy_(m.create_weight())
 
 
+def t5_bucket_meta(cfg, meta):
+    from transformers.models.t5.modeling_t5 import T5Attention
+    nb, md = cfg.relative_attention_num_buckets, cfg.relative_attention_max_distance
+    rel = torch.arange(-40, 41)
+    meta["buckets_bidirectional"] = {"from": -40, "buckets": T5Attention._relative_position_bucket(
+        rel, bidirectional=True, num_buckets=nb, max_distance=md).tolist()}
+    meta["buckets_causal"] = {"from": -40, "buckets": T5Attention._relative_position_bucket(
+        rel, bidirectional=False, num_buckets=nb, max_distance=md).tolist()}
+
+
+def make_encoder_only(name, spec):
+    """An encoder alone: the final-normed rows over two seeded sources."""
+    seed = sum(ord(ch) for ch in name) + spec.get("seed_off", 0)
+    torch.manual_seed(seed)
+    cfg = getattr(transformers, spec["cls"])(**spec["kw"])
+    cls = getattr(transformers, spec["model"])
+    model = cls(cfg)
+    model.eval()
+    randomise(model, cfg.d_model, seed)
+    with torch.no_grad():
+        emb = model.get_input_embeddings().weight
+        emb.mul_(spec.get("embed_mul", 1.0))
+        emb.copy_(emb.to(torch.bfloat16).to(torch.float32))
+    d = os.path.join(FIX, name)
+    os.makedirs(d, exist_ok=True)
+    model.to(torch.bfloat16)
+    model.save_pretrained(d)
+    fresh = cls.from_pretrained(d, dtype=torch.float32, attn_implementation="eager")
+    fresh.eval()
+    rng = np.random.default_rng(seed)
+    recs = []
+    with torch.no_grad():
+        for n in SRC_LENS:
+            src = [int(t) for t in rng.integers(3, V - 4, size=n - 1)] + [cfg.eos_token_id]
+            enc = fresh(input_ids=torch.tensor([src])).last_hidden_state[0]
+            recs.append({"input_ids": src, "encoder_hidden": enc.tolist()})
+    meta = {"records": recs, "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,
+            "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager"}
+    if spec["cls"] in ("T5Config", "LongT5Config"):
+        t5_bucket_meta(cfg, meta)
+    with open(os.path.join(d, "outputs.json"), "w") as f:
+        json.dump(meta, f)
+    return [len(r["input_ids"]) for r in recs]
+
+
+def make_frames(name, spec):
+    """A model that reads feature frames (Whisper): the encoder's rows, the teacher-forced and greedy decoder logits."""
+    seed = sum(ord(ch) for ch in name) + spec.get("seed_off", 0)
+    torch.manual_seed(seed)
+    cfg = getattr(transformers, spec["cls"])(**spec["kw"])
+    cls = getattr(transformers, spec["model"])
+    model = cls(cfg)
+    model.eval()
+    randomise(model, cfg.d_model, seed)
+    with torch.no_grad():
+        emb = model.model.decoder.embed_tokens.weight
+        emb.mul_(spec.get("embed_mul", 1.0))
+        emb.copy_(emb.to(torch.bfloat16).to(torch.float32))
+        for n, prm in model.named_parameters():
+            if n in ("model.decoder.layer_norm.weight", "model.decoder.layer_norm.bias"):
+                prm.mul_(OUT_GAIN)
+                prm.copy_(prm.to(torch.bfloat16).to(torch.float32))
+    d = os.path.join(FIX, name)
+    os.makedirs(d, exist_ok=True)
+    model.to(torch.bfloat16)
+    model.save_pretrained(d)
+    fresh = cls.from_pretrained(d, dtype=torch.float32, attn_implementation="eager")
+    fresh.eval()
+    rng = np.random.default_rng(seed)
+    bins, frames = cfg.num_mel_bins, cfg.max_source_positions * 2
+    start = cfg.decoder_start_token_id
+    recs = []
+    with torch.no_grad():
+        for _ in range(2):
+            # A normalised log-mel lies in about [-1, 1.5]; the integer program reads it as i16 codes at 2^-13, and the
+            # reference reads exactly those values (an exact multiple of 2^-13 is exact in f32).
+            mel = np.round(rng.uniform(-1.0, 1.5, size=(bins, frames)) * (1 << MEL_Q)) / (1 << MEL_Q)
+            feats = torch.tensor(mel, dtype=torch.float32)[None]
+            enc = fresh.model.encoder(feats).last_hidden_state[0]
+            stream = [start]
+            for _ in range(NEW_TOKENS):
+                lg = fresh(input_features=feats, decoder_input_ids=torch.tensor([stream])).logits[0, -1]
+                stream.append(int(torch.argmax(lg)))
+            gen = stream[1:]
+            dec = [start] + gen[:-1]
+            o = fresh(input_features=feats, decoder_input_ids=torch.tensor([dec]))
+            rnd = [start] + [int(t) for t in rng.integers(0, V, size=NEW_TOKENS - 1)]
+            ro = fresh(input_features=feats, decoder_input_ids=torch.tensor([rnd]))
+            recs.append({"input_features": mel.tolist(), "generated": gen, "decoder_input_ids": dec,
+                         "logits": o.logits[0].tolist(), "encoder_hidden": enc.tolist(),
+                         "random_decoder_ids": rnd, "random_logits": ro.logits[0].tolist()})
+    meta = {"records": recs, "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,
+            "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager",
+            "mel_q": MEL_Q, "decoder_start_token_id": start}
+    with open(os.path.join(d, "outputs.json"), "w") as f:
+        json.dump(meta, f)
+    return [r["generated"] for r in recs]
+
+
 def make(name):
     spec = CONFIGS[name]
+    if spec.get("encoder_only"):
+        return make_encoder_only(name, spec)
+    if spec.get("frames"):
+        return make_frames(name, spec)
     seed = sum(ord(ch) for ch in name) + spec.get("seed_off", 0)
     torch.manual_seed(seed)
     cfg = getattr(transformers, spec["cls"])(**spec["kw"])
@@ -159,7 +283,7 @@ def make(name):
     meta = {"records": recs, "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,
             "weights": "bfloat16-exact (rounded before the forward)", "attn_implementation": "eager",
             "decoder_start_token_id": cfg.decoder_start_token_id, "eos_token_id": eos}
-    if spec["cls"] == "T5Config":
+    if spec["cls"] in ("T5Config", "LongT5Config"):
         from transformers.models.t5.modeling_t5 import T5Attention
         nb, md = cfg.relative_attention_num_buckets, cfg.relative_attention_max_distance
         rel = torch.arange(-40, 41)

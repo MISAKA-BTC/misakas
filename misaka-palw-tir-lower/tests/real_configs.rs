@@ -192,6 +192,154 @@ fn olmo_cohere_granite_nemotron() {
     assert_eq!(s.final_norm.map(|n| n.gain), Some(Gain::OnePlusW));
 }
 
+/// **BitNet b1.58 and Apertus** (data adapters, no Rust reader): BitNet's two sub-layer norms (`SUBLAYER_NORMS_V1`) over the attention
+/// output and the MLP's hidden activation, and Apertus' ungated MLP with xIELU (`ACT_LEARNED_POINTWISE_V1`), q/k norm and llama3 rope.
+#[test]
+fn bitnet_and_apertus() {
+    let (s, p) = ok("bitnet-b1.58-2b-4t");
+    assert!(attn(&s, 0).o_norm.is_some(), "attn_sub_norm");
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.act == Act::Relu2 && m.inner_norm.is_some()), "ReLU2 gated with ffn_sub_norm");
+    assert!(s.head.tied);
+    assert!(p.params.iter().any(|d| d.name == "attn.sub_norm.gain") && p.params.iter().any(|d| d.name == "mlp.sub_norm.gain"));
+    let (s, p) = ok("apertus-8b-2509");
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if !m.gated && m.act == Act::Xielu && m.inner_norm.is_none()), "an ungated xIELU MLP");
+    assert_eq!(attn(&s, 0).qk_norm.map(|q| q.scope), Some(QkNormScope::PerHeadShared));
+    assert_eq!(rope(attn(&s, 0)).freqs.rope_type, "llama3");
+    for k in ["alpha_p", "alpha_n", "beta", "eps"] {
+        assert!(p.params.iter().any(|d| d.name == format!("mlp.act.{k}") && d.per_layer), "xIELU's {k} is a per-layer param");
+    }
+    assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Xielu)));
+}
+
+/// **LFM2** (`MIXER_SHORT_CONV_V1`, a data adapter): the 1.2B shape, ten gated short-convolution layers and six attention layers named by
+/// `layer_types`, the MLP width HF derives from `block_ff_dim` (2/3 of 12288, a multiple of 256: 8192), `embedding_norm` as the final norm,
+/// and the legacy spellings (`tie_embedding`, `block_ff_dim`) read as HF reads them.
+#[test]
+fn lfm2_short_convolutions_and_six_attention_layers() {
+    let (s, p) = ok("lfm2-1.2b");
+    assert_eq!(s.layers.len(), 16);
+    let attn_layers: Vec<usize> = (0..16).filter(|&l| matches!(s.layers[l].mixer, Mixer::Attention(_))).collect();
+    assert_eq!(attn_layers, vec![2, 5, 8, 10, 12, 14]);
+    for l in (0..16).filter(|l| !attn_layers.contains(l)) {
+        assert!(matches!(&s.layers[l].mixer, Mixer::ShortConv(c) if c.kernel == 3 && !c.bias), "layer {l}");
+    }
+    assert_eq!((attn(&s, 2).heads, attn(&s, 2).kv_heads, attn(&s, 2).head_dim), (32, 8, 64));
+    assert!(attn(&s, 2).qk_norm.is_some());
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.intermediate == 8192 && m.act == Act::Silu));
+    assert!(s.head.tied);
+    assert_eq!(s.hf.names["final_norm"], "model.embedding_norm");
+    assert_eq!(s.hf.names["shortconv.in"], "model.layers.{L}.conv.in_proj");
+    assert!(p.params.iter().any(|d| d.name.starts_with("shortconv.in.b.")) && p.params.iter().any(|d| d.name == "shortconv.conv.w"));
+    // The legacy spelling HF still reads: `tie_embedding: false` unties the head (the head is then `lm_head`).
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/lfm2-1.2b.json")).unwrap();
+    let untied = parse_config_str(&cfg.replace("\"tie_embedding\": true", "\"tie_embedding\": false")).unwrap();
+    assert!(!untied.head.tied);
+    // Disagreeing spellings are refused, not resolved by order.
+    let both = cfg.replace("\"tie_embedding\": true", "\"tie_embedding\": true, \"tie_word_embeddings\": false");
+    assert!(parse_config_str(&both).is_err());
+}
+
+/// **Nemotron-H** (data adapter; `LAYER_FFN_ONLY_V1`, `MOE_EXPERTS_PLAIN_V1`): the 8B's legacy `hybrid_override_pattern` string (24 Mamba-2, 4 attention
+/// without rotary embedding, 24 plain relu^2 MLPs; every layer ONE block under ONE norm), and the Nano's MoE layers: DeepSeek-V3's sigmoid router over
+/// 128 PLAIN experts with a plain shared expert, no latent projection.
+#[test]
+fn nemotron_h_is_one_block_per_layer() {
+    let (s, p) = ok("nemotron-h-8b-base-8k");
+    assert_eq!(s.layers.len(), 52);
+    let kinds = |f: &dyn Fn(&LayerSpec) -> bool| s.layers.iter().filter(|l| f(l)).count();
+    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Mamba2(m) if m.groups == 8 && m.norm_groups == 8 && m.norm_mode == Mamba2Norm::GateFirst && m.dt_min == 0.0 && !m.proj_bias)), 24);
+    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::None) && a.heads == 32 && a.kv_heads == 8)), 4);
+    assert_eq!(kinds(&|l| matches!((&l.mixer, &l.ffn), (Mixer::None, Ffn::Mlp(m)) if !m.gated && m.act == Act::Relu2 && m.intermediate == 21504)), 24);
+    // A mixer layer has one pre-norm before its mixer and none before an FFN it does not have; an FFN-only layer has the norm before its FFN.
+    assert!(s.layers.iter().all(|l| match (&l.mixer, &l.residual) {
+        (Mixer::None, Residual::Sequential { pre_mixer, pre_ffn, .. }) => pre_mixer.is_none() && pre_ffn.is_some(),
+        (_, Residual::Sequential { pre_mixer, pre_ffn, .. }) => pre_mixer.is_some() && pre_ffn.is_none() && l.ffn == Ffn::None,
+        _ => false,
+    }));
+    assert!(!s.head.tied);
+    assert_eq!(s.hf.names["embed"], "backbone.embeddings");
+    assert_eq!(s.hf.names["norm.mix"], s.hf.names["norm.ffn"]);
+    assert!(s.hf.ignored_prefixes.iter().any(|p| p == "mtp."));
+    assert_eq!(kinds(&|_| true), 52);
+    assert_eq!(kinds(&|l| matches!(l.mixer, Mixer::None)), 24);
+    assert_eq!(p.blocks.len() - 2, 3, "three block kinds: Mamba-2, attention, MLP");
+    let (s, p) = ok("nemotron-3-nano-30b-a3b");
+    let moes = || s.layers.iter().filter_map(|l| if let Ffn::Moe(m) = &l.ffn { Some(m) } else { None });
+    assert_eq!(moes().count(), 23);
+    let m = moes().next().expect("a MoE layer");
+    assert!(!m.gated && m.latent.is_none());
+    assert_eq!((m.experts, m.top_k, m.intermediate), (128, 6, 1856));
+    assert_eq!(m.shared.as_ref().map(|sh| (sh.intermediate, sh.sigmoid_gate)), Some((3712, false)));
+    assert!(m.router.selection_bias && m.router.normalize && m.router.groups.is_none() && m.router.scale == 2.5);
+    assert_eq!(m.act, Act::Relu2);
+    assert!(p.params.iter().any(|d| d.name == "moe.experts.up") && !p.params.iter().any(|d| d.name == "moe.experts.gate"));
+    // The latent projection widens the routed experts' params to the latent width and adds two linears.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/nemotron-3-nano-30b-a3b.json")).unwrap();
+    let latent = parse_config_str(&cfg.replace("\"n_group\": 1,", "\"n_group\": 1, \"moe_latent_size\": 1024,")).unwrap();
+    let hl = hl::build_program(&latent).unwrap();
+    let shape = |n: &str| hl.params.iter().find(|d| d.name == n).map(|d| d.shape.clone());
+    assert_eq!(shape("moe.experts.up"), Some(vec![128, 1856, 1024]));
+    assert_eq!(shape("moe.experts.down"), Some(vec![128, 1024, 1856]));
+    assert_eq!(shape("moe.latent_in.w"), Some(vec![1024, 2688]));
+    assert_eq!(shape("moe.latent_out.w"), Some(vec![2688, 1024]));
+    hf_weights::bind(&latent, &hl).unwrap();
+    // A pattern character the architecture does not have is refused, and so is a pattern that disagrees with an explicit list.
+    assert!(parse_config_str(&cfg.replace("MEMEM*", "MEMEMX")).is_err());
+}
+
+/// **Falcon-H1** (data adapter; `MIXER_PARALLEL_BRANCH_V1`, `SCALE_MUP_V1`): a Mamba-2 mixer and attention in parallel in every layer, each with its own
+/// input and output scale; the muP multipliers placed where the model applies them (embedding, logits, the five chunks of the Mamba-2 projection, the
+/// attention key folded into the score scale, the MLP's gate and down folded into the weights).
+#[test]
+fn falcon_h1_parallel_mamba_and_attention_with_mup() {
+    let (s, p) = ok("falcon-h1-0.5b-instruct");
+    assert_eq!(s.layers.len(), 36);
+    assert_eq!(s.embedding.scale, 5.656854249492381);
+    assert_eq!(s.head.logit_scale, 0.0390625);
+    assert!(s.head.tied);
+    let Mixer::Parallel(bs) = &s.layers[0].mixer else { panic!("{:?}", s.layers[0].mixer) };
+    assert_eq!(bs.len(), 2);
+    let Mixer::Mamba2(m) = &bs[0].mixer else { panic!("{:?}", bs[0].mixer) };
+    assert_eq!((m.heads, m.head_dim, m.groups, m.state, m.conv_kernel), (24, 64, 1, 128, 4));
+    assert_eq!(m.norm_mode, Mamba2Norm::Ungated);
+    assert_eq!(m.chunk_scales, Some([0.3535533905932738, 0.25, 0.3535533905932738, 0.5, 0.3535533905932738]));
+    assert_eq!((bs[0].in_scale, bs[0].out_scale), (1.0, 0.23570226039551587));
+    let Mixer::Attention(a) = &bs[1].mixer else { panic!("{:?}", bs[1].mixer) };
+    assert_eq!((a.heads, a.kv_heads, a.head_dim), (8, 2, 64));
+    // The key multiplier is folded into the score scale: k·0.17677… is `scale = 0.17677… / √64`.
+    assert!((a.scale - 0.1767766952966369 / 8.0).abs() < 1e-15, "{}", a.scale);
+    assert_eq!((bs[1].in_scale, bs[1].out_scale), (1.0, 0.9375));
+    // The MLP's multipliers are weights expressions on the gate and down projections.
+    assert!(s.hf.weights.contains_key("mlp.gate.w") && s.hf.weights.contains_key("mlp.down.w"), "{:?}", s.hf.weights.keys().collect::<Vec<_>>());
+    // Split projections for the chunk scales: z, x, B, C, dt and three convolutions.
+    for n in ["mamba2.in.z.w", "mamba2.in.x.w", "mamba2.in.b.w", "mamba2.in.c.w", "mamba2.in.dt.w", "mamba2.conv.x.w", "mamba2.conv.b.w", "mamba2.conv.c.w"] {
+        assert!(p.params.iter().any(|d| d.name == n), "{n}");
+    }
+    // Disagreeing biases of the two Mamba-2 projections are refused.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/falcon-h1-0.5b-instruct.json")).unwrap();
+    assert!(parse_config_str(&cfg.replace("\"projectors_bias\": false", "\"projectors_bias\": true")).is_err());
+    // A non-default dt clamp is refused (HF's prefill clamps, its decode does not).
+    assert!(parse_config_str(&cfg.replace("\"vocab_size\"", "\"time_step_limit\": [0.01, 100.0], \"vocab_size\"")).is_err());
+}
+
+/// **PaliGemma as its text decoder** (`ATTN_PREFIX_LM_V1`, the text-only path): a Gemma-1 decoder (MQA, head_dim 256, GeGLU, (1+w) norms,
+/// tied head) under `language_model.`; the spec says it is the prefix-LM model's text-only causal path, and binding image rows to it is
+/// refused by name.
+#[test]
+fn paligemma_is_its_text_decoder_and_refuses_image_rows() {
+    let (s, _) = ok("paligemma-3b-pt-224");
+    assert!(s.prefix_lm && s.head.tied);
+    assert_eq!((s.layers.len(), attn(&s, 0).heads, attn(&s, 0).kv_heads, attn(&s, 0).head_dim), (18, 8, 1, 256));
+    assert!(s.notes.iter().any(|n| n.contains("ATTN_PREFIX_LM_V1")), "{:?}", s.notes);
+    assert!(s.hf.names["embed"].starts_with("language_model.model."), "{:?}", s.hf.names.get("embed"));
+    // The same decoder with image rows bound is another function: refused.
+    let cfg = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/paligemma-3b-pt-224.json")).unwrap();
+    let rows = misaka_palw_tir_lower::lower::ImageRows { rows: 256, width: 2048, unit: 1.0 / 4096.0, placeholder: 257152, mrope: None };
+    let opts = misaka_palw_tir_lower::lower::LowerOpts { image_rows: Some(rows), ..Default::default() };
+    let e = misaka_palw_tir_lower::fidelity::prepare(&cfg, &opts).err().expect("refused").to_string();
+    assert!(e.contains("ATTN_PREFIX_LM_V1"), "{e}");
+}
+
 #[test]
 fn remote_code_llama_likes_are_lowered_but_marked_unsure() {
     for n in ["internlm2.5-7b-chat", "minicpm-2b-sft-bf16", "exaone-3.5-2.4b-instruct"] {
@@ -280,6 +428,20 @@ fn deepseek_mla_and_routing() {
     assert_eq!((r.scoring, r.selection_bias, r.scale), (Scoring::Sigmoid, true, 2.5));
     assert_eq!(r.groups.map(|g| (g.n_group, g.topk_group, g.score)), Some((8, 4, GroupScore::Top2Sum)));
     assert!(matches!(&s.layers[2].ffn, Ffn::Mlp(_)));
+    // DeepSeek-V3.2-Exp: V3's MLA and routing plus DeepSeek sparse attention in every layer (`ATTN_TOKEN_INDEXER_V1`): an
+    // indexer of 64 heads × 128 over the top 2,048 tokens, rotated half-split over the first 64 lanes of its head with the
+    // same yarn frequencies as the MLA; each layer runs as its mixer half and its FFN half (the indexer's selection
+    // does not fit one block's 512 nodes with an MLA mixer and a MoE).
+    let (s, p) = ok("deepseek-v3.2-exp");
+    let Mixer::Mla(m) = &s.layers[0].mixer else { panic!() };
+    let ix = m.indexer.as_ref().expect("the indexer");
+    assert_eq!((ix.heads, ix.head_dim, ix.topk, ix.rope.rotary_dim, ix.rope.offset), (64, 128, 2048, 64, 0));
+    assert_eq!(ix.rope.style, crate_rope::RopeStyle::Half);
+    assert_eq!(m.rope.as_ref().unwrap().style, crate_rope::RopeStyle::Interleaved);
+    assert_eq!(ix.rope.freqs, m.rope.as_ref().unwrap().freqs);
+    assert!(s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Mla(m) if m.indexer.is_some())));
+    assert!(matches!(&s.layers[2].ffn, Ffn::Mlp(_)) && matches!(&s.layers[3].ffn, Ffn::Moe(_)));
+    assert_eq!(p.schedule.len(), 2 * 61, "a mixer half and an FFN half a layer");
 }
 
 #[test]
@@ -389,4 +551,44 @@ fn hl_ops_carry_no_checkpoint_names() {
         assert!(stem.len() < 6 || !text.contains(stem), "HL program mentions `{stem}`");
     }
     assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { .. })));
+}
+
+/// **Kimi-Linear** (`MIXER_KDA_V1`, `MIXER_MLA_NOPE_V1`, a data adapter): the class's defaults with the hub's `linear_attn_config` spelling of
+/// the layer lists and the KDA geometry (1-based `kda_layers` / `full_attn_layers`): seven latent-attention layers, twenty delta-attention
+/// layers, a dense first layer and the DeepSeek-V3 router on the other twenty-six. The config is written from the class's defaults and the spelling its
+/// `__post_init__` reads; the layer lists are as remembered, so the test is of the mechanism (the lists decide the layers), not of the release's pattern.
+#[test]
+fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
+    let (s, p) = ok("kimi-linear-48b-a3b");
+    assert_eq!(s.layers.len(), 27);
+    let full = [4usize, 8, 12, 16, 20, 24, 27];
+    for l in 0..27 {
+        match &s.layers[l].mixer {
+            Mixer::Mla(m) => {
+                assert!(full.contains(&(l + 1)), "layer {l}");
+                assert!(m.rope.is_none() && m.q_lora_rank.is_none() && (m.kv_lora_rank, m.qk_nope_head_dim, m.qk_rope_head_dim, m.v_head_dim) == (512, 128, 64, 128));
+                assert_eq!(m.scale, 1.0 / 192f64.sqrt());
+                assert_eq!(m.kv_a_norm.eps, 1e-6, "the latent norms keep their own epsilon, not rms_norm_eps");
+            }
+            Mixer::Kda(k) => {
+                assert!(!full.contains(&(l + 1)), "layer {l}");
+                assert_eq!((k.heads, k.head_dim, k.conv_kernel, k.gate_rank), (32, 128, 4, 128));
+                assert_eq!((k.gate_act, k.conv_act, k.norm_eps), (Act::Sigmoid, Act::Silu, 1e-5));
+            }
+            m => panic!("layer {l}: {m:?}"),
+        }
+        assert_eq!(matches!(s.layers[l].ffn, Ffn::Mlp(_)), l == 0, "layer {l}");
+    }
+    let Ffn::Moe(m) = &s.layers[1].ffn else { panic!() };
+    assert_eq!((m.experts, m.top_k, m.intermediate), (256, 8, 1024));
+    assert_eq!(m.shared.as_ref().map(|x| x.intermediate), Some(1024));
+    assert_eq!(s.hf.names["kda.q_conv"], "model.layers.{L}.self_attn.q_conv1d");
+    assert_eq!(s.hf.names["mla.kv_a"], "model.layers.{L}.self_attn.kv_a_proj_with_mqa");
+    // The delta attention's decay is one gate per key channel: the node carries `channel_decay` and a `[heads · head_dim]` decay chain.
+    assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { channel_decay: true, v_heads: 32, dk: 128, .. })));
+    assert!(p.params.iter().any(|d| d.name == "kda.A" && d.shape == vec![32 * 128]));
+    assert!(!p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Rope { heads: 1, .. })), "no rotation of the shared key");
+    // The features a registrant sees named.
+    let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
+    assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
 }

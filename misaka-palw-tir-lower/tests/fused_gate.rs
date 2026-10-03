@@ -230,6 +230,10 @@ fn draw(rng: &mut ChaCha20Rng, extreme: f64) -> impl FnMut(&str, usize) -> i128 
         let edge = rng.gen_bool(extreme);
         match name.rsplit('.').next().unwrap_or(name) {
             // A narrowing's multiplier, shift and zero: plausible scales, or anything at all.
+            "ez" if !edge => rng.gen_range(0i128..=1 << 20),
+            "es" if !edge => rng.gen_range(0i128..=40),
+            "ez" => value(rng, DType::I64, 1.0),
+            "es" => value(rng, DType::I32, 1.0),
             "m" if !edge => rng.gen_range(1i128..=1 << 16),
             "s" if !edge => rng.gen_range(8i128..=30),
             "z" if !edge => rng.gen_range(-64i128..=64),
@@ -245,6 +249,8 @@ fn draw(rng: &mut ChaCha20Rng, extreme: f64) -> impl FnMut(&str, usize) -> i128 
             }
             // The router's kept weights in [0, 2^25].
             "table" if name.starts_with("w.") => rng.gen_range(0i128..=1 << 25),
+            // Wide activations the kernel fuses over: sums of their squares stay in a machine word (the plan decides).
+            "table" if name.starts_with("x32") => rng.gen_range(-(1i128 << 26)..=1 << 26),
             "write_shift" => rng.gen_range(-40i128..=40),
             _ => i128::MIN, // resolved by dtype below
         }
@@ -278,6 +284,91 @@ fn gate(kernel: &str, p: &TirProgramV1, layers: u16, positions: usize) {
 fn gdn_step_is_the_reference_on_random_and_extreme_operands_and_its_broken_variant_is_caught() {
     gate("gdn_step_q36", &gdn_program(4, 8, 16, 2), 2, 6);
     gate("gdn_step_q36", &gdn_program(2, 4, 4, 1), 1, 6);
+}
+
+/// A one-layer program whose layer normalises the row its token selects: `l2_unit_q15` over `i16` codes, or `rms_unit_q24` over
+/// `i16`/`i32` codes with an `i64` `eps` param. `rows × n` is the row shape; the table's rows are the operands.
+fn rowop_program(l2: bool, dtype: DType, rows: u32, n: u32, layers: usize) -> TirProgramV1 {
+    rowop_program_kind(if l2 { 0 } else { 1 }, dtype, rows, n, layers)
+}
+
+/// `kind`: 0 `l2_unit_q15`, 1 `rms_unit_q24`, 2 `rms_norm_wide_q36`, 3 `rms_norm_wide_q36_exact`.
+fn rowop_program_kind(kind: u8, dtype: DType, rows: u32, n: u32, layers: usize) -> TirProgramV1 {
+    let l2 = kind == 0;
+    let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param(if dtype == DType::I32 { "x32.table" } else { "x.table" }, dtype, &[VOCAB, rows * n], false);
+    let eps = (kind == 1).then(|| pb.param("eps", DType::I64, &[1], false));
+    let wide = (kind >= 2).then(|| (pb.param("ez", DType::I64, &[1], false), pb.param("es", DType::I32, &[1], false)));
+    let out_dtype = if l2 { DType::I16 } else { DType::I32 };
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let v = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let v = b.cast(v, out_dtype);
+        b.finish(&[v])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(out_dtype, &[rows * n])]);
+        let x = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.reshape_fixed(x, &[rows, n]);
+        let y = match kind {
+            0 => b.l2_unit_q15(x),
+            1 => b.rms_unit_q24(x, eps.expect("rms has an eps")),
+            2 => {
+                let (ez, es) = wide.expect("wide eps");
+                b.rms_norm_wide_q36(x, ez, es)
+            }
+            _ => {
+                let (ez, es) = wide.expect("wide eps");
+                b.rms_norm_wide_q36_exact(x, ez, es)
+            }
+        };
+        let y = b.reshape_fixed(y, &[rows * n]);
+        let y = b.commit(y);
+        b.finish(&[y])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(out_dtype, &[rows * n])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[rows * n]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer; layers], post, 0)
+}
+
+#[test]
+fn the_unit_row_kernels_are_the_reference_on_random_and_extreme_operands_and_their_broken_variants_are_caught() {
+    gate("l2_unit_q15", &rowop_program(true, DType::I16, 3, 8, 2), 2, 6);
+    gate("l2_unit_q15", &rowop_program(true, DType::I16, 1, 16, 1), 1, 6);
+    gate("rms_unit_q24", &rowop_program(false, DType::I16, 3, 8, 2), 2, 6);
+    gate("rms_unit_q24", &rowop_program(false, DType::I32, 2, 16, 1), 1, 6);
+    for kind in [2u8, 3] {
+        gate("rms_norm_wide_q36", &rowop_program_kind(kind, DType::I16, 3, 8, 2), 2, 6);
+        gate("rms_norm_wide_q36", &rowop_program_kind(kind, DType::I32, 2, 16, 1), 1, 6);
+    }
+}
+
+/// **The gated delta rule's step and the unit-row kernels on the Metal GPU** (RFC-0002 §7 F-6; `--features misaka-palw-tir-exec/metal`, macOS):
+/// the same gate, the same programs, with the backend on and its size floor at zero — the GPU's integers are the reference's. Skipped where
+/// the build or the machine has no backend.
+#[test]
+fn the_gpu_backend_is_the_reference_on_the_gdn_step_and_the_wide_patterns() {
+    use misaka_palw_tir_exec::fused::metal::{metal_counts, set_metal_backend, set_metal_min_elems};
+    if set_metal_backend(true).is_err() {
+        eprintln!("no Metal backend: skipped");
+        return;
+    }
+    set_metal_min_elems(0);
+    let before = metal_counts();
+    gate("gdn_step_q36", &gdn_program(4, 8, 16, 2), 2, 6);
+    gate("gdn_step_q36", &gdn_program(2, 4, 4, 1), 1, 6);
+    let after_gdn = metal_counts();
+    assert!(after_gdn.0 > before.0, "the GPU answered no gdn step: {before:?} -> {after_gdn:?}");
+    gate("rms_norm_wide_q36", &rowop_program_kind(2, DType::I16, 3, 8, 2), 2, 6);
+    gate("rms_norm_wide_q36", &rowop_program_kind(3, DType::I32, 2, 16, 1), 1, 6);
+    let after = metal_counts();
+    set_metal_backend(false).expect("off");
+    assert!(after.0 > before.0, "the GPU answered nothing: {before:?} -> {after:?}");
+    eprintln!("GPU answered {} calls, handed back {}", after.0 - before.0, after.1 - before.1);
 }
 
 // ---- every HF tiny-fixture program -------------------------------------------------------------
@@ -401,5 +492,61 @@ fn bench_the_tiny_hybrids_generic_and_fused() {
         }
         assert_eq!(logits[0], logits[1], "{name}: the fused backend's logits differ");
         eprintln!("{line}");
+    }
+}
+
+/// **The measurement behind `ADMISSIBLE_GENERIC`'s coefficient** (`misaka-palw-sdk` `GENERIC_WIDE_PASS_FACTOR_V1`): the unit-row programs at
+/// serving-like shapes, stepped on the generic backend and with the fused kernels on, every logit compared, the median time per position
+/// printed with the ratio. A measurement, not a check: `cargo test --release -p misaka-palw-tir-lower --test fused_gate measure_ -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_the_generic_over_fused_ratio_of_the_wide_patterns() {
+    use std::time::Instant;
+    let cases: [(&str, u8, DType, u32, u32); 6] = [
+        ("l2_unit_q15 32x128", 0, DType::I16, 32, 128),
+        ("l2_unit_q15 8x2048", 0, DType::I16, 8, 2048),
+        ("rms_unit_q24 1x4096", 1, DType::I16, 1, 4096),
+        ("rms_unit_q24 16x512", 1, DType::I16, 16, 512),
+        ("rms_norm_wide_q36 1x4096", 2, DType::I16, 1, 4096),
+        ("rms_norm_wide_q36 8x1024", 2, DType::I16, 8, 1024),
+    ];
+    for (label, kind, dtype, rows, n) in cases {
+        let p = rowop_program_kind(kind, dtype, rows, n, 8);
+        let mut rng = ChaCha20Rng::seed_from_u64(77);
+        let mut raw_rng = ChaCha20Rng::seed_from_u64(78);
+        let mut raw = draw(&mut raw_rng, 0.0);
+        let dtypes: std::collections::BTreeMap<String, DType> = p.params.iter().map(|d| (d.name.clone(), d.dtype)).collect();
+        let params = params_for(&p, 8, &mut |name, i| {
+            let v = raw(name, i);
+            if v == i128::MIN { value(&mut rng, dtypes[name], 0.0) } else { v }
+        });
+        let plan = TirPlan::compile(&p).expect("plan");
+        let owned: Vec<((u16, Option<u16>), Vec<u8>)> =
+            plan.param_instances.iter().map(|&(j, l)| ((j, l), params.param(j, l).expect("bound").to_le_bytes())).collect();
+        let mut xparams = TirParams::new(&plan);
+        for ((j, layer), b) in &owned {
+            let data = ParamData::from_le_bytes(p.params[*j as usize].dtype, b).expect("whole elements");
+            xparams.insert(&plan, *j, *layer, data).expect("a param");
+        }
+        let seq: Vec<u32> = (0..64).map(|i| (i * 5 + 1) % VOCAB).collect();
+        let mut med = [0f64; 2];
+        let mut logits: Vec<Vec<Vec<i128>>> = Vec::new();
+        for (k, fused) in [false, true].into_iter().enumerate() {
+            let mut exec = TirExecutor::new(&plan, &xparams).expect("an executor");
+            exec.set_fused(fused);
+            let mut times = Vec::new();
+            let mut out = Vec::new();
+            for tok in &seq {
+                let s = Instant::now();
+                exec.step(*tok, &mut misaka_palw_tir_exec::NoSink).expect("a step");
+                times.push(s.elapsed().as_secs_f64());
+                out.push(exec.logits().1.to_i128s());
+            }
+            times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            med[k] = times[times.len() / 2];
+            logits.push(out);
+        }
+        assert_eq!(logits[0], logits[1], "{label}: the fused logits differ");
+        eprintln!("{label:>28}: generic {:>9.1} us  fused {:>9.1} us  ratio {:.2}x", med[0] * 1e6, med[1] * 1e6, med[0] / med[1]);
     }
 }

@@ -399,6 +399,43 @@ impl Report {
                 let _ = writeln!(o, "  - {p}");
             }
             let _ = writeln!(o, "  {}", f.note);
+            if let Some(i) = &f.independence {
+                let share = i
+                    .licensable_share_at_floor_permille
+                    .map(|p| format!(" — {p} ‰ of its claims would be licensable at exactly the floor"))
+                    .unwrap_or_default();
+                let base = i.base_operators.map(|b| format!(" against {b} base operators on the network")).unwrap_or_default();
+                let _ = writeln!(
+                    o,
+                    "  independence: {} ready operators and {} independent{base}{share} ({})",
+                    i.seat_count,
+                    i.independent_floor,
+                    if i.fence_in_force { "palw_class_seating in force" } else { "palw_class_seating not in force" }
+                );
+            }
+        }
+        if let Some(full) = &self.full {
+            let _ = writeln!(o);
+            let _ = writeln!(o, "full            pack {}{}", full.pack, full.pack_digest.as_deref().map(|d| format!(" ({})", &d[..16.min(d.len())])).unwrap_or_default());
+            for c in &full.checks {
+                let _ = writeln!(o, "  {:<7} {:<18} {}", c.status, c.name, c.detail);
+            }
+            if let Some(root) = &full.artifact_root {
+                let _ = writeln!(o, "  artifact root {}…", &root[..24.min(root.len())]);
+            }
+            for c in &full.on_chain {
+                let _ = writeln!(o, "  on the chain: {c}");
+            }
+        }
+        if let Some(node) = &self.node {
+            let _ = writeln!(
+                o,
+                "node            {} at DAA {} · {} classes{}",
+                node.network,
+                node.tip_daa,
+                node.classes,
+                node.base_operators.map(|b| format!(" · {b} base operators")).unwrap_or_default()
+            );
         }
         if !self.notes.is_empty() {
             let _ = writeln!(o);

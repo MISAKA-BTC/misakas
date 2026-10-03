@@ -104,6 +104,7 @@ dense!(
     gemma3,
     gemma3_vlm,
     llava,
+    paligemma_vlm,
     mistral3_vlm,
     phi3_longrope,
     olmo,
@@ -116,6 +117,8 @@ dense!(
     gemma4_kvshare,
     cohere,
     cohere2,
+    bitnet,
+    apertus,
     stablelm,
     stablelm_parallel,
     starcoder2,
@@ -158,7 +161,29 @@ macro_rules! recurrent {
     )*};
 }
 
-recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv);
+recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv, lfm2, kimi_linear, nemotron_h, nemotron_h_latent, falcon_h1, falcon_h1_norm, falcon_h1_gate);
+
+// Qwen4-Exp's generic features (hyper-connection streams, hashed n-gram per-layer embeddings, sparse block attention,
+// delta nets at any ratio, a routed MoE): the named acceptance matrix is `tests/qwen4_exp.rs`; here every fixture
+// holds the same bar as the recurrent families.
+recurrent!(
+    qwen4_exp,
+    qwen4_gdn_1_1,
+    qwen4_gdn_1_3,
+    qwen4_gdn_1_4,
+    qwen4_gdn_sigmoid_gate,
+    qwen4_hc1,
+    qwen4_hc2,
+    qwen4_hc_edge,
+    qwen4_moe512,
+    qwen4_ple_bigram,
+    qwen4_ple_boundary,
+    qwen4_ple_trigram,
+    qwen4_qsa_k1,
+    qwen4_qsa_kmax,
+    qwen4_qsa_r3,
+    qwen4_qsa_tie,
+);
 
 /// Per-site errors of one fixture (debugging aid): `PALW_SITES=qwen3_5 cargo test … -- --ignored`.
 #[test]
@@ -194,7 +219,7 @@ fn a_recurrent_program_is_calibrated_as_long_as_its_context() {
         misaka_palw_tir_lower::hl::build_program(&spec).expect("hl")
     };
     let short = vec![vec![1usize; 32]; 4];
-    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv"] {
+    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv", "lfm2", "kimi_linear", "nemotron_h", "falcon_h1"] {
         let hl = hl_of(recurrent);
         assert!(fidelity::check_calibration_length(&hl, &short, 64).is_err(), "{recurrent}");
         assert_eq!(fidelity::check_calibration_length(&hl, &short, 32), Ok(Some(32)), "{recurrent}");

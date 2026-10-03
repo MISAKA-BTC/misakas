@@ -2240,6 +2240,22 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .filter(|b| b.active && b.above_floor && b.free_collateral_sompi >= b.needed_collateral_sompi)
                 .count() as u32,
             blocking: Vec::new(),
+            // RFC-0002 Part II §II.7.5 Proposal A: the seating `palw_class_seating` reads (empty below the fence).
+            seating: read
+                .classes
+                .iter()
+                .filter_map(|class| {
+                    class.seating.map(|s| kaspa_rpc_core::RpcPalwClassSeating {
+                        class_id: class.class_id.to_string(),
+                        ready_operators: s.ready_operators,
+                        needed_operators: s.needed_operators,
+                        independent_operators: s.independent_operators,
+                        needed_independent: s.needed_independent,
+                        base_operators: s.base_operators,
+                        licensable_share_permille: s.licensable_share_permille(),
+                    })
+                })
+                .collect(),
         };
         // RFC-0002 Part II §II.7.4: what blocks each class and at which stage, read off the response the node just built
         // (one pure function, shared with the CLI, which derives the same reading for a node that serves none).

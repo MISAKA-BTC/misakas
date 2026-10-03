@@ -1787,6 +1787,17 @@ from!(item: &kaspa_rpc_core::RpcPalwClassBlocking, protowire::RpcPalwClassBlocki
         next: item.next.clone(),
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwClassSeating, protowire::RpcPalwClassSeating, {
+    Self {
+        class_id: item.class_id.clone(),
+        ready_operators: item.ready_operators,
+        needed_operators: item.needed_operators,
+        independent_operators: item.independent_operators,
+        needed_independent: item.needed_independent,
+        base_operators: item.base_operators,
+        licensable_share_permille: item.licensable_share_permille.into(),
+    }
+});
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
     Self {
         available: item.available,
@@ -1828,6 +1839,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         panel_horizon_spans: item.panel_horizon_spans,
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(protowire::RpcPalwClassBlocking::from).collect(),
+        seating: item.seating.iter().map(protowire::RpcPalwClassSeating::from).collect(),
         error: None,
     }
 });
@@ -3964,6 +3976,18 @@ from!(item: &protowire::RpcPalwClassBlocking, kaspa_rpc_core::RpcPalwClassBlocki
         next: item.next.clone(),
     }
 });
+try_from!(item: &protowire::RpcPalwClassSeating, kaspa_rpc_core::RpcPalwClassSeating, {
+    Self {
+        class_id: item.class_id.clone(),
+        ready_operators: item.ready_operators,
+        needed_operators: item.needed_operators,
+        independent_operators: item.independent_operators,
+        needed_independent: item.needed_independent,
+        base_operators: item.base_operators,
+        licensable_share_permille: u16::try_from(item.licensable_share_permille)
+            .map_err(|_| RpcError::General(format!("licensable_share_permille {} is not a permille", item.licensable_share_permille)))?,
+    }
+});
 try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRegistryResponse>, {
     Self {
         available: item.available,
@@ -4005,6 +4029,7 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         panel_horizon_spans: item.panel_horizon_spans,
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(kaspa_rpc_core::RpcPalwClassBlocking::from).collect(),
+        seating: item.seating.iter().map(kaspa_rpc_core::RpcPalwClassSeating::try_from).collect::<Result<Vec<_>, _>>()?,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

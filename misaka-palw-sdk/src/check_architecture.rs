@@ -32,6 +32,7 @@ use kaspa_consensus_core::palw_tir_v1::{PALW_T12_TIR_CEILINGS_V1, PalwTirCeiling
 use kaspa_hashes::Hash64;
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir::admit::{TirAdmitError, TirAdmitInputsV1, TirCeilingsV1};
+use misaka_palw_tir_lower::hf_schema::ReadOptions;
 use misaka_palw_tir_lower::spec::{Act, ArchSpec, Ffn, Gain, Glu, Mixer, NormKind, Position, Residual};
 
 /// A verdict of either mode.
@@ -53,6 +54,19 @@ pub enum ArchVerdictV1 {
     /// A check needs something not given (the artifact, a verified reference).
     Unverified(String),
     NeedsKernel(String),
+    /// **`ADMISSIBLE_GENERIC`** (RFC-0002 §8): registrable as data, and some wide patterns have no fused kernel in this build, so a
+    /// node runs them on the generic kernels. `slowdown_permille` is the estimate ([`generic_slowdown_v1`]) of the generic-kernel
+    /// position time over the fully fused one, in thousandths (1,300 = 1.3x); `patterns` names what runs generic. Speed only: nothing
+    /// of it reaches a consensus object (F-3).
+    AdmissibleGeneric {
+        slowdown_permille: u32,
+        patterns: Vec<String>,
+    },
+    /// **`LOWERABLE_UNVERIFIED`** (RFC-0002 §8): lowered from an architecture whose float reference is remote code this tool cannot run
+    /// offline, so the fidelity column is empty; `inner` is the verdict the program itself earned, which holds.
+    LowerableUnverified {
+        inner: Box<ArchVerdictV1>,
+    },
 }
 
 impl std::fmt::Display for ArchVerdictV1 {
@@ -66,13 +80,25 @@ impl std::fmt::Display for ArchVerdictV1 {
             Self::Refused(r) => write!(f, "REFUSED({r})"),
             Self::Unverified(r) => write!(f, "UNVERIFIED({r})"),
             Self::NeedsKernel(k) => write!(f, "NEEDS_KERNEL({k})"),
+            Self::AdmissibleGeneric { slowdown_permille, patterns } => write!(
+                f,
+                "ADMISSIBLE_GENERIC (estimated slowdown {}.{:02}x on generic kernels: {})",
+                slowdown_permille / 1000,
+                (slowdown_permille % 1000) / 10,
+                patterns.join("; ")
+            ),
+            Self::LowerableUnverified { inner } => write!(f, "LOWERABLE_UNVERIFIED (the program's own verdict: {inner})"),
         }
     }
 }
 
 impl ArchVerdictV1 {
     pub fn is_admissible(&self) -> bool {
-        matches!(self, Self::Admissible { .. })
+        match self {
+            Self::Admissible { .. } | Self::AdmissibleGeneric { .. } => true,
+            Self::LowerableUnverified { inner } => inner.is_admissible(),
+            _ => false,
+        }
     }
 }
 
@@ -87,6 +113,11 @@ pub struct IrReportV1 {
     pub ceilings_source: String,
     pub ceilings: PalwTirCeilingsV1,
     pub program_bytes: usize,
+    /// **The seat need**: the bytes of the integer parameters the artifact carries (every parameter at its dtype,
+    /// a per-layer one once per layer occurrence), i.e. what a seat must hold resident before any state. A
+    /// registration may carry any artifact size: seat resources gate READINESS (staged enablement), not admission,
+    /// so this is reported, never judged.
+    pub artifact_bytes: u128,
     pub blocks: usize,
     pub nodes: usize,
     /// Nodes of one position: `pre`, every layer's block, `post`.
@@ -98,12 +129,37 @@ pub struct IrReportV1 {
     /// `tir_admit_v1`'s report (text lines and JSON) — its numbers, or its refusal.
     pub admission_text: String,
     pub admission_json: serde_json::Value,
+    /// The feature report of a config ([`misaka_palw_tir_lower::model::ArchitectureReport`]): the
+    /// model_type (informational), the features each `SUPPORTED` or `MISSING` with the capability that
+    /// would close the gap, the support level, the adapter used, and whether the protocol would need a
+    /// new primitive or court kernel. `None` for a program, which has no config.
+    pub architecture_report: Option<misaka_palw_tir_lower::model::ArchitectureReport>,
 }
 
 /// `tile_len` and the canonical history chunk IR mode admits with unless given (a layout's
 /// `commit_tiles` and `h_tile`).
 pub const IR_DEFAULT_TILE_LEN_V1: u32 = 64;
 pub const IR_DEFAULT_H_CHUNK_V1: u32 = 64;
+/// The source length (the encoder's padded axis) IR mode judges an encoder–decoder at unless given: the encoder is ONE
+/// position over this many rows, so its cost and cones scale with it (`docs/design/palw/tir/frontend-as-data-v1.md` §3.4).
+pub const IR_DEFAULT_SOURCE_LEN_V1: u32 = 128;
+/// The decoder's window (target positions its histories keep) it is judged at unless given.
+pub const IR_DEFAULT_TARGET_LEN_V1: u32 = 128;
+
+/// The lengths an encoder–decoder is judged at. These are DEFAULTS (128 source rows, 128 target positions): a
+/// registration declares its own, and the preflight reports what fits (`palw-class check-architecture
+/// --source-len N --target-len M`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IrShapeV1 {
+    pub source_len: u32,
+    pub target_len: u32,
+}
+
+impl Default for IrShapeV1 {
+    fn default() -> Self {
+        IrShapeV1 { source_len: IR_DEFAULT_SOURCE_LEN_V1, target_len: IR_DEFAULT_TARGET_LEN_V1 }
+    }
+}
 
 /// **The inputs `tir_admit_v1` runs with on this network**: the layout facts, tir/core's terminal
 /// ceilings, and the network's per-position MACs, state bytes and admission work cap in place of
@@ -153,7 +209,47 @@ fn ir_lower_opts(long_history: bool) -> misaka_palw_tir_lower::lower::LowerOpts 
 
 /// **IR mode from a config** with `tile_len` and the history chunk given.
 pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: bool, tile_len: u32, h_chunk: u32) -> IrReportV1 {
-    let opts = ir_lower_opts(long_history);
+    check_ir_config_read_v1(params, config_text, None, &ReadOptions::default(), long_history, tile_len, h_chunk)
+}
+
+/// **IR mode from a config**, read through the adapter `read` names (the built-in that claims it, a
+/// user-supplied adapter file, none) and, when given, the checkpoint's tensor names (which a Level-B
+/// adapter's name templates are checked against): the feature report first, then lowering and
+/// `tir_admit_v1`. A model is judged by the features it combines, never by its `model_type`.
+pub fn check_ir_config_read_v1(
+    params: &Params,
+    config_text: &str,
+    tensors: Option<&misaka_palw_tir_lower::hf_schema::TensorIndex>,
+    read: &ReadOptions,
+    long_history: bool,
+    tile_len: u32,
+    h_chunk: u32,
+) -> IrReportV1 {
+    check_ir_config_shaped_v1(params, config_text, tensors, read, long_history, tile_len, h_chunk, IrShapeV1::default())
+}
+
+/// [`check_ir_config_read_v1`] with the lengths an encoder–decoder is judged at given (a decoder ignores them).
+#[allow(clippy::too_many_arguments)]
+pub fn check_ir_config_shaped_v1(
+    params: &Params,
+    config_text: &str,
+    tensors: Option<&misaka_palw_tir_lower::hf_schema::TensorIndex>,
+    read: &ReadOptions,
+    long_history: bool,
+    tile_len: u32,
+    h_chunk: u32,
+    shape: IrShapeV1,
+) -> IrReportV1 {
+    let parsed = serde_json::from_str::<serde_json::Value>(&misaka_palw_tir_lower::hf_config::sanitize_json(config_text)).ok();
+    let report = parsed.as_ref().map(|c| misaka_palw_tir_lower::model::analyze(c, tensors, read));
+    let opts = misaka_palw_tir_lower::lower::LowerOpts {
+        history_bound: if long_history {
+            misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
+        } else {
+            misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
+        },
+        ..Default::default()
+    };
     let (ceilings, source, _) = tir_ceilings_v1(params);
     let empty = |architecture: String, verdict: ArchVerdictV1| IrReportV1 {
         architecture,
@@ -162,6 +258,7 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
         ceilings_source: source.clone(),
         ceilings,
         program_bytes: 0,
+        artifact_bytes: 0,
         blocks: 0,
         nodes: 0,
         unrolled_nodes: 0,
@@ -170,8 +267,14 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
         inputs: None,
         admission_text: String::new(),
         admission_json: serde_json::Value::Null,
+        architecture_report: report.clone(),
     };
-    let spec = match misaka_palw_tir_lower::parse_config_str(config_text) {
+    // An encoder–decoder is two programs (the encoder over the padded source, then the decoder's text stage): each is
+    // admitted on its own, and the model is admissible when both are (ENCDEC_FROM_SPEC_V1).
+    if let Some(c) = parsed.as_ref().filter(|c| misaka_palw_tir_lower::hf_schema::is_encoder_decoder(c)) {
+        return check_ir_encdec_v1(params, c, tensors, read, tile_len, h_chunk, shape, report);
+    }
+    let spec = match misaka_palw_tir_lower::hf_config::parse_config_str_read(config_text, read, misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()) {
         Ok(s) => s,
         Err(e) => return empty(String::new(), not_lowerable(e)),
     };
@@ -182,11 +285,103 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
     };
     let mut r = check_ir_program_at_v1(params, &prep.program, tile_len, h_chunk);
     r.architecture = arch;
+    r.architecture_report = report;
     if matches!(spec.reference, misaka_palw_tir_lower::spec::Reference::RemoteCode { .. }) {
         r.unverified
             .push("the architecture is remote code: the lowering follows its source, no installed transformers reference".into());
+        r.verdict = ArchVerdictV1::LowerableUnverified { inner: Box::new(r.verdict.clone()) };
     }
     r
+}
+
+/// **IR mode on an encoder–decoder config**: the adapter of kind `encdec` builds the spec, both stages are lowered
+/// (the encoder at `shape.source_len` source rows, the decoder over `shape.target_len`; defaults [`IrShapeV1`]) and each is
+/// judged by [`check_ir_program_at_v1`]. The verdict is the first stage's that is not admissible, else admissible;
+/// the numbers add up (`program_bytes`, `blocks`, `nodes`, `unrolled_nodes`), `admission_json` carries both stages'.
+#[allow(clippy::too_many_arguments)]
+fn check_ir_encdec_v1(
+    params: &Params,
+    config: &serde_json::Value,
+    tensors: Option<&misaka_palw_tir_lower::hf_schema::TensorIndex>,
+    read: &ReadOptions,
+    tile_len: u32,
+    h_chunk: u32,
+    shape: IrShapeV1,
+    report: Option<misaka_palw_tir_lower::model::ArchitectureReport>,
+) -> IrReportV1 {
+    use misaka_palw_tir_lower::lower::encdec::{hl_programs, lower_decoder, lower_encoder};
+    let (ceilings, source, _) = tir_ceilings_v1(params);
+    let refuse = |architecture: String, verdict: ArchVerdictV1| IrReportV1 {
+        architecture,
+        verdict,
+        unverified: Vec::new(),
+        ceilings_source: source.clone(),
+        ceilings,
+        program_bytes: 0,
+        artifact_bytes: 0,
+        blocks: 0,
+        nodes: 0,
+        unrolled_nodes: 0,
+        max_context: 0,
+        graph_ir_root: None,
+        inputs: None,
+        admission_text: String::new(),
+        admission_json: serde_json::Value::Null,
+        architecture_report: report.clone(),
+    };
+    let spec = match misaka_palw_tir_lower::hf_schema::read_encdec(config, read) {
+        Ok(r) => r.spec,
+        Err(f) => return refuse(String::new(), not_lowerable(f.error)),
+    };
+    let arch = spec.architecture.clone();
+    let has = |n: &str| tensors.is_some_and(|t| t.has(n));
+    let (lmax, wmax) = (shape.source_len, shape.target_len);
+    let stages = hl_programs(&spec, lmax as usize, &has).and_then(|((ehl, _), (dhl, _))| {
+        let enc = lower_encoder(&ehl, &spec, lmax)?;
+        let dec = lower_decoder(&dhl, &spec, lmax, wmax)?;
+        Ok((enc, dec))
+    });
+    let (enc, dec) = match stages {
+        Ok(p) => p,
+        Err(e) => return refuse(arch, not_lowerable(e)),
+    };
+    let (re, rd) = (check_ir_program_at_v1(params, &enc.program, tile_len, h_chunk), check_ir_program_at_v1(params, &dec.program, tile_len, h_chunk));
+    let verdict = if !re.verdict.is_admissible() {
+        re.verdict.clone()
+    } else if !rd.verdict.is_admissible() {
+        rd.verdict.clone()
+    } else {
+        // Both stages admissible: the model is as slow as its slower stage's estimate says.
+        match (&re.verdict, &rd.verdict) {
+            (ArchVerdictV1::AdmissibleGeneric { slowdown_permille: a, patterns: pa }, ArchVerdictV1::AdmissibleGeneric { slowdown_permille: b, patterns: pb }) => {
+                ArchVerdictV1::AdmissibleGeneric { slowdown_permille: (*a).max(*b), patterns: pa.iter().chain(pb).cloned().collect() }
+            }
+            (g @ ArchVerdictV1::AdmissibleGeneric { .. }, _) => g.clone(),
+            (_, g @ ArchVerdictV1::AdmissibleGeneric { .. }) => g.clone(),
+            _ => rd.verdict.clone(),
+        }
+    };
+    let mut unverified = re.unverified.clone();
+    unverified.push(format!("stage 0 (encoder, {lmax} source rows): {}", re.verdict));
+    unverified.push(format!("stage 1 (decoder, {wmax} target positions): {}", rd.verdict));
+    IrReportV1 {
+        architecture: arch,
+        verdict,
+        unverified,
+        ceilings_source: re.ceilings_source.clone(),
+        ceilings: re.ceilings,
+        program_bytes: re.program_bytes + rd.program_bytes,
+        artifact_bytes: re.artifact_bytes + rd.artifact_bytes,
+        blocks: re.blocks + rd.blocks,
+        nodes: re.nodes + rd.nodes,
+        unrolled_nodes: re.unrolled_nodes + rd.unrolled_nodes,
+        max_context: rd.max_context,
+        graph_ir_root: None,
+        inputs: re.inputs,
+        admission_text: format!("── stage 0: the encoder ──\n{}\n── stage 1: the decoder ──\n{}", re.admission_text, rd.admission_text),
+        admission_json: serde_json::json!({"stages": [re.admission_json, rd.admission_json]}),
+        architecture_report: report,
+    }
 }
 
 fn not_lowerable(e: misaka_palw_tir_lower::LowerError) -> ArchVerdictV1 {
@@ -199,6 +394,16 @@ fn not_lowerable(e: misaka_palw_tir_lower::LowerError) -> ArchVerdictV1 {
 /// **IR mode on a program**, at the default layout facts.
 pub fn check_ir_program_v1(params: &Params, program: &TirProgramV1) -> IrReportV1 {
     check_ir_program_at_v1(params, program, IR_DEFAULT_TILE_LEN_V1, IR_DEFAULT_H_CHUNK_V1)
+}
+
+/// The bytes of a program's integer parameters: each at its dtype, a per-layer one once per layer occurrence.
+pub fn artifact_bytes_of(program: &TirProgramV1) -> u128 {
+    let layers = program.schedule.layers.len() as u128;
+    program
+        .params
+        .iter()
+        .map(|d| d.shape.iter().map(|x| *x as u128).product::<u128>() * d.dtype.width() as u128 * if d.per_layer { layers } else { 1 })
+        .sum()
 }
 
 /// **IR mode on a program**: the network's primitive set, then `tir_admit_v1` under the network's
@@ -220,6 +425,7 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
         ceilings_source: source,
         ceilings,
         program_bytes: bytes.len(),
+        artifact_bytes: artifact_bytes_of(program),
         blocks: program.blocks.len(),
         nodes: program.blocks.iter().map(|b| b.nodes.len()).sum(),
         unrolled_nodes,
@@ -228,6 +434,7 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
         inputs: Some(inputs),
         admission_text: String::new(),
         admission_json: serde_json::Value::Null,
+        architecture_report: None,
     };
     // The primitive set first: a program over another set is not this network's to judge.
     if program.prim_set_id[..] != *prim_set.as_byte_slice() {
@@ -266,12 +473,86 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
             return r;
         }
     }
-    r.verdict = ArchVerdictV1::Admissible {
-        pending: vec![
-            "admission v10's layout checks (declared tiles, C ≤ min C_j, the canonical job, close bytes, the window court) need a declared layout".into(),
-        ],
+    let pending = vec![
+        "admission v10's layout checks (declared tiles, C ≤ min C_j, the canonical job, close bytes, the window court) need a declared layout".into(),
+    ];
+    r.verdict = match generic_slowdown_v1(program) {
+        Some((slowdown_permille, patterns)) => ArchVerdictV1::AdmissibleGeneric { slowdown_permille, patterns },
+        None => ArchVerdictV1::Admissible { pending },
     };
     r
+}
+
+/// **The weight of a generic wide pattern against its fused kernel** in [`generic_slowdown_v1`]: the generic backend runs a pattern's wide
+/// (`i128`-working) nodes as separate passes over `i128` lanes (a table gather or a division per element), where a fused kernel visits each
+/// element once in machine words. **Measured**, not assumed: `misaka-palw-tir-lower/tests/fused_gate.rs`
+/// `measure_the_generic_over_fused_ratio_of_the_wide_patterns` steps the three unit-row patterns (`l2_unit_q15`, `rms_unit_q24`,
+/// `rms_norm_wide_q36`) at six serving-like shapes (32x128 to 1x4096 rows) on the generic backend and with the fused kernels, every logit compared,
+/// release build, Apple M-series, median of 64 positions of an 8-layer program: the generic/fused ratios are 3.17, 3.42, 2.21, 2.95, 2.72 and
+/// 5.15 (geometric mean 3.2; each includes the program's un-fused gather and reshape nodes, so the pattern's own ratio is higher). The weight is the
+/// measured order, 3; the verdict still calls its figure an estimate (another machine, another shape).
+pub const GENERIC_WIDE_PASS_FACTOR_V1: u64 = 3;
+
+/// Below this share of a position's estimated work the generic wide passes do not change the verdict (`ADMISSIBLE` stays).
+pub const GENERIC_SHARE_FLOOR_PERMILLE_V1: u64 = 20;
+
+/// **`ADMISSIBLE_GENERIC`'s estimate** (RFC-0002 §8): `Some((slowdown in thousandths, the patterns that run generic))` when more than
+/// [`GENERIC_SHARE_FLOOR_PERMILLE_V1`] of the position's estimated work is in wide (`i128`-working) nodes no fused kernel of this build
+/// matches; `None` when the fused kernels cover every such pattern (the verdict stays `ADMISSIBLE`).
+///
+/// The model, over the program as it stands (before any params exist): the work of a node is its output's element count (a `MatMul`
+/// is `m·k·n / 8` — the dot product is one vectorised kernel on either backend, so it is never a fusion target), summed over the
+/// position's occurrences with an `H` dimension counted as one row; a node outside every matched region ([`misaka_palw_tir_exec::fused::match_program`],
+/// structural, so optimistic: whether a region runs fused on a node also needs its operands' ranges, which an artifact decides) whose
+/// working type is `i128` costs [`GENERIC_WIDE_PASS_FACTOR_V1`] times a fused pass. The slowdown is total / (total − extra) over the
+/// generic run — i.e. what generic costs against all wide patterns fused.
+pub fn generic_slowdown_v1(program: &TirProgramV1) -> Option<(u32, Vec<String>)> {
+    use misaka_palw_tir::{DType, Dim, Prim};
+    let plan = misaka_palw_tir_exec::TirPlan::compile(program).ok()?;
+    let regions = misaka_palw_tir_exec::fused::match_program(program);
+    let numel = |t: &misaka_palw_tir::TensorType| -> u64 {
+        t.shape.iter().map(|d| if let Dim::Fixed(n) = d { u64::from(*n) } else { 1 }).product::<u64>().max(1)
+    };
+    let (mut total, mut extra) = (0u64, 0u64);
+    let mut by_pattern: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    for bi in plan.occurrences.iter().map(|(b, _)| *b as usize) {
+        let Some(block) = plan.blocks.get(bi) else { continue };
+        let inside: std::collections::BTreeSet<u16> = regions.get(bi).into_iter().flatten().flat_map(|r| r.nodes.iter().copied()).collect();
+        for (i, n) in block.nodes.iter().enumerate() {
+            let work = match &n.prim {
+                Prim::MatMul => {
+                    let k = n.in_types.first().and_then(|t| t.shape.last()).map_or(1, |d| if let Dim::Fixed(k) = d { u64::from(*k) } else { 1 });
+                    (numel(&n.out) * k / 8).max(1)
+                }
+                _ => numel(&n.out),
+            };
+            total += work;
+            let wide = n.work == misaka_palw_tir_exec::plan::Work::I128 || n.out.dtype == DType::I128;
+            let computed = !matches!(n.prim, Prim::MatMul | Prim::Reshape | Prim::Gather { .. } | Prim::StateWrite { .. });
+            if wide && computed && !inside.contains(&(i as u16)) {
+                let e = work * (GENERIC_WIDE_PASS_FACTOR_V1 - 1);
+                extra += e;
+                let slot = by_pattern.entry(prim_name(&n.prim)).or_default();
+                slot.0 += 1;
+                slot.1 += work;
+            }
+        }
+    }
+    let total_generic = total + extra;
+    if total == 0 || extra * 1000 < total_generic * GENERIC_SHARE_FLOOR_PERMILLE_V1 {
+        return None;
+    }
+    let slowdown = (total_generic * 1000 / total).min(u64::from(u32::MAX)) as u32;
+    let mut patterns: Vec<(String, (u64, u64))> = by_pattern.into_iter().collect();
+    patterns.sort_by_key(|(_, (_, w))| std::cmp::Reverse(*w));
+    let patterns = patterns.into_iter().take(6).map(|(k, (n, w))| format!("{k} x{n} ({w} element-ops)")).collect();
+    Some((slowdown, patterns))
+}
+
+/// A primitive's name without its attributes.
+fn prim_name(p: &misaka_palw_tir::Prim) -> String {
+    let d = format!("{p:?}");
+    d.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_string()
 }
 
 // ───────────────────────────── legacy mode ─────────────────────────────
@@ -352,9 +633,13 @@ fn mixer_name(m: &Mixer) -> &'static str {
         Mixer::Attention(_) => "attention",
         Mixer::Mla(_) => "multi-head latent attention",
         Mixer::GatedDeltaNet(_) => "gated-delta",
+        Mixer::Kda(_) => "Kimi delta attention",
         Mixer::Mamba(_) => "Mamba",
         Mixer::Mamba2(_) => "Mamba2",
         Mixer::RwkvTime(_) => "RWKV",
+        Mixer::ShortConv(_) => "gated short convolution",
+        Mixer::Parallel(_) => "parallel mixer branches",
+        Mixer::None => "no mixer (the layer is its feed-forward)",
     }
 }
 
@@ -1153,7 +1438,7 @@ mod tests {
             .filter(|p| p.join("config.json").exists())
             .collect();
         dirs.sort();
-        assert_eq!(dirs.len(), 68, "tir-lower's HF tiny fixtures");
+        assert_eq!(dirs.len(), 94, "tir-lower's HF tiny fixtures (the 16 Qwen4-Exp ones included)");
         for d in dirs {
             let text = std::fs::read_to_string(d.join("config.json")).expect("config");
             let r = check_ir_config_v1(&params, &text, false);
@@ -1170,8 +1455,12 @@ mod tests {
         let verdict = |f: &str| check_ir_config_v1(&params, &read(&format!("tests/configs/real/{f}")), false).verdict;
         assert!(verdict("qwen2.5-1.5b-instruct.json").is_admissible());
         assert!(verdict("llama-3.1-8b.json").is_admissible());
+        // An encoder-decoder is two programs (ENCDEC_FROM_SPEC_V1): the encoder over the padded source and the decoder's
+        // text stage, each admitted on its own — it is no longer refused for being one.
+        let t5 = check_ir_config_v1(&params, &read("tests/configs/encdec/t5-small.json"), false);
+        assert!(!matches!(t5.verdict, ArchVerdictV1::NotLowerable(_)), "{}", t5.verdict);
+        assert!(t5.unverified.iter().any(|u| u.starts_with("stage 0 (encoder")) && t5.unverified.iter().any(|u| u.starts_with("stage 1 (decoder")), "{:?}", t5.unverified);
         // Encoder-only models are not decoders.
-        assert!(matches!(verdict("t5-small.json"), ArchVerdictV1::NotLowerable(_)));
         assert!(matches!(verdict("bert-base-uncased.json"), ArchVerdictV1::NotLowerable(_)));
         // 671B parameters at a 2^18-position history: past the provisional per-position MACs.
         assert!(matches!(verdict("deepseek-v3-bf16.json"), ArchVerdictV1::Exceeds { .. }), "{}", verdict("deepseek-v3-bf16.json"));
@@ -1220,6 +1509,74 @@ mod tests {
                 assert_eq!(row.verdict.is_admissible(), processor, "{id} {}: {}", row.model_id, row.verdict);
             }
         }
+    }
+
+    /// A one-layer program normalising a `[rows, n]` row of `i16` codes by the form `wide` names (the 39-node wide RMS the library
+    /// keeps, which no fused kernel covers once its operands are not the kernel's) or by the 21-node unit row.
+    fn norm_program(unit: bool, rows: u32, n: u32) -> TirProgramV1 {
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN};
+        use misaka_palw_tir::{DType, Ref, TensorType};
+        let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
+        let table = pb.param("x.table", DType::I16, &[16, rows * n], false);
+        let eps = pb.param("eps", DType::I64, &[1], false);
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let v = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+            b.finish(&[v])
+        };
+        let layer = {
+            let mut b = pb.block("layer", vec![TensorType::fixed(DType::I16, &[rows * n])]);
+            let x = b.reshape_fixed(Ref::CarryIn(0), &[rows, n]);
+            // The unit row is a fused kernel's pattern; the same value spelled with an extra wide pass is not.
+            let y = if unit {
+                b.rms_unit_q24(x, eps)
+            } else {
+                let u = b.rms_unit_q24(x, eps);
+                let wide = b.mul(u, u, DType::I128);
+                let one = b.c(DType::I64, 1 << 20);
+                let wide = b.div(wide, one, misaka_palw_tir::Rounding::Floor, DType::I128);
+                b.clamp(wide, i32::MIN as i64, i32::MAX as i64, DType::I32)
+            };
+            let y = b.reshape_fixed(y, &[rows * n]);
+            let y = b.clamp(y, -32768, 32767, DType::I16);
+            let y = b.commit(y);
+            b.finish(&[y])
+        };
+        let post = {
+            let mut b = pb.block("post", vec![TensorType::fixed(DType::I16, &[rows * n])]);
+            let l = b.reshape_fixed(Ref::CarryIn(0), &[rows * n]);
+            b.commit(l);
+            b.finish(&[])
+        };
+        pb.finish(pre, vec![layer], post, 0)
+    }
+
+    #[test]
+    fn a_program_whose_wide_patterns_are_all_fused_is_admissible_and_one_with_unfused_wide_work_is_admissible_generic() {
+        let (params, _, _) = network("testnet-11");
+        let fused = check_ir_program_v1(&params, &norm_program(true, 8, 256));
+        assert!(fused.admission_json["admitted"] == serde_json::json!(true), "{}", fused.verdict);
+        assert!(matches!(fused.verdict, ArchVerdictV1::Admissible { .. }), "a fused wide pattern leaves nothing generic: {}", fused.verdict);
+        let generic = check_ir_program_v1(&params, &norm_program(false, 8, 256));
+        let ArchVerdictV1::AdmissibleGeneric { slowdown_permille, patterns } = &generic.verdict else {
+            panic!("unfused wide work is ADMISSIBLE_GENERIC, got {}", generic.verdict)
+        };
+        assert!(*slowdown_permille > 1_020 && *slowdown_permille < 3_000, "{slowdown_permille}");
+        assert!(patterns.iter().any(|p| p.starts_with("Mul") || p.starts_with("Div")), "{patterns:?}");
+        assert!(generic.verdict.is_admissible(), "speed only: it registers");
+        assert!(generic.verdict.to_string().starts_with("ADMISSIBLE_GENERIC (estimated slowdown 1."), "{}", generic.verdict);
+    }
+
+    #[test]
+    fn a_remote_code_architecture_is_lowerable_unverified_and_keeps_the_programs_own_verdict() {
+        let (params, _, _) = network("testnet-11");
+        let text = std::fs::read_to_string(lower_dir("tools/corpus/specs/internlm2/config.json")).expect("a remote-code config");
+        let r = check_ir_config_v1(&params, &text, false);
+        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else { panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict) };
+        assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
+        assert!(r.verdict.is_admissible());
+        assert!(r.verdict.to_string().starts_with("LOWERABLE_UNVERIFIED ("), "{}", r.verdict);
     }
 
     #[test]

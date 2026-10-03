@@ -194,7 +194,7 @@ or fault is added only if A6/A7 show one is needed, and takes the next number he
 (13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
 analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
 evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 95
-and up (91–93 RFC-0006's, 94 RFC-0001's, are RFC-0006's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+and up (91–93 RFC-0006's, 94 RFC-0001's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
 object tags 83–92 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence

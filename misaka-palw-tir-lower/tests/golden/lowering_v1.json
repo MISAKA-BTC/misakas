@@ -89,6 +89,72 @@
     "params": 74,
     "program": "64684f1dd000ef46b5df94fd371d282610de08060344125782386b486d90981d6eb0c6b7d4ee7ab87f939cdda20188440b474177e367693a67a34896b52ac62d"
   },
+  "hf-quant/ct_fp8_channel": {
+    "artifact": "5ea3541c37f407d15016513d83139154d7f1f261954e5f5ad52e28dd6a45a294314f4d3c6f0df50648ecff3b03fbd0596ad322b0a07a2c527515f71a1b99649a",
+    "nodes": 317,
+    "params": 71,
+    "program": "8b002053951d28c0730cb865b26c364d8a8111355735e13647c10e2202b9f8c24b6c7bf12fc5f2478d85400f5cb33e920f2b3f8a1b9356d24505b9aa0ead93e6"
+  },
+  "hf-quant/ct_int8_channel": {
+    "artifact": "2e0ec37410f55fbcfc547fa11d083666fb7f117b7a6dfa2340fb0efcf9ae8709501beb79255317c9d59132325be85d86da14d40d9efee143aae7deccc84acde7",
+    "nodes": 342,
+    "params": 77,
+    "program": "f9c17afe6015cdbb3fa3c146d538fb372b4e84dc32b5dd45782c98290ca13b55eaeb1683901cc6464b007b0fe798e57c8ac8e703de8f0bc614c5c60503e90e64"
+  },
+  "hf-quant/ct_pack_b4_channel": {
+    "artifact": "d87e19253d2eaf2da03365c3985433928a44b0d1a7f6ddcd6ba8c01660177c56d1608fdbcc00db1c221c11df425b6d74655592497892e264bb2869f7b32e12fe",
+    "nodes": 345,
+    "params": 78,
+    "program": "80b5e3ea56a110516369d3712dabb2f4e370fc049b3eee5836b9f8a773ad3ea6a5faf0566161040c4579eb52a42d6cfc2de9c220bb9062686e794d89f19f6b9b"
+  },
+  "hf-quant/ct_pack_b4_g32": {
+    "artifact": "9f2bbd1da2b0e9e18079e12671577e01dd66a797dfa0da5a8bc4f81808dab6d31c45d0b5f183b39654657364c48136d61425239f0dd47bc76df255625c814c12",
+    "nodes": 352,
+    "params": 78,
+    "program": "bde76deae309bacb07e55d0688f543942f12e53258eef4a32988c22dd6ea2c556045cf93a2493296c0e09cea0768259f1fa786968fec679ac18906f97f1b51d7"
+  },
+  "hf-quant/ct_pack_b4_g32_act": {
+    "artifact": "65e6035d11d382336f5a1cf3ccd468018edca8d266ba37db359a71c2145472609ebf2e13af647c1debfff046198fdf224d2dc8e40b041e904363e1c31a18221d",
+    "nodes": 366,
+    "params": 85,
+    "program": "d3a1a35d363d13d2995e6c396a1087b94443e96eb0a3a13a03881a687973def0e302e019415b5b9a47a65399f84419c701759f203775c566835ddba695c50066"
+  },
+  "hf-quant/ct_pack_b4_g64_asym": {
+    "artifact": "710bb94482a1386d3d03b081160f759bff9ef50c718309da37b6285dab8d7141e2f4482f148c76bea5e01067e0b08ba07ea19055fe2f831ab866a4512c5a02d7",
+    "nodes": 349,
+    "params": 77,
+    "program": "2727009b75e745fa6c22d0155403caabeced604a09bf1eb532ce886bcc23bac6fe5d24f4032edd473ac6d78847911db240f5f6ca48ff87b76a9990d4a9aafed8"
+  },
+  "hf-quant/ct_pack_b8_g32_asym_act": {
+    "artifact": "0cba9558150ac592b7f0061591b39e8871510aa5737e3125da2acc3956fec9f96fe7b23d3cf7261315b5d0e84ed76e45306e88047000fe5e47ecab22d7351865",
+    "nodes": 412,
+    "params": 98,
+    "program": "e00b87d1e1bfa9152a03d429d2320a62d9a68045622fd177140354de8f0dd0a9cff1060b979d50377a2f79fd12454b11553789471c761bb017a8d1f21adfbdfc"
+  },
+  "hf-quant/ct_pack_qwen3moe_b4_g32": {
+    "artifact": "b81c21688fd9d8510b875ffce63d6fd88f53be352a7ac58b1f481a04d0c68413b8b94f9fa37ba91680da7fba70421fd8c0ae5fc41d5be7f9c3264eef211d169d",
+    "nodes": 447,
+    "params": 80,
+    "program": "e46828059a93a7d53d483e46044ee1c2f6bbd685bc375d8a674c4ae16e19ea253e9f8ec33886cf2799d57d4855f93feb6e77e7f7b99d46f30c2c2a0e30238f50"
+  },
+  "hf-quant/fp8_block_32": {
+    "artifact": "ba272208085d26d39b6ea3eae128216417c22ad8805cdd2789a20a20f43e1937fac7b5b3afcbb3e56d25e6e35dbb56abe82fb3e657a62b0da1eeac98339dc3be",
+    "nodes": 317,
+    "params": 71,
+    "program": "8b002053951d28c0730cb865b26c364d8a8111355735e13647c10e2202b9f8c24b6c7bf12fc5f2478d85400f5cb33e920f2b3f8a1b9356d24505b9aa0ead93e6"
+  },
+  "hf-quant/fp8_block_qwen3moe": {
+    "artifact": "c9ee6d9a2f2764e853921b6df6726583dbeddaf8f4cb303bb785ae3b2832354398c41e3905f7de2fab6f84683f645e3aa121d05cf43dbf1c11d1bab3bb1ce920",
+    "nodes": 400,
+    "params": 73,
+    "program": "9675481acb7f17e876e44f2ef8eb518bbdcca47baf6f3ed6e72c68f685b97ac62b05c36efbbc565cde0984db91b6f5d9b54827c8b5a3e00bf6348eff9c7559fa"
+  },
+  "hf-quant/fp8_block_ragged": {
+    "artifact": "1ae7ec43b8aea83604f9133f180d12da27eea8fecbb9b449f7d1b47dd68abb1658d5a2dc3bf2006285e93ce55545a9cab2783b4200aba99ba959fde5f2d5ed04",
+    "nodes": 314,
+    "params": 70,
+    "program": "f99cac8938dad1621cfe8fcbe18b8291c549db21de5a3d95c4d5f77730cda8888c2bd7e500ffc6003e26e58873fad1575576058bd568f361a59c9e4343845186"
+  },
   "hf-quant/gptq_b2_g32": {
     "artifact": "696ef5ca9a3d63fb28df0fdd0b590d89b5b13920f808ea2a22dfbb144cf3972250495753427307834c4012a76fe39095848fbde90ab097954d484dd6bf266845",
     "nodes": 366,
@@ -580,7 +646,9 @@
     "program": "244aa5b0f5f6d2d077bf377a52b51f4f4e7b5ad3d7b246169cdc2e9d465908fd35f326b05609b4295c1da7d14794d3f3e1c08cc8797508d299ff0bfa87169206"
   },
   "real/deepseek-v3-fp8.json": {
-    "refused": true
+    "nodes": 887,
+    "params": 178,
+    "program": "244aa5b0f5f6d2d077bf377a52b51f4f4e7b5ad3d7b246169cdc2e9d465908fd35f326b05609b4295c1da7d14794d3f3e1c08cc8797508d299ff0bfa87169206"
   },
   "real/exaone-3.5-2.4b-instruct.json": {
     "nodes": 308,

@@ -159,6 +159,11 @@ pub struct FillCtx<'a> {
     /// Elements of an `f32` block read to compute a deferred param's row scales.
     block_elems: usize,
     rscale_memo: Mutex<BTreeMap<(u32, bool), Arc<Vec<f64>>>>,
+    /// The largest magnitude of a shared-scale table's used rows, per HL param ([`Self::table_amax`]).
+    amax_memo: Mutex<BTreeMap<u32, f64>>,
+    /// Set when a fill runs for ONE BLOCK of a mapped param's artifact rows: the block's artifact-row range. The
+    /// param's float tensor in `params` is then that block's rows, already in artifact order.
+    block: Option<std::ops::Range<usize>>,
 }
 
 /// The prefix of the error a fill returns when it needs the whole of a param the streaming
@@ -203,7 +208,50 @@ impl<'a> FillCtx<'a> {
             rowsrc: None,
             block_elems: 0,
             rscale_memo: Mutex::new(BTreeMap::new()),
+            amax_memo: Mutex::new(BTreeMap::new()),
+            block: None,
         }
+    }
+
+    /// This context fills one block of a mapped param's artifact rows ([`RowKind::Mapped`]).
+    pub fn with_block(mut self, r: std::ops::Range<usize>) -> Self {
+        self.block = Some(r);
+        self
+    }
+
+    /// The artifact-row range of the block being filled, when a mapped param is filled by blocks.
+    pub fn block_range(&self) -> Option<std::ops::Range<usize>> {
+        self.block.clone()
+    }
+
+    /// Hand the context the table's `max |x|` ready-made (a streaming conversion computes it in a first pass).
+    pub fn inject_amax(&self, p: u32, a: f64) {
+        self.amax_memo.lock().expect("memo").insert(p, a);
+    }
+
+    /// The largest magnitude over the first `used` rows of HL param `p` (a `[.., dim]` table): from the param when it
+    /// is resident, else — a param the streaming conversion deferred — in one pass over its blocks that keeps
+    /// nothing but the maximum. Computed once per occurrence.
+    pub fn table_amax(&self, p: u32, used: usize) -> Result<f64> {
+        if let Some(a) = self.amax_memo.lock().expect("memo").get(&p) {
+            return Ok(*a);
+        }
+        let a = match (self.deferred.is_some_and(|d| d.contains(&p)), self.rowsrc) {
+            (true, Some(rs)) if self.params.get(p, self.layer).is_err() => {
+                let (rows, cols) = rs
+                    .row_space(p, self.layer)?
+                    .ok_or_else(|| LowerError::eval(format!("{DEFERRED_MARK}{p}: deferred but not readable by rows")))?;
+                table_amax_blocks(rs, p, self.layer, rows.min(used), cols, self.block_elems)?
+            }
+            _ => {
+                let t = self.f(p)?;
+                let cols = t.shape.last().copied().unwrap_or(1).max(1);
+                let rows = (t.data.len() / cols).min(used);
+                t.data[..rows * cols].iter().fold(0f64, |m, v| m.max((*v as f64).abs()))
+            }
+        };
+        self.amax_memo.lock().expect("memo").insert(p, a);
+        Ok(a)
     }
 
     /// A context for one occurrence of a streaming conversion: `deferred` HL params are not in
@@ -583,6 +631,8 @@ pub fn materialise(
             rowsrc: None,
             block_elems: 0,
             rscale_memo: Mutex::new(BTreeMap::new()),
+            amax_memo: Mutex::new(BTreeMap::new()),
+            block: None,
         };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];
@@ -604,6 +654,7 @@ pub fn materialise(
             out.tensors.insert(key, t);
         }
         if hbk == hl.post {
+            super::check_logits_range(hl, &ctx)?;
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
         quant_inexact += ctx.quant_inexact();
@@ -624,4 +675,22 @@ pub fn output_q(s: f64) -> Option<u8> {
         return None;
     }
     Some((-crate::detmath::ceil_log2(s)).clamp(0.0, 31.0) as u8)
+}
+
+/// `max |x|` over rows `0..rows` of HL param `p`, read `block_elems` elements at a time (keeps nothing else).
+pub(super) fn table_amax_blocks(
+    rs: &dyn RowSource,
+    p: u32,
+    layer: Option<usize>,
+    rows: usize,
+    cols: usize,
+    block_elems: usize,
+) -> Result<f64> {
+    let step = (block_elems / cols.max(1)).max(1);
+    let mut a = 0f64;
+    for blk in row_blocks(rows, step) {
+        let t = rs.rows(p, layer, blk)?;
+        a = t.data.iter().fold(a, |m, v| m.max((*v as f64).abs()));
+    }
+    Ok(a)
 }

@@ -563,6 +563,12 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
+    /// `Params::palw_tir_only_v1` (RFC-0002 Phase H): is a new class admitted only as an IR program or pipeline. Resolved in ONE place,
+    /// [`Self::palw_tir_only_at`], at the block the registration is judged in. `None` on every shipped preset.
+    pub(super) palw_tir_only_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_gdn_key_heads` (P0a): may a registration carry a version-3 profile. Resolved in
+    /// ONE place, [`Self::palw_gdn_key_heads_at`], at the block the registration is judged in.
+    pub(super) palw_gdn_key_heads: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1157,6 +1163,8 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_gen_v1: params.palw_gen_v1_fence(),
+            palw_tir_only_v1: params.palw_tir_only_fence(),
+            palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
@@ -5796,6 +5804,23 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for the named bond**, the fold's
+        // seating door asked before an inference is spent (`Ok` below the fence).
+        if facts.class_admission_refusal.is_none()
+            && let Some(outpoint) = bond
+        {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_class_seated_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &key,
+                &class_id,
+                candidate_daa,
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // **ADR-0152 v3.1 T-2(a) (S-6): and the named bond's share of the class**, which the fold
         // asks right after the class gate and skips the block's own attempt on — the attempt's
         // inference spent and its worker carve withheld and burned (`palw_v2_skipped_own_attempt_carve`).
@@ -10628,6 +10653,14 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
+                    // **RFC-0002 Phase H (`palw_tir_only_v1`): past it a new class is an IR program or an IR pipeline** — a legacy-family
+                    // registration (an admission carriage of hand-written kernels) is refused by name, before the graph walk. Dormant
+                    // everywhere: no preset arms it.
+                    if self.palw_tir_only_at(point.daa_score) {
+                        return Err(format!(
+                            "class {class_id} is a legacy-family registration and palw_tir_only_v1 admits only IR programs and pipelines (RFC-0002 Phase H)"
+                        ));
+                    }
                     kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(
                         bundle,
                         &carriage.profile,
@@ -10662,6 +10695,10 @@ impl VirtualStateProcessor {
                         // 2026-09-23 audit C-4: past its fence a non-fused class's priced geometry
                         // must fit the query row its graph reads.
                         self.palw_audit_2026_09_23_at(point.daa_score),
+                        // P0a: a version-3 profile (the derived GDN key-head count) is admitted by its
+                        // fence alone, and past it a V1/V2 hybrid whose head counts differ may not
+                        // register a map written over one head count.
+                        self.palw_gdn_key_heads_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // ADR-0152 §4-ter C5: past `palw_offence_attribution` a held class is admitted
@@ -14239,6 +14276,16 @@ impl VirtualStateProcessor {
     /// **RFC-0007 Part IV.1's audit mesh, read off the bundle's mirror** (`audit_mesh_from_daa`).
     fn palw_audit_mesh_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.audit_mesh_active_at(daa_score))
+    }
+
+    /// **RFC-0002 Phase H, resolved in exactly one place.**
+    fn palw_tir_only_at(&self, daa_score: u64) -> bool {
+        self.palw_tir_only_v1.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **P0a, resolved in exactly one place.**
+    fn palw_gdn_key_heads_at(&self, daa_score: u64) -> bool {
+        self.palw_gdn_key_heads.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**

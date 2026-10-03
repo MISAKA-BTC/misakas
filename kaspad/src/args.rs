@@ -452,6 +452,12 @@ pub struct Args {
     /// `palw_registry_resilience` in force at or below it. Command line only.
     #[serde(skip)]
     pub palw_drill_capped_at: Option<u64>,
+    /// **DRILL ONLY: arm the class-seating fence (`palw_class_seating`, RFC-0002 Part II §II.7.5 Proposal A) at this DAA**
+    /// (`config::drill::palw_drill_class_seating_at_v1`): one seating rule for every class kind — `seat_count` distinct ready
+    /// operators besides the executor, three of them independent — at the claim gate and the lifecycle. It needs `palw_gen_v1`
+    /// in force at or below it (combine with `--palw-drill-gen-at`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_class_seating_at: Option<u64>,
     /// **DRILL ONLY: cross the int-11 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int11_at_v1`): the
     /// whole list — decode rules, the generative fence, FP Job V5, the held leaf challenge, the improvement fence, F-N's
     /// verification term and the capacity ramp's ρ = 25 step — at H', and ρ = 100 at H' + 95, the offset the release uses. The
@@ -516,6 +522,21 @@ pub struct Args {
     /// the regions its plan matched fused. Node software in no consensus object, byte-identical to the
     /// generic kernels; OFF by default, and kept off until the D-F drills pass with it on.
     pub palw_tir_fused_kernels: bool,
+    /// **Run the fused unit-row kernels on the GPU** (RFC-0002 §7 F-6; implies `--palw-tir-fused-kernels`): bit-identical to the CPU
+    /// kernels, node software only. Needs a build with `--features palw-tir-metal` on macOS and a Metal device, else refused at startup.
+    pub palw_tir_metal: bool,
+    /// **Do not run the executor self-test before a seat's first possession proof** (RFC-0002 Part II §II.7.5 Proposal B, node
+    /// software, no fence). By default a seat runs, once per (class, artifact root), its own executor against the class's reference
+    /// evaluator on a few positions — the reference streamed from the artifact — and posts a proof only if they agree; a failure
+    /// is shown by `getPalwPanelStatus` as `EXECUTOR_NOT_CONFORMANT`. A seat that skips it harms only itself: the court convicts it on
+    /// its first wrong tile.
+    pub palw_no_seat_conformance: bool,
+    /// **DRILL ONLY: cross testnet-12's FOURTH post-launch flag day at this DAA** (P0a, the live GDN
+    /// key-head fix) — with the salt, every fence of `PALW_T12_POST_LAUNCH_FENCES_V4` is armed at this
+    /// height on the drill chain, after the first three flag days' moves and at a height of its own
+    /// (`config::drill::palw_drill_post_launch_fences_v4_at_v1`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_fence4_at: Option<u64>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (RFC-0006, D-S3): commit a CONSISTENT lie at a layer-shard boundary — `<position>:<occurrence>`: at that position the
@@ -803,6 +824,7 @@ impl Default for Args {
             palw_drill_witness_at: None,
             palw_drill_audit_mesh_at: None,
             palw_drill_capped_at: None,
+            palw_drill_class_seating_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
@@ -817,6 +839,9 @@ impl Default for Args {
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
+            palw_tir_metal: false,
+            palw_no_seat_conformance: false,
+            palw_drill_fence4_at: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
@@ -2077,6 +2102,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-class-seating-at")
+                .long("palw-drill-class-seating-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0002 Part II's class-seating fence (palw_class_seating: one seating \
+                     rule for every class kind) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a \
+                     height another fence uses, and unless palw_gen_v1 is in force at or below it (--palw-drill-gen-at arms it).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-int11-at")
                 .long("palw-drill-int11-at")
                 .require_equals(true)
@@ -2217,6 +2253,37 @@ pub fn cli() -> Command {
                 .help(
                     "PALW (RFC-0002 Phase G): run the IR fused kernels in every IR backend this node builds — byte-identical to \
                      the generic kernels, node software in no consensus object. Off by default until the D-F drills pass with it on.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-metal")
+                .long("palw-tir-metal")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 §7 F-6): run the fused unit-row kernels (l2_unit_q15, rms_unit_q24) on the Metal GPU — bit-identical to \
+                     the CPU kernels, node software in no consensus object; implies --palw-tir-fused-kernels. Needs a macOS build with \
+                     --features palw-tir-metal and a Metal device, else the node refuses to start.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-no-seat-conformance")
+                .long("palw-no-seat-conformance")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (RFC-0002 Part II Proposal B): do not run the executor self-test (this node's executor against the class's \
+                     reference evaluator on a few positions, streamed) before a seat's first possession proof of a class. Node software, \
+                     no consensus object; a seat that skips it harms only itself.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-fence4-at")
+                .long("palw-drill-fence4-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm every fence of testnet-12's fourth post-launch flag day (P0a, the \
+                     GDN key-head count) at this DAA on the drill chain, after the first three flag days. Nothing else moves. \
+                     Refused without the salt, at 0, and at a height another fence uses.",
                 ),
         )
         .arg(
@@ -3296,6 +3363,7 @@ impl Args {
             palw_drill_capped_at: m.get_one::<u64>("palw-drill-capped-at").copied(),
             palw_sketch_check: arg_match_unwrap_or::<bool>(&m, "palw-sketch-check", defaults.palw_sketch_check),
             palw_vertex_full_refs: arg_match_unwrap_or::<bool>(&m, "palw-vertex-full-refs", defaults.palw_vertex_full_refs),
+            palw_drill_class_seating_at: m.get_one::<u64>("palw-drill-class-seating-at").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
@@ -3310,6 +3378,9 @@ impl Args {
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
+            palw_tir_metal: m.get_one::<bool>("palw-tir-metal").copied().unwrap_or(defaults.palw_tir_metal),
+            palw_no_seat_conformance: m.get_one::<bool>("palw-no-seat-conformance").copied().unwrap_or(defaults.palw_no_seat_conformance),
+            palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),

@@ -83,7 +83,36 @@ pub fn palw_registry_blocking(r: &GetPalwModelRegistryResponse, class: &RpcPalwM
     };
     const RUN_A_SEAT: &str = "run seats that hold the artifact — a seat needs memory for the artifact plus the replay working set, and a possession proof \
                               fresher than the readiness age; `misaka model readiness <class>` lists each seat";
-    match state_name(state) {
+    // **RFC-0002 Part II §II.7.5 Proposal A (`palw_class_seating`): the independence floor, as the node's seating read serves it.**
+    // Past the fence a class whose ready operators are too few independent of the registrant (and of the claim's executor) takes
+    // no claim and does not enter `Probation`; the possession count (`READY_SEATS`, `PANEL_NOT_DRAWABLE`) is named first where it
+    // is the one that fails.
+    let name = state_name(state);
+    if let Some(seating) = r.seating.iter().find(|x| x.class_id == class.class_id)
+        && seating.independent_operators < seating.needed_independent
+        && !matches!(name, "Registered" | "Candidate")
+        && !(matches!(name, "Prefetching" | "Held") && ready < required)
+    {
+        return Some(make(
+            class,
+            STAGE_MINE,
+            "INDEPENDENT_OPERATORS",
+            format!(
+                "{} of the {} operators that hold the class are independent of its registrant and of a claim's executor and serve the \
+                 network's liveness floor; {} are needed before it admits a claim. At {} ‰ of its claims' outsiders it would be licensed \
+                 ({} base operators)",
+                seating.independent_operators,
+                seating.ready_operators,
+                seating.needed_independent,
+                seating.licensable_share_permille,
+                seating.base_operators
+            ),
+            Some((u64::from(seating.independent_operators), u64::from(seating.needed_independent))),
+            "operators other than the registrant's must run seats for the class and keep their possession proofs fresh: adoption is how \
+             a model gets claims, and a registrant's own keys do not count",
+        ));
+    }
+    match name {
         "Registered" => {
             let (code, what) = if !class.ops_supported {
                 (
@@ -360,5 +389,41 @@ mod tests {
         r.classes = vec![class("Active"), class("Prefetching"), class("Registered")];
         let all = palw_registry_blockings(&r);
         assert_eq!(all.iter().map(|b| b.code.as_str()).collect::<Vec<_>>(), ["READY_SEATS", "NO_WORK"]);
+    }
+
+    #[test]
+    fn the_independence_floor_is_named_once_possession_holds() {
+        use crate::model::message::RpcPalwClassSeating;
+        let seating = |independent: u32| RpcPalwClassSeating {
+            class_id: "cd".repeat(64),
+            ready_operators: 7,
+            needed_operators: 5,
+            independent_operators: independent,
+            needed_independent: 3,
+            base_operators: 20,
+            licensable_share_permille: (independent * 50) as u16,
+        };
+        let with = |state: &str, ready: u32, independent: u32| {
+            let mut r = registry();
+            r.seating = vec![seating(independent)];
+            let mut c = class(state);
+            c.ready_seats_now = ready;
+            palw_registry_blocking(&r, &c)
+        };
+        // Possession first: below the required seats the count that fails is READY_SEATS.
+        assert_eq!(with("Prefetching", 3, 1).unwrap().code, "READY_SEATS");
+        // Seven ready, two independent: INDEPENDENT_OPERATORS 2/3 with the licensable share in its sentence.
+        let b = with("Prefetching", 7, 2).unwrap();
+        assert_eq!((b.stage.as_str(), b.code.as_str(), b.have, b.need, b.has_count), ("mine", "INDEPENDENT_OPERATORS", 2, 3, true));
+        assert!(b.what.contains("100 ‰") && b.what.contains("20 base operators"), "{}", b.what);
+        // The floor met: the reading is the lifecycle's (PENDING_STEP for a Prefetching class), and an Active class with it met
+        // is nothing; unmet it is named (its claims are refused).
+        assert_eq!(with("Prefetching", 7, 3).unwrap().code, "PENDING_STEP");
+        assert!(with("Active", 7, 3).is_none());
+        assert_eq!(with("Active", 7, 2).unwrap().code, "INDEPENDENT_OPERATORS");
+        assert_eq!(with("Probation { probes_passed: 1 }", 7, 2).unwrap().code, "INDEPENDENT_OPERATORS");
+        assert_eq!(with("Held", 7, 2).unwrap().code, "INDEPENDENT_OPERATORS");
+        // A registry that serves no seating (below the fence, or a version-2 node) reads as before.
+        assert_eq!(block("Prefetching", |c| c.ready_seats_now = 7).unwrap().code, "PENDING_STEP");
     }
 }

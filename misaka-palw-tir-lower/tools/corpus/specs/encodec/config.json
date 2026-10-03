@@ -1,0 +1,37 @@
+{
+  "architectures": [
+    "EncodecModel"
+  ],
+  "audio_channels": 1,
+  "chunk_length_s": null,
+  "codebook_dim": 8,
+  "codebook_size": 16,
+  "compress": 2,
+  "dilation_growth_rate": 2,
+  "dtype": "float32",
+  "hidden_size": 8,
+  "kernel_size": 7,
+  "last_kernel_size": 7,
+  "model_type": "encodec",
+  "norm_type": "weight_norm",
+  "normalize": false,
+  "num_filters": 4,
+  "num_lstm_layers": 2,
+  "num_residual_layers": 1,
+  "overlap": null,
+  "pad_mode": "reflect",
+  "residual_kernel_size": 3,
+  "sampling_rate": 400,
+  "target_bandwidths": [
+    1.5,
+    3.0
+  ],
+  "transformers_version": "5.17.0",
+  "trim_right_ratio": 1.0,
+  "upsampling_ratios": [
+    2,
+    2
+  ],
+  "use_causal_conv": true,
+  "use_conv_shortcut": true
+}

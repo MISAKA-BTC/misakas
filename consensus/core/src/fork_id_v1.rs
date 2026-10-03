@@ -744,6 +744,12 @@ mod tests {
             "palw_witness_manifest_v1" => params.palw_witness_manifest_v1 = Some(at),
             "palw_audit_mesh_v1" => params.palw_audit_mesh_v1 = Some(at),
             "palw_capped_onboarding_v1" => params.palw_capped_onboarding_v1 = Some(at),
+            // RFC-0002 Part II Proposal A, likewise: the drill's value (the fence is in no network's release).
+            // RFC-0002 Phase H: a bare height.
+            "palw_tir_only_v1" => params.palw_tir_only_v1 = Some(at),
+            "palw_class_seating" => {
+                params.palw_class_seating = Some(crate::palw_class_seating_fence_v1::PalwClassSeatingFenceV1::drill_v1(at))
+            }
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
@@ -798,6 +804,8 @@ mod tests {
             "palw_shard_court" => params.palw_shard_court = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
+            // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.
+            "palw_gdn_key_heads" => params.palw_gdn_key_heads = Some(at),
             "palw_fused_dissectable" => params.palw_fused_dissectable = Some(at),
             "palw_attn_anchored_root" => params.palw_attn_anchored_root = Some(at),
             "palw_held_context" => params.palw_held_context = Some(at),

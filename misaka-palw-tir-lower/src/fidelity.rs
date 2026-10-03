@@ -74,6 +74,12 @@ pub fn quant_descriptors_used(path: &std::path::Path, prep: &Prepared, reg: &cra
     Ok(out.into_iter().collect())
 }
 
+/// [`prepare_with`] reading the config through the adapter `read` names (a user-supplied adapter file,
+/// a built-in by id, none).
+pub fn prepare_read(config_text: &str, read: &crate::hf_schema::ReadOptions, opts: &LowerOpts, reg: &crate::quantfmt::QuantRegistry) -> Result<Prepared> {
+    prepare_spec(crate::hf_config::parse_config_str_read(config_text, read, reg)?, opts)
+}
+
 /// A checkpoint on disk, prepared: a Hugging Face directory (`config.json` + safetensors), or a
 /// GGUF file (a `.gguf` path, or a directory holding `model.gguf` and no `config.json`), whose
 /// tensors are then served under their Hugging Face names (`crate::gguf::GgufModel`).
@@ -89,6 +95,18 @@ pub fn open_model_with(
     reg: &crate::quantfmt::QuantRegistry,
 ) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
     let o = open_model_full(path, opts, reg, &crate::hf_schema::ReadOptions::default())?;
+    Ok((o.prepared, o.source))
+}
+
+/// [`open_model_with`] choosing the adapter of a Hugging Face directory's config by `read` (a GGUF file's architecture is its own,
+/// read by the GGUF importer).
+pub fn open_model_read(
+    path: &std::path::Path,
+    read: &crate::hf_schema::ReadOptions,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<(Prepared, Box<dyn crate::weights::TensorSource + Sync>)> {
+    let o = open_model_full(path, opts, reg, read)?;
     Ok((o.prepared, o.source))
 }
 
@@ -164,6 +182,12 @@ pub fn open_model_full(
 
 /// [`prepare`] from a spec (a GGUF checkpoint's, `crate::gguf::GgufModel::spec`).
 pub fn prepare_spec(spec: ArchSpec, opts: &LowerOpts) -> Result<Prepared> {
+    if spec.prefix_lm && opts.image_rows.is_some() {
+        return Err(crate::error::LowerError::not_lowerable(format!(
+            "{}: image rows over a prefix-LM text decoder — its prompt attends bidirectionally over the image tokens (ATTN_PREFIX_LM_V1, FR-20: a prefix stage that is not built); this lowering is the text-only causal path",
+            spec.architecture
+        )));
+    }
     let hl = crate::hl::build_program(&spec)?;
     let binding = crate::hf_weights::bind(&spec, &hl)?;
     // A pre-quantised checkpoint's projections lower from their stored integers.

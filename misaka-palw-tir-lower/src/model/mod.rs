@@ -21,14 +21,15 @@
 
 pub mod features;
 pub mod report;
+pub mod route;
 pub mod scope;
 
 pub use crate::spec::ModelSpec;
 pub use features::{
-    Area, BASE_PRIMITIVES, FeatureId, FeatureInfo, FeatureUse, Lowering, REGISTRY, Requirement, feature_info,
+    Area, BASE_PRIMITIVES, FeatureId, FeatureInfo, FeatureUse, Lowering, REGISTRY, Requirement, encdec_features, feature_info,
 };
 pub use crate::hf_schema::{AdapterSource, Level, MissingItem};
-pub use report::{ArchitectureReport, FeatureReport, FeatureStatus, ReportResult, analyze, analyze_with};
+pub use report::{ArchitectureReport, FeatureReport, FeatureStatus, ReportResult, analyze, analyze_headers_with, analyze_with};
 pub use scope::{Excluded, FeatureScope, SCOPE_SCHEMA_V1, scope_of, sibling_files};
 
 /// The schema id of a serialised [`ModelSpec`] (what an adapter file's `spec` template instantiates).

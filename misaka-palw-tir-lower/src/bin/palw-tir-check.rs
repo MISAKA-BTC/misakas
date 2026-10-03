@@ -12,7 +12,9 @@
 //! weights mismatch or an admission refusal, 1 usage or I/O error. Non-consensus tooling.
 
 use clap::Parser;
+use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, TensorIndex};
 use misaka_palw_tir_lower::lower::{self, LowerOpts};
+use misaka_palw_tir_lower::model;
 use misaka_palw_tir_lower::report::{self, WeightsArg};
 use std::path::PathBuf;
 
@@ -46,6 +48,11 @@ struct Args {
     /// attention cone at this window (the same option as `palw-tir-fidelity --max-window`).
     #[arg(long)]
     max_window: Option<u32>,
+    /// How the config is read: `auto` (the built-in adapter that claims it, else the standard keys),
+    /// `none` (the standard keys only), `builtin:<id>`, or the path of an adapter file
+    /// (`misaka.palw.model-adapter.v1`): a model written for as data lowers with no code change.
+    #[arg(long, default_value = "auto")]
+    adapter: String,
     /// Print the ArchSpec, HL program and costs as JSON instead of text.
     #[arg(long)]
     json: bool,
@@ -151,12 +158,53 @@ fn main() {
         }
         (None, None) => None,
     };
-    match report::check(&text, w) {
+    let read = match AdapterChoice::parse_arg(&a.adapter) {
+        Ok(adapter) => ReadOptions { adapter },
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    // The feature report (model_type is informational; the features, the level, the adapter used).
+    let (arch, (encdec, vision)) = {
+        let cfg: Result<serde_json::Value, _> = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text));
+        let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
+        let encdec = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
+        let vision = cfg.as_ref().ok().is_some_and(|c| {
+            misaka_palw_tir_lower::hf_schema::is_vision_tower(c) || misaka_palw_tir_lower::hf_schema::is_cnn(c) || misaka_palw_tir_lower::hf_schema::is_diffusers(c)
+        });
+        (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), (encdec, vision))
+    };
+    // An encoder-decoder lowers to TWO programs (the encoder over the padded source, the decoder's text stage): this
+    // tool's per-position cost report is for one decoder-shaped program, so the feature report is the whole answer here
+    // and `palw-class check-architecture` judges both stages under the network's ceilings.
+    if encdec && let Some(r) = &arch {
+        if a.json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"architecture_report": r})).unwrap_or_default());
+        } else {
+            print!("{}", r.render());
+            println!("an encoder–decoder lowers to two programs; `palw-class check-architecture` admits both stages");
+        }
+        std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
+    }
+    // A diffusers component is read by its own route (`hf_schema::diffusers`). A vision tower (or a convolutional network) is one position over a fixed image, not a decoder: the feature report is the
+    // answer here too (the program is lowered and admitted by `lower::vision` / `lower::cnn`, which `palw-class
+    // check-architecture` runs).
+    if vision && let Some(r) = &arch {
+        if a.json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"architecture_report": r})).unwrap_or_default());
+        } else {
+            print!("{}", r.render());
+        }
+        std::process::exit(if matches!(r.result, model::ReportResult::Lowerable) { 0 } else { 2 });
+    }
+    match report::check_read(&text, &read, w) {
         Ok(c) => {
             let (tir_json, tir_text, tir_ok) = tir_section(&c, &a);
             if a.json {
                 let v = serde_json::json!({
                     "verdict": report::verdict(&c),
+                    "architecture_report": arch,
                     "spec": c.spec,
                     "program": c.program,
                     "cost": c.cost,
@@ -165,6 +213,9 @@ fn main() {
                 });
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             } else {
+                if let Some(r) = &arch {
+                    print!("{}", r.render());
+                }
                 print!("{}", report::render(&c));
                 print!("{tir_text}");
             }
@@ -172,6 +223,11 @@ fn main() {
             std::process::exit(if bad || !tir_ok { 2 } else { 0 });
         }
         Err(e) => {
+            if let Some(r) = &arch
+                && !a.json
+            {
+                print!("{}", r.render());
+            }
             println!("{}", report::refusal(&e));
             std::process::exit(if matches!(e, misaka_palw_tir_lower::LowerError::NotLowerable(_)) { 2 } else { 1 });
         }

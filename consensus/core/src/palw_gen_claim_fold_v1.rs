@@ -108,22 +108,21 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     // Where there is no registry there are no possession proofs to count, and the lane refuses.
     //
     // **The one function every class kind asks** (lane F's Proposal A, approved 2026-10-01): the possession
-    // floor is `class_seating_v1`'s, shared with the IR and composite lanes (`palw_class_seating_v1`); the
-    // independence floor is added there under the later fence `palw_class_seating`, not here.
+    // floor is `class_possession_v1`'s, shared with the IR and composite lanes (`palw_class_seating_v1`); the
+    // independence floor is added there under the fence `palw_class_seating` and asked just below.
     let Some(fold) = builder.model_registry_fold().cloned() else {
         return Err(refused("no model registry is in force: a class's seats prove possession through it"));
     };
-    let seating = builder
+    let (ready, needed) = builder
         .read()
-        .class_seating_v1(c.class_id, Some(c.bond), daa, &fold)
+        .class_possession_v1(c.class_id, c.bond, daa, &fold)
         .ok_or(PalwStateV2Error::MissingBond(*c.bond))?;
-    if !seating.possession_floor_met() {
-        return Err(PalwStateV2Error::GenClassNotReady {
-            class: *c.class_id,
-            ready: seating.ready_operators(),
-            needed: seating.seat_count,
-        });
+    if ready < needed {
+        return Err(PalwStateV2Error::GenClassNotReady { class: *c.class_id, ready, needed });
     }
+    // Past `palw_class_seating` the same function asks the independence floor too (the possession floor above is its first
+    // condition, kept under this lane's own name): a refusal names `ClassNotSeated`.
+    builder.read().check_class_seated_v1(c.class_id, c.bond, daa)?;
     builder.check_class_verify_admits_v1(
         c.class_id,
         daa,

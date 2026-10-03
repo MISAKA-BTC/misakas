@@ -8,6 +8,7 @@ pub mod annex;
 pub mod artifact;
 pub mod backend;
 pub mod cell;
+pub mod conformance;
 pub mod shardrows;
 pub mod drill;
 pub mod evidence;
@@ -23,15 +24,19 @@ pub use annex::{
 };
 pub use artifact::TirArtifactV1;
 pub use backend::{
-    set_tir_drill_boundary_lie_v1,
-    TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
-    tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
+    TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_drill_boundary_lie_v1,
+    set_tir_fused_kernels_default_v1, set_tir_metal_v1, tir_dissect_choice_v1, tir_fused_kernels_default_v1,
+    tir_trace_event_disclosure_of_capture_v1,
 };
 pub use cell::{
     CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1,
     TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, register_device_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
     tir_shard_cells_over_v1, tir_shard_cells_v1, tir_shard_geometry_over_v1, tir_shard_geometry_v1, tir_verify_capture_cells_over_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1, tokens_of_capture_v1,
     verify_cell_stepping_v1, verify_cell_v1,
+};
+pub use conformance::{
+    LazyContainerParams, TIR_CONFORMANCE_POSITIONS_V1, TirConformanceV1, tir_conformance_prompt_v1,
+    tir_executor_conformance_against_v1, tir_executor_conformance_of_file_v1, tir_executor_conformance_v1,
 };
 pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
 pub use shardrows::{TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1};

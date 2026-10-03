@@ -30,6 +30,8 @@ fn moe(experts: usize, top_k: usize, inter: usize, act: Act, r: RouterSpec) -> M
         router: r,
         shared: None,
         input_scaled: false,
+        gated: true,
+        latent: None,
     }
 }
 
@@ -420,8 +422,9 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         q_a_norm: norm,
         kv_a_norm: norm,
         a_bias,
-        rope,
+        rope: Some(rope),
         scale,
+        indexer: None,
     };
     let r = RouterSpec {
         scoring,
@@ -665,6 +668,7 @@ pub(crate) fn phimoe(p: &mut P) -> Result<ArchSpec> {
                     dynamic: None,
                     longrope: None,
                     mrope: None,
+                    reversed: false,
                 },
             }
         }
@@ -894,6 +898,8 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         router: r,
         shared: None,
         input_scaled: false,
+        gated: true,
+        latent: None,
     };
     p.layouts.experts = MlpLayout::FusedInterleaved;
     let layers = (0..n)

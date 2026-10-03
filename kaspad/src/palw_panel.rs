@@ -3566,6 +3566,30 @@ const PANEL_POOL_MAX_CLAIMS: usize = 512;
 /// 16 MiB material each is far past any real duty backlog, and this cuts in first.
 const PANEL_POOL_MAX_BYTES: usize = 192 * 1024 * 1024;
 
+/// **RFC-0002 Part II §II.7.5 Proposal B: the state of a seat's executor self-test for one (class, artifact root).**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatConformanceV1 {
+    /// Running on its own thread.
+    Running,
+    /// The executor reproduced the reference evaluator; what was compared, in a sentence.
+    Passed(String),
+    /// It did not (or the test could not run); why.
+    Failed(String),
+    /// Nothing to test: the backend has no reference of its own (the legacy families).
+    NotApplicable,
+}
+
+static SEAT_CONFORMANCE_V1: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether a seat runs the executor self-test before its first possession proof — on unless `--palw-no-seat-conformance`.
+pub(crate) fn set_seat_conformance_v1(on: bool) {
+    SEAT_CONFORMANCE_V1.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn seat_conformance_on_v1() -> bool {
+    SEAT_CONFORMANCE_V1.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
     pub key_path: String,
@@ -3804,6 +3828,9 @@ pub struct PalwPanelService {
     /// run: three builds in three minutes, 23.7 GiB, killed.
     readiness_built: std::sync::Mutex<HashMap<Hash64, (u64, kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1)>>,
     readiness_logged: std::sync::Mutex<HashMap<Hash64, String>>,
+    /// **RFC-0002 Part II Proposal B: this seat's executor self-test, once per (class, artifact root)** — run on a thread of its own
+    /// (a large class's reference evaluator is slow), its state kept here. A class whose test failed gets no possession proof.
+    executor_conformance: std::sync::Arc<std::sync::Mutex<HashMap<(Hash64, Hash64), PalwSeatConformanceV1>>>,
     readiness_read_at: std::sync::Mutex<Option<std::time::Instant>>,
     /// **What this node has already opened, so a second ask is not a second replay.**
     ///
@@ -4193,8 +4220,69 @@ impl PalwPanelService {
             sketch,
             readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
+            executor_conformance: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             readiness_read_at: std::sync::Mutex::new(None),
             shutdown: SingleTrigger::default(),
+        }
+    }
+
+    /// **The executor self-test's state for a class** (Proposal B), started on a thread of its own on the first ask: `None` where
+    /// there is nothing to test (the switch is off, the backend has no reference of its own — the legacy families — or the class's
+    /// backend cannot be resolved yet), else `Running`, `Passed` or `Failed`. Asked once per readiness tick per class; the answer for
+    /// a (class, artifact root) never changes once it is `Passed` or `Failed`.
+    fn executor_conformance_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Option<PalwSeatConformanceV1> {
+        if !seat_conformance_on_v1() {
+            return None;
+        }
+        let key = (class_id, artifact_root);
+        if let Some(state) = self.executor_conformance.lock().unwrap().get(&key) {
+            return match state {
+                PalwSeatConformanceV1::NotApplicable => None,
+                other => Some(other.clone()),
+            };
+        }
+        let backend = self.resolve_backend(session, class_id, artifact_root).ok()?;
+        let Some(job) = backend.executor_conformance_job_v1() else {
+            self.executor_conformance.lock().unwrap().insert(key, PalwSeatConformanceV1::NotApplicable);
+            return None;
+        };
+        drop(backend);
+        self.executor_conformance.lock().unwrap().insert(key, PalwSeatConformanceV1::Running);
+        let books = self.executor_conformance.clone();
+        let spawned = std::thread::Builder::new().name("palw-seat-conformance".into()).spawn(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))
+                .unwrap_or_else(|_| Err("the self-test panicked".to_string()));
+            let state = match outcome {
+                Ok(sentence) => PalwSeatConformanceV1::Passed(sentence),
+                Err(why) => PalwSeatConformanceV1::Failed(why),
+            };
+            match &state {
+                PalwSeatConformanceV1::Passed(s) => info!("[{PALW_PANEL}] executor conformance of class {class_id}: PASS — {s}"),
+                PalwSeatConformanceV1::Failed(why) => {
+                    warn!("[{PALW_PANEL}] executor conformance of class {class_id}: FAIL — {why}; no possession proof will be posted for it")
+                }
+                _ => {}
+            }
+            books.lock().unwrap().insert(key, state);
+        });
+        if let Err(e) = spawned {
+            warn!("[{PALW_PANEL}] could not start the executor self-test of class {class_id}: {e}");
+            self.executor_conformance.lock().unwrap().remove(&key);
+            return None;
+        }
+        Some(PalwSeatConformanceV1::Running)
+    }
+
+    /// The state of a class's self-test as it stands, without starting one (the status publisher's read).
+    fn executor_conformance_peek_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<PalwSeatConformanceV1> {
+        match self.executor_conformance.lock().unwrap().get(&(class_id, artifact_root)) {
+            None | Some(PalwSeatConformanceV1::NotApplicable) => None,
+            Some(other) => Some(other.clone()),
         }
     }
 
@@ -4259,6 +4347,13 @@ impl PalwPanelService {
                     // what the seat does.
                     if self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))).is_err() {
                         hold = Some(PalwPanelHoldReasonV1::ReplayBudgetInsufficient);
+                    } else {
+                        // Proposal B: the executor self-test, as it stands (the duty starts it; the status only reads it).
+                        match self.executor_conformance_peek_v1(class.class_id, class.artifact_root) {
+                            Some(PalwSeatConformanceV1::Failed(_)) => hold = Some(PalwPanelHoldReasonV1::ExecutorNotConformant),
+                            Some(PalwSeatConformanceV1::Running) => hold = Some(PalwPanelHoldReasonV1::ExecutorConformancePending),
+                            _ => {}
+                        }
                     }
                 }
                 Err(e) => {
@@ -4448,6 +4543,20 @@ impl PalwPanelService {
             if let Err(why) = self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
+            }
+            // **RFC-0002 Part II §II.7.5 Proposal B: this seat's executor reproduces the class's reference evaluator before it first
+            // proves readiness for the class.** Node software: nothing on the chain records it, and a seat that skips it (the switch
+            // is `--palw-no-seat-conformance`) harms only itself — the court convicts it on its first wrong tile.
+            match self.executor_conformance_v1(session, class.class_id, class.artifact_root) {
+                Some(PalwSeatConformanceV1::Failed(why)) => {
+                    self.readiness_note(class.class_id, format!("no proof — EXECUTOR_NOT_CONFORMANT: {why}"));
+                    continue;
+                }
+                Some(PalwSeatConformanceV1::Running) => {
+                    self.readiness_note(class.class_id, "no proof yet — EXECUTOR_CONFORMANCE_PENDING: the executor self-test is running".to_string());
+                    continue;
+                }
+                Some(PalwSeatConformanceV1::Passed(_)) | Some(PalwSeatConformanceV1::NotApplicable) | None => {}
             }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
@@ -18677,6 +18786,7 @@ mod seat_r_tests {
             is_base_class: false,
             row,
             ready_seats_now: 0,
+            seating: None,
             inflight_now: 0,
             share_permille: None,
             no_capable_panel_voids: 0,

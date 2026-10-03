@@ -25,6 +25,7 @@
 //! * [`stream`] — the one narrowing between code scales (the stream to codes and back);
 //! * [`text`] — CLIP's text tower as the pipeline's two text stages (rows and pooled), through the HF frontend;
 //! * [`pipeline`] — the text stages, the denoise scan and the VAE chain as one `TirPipelineV1`;
+//! * [`probe`] — a component read, lowered and admitted from its checkpoint on seeded random calibration (the diffusers read path's check);
 //! * [`norm`] — `NORM_GROUP_SPATIAL_V1`, GroupNorm with committed row partials (no cone reads a whole tensor);
 //!
 //! **Conventions** (the library's, spec 04b §11): activations are `i16` codes at a calibrated per-site scale
@@ -45,6 +46,7 @@ pub mod float;
 pub mod linear;
 pub mod norm;
 pub mod pipeline;
+pub mod probe;
 pub mod sampler;
 pub mod sink;
 pub mod stream;

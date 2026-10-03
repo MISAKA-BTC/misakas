@@ -106,6 +106,44 @@ block kinds. `ModelSpec::features()` lists the features it uses; each [`FeatureI
 states its lowering status, the primitives it emits (checked against every lowered fixture), its protocol
 requirement (none, or a named capability with the general primitive that would close it) and its tests.
 
+### 5.1 Weights as data (`WEIGHTS_EXPR_V1`)
+
+`spec.hf.names` maps a *role* to a tensor-name template and the enumerated layouts (`qkv`, `mlp`, `experts`, `gdn`,
+`conv1d_weights`, `table_shards`) name the common ways a checkpoint packs several matrices into one. A layout those
+do not describe is written in the adapter, not in Rust: `spec.hf.weights` maps an **HL parameter name** to a *weight
+expression* — a JSON array, the checkpoint tensor's complete name followed by steps (`"transpose"`, `{"reshape": […]}`
+or `{"reshape": "param"}`, `{"rows": [start, len]}`, `{"take": {…}}`, `{"stack": "E", "count": n}`, `{"pad_rows": n}`,
+`{"map": …}`) applied in order. An entry replaces the parameter's default binding, so the roles it would have read need
+not be named; a key that names no parameter of the graph is an error that lists the parameters under its prefix; an
+unknown step key is an error. Every step is an exact copy or re-indexing, so the artifact is what the checkpoint holds.
+
+```jsonc
+"spec": {"hf": {"weights": {
+  "moe.experts.down": ["transformer.blocks.{L}.ffn.experts.mlp.w2", {"reshape": [8, 16, 32]}, "transpose"],
+  "moe.shared.up.w":  ["{p}layers.{L}.shared_mlp.input_linear.weight", {"rows": [32, 32]}],
+  "moe.sel_bias":     ["{p}layers.{L}.mlp.moe_statics.e_score_correction_bias", {"reshape": "param"}]
+}}}
+```
+
+The grammar, its bounds and the design are in [`frontend-as-data-v1.md`](frontend-as-data-v1.md) §2; every layout the
+built-in binder enumerates is an instance of it (`tests/weights_expr.rs` round-trips every binding of every fixture).
+
+### 5.2 Encoder–decoder adapters (`"kind": "encdec"`, `ENCDEC_FROM_SPEC_V1`)
+
+An adapter whose top-level `"kind"` is `"encdec"` instantiates not a `ModelSpec` but an `EncDecSpec`
+(`misaka.palw.encdec-spec.v1`, `lower::encdec`): the encoder–decoder's math (positions — `Relative`, `Learned`,
+`Sinusoidal` —, norms, activation, gating, scales, the decoder's start token) and **where its tensors live**
+(`names`: the shared embedding, the `[q, k, v, o]` projection modules, and for each stack the layer prefix with
+`{L}`, the self-/cross-attention modules, the norms, the FFN projections, the embedding-side modules, T5's
+relative-bias table, the head, `final_logits_bias`, the prefixes neither stage reads). Everything else is the same
+language and the same strictness: variables, class defaults, inert keys, a key nobody accounts for refused. The mixins
+`encdec-frame` (the spec's frame) and `mixin-bart-lineage` (LayerNorm, `fc1`/`fc2`, biased projections, softmax scores
+scaled by `head_dim^-1/2`, a tied head plus `final_logits_bias`) carry what the families share: `t5`, `bart`, `mbart`,
+`marian` and `pegasus` are 6 to 40 lines each. `hf_schema::read_encdec` reads them (`--adapter` works the same); the
+decoder reader never sees one; `palw-class check-architecture` routes an encoder–decoder config to them and
+judges the two stages (the encoder over the padded source, the decoder's text stage) separately. The Rust reader the
+five families used to need (`parse_encdec`) remains as the oracle of `tests/encdec_adapters.rs`.
+
 ## 6. The built-in pack
 
 `adapters/*.json`: `decoder-core` (the strict Llama-lineage decoder every family adapter extends: it reads
@@ -127,7 +165,7 @@ and the Rust parser either read the same spec or both refuse. Where an adapter r
 parser read, the refusal comes from the generic checks of the evaluator (a head count that does not
 divide the width, an odd rotary dimension, a division by zero, a non-finite number, a decoder with no
 layer): stricter, never looser. `tests/golden_lowering.rs` holds the lowered programs and artifacts
-(92 fixtures, 63 real configs) byte-identical to the baseline recorded before the refactor; it is the
+(119 fixtures — 84 float, 24 GPTQ/AWQ/FP8/compressed-tensors, 11 GGUF — and 63 real configs; the 16 Qwen4-Exp fixtures have version-2 rows only, no version-1 baseline existed) byte-identical to the baseline recorded before the refactor; it is the
 permanent gate, and the Rust parsers (`src/hf_config/legacy_oracle`, compiled only with the feature) can
 be deleted once the corpus lane has validated the pack.
 
@@ -138,3 +176,13 @@ be deleted once the corpus lane has validated the pack.
    and override the variables your class departs in (`norm`, `residual`, `names`, `l_mixer`, `l_ffn`, …).
 3. If a key changes the math and no variable can express it, the gap is a **feature**: name it, add it
    generically (a `FeatureId`, a spec field with a default, a lowerer) — never family code.
+   A checkpoint layout none of the enumerated ones describes (flat experts, a fused shared expert, a bias stored
+   `[1, E]`) is a `spec.hf.weights` expression (§5.1), not a feature request.
+4. Run it with your file, no rebuild: `palw-class check-architecture <hf dir> --adapter my.json` (the
+   feature report names the adapter used: a built-in, `user file <id> <hash>`, or none),
+   `palw-tir-check --config <hf dir>/config.json --adapter my.json`, and the same `--adapter` on
+   `palw-tir-fidelity` and `palw-tir-convert` (`auto` is the default: the built-in that claims the
+   config; `none` reads the standard keys only; `builtin:<id>` forces one). A model the vocabulary
+   already has the features for is added with DATA only — `adapters/qwen4-exp.json` combines
+   hyper-connection residuals, gated delta layers, sparse block attention, hashed n-gram per-layer
+   embeddings and a routed MoE and has no Rust of its own.

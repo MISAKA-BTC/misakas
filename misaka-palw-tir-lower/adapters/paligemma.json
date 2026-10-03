@@ -1,0 +1,20 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "paligemma",
+  "doc": "PaliGemma wrappers read as their text decoder: the decoder's own model_type picks the decoder adapter (Gemma-1: `vlm-gemma`, Gemma-2: `vlm-gemma2`); the vision side is inert and the prefix attention is not lowered (see `vlm-gemma`).",
+  "match": {
+    "architectures": [
+      "PaliGemmaForConditionalGeneration"
+    ]
+  },
+  "dispatch": {
+    "key": "text_config.model_type",
+    "default": {
+      "PaliGemmaForConditionalGeneration": "gemma"
+    },
+    "to": {
+      "gemma": "vlm-gemma",
+      "gemma2": "vlm-gemma2"
+    }
+  }
+}

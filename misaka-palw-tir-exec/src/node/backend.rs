@@ -72,6 +72,17 @@ pub fn set_tir_fused_kernels_default_v1(on: bool) {
     TIR_FUSED_KERNELS_DEFAULT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// **The Metal backend of the fused unit-row kernels** — the node's `--palw-tir-metal` (RFC-0002 §7 F-6): bit-identical to the CPU
+/// kernels, node software in no consensus object. Turning it on turns the fused kernels on (it is one of their implementations);
+/// `Err` names why this node cannot (no `metal` build, no device).
+pub fn set_tir_metal_v1(on: bool) -> Result<(), String> {
+    crate::fused::metal::set_metal_backend(on)?;
+    if on {
+        set_tir_fused_kernels_default_v1(true);
+    }
+    Ok(())
+}
+
 /// What a new [`TirBackendV1`] starts with ([`set_tir_fused_kernels_default_v1`]).
 pub fn tir_fused_kernels_default_v1() -> bool {
     TIR_FUSED_KERNELS_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
@@ -1165,6 +1176,19 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
     /// the node's court flow asks of it for an IR class).
     fn supports_court(&self) -> bool {
         true
+    }
+
+    /// **Proposal B**: this backend's executor against the reference evaluator on a few positions, the reference streamed from the
+    /// container ([`super::conformance`]). A composite candidate is tested as its parent is, so it has no job of its own.
+    fn executor_conformance_job_v1(&self) -> Option<Box<dyn FnOnce() -> Result<String, String> + Send + 'static>> {
+        if self.artifact.composite_ref().is_some() {
+            return None;
+        }
+        let artifact = self.artifact.clone();
+        Some(Box::new(move || {
+            super::conformance::tir_executor_conformance_v1(&artifact, super::conformance::TIR_CONFORMANCE_POSITIONS_V1)
+                .map(|c| c.summary())
+        }))
     }
 
     fn artifact_root_and_leaf_count(&self) -> Result<(Hash64, u32), String> {

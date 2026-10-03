@@ -53,6 +53,8 @@ sys.path.insert(0, HERE)
 
 V = 256
 T = 16
+# Final-norm gain per fixture whose random head would otherwise pass LOGITS_Q24_V1's |logit| < 128.
+LOGIT_GAIN = {"gguf_gemma_q4_0": 0.1, "gguf_qwen2_q5_k_m": 0.15}
 
 # ggml types
 F32, F16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K, BF16 = 0, 1, 2, 3, 6, 7, 8, 12, 13, 14, 30
@@ -499,6 +501,15 @@ def build(name):
                 p.add_(torch.randn(p.shape, generator=g) * 0.1)
             # bf16-exact values: `1 + w` and back are exact in f32 (Gemma's norms).
             p.copy_(p.to(torch.bfloat16).to(torch.float32))
+        # LOGITS_Q24_V1: a text program's logits are natural-log units × 2^24 in an i32 (|logit| < 128).
+        # These two fixtures' tied / random heads reach 200–300; the final norm's gain brings them to
+        # ~30 (a 1-D tensor: no matrix, no random draw, and so no other byte of the fixture, changes).
+        gain = LOGIT_GAIN.get(name)
+        if gain is not None:
+            w = model.model.norm.weight
+            shifted_gain = arch.startswith("gemma")  # `1 + w`
+            eff = (1.0 + w) if shifted_gain else w
+            w.copy_(((eff * gain) - (1.0 if shifted_gain else 0.0)).to(torch.bfloat16).to(torch.float32))
     sd = {k: v.double().numpy() for k, v in model.state_dict().items()}
     n_layers, heads, kvh = cfg.num_hidden_layers, cfg.num_attention_heads, cfg.num_key_value_heads
     hd = getattr(cfg, "head_dim", None) or cfg.hidden_size // heads

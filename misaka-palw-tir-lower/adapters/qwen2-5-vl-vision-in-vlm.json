@@ -1,0 +1,11 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen2-5-vl-vision-in-vlm",
+  "extends": ["qwen2-5-vl-vision"],
+  "doc": "The same tower inside Qwen2_5_VLForConditionalGeneration: its configuration is the wrapper's `vision_config` and its tensors live under `visual.`. The wrapper itself is read as its text decoder (vlm-qwen2-vl); this adapter is reached by `match.tower_of`, never by the wrapper's architecture. Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": [], "model_types": [], "tower_of": ["Qwen2_5_VLForConditionalGeneration"]},
+  "config": {"scope": "vision_config"},
+  "vars": [
+    {"name": "vp", "value": "visual."}
+  ]
+}

@@ -1,0 +1,259 @@
+{
+ "vision_model.embeddings.class_embedding": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.embeddings.patch_embedding.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   3,
+   7,
+   7
+  ]
+ },
+ "vision_model.embeddings.position_embedding.weight": {
+  "dtype": "BF16",
+  "shape": [
+   17,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.layer_norm1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.layer_norm1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.layer_norm2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.layer_norm2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.mlp.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "vision_model.encoder.layers.0.mlp.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.mlp.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.mlp.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.k_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.q_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.v_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.0.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.layer_norm1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.layer_norm1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.layer_norm2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.layer_norm2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.mlp.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "vision_model.encoder.layers.1.mlp.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.mlp.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.mlp.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.k_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.q_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.v_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.encoder.layers.1.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "vision_model.post_layernorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.post_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.pre_layrnorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "vision_model.pre_layrnorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "visual_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   24,
+   32
+  ]
+ }
+}

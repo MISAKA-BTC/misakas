@@ -6,8 +6,11 @@
 //! same data serialises as JSON (`--json`) for the tools that wrap it (header-only preflight, the t12
 //! admission conditions).
 
-use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, feature_info};
-use crate::hf_schema::{AdapterSource, Level, MissingItem, ReadOptions, TensorIndex};
+use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, sd3_features, vae_features, vision_features};
+use crate::hf_schema::{
+    AdapterSource, DiffusersRoute, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_diffusers, is_encoder_decoder, is_vision_tower, read_cnn, read_diffusers, read_encdec,
+    read_vision,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -51,10 +54,24 @@ pub struct ArchitectureReport {
     pub model_type: Option<String>,
     pub architectures: Vec<String>,
     pub adapter: AdapterSource,
+    /// The built-in refusal a user-supplied adapter overrode (FR-25), as `<architecture>: <why>`.
+    pub overrides_refusal: Option<String>,
     pub level: Level,
+    /// The level as the report prints it: Level A is `A (unconfirmed)` until a reference check passed (FR-26) —
+    /// the standard template reads a class no adapter claims, and rope pairing, norm placement and MLP gating are
+    /// class code, not configuration.
+    pub level_label: String,
+    /// A float-vs-transformers check on the same weights passed ([`ArchitectureReport::confirm_reference`]).
+    pub reference_confirmed: bool,
     pub features: Vec<FeatureReport>,
     pub assumed_defaults: Vec<String>,
     pub unmapped_config_keys: Vec<String>,
+    /// Checkpoint tensors no parameter of the reading reads, when a tensor index was given (FR-26): a feature the
+    /// template or the adapter does not know. They are refused, never ignored.
+    pub unread_tensors: Vec<String>,
+    /// What the binder found wrong with the tensor index: a missing tensor, a shape the graph does not accept, a
+    /// malformed weight expression.
+    pub weight_errors: Vec<String>,
     pub missing: Vec<MissingItem>,
     pub new_consensus_primitive_required: bool,
     pub new_court_kernel_required: bool,
@@ -105,6 +122,350 @@ fn feature_report(u: &FeatureUse) -> FeatureReport {
     }
 }
 
+/// `A (unconfirmed)` for a Level A nobody has checked against a reference; the letter otherwise.
+fn label_of(level: Level, confirmed: bool) -> String {
+    match level {
+        Level::A if !confirmed => "A (unconfirmed)".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Run the weight binding on the checkpoint's tensor names — and shapes, when the headers carry them — and
+/// return `(tensors no param reads, binding errors)` (FR-26: this is the check that caught Arcee's gated MLP
+/// and BitNet's sub-norms). An HL graph that cannot be built is the lowering's finding, not this one's.
+fn weights_check(spec: &crate::spec::ModelSpec, t: &TensorIndex) -> (Vec<String>, Vec<String>) {
+    // A pre-quantised checkpoint's shapes come from small role tensors whose DATA the tensor index does not carry (a descriptor reads
+    // `qzeros`, `g_idx`, … for the shape of a packed weight): this check has names and shapes only, so it leaves such a model to the
+    // caller that holds the files (`palw-class preflight` reads them through its header source, `read_slice` and all).
+    if spec.hf.quant.is_some() {
+        return (Vec::new(), Vec::new());
+    }
+    let Ok(prog) = crate::hl::build_program(spec) else { return (Vec::new(), Vec::new()) };
+    let binding = match crate::hf_weights::bind(spec, &prog) {
+        Ok(b) => b,
+        Err(e) => return (Vec::new(), vec![e.to_string()]),
+    };
+    let rep = if t.has_all_shapes() {
+        crate::weights::check_weights(&prog, &binding, &crate::hf_schema::HeaderSource(t))
+    } else {
+        crate::weights::check_names(&prog, &binding, &t.names().map(str::to_string).collect())
+    };
+    // A tied head reads the embedding table; some checkpoints save the same matrix a second time as `lm_head.weight`
+    // (HF loads both into the one tied parameter): that copy is not a feature the reading is missing.
+    let tied_copy = |n: &String| {
+        matches!(spec.output, crate::spec::OutputSpec::Logits) && spec.head.tied && (n == "lm_head.weight" || n.ends_with(".lm_head.weight"))
+    };
+    (rep.unused.into_iter().filter(|n| !tied_copy(n)).collect(), rep.errors)
+}
+
+fn short_list(v: &[String], n: usize) -> String {
+    let mut s = v.iter().take(n).cloned().collect::<Vec<_>>().join(", ");
+    if v.len() > n {
+        s.push_str(&format!(", … ({} in all)", v.len()));
+    }
+    s
+}
+
+/// The encoder-decoder's weight binding run on the tensor index, as [`weights_check`] does for a decoder: both stages
+/// bind from ONE checkpoint, so a tensor is unread only when NEITHER stage reads it. Returns `(unread, errors)`.
+fn encdec_weights_check(spec: &crate::lower::encdec::EncDecSpec, t: &TensorIndex) -> (Vec<String>, Vec<String>) {
+    use crate::lower::encdec::hl_programs;
+    use crate::weights::{WeightReport, check_names, check_weights};
+    let has = |n: &str| t.has(n);
+    // The source length only sizes the carry of the encoder's program; the binding does not depend on it.
+    let ((ehl, ebind), (dhl, dbind)) = match hl_programs(spec, 16, &has) {
+        Ok(p) => p,
+        Err(e) => return (Vec::new(), vec![e.to_string()]),
+    };
+    let check = |hl: &crate::hl::HlProgram, b: &crate::weights::Binding| -> WeightReport {
+        if t.has_all_shapes() {
+            check_weights(hl, b, &crate::hf_schema::HeaderSource(t))
+        } else {
+            check_names(hl, b, &t.names().map(str::to_string).collect())
+        }
+    };
+    let (e, d) = (check(&ehl, &ebind), check(&dhl, &dbind));
+    let unread: Vec<String> = e.unused.iter().filter(|n| d.unused.contains(n)).cloned().collect();
+    let mut errors = e.errors;
+    for x in d.errors {
+        if !errors.contains(&x) {
+            errors.push(x);
+        }
+    }
+    (unread, errors)
+}
+
+/// [`analyze`] for an encoder-decoder (`ENCDEC_FROM_SPEC_V1`): the adapter of kind `encdec` builds the spec, the
+/// features are listed, and the tensor index is run through both stages' bindings.
+pub fn analyze_encdec(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let model_type = model_type_of(config);
+    let architectures = architectures_of(config);
+    match read_encdec(config, opts) {
+        Ok(read) => {
+            let features: Vec<FeatureReport> = encdec_features(&read.spec).iter().map(feature_report).collect();
+            let mut missing = Vec::new();
+            let (unread_tensors, weight_errors) = match tensors {
+                Some(t) => encdec_weights_check(&read.spec, t),
+                None => (Vec::new(), Vec::new()),
+            };
+            if !unread_tensors.is_empty() {
+                missing.push(MissingItem {
+                    what: "checkpoint tensors the reading never uses".to_string(),
+                    why: format!(
+                        "{} tensor(s): {} — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)",
+                        unread_tensors.len(),
+                        short_list(&unread_tensors, 6)
+                    ),
+                    general_primitive: None,
+                });
+            }
+            if !weight_errors.is_empty() {
+                missing.push(MissingItem {
+                    what: "the checkpoint does not fit the reading".to_string(),
+                    why: short_list(&weight_errors, 3),
+                    general_primitive: None,
+                });
+            }
+            let level = if missing.is_empty() { Level::B } else { Level::C };
+            let result = if missing.is_empty() {
+                ReportResult::Lowerable
+            } else {
+                ReportResult::NotLowerable {
+                    reason: format!("missing: {}", missing.iter().map(|m| m.what.clone()).collect::<Vec<_>>().join(", ")),
+                }
+            };
+            ArchitectureReport {
+                scope: super::scope::scope_of(config, None, None, &[]),
+                schema: REPORT_SCHEMA_V1,
+                model_type,
+                architectures,
+                adapter: read.adapter,
+                overrides_refusal: None,
+                level,
+                level_label: label_of(level, false),
+                reference_confirmed: false,
+                features,
+                assumed_defaults: read.assumed_defaults,
+                unmapped_config_keys: Vec::new(),
+                unread_tensors,
+                weight_errors,
+                missing,
+                new_consensus_primitive_required: false,
+                new_court_kernel_required: false,
+                result,
+                notes: vec!["an encoder–decoder lowers to two programs (the encoder over the padded source, then the decoder's text stage); admission is judged per stage".to_string()],
+            }
+        }
+        Err(f) => ArchitectureReport {
+            scope: super::scope::scope_of(config, None, None, &[]),
+            schema: REPORT_SCHEMA_V1,
+            model_type,
+            architectures,
+            adapter: f.adapter,
+            overrides_refusal: None,
+            level: Level::C,
+            level_label: label_of(Level::C, false),
+            reference_confirmed: false,
+            features: Vec::new(),
+            assumed_defaults: Vec::new(),
+            unmapped_config_keys: f.unmapped_config_keys,
+            unread_tensors: Vec::new(),
+            weight_errors: Vec::new(),
+            missing: f.missing,
+            new_consensus_primitive_required: false,
+            new_court_kernel_required: false,
+            result: ReportResult::NotLowerable { reason: f.error.to_string() },
+            notes: Vec::new(),
+        },
+    }
+}
+
+/// What [`analyze_data`] needs of a model of a data kind (a vision tower, a convolutional network): the features it uses, the
+/// adapter that read it, the assumptions made, its HL program and weight binding (to run the tensor index through), and a note.
+struct DataRead {
+    features: Vec<FeatureUse>,
+    adapter: AdapterSource,
+    assumed_defaults: Vec<String>,
+    hl: crate::Result<(crate::hl::HlProgram, crate::weights::Binding)>,
+    note: &'static str,
+}
+
+/// [`analyze`] for a model an adapter of a DATA kind reads (`vision`, `cnn`): the adapter builds the spec, the features are
+/// listed, and the tensor index is run through the spec's binding.
+fn analyze_data(config: &Value, tensors: Option<&TensorIndex>, read: Result<DataRead, crate::hf_schema::ReadFailure>) -> ArchitectureReport {
+    let model_type = model_type_of(config);
+    let architectures = architectures_of(config);
+    match read {
+        Ok(read) => {
+            let features: Vec<FeatureReport> = read.features.iter().map(feature_report).collect();
+            let mut missing = Vec::new();
+            let (unread_tensors, weight_errors) = match tensors {
+                Some(t) => match &read.hl {
+                    Ok((hl, b)) => {
+                        let r = if t.has_all_shapes() {
+                            crate::weights::check_weights(hl, b, &crate::hf_schema::HeaderSource(t))
+                        } else {
+                            crate::weights::check_names(hl, b, &t.names().map(str::to_string).collect())
+                        };
+                        (r.unused, r.errors)
+                    }
+                    Err(e) => (Vec::new(), vec![e.to_string()]),
+                },
+                None => (Vec::new(), Vec::new()),
+            };
+            if !unread_tensors.is_empty() {
+                missing.push(MissingItem {
+                    what: "checkpoint tensors the reading never uses".to_string(),
+                    why: format!(
+                        "{} tensor(s): {} — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)",
+                        unread_tensors.len(),
+                        short_list(&unread_tensors, 6)
+                    ),
+                    general_primitive: None,
+                });
+            }
+            if !weight_errors.is_empty() {
+                missing.push(MissingItem { what: "the checkpoint does not fit the reading".to_string(), why: short_list(&weight_errors, 3), general_primitive: None });
+            }
+            let level = if missing.is_empty() { Level::B } else { Level::C };
+            let result = if missing.is_empty() {
+                ReportResult::Lowerable
+            } else {
+                ReportResult::NotLowerable { reason: format!("missing: {}", missing.iter().map(|m| m.what.clone()).collect::<Vec<_>>().join(", ")) }
+            };
+            ArchitectureReport {
+                scope: super::scope::scope_of(config, None, None, &[]),
+                schema: REPORT_SCHEMA_V1,
+                model_type,
+                architectures,
+                adapter: read.adapter,
+                overrides_refusal: None,
+                level,
+                level_label: label_of(level, false),
+                reference_confirmed: false,
+                features,
+                assumed_defaults: read.assumed_defaults,
+                unmapped_config_keys: Vec::new(),
+                unread_tensors,
+                weight_errors,
+                missing,
+                new_consensus_primitive_required: false,
+                new_court_kernel_required: false,
+                result,
+                notes: vec![read.note.to_string()],
+            }
+        }
+        Err(f) => ArchitectureReport {
+            scope: super::scope::scope_of(config, None, None, &[]),
+            schema: REPORT_SCHEMA_V1,
+            model_type,
+            architectures,
+            adapter: f.adapter,
+            overrides_refusal: None,
+            level: Level::C,
+            level_label: label_of(Level::C, false),
+            reference_confirmed: false,
+            features: Vec::new(),
+            assumed_defaults: Vec::new(),
+            unmapped_config_keys: f.unmapped_config_keys,
+            unread_tensors: Vec::new(),
+            weight_errors: Vec::new(),
+            missing: f.missing,
+            new_consensus_primitive_required: false,
+            new_court_kernel_required: false,
+            result: ReportResult::NotLowerable { reason: f.error.to_string() },
+            notes: Vec::new(),
+        },
+    }
+}
+
+/// [`analyze`] for a vision tower (`VISION_FROM_SPEC_V1`).
+pub fn analyze_vision(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let read = read_vision(config, opts).map(|r| DataRead {
+        features: vision_features(&r.spec),
+        hl: crate::lower::vision::hl_program(&r.spec),
+        adapter: r.adapter,
+        assumed_defaults: r.assumed_defaults,
+        note: "a vision tower takes a canonical u8 image at the class's declared size; the processor's normalisation is the adapter's default unless the class gives its own",
+    });
+    analyze_data(config, tensors, read)
+}
+
+/// [`analyze`] for a convolutional network (`CNN_FROM_SPEC_V1`).
+pub fn analyze_cnn(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
+    let read = read_cnn(config, opts).map(|r| DataRead {
+        features: cnn_features(&r.spec),
+        hl: crate::lower::cnn::hl_program(&r.spec),
+        adapter: r.adapter,
+        assumed_defaults: r.assumed_defaults,
+        note: "a convolutional network takes a canonical u8 image at the class's declared size (224x224 unless the class says otherwise); the processor's normalisation is the adapter's default unless the class gives its own",
+    });
+    analyze_data(config, tensors, read)
+}
+
+/// [`analyze`] for a diffusers component (`_class_name`): the lowering that exists for its class (the MMDiT denoiser, the VAE
+/// decoder: Level B through a built-in Rust reader, never an adapter file) or Level C naming what its lowering lacks. The tensors
+/// are accounted for by the probe that has the weights ([`crate::diffusion::probe`]), not here.
+pub fn analyze_diffusers(config: &Value, _tensors: Option<&TensorIndex>, _opts: &ReadOptions) -> ArchitectureReport {
+    let class = crate::hf_schema::diffusers_class(config).unwrap_or("").to_string();
+    let architectures = vec![class.clone()];
+    match read_diffusers(config) {
+        Ok(r) => {
+            let features: Vec<FeatureReport> = match &r.route {
+                DiffusersRoute::Sd3Transformer(c) => sd3_features(c),
+                DiffusersRoute::VaeDecoder(c) => vae_features(c),
+            }
+            .iter()
+            .map(feature_report)
+            .collect();
+            ArchitectureReport {
+                scope: super::scope::scope_of(config, None, None, &[]),
+                schema: REPORT_SCHEMA_V1,
+                model_type: None,
+                architectures,
+                adapter: AdapterSource::CoreReader { id: r.route.id().to_string() },
+                overrides_refusal: None,
+                level: Level::B,
+                level_label: label_of(Level::B, false),
+                reference_confirmed: false,
+                features,
+                assumed_defaults: r.assumed_defaults,
+                unmapped_config_keys: Vec::new(),
+                unread_tensors: Vec::new(),
+                weight_errors: Vec::new(),
+                missing: Vec::new(),
+                new_consensus_primitive_required: false,
+                new_court_kernel_required: false,
+                result: ReportResult::Lowerable,
+                notes: vec![
+                    "a diffusers component (`_class_name`) is read by a built-in Rust route, lowered from its weights and a calibration set; `diffusion::probe` lowers and admits it from a checkpoint and names any tensor nothing reads".to_string(),
+                ],
+            }
+        }
+        Err(f) => ArchitectureReport {
+            scope: super::scope::scope_of(config, None, None, &[]),
+            schema: REPORT_SCHEMA_V1,
+            model_type: None,
+            architectures,
+            adapter: f.adapter,
+            overrides_refusal: None,
+            level: Level::C,
+            level_label: label_of(Level::C, false),
+            reference_confirmed: false,
+            features: Vec::new(),
+            assumed_defaults: Vec::new(),
+            unmapped_config_keys: f.unmapped_config_keys,
+            unread_tensors: Vec::new(),
+            weight_errors: Vec::new(),
+            missing: f.missing,
+            new_consensus_primitive_required: false,
+            new_court_kernel_required: false,
+            result: ReportResult::NotLowerable { reason: f.error.to_string() },
+            notes: Vec::new(),
+        },
+    }
+}
+
 /// Read a configuration (and, if given, its tensor names) and report what it needs.
 pub fn analyze(config: &Value, tensors: Option<&TensorIndex>, opts: &ReadOptions) -> ArchitectureReport {
     analyze_with(config, tensors, opts, crate::quantfmt::QuantRegistry::builtin(), &[])
@@ -119,6 +480,43 @@ pub fn analyze_with(
     reg: &crate::quantfmt::QuantRegistry,
     files: &[String],
 ) -> ArchitectureReport {
+    analyze_impl(config, tensors, opts, reg, files, true)
+}
+
+/// [`analyze_with`] **without the frontend's own weight check** (FR-26): for a caller that runs the same binding over the headers it
+/// holds and reports each finding by its own stable code — `palw-class preflight`'s `TENSOR_MISSING`, `TENSOR_SHAPE` and its unread
+/// tensors — so a tensor the program cannot find is a finding of that check and does not also make the whole report `NotLowerable`
+/// (which would stop the shape-only lowering the preflight judges the chain's conditions from).
+pub fn analyze_headers_with(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+    files: &[String],
+) -> ArchitectureReport {
+    analyze_impl(config, tensors, opts, reg, files, false)
+}
+
+fn analyze_impl(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    opts: &ReadOptions,
+    reg: &crate::quantfmt::QuantRegistry,
+    files: &[String],
+    check_weights: bool,
+) -> ArchitectureReport {
+    if is_diffusers(config) {
+        return analyze_diffusers(config, tensors, opts);
+    }
+    if is_encoder_decoder(config) {
+        return analyze_encdec(config, tensors, opts);
+    }
+    if is_vision_tower(config) {
+        return analyze_vision(config, tensors, opts);
+    }
+    if is_cnn(config) {
+        return analyze_cnn(config, tensors, opts);
+    }
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);
     match crate::hf_schema::read_model_with(config, tensors, opts, reg) {
@@ -142,6 +540,30 @@ pub fn analyze_with(
                 };
                 missing.push(MissingItem { what: f.id.clone(), why, general_primitive: gp });
             }
+            // The checkpoint, when its tensor index was given: every tensor must be read by some param, every
+            // param must find its tensor with the shape the graph needs (FR-26).
+            let (unread_tensors, weight_errors) = match tensors {
+                Some(t) if missing.is_empty() && check_weights => weights_check(&read.spec, t),
+                _ => (Vec::new(), Vec::new()),
+            };
+            if !unread_tensors.is_empty() {
+                missing.push(MissingItem {
+                    what: "checkpoint tensors the reading never uses".to_string(),
+                    why: format!(
+                        "{} tensor(s): {} — a feature this reading does not know; an adapter must account for every tensor (or list its prefix as ignored)",
+                        unread_tensors.len(),
+                        short_list(&unread_tensors, 6)
+                    ),
+                    general_primitive: None,
+                });
+            }
+            if !weight_errors.is_empty() {
+                missing.push(MissingItem {
+                    what: "the checkpoint does not fit the reading".to_string(),
+                    why: short_list(&weight_errors, 3),
+                    general_primitive: None,
+                });
+            }
             let level = if !missing.is_empty() {
                 Level::C
             } else if matches!(read.adapter, AdapterSource::None) {
@@ -161,10 +583,15 @@ pub fn analyze_with(
                 model_type,
                 architectures,
                 adapter: read.adapter,
+                overrides_refusal: read.overrides_refusal,
                 level,
+                level_label: label_of(level, false),
+                reference_confirmed: false,
                 features,
                 assumed_defaults: read.assumed_defaults,
                 unmapped_config_keys: Vec::new(),
+                unread_tensors,
+                weight_errors,
                 missing,
                 new_consensus_primitive_required: prim,
                 new_court_kernel_required: kernel,
@@ -180,10 +607,15 @@ pub fn analyze_with(
                 model_type,
                 architectures,
                 adapter: f.adapter,
+                overrides_refusal: None,
                 level: Level::C,
+                level_label: label_of(Level::C, false),
+                reference_confirmed: false,
                 features: Vec::new(),
                 assumed_defaults: Vec::new(),
                 unmapped_config_keys: f.unmapped_config_keys,
+                unread_tensors: Vec::new(),
+                weight_errors: Vec::new(),
                 missing: f.missing,
                 new_consensus_primitive_required: false,
                 new_court_kernel_required: false,
@@ -219,7 +651,22 @@ impl ArchitectureReport {
             let _ = writeln!(o, "architectures   {}", self.architectures.join(", "));
         }
         let _ = writeln!(o, "adapter         {}", self.adapter.describe());
-        let _ = writeln!(o, "level           {}", self.level);
+        if let Some(r) = &self.overrides_refusal {
+            let _ = writeln!(o, "user adapter overrides built-in refusal: {r}");
+            if !self.reference_confirmed {
+                let _ = writeln!(
+                    o,
+                    "                the override passed the same validation as any adapter; whether the reading is RIGHT is not checked here — confirm with palw-tir-fidelity against the transformers class"
+                );
+            }
+        }
+        let _ = writeln!(o, "level           {}", self.level_label);
+        if self.level == Level::A && !self.reference_confirmed {
+            let _ = writeln!(
+                o,
+                "                the standard template is a reading of a class no adapter claims: rope pairing, norm placement and MLP gating are class code, not configuration — confirm with palw-tir-fidelity against the transformers class"
+            );
+        }
         if !self.features.is_empty() {
             let _ = writeln!(o, "features ({}):", self.features.len());
             let w = self.features.iter().map(|f| f.id.len()).max().unwrap_or(0);
@@ -252,6 +699,12 @@ impl ArchitectureReport {
             }
             let _ = writeln!(o);
         }
+        for t in self.unread_tensors.iter().take(20) {
+            let _ = writeln!(o, "unread tensor: {t}");
+        }
+        for e in self.weight_errors.iter().take(20) {
+            let _ = writeln!(o, "weights: {e}");
+        }
         for n in &self.notes {
             let _ = writeln!(o, "note: {n}");
         }
@@ -278,12 +731,20 @@ impl ArchitectureReport {
         }
         match &self.result {
             ReportResult::Lowerable => {
-                let _ = writeln!(o, "result          LOWERABLE (Level {})", self.level);
+                let _ = writeln!(o, "result          LOWERABLE (Level {})", self.level_label);
             }
             ReportResult::NotLowerable { reason } => {
-                let _ = writeln!(o, "result          NOT_LOWERABLE (Level {}): {reason}", self.level);
+                let _ = writeln!(o, "result          NOT_LOWERABLE (Level {}): {reason}", self.level_label);
             }
         }
         o
+    }
+
+    /// Record that a reference check — the float reference against the transformers class on the same weights
+    /// (`float_vs_hf`) — passed: a Level A reading is then plain `A` (FR-26).
+    pub fn confirm_reference(mut self) -> Self {
+        self.reference_confirmed = true;
+        self.level_label = label_of(self.level, true);
+        self
     }
 }

@@ -5893,6 +5893,7 @@ dependencies = [
  "misaka-palw-extension",
  "misaka-palw-pow-driver",
  "misaka-palw-sdk",
+ "misaka-palw-tir-lower",
  "serde",
  "serde_json",
  "sha2 0.10.8",
@@ -6283,6 +6284,7 @@ version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
+ "cc",
  "kaspa-consensus-core",
  "libc",
  "misaka-palw-base0",

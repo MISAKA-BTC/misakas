@@ -1,0 +1,33 @@
+{
+  "architectures": [
+    "PhiForCausalLM"
+  ],
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "dtype": "bfloat16",
+  "embd_pdrop": 0.0,
+  "eos_token_id": 2,
+  "hidden_act": "gelu_new",
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "layer_norm_eps": 1e-05,
+  "max_position_embeddings": 128,
+  "model_type": "phi",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "num_key_value_heads": 2,
+  "pad_token_id": null,
+  "partial_rotary_factor": 0.5,
+  "qk_layernorm": false,
+  "resid_pdrop": 0.0,
+  "rope_parameters": {
+    "partial_rotary_factor": 0.5,
+    "rope_theta": 10000.0,
+    "rope_type": "default"
+  },
+  "tie_word_embeddings": false,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

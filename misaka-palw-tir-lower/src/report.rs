@@ -8,7 +8,7 @@ use crate::hl::{self, HlProgram, cost};
 use crate::rope::RopeStyle;
 use crate::spec::*;
 use crate::weights::{self, Checkpoint, IndexOnly, WeightReport};
-use crate::{hf_weights, parse_config_str};
+use crate::hf_weights;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -29,7 +29,13 @@ pub struct Checked {
 }
 
 pub fn check(config_text: &str, weights: Option<WeightsArg>) -> Result<Checked> {
-    let spec = parse_config_str(config_text)?;
+    check_read(config_text, &crate::hf_schema::ReadOptions::default(), weights)
+}
+
+/// [`check`] reading the config through the adapter `read` names (a user-supplied adapter file, a
+/// built-in by id, none).
+pub fn check_read(config_text: &str, read: &crate::hf_schema::ReadOptions, weights: Option<WeightsArg>) -> Result<Checked> {
+    let spec = crate::hf_config::parse_config_str_read(config_text, read, crate::quantfmt::QuantRegistry::builtin())?;
     let program = hl::build_program(&spec)?;
     let binding = hf_weights::bind(&spec, &program)?;
     let cost = cost::estimate(&program);
@@ -146,11 +152,15 @@ fn mixer(m: &Mixer) -> String {
             m.qk_rope_head_dim,
             m.v_head_dim,
             m.scale,
-            position(&Position::Rope(m.rope.clone()))
+            m.rope.as_ref().map_or_else(|| position(&Position::None), |r| position(&Position::Rope(r.clone())))
         ),
         Mixer::GatedDeltaNet(g) => format!(
             "gated delta net {} k-heads × {} / {} v-heads × {}, conv {}, head map {:?}",
             g.k_heads, g.k_dim, g.v_heads, g.v_dim, g.conv_kernel, g.head_map
+        ),
+        Mixer::Kda(k) => format!(
+            "Kimi delta attention {} heads × {}, conv {}, channel-wise forget gate (rank {})",
+            k.heads, k.head_dim, k.conv_kernel, k.gate_rank
         ),
         Mixer::Mamba(m) => format!(
             "Mamba inner {} state {} conv {} dt_rank {}{}",
@@ -161,9 +171,27 @@ fn mixer(m: &Mixer) -> String {
             if m.bcdt_norm.is_some() { ", RMS-normed dt/B/C" } else { "" }
         ),
         Mixer::Mamba2(m) => {
-            format!("Mamba2 {} heads × {} state {} groups {} conv {}", m.heads, m.head_dim, m.state, m.groups, m.conv_kernel)
+            let norm = match m.norm_mode {
+                Mamba2Norm::GateFirst => "",
+                Mamba2Norm::NormFirst => ", norm before gate",
+                Mamba2Norm::Ungated => ", gate only (no norm)",
+            };
+            format!(
+                "Mamba2 {} heads × {} state {} groups {} conv {}{norm}{}",
+                m.heads,
+                m.head_dim,
+                m.state,
+                m.groups,
+                m.conv_kernel,
+                if m.chunk_scales.is_some() { ", muP chunk scales" } else { "" }
+            )
         }
         Mixer::RwkvTime(r) => format!("RWKV-{} time mix, attention dim {}", r.version, r.attn_dim),
+        Mixer::ShortConv(c) => format!("gated short convolution, kernel {}", c.kernel),
+        Mixer::None => "none (the layer is its FFN)".into(),
+        Mixer::Parallel(bs) => {
+            format!("parallel: {}", bs.iter().map(|b| format!("[{}]×{}→×{}", mixer(&b.mixer), b.in_scale, b.out_scale)).collect::<Vec<_>>().join(" + "))
+        }
     }
 }
 
@@ -197,6 +225,12 @@ fn ffn(f: &Ffn) -> String {
             }
             if let Glu::ClampedSwiGlu { alpha, limit } = m.glu {
                 let _ = write!(s, ", clamped SwiGLU α={alpha} limit={limit}");
+            }
+            if !m.gated {
+                s.push_str(", plain experts (no gate)");
+            }
+            if let Some(l) = m.latent {
+                let _ = write!(s, ", latent {l}");
             }
             s
         }

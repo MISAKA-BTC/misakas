@@ -336,6 +336,7 @@ fn admit(profile: &PalwShapeProfileV3, job: &PalwJobContextV2) -> Result<u64, Pa
         shape.kimi_family,
         // 2026-09-23 audit C-4 fence, as the network resolves it.
         p.palw_audit_2026_09_23_active_at(0),
+        shape.gdn_key_heads,
     )
     .map(|e| e.canonical_step_leaf_count)
 }

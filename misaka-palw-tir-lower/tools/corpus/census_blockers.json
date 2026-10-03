@@ -1,0 +1,328 @@
+{
+ "_doc": "Census families whose gap this lane has read in the transformers code (not all 51 Level C: the others are listed by the refusal the reader gave, in the generated census table, and are NOT classified). class: feature | route | refusal | data (an adapter is expected to hold, not yet written) ; frs: the feature requests (docs/design/palw/tir/feature-requests.md) that name it.",
+ "nanochat": {
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-35); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
+ },
+ "modernbert_decoder": {
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-29); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
+ },
+ "axk2": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "DeepSeek sparse attention layers",
+  "evidence": "the reader's own refusal: layer type deepseek_sparse_attention"
+ },
+ "glm_moe_dsa": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "DeepSeek sparse attention (interleaved indexer rope, shared indexer layers)",
+  "evidence": "the reader's own refusal"
+ },
+ "hy_v4": {
+  "class": "feature",
+  "frs": [
+   "FR-09",
+   "FR-10"
+  ],
+  "short": "DSA indexer plus hyper-connections without a mixing matrix and swiglu_limit",
+  "evidence": "the reader's own refusal"
+ },
+ "olmo_hybrid": {
+  "class": "feature",
+  "frs": [
+   "FR-16"
+  ],
+  "short": "gated delta rule layers with SEPARATE q/k/v projections and convolutions (the GdnLayout enum has only Qwen3-Next's fused and Qwen3.5's split-projection layouts), allow_neg_eigval (beta times 2) and a different norm placement per layer type; the same split-conv shape as Kimi's KDA",
+  "evidence": "config and tensor names (q_conv1d, k_conv1d, v_conv1d, a_proj, b_proj, g_proj, o_norm)"
+ },
+ "minimax": {
+  "class": "feature",
+  "frs": [
+   "FR-32",
+   "FR-30"
+  ],
+  "short": "lightning attention: linear attention with a constant per-head decay (Mamba-2's update without dt, conv or skip), an RMS norm over all heads and a SEPARATE sigmoid output gate; hybrid with softmax attention layers",
+  "evidence": "read from modeling_minimax.py"
+ },
+ "recurrent_gemma": {
+  "class": "feature",
+  "frs": [],
+  "short": "RG-LRU recurrent blocks (a gated linear recurrence with a learned decay and a convolution) beside local attention: a new mixer, not yet read in detail",
+  "evidence": "config keys (lru_width, conv1d_width, block_types)"
+ },
+ "afmoe": {
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-30); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
+ },
+ "laguna": {
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-30); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
+ },
+ "mimo_v2_flash": {
+  "class": "data",
+  "frs": [],
+  "short": "LANDED on tir/generic c3f1c27ca (FR-31); now Level B by a third-party data adapter, every stage incl. court",
+  "evidence": "adapter run on the merge of c3f1c27ca"
+ },
+ "zaya": {
+  "class": "feature",
+  "frs": [],
+  "short": "Zyphra's CCA attention (a convolution over q/k, a delayed value projection, a q/k norm with a learned temperature), per-layer residual scale/bias vectors, an MLP router with balancing biases, layer types `hybrid`/`hybrid_sliding`: several features at once",
+  "evidence": "config and tensor names (the layer shows qkv_proj.conv_qk_depthwise, v_proj_delayed, router_mlp, *_residual_scale)"
+ },
+ "xglm": {
+  "class": "feature",
+  "frs": [
+   "FR-18",
+   "FR-34"
+  ],
+  "short": "sinusoidal positions in a DECODER (the spec has learned positions only), and the embedding scale applies to the token embedding only (FR-34); otherwise OPT-like",
+  "evidence": "tensor names and spec.rs / lower/encdec.rs"
+ },
+ "doge": {
+  "class": "feature",
+  "frs": [],
+  "short": "dynamic-mask attention (a learned `A` and `dt_proj` mask the keys) and residual vectors (input_residual, post_attention_residual): a new mixer",
+  "evidence": "tensor names"
+ },
+ "gpt_neox_japanese": {
+  "class": "feature",
+  "frs": [
+   "FR-01"
+  ],
+  "short": "an output-projection bias stored as a separate tensor (attention.dense_bias) added outside the projection on some layers",
+  "evidence": "tensor names"
+ },
+ "aria_text": {
+  "class": "data",
+  "frs": [],
+  "short": "Level B on tir/generic: the stacked, transposed experts are `spec.hf.weights` expressions (FR-01 landed)",
+  "evidence": "adapter run, every stage"
+ },
+ "biogpt": {
+  "class": "feature",
+  "frs": [
+   "FR-34"
+  ],
+  "short": "OPT's block under another prefix, but the embedding scale multiplies the token embedding only (the builder multiplies token + position): expected to stop at float_vs_hf; the variant without the scale shows the rest is data",
+  "evidence": "adapter run: stops at float_vs_hf (0.43 of the logit scale); the variant biogpt_unscaled (scale_embedding false) is Level B with every stage including the court (FR-34)"
+ },
+ "camembert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "data2vec_text": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "electra": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "ernie": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "megatron_bert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "rembert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roberta_prelayernorm": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roc_bert": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "roformer": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "xlm_roberta_xl": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "big_bird": {
+  "class": "feature",
+  "frs": [
+   "FR-29"
+  ],
+  "short": "a BERT-lineage `ForCausalLM`: a BERT block under a causal mask whose output goes through an MLM prediction head (dense + activation + LayerNorm + bias) before the vocabulary projection",
+  "evidence": "the fixture's tensor names (lm_head.dense / lm_head.layer_norm, cls.predictions.transform.*); not run"
+ },
+ "bigbird_pegasus": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "blenderbot_small": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "mvp": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "pegasus": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "prophetnet": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "trocr": {
+  "class": "route",
+  "frs": [
+   "FR-18"
+  ],
+  "short": "the decoder half of an encoder-decoder served alone (LayerNorm blocks, learned or sinusoidal positions, `d_model`/`activation_function` key names); the encoder-decoder family itself is FR-18, and a sinusoid in a decoder needs `POS_SINUSOID_V1`",
+  "evidence": "config keys and tensor names; not run"
+ },
+ "ctrl": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "xlm": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "xlnet": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "cpmant": {
+  "class": "legacy",
+  "frs": [],
+  "short": "a historical language model (CTRL, XLM, XLNet's permutation LM, CPM-Ant) with its own mechanics; not examined and not a candidate by hub usage",
+  "evidence": "not read"
+ },
+ "fuyu": {
+  "class": "route",
+  "frs": [
+   "FR-19"
+  ],
+  "short": "a vision-language model: Persimmon's decoder (this lane's `persimmon` adapter lowers it) over image patches fed as embeddings (the vision stage is RFC-0003's)",
+  "evidence": "config keys (image_size, patch_size, text_config)"
+ },
+ "moshi": {
+  "class": "route",
+  "frs": [
+   "FR-23"
+  ],
+  "short": "a speech-text model: a codec-fed temporal transformer and a depth decoder",
+  "evidence": "config keys (audio_encoder_config, depth_decoder_config)"
+ },
+ "hrm_text": {
+  "class": "feature",
+  "frs": [],
+  "short": "a hierarchical recurrent model (H and L cycles over shared stacks, `num_layers_per_stack`, a prefix-LM mask): a new composition of layers, not examined",
+  "evidence": "config keys (H_cycles, L_cycles, L_bp_cycles, prefix_lm)"
+ },
+ "minimax_m3_vl_text": {
+  "class": "feature",
+  "frs": [
+   "FR-09"
+  ],
+  "short": "a BLOCK-sparse attention indexer with local blocks (index_block_size, index_local_blocks, index_topk_blocks) plus MoE; `ATTN_SPARSE_BLOCK_V1` exists for Qwen4's variant and was not tried",
+  "evidence": "config keys; not run"
+ },
+ "cohere2_moe_shared_avg": {
+  "class": "feature",
+  "frs": [],
+  "short": "a shared expert averaged with the routed output needs a scale on the shared expert (SharedExpertSpec has none); the adapter refuses by its own check; the `sum` variant is Level B",
+  "evidence": "adapter run"
+ },
+ "minicpm3": {
+  "class": "data",
+  "frs": [
+   "FR-25"
+  ],
+  "short": "Level B by a third-party adapter when the built-in refusal (by name, a description of the remote-code model) is overridden; on the merged tree its random tiny fixture reached logits of 305 natural-log units and lane G's LOGITS_Q24_V1 refused it past 120 (a property of the fixture's scale_emb = 12, not of the family): the census config now uses scale_emb = 2",
+  "evidence": "adapter run"
+ }
+}

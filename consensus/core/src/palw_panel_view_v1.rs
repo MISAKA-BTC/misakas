@@ -46,6 +46,11 @@ pub enum PalwPanelHoldReasonV1 {
     /// RFC-0004 §6.7 (spec 17 §17.7.1): the seat proved the composite's adapter section but is not ready for
     /// the parent class the composite rests on. Appended last.
     ParentNotReady,
+    /// RFC-0002 Part II §II.7.5 Proposal B (node-only): this seat's executor has not reproduced the class's reference evaluator — the
+    /// self-test it runs before its first possession proof failed (`ExecutorNotConformant`) or is still running
+    /// (`ExecutorConformancePending`). Appended last.
+    ExecutorNotConformant,
+    ExecutorConformancePending,
 }
 
 impl PalwPanelHoldReasonV1 {
@@ -63,6 +68,8 @@ impl PalwPanelHoldReasonV1 {
             Self::SegmentCheckpointMissing => "SEGMENT_CHECKPOINT_MISSING",
             Self::BondImmature => "BOND_IMMATURE",
             Self::ParentNotReady => "PARENT_NOT_READY",
+            Self::ExecutorNotConformant => "EXECUTOR_NOT_CONFORMANT",
+            Self::ExecutorConformancePending => "EXECUTOR_CONFORMANCE_PENDING",
         }
     }
 
@@ -80,6 +87,8 @@ impl PalwPanelHoldReasonV1 {
             Self::SegmentCheckpointMissing => "the assigned segment's SC01 checkpoint is not open, so a partial seat cannot resume",
             Self::BondImmature => "the bond registered less than the seat-maturity window ago (ADR-0065 D1); it counts from its registration DAA plus the window",
             Self::ParentNotReady => "the seat proved the composite's adapter section but holds no standing possession proof for the parent class it rests on",
+            Self::ExecutorNotConformant => "this seat's executor did not reproduce the class's reference evaluator on the self-test it runs before its first possession proof: it posts none (RFC-0002 Part II Proposal B)",
+            Self::ExecutorConformancePending => "this seat is running the executor self-test of the class (a large class's reference evaluator is slow); no possession proof until it passes",
         }
     }
 

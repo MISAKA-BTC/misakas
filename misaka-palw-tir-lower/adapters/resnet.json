@@ -1,0 +1,69 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "resnet",
+  "kind": "cnn",
+  "doc": "ResNet (ResNetModel and the base of ResNetForImageClassification; microsoft/resnet-*): a 7x7 stride-2 stem convolution with its batch norm and ReLU, a 3x3 stride-2 max pool, then stages of residual units — basic (two 3x3) or bottleneck (1x1, 3x3, 1x1 at a quarter of the width; the stride on the 3x3 unless downsample_in_bottleneck) — each with a 1x1 projection shortcut where the width or the stride changes, ReLU after the sum; the output is the pooled vector (global average pooling, `pooler_output`). Batch norms are folded into their convolutions (BN_FOLD_V1). The data form of the ResNet structure that tests/cnn.rs writes in Rust (its oracle). Features: CNN_FROM_SPEC_V1, CONV_2D_V1, BN_FOLD_V1, POOL_MAX_2D_V1, RESIDUAL_ADD_ACT_V1, POOL_AVG_GLOBAL_V1.",
+  "match": {"architectures": ["ResNetModel", "ResNetForImageClassification"], "model_types": ["resnet"]},
+  "config": {
+    "defaults": {"num_channels": 3, "embedding_size": 64, "hidden_sizes": [256, 512, 1024, 2048], "depths": [3, 4, 6, 3], "layer_type": "bottleneck", "hidden_act": "relu", "downsample_in_first_stage": false, "downsample_in_bottleneck": false},
+    "inert": ["out_features", "out_indices", "stage_names", "id2label", "label2id", "num_labels", "problem_type", "is_decoder", "cross_attention_hidden_size", "add_cross_attention", "tie_word_embeddings", "initializer_range"]
+  },
+  "vars": [
+    {"name": "nc", "value": {"$cfg": "num_channels"}},
+    {"name": "nc_ok", "value": {"$check": [{"$eq": [{"$var": "nc"}, 3]}, "num_channels other than 3 (the class's image is RGB)"]}},
+    {"name": "emb", "value": {"$cfg": "embedding_size"}},
+    {"name": "sizes", "value": {"$cfg": "hidden_sizes"}},
+    {"name": "depths", "value": {"$cfg": "depths"}},
+    {"name": "lt", "value": {"$cfg": "layer_type"}},
+    {"name": "lt_ok", "value": {"$check": [{"$or": [{"$eq": [{"$var": "lt"}, "basic"]}, {"$eq": [{"$var": "lt"}, "bottleneck"]}]}, {"$cat": ["layer_type `", {"$var": "lt"}, "` is not modelled"]}]}},
+    {"name": "stages_ok", "value": {"$check": [{"$eq": [{"$len": {"$var": "sizes"}}, {"$len": {"$var": "depths"}}]}, "hidden_sizes and depths differ in length"]}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "first", "value": {"$cfg": "downsample_in_first_stage"}},
+    {"name": "inb", "value": {"$cfg": "downsample_in_bottleneck"}},
+    {"name": "stem", "value": [
+      {"Conv": {"name": "embedder.embedder.convolution", "cin": 3, "cout": {"$var": "emb"}, "k": 7, "stride": 2, "pad": 3, "bn": {"name": "embedder.embedder.normalization", "eps": 1e-05}, "act": {"$var": "act"}}},
+      {"MaxPool": {"k": 3, "stride": 2, "pad": 1}}
+    ]},
+    {"name": "units", "value": {"$flatten": {"$map": [{"$range": {"$len": {"$var": "depths"}}}, "s",
+      {"$let": ["out_ch", {"$index": [{"$var": "sizes"}, {"$var": "s"}]},
+      {"$let": ["in_ch", {"$if": [{"$eq": [{"$var": "s"}, 0]}, {"$var": "emb"}, {"$index": [{"$var": "sizes"}, {"$sub": [{"$var": "s"}, 1]}]}]},
+      {"$let": ["stage_stride", {"$if": [{"$eq": [{"$var": "s"}, 0]}, {"$if": [{"$var": "first"}, 2, 1]}, 2]},
+      {"$map": [{"$range": {"$index": [{"$var": "depths"}, {"$var": "s"}]}}, "l",
+        {"$let": ["cin", {"$if": [{"$eq": [{"$var": "l"}, 0]}, {"$var": "in_ch"}, {"$var": "out_ch"}]},
+        {"$let": ["stride", {"$if": [{"$eq": [{"$var": "l"}, 0]}, {"$var": "stage_stride"}, 1]},
+        {"$let": ["p", {"$cat": ["encoder.stages.", {"$var": "s"}, ".layers.", {"$var": "l"}]},
+        {"$let": ["red", {"$idiv": [{"$var": "out_ch"}, 4]},
+        {"Residual": {
+          "main": {"$if": [{"$eq": [{"$var": "lt"}, "basic"]},
+            [
+              {"Conv": {"name": {"$cat": [{"$var": "p"}, ".layer.0.convolution"]}, "cin": {"$var": "cin"}, "cout": {"$var": "out_ch"}, "k": 3, "stride": {"$var": "stride"}, "pad": 1, "bn": {"name": {"$cat": [{"$var": "p"}, ".layer.0.normalization"]}, "eps": 1e-05}, "act": {"$var": "act"}}},
+              {"Conv": {"name": {"$cat": [{"$var": "p"}, ".layer.1.convolution"]}, "cin": {"$var": "out_ch"}, "cout": {"$var": "out_ch"}, "k": 3, "stride": 1, "pad": 1, "bn": {"name": {"$cat": [{"$var": "p"}, ".layer.1.normalization"]}, "eps": 1e-05}, "act": null}}
+            ],
+            [
+              {"Conv": {"name": {"$cat": [{"$var": "p"}, ".layer.0.convolution"]}, "cin": {"$var": "cin"}, "cout": {"$var": "red"}, "k": 1, "stride": {"$if": [{"$var": "inb"}, {"$var": "stride"}, 1]}, "pad": 0, "bn": {"name": {"$cat": [{"$var": "p"}, ".layer.0.normalization"]}, "eps": 1e-05}, "act": {"$var": "act"}}},
+              {"Conv": {"name": {"$cat": [{"$var": "p"}, ".layer.1.convolution"]}, "cin": {"$var": "red"}, "cout": {"$var": "red"}, "k": 3, "stride": {"$if": [{"$var": "inb"}, 1, {"$var": "stride"}]}, "pad": 1, "bn": {"name": {"$cat": [{"$var": "p"}, ".layer.1.normalization"]}, "eps": 1e-05}, "act": {"$var": "act"}}},
+              {"Conv": {"name": {"$cat": [{"$var": "p"}, ".layer.2.convolution"]}, "cin": {"$var": "red"}, "cout": {"$var": "out_ch"}, "k": 1, "stride": 1, "pad": 0, "bn": {"name": {"$cat": [{"$var": "p"}, ".layer.2.normalization"]}, "eps": 1e-05}, "act": null}}
+            ]
+          ]},
+          "shortcut": {"$if": [{"$or": [{"$ne": [{"$var": "cin"}, {"$var": "out_ch"}]}, {"$ne": [{"$var": "stride"}, 1]}]},
+            [{"Conv": {"name": {"$cat": [{"$var": "p"}, ".shortcut.convolution"]}, "cin": {"$var": "cin"}, "cout": {"$var": "out_ch"}, "k": 1, "stride": {"$var": "stride"}, "pad": 0, "bn": {"name": {"$cat": [{"$var": "p"}, ".shortcut.normalization"]}, "eps": 1e-05}, "act": null}}],
+            []
+          ]},
+          "act": {"$var": "act"}
+        }}
+        ]}]}]}]}
+      ]}
+      ]}]}]}
+    ]}}},
+    {"name": "ops", "value": {"$concat": [{"$var": "stem"}, {"$var": "units"}]}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": null, "w": null,
+    "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
+    "ops": {"$var": "ops"},
+    "out": "GlobalAvg",
+    "ignored": ["classifier."],
+    "aliases": [["", "resnet."]]
+  }
+}

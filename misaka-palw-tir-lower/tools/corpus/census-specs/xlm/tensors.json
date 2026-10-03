@@ -1,0 +1,238 @@
+{
+ "pred_layer.proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "transformer.attentions.0.k_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.0.k_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.0.out_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.0.out_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.0.q_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.0.q_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.0.v_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.0.v_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.1.k_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.1.k_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.1.out_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.1.out_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.1.q_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.1.q_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.attentions.1.v_lin.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.attentions.1.v_lin.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.ffns.0.lin1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   128
+  ]
+ },
+ "transformer.ffns.0.lin1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.ffns.0.lin2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.ffns.0.lin2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "transformer.ffns.1.lin1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   128
+  ]
+ },
+ "transformer.ffns.1.lin1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.ffns.1.lin2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.ffns.1.lin2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "transformer.layer_norm1.0.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm1.0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm1.1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm1.1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm2.0.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm2.0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm2.1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm2.1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm_emb.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.layer_norm_emb.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.position_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ }
+}

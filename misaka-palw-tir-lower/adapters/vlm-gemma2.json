@@ -1,0 +1,35 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-gemma2",
+  "doc": "PaliGemma 2 (PaliGemmaForConditionalGeneration with a Gemma-2 text decoder), read as its TEXT decoder alone: see `vlm-gemma` (the same scope and the same refusal of image rows).",
+  "extends": [
+    "gemma2",
+    "mixin-vlm"
+  ],
+  "config": {
+    "inert": [
+      "use_bidirectional_attention",
+      "num_image_tokens"
+    ],
+    "root_inert": [
+      "projection_dim",
+      "hidden_size"
+    ]
+  },
+  "vars": [
+    {
+      "name": "tie_rule",
+      "value": "true"
+    },
+    {
+      "name": "no_bidir",
+      "value": false
+    }
+  ],
+  "spec": {
+    "prefix_lm": true,
+    "notes": [
+      "PaliGemma 2: the text-only causal path; the bidirectional prefix attention over an image prompt (ATTN_PREFIX_LM_V1) is not lowered"
+    ]
+  }
+}

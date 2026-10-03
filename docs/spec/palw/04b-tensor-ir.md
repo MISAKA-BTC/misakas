@@ -2823,9 +2823,10 @@ in the block's object list.
    readiness multiple), else `GenClassNotReady { ready, needed }`; with no registry in force the lane refuses
    (`GenClaimRefused`). **The possession floor is one shared function** (`class_seating_v1` in
    `palw_class_seating_v1`, extracted 2026-10-01): for a class and an executor bond it returns each ready
-   operator once with its ready bonds, the executor's bond and operator excluded, and the panel's size;
-   RFC-0002 Part II §II.7.5 Proposal A (the fence `palw_class_seating`, approved) makes it the one door every
-   class kind asks and adds the independence floor over the same map (`ready_operators_in`);
+   operator once with its ready bonds, the executor's bond and operator excluded, and the panel's size
+   (`class_possession_v1`, which this lane's `GenClassNotReady` reads); RFC-0002 Part II §II.7.5 Proposal A (the
+   fence `palw_class_seating`, §16) makes it the one door every class kind asks (`check_class_seated_v1`) and adds
+   the independence floor over the same read;
 4. the job against the class: `palw_gen_job_resolve_class_v1` (§15.13's refusals, as `GenClaimRefused`), the
    profile an Image or an Embedding, and under `PublicDa` the carried ids within the class's counts and token
    bounds;
@@ -3060,3 +3061,89 @@ builds past one carrier is the same object). Where bisection is played the ladde
 both parties compute alike: `H64(key "misaka-palw/gen/bisect-prefix-state/v1", execution_root ‖ le64(index) ‖
 le64(take) ‖ the first take leaf hashes, stage-major)` with `take = min(index, leaf count)` (the IR's convention,
 `tir_bisect_prefix_state_v1`, under its own key).
+
+## 16. Class seating — one seating rule for every class kind (RFC-0002 Part II §II.7.5 Proposal A; fence `palw_class_seating`)
+
+**The fence.** `Params::palw_class_seating: Option<PalwClassSeatingFenceV1 { activation, independent_floor, raise }>` —
+dormant (`None`) on every preset and in no flag-day list; hashed Some-only into `consensus_params_id` and
+`consensus_schedule_id` (the floor and a raise with it), its activation and its raise's visited by `for_each_fence`, the whole
+option collapsed from `Some(never())` in `normalize_values_a_scheduled_fence_drags_with_it`; mirrored on the V2 bundle's state
+params (`PalwStateParamsV2::class_seating`, written only by `Params::sync_palw_class_seating`). `validate_palw_v2` refuses a
+ruleset that is not `ConsensusV2`, a mirror that disagrees, an `independent_floor` of 0 or above the panel's `seat_count`, a
+`raise` that is not above the fence's own height or lowers the floor, and arming without `palw_gen_v1`,
+`palw_activation_pool` and `palw_audit_2026_09_23` in force at or below it. The default floor is the admission jury's strict
+majority of a panel, `⌊seat_count / 2⌋ + 1` = 3 on testnet-12 (`PALW_CLASS_SEATING_T12_INDEPENDENT_FLOOR_V1`); a later flag-day
+entry may raise it from a later height (the `raise`), and a floor never moves under a running chain.
+
+**The predicate** (`palw_class_seating_v1(state, params, fold, class, executor, daa, terms, activation_pool)`, pure; no side
+effect). `Ready` is the set of **operators** — an operator counted once however many bonds it holds — with a fresh readiness V2
+possession proof for the class by the registry's own predicate (`palw_seat_class_not_ready_reason_v1`: an active bond above the
+floor, a fresh row, free collateral for the readiness multiple, and for a composite class the parent clause). `Base` is the base
+population `palw_base_population_v1`: active bonds a panel can draw (collateral at the panel floor, serving the liveness floor's
+class), registered before the span's cut `(span − 1) × span_daa` and, past `palw_bond_maturity_early`, matured, **less the
+class's registrant's bond and operator** — the admission jury's filter extracted, so the jury, the per-claim outsider draw and the
+seating floor read one population. The class is **seated** for a claim whose executor is `e` iff
+
+1. *possession floor*: `|Ready \ {operator(e)}| ≥ seat_count`;
+2. *independence floor*: `|(Ready ∩ Base) \ {operator(registrant), operator(e)}| ≥ independent_floor`.
+
+A genesis class has no registrant to exclude. The result carries every number a refusal, the lifecycle, the registry read and the
+preflight need (`PalwClassSeatingV1 { ready_operators, needed_operators, independent_operators, needed_independent,
+base_operators }`), its `verdict()` asks possession first, and `licensable_share_permille()` is `independent_operators × 1000 /
+base_operators` (0 for an empty base): the probability that a claim's outsider — drawn per claim over all of `Base`, not over its
+holders, which is ADR-0147's price kept on purpose — holds the class. It is read by no gate.
+
+**The doors.** One function, `check_class_seated_v1(class, executor, daa)`, past the fence and for every class that has a lifecycle
+row or a generative row (the floor and a legacy class without a row are never gated), asked
+(a) by an attempt claim after `check_class_admits_claim` and before its reservation, (b) by a free-prompt commitment, (c) by an
+improvement evaluation claim, (d) by a generative tensor claim after its own possession floor (`GenClassNotReady`, kept as that
+lane's name, asked below the fence too), and (e) by the producer's pre-check (`palw_class_seated_admits_v1`, filled into the
+facts' `class_admission_refusal`). A refusal is one error, `ClassNotSeated { class, floor: Possession | Independence, have, need }`,
+raised before any reservation is taken, so no `NoCapablePanel` void follows. Every door reads the claim's own DAA, so a claim
+accepted below the fence is judged by the old rules for its whole life.
+
+**The lifecycle.** Past the fence the step reads the class with no executor: `PalwLifecycleObservationV1.ready_seats` is the
+number of distinct ready operators and `independence_floor_met` is `|(Ready ∩ Base) \ {registrant}| ≥ independent_floor`
+(`true` below the fence); `Prefetching → Probation`, `Held → Probation` and `Probation → ActiveLimited` require it. The registry
+read serves the class's seating (`PalwModelRegistryClassReadV1::seating`) to the RPC (`blocking`: `INDEPENDENT_OPERATORS`,
+`have / need`; the class's licensable share) and the preflight.
+
+## 17. Node-side fused kernels, the Metal backend and the architecture verdicts (RFC-0002 §7 and §8; informative)
+
+Nothing in this section reaches a consensus object, a class id or a fingerprint (F-3): it is node software and tool output.
+
+**The kernels of this build** (`misaka_palw_tir_exec::fused::kernels_v1`), each a `tir_library_v1` template matched structurally over
+the canonical program (F-5) and run only where the refined plan proves no node of the region can fail:
+
+| Kernel | Template | Operands | Output |
+| --- | --- | --- | --- |
+| `gdn_step_q36` | the gated delta rule over a `Fixed` state | key, value, query, gates, narrowing triples, write shift | `i32` |
+| `l2_unit_q15` | `x / ‖x‖` along the last axis, 17 nodes | `i16` rows `[n]` or `[rows, n]` | `i16`, ±32767 |
+| `rms_unit_q24` | `x / √(mean(x²) + ε)` in Q24, 21 nodes | `i16`/`i32` rows, one `i64` ε | `i32` |
+| `rms_norm_wide_q36` (and `_exact`) | the 39-node wide RMS, ε = `eps_zero · 2^eps_shift` | `i16`/`i32` rows, two ε scalars | `i32` |
+
+Measured and **not** fused, because the generic kernels are as fast: `a16_matmul`, `moe_combine_q36` and (not present in any program this
+tree lowers) `a16_attn_fused`. The gate is `tests/fused_gate.rs` of `misaka-palw-tir-lower` (F-4): per kernel, random and range-extreme
+operands against the reference evaluator, the independent second implementation and the generic backend, at more than one shape, with the
+check that the kernel ran, and the deliberately broken variant (`TirExecutor::set_fused_fault`) that the gate must refuse.
+
+**The Metal backend** (cargo feature `metal`, macOS; node flag `--palw-tir-metal`, which implies `--palw-tir-fused-kernels`). `l2_unit_q15`
+and `rms_unit_q24` run on the GPU: one row per threadgroup, the exact sum of squares by a tree reduction, the scalar chain once, the outputs
+strided, all in 64-bit words. The one place the template needs more than a word (`Σx² · 2^24 / n` in `i128`) is split into a quotient and a
+remainder, and a row whose result leaves the word raises a flag: the call is then answered by the CPU kernel, so the GPU never answers a value
+it did not compute exactly. A call under 32,768 elements stays on the CPU (a dispatch costs more than the work). The kernel source is
+compiled by the system's Metal runtime at first use. The gate (`misaka-palw-tir-exec/tests/metal_gate.rs`) holds the GPU path to the reference,
+the generic backend and the CPU fused kernels on random and extreme rows, including rows beyond the kernel's word, and requires the broken
+variant to be refused with the GPU path in front of it. A node whose build or machine lacks the backend refuses `--palw-tir-metal` by name.
+
+**The architecture verdicts** (`palw-class check-architecture`, `misaka-palw-sdk/src/check_architecture.rs`). Besides `ADMISSIBLE`:
+
+* `ADMISSIBLE_GENERIC (estimated slowdown S on generic kernels: patterns)`: admissible, and more than 2 % of the position's estimated work is
+  in wide (`i128`-working) nodes that no kernel of this build matches. `generic_slowdown_v1` counts a node's work as its output's elements
+  (`MatMul`: `m·k·n / 8`, never a fusion target), and a wide node outside every matched region as `GENERIC_WIDE_PASS_FACTOR_V1 = 3` fused passes;
+  `S` is the generic total over the all-fused total. It is an estimate from the program alone (before any params exist, so matching is
+  optimistic about the ranges an artifact decides). The weight 3 is **measured**: the generic/fused time ratios of the three unit-row patterns at six
+  shapes are 3.17, 3.42, 2.21, 2.95, 2.72 and 5.15 (geometric mean 3.2; release, Apple M-series; `fused_gate`'s `measure_…` test), each including the
+  program's un-fused nodes. The verdict is a statement about speed and blocks no registration.
+* `LOWERABLE_UNVERIFIED (the program's own verdict: V)`: the architecture's float reference is remote code this tool cannot run offline, so
+  the fidelity column is empty; `V` is the verdict the program earned, which holds.

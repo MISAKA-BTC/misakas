@@ -241,7 +241,7 @@ a new adapter (a data file) over existing HL ops unless stated):
 | `Llama4ForCausalLM`/`…ConditionalGeneration` | chunked attention (a new window shape), NoPE layers with attention temperature tuning, Llama-4 MoE — needs a `chunked` Hist read |
 | `Gemma3nForConditionalGeneration` | AltUp, Laurel, per-layer embeddings, activation sparsity (a top-k-by-value gate) |
 | `Glm4ForCausalLM`, `GlmForCausalLM`, `Glm4MoeForCausalLM`, ChatGLM (remote) | not modelled yet; GLM-4.5 is DeepSeek-V3-style routing with partial rope — mostly existing ops |
-| `Olmo3ForCausalLM`, `GraniteMoeHybridForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
+| `Olmo3ForCausalLM`, `NemotronHForCausalLM`, `FalconH1ForCausalLM`, `Zamba2ForCausalLM`, `BambaForCausalLM` | hybrids of existing ops (Mamba2 + attention); config parsers not written; Falcon-H1 adds µP multipliers |
 | `PhimoeForCausalLM` | sparsemixer routing (a second top-1 over a masked, jittered distribution) |
 | `DbrxForCausalLM`, `JetMoeForCausalLM`, `Ernie4_5*`, `HunYuan*`, `MiniMax*`, `Lfm2*`, `RecurrentGemma`, `xLSTM`, `DiffLlama`, `BitNet`, … | long tail; each needs its parser, some a new op (xLSTM's exponential gating, BitNet's ternary weights) |
 | `Rwkv5ForCausalLM`, `Rwkv6ForCausalLM` (remote), `RWKV7ForCausalLM` (flash-linear-attention) | not in transformers 5.17: the group-norm eps, rescale and LoRA widths cannot be checked offline. The **recurrences are HL ops** (`Wkv6` covers RWKV-5/6 with a per-channel decay, `Wkv7` the RWKV-7 generalised delta rule), tested against their closed forms |
@@ -436,6 +436,7 @@ calibration statistics (`lower::fill`), so a recalibration moves the artifact, n
 | weights | W8: `i8` per output row. A table gathered by row (an embedding, a learned position table) is `i16` per row, and a head tied to it reads the same codes (`i16 × i16`, exact in `i64`). `(m, s, z)` are three typed per-channel params (`i64`, `i8`, `i64`) |
 | norm unit rows, softmax probabilities, decays, gates | Q24 `i32` |
 | attention and router logits | Q14 `i32` (±131,072: Qwen2.5's layer-0 logits reach 24,000) |
+| the text program's logits | Q24 `i32`: natural-log units × 2^24 whatever the model (`LOGITS_Q24_V1`, §22; `|logit| < 128`) |
 | activations | `Table(x; T)`: 65,536 `i16` entries per site and layer, the float function rounded on the code grid |
 
 **Outlier channels.** A value read only by projections splits off its `k ≤ 16` channels with the
@@ -1274,3 +1275,140 @@ large by downloads):
 | **text generation in all** | **≈ 423 k, ≈ 13.6 % of HF** | by `tir_admit_v1`; the sizing cap lowers it until fence2 |
 | + RFC-0003 classes | **≈ 505 k, ≈ 16.3 %** | |
 
+
+## 21. Generic feature lowerers: Qwen4-Exp as a combination, not a model (2026-10-01, RFC-0002 lane G)
+
+The generic frontend's acceptance test. Qwen4-Exp (transformers 5.17 `qwen4_exp_text`) combines four
+residual streams with gated mixes, gated delta layers at a key:value head ratio, sparse block
+attention, hashed n-gram per-layer embeddings, a routed MoE and an attention output gate. It is read
+by ONE data file (`adapters/qwen4-exp.json`, Level B) into a `ModelSpec` of generic features and
+lowered by generic lowerers (`src/lower/generic.rs`). Nothing in the lowering knows the name `qwen4`;
+**no new primitive, no new court kernel** (the registry says so for every feature below).
+
+| feature | what the spec says | how it lowers (`lower/generic.rs`) |
+| --- | --- | --- |
+| `RESIDUAL_GATED_HC_V1` | `streams` rows of the hidden width; each block reads a gated mean of them and writes back through learned weights | the carry is `streams × hidden` `i32`; a grouped RMS norm, a low-rank pair of projections (SiLU between), a sigmoid gate, `StreamMean` (one `ReduceSum` and one narrowing), `StreamOuter` (one broadcast product and one narrowing); two blocks a layer |
+| `EMBED_NGRAM_PLE_V1` | per layer, hashed 2- and 3-gram rows gate against the streams, a dilated causal conv adds context | the hash IN the program (below); a per-head table read; `GroupDot`, a signed-sqrt table and a sigmoid table; the third block of the layer |
+| `ATTN_SPARSE_BLOCK_V1` | mean-pooled block keys, ReLU scores over index heads, top-K blocks plus the incomplete tail | `BlockMean`, `RopeAtBlock`, `BlockSelect`, `BlockWrite`, and a key mask in the attention (below) |
+| `CONV_DEPTHWISE_CAUSAL_V1` at any dilation | taps `d` positions apart | a window state of `(k−1)·d` rows and one `Gather` by a constant index vector |
+| `MIXER_GDN_V1` | any key:value head ratio, gate `silu` or `sigmoid` | the existing delta step; `GatedRmsNorm` now carries its gate's activation |
+
+**Data-dependent values, never shapes.** A sparse-attention layer reads a different set of blocks at
+every position, but every tensor keeps its static shape: the block scores are computed for ALL
+`blocks` rows, an incomplete block scores `−1` (every real score is `≥ 0`), a fixed-K `TopK` picks
+the ids (04b §6.6: the higher score first, equal scores the lower index first, the set in ascending
+index order), and the logits of the keys outside the picked blocks and outside the incomplete tail
+take the softmax's floor through a `Select`. The `1/√dim` of the float score moves no rank and is
+dropped; the scores are shifted into `i32` so they can be committed (a `TopK` cone is then `blocks`
+leaves, each a small matmul).
+
+**The n-gram hash, in `i64`, with no consensus change.** `mixed_n = t₀·m₀ ⊕ … ⊕ t_{n−1}·m_{n−1}` needs an
+XOR the primitive set does not have. It is bit decomposition: `bit_k(a) = ⌊a/2^k⌋ − 2⌊a/2^(k+1)⌋` for
+the 63 bits of each product (a `Div` by a constant vector, a `Div`, a `Mul`, a `Sub`, a never-fires
+`Clamp(0, 1)` to give the range analysis the interval it cannot derive), the XOR of the first `m`
+products' bits as the parity of their sum (ONE `MatMul` by a 0/1 triangular constant gives every order),
+the recomposition as a `MatMul` by `2^k` into `i128` and a `Clamp` back (the analysis bounds a
+63-term sum of up to `2^62` terms by `2^68`), and `mixed mod size` as a floor-division, a `Mul` in `i128`
+and a `Sub`. The multipliers are bounded by `i64::MAX / vocab` (a `Clamp` states it), so `token ·
+multiplier` never leaves `i64`. The segment window (the last `n − 1` tokens, an `eos` ending a
+segment) is a `Fixed` state of `token − eos`: a fresh sequence is all zeros.
+- **Measured** (trigram layer, tiny fixture): the ids are **26 nodes**, the per-head table read 14 (one
+  chunk), the whole PLE block 187 nodes with its three norms, the mixer half at most 450.
+- **Evidence for a possible one-time primitive-set extension** (decided later, not required): general
+  integer bit primitives — `XOR`, shifts, a wrapping multiply, a remainder — would cut the ids from 26
+  nodes to about 6.
+- The in-program ids equal transformers' ids at every (PLE layer × position) of every PLE fixture
+  (`PLE_01..04`, `PLE_06`), including eos inside n-grams and the extreme token ids.
+
+**A table above 2^24 rows is a lowering matter (NF-8).** Each hash head owns a contiguous range of the
+layer's table, so the table becomes `[heads, rows, dim]` `i16` codes at one scale per layer, cut into
+chunks of at most `2^24` rows (`LowerOpts::table_chunk_rows`), one batched `Gather` (`batch_dims` 1)
+per chunk and a `Select` by the chunk index. Published sizes (20 M rows a head, 16 heads) need two
+chunks. The fixture test cuts at 16 rows (`PLE_06`): the logits are bit-identical to the unchunked
+lowering's and the three implementations agree.
+
+**Results** (16 fixtures, `tests/qwen4_exp.rs`; float = the HL interpreter; KL in nats):
+
+| check | result |
+| --- | --- |
+| float reference ↔ transformers | max abs logit difference 2.4e-7 … 3.4e-6 (logit scale ≈ 1.5–1.8) on all 16 |
+| integer program ↔ transformers | KL 1e-5 … 4.1e-4; no top-1 differs where transformers leads by more than 8× the quantisation error |
+| streaming program ↔ transformers' cached decode | the same (QSA-06, PLE-04) |
+| block selection | at every position of K = 1, K = max, tie, ratio-3 and the full model, the program's selected blocks read exactly the tokens transformers' indexer keeps (an all-zero indexer included: the tie rule is the lower index) |
+| reference ↔ ref2 ↔ exec | logits and every commit point equal, all fixtures |
+| court | the demand evaluator reproduces every node of every occurrence from the committed leaves alone, with `Fixed` state replayed between checkpoints, and the dissection arithmetic of every reduction over `H`; all **25** primitives are evaluated |
+| admission (`tir_admit_v1`) | admitted: largest block 450 nodes (NF-12: 512), 6–9 blocks, worst court terminal 4,096 MACs (16,384 at 512 experts) |
+| the published shape (2048 wide, 40 layers, 512 experts of top 10, 4 streams, 16 hash heads of 20 M rows; declared, never instantiated: peak 23 MB) | lowers to 9 blocks, largest 450 nodes, the PLE block 196; every head's table takes two chunks (`[16, 2^24, 128]` and `[16, 3,225,183, 128]`); admitted at the legacy court ceilings (187 cones, cone work 6,120, 131,318 step leaves, 2.5e10 MACs a position) |
+| the in-program hash at that scale | equal to the reference function on random tokens at a vocabulary of 248,320 and head tables of 20 M rows, through the range analysis (`lower::generic::tests`) — the function alone, never the table |
+| robustness | 1,378 single-key mutations of two configs (a key deleted, or set to a null, 0, 1, 2, 3, 7, 65, −1, a float, a boolean, a string, a list): no panic, 710 lowered, the rest refused by name; 45 hostile huge numbers in the keys that size a feature: 40 refused before anything is sized on them, none allocates |
+
+**Hardening this found.** A mutated config reached an 85 GB allocation through `head_dim = 10^12` (the rope's
+frequency vector) and `hc_count = 10^12` (the stream repeat): rotary dimensions past 4,096 are refused, as are
+more than 64 streams, more than 1,024 hash heads, a convolution past 64 taps or 4,096 rows and a block-key matrix
+past 2^27 elements; a zero-tap convolution and a hash base of 0 were panics and are refusals now. The test binary
+runs under an allocator that aborts on one allocation over 512 MiB, its mutants are small numbers, and each is sized
+by arithmetic over what it declares.
+
+**Limits found.**
+- The PLE table of a real checkpoint (hundreds of millions of rows × `dim` × the PLE layers) is
+  hundreds of GB: the lowering has no dimension problem, but an in-memory fill of it does. A row-wise
+  (streamed) fill of the chunk params is the missing piece, not a primitive.
+- The block-key matrix is written by a one-hot `Select` over `[blocks, dim]` (cost `O(blocks·dim)` a
+  position, small beside the matmuls at published sizes); a dynamic-row write would make it `O(dim)`.
+- `ple_layer_ids` are 1-based in the config and the tensors are named by the 0-based layer; the
+  adapter does the shift and the fixtures pin it against transformers' ids.
+
+## 22. `LOGITS_Q24_V1` (lowering version 2): a text program's logits are natural-log units × 2^24 (2026-10-01)
+
+Until version 2 the logits left the head at a calibrated static scale — an arbitrary real
+(`2^−27.5 … 2^−23.7` on the tiny fixtures) — so a sampler had to read the scale from the pack, and a
+temperature meant something different for every class. Version 2 fixes the unit: **the logits are
+natural-log units × 2^24 in an `i32`, whatever the model.**
+- **What moved.** The head's last narrowing lands on `2^−24` (`ScaleKey::q24`) instead of the
+  site's calibrated scale: the same nodes, other `(m, s)` params. The program's digest, node count
+  and param count are identical to version 1's; only the artifact changes. The version-1 golden files
+  hold the programs (what a deliberate change must NOT move) and `tests/golden/lowering_v2{,_libm}.json`
+  pin the artifacts of version 2. `LOWERING_VERSION` is recorded in the convert and fidelity provenance.
+- **The bound.** `i32` at `2^−24` holds `|logit| < 128`. A model whose calibrated logits reach 120
+  natural-log units is refused (`NOT_LOWERABLE`, `LOGITS_Q24_V1`), not clipped; an input beyond 128 at
+  run time saturates. Two synthetic GGUF fixtures whose random weights reached 200+ were regenerated
+  with a final-norm gain.
+- **Cost.** None on the logits tile: the close carries `i32` logits as before, so close sizes and the
+  court's cone for the logits node are unchanged.
+- **Check.** `tests/logits_q24.rs`: the logits scale is exactly `2^−24`; the integer logits divided by
+  `2^24` agree with transformers' on eight head shapes (plain, tied, soft-capped, scaled, MoE,
+  recurrent, learned-position, Gemma-4) within the quantisation's error and top-1 agrees wherever
+  transformers leads by more than 8× that error; a head scaled to hundreds is refused by name.
+
+## 23. The corpus measured on the integrated tree (lane R2, 2026-10-03)
+
+`tir/generic` (the feature lowerers, the data adapters, fixtures 93) and `tir/corpus` (the 100-architecture harness, `corpus-v2.md`) are
+merged on `rfc2/rest`, and the harness's data-route probe (vision towers, convolutional networks, encoder–decoders, diffusers components)
+is part of it. **Existing features only** — nothing was added to a lowerer for the measurement.
+
+| Level | Entries | Share |
+| --- | ---: | ---: |
+| A — the standard keys and names | 8 | 8 % |
+| B — a data adapter (built in, or a file the corpus carries) | 75 | 75 % |
+| **A + B** | **83** | **83 %** (usage-weighted 84.7 %; text-generation 50 of 57) |
+| C — a capability is missing | 17 | 17 % |
+
+**The target was 90 % and is not reached with existing features**; the corpus itself says why. The 17 Level-C entries each name what they lack:
+the text models need features (`diffllama`: differential attention; `gemma3n_text`: AltUp/LAuReL/activation sparsity, FR-12; `jetmoe`:
+mixture-of-attention heads; `longcat_flash`: zero-computation experts with a shortcut branch; `deepseek_v4`: hyper-connections with compressed
+sparse attention and hash routing; `zamba2`: one shared attention block at several depths; `kimi_linear`: channel-wise gated delta rule),
+the multimodal ones capabilities (`mllama`: cross-attention to vision states, FR-21; the diffusers denoisers `unet2d_condition`, `unet_sdxl`,
+`dit`, `flux`: FR-22; the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec`: FR-23) and `chatglm3` a remote-code reference (FR-24).
+Seven more entries would be needed for 90 %; the cheapest are the seven text features, each a general lowerer and not a per-model path.
+
+**The weights-bearing stages are unchanged** from `corpus-v2.md`: of the entries that read, every one with weights passes admission, the float
+reference against `transformers`, the integer program against the float reference, reference ↔ ref2 ↔ exec bit identity and the court property.
+
+**A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each of the 100
+entries is preflighted at the `shape` depth on testnet-12, from its committed light spec written back as header-only safetensors, at a declared
+context of 128 positions, and its convert/register/mine statuses and blocker codes are pinned. The pins are the claim a user would be shown; a
+change to a feature, an adapter, a check or a code moves one by name.
+
+On the preflight's terms 67 of the 100 reach `convert: ok`, against 83 that read at Level A or B: the 16 that differ are chiefly the kinds the
+preflight does not yet carry (encoder–decoders, vision towers, diffusers components and audio are refused `ARCH_REFUSED` — R1 judges text decoders
+and encoders), plus entries whose committed light spec has no tensor list (`internlm2`, `minicpm`). The pins record exactly that.

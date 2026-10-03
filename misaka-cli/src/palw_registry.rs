@@ -93,6 +93,20 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
             b.next
         ));
     }
+    // RFC-0002 Part II §II.7.5 Proposal A: past `palw_class_seating`, each class's seating — the distinct ready operators, how many of
+    // them are independent of the registrant, and the share of the class's claims whose outsider would hold it.
+    for s in &r.seating {
+        out.push_str(&format!(
+            "    {} ▸ seating: {}/{} ready operators, {}/{} independent, {} base operators → licensable share {} ‰\n",
+            short(&s.class_id),
+            s.ready_operators,
+            s.needed_operators,
+            s.independent_operators,
+            s.needed_independent,
+            s.base_operators,
+            s.licensable_share_permille
+        ));
+    }
     let voids: u32 = r.classes.iter().map(|c| c.no_capable_panel_voids).sum();
     if voids > 0 {
         out.push_str(&format!("  ({voids} claims voided as NoCapablePanel across the classes)\n"));

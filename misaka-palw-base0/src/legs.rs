@@ -623,7 +623,7 @@ pub fn base0_state_chunk_geometry_v1(
         // not re-derived: a producer that chunked a v3 class at v2's width would commit chunks
         // whose count is not the map's, and its own anchored replay would refuse its own state.
         map::tiled_kv_state_geometry_v3(profile, positions)
-    } else if map::palw_map_is_held_v4(&declared) {
+    } else if map::palw_profile_is_held_v4(profile) {
         // **ADR-0103 Decision 3: the held map** — the same tiles as v3, in the same flat order,
         // bounded by the proof's depth instead of a count; only the leaf and the root differ, and
         // those are `Base0CheckpointCaptureV1`'s (`leaf_hash_v1`, `root_v1`).
@@ -711,7 +711,7 @@ impl Base0CaptureGeometryV1 {
 pub fn base0_capture_geometry_v1(profile: &PalwShapeProfileV3, positions: u32) -> Result<Base0CaptureGeometryV1, LegError> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
     if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3()
-        || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v4()
+        || map::palw_map_is_hybrid_held_for_version_v1(&profile.state_chunk_map_id, profile.version)
     {
         return map::hybrid_state_geometry_for_covered_v1(profile, positions)
             .map(Base0CaptureGeometryV1::Hybrid)
@@ -1163,7 +1163,7 @@ impl Base0CheckpointCaptureV1 {
     /// tree the leaf and the root are read against (ADR-0103 Decision 3).
     fn next_held_layout_v1(&self) -> Result<Option<kaspa_consensus_core::palw_state_chunk_map::PalwStateLayoutV4>, LegError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
-        if !map::palw_map_is_held_v4(&self.state_chunk_map_id) {
+        if !map::palw_profile_is_held_v4(&self.profile) {
             return Ok(None);
         }
         map::palw_state_layout_v4(&self.profile, self.next_positions_v1()).map(Some).map_err(LegError::CheckpointStateMap)
@@ -1235,7 +1235,7 @@ impl Base0CheckpointCaptureV1 {
         // append there.
         let prev_index =
             kind * (prev.layers as u64 * prev.chunks_per_slice as u64) + layer_ordinal * prev.chunks_per_slice as u64 + block;
-        let held = kaspa_consensus_core::palw_state_chunk_map::palw_map_is_held_v4(&self.state_chunk_map_id);
+        let held = kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&self.profile);
         if !held && prev_index != index {
             return None;
         }
