@@ -654,6 +654,26 @@ pub(crate) fn palw_supplementary_idle_v1(last_none: Option<&(u64, u64)>, fingerp
     last_none.is_some_and(|(seen, at)| *seen == fingerprint && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
 }
 
+/// **How long a licence collector leaves a claim alone after its candidates came to no object** (the 2026-10-03 panel
+/// starvation, `docs/design/palw/t12-panel-backlog-1003.md` §7). Every tick the collector asked every pooled claim for a
+/// coverage set, a V1 quorum and an optimistic set; each ask is an ML-DSA-87 check per candidate and up to a few folds, and a
+/// fold clones the whole ~57 MB PALW state (`TransitionBuilder::new` and `checkpoint`). With ~90-250 claims pooled, most of
+/// them one or two `Valid`s short of any door, that was ~200 s of a 5.104 seat's 280 s tick — and it was asked again, for the
+/// same candidates, on the next one. A claim whose candidate set is unchanged is re-asked after this many DAA (about two
+/// minutes, a fifth of the supplementary collector's [`COURT_MOVE_REPLAN_DAA`]); a receipt arriving or leaving changes
+/// the fingerprint and it is asked at once.
+pub(crate) const LICENCE_IDLE_REPLAN_DAA: u64 = 2;
+
+/// **The most wall-clock one tick spends asking assemblers** (licences, then supplementary sets). A claim asked and answered
+/// `None` goes idle, so the next tick starts further down the same order: a long list is walked over a few ticks instead of
+/// stopping the loop — the receipts the seat has just signed and every replay waiting to be polled — for minutes.
+pub(crate) const COLLECTOR_ASSEMBLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// [`palw_supplementary_idle_v1`] for the licence loop: the same rule at [`LICENCE_IDLE_REPLAN_DAA`].
+pub(crate) fn palw_licence_idle_v1(last_none: Option<&(u64, u64)>, fingerprint: u64, current_daa: u64) -> bool {
+    last_none.is_some_and(|(seen, at)| *seen == fingerprint && current_daa < at.saturating_add(LICENCE_IDLE_REPLAN_DAA))
+}
+
 /// **The order a collector carries supplementary sets in** (ADR-0152 Q-7, SR-1b, Q-5; node policy).
 ///
 /// The collector runs after every licence this tick could offer, on the same carrier budget
@@ -7416,6 +7436,8 @@ impl PalwPanelService {
         // not asked again until the candidates change or the replan interval passes
         // (`palw_supplementary_idle_v1`, the M4 review's LOW on the collector's per-tick cost).
         let mut supplementary_idle: HashMap<Hash64, (u64, u64)> = HashMap::new();
+        // The licence loop's twin of the map above (`palw_licence_idle_v1`): claims whose candidates came to no object.
+        let mut licence_idle: HashMap<Hash64, (u64, u64)> = HashMap::new();
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
         // **A debounce, not a receipt.** This used to be a `HashSet` written on MEMPOOL acceptance
@@ -12186,8 +12208,13 @@ impl PalwPanelService {
                         )
                     });
                 }
+                tick_guard.phase("tail-pre-licence");
+                let assemble_started = std::time::Instant::now();
                 for claim in claims {
                     if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
+                        break;
+                    }
+                    if assemble_started.elapsed() >= COLLECTOR_ASSEMBLE_BUDGET {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
@@ -12207,6 +12234,10 @@ impl PalwPanelService {
                     // assembler judges every one.
                     let pool = receipt_pool_v2.candidates(&claim, &receipt_facts);
                     let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
+                    let licence_fingerprint = palw_supplementary_candidates_fingerprint_v1(&v3, &pool);
+                    if palw_licence_idle_v1(licence_idle.get(&claim), licence_fingerprint, current_daa) {
+                        continue;
+                    }
                     // Past SEAT-R the V1 door is offered its quorum and nothing past it, a different
                     // one each time (`palw_v1_offer_v1`); below it, every candidate, as always.
                     // **ADR-0152 Q-7's X22, past `palw_rcore_plus`**: coverage, then V1, then S2 — a set
@@ -12226,8 +12257,10 @@ impl PalwPanelService {
                         },
                         || session.palw_v2_optimistic_assemble(claim, v3.clone()),
                     ) else {
+                        licence_idle.insert(claim, (licence_fingerprint, current_daa));
                         continue;
                     };
+                    licence_idle.remove(&claim);
                     let through_v1 = door == kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum;
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
@@ -12303,17 +12336,22 @@ impl PalwPanelService {
                 // It rides the Licences site of P2-6's one scheduler (`PalwCarrierSlotsV1`): after the
                 // collector's licences and before the priority lane's turn after them, so a supplementary
                 // set never takes a licence's slot and a slot neither wanted still goes to the court.
+                tick_guard.phase("licences");
                 if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
                     && slots.offers(PalwCarrierSiteV1::Licences, inflight)
                     && !readiness_waiting
                     && funding.is_some()
                 {
+                    let supplementary_started = std::time::Instant::now();
                     let mut offers: Vec<(Hash64, kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1)> = Vec::new();
                     let mut claims = receipt_pool_v3.claim_ids();
                     claims.extend(receipt_pool_v2.claim_ids());
                     claims.sort_unstable();
                     claims.dedup();
                     for claim in claims {
+                        if supplementary_started.elapsed() >= COLLECTOR_ASSEMBLE_BUDGET {
+                            break;
+                        }
                         if supplementary_v3_submitted
                             .get(&claim)
                             .is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
@@ -12391,6 +12429,7 @@ impl PalwPanelService {
                 }
                 // **P2-6: the licences' turn passes the slot to the priority lane** when the collector
                 // had nothing to carry, in the same tick.
+                tick_guard.phase("supplementary");
                 slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, inflight) {
                     self.carry_priority_v1(
@@ -12671,6 +12710,7 @@ impl PalwPanelService {
             supplementary_v3_submitted
                 .retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
             supplementary_idle.retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
+            licence_idle.retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipt_pool_v2.contains_claim(claim));
@@ -20953,6 +20993,24 @@ mod p2_6_da_accusation_policy {
         assert!(storm.windows(2).all(|pair| pair != [Priority, Priority]), "never two priority slots while a licence waits");
         let sparse = run(100, &|tick| tick % 10 == 3);
         assert_eq!(sparse.iter().filter(|lane| **lane == Licence).count(), 10, "every waiting licence is carried in its slot");
+    }
+
+    /// The licence collector leaves a claim alone for [`LICENCE_IDLE_REPLAN_DAA`] when its candidates came to no object, asks it
+    /// again at once when a receipt arrives or leaves, and a collector's tick never spends more than its budget asking
+    /// (the 2026-10-03 panel starvation: ~200 s of a 280 s tick on a 5.104 seat).
+    #[test]
+    fn the_licence_collector_rests_a_claim_whose_candidates_came_to_nothing_and_a_tick_has_a_budget() {
+        let asked_at = Some((7u64, 100u64));
+        assert!(palw_licence_idle_v1(asked_at.as_ref(), 7, 100), "the same candidates the same DAA: idle");
+        assert!(palw_licence_idle_v1(asked_at.as_ref(), 7, 100 + LICENCE_IDLE_REPLAN_DAA - 1), "and inside the replan interval");
+        assert!(!palw_licence_idle_v1(asked_at.as_ref(), 7, 100 + LICENCE_IDLE_REPLAN_DAA), "re-asked once the interval passes");
+        assert!(!palw_licence_idle_v1(asked_at.as_ref(), 8, 100), "a receipt arrived or left: asked at once");
+        assert!(!palw_licence_idle_v1(None, 7, 100), "a claim never asked is asked");
+        assert!(LICENCE_IDLE_REPLAN_DAA < COURT_MOVE_REPLAN_DAA, "a licence waits less than a supplementary set");
+        assert!(COLLECTOR_ASSEMBLE_BUDGET <= std::time::Duration::from_secs(30), "a tick's assembler work is bounded");
+        // The fingerprint the loop keys on moves with the candidates (and is the supplementary collector's own).
+        let none: (Vec<PalwSeatReceiptV3>, Vec<PalwSeatReceiptV2>) = (Vec::new(), Vec::new());
+        assert_eq!(palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1), palw_supplementary_candidates_fingerprint_v1(&none.0, &none.1));
     }
 
     /// The loop's stopwatch (the 2026-10-03 panel starvation): an iteration is recorded however it ends, the status line

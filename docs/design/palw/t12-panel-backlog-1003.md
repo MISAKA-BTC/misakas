@@ -117,3 +117,18 @@ rose with the duty count. On .113 b7 the hot thread is a genuine replay (`palw_s
 reserved, so no other artifact can be found at it; an evicted holding still frees its 1.7 GB; `Arc::get_mut` refuses while it exists), at most 16. Used at the three per-resolve sites. Test:
 `a_held_artifacts_digest_is_memoised_on_its_allocation_and_is_always_the_digest`; `misaka-palw-sdk` lib 56/0, `misaka-palw-base0` inventory 11/0. Node-only; the digest value is unchanged.
 Expected: the sweep drops from ~2 s a duty to the cost of the duty's own work (state reads, receipt-pool checks): the tick should fall to the 60 s throttle floor seen on b0/b6/b7, i.e. ~6x the receipts on a 5.104 seat.
+
+## 7. The tail: the licence collector asks every pooled claim for three doors every tick (int-10.5 b2: tail 206.7 s of 282 s)
+
+After §6 the b2 tick is `duty-sweep 75 s, tail 207 s`; the tail ends with the supplementary collector's log line. What runs in the tail: the audit duty, readiness proofs, the fee-chain resolve, then the **licence loop**
+(`for claim in claims`: coverage set, V1 quorum, optimistic set, per pooled claim) and the **supplementary loop**. Only the supplementary loop had a "this claim came to nothing" memo
+(`palw_supplementary_idle_v1`, 10 DAA). The licence loop asked every pooled claim (88-250, most of them one or two `Valid`s short of any door) at every tick: each ask is an ML-DSA-87 check per candidate and
+up to a few folds, and **a fold clones the whole ~57 MB PALW state** (`palw_v2_apply_one_object_v1` → `TransitionBuilder::new(parent.clone())`, `checkpoint()` clones again). The profile of the loop thread on b2 is
+BLAKE2b/state work under `palw_state_v2.rs` with no replay frame (385+ samples of ~100 % of a worker), and `perf trace` shows every other thread parked.
+
+**F5 (int-10.5 + this commit)**: `licence_idle` (the licence loop's twin of `supplementary_idle`): a claim whose candidate fingerprint is unchanged and whose last ask came to no object is left alone for
+`LICENCE_IDLE_REPLAN_DAA` = 2 DAA (~2 min; a receipt arriving or leaving asks at once); and one tick spends at most `COLLECTOR_ASSEMBLE_BUDGET` = 20 s asking assemblers in each of the two loops. An asked-and-idle claim
+drops out of the order, so the next tick starts further down the same oldest-first list: a long list is walked over a few ticks instead of freezing the loop. Phases split: `tail-pre-licence`, `licences`, `supplementary`, `tail`.
+Tests: `the_licence_collector_rests_a_claim_whose_candidates_came_to_nothing_and_a_tick_has_a_budget`; kaspad lib `-- palw` 446/0. Node-only; a licence whose candidates did not change and whose state did can wait at most 2 DAA longer.
+Expected: tail ≤ ~45 s (20 s + 20 s + the carrier work) on a 5.104 seat, the tick toward 100-120 s with the sweep's 75 s (the sweep is the next phase: its per-duty cost is now state reads and the receipt pool).
+Not done, and the structural fix: a fold should not clone the state (copy-on-write rows in `TransitionBuilder`) — consensus-core, node-only, its own lane.
