@@ -137,10 +137,14 @@ def gate(row: dict, view: str, name: str) -> dict:
 
 
 def stop_key(row: dict, view: str = "technical") -> tuple[str, str, str]:
-    """The first gate that is not PASS, its code and argument."""
+    """Where the repository stops: the first gate that FAILs, or the first that is NOT_RUN — skipping `pack`'s
+    NOT_RUN_NEEDS_WEIGHTS, which no header census runs (the admit gate after it is judged at the shape depth)."""
     for g in row[view]:
-        if g["status"] != "PASS":
-            return g["gate"], g.get("blocking") or g["status"], g.get("arg") or ""
+        if g["status"] == "PASS":
+            continue
+        if g["gate"] == "pack" and g.get("blocking") == "NOT_RUN_NEEDS_WEIGHTS":
+            continue
+        return g["gate"], g.get("blocking") or g["status"], g.get("arg") or ""
     return "none", "PASS", ""
 
 
@@ -245,8 +249,8 @@ def main() -> int:
                 y_shape = 1.0 if row["shape_ready"] else 0.0
                 y_retry = 1.0 if row.get("shape_ready_at_retry") else 0.0
                 k = stop_key(row)
-                if k[0] == "pack" and y_shape:
-                    k = ("none", "SHAPE_READY", "")
+                if y_shape:
+                    k = ("admit", "SHAPE_READY", "")
                 by_group[(g, fmt)]["shape"] += y_shape
                 by_group[(g, fmt)]["shape_w"] += y_shape * w
                 by_group[(g, fmt)]["lower"] += y_lower

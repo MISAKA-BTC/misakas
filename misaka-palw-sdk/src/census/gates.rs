@@ -495,11 +495,27 @@ fn summary(r: &Report) -> PreflightSummaryV1 {
 /// decoder reads, the route lowers from the weights, which the census does not read.
 fn diffusers_lower(
     comps: &std::collections::BTreeMap<String, (String, String, Option<serde_json::Value>)>,
+    inventory: &[store::FileV1],
 ) -> (Vec<Found>, Vec<String>) {
     let mut f = Vec::new();
     let mut ev = Vec::new();
     for (name, (lib, class, cfg)) in comps {
-        match lib.as_str() {
+        // Post-filters and preprocessors are not the denoising computation the image job commits to.
+        if matches!(name.as_str(), "safety_checker" | "feature_extractor" | "watermarker" | "image_processor")
+            || name.starts_with("tokenizer")
+        {
+            continue;
+        }
+        // A library name that is neither diffusers nor transformers is custom code only when the repository ships it as Python (a
+        // `<library>.py` file, or Python in the component's directory); otherwise it is a diffusers-internal module path
+        // (`stable_diffusion`, …).
+        let ships_python = inventory.iter().any(|x| {
+            x.path.ends_with(".py")
+                && (x.path.rsplit('/').next().and_then(|n| n.strip_suffix(".py")) == Some(lib.as_str())
+                    || x.path.starts_with(&format!("{name}/")))
+        });
+        let lib = if lib != "diffusers" && lib != "transformers" && !ships_python { "diffusers" } else { lib.as_str() };
+        match lib {
             "diffusers" => {
                 if name == "scheduler" || class.ends_with("Scheduler") {
                     continue;
@@ -681,7 +697,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 };
                 match comps {
                     Ok(c) => {
-                        let (f, ev) = diffusers_lower(&c);
+                        let (f, ev) = diffusers_lower(&c, &fx.fetch.inventory);
                         lower_extra.extend(f);
                         lower_evidence.extend(ev);
                         route_needs_weights = true;
