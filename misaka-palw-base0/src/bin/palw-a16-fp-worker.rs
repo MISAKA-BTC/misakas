@@ -113,7 +113,17 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
         ))
     });
     let artifact_path = std::env::var("MISAKA_PALW_ARTIFACT").unwrap_or_else(|_| die("MISAKA_PALW_ARTIFACT is not set".into()));
-    let tokenizer_path = std::env::var("MISAKA_PALW_TOKENIZER").unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set".into()));
+    // RFC-0001 §2.9: `--sidecar <file>` supplies the tokenizer (checked against the artifact's own
+    // commitment) in place of `MISAKA_PALW_TOKENIZER`; the file's chat template and generation
+    // defaults are the GATEWAY's to read.
+    let sidecar_path: Option<String> = {
+        let args: Vec<String> = std::env::args().collect();
+        args.iter().position(|a| a == "--sidecar").and_then(|i| args.get(i + 1)).cloned()
+    };
+    let tokenizer_path = match &sidecar_path {
+        Some(path) => path.clone(),
+        None => std::env::var("MISAKA_PALW_TOKENIZER").unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set (or pass --sidecar <file>)".into())),
+    };
 
     // **The ladder is the RULESET's, not this module's constant** (ADR-0082 Decision 8, W1b).
     // `PALW_STEP_MAX_LEAVES` decided how many tokens a user got — measured, 12 decode tokens on a
@@ -137,7 +147,20 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // `tokenizer.json` fails SILENTLY: different ids, a different `prompt_token_ids_hash`, a
     // different `job_context_hash`, and an honest producer defaulted for a claim no seat can
     // reproduce. So the comparison happens here, once, where its answer is a name.
-    let tokenizer_bytes = std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
+    let tokenizer_bytes = match &sidecar_path {
+        Some(path) => {
+            let raw = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            let side = misaka_palw_base0::sidecar::parse_sidecar_v2(&raw).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            // The sidecar must name THIS artifact and carry ITS tokenizer; the check below then runs
+            // on the bytes exactly as it does for a loose file.
+            if let Err(e) = side.check_against_artifact(&artifact) {
+                die(format!("{path}: {e}"));
+            }
+            eprintln!("[palw-a16-fp-worker] sidecar {path}: digest {} (tokenizer from the sidecar)", side.digest());
+            side.tokenizer_json
+        }
+        None => std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}"))),
+    };
     let binding = artifact.check_tokenizer_bytes_v1(&tokenizer_bytes);
     if let Some(why) = binding.refusal() {
         die(format!("{tokenizer_path}: {why} (artifact {artifact_path})"));
@@ -211,6 +234,22 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // ADR-0152 v3.1 post-edit 4: the network's attempt rule, so the output root this worker commits
     // is the one rendered rule the chain holds a free-prompt claim to where the fence is armed.
     .with_attempt_rules(misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)));
+    // RFC-0001 §2.6 stage 1: the node-only KV prefix cache the answer-only path resumes from. Off
+    // unless the operator gives it a budget; the boot self-check proves prefix-resume == fresh or
+    // leaves it disabled.
+    let args: Vec<String> = std::env::args().collect();
+    let flag_u64 = |name: &str| -> Option<u64> {
+        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(|v| v.parse().unwrap_or_else(|e| die(format!("{name}: {e}"))))
+    };
+    let backend = match flag_u64("--kv-cache-budget-mib").filter(|mib| *mib > 0) {
+        Some(mib) => {
+            let backend = backend.with_prefix_cache_v1(mib.saturating_mul(1 << 20), flag_u64("--kv-cache-verify-every").unwrap_or(0));
+            let on = backend.prefix_cache_stats_v1().is_some_and(|s| !s.disabled);
+            eprintln!("[palw-a16-fp-worker] kv prefix cache: {mib} MiB, boot self-check {}", if on { "passed" } else { "FAILED — cache disabled" });
+            backend
+        }
+        None => backend,
+    };
     FpWorkerRuntime::new(
         backend,
         &entry.profile,
@@ -253,6 +292,16 @@ fn main() {
                 .into())
         }))
     };
+    // ADR-0096 Decision 8: write this class's token table (the id → bytes rendering a constrained job's mask is read through) as
+    // the file a seat loads with `--palw-token-table`, print its Merkle root (what a constrained claim's tail names) and exit.
+    if let Some(path) = flag("--emit-token-table") {
+        let rt = load();
+        let table = rt.token_table_v1();
+        let bytes = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table);
+        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot write {path}: {e}")));
+        println!("token table: {} ids, {} end-of-generation, {} bytes, root {}", table.vocab(), table.eog_token_ids.len(), bytes.len(), table.root());
+        return;
+    }
     match flag("--mode").as_deref() {
         Some(PALW_FP_WORKER_MODE_MANIFEST_V3) => {
             let rt = load();

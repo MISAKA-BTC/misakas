@@ -111,6 +111,15 @@ pub const PALW_LIBM_PROBE_V1: &[u32] = &[
 ];
 /// `trace_commitment_version` (v2 design §2.1).
 pub const PALW_TRACE_COMMITMENT_VERSION_V2: u16 = 2;
+/// **The inherited-prefix context's version** (RFC-0001 §2.6 stage 2b): a free-prompt context whose first `k` prefill positions'
+/// step leaves are bound to a JOB-INDEPENDENT prefix context ([`PalwJobContextV2::prefix_context_hash_v1`]) so that two claims
+/// over the same prefix commit byte-identical leaves there. The same struct, the same field order and the same borsh as
+/// version 2 — `job_nullifier` holds `k` (the free-prompt lane zeroes it otherwise) and `assignment_id` the prefix state's root
+/// — so no existing literal, wire or hash moves; only a context that says version 3 is read differently, and only past
+/// `Params::palw_fp_prefix_inherit`.
+pub const PALW_TRACE_COMMITMENT_VERSION_V3_INHERITED: u16 = 3;
+/// The key of a prefix context's hash.
+pub const PALW_V2_DOMAIN_PREFIX_CONTEXT: &[u8] = b"misaka-palw/fp-inherit/prefix-context/v1";
 /// The job envelope / job result wire version (VPS design §5.2).
 pub const PALW_JOB_WIRE_VERSION_V2: u16 = 2;
 
@@ -564,6 +573,54 @@ impl PalwJobContextV2 {
             exact_decode_tokens: envelope.exact_decode_tokens,
             max_context_tokens: envelope.max_context_tokens,
         }
+    }
+
+    /// **The inherited prefix this context names** (stage 2b): `Some((k, state_root))` exactly for a version-3 context whose
+    /// `job_nullifier` carries a non-zero `k` below the prefill count and whose `assignment_id` is a non-empty state root.
+    pub fn inherited_prefix_v1(&self) -> Option<(u32, Hash64)> {
+        if self.version != PALW_TRACE_COMMITMENT_VERSION_V3_INHERITED {
+            return None;
+        }
+        let bytes = self.job_nullifier.as_bytes();
+        if bytes[..56].iter().any(|b| *b != 0) {
+            return None;
+        }
+        let k = u64::from_le_bytes(bytes[56..64].try_into().expect("8 bytes"));
+        let k = u32::try_from(k).ok().filter(|k| *k > 0 && *k < self.declared_prefill_tokens)?;
+        (self.assignment_id != Hash64::default()).then_some((k, self.assignment_id))
+    }
+
+    /// **The prefix context's hash** — a function of the CLASS (model, runtime, shape, scheme, CU rule, tokenizer, network) and the
+    /// prefix (its length and state root), and of nothing about the job: not its id, seed, prompt hash or counts. The context the
+    /// first `k` prefill positions' step leaves are bound to, so any job with this prefix commits the same ones.
+    pub fn prefix_context_hash_v1(&self) -> Option<Hash64> {
+        let (k, state_root) = self.inherited_prefix_v1()?;
+        let mut w = CanonicalWriter::new();
+        w.put_var_bytes(&self.network_id);
+        w.put_hash64(&self.model_profile_id);
+        w.put_hash64(&self.runtime_manifest_hash);
+        w.put_hash64(&self.runtime_class_id);
+        w.put_hash64(&self.shape_profile_id);
+        w.put_hash64(&self.trace_scheme_id);
+        w.put_hash64(&self.cu_ruleset_id);
+        w.put_hash64(&self.tokenizer_id);
+        w.put_u32(k);
+        w.put_hash64(&state_root);
+        Some(w.keyed64(PALW_V2_DOMAIN_PREFIX_CONTEXT))
+    }
+
+    /// **The context hash a STEP LEAF at `(call_index, position)` is bound to**: the prefix context's for a prefill position
+    /// below the inherited `k`, the job context's for everything else — and for every version-2 context, the job context's, so
+    /// no existing leaf moves.
+    pub fn leaf_context_hash_v1(&self, call_index: u32, position: u32) -> Hash64 {
+        if call_index == 0
+            && let Some((k, _)) = self.inherited_prefix_v1()
+            && position < k
+            && let Some(prefix) = self.prefix_context_hash_v1()
+        {
+            return prefix;
+        }
+        self.context_hash()
     }
 
     /// The frozen preimage layout. Field order is the struct order; variable-length fields are

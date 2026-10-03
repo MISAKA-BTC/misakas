@@ -954,6 +954,11 @@ pub struct Qwen25A16Backend {
     runtime_profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **RFC-0001 §2.6 stage 1: the node-only KV prefix cache** the answer-only path resumes from
+    /// (`None`: no cache, every answer prefills fresh). Never read by a committed run.
+    prefix_cache: Option<std::sync::Mutex<crate::prefix_cache::PrefixKvCacheV1>>,
+    /// RFC-0001 §2.7 stage 2: the widest batched decode step.
+    decode_batch_width: usize,
     /// **How many prompt positions this instance's prefill walks a layer at a time** (int-10.2 A2):
     /// [`A16_PREFILL_RUN_POSITIONS`] unless a node narrowed it for the memory it could reserve. Read by
     /// the resource profile (the trace scratch it prices) and by every execution this instance runs —
@@ -1052,7 +1057,199 @@ impl Qwen25A16Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
+            prefix_cache: None,
+            decode_batch_width: 8,
         })
+    }
+
+    /// **Everything an answer does before its first selection**: the committed path's own checks,
+    /// the prefix-cache lookup (with the sampled verification), the prefill of what the cache did
+    /// not hold, and the cache fill. Returns the cache holding the whole prompt, how many leading
+    /// positions came from the prefix cache, and the last prompt position's logits.
+    fn answer_prefill_v1(
+        &self,
+        engine: &A16Engine<'_>,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+    ) -> Result<(A16Cache, usize, Vec<i32>), String> {
+        self.artifact_read_probe_v1()?;
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        if let Some(decode) = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())
+            && decode.bans_cover_vocab(vocab as u32)
+        {
+            return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
+        }
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let prefill = prompt_tokens.len();
+        let limit = job.decode_token_limit as usize;
+        let (class_id, tokenizer_id) = (job.class_id, job.tokenizer_id);
+        let mut resumed: Option<(usize, A16Cache)> = None;
+        let mut verify = false;
+        if let Some(lock) = &self.prefix_cache {
+            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(hit) = cache.lookup_v1(class_id, tokenizer_id, &prompt_ids) {
+                verify = cache.wants_verification_v1();
+                resumed = Some((hit.positions as usize, hit.cache));
+            }
+        }
+        let (mut kv, mut reused, mut logits) = match resumed {
+            Some((positions, mut kv)) => {
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = self.answer_prefill_run_v1(engine, &mut kv, &prompt_tokens[positions..], positions)?;
+                (kv, positions, logits)
+            }
+            None => {
+                let mut kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+                kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+                let logits = self.answer_prefill_run_v1(engine, &mut kv, prompt_tokens, 0)?;
+                (kv, 0, logits)
+            }
+        };
+        // Sampled verification: the resumed logits against a fresh prefill's. A difference turns the
+        // cache off for the life of the process and the answer is served from the fresh run.
+        if verify && reused > 0 {
+            let mut fresh_kv = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+            fresh_kv.reserve_positions(prefill + limit, self.artifact.shape.kv_dim());
+            let fresh_logits = self.answer_prefill_run_v1(engine, &mut fresh_kv, prompt_tokens, 0)?;
+            if fresh_logits != logits || fresh_kv.contents_as_i32() != kv.contents_as_i32() {
+                eprintln!("[prefix-cache] a resumed prefill differed from a fresh one: the cache is DISABLED and this answer is served fresh");
+                if let Some(lock) = &self.prefix_cache {
+                    lock.lock().unwrap_or_else(|e| e.into_inner()).disable_v1();
+                }
+                (kv, logits, reused) = (fresh_kv, fresh_logits, 0);
+            }
+        }
+        if let Some(lock) = &self.prefix_cache {
+            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &prompt_ids, &kv);
+        }
+        Ok((kv, reused, logits))
+    }
+
+    /// Prefill `tokens` into `cache` from `first`, in runs of this node's own width exactly as the
+    /// committed prefill walks them; the last position's logits.
+    fn answer_prefill_run_v1(&self, engine: &A16Engine<'_>, cache: &mut A16Cache, tokens: &[usize], first: usize) -> Result<Vec<i32>, String> {
+        match self.plan.as_ref() {
+            Some(plan) if plan.one_pass_prefill_supported() => {
+                let mut last = Vec::new();
+                let mut at = 0usize;
+                while at < tokens.len() {
+                    let end = (at + self.prefill_run_positions.max(1)).min(tokens.len());
+                    let is_last = end == tokens.len();
+                    let (logits, _) = engine
+                        .forward_prefill_planned(plan, cache, &tokens[at..end], first + at, is_last)
+                        .map_err(|e| format!("the prefill run at {}: {e:?}", first + at))?;
+                    if is_last {
+                        last = logits;
+                    }
+                    at = end;
+                }
+                Ok(last)
+            }
+            Some(plan) => {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_planned(plan, cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                }
+                Ok(last)
+            }
+            None => {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_traced(cache, *t, first + k).map_err(|e| format!("prefill at {}: {e:?}", first + k))?.0;
+                }
+                Ok(last)
+            }
+        }
+    }
+
+    /// The whole conversation so far — prompt plus every answer id whose K/V the cache holds (the
+    /// last selected id was never fed forward) — is what the next turn most often extends.
+    fn remember_conversation_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+        generated: &[u32],
+        kv: &A16Cache,
+    ) {
+        if let Some(lock) = &self.prefix_cache
+            && generated.len() > 1
+        {
+            let mut ids = prompt_ids.to_vec();
+            ids.extend_from_slice(&generated[..generated.len() - 1]);
+            if kv.rows() == ids.len() {
+                lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(job.class_id, job.tokenizer_id, &ids, kv);
+            }
+        }
+    }
+
+    /// How many sequences one batched decode step carries at most (`--decode-batch`; default 8).
+    pub fn with_decode_batch_width_v1(mut self, width: usize) -> Self {
+        self.decode_batch_width = width.max(1);
+        self
+    }
+
+    /// **Give this backend a KV prefix cache** of at most `budget_bytes` (RFC-0001 §2.6 stage 1;
+    /// `verify_every` re-verifies every Nth hit against a fresh prefill, 0: never). Runs the boot
+    /// self-check first — a resume that is not bit-identical to a fresh prefill leaves the cache
+    /// DISABLED — and reports whether it is on.
+    pub fn with_prefix_cache_v1(mut self, budget_bytes: u64, verify_every: u64) -> Self {
+        let mut cache = crate::prefix_cache::PrefixKvCacheV1::new(budget_bytes).with_verify_every_v1(verify_every);
+        if budget_bytes > 0 && !self.prefix_resume_self_check_v1(&mut cache) {
+            eprintln!("[prefix-cache] the boot self-check found a resumed prefill that is not bit-identical to a fresh one: the cache is DISABLED");
+        }
+        self.prefix_cache = Some(std::sync::Mutex::new(cache));
+        self
+    }
+
+    /// The cache's counters, `None` when this backend holds none.
+    pub fn prefix_cache_stats_v1(&self) -> Option<crate::prefix_cache::PrefixCacheStatsV1> {
+        self.prefix_cache.as_ref().map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).stats_v1())
+    }
+
+    /// **The golden rule, run at boot**: prefill a fixed prompt fresh, prefill the same prompt in
+    /// two pieces (the second resumed from a cache snapshot of the first), and require the same
+    /// logits and the same K/V bits — at every split the prompt has. Returns whether the cache
+    /// stays enabled (it is `disable_v1`-ed on the first difference).
+    fn prefix_resume_self_check_v1(&self, cache: &mut crate::prefix_cache::PrefixKvCacheV1) -> bool {
+        let Some(plan) = self.plan.as_ref() else { return true };
+        let vocab = self.artifact.shape.vocab.max(1);
+        let prompt: Vec<usize> = (0..6usize).map(|i| (i * 7 + 3) % vocab).collect();
+        let Ok(engine) = A16Engine::new(&self.artifact) else { cache.disable_v1(); return false };
+        let run = |cache: &mut A16Cache, tokens: &[usize], first: usize| -> Option<Vec<i32>> {
+            if plan.one_pass_prefill_supported() {
+                engine.forward_prefill_planned(plan, cache, tokens, first, true).ok().map(|(l, _)| l)
+            } else {
+                let mut last = Vec::new();
+                for (k, t) in tokens.iter().enumerate() {
+                    last = engine.forward_token_planned(plan, cache, *t, first + k).ok()?.0;
+                }
+                Some(last)
+            }
+        };
+        let mut fresh = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+        let Some(fresh_logits) = run(&mut fresh, &prompt, 0) else { cache.disable_v1(); return false };
+        for split in 1..prompt.len() {
+            let mut head = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+            if run(&mut head, &prompt[..split], 0).is_none() {
+                cache.disable_v1();
+                return false;
+            }
+            let Some(mut resumed) = head.prefix_clone_v1(split) else { cache.disable_v1(); return false };
+            let Some(resumed_logits) = run(&mut resumed, &prompt[split..], split) else { cache.disable_v1(); return false };
+            if !cache.boot_check_v1(&(fresh_logits.clone(), fresh.clone()), &(resumed_logits, resumed)) {
+                return false;
+            }
+        }
+        true
     }
 
     /// **Hold the cache in `profile`'s representation** — `A16-KV-i32` (the oracle) or
@@ -1315,6 +1512,8 @@ impl Qwen25A16Backend {
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
             prefill_run_positions: A16_PREFILL_RUN_POSITIONS,
+            prefix_cache: None,
+            decode_batch_width: 8,
         })
     }
 
@@ -1833,7 +2032,7 @@ impl Qwen25A16Backend {
         carried_prompt: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
         let binding = &filing.binding;
         if binding.shape_profile.shape_profile_id() != self.class_profile_id {
             return Err("the filing is not this class's".to_string());
@@ -1885,7 +2084,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
                     if index == query_leaf {
                         query_tile = Some(tile);
                     }
@@ -1946,7 +2145,7 @@ impl Qwen25A16Backend {
     ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
         use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOutLenV1, PalwStepTableV1};
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
         if !self.court_capable {
             return Err("the v1 class carries no capture to read a cache row out of".to_string());
         }
@@ -2022,7 +2221,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
                     if wanted.contains(&index) {
                         kept.push((index, tile));
                     }
@@ -2737,6 +2936,241 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         self.execute_free_prompt_v1(job, prompt_tokens, on_token, None)
+    }
+
+    /// **RFC-0001 §2.6: the answer with no commitment, resuming from the prefix cache.** The same
+    /// engine, plan and decoder as the committed run, so the ids are the ones a committed job with
+    /// these fields selects; nothing is captured, which is what makes a cached prefix usable (the
+    /// fold would need the prefix's tiles). Fills the cache with the prompt's state after the
+    /// prefill, and again with the whole conversation (prompt + answer) when the run completes.
+    fn answer_free_prompt_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpAnswerV1, String> {
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let plan = self.plan.as_ref();
+        let (mut kv, reused, mut logits) = self.answer_prefill_v1(&engine, job, prompt_tokens)?;
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let prefill = prompt_tokens.len();
+        let limit = job.decode_token_limit as usize;
+        let mut decoder = job.decoder_v1();
+        let mut generated: Vec<u32> = Vec::new();
+        let mut ended_on_stop_id = false;
+        loop {
+            let next = decoder.select(&logits);
+            if decoder.generated().len() == generated.len() {
+                // The decoder committed nothing from this row: no lane was admissible.
+                break;
+            }
+            generated.push(next);
+            on_token(next);
+            if stop_ids.contains(&next) {
+                ended_on_stop_id = true;
+                break;
+            }
+            if decoder.stop().is_some() || generated.len() >= limit {
+                break;
+            }
+            let position = prefill + generated.len() - 1;
+            logits = match plan {
+                Some(plan) => engine.forward_token_planned(plan, &mut kv, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?.0,
+                None => engine.forward_token_traced(&mut kv, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?.0,
+            };
+        }
+        self.remember_conversation_v1(job, &prompt_ids, &generated, &kv);
+        Ok(kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+            output_token_ids: generated,
+            cached_prefix_tokens: reused as u32,
+            ended_on_stop_id,
+        })
+    }
+
+    /// **RFC-0001 §2.6 stage 2: the prefix state of `prefix_ids`** — the K/V state after the prefix, digested (BLAKE2b-512
+    /// over every layer's keys then values as little-endian `i32`s, in layer order) and named under the class and the
+    /// prefix's length ([`kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1`]). Taken from the prefix
+    /// cache when it holds exactly this prefix, by a fresh prefill otherwise — and the two agree bit for bit, which the
+    /// golden test holds.
+    fn prefix_state_v1(
+        &self,
+        class_id: Hash64,
+        tokenizer_id: Hash64,
+        prefix_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        if prefix_ids.is_empty() {
+            return Err("a prefix of no ids has no state".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prefix_ids.iter().find(|t| **t as usize >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let tokens: Vec<usize> = prefix_ids.iter().map(|t| *t as usize).collect();
+        // The cache holds a snapshot of exactly this prefix when an earlier run ended its prefill here; otherwise walk it.
+        let held = self.prefix_cache.as_ref().and_then(|lock| {
+            let mut cache = lock.lock().unwrap_or_else(|e| e.into_inner());
+            // `lookup_v1` leaves one token to run, so ask with one more id than the prefix.
+            let mut probe = prefix_ids.to_vec();
+            probe.push(0);
+            cache.lookup_v1(class_id, tokenizer_id, &probe).filter(|hit| hit.positions as usize == prefix_ids.len()).map(|hit| hit.cache)
+        });
+        let cache = match held {
+            Some(cache) => cache,
+            None => {
+                let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+                cache.reserve_positions(tokens.len(), self.artifact.shape.kv_dim());
+                self.answer_prefill_run_v1(&engine, &mut cache, &tokens, 0)?;
+                cache
+            }
+        };
+        let (keys, values) = cache.contents_as_i32();
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/qwen25-a16/prefix-kv-digest/v1").to_state();
+        state.update(&(keys.len() as u64).to_le_bytes());
+        for (k, v) in keys.iter().zip(values.iter()) {
+            for x in k.iter().chain(v.iter()) {
+                state.update(&x.to_le_bytes());
+            }
+        }
+        let mut digest = [0u8; 64];
+        digest.copy_from_slice(state.finalize().as_bytes());
+        let prefix_tokens = u32::try_from(prefix_ids.len()).map_err(|_| "a prefix past u32".to_string())?;
+        Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+            state_root: kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(
+                &class_id,
+                prefix_tokens,
+                &Hash64::from_bytes(digest),
+            ),
+            prefix_tokens,
+            class_id,
+        })
+    }
+
+    /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt.** The residual stream after
+    /// the last layer, per position (the layer table's last row — the same rows the committed walk
+    /// feeds the post table), pooled by `pool`. **Mean** pooling needs every position's row, so it
+    /// walks the whole prompt; **last-token** pooling needs only the final position's, so it resumes
+    /// from the KV prefix cache like an answer does and fills it for the next request.
+    fn embed_prompt_v1(
+        &self,
+        prompt_tokens: &[usize],
+        class_id: Hash64,
+        tokenizer_id: Hash64,
+        pool: kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpEmbeddingV1, String> {
+        use kaspa_consensus_core::palw_embedding_pool_v1::{PalwEmbeddingPoolV1, palw_embedding_pool_v1};
+        self.artifact_read_probe_v1()?;
+        if prompt_tokens.is_empty() {
+            return Err("a prompt of no tokens has no embedding".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+        let plan = self.plan.as_ref().filter(|plan| plan.one_pass_prefill_supported()).ok_or("this class's plan serves no embedding path")?;
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let last_layer = self.artifact.shape.n_layers.checked_sub(1).ok_or("a class with no layers")?;
+        // Mean pooling walks everything; last-token resumes from the cache when it can.
+        let (mut kv, start) = match (pool, &self.prefix_cache) {
+            (PalwEmbeddingPoolV1::LastToken, Some(lock)) => {
+                match lock.lock().unwrap_or_else(|e| e.into_inner()).lookup_v1(class_id, tokenizer_id, &ids) {
+                    Some(hit) => (hit.cache, hit.positions as usize),
+                    None => (A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile), 0),
+                }
+            }
+            _ => (A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile), 0),
+        };
+        kv.reserve_positions(prompt_tokens.len(), self.artifact.shape.kv_dim());
+        let mut hidden: Vec<Vec<i32>> = Vec::new();
+        let mut at = start;
+        while at < prompt_tokens.len() {
+            let end = (at + self.prefill_run_positions.max(1)).min(prompt_tokens.len());
+            let (_, traces) = engine
+                .forward_prefill_planned(plan, &mut kv, &prompt_tokens[at..end], at, false)
+                .map_err(|e| format!("the embedding run at {at}: {e:?}"))?;
+            for trace in traces {
+                let row = trace
+                    .attn
+                    .get(last_layer)
+                    .and_then(|layer| layer.last())
+                    .ok_or("a position's trace has no last-layer row")?;
+                hidden.push(row.clone());
+            }
+            at = end;
+        }
+        if let (PalwEmbeddingPoolV1::LastToken, Some(lock)) = (pool, &self.prefix_cache) {
+            lock.lock().unwrap_or_else(|e| e.into_inner()).insert_v1(class_id, tokenizer_id, &ids, &kv);
+        }
+        let raw = palw_embedding_pool_v1(&hidden, pool).map_err(|e| e.to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpEmbeddingV1 {
+            raw,
+            positions: prompt_tokens.len() as u32,
+            cached_prefix_tokens: start as u32,
+        })
+    }
+
+    /// **RFC-0001 §2.7 stage 2: several answers in ONE decode loop.** Each job prefills (resuming
+    /// from the prefix cache where it can) and joins a [`crate::decode_scheduler::DecodeSchedulerV1`];
+    /// their decode steps then run batched, the weights read once for the batch. Every answer is
+    /// the one [`Self::answer_free_prompt_v1`] gives the job alone — batch invariance, held by
+    /// `in_batch_equals_alone` — and `on_token(job index, id)` is called as each id is selected.
+    fn answer_batch_free_prompt_v1(
+        &self,
+        jobs: &[kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1<'_>],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(usize, u32),
+    ) -> Result<Vec<kaspa_consensus_core::palw_backend::PalwFpAnswerV1>, String> {
+        let Some(plan) = self.plan.as_ref().filter(|plan| plan.one_pass_prefill_supported()) else {
+            // A class whose plan cannot batch answers its jobs one at a time.
+            return jobs
+                .iter()
+                .enumerate()
+                .map(|(i, j)| self.answer_free_prompt_v1(j.job, j.prompt_tokens, stop_ids, &mut |id| on_token(i, id)))
+                .collect();
+        };
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let mut scheduler = crate::decode_scheduler::DecodeSchedulerV1::new(self.decode_batch_width);
+        let mut reused = vec![0u32; jobs.len()];
+        let mut prompts: Vec<Vec<u32>> = Vec::with_capacity(jobs.len());
+        for (i, j) in jobs.iter().enumerate() {
+            let (kv, hit, logits) = self.answer_prefill_v1(&engine, j.job, j.prompt_tokens)?;
+            reused[i] = hit as u32;
+            prompts.push(j.prompt_tokens.iter().map(|t| *t as u32).collect());
+            scheduler.admit(crate::decode_scheduler::DecodeSequenceV1::start(
+                i as u64,
+                kv,
+                j.prompt_tokens.len(),
+                &logits,
+                j.job.decoder_v1(),
+                j.job.decode_token_limit as usize,
+                stop_ids.to_vec(),
+            ));
+            for (id, token) in scheduler.drain_events() {
+                on_token(id as usize, token);
+            }
+        }
+        let mut answers: Vec<Option<kaspa_consensus_core::palw_backend::PalwFpAnswerV1>> = vec![None; jobs.len()];
+        loop {
+            for done in scheduler.take_finished() {
+                let i = done.id as usize;
+                self.remember_conversation_v1(jobs[i].job, &prompts[i], &done.output_token_ids, &done.cache);
+                answers[i] = Some(kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+                    output_token_ids: done.output_token_ids,
+                    cached_prefix_tokens: reused[i],
+                    ended_on_stop_id: done.ended_on_stop_id,
+                });
+            }
+            if scheduler.is_idle() {
+                break;
+            }
+            scheduler.step(&engine, plan)?;
+            for (id, token) in scheduler.drain_events() {
+                on_token(id as usize, token);
+            }
+        }
+        answers.into_iter().map(|a| a.ok_or_else(|| "a batched job finished with no answer".to_string())).collect()
     }
 
     /// DRILL ONLY: the honest run with the committed tile at `leaf` made a lie, in the stream of
@@ -3906,7 +4340,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
@@ -3950,7 +4384,7 @@ fn a16_leaves_by_position(
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
         }
     }
     leaves
@@ -8657,5 +9091,464 @@ mod aheld_end_to_end {
         assert_eq!(end.court_sessions_for_claim(&claim), 0);
         assert_eq!(collateral(&end, SEAT), collateral(&s4, SEAT), "the winning seat pays nothing");
         assert!(collateral(&end, PRODUCER) < collateral(&s4, PRODUCER), "the forger is charged");
+    }
+}
+
+/// **RFC-0001 §2.6 stage 1 — the KV prefix cache and the answer-only path, on the real engine.**
+#[cfg(test)]
+mod prefix_cache_serving {
+    use super::*;
+    use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFreePromptJobV3,
+    };
+    use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    fn fixture() -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 128,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a held graph-v7 profile");
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+        (artifact, profile)
+    }
+
+    fn backend(artifact: &std::sync::Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3) -> Qwen25A16Backend {
+        Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(1 << 12)
+    }
+
+    fn job(profile: &PalwShapeProfileV3, prompt: usize, decode: u32) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::from_u64_word(0x70),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            prompt_tokens: prompt as u32,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            tail: None,
+        }
+    }
+
+    fn prompt(len: usize, salt: usize) -> Vec<usize> {
+        (0..len).map(|i| (i * 7919 + 1013 + salt) % 128).collect()
+    }
+
+    fn answer(b: &Qwen25A16Backend, job: &PalwFreePromptJobV3, p: &[usize]) -> kaspa_consensus_core::palw_backend::PalwFpAnswerV1 {
+        b.answer_free_prompt_v1(job, p, &[], &mut |_| {}).expect("the answer runs")
+    }
+
+    /// **The answer-only path selects the tokens a committed run commits** — the claim every other
+    /// serving optimisation rests on: one decoder, one engine, so the ids a user is shown are the
+    /// ids a claim would have committed. Greedy, sampled (a seed and a temperature) and a V4 job
+    /// with penalties.
+    #[test]
+    fn an_answer_only_run_selects_the_tokens_a_committed_run_commits() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(20, 0);
+        let greedy = job(&profile, p.len(), 6);
+        let mut sampled = job(&profile, p.len(), 6);
+        sampled.sampling_seed = [0x33; 32];
+        sampled.temperature_q = 1 << 24;
+        let mut v4 = job(&profile, p.len(), 6);
+        v4.version = PALW_FP_V4_VERSION;
+        v4.decode = Some(DecodeConfigV4 { repeat_penalty_q: 98_304, penalty_window: 8, ..DecodeConfigV4::NOOP });
+        v4.sampling_seed = [0x44; 32];
+        v4.temperature_q = 1 << 24;
+        for (label, job) in [("greedy", &greedy), ("sampled", &sampled), ("v4 penalties", &v4)] {
+            let committed = b.execute_free_prompt(job, &p).expect("the committed run").output_token_ids;
+            let answered = answer(&b, job, &p);
+            assert_eq!(answered.output_token_ids, committed, "{label}: the answer is the committed ids");
+            assert_eq!(answered.cached_prefix_tokens, 0, "{label}: no cache, no reuse");
+        }
+    }
+
+    /// **GOLDEN: prefix-resume == fresh**, at every split of the prompt. For each prefix length the
+    /// cache is filled by running the prefix as its own prompt, then the whole prompt is answered
+    /// from that resume point; the ids must equal a cache-less backend's, the hit must be real
+    /// (`cached_prefix_tokens` is the prefix), and with `verify_every = 1` every hit is re-checked
+    /// logits-and-K/V against a fresh prefill — which must leave the cache enabled.
+    #[test]
+    fn a_run_resumed_from_a_cached_prefix_is_bit_identical_to_a_fresh_run() {
+        let (artifact, profile) = fixture();
+        let fresh = backend(&artifact, &profile);
+        let full = prompt(24, 5);
+        let mut sampled = job(&profile, full.len(), 8);
+        sampled.sampling_seed = [0x21; 32];
+        sampled.temperature_q = 1 << 24;
+        let expected = answer(&fresh, &sampled, &full).output_token_ids;
+        for split in [1usize, 2, 7, 8, 9, 16, 23] {
+            let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 1);
+            assert!(!cached.prefix_cache_stats_v1().unwrap().disabled, "the boot self-check passes");
+            // Fill the cache with the first `split` ids as a prompt of their own.
+            let head = &full[..split];
+            let _ = answer(&cached, &job(&profile, head.len(), 2), head);
+            let hit = answer(&cached, &sampled, &full);
+            assert_eq!(hit.cached_prefix_tokens as usize, split, "split {split}: the cache served the whole prefix");
+            assert_eq!(hit.output_token_ids, expected, "split {split}: resumed == fresh");
+            let stats = cached.prefix_cache_stats_v1().unwrap();
+            assert!(!stats.disabled, "split {split}: the sampled verification found no difference");
+            assert_eq!(stats.hits, 1);
+        }
+    }
+
+    /// **RFC-0001 §2.6 stage 2: a prefix state is a function of the ids alone** — a cached producer and a cacheless seat
+    /// derive the same state root, a job naming it verifies, and a job naming another state (or another prefix length, or
+    /// a prefix that is not proper) is refused by name.
+    #[test]
+    fn a_prefix_state_is_the_same_cached_or_recomputed_and_a_wrong_one_is_refused() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+        let (artifact, profile) = fixture();
+        let class = profile.shape_profile_id();
+        let tok = Hash64::from_u64_word(0x70);
+        let full = prompt(20, 3);
+        let ids: Vec<u32> = full.iter().map(|t| *t as u32).collect();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let seat = backend(&artifact, &profile);
+        // The producer served a prompt that ended at 8 ids, so its cache holds that exact state.
+        let _ = answer(&cached, &job(&profile, 8, 2), &full[..8]);
+        let from_cache = cached.prefix_state_v1(class, tok, &ids[..8]).unwrap();
+        let recomputed = seat.prefix_state_v1(class, tok, &ids[..8]).unwrap();
+        assert_eq!(from_cache, recomputed, "cache and recomputation agree");
+        assert_eq!(from_cache.prefix_tokens, 8);
+        assert_ne!(seat.prefix_state_v1(class, tok, &ids[..9]).unwrap().state_root, recomputed.state_root, "another prefix, another state");
+        let mut other = ids.clone();
+        other[3] ^= 1;
+        assert_ne!(seat.prefix_state_v1(class, tok, &other[..8]).unwrap().state_root, recomputed.state_root, "other ids, another state");
+        assert!(seat.prefix_state_v1(class, tok, &[]).is_err());
+        assert!(seat.prefix_state_v1(class, tok, &[9_999]).is_err(), "outside the vocabulary");
+
+        let mut j = job(&profile, ids.len(), 4);
+        j.version = kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        j.decode = Some(DecodeConfigV4::NOOP);
+        j.tail = Some(PalwFpJobTailV1::Prefix(recomputed));
+        seat.verify_prefix_state_v1(&j, &ids).expect("the named state is the derived one");
+        let mut wrong = j.clone();
+        wrong.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(1), ..recomputed }));
+        assert!(seat.verify_prefix_state_v1(&wrong, &ids).unwrap_err().contains("derives"));
+        let mut whole = j.clone();
+        whole.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { prefix_tokens: ids.len() as u32, ..recomputed }));
+        assert!(seat.verify_prefix_state_v1(&whole, &ids).unwrap_err().contains("proper prefix"));
+        // A job that names no state is not this check's business.
+        seat.verify_prefix_state_v1(&job(&profile, ids.len(), 4), &ids).expect("no state named");
+    }
+
+    /// A conversation: turn 2 extends turn 1's prompt AND its answer, and resumes from the whole
+    /// of turn 1's state (prompt + answer ids).
+    #[test]
+    fn the_next_turn_resumes_from_the_whole_of_the_last_one() {
+        let (artifact, profile) = fixture();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let fresh = backend(&artifact, &profile);
+        let turn1 = prompt(14, 9);
+        let first = answer(&cached, &job(&profile, turn1.len(), 5), &turn1);
+        let mut turn2 = turn1.clone();
+        turn2.extend(first.output_token_ids.iter().map(|t| *t as usize));
+        turn2.extend(prompt(5, 77));
+        let j2 = job(&profile, turn2.len(), 5);
+        let resumed = answer(&cached, &j2, &turn2);
+        // The cache holds prompt + the answer ids that were fed forward (all but the last).
+        assert_eq!(resumed.cached_prefix_tokens as usize, turn1.len() + first.output_token_ids.len() - 1);
+        assert_eq!(resumed.output_token_ids, answer(&fresh, &j2, &turn2).output_token_ids);
+    }
+
+    /// **A resume that is not the fresh run is caught and turns the cache off.** The stored snapshot
+    /// is corrupted (one key code moved); the next hit's verification compares it with a fresh
+    /// prefill, serves the FRESH answer, and disables the cache for good.
+    #[test]
+    fn a_corrupted_snapshot_is_caught_and_disables_the_cache() {
+        let (artifact, profile) = fixture();
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 1);
+        let fresh = backend(&artifact, &profile);
+        let full = prompt(20, 3);
+        let head = &full[..10];
+        let _ = answer(&cached, &job(&profile, head.len(), 2), head);
+        cached.prefix_cache.as_ref().unwrap().lock().unwrap().corrupt_all_for_test();
+        let j = job(&profile, full.len(), 6);
+        let served = answer(&cached, &j, &full);
+        assert_eq!(served.output_token_ids, answer(&fresh, &j, &full).output_token_ids, "the answer is the fresh one");
+        assert_eq!(served.cached_prefix_tokens, 0, "the corrupted resume was discarded");
+        assert!(cached.prefix_cache_stats_v1().unwrap().disabled, "and the cache is off for good");
+        let again = answer(&cached, &job(&profile, full.len(), 2), &full);
+        assert_eq!(again.cached_prefix_tokens, 0);
+    }
+
+    /// The decoder's own stop ends an answer-only run, and an EOG id ends it at that id.
+    #[test]
+    fn the_run_ends_at_a_stop_id_and_at_the_decoders_stop() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(12, 1);
+        let j = job(&profile, p.len(), 8);
+        let all = answer(&b, &j, &p).output_token_ids;
+        assert_eq!(all.len(), 8, "no stop id: the budget");
+        let stop_at = all[3];
+        let cut = b.answer_free_prompt_v1(&j, &p, &[stop_at], &mut |_| {}).unwrap();
+        let first = all.iter().position(|t| *t == stop_at).unwrap();
+        assert_eq!(cut.output_token_ids, all[..=first], "the run ends at the first stop id, which is its last id");
+        assert!(cut.ended_on_stop_id);
+        // A V4 stop sequence ends it too, with the sequence in the ids.
+        let mut v4 = job(&profile, p.len(), 8);
+        v4.version = PALW_FP_V4_VERSION;
+        v4.decode = Some(DecodeConfigV4 { stop_sequences: vec![vec![all[1], all[2]]], ..DecodeConfigV4::NOOP });
+        let stopped = answer(&b, &v4, &p);
+        assert_eq!(stopped.output_token_ids, all[..3]);
+        let committed = b.execute_free_prompt(&v4, &p).unwrap().output_token_ids;
+        assert_eq!(stopped.output_token_ids, committed, "the committed run stops where the answer does");
+    }
+
+    /// The refusals a committed job names are the answer path's too, by name.
+    #[test]
+    fn the_answer_path_refuses_what_the_committed_path_refuses() {
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let p = prompt(8, 0);
+        let j = job(&profile, p.len(), 2);
+        assert!(b.answer_free_prompt_v1(&j, &[], &[], &mut |_| {}).is_err(), "no prompt");
+        let mut wrong = j.clone();
+        wrong.prompt_tokens = 7;
+        assert!(b.answer_free_prompt_v1(&wrong, &p, &[], &mut |_| {}).unwrap_err().contains("declares 7 prompt tokens"));
+        let mut outside = p.clone();
+        outside[0] = 5_000;
+        assert!(b.answer_free_prompt_v1(&j, &outside, &[], &mut |_| {}).unwrap_err().contains("outside this class's vocabulary"));
+    }
+
+    use kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1;
+
+    /// **ENGINE: a batched decode step is each sequence's own step** — the logits a row gets and the
+    /// cache it leaves are exactly what `forward_token_planned` gives it alone, for sequences at
+    /// different positions with different caches, in every order the rows can be in.
+    #[test]
+    fn a_batched_decode_step_is_each_sequences_own_step() {
+        use crate::engine_a16::A16DecodeRowV1;
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = b.plan.as_ref().unwrap();
+        let prompts = [prompt(9, 1), prompt(17, 2), prompt(5, 3), prompt(12, 4)];
+        let tokens = [11usize, 99, 3, 64];
+        let mut base: Vec<A16Cache> = Vec::new();
+        for p in &prompts {
+            let mut c = A16Cache::with_storage(artifact.shape.n_layers, b.runtime_profile);
+            engine.forward_prefill_planned(plan, &mut c, p, 0, true).unwrap();
+            base.push(c);
+        }
+        // Each alone.
+        let mut alone_logits = Vec::new();
+        let mut alone_caches = Vec::new();
+        for (i, c) in base.iter().enumerate() {
+            let mut c = c.clone();
+            alone_logits.push(engine.forward_token_planned(plan, &mut c, tokens[i], prompts[i].len()).unwrap().0);
+            alone_caches.push(c);
+        }
+        for order in [[0usize, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let mut caches: Vec<A16Cache> = order.iter().map(|i| base[*i].clone()).collect();
+            let mut rows: Vec<A16DecodeRowV1<'_>> = caches
+                .iter_mut()
+                .zip(order)
+                .map(|(cache, i)| A16DecodeRowV1 { cache, token: tokens[i], position: prompts[i].len() })
+                .collect();
+            let logits = engine.forward_decode_batch_planned(plan, &mut rows).unwrap();
+            drop(rows);
+            for (k, i) in order.iter().enumerate() {
+                assert_eq!(logits[k], alone_logits[*i], "order {order:?}: row {k} (sequence {i}) has its own logits");
+                assert_eq!(caches[k].contents_as_i32(), alone_caches[*i].contents_as_i32(), "order {order:?}: and its own cache");
+            }
+        }
+        // A batch of one is the single step.
+        let mut c = base[1].clone();
+        let one = engine
+            .forward_decode_batch_planned(plan, &mut [A16DecodeRowV1 { cache: &mut c, token: tokens[1], position: prompts[1].len() }])
+            .unwrap();
+        assert_eq!(one[0], alone_logits[1]);
+        // Refusals, by name.
+        let mut wrong = base[0].clone();
+        let err = engine
+            .forward_decode_batch_planned(plan, &mut [A16DecodeRowV1 { cache: &mut wrong, token: 1, position: 3 }])
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("does not hold exactly the positions before it"), "{err:?}");
+        assert!(engine.forward_decode_batch_planned(plan, &mut []).is_err());
+    }
+
+    /// **BACKEND, GOLDEN: in-batch == alone.** Jobs of different prompt lengths, budgets, seeds,
+    /// temperatures and a V4 stop sequence, answered together (batch width 2, so five jobs are served
+    /// round-robin and finish at different times), each give the ids, the stop and the K/V the job
+    /// gives alone — and the batching is real (more rows than steps).
+    #[test]
+    fn in_batch_equals_alone() {
+        let (artifact, profile) = fixture();
+        let alone = backend(&artifact, &profile);
+        let batched = backend(&artifact, &profile).with_decode_batch_width_v1(2);
+        let prompts: Vec<Vec<usize>> = (0..5).map(|k| prompt(6 + 3 * k, 10 * k)).collect();
+        let mut jobs: Vec<PalwFreePromptJobV3> = Vec::new();
+        for (k, p) in prompts.iter().enumerate() {
+            let mut j = job(&profile, p.len(), 3 + 2 * k as u32);
+            j.sampling_seed = [k as u8 + 1; 32];
+            j.temperature_q = if k % 2 == 0 { 1 << 24 } else { 0 };
+            jobs.push(j);
+        }
+        // Job 3 carries a stop sequence taken from its own greedy answer.
+        let greedy3 = alone.answer_free_prompt_v1(&jobs[3], &prompts[3], &[], &mut |_| {}).unwrap().output_token_ids;
+        jobs[3].version = PALW_FP_V4_VERSION;
+        jobs[3].decode = Some(DecodeConfigV4 { stop_sequences: vec![vec![greedy3[1], greedy3[2]]], ..DecodeConfigV4::NOOP });
+        let expected: Vec<_> = jobs
+            .iter()
+            .zip(&prompts)
+            .map(|(j, p)| alone.answer_free_prompt_v1(j, p, &[], &mut |_| {}).unwrap())
+            .collect();
+        let batch: Vec<PalwFpAnswerJobV1<'_>> =
+            jobs.iter().zip(&prompts).map(|(job, prompt_tokens)| PalwFpAnswerJobV1 { job, prompt_tokens }).collect();
+        let mut streamed: Vec<Vec<u32>> = vec![Vec::new(); jobs.len()];
+        let got = batched.answer_batch_free_prompt_v1(&batch, &[], &mut |i, id| streamed[i].push(id)).unwrap();
+        for k in 0..jobs.len() {
+            assert_eq!(got[k].output_token_ids, expected[k].output_token_ids, "job {k}: in-batch == alone");
+            assert_eq!(streamed[k], expected[k].output_token_ids, "job {k}: and it streamed exactly those ids");
+        }
+        assert_eq!(got[3].output_token_ids.len(), 3, "the stop sequence ended job 3's answer");
+        // The same again with every job in a different position and a wider batch.
+        let wide = backend(&artifact, &profile).with_decode_batch_width_v1(8);
+        let reversed: Vec<PalwFpAnswerJobV1<'_>> = batch.iter().rev().copied().collect();
+        let got = wide.answer_batch_free_prompt_v1(&reversed, &[], &mut |_, _| {}).unwrap();
+        for (k, g) in got.iter().rev().enumerate() {
+            assert_eq!(g.output_token_ids, expected[k].output_token_ids, "job {k}: order does not matter");
+        }
+    }
+
+    /// The scheduler batches (rows > steps), is fair when the set is wider than the batch, and a
+    /// sequence admitted mid-flight gets exactly its own answer.
+    #[test]
+    fn the_scheduler_batches_is_fair_and_admits_mid_flight() {
+        use crate::decode_scheduler::{DecodeSchedulerV1, DecodeSequenceV1};
+        let (artifact, profile) = fixture();
+        let b = backend(&artifact, &profile);
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = b.plan.as_ref().unwrap();
+        let start = |id: u64, p: &[usize], limit: u32| {
+            let j = job(&profile, p.len(), limit);
+            let (kv, _, logits) = b.answer_prefill_v1(&engine, &j, p).unwrap();
+            DecodeSequenceV1::start(id, kv, p.len(), &logits, j.decoder_v1(), limit as usize, vec![])
+        };
+        let alone = |p: &[usize], limit: u32| b.answer_free_prompt_v1(&job(&profile, p.len(), limit), p, &[], &mut |_| {}).unwrap().output_token_ids;
+        let (pa, pb, pc) = (prompt(8, 1), prompt(10, 2), prompt(7, 3));
+        let mut sched = DecodeSchedulerV1::new(2);
+        sched.admit(start(0, &pa, 6));
+        sched.admit(start(1, &pb, 6));
+        let mut seen: std::collections::BTreeMap<u64, Vec<u32>> = Default::default();
+        let mut collect = |sched: &mut DecodeSchedulerV1| {
+            for (id, tok) in sched.drain_events() {
+                seen.entry(id).or_default().push(tok);
+            }
+        };
+        collect(&mut sched);
+        assert_eq!(sched.step(&engine, plan).unwrap(), 2);
+        collect(&mut sched);
+        // A third sequence arrives while two are mid-answer; the batch is 2 wide so it waits its turn.
+        sched.admit(start(2, &pc, 6));
+        collect(&mut sched);
+        assert_eq!(sched.running(), 3);
+        let mut guard = 0;
+        while !sched.is_idle() {
+            sched.step(&engine, plan).unwrap();
+            collect(&mut sched);
+            guard += 1;
+            assert!(guard < 64, "the scheduler makes progress");
+        }
+        let finished: std::collections::BTreeMap<u64, Vec<u32>> =
+            sched.take_finished().into_iter().map(|f| (f.id, f.output_token_ids)).collect();
+        assert_eq!(finished[&0], alone(&pa, 6));
+        assert_eq!(finished[&1], alone(&pb, 6));
+        assert_eq!(finished[&2], alone(&pc, 6));
+        for (id, ids) in &finished {
+            assert_eq!(&seen[id], ids, "sequence {id}: the events are the answer");
+        }
+        let (steps, rows) = sched.counters();
+        assert!(rows > steps, "the steps were batched: {rows} rows in {steps} steps");
+    }
+
+    /// **RFC-0001 §2.8: the embedding is the pooled last-layer hidden state, deterministic, and the
+    /// last-token form resumes from the prefix cache to the same bits.**
+    #[test]
+    fn an_embedding_is_the_pooled_last_layer_state_and_the_cache_does_not_change_it() {
+        use kaspa_consensus_core::palw_embedding_pool_v1::{PalwEmbeddingPoolV1, palw_embedding_pool_v1};
+        let (artifact, profile) = fixture();
+        let plain = backend(&artifact, &profile);
+        let cached = backend(&artifact, &profile).with_prefix_cache_v1(1 << 26, 0);
+        let (class, tok) = (profile.shape_profile_id(), Hash64::from_u64_word(0x70));
+        let p = prompt(15, 4);
+        // Reference: the engine's own per-position last-layer rows, walked one position at a time.
+        let engine = A16Engine::new(&artifact).unwrap();
+        let plan = plain.plan.as_ref().unwrap();
+        let mut c = A16Cache::with_storage(artifact.shape.n_layers, plain.runtime_profile);
+        let mut rows = Vec::new();
+        for (i, t) in p.iter().enumerate() {
+            let (_, trace) = engine.forward_token_planned(plan, &mut c, *t, i).unwrap();
+            rows.push(trace.attn.last().unwrap().last().unwrap().clone());
+        }
+        for pool in [PalwEmbeddingPoolV1::Mean, PalwEmbeddingPoolV1::LastToken] {
+            let want = palw_embedding_pool_v1(&rows, pool).unwrap();
+            let got = plain.embed_prompt_v1(&p, class, tok, pool).unwrap();
+            assert_eq!(got.raw, want, "{pool:?}: the pooled one-pass prefill rows are the stepped walk's");
+            assert_eq!(got.raw.len(), artifact.shape.d_model());
+            assert_eq!(got.positions as usize, p.len());
+            assert_eq!(plain.embed_prompt_v1(&p, class, tok, pool).unwrap(), got, "{pool:?}: deterministic");
+        }
+        // Last-token with a cache: the first call fills it, the second extends the prompt and resumes.
+        let first = cached.embed_prompt_v1(&p, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap();
+        assert_eq!(first.cached_prefix_tokens, 0);
+        let mut longer = p.clone();
+        longer.extend(prompt(6, 90));
+        let resumed = cached.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap();
+        assert_eq!(resumed.cached_prefix_tokens as usize, p.len(), "the longer prompt resumed from the shorter one");
+        assert_eq!(resumed.raw, plain.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::LastToken).unwrap().raw, "resumed == fresh");
+        // Mean pooling never reads the cache (it needs every position's row).
+        let mean = cached.embed_prompt_v1(&longer, class, tok, PalwEmbeddingPoolV1::Mean).unwrap();
+        assert_eq!(mean.cached_prefix_tokens, 0);
+        // Refusals, by name.
+        assert!(plain.embed_prompt_v1(&[], class, tok, PalwEmbeddingPoolV1::Mean).unwrap_err().contains("no tokens"));
+        assert!(plain.embed_prompt_v1(&[9_999], class, tok, PalwEmbeddingPoolV1::Mean).unwrap_err().contains("outside this class's vocabulary"));
     }
 }

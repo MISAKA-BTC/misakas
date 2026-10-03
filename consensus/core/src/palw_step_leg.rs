@@ -1212,6 +1212,14 @@ pub struct PalwStepTileLeafV1 {
     pub values_le: Vec<u8>,
 }
 
+/// **The step tile leaf, bound to the context its COORDINATE belongs to** (RFC-0001 §2.6 stage 2b): the prefix context for a
+/// prefill position below an inherited prefix, the job context for everything else — and for every version-2 context exactly
+/// [`step_tile_leaf_hash_v1`] over the job context, so no existing leaf moves. Every site that hashes a step tile from a context
+/// calls this and not the bare function.
+pub fn step_tile_leaf_hash_ctx_v1(ctx: &PalwJobContextV2, shape_profile_hash: &Hash64, leaf: &PalwStepTileLeafV1) -> Hash64 {
+    step_tile_leaf_hash_v1(&ctx.leaf_context_hash_v1(leaf.coord.call_index, leaf.coord.position), shape_profile_hash, leaf)
+}
+
 pub fn step_tile_leaf_hash_v1(job_context_hash: &Hash64, shape_profile_hash: &Hash64, leaf: &PalwStepTileLeafV1) -> Hash64 {
     let mut w = Writer::new();
     w.u16(leaf.version);
@@ -1881,7 +1889,7 @@ impl PalwStepLegBuilderV1 {
             values_le.extend_from_slice(&bits.to_le_bytes());
         }
         let leaf = PalwStepTileLeafV1 { version: PALW_STEP_LEG_OBJECT_VERSION_V1, coord, value_count: expected_values, values_le };
-        self.leaf_hashes.push(step_tile_leaf_hash_v1(&self.context_hash, &self.profile_hash, &leaf));
+        self.leaf_hashes.push(step_tile_leaf_hash_ctx_v1(&self.context, &self.profile_hash, &leaf));
         Ok(next)
     }
 
@@ -2352,7 +2360,7 @@ pub fn check_step_refutation_capped_v1(
         PalwStepEvidenceV1::Shape => unreachable!("handled above"),
         PalwStepEvidenceV1::StepTile { opening, preimage } => {
             open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
-            if step_tile_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
+            if step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, preimage) != opening.leaf_hash {
                 return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" });
             }
             let fault = step_tile_fault(binding, opening, preimage);

@@ -85,6 +85,11 @@ pub struct PalwDrillExtraFencesV1 {
     pub gen_at: Option<u64>,
     pub decode_rules_at: Option<u64>,
     pub fp_v5_at: Option<u64>,
+    pub fp_constraint_at: Option<u64>,
+    pub fp_prefix_at: Option<u64>,
+    pub fp_tokenizer_at: Option<u64>,
+    pub fp_constraint2_at: Option<u64>,
+    pub adapter_at: Option<u64>,
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
     /// RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 100 and 101).
@@ -117,6 +122,11 @@ impl PalwDrillExtraFencesV1 {
             gen_at: args.palw_drill_gen_at,
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
+            fp_constraint_at: args.palw_drill_fp_constraint_at,
+            fp_prefix_at: args.palw_drill_fp_prefix_at,
+            fp_tokenizer_at: args.palw_drill_fp_tokenizer_at,
+            fp_constraint2_at: args.palw_drill_fp_constraint2_at,
+            adapter_at: args.palw_drill_adapter_at,
             held_chunks_at: args.palw_drill_held_chunks_at,
             vertex_at: args.palw_drill_vertex_at,
             witness_at: args.palw_drill_witness_at,
@@ -136,6 +146,11 @@ impl PalwDrillExtraFencesV1 {
             || self.gen_at.is_some()
             || self.decode_rules_at.is_some()
             || self.fp_v5_at.is_some()
+            || self.fp_constraint_at.is_some()
+            || self.fp_prefix_at.is_some()
+            || self.fp_tokenizer_at.is_some()
+            || self.fp_constraint2_at.is_some()
+            || self.adapter_at.is_some()
             || self.held_chunks_at.is_some()
             || self.vertex_at.is_some()
             || self.witness_at.is_some()
@@ -180,6 +195,11 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-gen-at", self.gen_at, "RFC-0003's generative fence (palw_gen_v1)"),
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
+            ("--palw-drill-fp-constraint-at", self.fp_constraint_at, "the decode constraint (palw_fp_decode_constraint, FP job version 6)"),
+            ("--palw-drill-fp-prefix-at", self.fp_prefix_at, "the prefix-state receipt (palw_fp_prefix_state)"),
+            ("--palw-drill-fp-tokenizer-at", self.fp_tokenizer_at, "the tokenizer-match rule (palw_fp_tokenizer_match)"),
+            ("--palw-drill-fp-constraint2-at", self.fp_constraint2_at, "the second constraint subset (palw_fp_constraint_v2)"),
+            ("--palw-drill-adapter-at", self.adapter_at, "the adapter class listing (palw_adapter_class_v1)"),
             ("--palw-drill-held-chunks-at", self.held_chunks_at, "RFC-0003's held leaf challenge (palw_held_close_chunks_v1)"),
             ("--palw-drill-vertex-at", self.vertex_at, "RFC-0007's verification vertex (palw_verification_vertex_v1)"),
             ("--palw-drill-witness-at", self.witness_at, "RFC-0007's witness manifest (palw_witness_manifest_v1)"),
@@ -210,6 +230,11 @@ impl PalwDrillExtraFencesV1 {
                 ("--palw-drill-gen-at", self.gen_at),
                 ("--palw-drill-decode-rules-at", self.decode_rules_at),
                 ("--palw-drill-fp-v5-at", self.fp_v5_at),
+                ("--palw-drill-fp-constraint-at", self.fp_constraint_at),
+                ("--palw-drill-fp-prefix-at", self.fp_prefix_at),
+                ("--palw-drill-fp-tokenizer-at", self.fp_tokenizer_at),
+                ("--palw-drill-fp-constraint2-at", self.fp_constraint2_at),
+                ("--palw-drill-adapter-at", self.adapter_at),
                 ("--palw-drill-held-chunks-at", self.held_chunks_at),
                 ("--palw-drill-improve-at", self.improve_at),
                 ("--palw-drill-capacity-network-verify-at", self.capacity_network_verify_at),
@@ -266,6 +291,21 @@ impl PalwDrillExtraFencesV1 {
         }
         if let Some(at) = self.fp_v5_at {
             moves.extend(d::palw_drill_fp_v5_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-v5-at: {e}"))?);
+        }
+        if let Some(at) = self.fp_constraint_at {
+            moves.extend(d::palw_drill_fp_constraint_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-constraint-at: {e}"))?);
+        }
+        if let Some(at) = self.fp_prefix_at {
+            moves.extend(d::palw_drill_fp_prefix_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-at: {e}"))?);
+        }
+        if let Some(at) = self.fp_tokenizer_at {
+            moves.extend(d::palw_drill_fp_tokenizer_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-tokenizer-at: {e}"))?);
+        }
+        if let Some(at) = self.fp_constraint2_at {
+            moves.extend(d::palw_drill_fp_constraint2_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-constraint2-at: {e}"))?);
+        }
+        if let Some(at) = self.adapter_at {
+            moves.extend(d::palw_drill_adapter_at_v1(params, at).map_err(|e| format!("--palw-drill-adapter-at: {e}"))?);
         }
         if let Some(at) = self.held_chunks_at {
             moves.extend(d::palw_drill_held_close_chunks_at_v1(params, at).map_err(|e| format!("--palw-drill-held-chunks-at: {e}"))?);
@@ -331,7 +371,25 @@ impl PalwDrillExtraFencesV1 {
             ("audit_mesh_at=", "--palw-drill-audit-mesh-at", palw_drill_marker_fence_text_v1(self.audit_mesh_at)),
             ("capped_at=", "--palw-drill-capped-at", palw_drill_marker_fence_text_v1(self.capped_at)),
             ("tir_shard_at=", "--palw-drill-tir-shard-at", palw_drill_marker_fence_text_v1(self.tir_shard_at)),
+            ("rfc1_at=", "--palw-drill-fp-prefix-at / -fp-tokenizer-at / -fp-constraint2-at / -adapter-at", self.rfc1_marker_text()),
         ]
+    }
+
+    /// The marker's `rfc1_at=` line — RFC-0001's four fences (`none` when none stands, else
+    /// `fp_prefix:… fp_tokenizer:… fp_constraint2:… adapter:…`), its own line so every earlier line keeps its text.
+    fn rfc1_marker_text(&self) -> String {
+        if self.fp_constraint_at.is_none() && self.fp_prefix_at.is_none() && self.fp_tokenizer_at.is_none() && self.fp_constraint2_at.is_none() && self.adapter_at.is_none() {
+            return palw_drill_marker_fence_text_v1(None);
+        }
+        let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
+        format!(
+            "fp_constraint:{},fp_prefix:{},fp_tokenizer:{},fp_constraint2:{},adapter:{}",
+            at(self.fp_constraint_at),
+            at(self.fp_prefix_at),
+            at(self.fp_tokenizer_at),
+            at(self.fp_constraint2_at),
+            at(self.adapter_at)
+        )
     }
 
     /// The marker's `extra_at=` line — RFC-0003 / RFC-0004's four flags only (`none` when none stands, else

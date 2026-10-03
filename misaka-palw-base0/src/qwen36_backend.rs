@@ -2878,7 +2878,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or
         // this is a producer whose roots disagree with its material — which any seat catches
@@ -2922,7 +2922,7 @@ fn qwen36_leaves_by_position(
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
         }
     }
     leaves

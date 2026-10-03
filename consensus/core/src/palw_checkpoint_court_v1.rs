@@ -38,7 +38,7 @@ use crate::palw_state_chunk_map::{
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step::{PalwLayerKindV1, PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepTableV1};
 use crate::palw_step_leg::{
-    PalwStepBindingV2, checkpoint_leaf_hash_v2, step_opening_root_capped_v1, step_tile_leaf_hash_v1, verify_binding_v1,
+    PalwStepBindingV2, checkpoint_leaf_hash_v2, step_opening_root_capped_v1, verify_binding_v1,
 };
 
 pub const PALW_CHECKPOINT_COURT_VERSION_V1: u16 = 1;
@@ -275,7 +275,7 @@ pub fn palw_checkpoint_court_verdict_v1(
         if row.leaf.coord != want {
             return Err(E::RowNotCommitted { tile: t });
         }
-        if step_tile_leaf_hash_v1(&context_hash, &profile_hash, &row.leaf) != row.opening.leaf_hash {
+        if crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&a.binding.job_context, &profile_hash, &row.leaf) != row.opening.leaf_hash {
             return Err(E::RowNotCommitted { tile: t });
         }
         let at = step_opening_root_capped_v1(a.binding.step_leaf_count, &row.opening, ladder)
@@ -302,6 +302,7 @@ pub fn palw_checkpoint_court_verdict_v1(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::palw_step_leg::step_tile_leaf_hash_v1;
     use crate::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, canonical_step_leaf_index, step_leaf_count_capped_v1};
     use crate::palw_step_leg::{
         PalwCheckpointLeafV2, PalwStepOpeningV1, PalwStepTileLeafV1, checkpoint_genesis_prev_v2, checkpoint_leg_root_v2,

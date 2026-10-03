@@ -7,6 +7,8 @@
 //!   schema::validate   an answer against a parsed schema, errors at JSON-pointer paths
 //!   canonical          RFC 8785 (JCS) bytes of any JSON value
 //!   constraint_id      H("misaka-palw/constraint/v1" ‖ len ‖ canonical bytes)
+//!   schema::parse_v2   the second subset (RFC-0001 §2.5): + non-recursive `$ref`, discriminated `anyOf`/`oneOf`, exclusive bounds
+//!   compile_v2         the second compiler: a second-subset schema → the same automaton at header version 2
 //!   compile            Part B: a parsed schema → consensus-core's byte-level automaton
 //!                      (`PalwDecodeConstraintV1`), content-named by `compile::compiler_id_v1`
 //! ```
@@ -40,6 +42,8 @@
 
 pub mod canonical;
 pub mod compile;
+/// RFC-0001 §2.5: the second compiler — discriminated unions, inlined `$ref`, integer ranges — at automaton version 2.
+pub mod compile_v2;
 pub mod schema;
 
 use kaspa_hashes::Hash64;

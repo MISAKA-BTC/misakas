@@ -128,6 +128,9 @@ mod palw_held_close_fold_v1;
 mod palw_vertex_fold_v1;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
+// RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
+#[path = "palw_adapter_class_fold_v1.rs"]
+mod palw_adapter_class_fold_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -1639,6 +1642,15 @@ pub struct PalwStateParamsV2 {
     /// `tir_fence2_from_daa`'s reason (the fold's shard objects read it). `None` on every shipped preset.
     #[borsh(skip)]
     tir_shard_from_daa: Option<u64>,
+    /// **RFC-0001 §2.10 (ADR-0163): `Params::palw_adapter_class_v1`'s height**, mirrored by
+    /// `Params::sync_palw_adapter_class_v1` for the same reason (the fold's adapter listing arm reads it).
+    /// `None` on every shipped preset.
+    #[borsh(skip)]
+    adapter_class_from_daa: Option<u64>,
+    /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint`'s height**, mirrored by
+    /// `Params::sync_palw_fp_decode_constraint_v1` (the fold's constrained decode close reads it). `None` on every preset.
+    #[borsh(skip)]
+    fp_decode_constraint_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1860,6 +1872,8 @@ impl PalwStateParamsV2 {
             audit_mesh_from_daa: None,
             capped_from_daa: None,
             tir_shard_from_daa: None,
+            adapter_class_from_daa: None,
+            fp_decode_constraint_from_daa: None,
         })
     }
 
@@ -2264,6 +2278,39 @@ impl PalwStateParamsV2 {
     /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
     pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
         self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0096 Decision 8: the decode constraint's mirror** — written by `Params::sync_palw_fp_decode_constraint_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_fp_decode_constraint_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.fp_decode_constraint_from_daa = from_daa;
+        self
+    }
+
+    pub fn fp_decode_constraint_from_daa(&self) -> Option<u64> {
+        self.fp_decode_constraint_from_daa
+    }
+
+    /// **Is the decode constraint in force at `daa_score`?** `false` on every shipped preset.
+    pub fn fp_decode_constraint_active_at(&self, daa_score: u64) -> bool {
+        self.fp_decode_constraint_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0001 §2.10: the adapter class listing's mirror** — written by `Params::sync_palw_adapter_class_v1` and
+    /// by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_adapter_class_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.adapter_class_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_adapter_class_v1`'s height, if the network arms it (the mirror).
+    pub fn adapter_class_from_daa(&self) -> Option<u64> {
+        self.adapter_class_from_daa
+    }
+
+    /// **Is the adapter class listing in force at `daa_score`?** `false` on every shipped preset.
+    pub fn adapter_class_active_at(&self, daa_score: u64) -> bool {
+        self.adapter_class_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7949,6 +7996,19 @@ pub enum PalwConsensusObjectV2 {
         proof: Box<crate::palw_artifact::PalwArtifactMultiproofV1>,
         signature: Vec<u8>,
     } = 93,
+    // Tags 91–93 are RFC-0006's and RFC-0007's (declared on their own branches, integrated there).
+    /// **RFC-0001 §2.10 (ADR-0163): an adapter class's listing** — a registered IR class whose artifact is a
+    /// composite (its parent's inventory plus an adapter section, RFC-0004 §6.3) is entered in the registry of
+    /// composite classes, the only classes a composite opening may name and the record a seat proves possession
+    /// of the adapter section against. Signed by the lister's bond. **Its tag is 94, declared explicitly** (spec 17
+    /// section 17.0: a lane asks the core lane before taking one; this lane took the next free one after 93 and
+    /// says so in ADR-0163). Below `palw_adapter_class_v1` the acceptance walk drops it by name and the fold
+    /// refuses it as the second lock.
+    AdapterClassListed {
+        payload: Box<crate::palw_adapter_class_v1::PalwAdapterClassListingV1>,
+        lister: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 94,
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -7963,6 +8023,12 @@ pub fn palw_object_is_mesh_v1(object: &PalwConsensusObjectV2) -> bool {
 /// charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_vertex_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::VerificationVertexV1 { .. } | PalwConsensusObjectV2::VertexEquivocationV1 { .. })
+}
+
+/// **Is this object the adapter class listing (RFC-0001 §2.10, `palw_adapter_class_v1`)?** Below the fence the
+/// acceptance walk drops it by name before any slot is charged, and the fold refuses it as the second lock.
+pub fn palw_object_is_adapter_class_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::AdapterClassListed { .. })
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -8035,6 +8101,15 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
         | PalwConsensusObjectV2::GenTensorCommitted { .. }
         | PalwConsensusObjectV2::GenShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
+        _ => false,
+    }
+}
+
+/// **Is this object a constrained decode close** (ADR-0096 Decision 7, court proof tag 17)? Below `palw_fp_decode_constraint` the
+/// acceptance walk drops it by name before any slot, rent or budget is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_constrained_decode_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_constrained_decode_v1(),
         _ => false,
     }
 }
@@ -10260,6 +10335,11 @@ pub enum PalwStateV2Error {
     /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
     #[error("an audit mesh move is refused: {0}")]
     MeshRefused(String),
+    /// **RFC-0001 §2.10 (ADR-0163): an adapter class listing the fold refuses**, by the rule's own reason (below the
+    /// fence, an unregistered class or parent, a composite that is not the class's artifact, a class already listed,
+    /// a lister with no bond).
+    #[error("an adapter class listing is refused: {0}")]
+    AdapterClassRefused(String),
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -13138,6 +13218,17 @@ impl PalwChainStateV2 {
     /// not hold is a legacy question for the transition to refuse by name, and answers `true`.
     pub fn class_commits_q24_logits_v1(&self, class_id: &Hash64) -> bool {
         !self.tir_classes.contains_key(class_id) && !self.gen_classes.contains_key(class_id)
+    }
+
+    /// **RFC-0001 §2.9: the tokenizer commitment a class's registry row lists** — an IR class's record's `tokenizer_id`, a
+    /// generative class's row's — or `None` for a class whose row lists none (a dense legacy class: its tokenizer
+    /// commitment is inside an artifact digest the chain cannot read). The one read `palw_fp_tokenizer_match` compares a
+    /// job against.
+    pub fn class_tokenizer_listing_v1(&self, class_id: &Hash64) -> Option<Hash64> {
+        self.tir_classes
+            .get(class_id)
+            .map(|record| record.tokenizer_id)
+            .or_else(|| self.gen_classes.get(class_id).map(|record| record.tokenizer_id))
     }
 
     /// **RFC-0003 §II.2.1: a V5 claim's class, resolved against the generative registry** — the row
@@ -32673,6 +32764,12 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **ADR-0096 Decision 7, likewise**: below `palw_fp_decode_constraint` a constrained decode close is refused by name.
+    if palw_object_is_constrained_decode_v1(object) && !builder.params.fp_decode_constraint_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::AdapterClassRefused(
+            "a constrained decode close before palw_fp_decode_constraint is in force (ADR-0096)".into(),
+        ));
+    }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.
     if palw_object_is_eval_v1(object) && !builder.params.improve_active_at(ctx.daa_score) {
@@ -32723,6 +32820,11 @@ fn apply_object(
     // an older build cannot decode; the acceptance walk drops them by name, and this is the second lock.
     if palw_object_is_tir_shard_v1(object) && !builder.params.tir_shard_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirShardDormant);
+    }
+    // **RFC-0001 §2.10, likewise**: below `palw_adapter_class_v1` the adapter class listing is a payload an older
+    // build cannot decode; the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_adapter_class_v1(object) && !builder.params.adapter_class_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::AdapterClassRefused("an adapter class listing before palw_adapter_class_v1 is in force".into()));
     }
     // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
     // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
@@ -33076,6 +33178,11 @@ fn apply_object(
         // `Terminal` on the leaf and the challenger-side group, in one step (`palw_held_close_fold_v1`).
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => {
             palw_held_close_fold_v1::apply_held_leaf_challenge_v1(builder, ctx, challenge)?;
+        }
+        // **RFC-0001 §2.10: an adapter class's listing** — the registry entry a composite opening and a seat's
+        // possession proof read (`palw_adapter_class_fold_v1::apply_adapter_class_listed_v1`).
+        PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature: _ } => {
+            palw_adapter_class_fold_v1::apply_adapter_class_listed_v1(builder, ctx, payload, lister)?;
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
@@ -34932,6 +35039,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_eval_v1() && !builder.params.improve_active_at(ctx.daa_score))
+                })
+                // ADR-0096 Decision 7: likewise a constrained decode proof below `palw_fp_decode_constraint`.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_constrained_decode_v1() && !builder.params.fp_decode_constraint_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);

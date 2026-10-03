@@ -539,3 +539,225 @@ pub fn gen_court_object_v1(
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The tiny in-repo vision class (a fixture for end-to-end tests of the gateway's image path)
+// ---------------------------------------------------------------------------------------------
+
+/// The golden toy VLM's weights, as a [`PipelineParams`] (one `MapParams` per program).
+#[derive(Clone)]
+pub struct GenToyParamsV1(pub Vec<misaka_palw_tir::interp::MapParams>);
+
+impl PipelineParams for GenToyParamsV1 {
+    fn params(&self, program: u16) -> &dyn misaka_palw_tir::interp::ParamSource {
+        &self.0[program as usize]
+    }
+}
+
+/// **A registered Text class with ONE image slot, from the repository's golden toy VLM vector** — its chain row, this
+/// node's weights, the vector's image and its prompt. The smallest class that runs a V5 job (an image through a vision
+/// stage into a text stage) end to end, so the gateway's image path is exercised against a real engine and not a mock.
+pub struct GenToyVlmFixtureV1 {
+    pub row: PalwGenClassRecordV1,
+    pub params: GenToyParamsV1,
+    pub image: JobImageV1,
+    pub prompt: Vec<u32>,
+    /// The slot's tile length (the image's `input_root` is taken at it).
+    pub image_tile_len: u32,
+}
+
+/// Load [`GenToyVlmFixtureV1`] from `consensus-vectors/tir-v2/pipelines/toy-vlm.json` (relative to this crate's source tree).
+pub fn gen_toy_vlm_fixture_v1() -> Result<GenToyVlmFixtureV1, String> {
+    use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
+    use kaspa_consensus_core::palw_gen_class_v1::{
+        OutputSpecV1, PALW_GEN_CLASS_VERSION_V1, PalwGenClassV1, PalwGenImageOfferV1, PalwGenOffersV1, PalwGenProfileOffersV1,
+        palw_gen_class_record_v1,
+    };
+    use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
+    use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+    use misaka_palw_tir::interp::MapParams;
+    use misaka_palw_tir::tensor::Tensor;
+
+    fn unhex(s: &str) -> Result<Vec<u8>, String> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string())).collect()
+    }
+    let (tile, h_tile, checkpoint, image_tile) = (4u32, 16u32, 1u32, 4u32);
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v2/pipelines/toy-vlm.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
+        .map_err(|e| e.to_string())?;
+    let jarr = |x: &serde_json::Value, what: &str| x.as_array().cloned().ok_or_else(|| format!("the vector has no {what}"));
+    let program_bytes: Vec<Vec<u8>> = jarr(&v["programs"], "programs")?
+        .iter()
+        .map(|p| unhex(p["program_borsh_hex"].as_str().ok_or("a program has no bytes")?))
+        .collect::<Result<_, _>>()?;
+    let programs: Vec<TirProgramV2> =
+        program_bytes.iter().map(|b| TirProgramV2::decode_canonical(b).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+    let pipeline_bytes = unhex(v["pipeline_borsh_hex"].as_str().ok_or("the vector has no pipeline")?)?;
+    let pipeline = TirPipelineV1::decode_canonical(&pipeline_bytes, &programs).map_err(|e| e.to_string())?;
+    let mut maps = Vec::new();
+    for (pj, prog) in jarr(&v["programs"], "programs")?.iter().zip(&programs) {
+        let mut m = MapParams::default();
+        for e in jarr(&pj["params"], "params")? {
+            let j = e["param"].as_u64().ok_or("a param has no index")? as u16;
+            let decl = &prog.params[j as usize];
+            let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
+            let layer = e["layer"].as_u64().map(|l| l as u16);
+            m.tensors.insert(
+                (j, layer),
+                Tensor::from_le_bytes(decl.dtype, &shape, &unhex(e["le_hex"].as_str().ok_or("a param has no bytes")?)?)
+                    .map_err(|e| format!("{e:?}"))?,
+            );
+        }
+        maps.push(m);
+    }
+    let params = GenToyParamsV1(maps);
+    let layouts: Vec<PalwTirLayoutV1> = pipeline
+        .stages
+        .iter()
+        .map(|st| {
+            let p = &programs[st.program as usize];
+            let commits = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
+            PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: st.max_trip,
+                checkpoint_interval: checkpoint,
+                h_tile,
+                commit_tiles: vec![tile; commits],
+                state_tiles: vec![tile; p.states.len()],
+            }
+        })
+        .collect();
+    let img = &v["job"]["images"][0];
+    let image = JobImageV1 {
+        h: img["h"].as_u64().ok_or("the image has no height")? as u32,
+        w: img["w"].as_u64().ok_or("the image has no width")? as u32,
+        rgb: unhex(img["rgb_hex"].as_str().ok_or("the image has no pixels")?)?,
+    };
+    let prompt = vec![3u32, 15, 15, 5];
+    let class = PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        pipeline: pipeline_bytes,
+        programs: program_bytes,
+        layouts,
+        output: OutputSpecV1::tokens(pipeline.stages[pipeline.output_stage as usize].max_trip),
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 8.max(prompt.len() as u32),
+            max_negative_tokens: 0,
+            images: vec![PalwGenImageOfferV1 { h: image.h, w: image.w, tile_len: image_tile, token_equivalents: 1_000_000 }],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::None,
+        },
+        tokenizer_id: Hash64::from_bytes([0x74; 64]),
+    };
+    let (root, _) = palw_gen_inventory_root_v1(&programs, &params).map_err(|e| format!("{e:?}"))?;
+    let row = palw_gen_class_record_v1(&class, &root).map_err(|e| format!("{e:?}"))?;
+    Ok(GenToyVlmFixtureV1 { row, params, image, prompt, image_tile_len: image_tile })
+}
+
+/// **The golden toy vision encoder as an Embedding class of one image** (`[1, 4]` lanes of `i32`, CLS pooling): the smallest
+/// class a tensor (embedding) claim runs on, from the repository's `toy-vision.json` vector.
+pub struct GenToyEmbeddingFixtureV1 {
+    pub row: PalwGenClassRecordV1,
+    pub params: GenToyParamsV1,
+    pub image: JobImageV1,
+    pub image_tile_len: u32,
+}
+
+/// Load [`GenToyEmbeddingFixtureV1`].
+pub fn gen_toy_embedding_fixture_v1() -> Result<GenToyEmbeddingFixtureV1, String> {
+    use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
+    use kaspa_consensus_core::palw_gen_class_v1::{
+        OutputSpecV1, PALW_GEN_CLASS_VERSION_V1, PALW_GEN_POOLING_CLS_V1, PalwGenClassV1, PalwGenEmbeddingOffersV1, PalwGenImageOfferV1,
+        PalwGenOffersV1, PalwGenProfileOffersV1, palw_gen_class_record_v1,
+    };
+    use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
+    use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+    use misaka_palw_tir::interp::MapParams;
+    use misaka_palw_tir::tensor::Tensor;
+
+    fn unhex(s: &str) -> Result<Vec<u8>, String> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string())).collect()
+    }
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v2/pipelines/toy-vision.json");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
+        .map_err(|e| e.to_string())?;
+    let jarr = |x: &serde_json::Value, what: &str| x.as_array().cloned().ok_or_else(|| format!("the vector has no {what}"));
+    let program_bytes: Vec<Vec<u8>> = jarr(&v["programs"], "programs")?
+        .iter()
+        .map(|p| unhex(p["program_borsh_hex"].as_str().ok_or("a program has no bytes")?))
+        .collect::<Result<_, _>>()?;
+    let programs: Vec<TirProgramV2> =
+        program_bytes.iter().map(|b| TirProgramV2::decode_canonical(b).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+    let pipeline_bytes = unhex(v["pipeline_borsh_hex"].as_str().ok_or("the vector has no pipeline")?)?;
+    let pipeline = TirPipelineV1::decode_canonical(&pipeline_bytes, &programs).map_err(|e| e.to_string())?;
+    let mut maps = Vec::new();
+    for (pj, prog) in jarr(&v["programs"], "programs")?.iter().zip(&programs) {
+        let mut m = MapParams::default();
+        for e in jarr(&pj["params"], "params")? {
+            let j = e["param"].as_u64().ok_or("a param has no index")? as u16;
+            let decl = &prog.params[j as usize];
+            let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
+            let layer = e["layer"].as_u64().map(|l| l as u16);
+            m.tensors.insert(
+                (j, layer),
+                Tensor::from_le_bytes(decl.dtype, &shape, &unhex(e["le_hex"].as_str().ok_or("a param has no bytes")?)?)
+                    .map_err(|e| format!("{e:?}"))?,
+            );
+        }
+        maps.push(m);
+    }
+    let params = GenToyParamsV1(maps);
+    let layouts: Vec<PalwTirLayoutV1> = pipeline
+        .stages
+        .iter()
+        .map(|st| {
+            let p = &programs[st.program as usize];
+            let commits = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum::<usize>();
+            PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: st.max_trip,
+                checkpoint_interval: 1,
+                h_tile: 16,
+                commit_tiles: vec![4; commits],
+                state_tiles: vec![4; p.states.len()],
+            }
+        })
+        .collect();
+    let img = &v["job"]["images"][0];
+    let slot = PalwGenImageOfferV1 {
+        h: img["h"].as_u64().ok_or("the image has no height")? as u32,
+        w: img["w"].as_u64().ok_or("the image has no width")? as u32,
+        tile_len: img["tile_len"].as_u64().ok_or("the image has no tile length")? as u32,
+        token_equivalents: 0,
+    };
+    let image = JobImageV1 { h: slot.h, w: slot.w, rgb: unhex(img["rgb_hex"].as_str().ok_or("the image has no pixels")?)? };
+    let image_tile_len = slot.tile_len;
+    let class = PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Embedding as u8,
+        layouts,
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: 0,
+            max_negative_tokens: 0,
+            images: vec![slot],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+            profile: PalwGenProfileOffersV1::Embedding(PalwGenEmbeddingOffersV1 { pooling: PALW_GEN_POOLING_CLS_V1, dims: vec![4] }),
+        },
+        output: OutputSpecV1::embedding_i32(1, 4, 0, false),
+        pipeline: pipeline_bytes,
+        programs: program_bytes,
+        tokenizer_id: Hash64::from_bytes([0x71; 64]),
+    };
+    let (root, _) = palw_gen_inventory_root_v1(&programs, &params).map_err(|e| format!("{e:?}"))?;
+    let row = palw_gen_class_record_v1(&class, &root).map_err(|e| format!("{e:?}"))?;
+    Ok(GenToyEmbeddingFixtureV1 { row, params, image, image_tile_len })
+}

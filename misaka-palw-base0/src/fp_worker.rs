@@ -423,9 +423,54 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     /// form the CHAIN reports for the class, so a worker started for the wrong network produces
     /// jobs the gateway refuses rather than jobs the chain refuses.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **ADR-0096 Decision 8: this class's token-to-bytes table**, derived from the tokenizer this worker checked against
+    /// the class's `tokenizer_id` — built on the first constrained job (a 150k-entry table is not a boot cost every worker
+    /// should pay).
+    token_table: std::sync::OnceLock<std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1>>,
 }
 
 impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
+    /// **The class's token table** (ADR-0096 Decision 8): the byte rendering of every id of the class's vocabulary, as this
+    /// worker's tokenizer spells it, and the manifest's end-of-generation ids, under the manifest's `tokenizer_id`.
+    pub fn token_table_v1(&self) -> std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
+        self.token_table
+            .get_or_init(|| {
+                std::sync::Arc::new(kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+                    entries: (0..self.manifest.vocab).map(|id| self.tokenizer.token_bytes(id)).collect(),
+                    eog_token_ids: self.manifest.eog_token_ids.clone(),
+                    tokenizer_id: self.manifest.tokenizer_id,
+                })
+            })
+            .clone()
+    }
+
+    /// **One id's piece of the answer** — its bytes, except that a constrained job's end-of-generation id is the answer's end and
+    /// not part of it (`render_answer_v2`, ADR-0096 Decision 6): the streamed pieces and the result's `rendered` are the same bytes.
+    fn piece_v1(&self, job: &PalwFreePromptJobV3, id: u32) -> Vec<u8> {
+        if job.is_constraint() && self.manifest.eog_token_ids.contains(&id) {
+            return Vec::new();
+        }
+        self.tokenizer.token_bytes(id).unwrap_or_default()
+    }
+
+    /// The answer's bytes under the job's rendering rule: `render_answer_v1` for every job, `render_answer_v2` for a constrained one.
+    fn render_v1(&self, job: &PalwFreePromptJobV3, ids: &[u32]) -> Vec<u8> {
+        if job.is_constraint() { render_answer_v2(&self.tokenizer, ids, &self.manifest.eog_token_ids) } else { render_answer_v1(&self.tokenizer, ids) }
+    }
+
+    /// **The mask a constrained job runs under on this worker**, or why it cannot (`Ok(None)` for every other job): the
+    /// scope [`kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`] opens around the run.
+    fn constraint_mask_v1(
+        &self,
+        job: &PalwFreePromptJobV3,
+    ) -> Result<Option<std::sync::Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwConstraintMaskV1>>, String> {
+        if !job.is_constraint() {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, Some(self.token_table_v1()))
+            .map_err(|e| format!("a constrained job this worker cannot mask: {e}"))
+    }
+
     /// Assemble the runtime, deriving the manifest from the class's registered profile.
     ///
     /// Fails closed and by name on the two things a family can get wrong at construction: a
@@ -524,6 +569,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             artifact: family.artifact,
             load_ms,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile),
+            token_table: std::sync::OnceLock::new(),
         })
     }
 
@@ -593,13 +639,25 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     // **V3 or V4** (RFC-0001 §A.4): the version decides whether the request carries a decode
     // config, and the job this worker builds is the request's version with the request's config.
     let v4 = request.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
-    if request.version != PALW_FP_V3_VERSION && !v4 {
+    // ADR-0096 Decision 7: a constrained request (version 6) is a V3 request with its constraint beside it.
+    let constrained = request.version == kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+    if request.version != PALW_FP_V3_VERSION && !v4 && !constrained {
         return Err(format!(
-            "request version {} is neither {} (V3) nor {} (V4)",
+            "request version {} is neither {} (V3), {} (V4) nor {} (constrained)",
             request.version,
             PALW_FP_V3_VERSION,
-            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION,
+            kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
         ));
+    }
+    match (&request.constraint, constrained) {
+        (Some(bytes), true) => {
+            kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(bytes)
+                .map_err(|e| format!("the request's decode constraint is not admitted: {e}"))?;
+        }
+        (None, false) => {}
+        (Some(_), false) => return Err("only a constrained request carries a decode constraint".to_string()),
+        (None, true) => return Err("a constrained request carries its constraint".to_string()),
     }
     match (&request.decode, v4) {
         (Some(decode), true) => {
@@ -787,26 +845,14 @@ pub fn prompt_ids_for_input_v1(
     }
     Ok(ids)
 }
-
-/// **One job, from a validated request to the result frame's contents.**
-///
-/// The whole of what `v3-job` and `v3-serve` share; that they share it is what makes W6 —
-/// byte-identical roots through both modes — a property of the code rather than of a habit.
-///
-/// `on_token` is called once per generated id, in decode order, as soon as it is SELECTED
-/// (Decision 2), with that id and the bytes of the answer that became renderable with it. Every
-/// generated id is reported, INCLUDING an end-of-generation id and anything after it: the
-/// execution runs to the job's declared decode budget because a step leaf hash binds the job
-/// context, which binds the executed count, so hashing cannot begin before the count is fixed. EOG
-/// is a DISPLAY stop and the manifest publishes the ids so the gateway can honour it — a worker
-/// that stopped executing there would commit a count the court's ladder was not sized for.
-pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
+/// **The job a request describes, and the ids it prompts with** — everything `run_one_job_v1` does
+/// before it touches the engine, shared with the answer-only path so the two build ONE job from one
+/// request (the same ids, the same decode config, the same sampling) and therefore select the same
+/// tokens.
+fn prepare_job_v1<B: PalwExecutionBackendV1>(
     rt: &FpWorkerRuntime<B>,
     request: &PalwFpWorkerRequestV3,
-    request_hash: Hash64,
-    trace_out: &Path,
-    on_token: &mut dyn FnMut(u32, &[u8]),
-) -> Result<PalwFpWorkerResultV3, String> {
+) -> Result<(PalwFreePromptJobV3, Vec<u32>), String> {
     precheck_request_v1(request)?;
     check_identity_v1(&rt.manifest, request)?;
 
@@ -879,8 +925,38 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
         decode,
-        tail: None,
+        // ADR-0096: the constraint is the request's; the table root is THIS worker's own table's — the gateway holds no tokenizer.
+        tail: request.constraint.clone().map(|constraint| {
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(
+                kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 { constraint, table_root: rt.token_table_v1().root() },
+            )
+        }),
     };
+    Ok((job, prompt_ids))
+}
+
+
+/// **One job, from a validated request to the result frame's contents.**
+///
+/// The whole of what `v3-job` and `v3-serve` share; that they share it is what makes W6 —
+/// byte-identical roots through both modes — a property of the code rather than of a habit.
+///
+/// `on_token` is called once per generated id, in decode order, as soon as it is SELECTED
+/// (Decision 2), with that id and the bytes of the answer that became renderable with it. Every
+/// generated id is reported, INCLUDING an end-of-generation id and anything after it: the
+/// execution runs to the job's declared decode budget because a step leaf hash binds the job
+/// context, which binds the executed count, so hashing cannot begin before the count is fixed. EOG
+/// is a DISPLAY stop and the manifest publishes the ids so the gateway can honour it — a worker
+/// that stopped executing there would commit a count the court's ladder was not sized for.
+pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &PalwFpWorkerRequestV3,
+    request_hash: Hash64,
+    trace_out: &Path,
+    on_token: &mut dyn FnMut(u32, &[u8]),
+) -> Result<PalwFpWorkerResultV3, String> {
+    let (job, prompt_ids) = prepare_job_v1(rt, request)?;
+    let prefill = job.prompt_tokens;
     let binding = fp_job_id_v3(&job);
 
     // **SA-6, immediately before the first page is touched.** Last of the checks because it is
@@ -939,7 +1015,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     retain_v1(rt, trace_out, binding, &run, &context)?;
 
-    let rendered = render_answer_v1(&rt.tokenizer, &run.output_token_ids);
+    let rendered = rt.render_v1(&job, &run.output_token_ids);
 
     eprintln!(
         "[{}] v3 executed: prefill={prefill} decode={}/{} in {execute_ms}ms ({} leaves); exec root={}…",
@@ -976,6 +1052,176 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
     })
 }
 
+/// **RFC-0001 §2.6/§2.7: one job answered with no commitment** — the same job a committed run would
+/// build from this request (one `prepare_job_v1`), run through the backend's answer-only path
+/// (prefix cache, no fold). `Err("… serves no answer-only path")` is the caller's cue to fall back
+/// to [`run_one_job_v1`].
+pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &PalwFpWorkerRequestV3,
+    request_hash: Hash64,
+    on_token: &mut dyn FnMut(u32, &[u8]),
+) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1, String> {
+    let (job, prompt_ids) = prepare_job_v1(rt, request)?;
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let prompt_usize: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+    let mut streamed: Vec<u32> = Vec::new();
+    let answer = {
+        let mut sink = |id: u32| {
+            streamed.push(id);
+            on_token(id, &rt.piece_v1(&job, id));
+        };
+        let mask = rt.constraint_mask_v1(&job)?;
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            rt.backend.answer_free_prompt_v1(&job, &prompt_usize, &rt.manifest.eog_token_ids, &mut sink)
+        })
+        .map_err(|e| format!("execution refused: {e}"))?
+    };
+    if streamed != answer.output_token_ids {
+        return Err("the streamed ids are not the answered ids".to_string());
+    }
+    let execute_ms = started.elapsed().as_millis() as u64;
+    eprintln!(
+        "[{}] answer-only: prefill={} (cached {}) decode={}/{} in {execute_ms}ms",
+        rt.retention_family,
+        job.prompt_tokens,
+        answer.cached_prefix_tokens,
+        answer.output_token_ids.len(),
+        job.decode_token_limit
+    );
+    let stop_sequence_len = answer_stop_len_v1(&job, &answer.output_token_ids);
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
+        request_hash,
+        prompt_token_ids: prompt_ids,
+        rendered: rt.render_v1(&job, &answer.output_token_ids),
+        output_token_ids: answer.output_token_ids,
+        cached_prefix_tokens: answer.cached_prefix_tokens,
+        ended_on_stop_id: answer.ended_on_stop_id,
+        stop_sequence_len,
+        execute_ms,
+    })
+}
+
+/// **RFC-0001 §2.7 stage 2: several requests answered in one batched decode** — each request
+/// builds its own job by the same `prepare_job_v1`, the backend decodes them together, and every
+/// answer is bound to its own request bytes. In request order.
+pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    requests: &[(PalwFpWorkerRequestV3, Hash64)],
+    on_token: &mut dyn FnMut(usize, u32, &[u8]),
+) -> Result<Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1>, String> {
+    if requests.is_empty() || requests.len() > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1 {
+        return Err(format!(
+            "a batch carries 1..={} requests, not {}",
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1,
+            requests.len()
+        ));
+    }
+    let mut prepared = Vec::with_capacity(requests.len());
+    for (request, _) in requests {
+        let (job, ids) = prepare_job_v1(rt, request)?;
+        let usize_ids: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        prepared.push((job, ids, usize_ids));
+    }
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let jobs: Vec<kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1<'_>> = prepared
+        .iter()
+        .map(|(job, _, usize_ids)| kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1 { job, prompt_tokens: usize_ids })
+        .collect();
+    // ADR-0096: the candidates of one request share one constraint, so one mask serves the batch.
+    let mask = rt.constraint_mask_v1(&prepared[0].0)?;
+    if prepared.iter().any(|(job, _, _)| job.tail != prepared[0].0.tail) {
+        return Err("a batch of jobs under different constraints".to_string());
+    }
+    let answers = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+        rt.backend.answer_batch_free_prompt_v1(&jobs, &rt.manifest.eog_token_ids, &mut |i, id| {
+            on_token(i, id, &rt.piece_v1(&prepared[i].0, id))
+        })
+    })
+    .map_err(|e| format!("execution refused: {e}"))?;
+    let execute_ms = started.elapsed().as_millis() as u64;
+    eprintln!("[{}] answer-batch: {} jobs in {execute_ms}ms", rt.retention_family, answers.len());
+    Ok(prepared
+        .into_iter()
+        .zip(answers)
+        .zip(requests)
+        .map(|(((job, ids, _), answer), (_, request_hash))| {
+            let stop_sequence_len = answer_stop_len_v1(&job, &answer.output_token_ids);
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
+                request_hash: *request_hash,
+                prompt_token_ids: ids,
+                rendered: rt.render_v1(&job, &answer.output_token_ids),
+                output_token_ids: answer.output_token_ids,
+                cached_prefix_tokens: answer.cached_prefix_tokens,
+                ended_on_stop_id: answer.ended_on_stop_id,
+                stop_sequence_len,
+                execute_ms,
+            }
+        })
+        .collect())
+}
+
+/// The length of the stop sequence that ended `ids`, by the job's own decode config (V4 only).
+fn answer_stop_len_v1(job: &PalwFreePromptJobV3, ids: &[u32]) -> Option<u32> {
+    job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).and_then(|decode| {
+        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(decode, job.decode_token_limit, u32::MAX, ids).ok()?;
+        match stop.reason {
+            kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
+                decode.stop_sequences.get(index as usize).map(|s| s.len() as u32)
+            }
+            _ => None,
+        }
+    })
+}
+
+/// **RFC-0001 §2.8: one embedding request** — the class pins held to the manifest, the input to ids
+/// by the same function a job's input goes through, the prompt bound by the class's width, then the
+/// backend's pooled hidden state. Never a claim.
+pub fn run_embed_v1<B: PalwExecutionBackendV1>(
+    rt: &FpWorkerRuntime<B>,
+    request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1,
+    request_hash: Hash64,
+) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1, String> {
+    use kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1;
+    if request.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1 {
+        return Err(format!("embed request version {} is not {}", request.version, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1));
+    }
+    if request.class_id != rt.manifest.class_id || request.shape_profile_id != rt.manifest.shape_profile_id {
+        return Err("the embed request names a class this worker does not serve".to_string());
+    }
+    let pool = PalwEmbeddingPoolV1::from_tag(request.pool).ok_or_else(|| format!("pool tag {} is neither mean (0) nor last (1)", request.pool))?;
+    let ids = prompt_ids_for_input_v1(&rt.tokenizer, &rt.manifest, &request.input)?;
+    if let Some(at) = ids.iter().position(|t| *t >= rt.manifest.vocab) {
+        return Err(format!("the prompt token at position {at} is outside the model's vocab ({})", rt.manifest.vocab));
+    }
+    if ids.len() as u64 > rt.manifest.n_ctx as u64 {
+        return Err(format!("the input is {} tokens and the class's context is {}", ids.len(), rt.manifest.n_ctx));
+    }
+    if let Some(artifact) = &rt.artifact {
+        artifact.revalidate()?;
+    }
+    let started = std::time::Instant::now();
+    let usize_ids: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+    let embedding = rt
+        .backend
+        .embed_prompt_v1(&usize_ids, rt.manifest.class_id, rt.manifest.tokenizer_id, pool)
+        .map_err(|e| format!("execution refused: {e}"))?;
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1 {
+        request_hash,
+        prompt_token_ids: ids,
+        pool: request.pool,
+        raw: embedding.raw,
+        cached_prefix_tokens: embedding.cached_prefix_tokens,
+        execute_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
 /// **The answer's bytes: every token's bytes, concatenated** (ADR-0077 Decision 2).
 ///
 /// Never fails, and that is the point. [`QwenTokenizer::decode`] refuses a whole run for one id it
@@ -990,6 +1236,14 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 /// comparison is an identity rather than two decoders that happen to agree.
 pub fn render_answer_v1(tokenizer: &QwenTokenizer, ids: &[u32]) -> Vec<u8> {
     ids.iter().filter_map(|id| tokenizer.token_bytes(*id)).flatten().collect()
+}
+
+/// **`render_answer_v2` (ADR-0096 Decision 6): the answer cut at the first committed end-of-generation id** — the ids up to and
+/// excluding the first id in `eog_token_ids`, rendered as `render_answer_v1` renders them. The ids after it stay executed,
+/// committed and priced, but are not the answer. Applies to a constrained job (version 6); every other job keeps `render_answer_v1`.
+pub fn render_answer_v2(tokenizer: &QwenTokenizer, ids: &[u32], eog_token_ids: &[u32]) -> Vec<u8> {
+    let end = ids.iter().position(|id| eog_token_ids.contains(id)).unwrap_or(ids.len());
+    render_answer_v1(tokenizer, &ids[..end])
 }
 
 /// The run itself, reporting each id as it is selected with THAT id's bytes.
@@ -1014,9 +1268,13 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
             // An id past the tokenizer's table (a class's padded vocab) renders to nothing, and
             // the id is still reported: the gateway counts tokens and a silent one would
             // desynchronise it from the ids it will be asked to check the stream against.
-            on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
+            on_token(id, &rt.piece_v1(job, id));
         };
-        rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink).map_err(|e| format!("execution refused: {e}"))?
+        let mask = rt.constraint_mask_v1(job)?;
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink)
+        })
+        .map_err(|e| format!("execution refused: {e}"))?
     };
     Ok((run, streamed))
 }
@@ -1107,6 +1365,14 @@ where
     write_framed(output, &bytes).map_err(|e| format!("cannot write the result frame: {e}"))
 }
 
+/// Marks a batch error that was the OUTPUT stream failing (a dead gateway), not a bad job.
+const STREAM_BROKEN: &str = "\u{0}stream-broken:";
+
+enum WorkerOutcome {
+    Committed(PalwFpWorkerResultV3),
+    Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
+}
+
 /// `--mode v3-serve`: the artifact is already mapped; announce it once, then answer jobs until the
 /// stream ends.
 ///
@@ -1125,6 +1391,64 @@ where
             Some(payload) => payload,
             None => return Ok(()),
         };
+        // **RFC-0001 §2.8: an embedding request** — local serving, one frame back.
+        if payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1) {
+            let body = payload[4..].to_vec();
+            let hash = fp_worker_request_hash_v3(&body);
+            let frame = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1>(&body)
+                .map_err(|e| format!("the frame is not an embed request: {e}"))
+                .and_then(|request| run_embed_v1(rt, &request, hash))
+                .map(|e| PalwFpWorkerFrameV1::Embedded(Box::new(e)));
+            match frame {
+                Ok(frame) => write_frame_v1(output, &frame)?,
+                Err(reason) => {
+                    eprintln!("[{}] v3-serve refused an embedding: {reason}", rt.retention_family);
+                    write_frame_v1(output, &PalwFpWorkerFrameV1::Refused { reason })?;
+                }
+            }
+            continue;
+        }
+        // **RFC-0001 §2.7 stage 2: a batch of answer-only requests** — decoded together.
+        if payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1) {
+            let frame = (|| -> Result<PalwFpWorkerFrameV1, String> {
+                let payloads: Vec<Vec<u8>> =
+                    borsh::from_slice(&payload[4..]).map_err(|e| format!("the batch frame is not a list of requests: {e}"))?;
+                let mut requests = Vec::with_capacity(payloads.len());
+                for p in &payloads {
+                    let request: PalwFpWorkerRequestV3 =
+                        borsh::from_slice(p).map_err(|e| format!("a batched frame is not a v3 request: {e}"))?;
+                    requests.push((request, fp_worker_request_hash_v3(p)));
+                }
+                let mut stream_error: Option<String> = None;
+                let answers = run_answer_batch_v1(rt, &requests, &mut |index, token_id, rendered| {
+                    if stream_error.is_none()
+                        && let Err(e) = write_frame_v1(
+                            output,
+                            &PalwFpWorkerFrameV1::BatchToken { index: index as u32, token_id, rendered: rendered.to_vec() },
+                        )
+                    {
+                        stream_error = Some(e);
+                    }
+                })?;
+                match stream_error {
+                    Some(e) => Err(format!("{STREAM_BROKEN}{e}")),
+                    None => Ok(PalwFpWorkerFrameV1::AnsweredBatch(answers)),
+                }
+            })();
+            match frame {
+                Ok(frame) => write_frame_v1(output, &frame)?,
+                // A dead gateway is not a bad job: end the session, as the single path does.
+                Err(reason) if reason.starts_with(STREAM_BROKEN) => return Err(reason[STREAM_BROKEN.len()..].to_string()),
+                Err(reason) => {
+                    eprintln!("[{}] v3-serve refused a batch: {reason}", rt.retention_family);
+                    write_frame_v1(output, &PalwFpWorkerFrameV1::Refused { reason })?;
+                }
+            }
+            continue;
+        }
+        // **RFC-0001 §2.6: an answer-only frame** — magic, then an ordinary request.
+        let answer_only = payload.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1);
+        let payload = if answer_only { payload[4..].to_vec() } else { payload };
         let request_hash = fp_worker_request_hash_v3(&payload);
         // A frame that is not a request at all is refused like any other bad job: the artifact is
         // resident and a gateway that sent nonsense gets to try again.
@@ -1153,13 +1477,18 @@ where
                     stream_error = Some(e);
                 }
             };
-            run_one_job_v1(rt, &request, request_hash, trace_out, &mut on_token)
+            if answer_only {
+                run_answer_only_v1(rt, &request, request_hash, &mut on_token).map(WorkerOutcome::Answered)
+            } else {
+                run_one_job_v1(rt, &request, request_hash, trace_out, &mut on_token).map(WorkerOutcome::Committed)
+            }
         };
         if let Some(e) = stream_error {
             return Err(e);
         }
         match outcome {
-            Ok(result) => write_frame_v1(output, &PalwFpWorkerFrameV1::Result(Box::new(result)))?,
+            Ok(WorkerOutcome::Committed(result)) => write_frame_v1(output, &PalwFpWorkerFrameV1::Result(Box::new(result)))?,
+            Ok(WorkerOutcome::Answered(answer)) => write_frame_v1(output, &PalwFpWorkerFrameV1::Answered(Box::new(answer)))?,
             // **The worker stays up.** One bad job must not drop a resident artifact — that is the
             // contract's sentence and the reason this mode exists at all.
             Err(reason) => {
@@ -1360,6 +1689,56 @@ mod tests {
         assert!(runtime(backend(None, fixture_net), fixture_net).is_ok());
     }
 
+    /// **ADR-0096 Decision 6: `render_answer_v2` cuts the answer at the first end-of-generation id** — the streamed pieces of a
+    /// constrained job and its `rendered` field are the same bytes (the end-of-generation piece is empty), every other job keeps
+    /// `render_answer_v1` byte for byte, and the class table digests are unchanged by it.
+    #[test]
+    fn render_answer_v2_cuts_at_the_first_end_of_generation_id_and_only_for_a_constrained_job() {
+        let rt = fixture_runtime_v1();
+        let eog = rt.manifest().eog_token_ids.clone();
+        let stop = eog[0];
+        let text: Vec<u32> = (0..3).filter(|id| rt.tokenizer().token_bytes(*id).is_some_and(|b| !b.is_empty())).collect();
+        assert!(!text.is_empty(), "the fixture tokenizer renders some low id");
+        let mut ids = text.clone();
+        ids.push(stop);
+        ids.extend_from_slice(&text);
+        let v1 = render_answer_v1(rt.tokenizer(), &ids);
+        let v2 = render_answer_v2(rt.tokenizer(), &ids, &eog);
+        assert_eq!(v2, render_answer_v1(rt.tokenizer(), &text), "the ids up to the first end-of-generation id");
+        assert!(v1.len() > v2.len(), "v1 keeps the end-of-generation piece and everything after it");
+        assert_eq!(render_answer_v2(rt.tokenizer(), &text, &eog), render_answer_v1(rt.tokenizer(), &text), "no end-of-generation id, no cut");
+        // The runtime's per-job rule and pieces.
+        let mut job = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(1),
+            class_id: Hash64::from_u64_word(2),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(3), 0),
+            executor_pubkey: vec![4],
+            operator_id: Hash64::from_u64_word(5),
+            anchor_block: Hash64::from_u64_word(6),
+            anchor_daa: 1,
+            job_nonce: [7; 32],
+            tokenizer_id: Hash64::from_u64_word(8),
+            prompt_token_ids_hash: Hash64::from_u64_word(9),
+            prompt_tokens: 1,
+            decode_token_limit: 4,
+            max_context_tokens: 16,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            tail: None,
+        };
+        assert_eq!(rt.render_v1(&job, &ids), v1, "a plain job: render_answer_v1");
+        assert_eq!(rt.piece_v1(&job, stop), rt.tokenizer().token_bytes(stop).unwrap_or_default());
+        job.version = kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+        assert_eq!(rt.render_v1(&job, &ids), v2, "a constrained job: render_answer_v2");
+        assert!(rt.piece_v1(&job, stop).is_empty(), "its end-of-generation piece is empty, so stream and result agree");
+        let streamed: Vec<u8> = ids.iter().take_while(|id| **id != stop).flat_map(|id| rt.piece_v1(&job, *id)).collect();
+        assert_eq!(streamed, v2);
+    }
+
     /// **The fixture class, built the way `e2e_drill::a16_fixture_v1` builds it**: a two-layer
     /// derived A16 store under the corrected (graph-v2) profile. Small enough to run in CI, and
     /// the same registered graph the 1.5B artifact is served under — which is what makes a root
@@ -1476,6 +1855,7 @@ mod tests {
             trace_scheme_id: manifest.trace_scheme_id,
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         }
     }
 
@@ -1750,6 +2130,199 @@ mod tests {
         assert_eq!(result.decode_tokens_executed, 4, "the run goes to the DECLARED budget, EOG or not");
         assert_eq!(tokens.iter().map(|(id, _)| *id).collect::<Vec<_>>(), result.output_token_ids, "one frame per committed id");
         assert_eq!(tokens.iter().flat_map(|(_, bytes)| bytes.clone()).collect::<Vec<u8>>(), result.rendered);
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// A V4 request with the no-op decode config under a sampler: the form a sampled job takes.
+    fn sampled_request_v1(manifest: &PalwFpWorkerManifestV1, ids: Vec<u32>, seed_byte: u8, limit: u32) -> PalwFpWorkerRequestV3 {
+        let mut request = fixture_request_v1(manifest, PalwFpWorkerInputV3::TokenIds(ids));
+        request.version = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+        request.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        request.sampling_seed = [seed_byte; 32];
+        request.temperature_q = 1 << 24;
+        request.decode_token_limit = limit;
+        request
+    }
+
+    fn answer_framed(request: &PalwFpWorkerRequestV3) -> Vec<u8> {
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(request).expect("a request serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    fn batch_framed(requests: &[PalwFpWorkerRequestV3]) -> Vec<u8> {
+        let payloads: Vec<Vec<u8>> = requests.iter().map(|r| borsh::to_vec(r).expect("a request serializes")).collect();
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(&payloads).expect("the batch serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    /// **RFC-0001 §2.6, through the worker's frames: an answer-only request returns the ids the
+    /// SAME request commits when run as a job** — sampled and greedy — streams them once, binds its
+    /// answer to the request bytes (not including the magic), and a worker session mixing both
+    /// kinds of frame keeps working.
+    #[test]
+    fn an_answer_only_frame_answers_with_the_ids_the_committed_job_commits() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-answer-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let sampled = sampled_request_v1(&manifest, vec![3, 5, 8, 13, 21], 7, 5);
+        let mut greedy = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![2, 4, 6]));
+        greedy.decode_token_limit = 4;
+        let mut input = Vec::new();
+        for request in [&sampled, &greedy] {
+            input.extend(answer_framed(request));
+            input.extend(framed(request));
+        }
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let (mut answers, mut results, mut streamed) = (Vec::new(), Vec::new(), 0usize);
+        for frame in &frames {
+            match frame {
+                PalwFpWorkerFrameV1::Answered(a) => answers.push(a.clone()),
+                PalwFpWorkerFrameV1::Result(r) => results.push(r.clone()),
+                PalwFpWorkerFrameV1::Token { .. } => streamed += 1,
+                PalwFpWorkerFrameV1::Manifest(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!((answers.len(), results.len()), (2, 2));
+        for (k, request) in [&sampled, &greedy].into_iter().enumerate() {
+            let payload = borsh::to_vec(request).unwrap();
+            assert_eq!(answers[k].request_hash, fp_worker_request_hash_v3(&payload), "the answer binds the request without the magic");
+            assert_eq!(answers[k].output_token_ids, results[k].output_token_ids, "answer-only == committed");
+            assert_eq!(answers[k].rendered, results[k].rendered);
+            assert_eq!(answers[k].prompt_token_ids, results[k].prompt_token_ids);
+            assert_eq!(answers[k].cached_prefix_tokens, 0);
+        }
+        assert_eq!(streamed, answers.iter().map(|a| a.output_token_ids.len()).sum::<usize>() * 2, "each id streams once per mode");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// **RFC-0001 §2.7 stage 2, through the worker's frames: a batch frame's answers are the ones each
+    /// request gets alone**, bound to their own request bytes, with each id streamed under its
+    /// request's index; a malformed or oversized batch is one `Refused` and the worker stays up.
+    #[test]
+    fn a_batch_frame_answers_each_request_as_it_would_be_answered_alone() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-batch-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let requests: Vec<PalwFpWorkerRequestV3> = (0..4u8)
+            .map(|k| sampled_request_v1(&manifest, (0..(3 + 2 * k as u32)).map(|i| 2 + i * 3).collect(), k + 1, 3 + k as u32))
+            .collect();
+        let mut input = batch_framed(&requests);
+        for r in &requests {
+            input.extend(answer_framed(r));
+        }
+        // A batch frame that is not a list, and one with too many requests.
+        let mut junk = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        junk.extend_from_slice(&[1, 2, 3]);
+        input.extend((junk.len() as u32).to_le_bytes());
+        input.extend(junk);
+        let too_many = vec![requests[0].clone(); kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAX_V1 + 1];
+        input.extend(batch_framed(&too_many));
+        // And the worker is still serving afterwards.
+        input.extend(answer_framed(&requests[0]));
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let mut batch = None;
+        let mut batch_tokens: Vec<Vec<u32>> = vec![Vec::new(); requests.len()];
+        let mut singles = Vec::new();
+        let mut refusals = Vec::new();
+        let mut in_batch = true;
+        for frame in &frames {
+            match frame {
+                PalwFpWorkerFrameV1::BatchToken { index, token_id, .. } => batch_tokens[*index as usize].push(*token_id),
+                PalwFpWorkerFrameV1::AnsweredBatch(a) => {
+                    batch = Some(a.clone());
+                    in_batch = false;
+                }
+                PalwFpWorkerFrameV1::Answered(a) => singles.push(a.clone()),
+                PalwFpWorkerFrameV1::Refused { reason } => refusals.push(reason.clone()),
+                PalwFpWorkerFrameV1::Token { .. } => assert!(!in_batch, "a batch streams BatchTokens only"),
+                PalwFpWorkerFrameV1::Manifest(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        let batch = batch.expect("the batch was answered");
+        assert_eq!(batch.len(), requests.len());
+        for k in 0..requests.len() {
+            assert_eq!(batch[k].request_hash, fp_worker_request_hash_v3(&borsh::to_vec(&requests[k]).unwrap()), "answer {k} binds its own request");
+            assert_eq!(batch[k].output_token_ids, singles[k].output_token_ids, "request {k}: in-batch == alone");
+            assert_eq!(batch[k].rendered, singles[k].rendered);
+            assert_eq!(batch_tokens[k], batch[k].output_token_ids, "request {k}: its ids streamed under its own index");
+        }
+        assert_eq!(refusals.len(), 2, "{refusals:?}");
+        assert!(refusals[0].contains("not a list of requests"), "{}", refusals[0]);
+        assert!(refusals[1].contains("a batch carries 1..=16 requests, not 17"), "{}", refusals[1]);
+        assert_eq!(singles.len(), 5, "the worker kept serving after both refusals");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    fn embed_framed(request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Vec<u8> {
+        let mut payload = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1.to_vec();
+        payload.extend_from_slice(&borsh::to_vec(request).expect("an embed request serializes"));
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    /// **RFC-0001 §2.8, through the worker's frames**: an embedding comes back bound to its request,
+    /// pooled as asked, deterministic; and a wrong class, an unknown pool, an empty or over-long
+    /// input is one `Refused` while the worker keeps serving.
+    #[test]
+    fn an_embed_frame_returns_the_pooled_state_and_refuses_by_name() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_EMBED_REQUEST_VERSION_V1, PalwFpEmbedRequestV1};
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-embed-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let ok = |pool: u8, ids: Vec<u32>| PalwFpEmbedRequestV1 {
+            version: PALW_FP_EMBED_REQUEST_VERSION_V1,
+            class_id: manifest.class_id,
+            shape_profile_id: manifest.shape_profile_id,
+            input: PalwFpWorkerInputV3::TokenIds(ids),
+            pool,
+        };
+        let mut wrong_class = ok(0, vec![3, 5]);
+        wrong_class.class_id = Hash64::from_u64_word(0xBAD);
+        let requests = [
+            ok(0, vec![3, 5, 8, 13]),
+            ok(1, vec![3, 5, 8, 13]),
+            ok(0, vec![3, 5, 8, 13]),
+            wrong_class,
+            ok(9, vec![3, 5]),
+            ok(0, (0..40).map(|i| i % 8 + 2).collect()),
+            PalwFpEmbedRequestV1 { input: PalwFpWorkerInputV3::TokenIds(vec![]), ..ok(0, vec![1]) },
+        ];
+        let input: Vec<u8> = requests.iter().flat_map(embed_framed).collect();
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
+        let frames = decode_frames_v1(&out).expect("the serve frames decode");
+        let embedded: Vec<_> = frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Embedded(e) = f { Some(e.clone()) } else { None }).collect();
+        let refused: Vec<String> =
+            frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Refused { reason } = f { Some(reason.clone()) } else { None }).collect();
+        assert_eq!(embedded.len(), 3);
+        assert_eq!(embedded[0].raw.len(), 8, "the fixture's hidden width");
+        assert_eq!(
+            (embedded[0].request_hash, &embedded[0].raw, &embedded[0].prompt_token_ids),
+            (embedded[2].request_hash, &embedded[2].raw, &embedded[2].prompt_token_ids),
+            "the same request is the same embedding"
+        );
+        assert_ne!(embedded[0].raw, embedded[1].raw, "mean and last-token differ");
+        assert_eq!(embedded[0].request_hash, fp_worker_request_hash_v3(&borsh::to_vec(&requests[0]).unwrap()));
+        assert_eq!(embedded[0].prompt_token_ids, vec![3, 5, 8, 13]);
+        assert_eq!(refused.len(), 4, "{refused:?}");
+        assert!(refused[0].contains("names a class this worker does not serve"));
+        assert!(refused[1].contains("pool tag 9"));
+        assert!(refused[2].contains("the class's context is 32"));
+        assert!(refused[3].contains("carries no tokens"));
+        assert!(refused.iter().all(|r| !r.contains("3, 5")), "a refusal never quotes the input");
         let _ = std::fs::remove_dir_all(&temp);
     }
 

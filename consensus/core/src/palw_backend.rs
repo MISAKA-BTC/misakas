@@ -173,6 +173,34 @@ pub struct PalwFpRunV1 {
     pub output_token_ids: Vec<u32>,
 }
 
+/// **What an answer-only run (RFC-0001 §2.6) returns**: the ids it selected, where its decoder
+/// stopped, and how many leading prompt positions came from a cached prefix rather than a forward
+/// pass. A node-local fact — never an input to any claim (invariant I-3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpAnswerV1 {
+    pub output_token_ids: Vec<u32>,
+    /// Leading prompt positions served from the prefix cache (0: a fresh prefill).
+    pub cached_prefix_tokens: u32,
+    /// The run ended on one of the caller's `stop_ids` (that id is the last of `output_token_ids`).
+    pub ended_on_stop_id: bool,
+}
+
+/// A pooled embedding: the raw pooled hidden codes, the number of positions pooled, and how many
+/// leading positions came from the prefix cache (last-token pooling only; a node-local fact).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpEmbeddingV1 {
+    pub raw: Vec<i32>,
+    pub positions: u32,
+    pub cached_prefix_tokens: u32,
+}
+
+/// One job of an answer batch ([`PalwExecutionBackendV1::answer_batch_free_prompt_v1`]).
+#[derive(Clone, Copy)]
+pub struct PalwFpAnswerJobV1<'a> {
+    pub job: &'a crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    pub prompt_tokens: &'a [usize],
+}
+
 /// What a seat concluded about ONE opened checkpoint interval (ADR-0077 Decision 8).
 ///
 /// Four outcomes, because they are four different accusations: `Valid` is every replayed row
@@ -849,6 +877,100 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **RFC-0001 §2.6/§2.7: the free-prompt ANSWER with no commitment** — the node-only serving
+    /// path. The same engine, the same decoder (`PalwFreePromptJobV3::decoder_v1`) and so the same
+    /// token ids a committed run of the job would select, but nothing is captured: no fold, no
+    /// checkpoint leg, no retention. That is what lets a worker resume from a cached prefix
+    /// (the committed fold hashes every prefill tile under the job's context and cannot) and
+    /// what a batch of sequences shares. `stop_ids` end the run at the first of them (the display
+    /// stop a committed run only observes). The default serves nothing, and the caller falls back
+    /// to the committed path.
+    fn answer_free_prompt_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _stop_ids: &[u32],
+        _on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpAnswerV1, String> {
+        Err("this backend serves no answer-only path".to_string())
+    }
+
+    /// **ADR-0096 Decision 8: the token-to-bytes table a constrained job's mask is read through**, if this host holds the one the
+    /// job names ([`crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1`]: the process's tables, registered from
+    /// `--palw-token-table` files and looked up by the root the CLAIM committed to). A host that holds none files
+    /// `Unverifiable` for a constrained claim and cannot produce one.
+    fn token_table_for_job_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
+        crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
+    }
+
+    /// **RFC-0001 §2.6 stage 2: the prefix STATE of a prompt's first `prefix_ids.len()` ids** — the object a
+    /// prefix-state claim (FP job version 11) names ([`crate::palw_fp_prefix_v1`]): the family's digest of the K/V state
+    /// after the prefix, under the class's id and the prefix's length. Deterministic in the ids, so a producer that holds
+    /// the state and a seat that recomputes (or holds it in a cache) agree. The default serves nothing.
+    fn prefix_state_v1(
+        &self,
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _prefix_ids: &[u32],
+    ) -> Result<crate::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        Err("this backend serves no prefix-state path".to_string())
+    }
+
+    /// **A seat's check of a prefix-state claim's state**: the job's named state against the one this backend derives for
+    /// the claim's own prompt prefix (from its cache or by recomputation). `Ok(())` is agreement; the error names the
+    /// disagreement. A job that is not a prefix-state job is `Ok(())` (it names no state).
+    fn verify_prefix_state_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+    ) -> Result<(), String> {
+        let Some(named) = crate::palw_fp_prefix_v1::palw_fp_prefix_tail_v1(job) else { return Ok(()) };
+        let k = named.prefix_tokens as usize;
+        if k == 0 || k >= prompt_ids.len() {
+            return Err("the named prefix is not a proper prefix of the prompt".to_string());
+        }
+        let derived = self.prefix_state_v1(job.class_id, job.tokenizer_id, &prompt_ids[..k])?;
+        if derived != *named {
+            return Err(format!(
+                "the job names prefix state {} over {} positions and this backend derives {} for the prompt's first {k} ids",
+                named.state_root, named.prefix_tokens, derived.state_root
+            ));
+        }
+        Ok(())
+    }
+
+    /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt** — the local embeddings
+    /// service. Node-only and never a claim; the pooling and the normalization are
+    /// [`crate::palw_embedding_pool_v1`]'s. The default serves nothing.
+    fn embed_prompt_v1(
+        &self,
+        _prompt_tokens: &[usize],
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _pool: crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    ) -> Result<PalwFpEmbeddingV1, String> {
+        Err("this backend serves no embedding path".to_string())
+    }
+
+    /// **RFC-0001 §2.7 stage 2: several answers at once.** A backend with a batch-invariant decode
+    /// runs them in one loop (each answer exactly the one [`Self::answer_free_prompt_v1`] gives the
+    /// job alone); the default answers them one after another. `on_token(i, id)` reports job `i`'s
+    /// ids as they are selected.
+    fn answer_batch_free_prompt_v1(
+        &self,
+        jobs: &[PalwFpAnswerJobV1<'_>],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(usize, u32),
+    ) -> Result<Vec<PalwFpAnswerV1>, String> {
+        jobs.iter()
+            .enumerate()
+            .map(|(i, j)| self.answer_free_prompt_v1(j.job, j.prompt_tokens, stop_ids, &mut |id| on_token(i, id)))
+            .collect()
+    }
+
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
     /// generated id in decode order, as soon as it is selected, from the SAME run whose capture
     /// and commitment the returned [`PalwFpRunV1`] carries — never from a second inference. The
@@ -934,9 +1056,17 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         committed_output_ids: &[u32],
     ) -> PalwFpIntervalVerdictV1 {
-        let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
-        crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
-            self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+        // ADR-0096 Decision 8: a constrained claim is replayed through its mask, which needs this class's token table; a
+        // host without it (or with another class's) cannot judge the claim — `Unverifiable`, an abstention, not a fault.
+        let mask = match crate::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, self.token_table_for_job_v1(job)) {
+            Ok(mask) => mask,
+            Err(_) => return PalwFpIntervalVerdictV1::Unverifiable,
+        };
+        crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
+            crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
+                self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+            })
         })
     }
 

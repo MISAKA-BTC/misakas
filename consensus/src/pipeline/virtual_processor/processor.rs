@@ -582,6 +582,18 @@ pub struct VirtualStateProcessor {
     /// version 10) may be accepted, over `palw_gen_v1` ([`Self::palw_gen_lane_open_at`]); read by the
     /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
     pub(super) palw_fp_job_v5: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.6 stage 2: `Params::palw_fp_prefix_state_fence()`** — the height from which a prefix-state claim (FP job
+    /// version 11) may be accepted. `None` on every shipped preset.
+    pub(super) palw_fp_prefix_state: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint_fence()`** — the height from which a constrained claim (FP
+    /// job version 6) may be accepted. `None` on every shipped preset.
+    pub(super) palw_fp_decode_constraint: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.5: `Params::palw_fp_constraint_v2_fence()`** — the height from which a constraint of the second form
+    /// is admitted. `None` on every shipped preset.
+    pub(super) palw_fp_constraint_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.9: `Params::palw_fp_tokenizer_match_fence()`** — the height from which a commitment's tokenizer must be its
+    /// class's listed one. `None` on every shipped preset.
+    pub(super) palw_fp_tokenizer_match: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1150,6 +1162,10 @@ impl VirtualStateProcessor {
             palw_held_context: params.palw_held_context_fence(),
             palw_fp_decode_rules: params.palw_fp_decode_rules_fence(),
             palw_fp_job_v5: params.palw_fp_job_v5_fence(),
+            palw_fp_prefix_state: params.palw_fp_prefix_state_fence(),
+            palw_fp_decode_constraint: params.palw_fp_decode_constraint_fence(),
+            palw_fp_constraint_v2: params.palw_fp_constraint_v2_fence(),
+            palw_fp_tokenizer_match: params.palw_fp_tokenizer_match_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
@@ -6989,6 +7005,15 @@ impl VirtualStateProcessor {
                 },
                 // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
                 logits_q24: state.class_commits_q24_logits_v1(class_id),
+                // RFC-0001 §2.6 stage 2 and §2.9, at the ACCEPTING block's DAA.
+                prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
+                // ADR-0096 Decision 8 and RFC-0001 §2.5, at the ACCEPTING block's DAA.
+                constraint_armed: self.palw_fp_decode_constraint.is_some_and(|fence| fence.is_active(block_daa)),
+                constraint_v2_armed: self.palw_fp_constraint_v2.is_some_and(|fence| fence.is_active(block_daa)),
+                tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                    self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                    state.class_tokenizer_listing_v1(class_id),
+                ),
             },
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_held_context_at(block_daa),
@@ -7423,6 +7448,14 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **ADR-0096 Decision 7: below `palw_fp_decode_constraint` a constrained decode close is dropped by name**, first
+            // and charged nothing, for the generative objects' reason above.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_constrained_decode_v1(&object)
+                && !self.palw_fp_decode_constraint_at(point.daa_score)
+            {
+                info!("Block {block}: a constrained decode close was dropped by name below palw_fp_decode_constraint, and the block stands (ADR-0096)");
+                continue;
+            }
             // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is dropped by name**, first and
             // charged nothing, for the generative objects' reason above.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score) {
@@ -7496,11 +7529,19 @@ impl VirtualStateProcessor {
             }
             // **RFC-0004 A5: a composite candidate's admission sizes an IR program too**, so it shares the
             // block's one place at admission sizing with the IR registrations: a second is dropped by name.
+            // **RFC-0001 §2.10: an adapter class listing sizes one too** (the same admission, over the class's
+            // composite), so below `palw_adapter_class_v1` it is dropped by name first and past it it shares the place.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_adapter_class_v1(&object)
+                && !self.palw_adapter_class_at(point.daa_score)
+            {
+                info!("Block {block}: an adapter class listing was dropped by name below palw_adapter_class_v1, and the block stands (RFC-0001 §2.10)");
+                continue;
+            }
             let sizes_a_composite = matches!(
                 &object,
                 kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, .. }
                     if payload.artifact.composite().is_some()
-            );
+            ) || kaspa_consensus_core::palw_state_v2::palw_object_is_adapter_class_v1(&object);
             if tir_registration_gated && sizes_a_composite {
                 info!(
                     "Block {block}: a second composite candidate or IR registration was dropped by name, and the block stands: one a \
@@ -8073,6 +8114,13 @@ impl VirtualStateProcessor {
                 if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } =
                     &object
                     && let Err(why) = self.palw_improvement_candidate_is_signed(&folded, payload, submitter, signature)
+                {
+                    info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                    continue;
+                }
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature } =
+                    &object
+                    && let Err(why) = self.palw_adapter_listing_is_signed(&folded, payload, lister, signature)
                 {
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                     continue;
@@ -9744,6 +9792,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score))
+                            })
+                            // ADR-0096 Decision 7: likewise a constrained decode proof below `palw_fp_decode_constraint`.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_constrained_decode_v1() && !self.palw_fp_decode_constraint_at(point.daa_score))
                             });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
@@ -10073,6 +10126,12 @@ impl VirtualStateProcessor {
                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score) {
                         return Err(format!(
                             "court {session_id}: a generative close is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
+                        ));
+                    }
+                    // ADR-0096 Decision 7: a constrained decode close likewise below `palw_fp_decode_constraint`.
+                    if proof.is_constrained_decode_v1() && !self.palw_fp_decode_constraint_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: a constrained decode close is refused: palw_fp_decode_constraint is not in force at this block (ADR-0096)"
                         ));
                     }
                     // RFC-0004 A6: an evaluation close likewise below `palw_improvement_v1`.
@@ -12521,6 +12580,26 @@ impl VirtualStateProcessor {
                         .improvement_candidate_acceptance_v1(payload, rules)
                         .map_err(|why| format!("candidate {} is not admissible: {why} (RFC-0004 §6)", payload.class_id))?;
                 }
+                // **RFC-0001 §2.10 (ADR-0163): an adapter class's listing** — the lister's signature, then the same
+                // acceptance half a composite candidate meets (the parent's family, the composite rule, the
+                // reference, every terminal close carriable in the composite form).
+                Obj::AdapterClassListed { payload, lister, signature } => {
+                    if !self.palw_adapter_class_at(point.daa_score) {
+                        return Err("an adapter class listing is refused: palw_adapter_class_v1 is not in force at this block (RFC-0001 §2.10)".to_string());
+                    }
+                    self.palw_adapter_listing_is_signed(state, payload.as_ref(), lister, signature)?;
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err("an adapter class listing on a network with no V2 bundle".to_string());
+                    };
+                    let rules = kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeAdmissionV1 {
+                        court: self.palw_kary_court_active_at(point.daa_score),
+                        carriable: kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court),
+                        work_cap: kaspa_consensus_core::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1,
+                    };
+                    state
+                        .adapter_class_acceptance_v1(payload, rules)
+                        .map_err(|why| format!("adapter class {} is not admissible: {why} (RFC-0001 §2.10)", payload.class_id))?;
+                }
                 // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
                 // The ride list proved a signature is present and the shape is the object's; here
                 // the signature is verified under the declared executor key, over the object's own
@@ -12739,6 +12818,29 @@ impl VirtualStateProcessor {
             signature,
             kaspa_consensus_core::palw_improve_candidate_v1::PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1,
             "a candidate",
+        )
+    }
+
+    /// **RFC-0001 §2.10: the lister bond's signature over an adapter class listing.**
+    fn palw_adapter_listing_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        payload: &kaspa_consensus_core::palw_adapter_class_v1::PalwAdapterClassListingV1,
+        lister: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let message = kaspa_consensus_core::palw_adapter_class_v1::palw_adapter_listing_message_v1(
+            &self.palw_network_domain_v2(),
+            payload,
+            lister,
+        );
+        self.palw_improvement_check_bond_signature(
+            state,
+            lister,
+            &message,
+            signature,
+            kaspa_consensus_core::palw_adapter_class_v1::PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1,
+            "an adapter class listing",
         )
     }
 
@@ -14116,6 +14218,14 @@ impl VirtualStateProcessor {
 
     /// **RFC-0003 decision 22's held leaf challenge, read off the bundle's mirror**
     /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
+    fn palw_fp_decode_constraint_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.fp_decode_constraint_active_at(daa_score))
+    }
+
+    fn palw_adapter_class_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.adapter_class_active_at(daa_score))
+    }
+
     fn palw_held_close_chunks_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.held_close_chunks_active_at(daa_score))
     }
@@ -15746,6 +15856,15 @@ impl VirtualStateProcessor {
                 },
                 // RFC-0001 §A.3 / RFC-0003 §I.3: whether the class commits its logits in Q24.
                 logits_q24: state.class_commits_q24_logits_v1(class_id),
+                // RFC-0001 §2.6 stage 2 and §2.9, at the ACCEPTING block's DAA.
+                prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
+                // ADR-0096 Decision 8 and RFC-0001 §2.5, at the ACCEPTING block's DAA.
+                constraint_armed: self.palw_fp_decode_constraint.is_some_and(|fence| fence.is_active(block_daa)),
+                constraint_v2_armed: self.palw_fp_constraint_v2.is_some_and(|fence| fence.is_active(block_daa)),
+                tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                    self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                    state.class_tokenizer_listing_v1(class_id),
+                ),
             },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside
@@ -15790,6 +15909,14 @@ impl VirtualStateProcessor {
                     // The class's logit unit, as the FP walk asks it (RFC-0001 §A.3): an evaluation claim's
                     // stand-in job meets the same decode-control offer as any V4 job on its class.
                     logits_q24: state.class_commits_q24_logits_v1(class_id),
+                    // An evaluation claim is not a prefix-state claim; its class's tokenizer listing binds it as any job's.
+                    prefix_state_armed: false,
+                    constraint_armed: false,
+                    constraint_v2_armed: false,
+                    tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(
+                        self.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(block_daa)),
+                        state.class_tokenizer_listing_v1(class_id),
+                    ),
                 },
                 self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
                 self.palw_held_context_at(block_daa),
@@ -20171,6 +20298,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::TirSeatReadinessProved { .. } => "TirSeatReadinessProved",
         O::GenShardCourtAccused { .. } => "GenShardCourtAccused",
         O::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
+        O::AdapterClassListed { .. } => "AdapterClassListed",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

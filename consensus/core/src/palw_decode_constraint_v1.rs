@@ -175,9 +175,16 @@ impl PalwDecodeConstraintV1 {
     /// validated automaton cannot index out of range, cannot shift a key bit out of the mask, and
     /// serializes under the ceiling.
     pub fn validate(&self) -> Result<(), PalwDecodeConstraintError> {
+        self.validate_form(PALW_DECODE_CONSTRAINT_VERSION_V1, PALW_CONSTRAINT_MAX_NODES_V1, PALW_CONSTRAINT_MAX_BYTES_V1)
+    }
+
+    /// [`Self::validate`] under a form's own header version and bounds: version 1's (the shipped form) or the second
+    /// form's ([`crate::palw_fp_constraint_v2`], RFC-0001 §2.5). The structural rules are the same; only the version word, the
+    /// automaton's node ceiling and its byte ceiling differ.
+    pub fn validate_form(&self, version: u16, max_nodes: usize, max_bytes: usize) -> Result<(), PalwDecodeConstraintError> {
         let bad = PalwDecodeConstraintError::Invalid;
-        if self.version != PALW_DECODE_CONSTRAINT_VERSION_V1 {
-            return Err(bad("the header version is not 1"));
+        if self.version != version {
+            return Err(bad(if version == PALW_DECODE_CONSTRAINT_VERSION_V1 { "the header version is not 1" } else { "the header version is not the form's" }));
         }
         if self.frames.is_empty() {
             return Err(bad("an automaton has at least one frame"));
@@ -197,7 +204,7 @@ impl PalwDecodeConstraintV1 {
                 return Err(bad("a frame has more nodes than a u16 can name"));
             }
             total_nodes += frame.nodes.len();
-            if total_nodes > PALW_CONSTRAINT_MAX_NODES_V1 {
+            if total_nodes > max_nodes {
                 return Err(bad("more nodes than the automaton ceiling"));
             }
             if frame.start as usize >= frame.nodes.len() {
@@ -242,7 +249,7 @@ impl PalwDecodeConstraintV1 {
             }
         }
         let len = self.to_bytes().len();
-        if len > PALW_CONSTRAINT_MAX_BYTES_V1 {
+        if len > max_bytes {
             return Err(PalwDecodeConstraintError::TooLarge(len));
         }
         Ok(())
@@ -258,11 +265,21 @@ impl PalwDecodeConstraintV1 {
     /// bytes), an automaton that fails [`Self::validate`], and bytes that are not the canonical
     /// serialization of what they parsed to — so one automaton has one id.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PalwDecodeConstraintError> {
-        if bytes.len() > PALW_CONSTRAINT_MAX_BYTES_V1 {
+        Self::from_bytes_form(bytes, PALW_DECODE_CONSTRAINT_VERSION_V1, PALW_CONSTRAINT_MAX_NODES_V1, PALW_CONSTRAINT_MAX_BYTES_V1)
+    }
+
+    /// [`Self::from_bytes`] under a form's own header version and bounds ([`Self::validate_form`]).
+    pub fn from_bytes_form(
+        bytes: &[u8],
+        version: u16,
+        max_nodes: usize,
+        max_bytes: usize,
+    ) -> Result<Self, PalwDecodeConstraintError> {
+        if bytes.len() > max_bytes {
             return Err(PalwDecodeConstraintError::TooLarge(bytes.len()));
         }
         let parsed: Self = borsh::from_slice(bytes).map_err(|e| PalwDecodeConstraintError::Malformed(e.to_string()))?;
-        parsed.validate()?;
+        parsed.validate_form(version, max_nodes, max_bytes)?;
         if parsed.to_bytes() != bytes {
             return Err(PalwDecodeConstraintError::NotCanonical);
         }
@@ -1599,5 +1616,220 @@ mod tests {
              {bare:?} bare automaton loop, {through_table:?} through the `&dyn Fn` table (debug={})",
             cfg!(debug_assertions)
         );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // ADR-0096 Decision 7 as a wire proof kind: the constrained decode close (court proof tag 17)
+    // -----------------------------------------------------------------------------------------
+
+    use crate::palw_fp_constraint_job_v1::{PalwConstrainedDecodeAccusationV1, PalwFpConstraintTailV1, PalwTokenTableV1};
+    use crate::palw_step_refute::check_constrained_decode_token_v1;
+
+    fn token_table() -> PalwTokenTableV1 {
+        PalwTokenTableV1 {
+            entries: (0..VOCAB as u32).map(class_table).collect(),
+            eog_token_ids: EOG_IDS.to_vec(),
+            tokenizer_id: Hash64::from_u64_word(0x70),
+        }
+    }
+
+    /// The claim's constrained job: a V3 job (greedy) whose tail is the constraint and the table's root.
+    fn constrained_job(c: &PalwDecodeConstraintV1, table: &PalwTokenTableV1) -> crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        use crate::palw_freeprompt_v3::*;
+        PalwFreePromptJobV3 {
+            version: crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION,
+            network_domain: Hash64::from_u64_word(1),
+            class_id: Hash64::from_u64_word(2),
+            executor_bond: crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(3), 0),
+            executor_pubkey: vec![4; 32],
+            operator_id: Hash64::from_u64_word(5),
+            anchor_block: Hash64::from_u64_word(6),
+            anchor_daa: 10,
+            job_nonce: [7; 32],
+            tokenizer_id: table.tokenizer_id,
+            prompt_token_ids_hash: Hash64::from_u64_word(8),
+            prompt_tokens: 3,
+            decode_token_limit: 8,
+            max_context_tokens: 64,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: PALW_DECODE_SEED_GREEDY,
+            temperature_q: PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            tail: Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: c.to_bytes(), table_root: table.root() })),
+        }
+    }
+
+    /// The fixture's binding re-pinned to `job`: its context names the job's id, the trace root is re-committed under it.
+    fn claim_binding(
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        rows: &[Vec<i32>],
+        ids: &[u32],
+    ) -> crate::palw_step_leg::PalwStepBindingV2 {
+        let mut binding = constrained_binding(rows, ids);
+        binding.job_context.job_id = crate::palw_freeprompt_v3::fp_job_id_v3(job);
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows[..ids.len()], ids).expect("a tree");
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        binding
+    }
+
+    /// The challenger's accusation at `position`: the one-disclosure pin, the renderings the rule reads (the prefix, the committed
+    /// id, `extra`), the end-of-generation list, and `witness`.
+    fn accusation(
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        table: &PalwTokenTableV1,
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        rows: &[Vec<i32>],
+        ids: &[u32],
+        position: u32,
+        extra: &[u32],
+        witness: Option<u32>,
+    ) -> PalwConstrainedDecodeAccusationV1 {
+        let mut needed: Vec<u32> = ids[..=position as usize].to_vec();
+        needed.extend_from_slice(extra);
+        needed.sort_unstable();
+        needed.dedup();
+        PalwConstrainedDecodeAccusationV1 {
+            pin: one_disclosure_pin(&binding.job_context, rows, ids, position),
+            job: job.clone(),
+            renderings: needed.iter().map(|id| table.opening_of(*id).expect("an id of the table")).collect(),
+            eog: table.eog_opening().expect("the list"),
+            witness,
+        }
+    }
+
+    /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with
+    /// no witness); an id the constraint forbids is convicted from the ids and the opened renderings alone; the stop rule's
+    /// "nothing is admitted" is convicted only when the challenger shows a lane that was; and a later position is not
+    /// adjudicated from a dead prefix.
+    #[test]
+    fn the_constrained_accusation_clears_an_honest_run_and_convicts_a_forbidden_id() {
+        let c = bracket_digit();
+        let table = token_table();
+        let job = constrained_job(&c, &table);
+        let rows = constrained_rows(6);
+        let ids = honest_run(&c, &rows, PalwDecodeSamplingV2::GREEDY);
+        assert_eq!(ids.len(), 4);
+        let binding = claim_binding(&job, &rows, &ids);
+        for p in 0..4u32 {
+            let honest = accusation(&job, &table, &binding, &rows, &ids, p, &[], None);
+            assert!(
+                matches!(check_constrained_decode_token_v1(&binding, &honest, cap()), Err(PalwStepRefuteError::NoFaultFound)),
+                "honest position {p}"
+            );
+        }
+        // `x` where a digit was due: convicted from the ids and the renderings.
+        let mut altered = ids.clone();
+        altered[1] = b'x' as u32;
+        let binding = claim_binding(&job, &rows, &altered);
+        let a = accusation(&job, &table, &binding, &rows, &altered, 1, &[], None);
+        assert_eq!(check_constrained_decode_token_v1(&binding, &a, cap()).map(|v| v.fault), Ok(fault_at(1)));
+        // A later position is not adjudicated from a dead prefix.
+        let later = accusation(&job, &table, &binding, &rows, &altered, 2, &[], None);
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &later, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        // The stop rule: the lowest EOG id committed where a digit WAS admitted is a lie — convicted only with a witness lane.
+        let mut early_stop = ids.clone();
+        early_stop[1] = EOG_LOW;
+        let binding = claim_binding(&job, &rows, &early_stop);
+        let without = accusation(&job, &table, &binding, &rows, &early_stop, 1, &[], None);
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &without, cap()), Err(PalwStepRefuteError::NoFaultFound)));
+        let witnessed = accusation(&job, &table, &binding, &rows, &early_stop, 1, &[b'3' as u32], Some(b'3' as u32));
+        assert_eq!(check_constrained_decode_token_v1(&binding, &witnessed, cap()).map(|v| v.fault), Ok(fault_at(1)));
+        let bogus = accusation(&job, &table, &binding, &rows, &early_stop, 1, &[b'x' as u32], Some(b'x' as u32));
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &bogus, cap()), Err(PalwStepRefuteError::NoFaultFound)), "a witness the constraint forbids");
+        // The HIGH eog id where the lowest is due is not the rule's token even when nothing is admitted.
+        let mut wrong_eog = ids.clone();
+        wrong_eog[3] = EOG_HIGH;
+        let binding = claim_binding(&job, &rows, &wrong_eog);
+        let a = accusation(&job, &table, &binding, &rows, &wrong_eog, 3, &[], None);
+        assert_eq!(check_constrained_decode_token_v1(&binding, &a, cap()).map(|v| v.fault), Ok(fault_at(3)));
+    }
+
+    /// **The accusation is bound to the claim, never to the challenger**: another job, a rendering that does not open against
+    /// the claim's table root, a forged end-of-generation list and a missing opening are each refused by name — and the
+    /// two-disclosure arm over two admitted lanes still convicts a lane that beats the committed one.
+    #[test]
+    fn the_constrained_accusation_is_bound_to_the_claims_job_and_table() {
+        let c = bracket_digit();
+        let table = token_table();
+        let job = constrained_job(&c, &table);
+        let rows = constrained_rows(6);
+        let ids = honest_run(&c, &rows, PalwDecodeSamplingV2::GREEDY);
+        let binding = claim_binding(&job, &rows, &ids);
+        let ok = accusation(&job, &table, &binding, &rows, &ids, 1, &[], None);
+        // Another job (another constraint) does not hash to the context's job id.
+        let mut other_job = ok.clone();
+        other_job.job.job_nonce = [9; 32];
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &other_job, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        // A rendering altered after it was opened no longer opens against the claim's root.
+        let mut forged = accusation(&job, &table, &binding, &rows, &{ let mut a = ids.clone(); a[1] = b'x' as u32; a }, 1, &[], None);
+        forged.renderings.iter_mut().find(|r| r.id == b'x' as u32).unwrap().rendering = Some(b"3".to_vec());
+        let altered_ids = { let mut a = ids.clone(); a[1] = b'x' as u32; a };
+        let b2 = claim_binding(&job, &rows, &altered_ids);
+        forged.pin = one_disclosure_pin(&b2.job_context, &rows, &altered_ids, 1);
+        assert!(matches!(check_constrained_decode_token_v1(&b2, &forged, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))), "a forged rendering would convict an honest `3`");
+        // A forged end-of-generation list.
+        let mut eog = ok.clone();
+        eog.eog.ids.push(7);
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &eog, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        // A prefix id with no opened rendering.
+        let mut missing = ok.clone();
+        missing.renderings.retain(|r| r.id != ids[0]);
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &missing, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        // A claim that is not a constrained job.
+        let mut plain = ok.clone();
+        plain.job.version = crate::palw_freeprompt_v3::PALW_FP_V3_VERSION;
+        plain.job.tail = None;
+        assert!(matches!(check_constrained_decode_token_v1(&binding, &plain, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        // The two-disclosure arm: a committed digit that a higher-keyed admitted digit beats.
+        let sampling = PalwDecodeSamplingV2::GREEDY;
+        let mut rows2 = constrained_rows(6);
+        let committed_digit = ids[1];
+        let better = if committed_digit == b'4' as u32 { b'5' as u32 } else { b'4' as u32 };
+        rows2[1][better as usize] = 2_000_000;
+        rows2[1][committed_digit as usize] = 10;
+        let binding2 = claim_binding(&job, &rows2, &ids);
+        let mut pin = tiled_pin(&binding2.job_context, &rows2, &ids, 1, better);
+        pin.beat_lane = better;
+        let two = PalwConstrainedDecodeAccusationV1 {
+            pin,
+            job: job.clone(),
+            renderings: [ids[0], ids[1], better].iter().map(|id| table.opening_of(*id).unwrap()).collect(),
+            eog: table.eog_opening().unwrap(),
+            witness: None,
+        };
+        let _ = sampling;
+        assert_eq!(check_constrained_decode_token_v1(&binding2, &two, cap()).map(|v| v.fault), Ok(fault_at(1)));
+        // The same pin naming a FORBIDDEN lane as the beater convicts nobody.
+        let mut forbidden = two.clone();
+        forbidden.pin = tiled_pin(&binding2.job_context, &rows2, &ids, 1, b'x' as u32);
+        forbidden.renderings.push(table.opening_of(b'x' as u32).unwrap());
+        assert!(matches!(check_constrained_decode_token_v1(&binding2, &forbidden, cap()), Err(PalwStepRefuteError::NoFaultFound)));
+    }
+
+    /// **The wire kind**: the variant round-trips, is recognised as a constrained decode close (and as nothing else), and its
+    /// object is the one the fence drops by name below `palw_fp_decode_constraint`.
+    #[test]
+    fn the_constrained_decode_close_is_a_court_proof_kind_the_fence_names() {
+        use crate::palw_court_v2::PalwCourtVerdictProofV2;
+        let c = bracket_digit();
+        let table = token_table();
+        let job = constrained_job(&c, &table);
+        let rows = constrained_rows(6);
+        let ids = honest_run(&c, &rows, PalwDecodeSamplingV2::GREEDY);
+        let binding = claim_binding(&job, &rows, &ids);
+        let proof = PalwCourtVerdictProofV2::DecodeTokenConstrained {
+            binding: binding.clone(),
+            accusation: Box::new(accusation(&job, &table, &binding, &rows, &ids, 1, &[], None)),
+        };
+        let bytes = borsh::to_vec(&proof).unwrap();
+        assert_eq!(borsh::from_slice::<PalwCourtVerdictProofV2>(&bytes).unwrap(), proof);
+        assert!(proof.is_constrained_decode_v1() && !proof.is_tir_v1() && !proof.is_gen_v1() && !proof.is_eval_v1());
+        let object = crate::palw_state_v2::PalwConsensusObjectV2::CourtClosed {
+            session_id: Hash64::from_u64_word(1),
+            verdict: crate::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty,
+            proof,
+        };
+        assert!(crate::palw_state_v2::palw_object_is_constrained_decode_v1(&object));
     }
 }

@@ -820,7 +820,7 @@ pub fn base0_anchored_leaf_check_v1(
         .iter()
         .find(|(i, _)| *i == leaf_index)
         .map(|(_, leaf)| {
-            kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), leaf)
+            kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), leaf)
         })
         .ok_or(ProduceError::Internal("the served material holds no tile at the disputed leaf"))?;
 
@@ -1038,7 +1038,7 @@ pub fn base0_replay_from_checkpoint_capped_v1(
     let leaf_hashes = partial
         .tiles
         .iter()
-        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf)))
+        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf)))
         .collect();
     Ok(Base0CheckpointReplayV1 {
         tiles: partial.tiles,
@@ -1346,7 +1346,7 @@ pub fn base0_dense_step_leaves_capped_v1(
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         let slot = leaves.get_mut(*index as usize)?;
-        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
     }
     Some(leaves)
 }
@@ -1718,7 +1718,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
     committed_leaves: &[Hash64],
 ) -> Result<(), Base0SeatRefusalV1> {
     use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
-    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_tile_leaf_hash_v1};
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_tile_leaf_hash_ctx_v1};
     let profile = &binding.shape_profile;
     let Some(head) = base0_logits_head_v1(profile) else {
         return Ok(());
@@ -1752,7 +1752,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
             let committed = usize::try_from(first + u64::from(tile_index)).ok().and_then(|at| committed_leaves.get(at));
-            if committed != Some(&step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf)) {
+            if committed != Some(&step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf)) {
                 return Err(refused);
             }
         }
@@ -2550,7 +2550,7 @@ mod tests {
             let slot = lying.tiles.iter_mut().find(|(i, _)| *i == index).expect("the capture holds the tile");
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             lying.leaves[index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), &slot.1);
         }
         let lying_binding = crate::legs::base0_binding_from_capture_v1(
             &profile,
@@ -2815,7 +2815,7 @@ mod tests {
             let Some(slot) = lying.tiles.iter_mut().find(|(i, _)| *i == index) else { continue };
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             let leaf_hash =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), &slot.1);
             lying.leaves[index as usize] = leaf_hash;
             let binding = crate::legs::base0_binding_from_capture_v1(
                 &profile,

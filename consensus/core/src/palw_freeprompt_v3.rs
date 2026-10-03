@@ -361,6 +361,12 @@ pub enum PalwFpJobTailV1 {
     V5(crate::palw_fp_job_v5::PalwFpV5TailV1),
     /// An evaluation job (version 9, RFC-0004 §7.2): the job the chain derives the claim's context from.
     Eval(Box<crate::palw_improve_eval_v1::PalwEvalJobV1>),
+    /// **A prefix-state job (version 11, RFC-0001 §2.6 stage 2)**: the KV prefix state the run consumed — a V4 job
+    /// whose credit is the new positions only ([`crate::palw_fp_prefix_v1`]).
+    Prefix(PalwFpPrefixStateV1),
+    /// **A constrained job (version 6, ADR-0096 Decision 7, RFC-0001 §2.5)**: the constraint's canonical bytes
+    /// ([`crate::palw_fp_constraint_job_v1`]) — a V3 job (no decode rules) whose committed token is the admitted argmax.
+    Constraint(crate::palw_fp_constraint_job_v1::PalwFpConstraintTailV1),
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -400,6 +406,8 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
             Some(PalwFpJobTailV1::Gen(tail)) => borsh::BorshSerialize::serialize(tail.as_ref(), writer)?,
             Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
+            Some(PalwFpJobTailV1::Prefix(state)) => borsh::BorshSerialize::serialize(state, writer)?,
+            Some(PalwFpJobTailV1::Constraint(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             None => {}
         }
         Ok(())
@@ -437,8 +445,15 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         // §I.4) at its seed and body, with no decode rules between.
         let (v5, eval) = (crate::palw_fp_job_v5::PALW_FP_V5_VERSION, crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION);
         let gen_version = crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION;
-        if version == PALW_FP_V4_VERSION || version == v5 || version == eval {
+        let prefix = crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        if version == PALW_FP_V4_VERSION || version == v5 || version == eval || version == prefix {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        }
+        if version == prefix {
+            job.tail = Some(PalwFpJobTailV1::Prefix(borsh::BorshDeserialize::deserialize_reader(reader)?));
+        }
+        if version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            job.tail = Some(PalwFpJobTailV1::Constraint(borsh::BorshDeserialize::deserialize_reader(reader)?));
         }
         if version == v5 {
             job.tail = Some(PalwFpJobTailV1::V5(borsh::BorshDeserialize::deserialize_reader(reader)?));
@@ -476,6 +491,24 @@ impl PalwFreePromptJobV3 {
         self.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION
     }
 
+    /// **Does this job decode under FP Job V4's rules** — its `DecodeConfigV4` and the V4 pipeline? A V4 job, and the
+    /// prefix-state job (version 11), which embeds one unchanged. What every seat's replay rule and every engine's
+    /// pre-run check asks, so a prefix-state claim is replayed as it was decoded.
+    pub fn decodes_under_v4_rules(&self) -> bool {
+        self.is_v4() || self.is_prefix_state()
+    }
+
+    /// Is this a constrained job (ADR-0096 Decision 7: version 6, a V3 job whose committed token is the argmax over the
+    /// lanes its constraint admits)?
+    pub fn is_constraint(&self) -> bool {
+        self.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
+    }
+
+    /// Is this a prefix-state job (RFC-0001 §2.6 stage 2: version 11, a V4 job naming the KV prefix it consumed)?
+    pub fn is_prefix_state(&self) -> bool {
+        self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
+    }
+
     /// Is this a tensor job (RFC-0003 §I.4: FP job version 10, an image or an embedding)?
     pub fn is_gen_tensor(&self) -> bool {
         self.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION
@@ -492,10 +525,14 @@ impl PalwFreePromptJobV3 {
     pub fn decoder_v1(&self) -> crate::palw_decode_pipeline_v4::PalwFpDecoderV1 {
         // A V5 job decodes under its V4 rules (RFC-0003 §II.2.1: V5 embeds V4 unchanged), and so does an
         // evaluation job (RFC-0004 §7.2).
-        match (&self.decode, self.is_v4() || self.is_v5() || self.is_eval()) {
+        match (&self.decode, self.is_v4() || self.is_v5() || self.is_eval() || self.is_prefix_state()) {
             (Some(decode), true) => {
                 crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
             }
+            // A constrained job (ADR-0096 Decision 7) is the V3 rule under its mask, which a host holding the class's
+            // token table opens as a scope around the run ([`crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`]).
+            _ if self.is_constraint() => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit)
+                .with_constraint(crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1()),
             _ => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit),
         }
     }
@@ -516,6 +553,14 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     // RFC-0004 §7.2: an evaluation job, under its own.
     if job.version == crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION {
         return crate::palw_improve_eval_v1::fp_job_id_eval_carried_v1(job);
+    }
+    // RFC-0001 §2.6 stage 2: a prefix-state job, under its own domain.
+    if job.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION {
+        return crate::palw_fp_prefix_v1::fp_job_id_prefix_v1(job);
+    }
+    // ADR-0096 Decision 7: a constrained job, under its own.
+    if job.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+        return crate::palw_fp_constraint_job_v1::fp_job_id_constraint_v1(job);
     }
     // RFC-0003 §I.4: a tensor job is named by the generative job's own id.
     if job.version == crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION {
@@ -1554,6 +1599,12 @@ pub enum PalwFpV3Error {
     /// own reason.
     #[error("the evaluation claim is refused: {0}")]
     EvaluationClaim(String),
+    /// A prefix-state claim (version 11) the lane's rules refuse, by name ([`crate::palw_fp_prefix_v1`]).
+    #[error("prefix-state claim: {0}")]
+    PrefixStateClaim(String),
+    /// **ADR-0096 Decision 7: a constrained job (version 6) the lane refuses**, by the rule's own reason.
+    #[error("a constrained job (FP job version 6) is refused: {0}")]
+    ConstraintClaim(String),
     /// **RFC-0003 §I.4: a tensor claim the generative lane refuses**, by the lane's own reason
     /// (`palw_gen_claim_v1`).
     #[error("the tensor claim is refused: {0}")]
@@ -2222,6 +2273,9 @@ pub struct PalwFpWorkerRequestV3 {
     /// sequence of the job's decode config, refusing a string that encodes to nothing or past the
     /// 16-token bound. Local to the gateway ↔ worker frame; never on chain: the job carries ids only.
     pub stop_texts: Vec<Vec<u8>>,
+    /// **ADR-0096 Decision 7: the decode constraint's canonical bytes** — `Some` exactly on a constrained request (version
+    /// [`crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION`]), copied onto the job's tail verbatim.
+    pub constraint: Option<Vec<u8>>,
 }
 
 impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
@@ -2250,6 +2304,9 @@ impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
             borsh::BorshSerialize::serialize(&self.stop_texts, writer)?;
+        }
+        if self.version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            borsh::BorshSerialize::serialize(self.constraint.as_deref().unwrap_or_default(), writer)?;
         }
         Ok(())
     }
@@ -2282,10 +2339,14 @@ impl borsh::BorshDeserialize for PalwFpWorkerRequestV3 {
             trace_scheme_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         };
         if version == PALW_FP_V4_VERSION {
             request.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
             request.stop_texts = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        }
+        if version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
+            request.constraint = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
         Ok(request)
     }
@@ -2356,7 +2417,11 @@ impl PalwFpWorkerResultV3 {
         // The job is the request's version (V3 or V4, RFC-0001 §A.4), with the request's decode
         // tail and sampler inputs verbatim: a worker that ran another decode config, seed or
         // temperature bound its trace to a job id the caller never asked for.
-        if (self.job.version != PALW_FP_V3_VERSION && self.job.version != PALW_FP_V4_VERSION) || self.job.version != request.version {
+        if (self.job.version != PALW_FP_V3_VERSION
+            && self.job.version != PALW_FP_V4_VERSION
+            && self.job.version != crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION)
+            || self.job.version != request.version
+        {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.job.version, expected: request.version });
         }
         // The decode config is the request's, except that the worker spelled `stop_texts` into
@@ -2375,7 +2440,14 @@ impl PalwFpWorkerResultV3 {
             }
             _ => false,
         };
+        // ADR-0096: a constrained job's constraint is the request's, verbatim.
+        let constraint_is_the_requests = match (&self.job.tail, &request.constraint) {
+            (Some(PalwFpJobTailV1::Constraint(job)), Some(asked)) => &job.constraint == asked && self.job.is_constraint(),
+            (None, None) => !self.job.is_constraint(),
+            _ => false,
+        };
         if !decode_is_the_requests
+            || !constraint_is_the_requests
             || self.job.sampling_seed != request.sampling_seed
             || self.job.temperature_q != request.temperature_q
             || self.job.prompt_mode != request.prompt_mode
@@ -2529,6 +2601,83 @@ pub enum PalwFpWorkerFrameV1 {
     Refused {
         reason: String,
     } = 3,
+    /// **RFC-0001 §2.6/§2.7 — the answer-only terminator** (a request that began with
+    /// [`PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1`]): the ids the decoder selected, with no commitment.
+    /// Node-local; no consensus object is built from it.
+    Answered(Box<PalwFpWorkerAnswerV1>) = 4,
+    /// **RFC-0001 §2.7 stage 2 — the answers of a batch request** ([`PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1`]),
+    /// in request order, each bound to its own request bytes.
+    AnsweredBatch(Vec<PalwFpWorkerAnswerV1>) = 5,
+    /// One id of one request of a batch, as it is selected (`index` is the request's place in the
+    /// batch frame) — what lets the gateway run each candidate's own display rule over its own ids.
+    BatchToken { index: u32, token_id: u32, rendered: Vec<u8> } = 6,
+    /// **RFC-0001 §2.8 — the answer to an embedding request** ([`PALW_FP_WORKER_EMBED_MAGIC_V1`]).
+    Embedded(Box<PalwFpWorkerEmbeddingV1>) = 7,
+}
+
+/// A `v3-serve` frame that asks for the POOLED HIDDEN STATE of a prompt (RFC-0001 §2.8): this magic,
+/// then a Borsh [`PalwFpEmbedRequestV1`]. Answered by one [`PalwFpWorkerFrameV1::Embedded`]. Local
+/// serving only — no claim, no commitment, nothing a consensus rule reads.
+pub const PALW_FP_WORKER_EMBED_MAGIC_V1: [u8; 4] = *b"MPEM";
+
+/// The embedding request: the class pins the worker checks against its manifest, the input (text
+/// bytes — an embedding is of the text, not of a chat template — or ids) and the pooling.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpEmbedRequestV1 {
+    pub version: u16,
+    pub class_id: Hash64,
+    pub shape_profile_id: Hash64,
+    pub input: PalwFpWorkerInputV3,
+    /// [`crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1`] as its tag.
+    pub pool: u8,
+}
+
+pub const PALW_FP_EMBED_REQUEST_VERSION_V1: u16 = 1;
+
+/// What an embedding request returns: the raw pooled hidden codes (`i32` per dimension) — the
+/// gateway derives the Q24 unit vector from them with the one shared function.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerEmbeddingV1 {
+    pub request_hash: Hash64,
+    pub prompt_token_ids: Vec<u32>,
+    pub pool: u8,
+    pub raw: Vec<i32>,
+    pub cached_prefix_tokens: u32,
+    pub execute_ms: u64,
+}
+
+/// A `v3-serve` frame that asks for SEVERAL answers decoded together (RFC-0001 §2.7 stage 2): this
+/// magic, then a Borsh `Vec<Vec<u8>>` of ordinary [`PalwFpWorkerRequestV3`] encodings. Answered by
+/// one [`PalwFpWorkerFrameV1::AnsweredBatch`]; nothing streams (the candidates of an `n` request
+/// are not streamed). Same collision argument as [`PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1`].
+pub const PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1: [u8; 4] = *b"MPAB";
+
+/// The most requests one batch frame may carry.
+pub const PALW_FP_WORKER_ANSWER_BATCH_MAX_V1: usize = 16;
+
+/// The first four bytes of a `v3-serve` request frame that asks for the ANSWER ONLY — no fold, no
+/// retention, no commitment (RFC-0001 §2.6). The rest of the frame is a [`PalwFpWorkerRequestV3`]
+/// whose first field is a `u16` version, so these bytes (`0x504D` read as a version) cannot begin a
+/// request and the two framings never collide. A worker that does not know the magic refuses the
+/// frame as "not a v3 request" and the gateway falls back to the committed path.
+pub const PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1: [u8; 4] = *b"MPAO";
+
+/// What an answer-only run returns (RFC-0001 §2.6): not bound to any trace, and never an input to
+/// a claim (I-3).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerAnswerV1 {
+    /// Hash of the request bytes after the magic — the worker is never trusted about what it was asked.
+    pub request_hash: Hash64,
+    pub prompt_token_ids: Vec<u32>,
+    pub output_token_ids: Vec<u32>,
+    pub rendered: Vec<u8>,
+    /// Leading prompt positions served from the KV prefix cache (0: fresh prefill).
+    pub cached_prefix_tokens: u32,
+    pub ended_on_stop_id: bool,
+    /// RFC-0001 §A.3 step 7: the length in ids of the stop sequence that ended the run, when one did
+    /// — derived by the worker from the job's own decode config over the ids it returned.
+    pub stop_sequence_len: Option<u32>,
+    pub execute_ms: u64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2756,10 +2905,15 @@ impl PalwFpCommitmentTxPayloadV3 {
     }
 
     /// **ADR-0145 §6: the prefix-STATE this payload names.** V3 names none, so this is genesis.
-    /// A later payload version that carries [`PalwFpPrefixStateV1`] overrides it; omitting the
+    /// A prefix-state job (version 11) carries [`PalwFpPrefixStateV1`] and overrides it; omitting the
     /// object is still genesis, which is how a miner cannot raise its pay by staying silent.
     pub fn consumed_prefix_state_v1(&self) -> PalwFpPrefixStateV1 {
-        PalwFpPrefixStateV1::genesis(self.commitment.job.class_id)
+        // **RFC-0001 §2.6 stage 2**: a prefix-state job (version 11) carries the object in its tail, inside the
+        // claim id; every other version names none.
+        match &self.commitment.job.tail {
+            Some(PalwFpJobTailV1::Prefix(state)) if self.commitment.job.is_prefix_state() => *state,
+            _ => PalwFpPrefixStateV1::genesis(self.commitment.job.class_id),
+        }
     }
 }
 
@@ -3313,6 +3467,7 @@ mod tests {
             trace_scheme_id: Hash64::from_u64_word(0x5),
             decode: None,
             stop_texts: Vec::new(),
+            constraint: None,
         };
         let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
         let result = PalwFpWorkerResultV3 {
@@ -4537,6 +4692,7 @@ mod job_v4_tests {
             trace_scheme_id: Hash64::from_u64_word(14),
             stop_texts: if decode.is_some() { vec![b"\n\n".to_vec()] } else { Vec::new() },
             decode,
+            constraint: None,
         };
         let old = request(PALW_FP_V3_VERSION, None);
         let new = request(PALW_FP_V4_VERSION, Some(rich()));

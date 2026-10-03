@@ -54,6 +54,7 @@ pub mod context_vector;
 /// it returns is the fact that the court convicted a planted fault and acquitted the honest run.
 pub mod e2e_drill;
 pub mod engine;
+pub mod decode_scheduler;
 pub mod engine_a16;
 pub mod fp_capture;
 pub mod fp_interval;
@@ -72,6 +73,8 @@ pub mod memory_phase;
 pub mod mmap;
 pub mod operands;
 pub mod plan;
+/// RFC-0001 §2.6 stage 1: the node-only KV prefix cache for the answer-only path.
+pub mod prefix_cache;
 pub mod produce;
 pub mod qwen25_a16_backend;
 pub mod qwen36;
@@ -81,6 +84,8 @@ pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
+/// RFC-0001 §2.9: the artifact sidecar v2 (tokenizer.json, chat template spec, generation defaults), read side.
+pub mod sidecar;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
 /// the claim before one step runs.
 pub mod segment_opening;

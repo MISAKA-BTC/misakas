@@ -2776,15 +2776,12 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_rules`
     /// shape directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**, exactly as the
-    /// decode-rules fence above is refused: none of the three halves exists on the path that
-    /// would apply it — consensus-core carries no constraint automaton and no version-6 job, the
-    /// court has no v3 refutation arm, and no engine masks a decode. Arming it changes exactly
-    /// one observable thing today — `GetPalwProducerFactsResponse::fp_decode_constraint_armed`,
-    /// which an entrance would read as "serve `response_format` committed" — so the fence's only
-    /// reachable effect would be a format the seat does not replay, which is a claim no seat can
-    /// reproduce. The refusal lifts when the build carries all three halves (ADR-0096 §6 steps
-    /// 3–4).
+    /// **BUILT (RFC-0001 §2.5, lane U, 2026-10-03) and still dormant** — `None` on every preset and in no testnet-12 flag-day
+    /// list. Armed, a free-prompt job may be FP job version 6 carrying a decode constraint
+    /// ([`crate::palw_fp_constraint_job_v1`]): the committed token is the argmax over the lanes the constraint admits, the
+    /// seat replays it through the same mask, and `palw_fp_constraint_v2` may ride it. What this build does NOT yet carry is
+    /// the court's third arm as a proof kind on the wire (the pure check, `check_tiled_decode_token_refutation_v3`, exists):
+    /// a lying constrained claim is stopped by the seat quorum. [`Self::validate_palw_v2`] refuses it off ConsensusV2.
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
     /// **ADR-0099 Decision 5's fence: a court opened at a NAMED leaf, decided in one move.**
@@ -2882,6 +2879,41 @@ pub struct Params {
     /// vision-language class is a generative class) and `palw_fp_decode_rules` (V5 embeds V4) in
     /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
     pub palw_fp_job_v5: Option<ForkActivation>,
+
+    /// **RFC-0001 §2.6 stage 2: the prefix-STATE receipt** (ADR-0145 §6). Past this height a free-prompt claim may be FP job
+    /// version 11: a V4 job whose tail names the KV prefix state it consumed ([`crate::palw_fp_prefix_v1`]), credited for the new
+    /// positions only. Below it, and on every network that leaves it `None`, such a job is refused by name.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both fingerprints, the whole option
+    /// collapsed from `Some(never())`. Requires `palw_fp_derived_work` (the price reads the state) and `palw_fp_decode_rules` (V11
+    /// embeds V4) in force at or below it ([`Self::validate_palw_fp_prefix_state_v1`]).
+    pub palw_fp_prefix_state: Option<ForkActivation>,
+
+    /// **RFC-0001 §2.9: the job's `tokenizer_id` must be the class's listed tokenizer** ([`crate::palw_fp_tokenizer_v1`]). Past this
+    /// height a free-prompt commitment on a class whose registry listing carries a tokenizer commitment (an IR class: its record's
+    /// `tokenizer_id`) is skipped by name unless its job names that tokenizer; a class that lists none is unconstrained, as before.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only. Requires `palw_tir_v1` (the listing) and
+    /// `palw_fp_decode_rules` in force at or below it ([`Self::validate_palw_fp_tokenizer_match_v1`]).
+    pub palw_fp_tokenizer_match: Option<ForkActivation>,
+
+    /// **RFC-0001 §2.5: the decode constraint's second subset** ([`crate::palw_fp_constraint_v2`]) — discriminated `anyOf`/`oneOf`,
+    /// non-recursive `$ref`, numeric ranges, with its own automaton bounds. Past this height a constraint of automaton version 2 may be
+    /// carried; below it only version 1.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only. Requires `palw_fp_decode_constraint` (the
+    /// carrier of every constraint) and `palw_fp_decode_rules` in force at or below it ([`Self::validate_palw_fp_constraint_v2_v1`]) —
+    /// and `palw_fp_decode_constraint` is itself unarmable by a build without ADR-0096 Decisions 6-8, so this one is too.
+    pub palw_fp_constraint_v2: Option<ForkActivation>,
+
+    /// **RFC-0001 §2.10: an adapter class listing** ([`crate::palw_adapter_class_v1`], ADR-0163) — a derived class, the registered
+    /// parent plus an adapter section, listed on its own and not through an improvement line. Past this height an
+    /// `AdapterClassListed` object records the composite reference of an IR class registered over that root.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only. Requires `palw_tir_v1` and
+    /// `palw_improvement_v1` (the composite machinery: possession, openings) in force at or below it
+    /// ([`Self::validate_palw_adapter_class_v1_v1`]).
+    pub palw_adapter_class_v1: Option<ForkActivation>,
 
     /// **RFC-0002 Phase F, the second IR fence** (`crate::palw_tir_fence2_v1`): the consensus half of
     /// the fixes after the DAA-2,000 release — ref2's H7 (the `TopK` row of the box demand and the
@@ -3936,6 +3968,14 @@ impl Params {
         self.validate_palw_gen_v1()?;
         // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
         self.validate_palw_fp_job_v5_v1()?;
+        // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
+        self.validate_palw_fp_prefix_state_v1()?;
+        // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
+        self.validate_palw_fp_tokenizer_match_v1()?;
+        // **palw_fp_constraint_v2** (`crate::palw_fp_constraint_v2`).
+        self.validate_palw_fp_constraint_v2_v1()?;
+        // **palw_adapter_class_v1** (`crate::palw_adapter_class_v1`).
+        self.validate_palw_adapter_class_v1_v1()?;
         // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
         self.validate_palw_tir_fence2()?;
         // **RFC-0006, layer-sharded panels' refusals** (`crate::palw_tir_shard_v1`).
@@ -4933,20 +4973,31 @@ impl Params {
         // work over the derived graph, every free-prompt engine and seat selects through
         // `PalwFpDecoderV1`, and the doors admit one job version per height. What arming still
         // requires is `validate_palw_fp_decode_rules_v1`'s, asked on both paths above.
-        // **ADR-0096 Decisions 6–8 cannot be armed by this build either, and the fence says so**
-        // — the same shape as the refusal directly above, for the same reason: a configuration
-        // that reads as "armed" while no job may carry a constraint, no court can try one and no
-        // engine masks one would tell every entrance to serve a committed format that no seat
-        // replays. `never()` is absence and is exempt.
+        // **ADR-0096 Decisions 6–8: the refusal is LIFTED** (RFC-0001 §2.5, lane U, 2026-10-03). It stood because no job could
+        // carry a constraint, no engine masked a decode and no seat replayed one. This build carries the constrained job
+        // (FP job version 6, `crate::palw_fp_constraint_job_v1`), the mask in every producer's driver and every seat's
+        // replay rule, and the court's third arm as a pure check (`check_tiled_decode_token_refutation_v3`). What arming
+        // still requires is the fence's own prerequisites below. (The court arm is not yet a proof kind on the wire: a
+        // lying constrained claim is stopped by the seat quorum, and convicted only where a challenger files the existing
+        // decode-token refutation — see ADR-0096 and the lane report.)
         if let Some(activation) = self.palw_fp_decode_constraint
             && activation != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
         {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_fp_decode_constraint is armed and this build cannot carry ADR-0096 Decisions 6-8: consensus-core has no \
-                 constraint automaton and no version-6 free-prompt job (no job may carry a constraint_id), the court has no \
-                 v3 refutation arm, and no engine masks a decode — the fence may only be armed by a build that carries all \
-                 three",
-            ));
+            return Err(PalwModeV2Error::Invalid("palw_fp_decode_constraint is armed on a network that is not ConsensusV2"));
+        }
+        {
+            let mirror = match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => bundle.state.fp_decode_constraint_from_daa(),
+                _ => None,
+            };
+            let armed = self.palw_fp_decode_constraint.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+            if mirror != armed && matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_fp_decode_constraint disagrees with the V2 bundle's mirror: mirror it with \
+                     Params::sync_palw_fp_decode_constraint_v1 after the bundle is assembled",
+                ));
+            }
         }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
         // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).
@@ -6175,6 +6226,18 @@ impl Params {
         // FP Job V5, likewise.
         if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
             self.palw_fp_job_v5 = None;
+        }
+        if self.palw_fp_prefix_state == Some(ForkActivation::never()) {
+            self.palw_fp_prefix_state = None;
+        }
+        if self.palw_fp_tokenizer_match == Some(ForkActivation::never()) {
+            self.palw_fp_tokenizer_match = None;
+        }
+        if self.palw_fp_constraint_v2 == Some(ForkActivation::never()) {
+            self.palw_fp_constraint_v2 = None;
+        }
+        if self.palw_adapter_class_v1 == Some(ForkActivation::never()) {
+            self.palw_adapter_class_v1 = None;
         }
         // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
         if self.palw_tir_fence2 == Some(ForkActivation::never()) {
@@ -9463,6 +9526,10 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_state,
+            palw_fp_tokenizer_match,
+            palw_fp_constraint_v2,
+            palw_adapter_class_v1,
             palw_tir_fence2,
             palw_tir_shard_v1,
             palw_improvement_v1,
@@ -9707,6 +9774,10 @@ impl Params {
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
+            ("palw_fp_prefix_state", *palw_fp_prefix_state),
+            ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
+            ("palw_fp_constraint_v2", *palw_fp_constraint_v2),
+            ("palw_adapter_class_v1", *palw_adapter_class_v1),
             ("palw_tir_fence2", *palw_tir_fence2),
             ("palw_tir_shard_v1", *palw_tir_shard_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
@@ -9964,6 +10035,26 @@ impl Params {
         if let Some(v5) = self.palw_fp_job_v5 {
             h.write(b"palw_fp_job_v5");
             h.write(v5.daa_score().to_le_bytes());
+        }
+        // palw_fp_prefix_state, NAMED likewise.
+        if let Some(at) = self.palw_fp_prefix_state {
+            h.write(b"palw_fp_prefix_state");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // palw_fp_tokenizer_match, NAMED likewise.
+        if let Some(at) = self.palw_fp_tokenizer_match {
+            h.write(b"palw_fp_tokenizer_match");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // palw_fp_constraint_v2, NAMED likewise.
+        if let Some(at) = self.palw_fp_constraint_v2 {
+            h.write(b"palw_fp_constraint_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // palw_adapter_class_v1, NAMED likewise.
+        if let Some(at) = self.palw_adapter_class_v1 {
+            h.write(b"palw_adapter_class_v1");
+            h.write(at.daa_score().to_le_bytes());
         }
         // RFC-0002 Phase F's second IR fence, NAMED likewise: it changes admission, the credited work
         // and the DA court from its height.
@@ -10511,6 +10602,10 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_state,
+            palw_fp_tokenizer_match,
+            palw_fp_constraint_v2,
+            palw_adapter_class_v1,
             palw_tir_fence2,
             palw_tir_shard_v1,
             palw_improvement_v1,
@@ -11216,6 +11311,22 @@ impl Params {
         if let Some(activation) = palw_fp_job_v5.as_mut() {
             fork(activation, visit);
         }
+        // palw_fp_prefix_state. Some-only.
+        if let Some(activation) = palw_fp_prefix_state.as_mut() {
+            fork(activation, visit);
+        }
+        // palw_fp_tokenizer_match. Some-only.
+        if let Some(activation) = palw_fp_tokenizer_match.as_mut() {
+            fork(activation, visit);
+        }
+        // palw_fp_constraint_v2. Some-only.
+        if let Some(activation) = palw_fp_constraint_v2.as_mut() {
+            fork(activation, visit);
+        }
+        // palw_adapter_class_v1. Some-only.
+        if let Some(activation) = palw_adapter_class_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0002 Phase F's second IR fence: Some-only, a bare height.
         if let Some(activation) = palw_tir_fence2.as_mut() {
             fork(activation, visit);
@@ -11674,6 +11785,10 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_state,
+            palw_fp_tokenizer_match,
+            palw_fp_constraint_v2,
+            palw_adapter_class_v1,
             palw_tir_fence2,
             palw_tir_shard_v1,
             palw_improvement_v1,
@@ -12423,6 +12538,26 @@ impl Params {
             h.write(b"palw_fp_job_v5");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // palw_fp_prefix_state, Some-only for the same reason.
+        if let Some(activation) = palw_fp_prefix_state {
+            h.write(b"palw_fp_prefix_state");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // palw_fp_tokenizer_match, Some-only for the same reason.
+        if let Some(activation) = palw_fp_tokenizer_match {
+            h.write(b"palw_fp_tokenizer_match");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // palw_fp_constraint_v2, Some-only for the same reason.
+        if let Some(activation) = palw_fp_constraint_v2 {
+            h.write(b"palw_fp_constraint_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // palw_adapter_class_v1, Some-only for the same reason.
+        if let Some(activation) = palw_adapter_class_v1 {
+            h.write(b"palw_adapter_class_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // RFC-0002 Phase F's second IR fence, Some-only: every shipped preset leaves it `None` and
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_tir_fence2 {
@@ -13111,6 +13246,10 @@ impl Params {
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
+            palw_fp_prefix_state: self.palw_fp_prefix_state,
+            palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
+            palw_fp_constraint_v2: self.palw_fp_constraint_v2,
+            palw_adapter_class_v1: self.palw_adapter_class_v1,
             palw_tir_fence2: self.palw_tir_fence2,
             palw_tir_shard_v1: self.palw_tir_shard_v1,
             palw_improvement_v1: self.palw_improvement_v1,
@@ -14178,6 +14317,10 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_state: None,
+    palw_fp_tokenizer_match: None,
+    palw_fp_constraint_v2: None,
+    palw_adapter_class_v1: None,
     palw_tir_fence2: None,
     palw_tir_shard_v1: None,
     palw_improvement_v1: None,
@@ -14442,6 +14585,10 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_state: None,
+    palw_fp_tokenizer_match: None,
+    palw_fp_constraint_v2: None,
+    palw_adapter_class_v1: None,
     palw_tir_fence2: None,
     palw_tir_shard_v1: None,
     palw_improvement_v1: None,
@@ -14688,6 +14835,10 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_state: None,
+    palw_fp_tokenizer_match: None,
+    palw_fp_constraint_v2: None,
+    palw_adapter_class_v1: None,
     palw_tir_fence2: None,
     palw_tir_shard_v1: None,
     palw_improvement_v1: None,
@@ -21727,6 +21878,10 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_capped_onboarding_v1();
     // RFC-0006's layer-sharded panels, likewise.
     params.sync_palw_tir_shard_v1();
+    // RFC-0001 §2.10's adapter class listing, likewise.
+    params.sync_palw_adapter_class_v1();
+    // ADR-0096's decode constraint, likewise.
+    params.sync_palw_fp_decode_constraint_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21982,6 +22137,10 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_state: None,
+    palw_fp_tokenizer_match: None,
+    palw_fp_constraint_v2: None,
+    palw_adapter_class_v1: None,
     palw_tir_fence2: None,
     palw_tir_shard_v1: None,
     palw_improvement_v1: None,

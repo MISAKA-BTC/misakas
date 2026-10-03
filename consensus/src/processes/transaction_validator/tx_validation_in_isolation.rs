@@ -54,6 +54,12 @@ impl TransactionValidator {
             // RFC-0003 §I.4.4: the tensor claim's height-free door — `true` only where the ruleset carries
             // `palw_fp_job_v5`; the header-context door decides the height.
             self.palw_fp_job_v5_fence.is_some(),
+            // RFC-0001 §2.6 stage 2: the prefix-state claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_prefix_state`; the header-context door decides the height.
+            self.palw_fp_prefix_state_fence.is_some(),
+            // ADR-0096 Decision 8: the constrained claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_decode_constraint`; the header-context door decides the height.
+            self.palw_fp_decode_constraint_fence.is_some(),
         )?;
         check_transaction_version(tx)
     }
@@ -364,6 +370,10 @@ fn check_transaction_subnetwork(
     palw_improvement_door: bool,
     // RFC-0003 §I.4.4: the ruleset carries `palw_fp_job_v5` (a tensor claim's door) — height-free too.
     palw_gen_door: bool,
+    // RFC-0001 §2.6 stage 2: the ruleset carries `palw_fp_prefix_state` — height-free, as isolation is.
+    palw_prefix_door: bool,
+    // ADR-0096 Decision 8: the ruleset carries `palw_fp_decode_constraint` — height-free.
+    palw_constraint_door: bool,
 ) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
@@ -467,7 +477,7 @@ fn check_transaction_subnetwork(
         // where it carries `palw_improvement_v1`, and every other payload — a claim whose door is shut included —
         // by the lane's own door exactly as before, which refuses both versions by name (`UnsupportedVersion`
         // for a tensor claim, undecodable bytes for an evaluation claim), as a build without the fences does.
-        kaspa_consensus_core::palw_gen_claim_v1::validate_palw_fp_commitment_tx_under_v7(
+        kaspa_consensus_core::palw_fp_constraint_job_v1::validate_palw_fp_commitment_tx_under_v9(
             &tx.payload,
             palw_panel_da_admissible,
             palw_prompt_ids_form,
@@ -481,6 +491,8 @@ fn check_transaction_subnetwork(
             // without the fence. The header-context door decides the height.
             palw_improvement_door,
             palw_gen_door,
+            palw_prefix_door,
+            palw_constraint_door,
         )
         .map_err(TxRuleError::InvalidPalwFpPayload)?;
         Ok(())
@@ -1474,6 +1486,8 @@ mod pq_output_class_enforcement_tests {
                 ),
                 tv.palw_improvement_fence.is_some(),
                 tv.palw_fp_job_v5_fence.is_some(),
+                tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_decode_constraint_fence.is_some(),
             )
         };
         // Isolation: no fence, the V4 shape is refused (as a pre-V4 build refuses its bytes); a
@@ -1636,6 +1650,8 @@ mod pq_output_class_enforcement_tests {
                 ),
                 tv.palw_improvement_fence.is_some(),
                 tv.palw_fp_job_v5_fence.is_some(),
+                tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_decode_constraint_fence.is_some(),
             )
         };
         let header =

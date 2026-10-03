@@ -69,7 +69,7 @@ use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token
 use kaspa_consensus_core::palw_segment_resume_v1::{PalwSegmentClaimV1, PalwSegmentReplayV1, PalwSegmentResumeWindowV1};
 use kaspa_consensus_core::palw_step::{PalwLayerKindV1, PalwShapeProfileV3, canonical_step_coordinates, kv_aux_leaf_count};
 use kaspa_consensus_core::palw_step_leg::{
-    PalwStepBindingV2, step_merkle_range_siblings_capped_v1, step_tile_leaf_hash_v1, verify_binding_v1,
+    PalwStepBindingV2, step_merkle_range_siblings_capped_v1, step_tile_leaf_hash_ctx_v1, verify_binding_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
     PalwBase0DecodeTokensV1, PalwCheckpointKvOperandsV1, PalwTiledDecodeTokensV1, base0_logits_trace_root_v1,
@@ -624,7 +624,7 @@ pub fn base0_replay_segment_opening_v2<K: Base0FpIntervalKernelsV1 + ?Sized>(
             if !proven && kept.is_none() {
                 return Ok(());
             }
-            let hash = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile);
+            let hash = step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &tile);
             if let Some(list) = kept.as_mut() {
                 if list.len() < PALW_SEGMENT_REPLAY_KEPT_LEAVES_V1 {
                     list.push((index, hash));

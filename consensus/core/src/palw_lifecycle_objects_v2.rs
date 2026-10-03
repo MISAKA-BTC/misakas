@@ -322,6 +322,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CandidateSubmitted { .. }
         | PalwConsensusObjectV2::LineageHeadRolledBack { .. }
         | PalwConsensusObjectV2::ImprovementPoolFunded { .. } => Ok(()),
+        // RFC-0001 §2.10 (tag 94): an adapter class listing rides at every height, as the IR and generative
+        // registrations do (A-2); the acceptance walk drops it by name below `palw_adapter_class_v1`, and its
+        // form (state-free) is checked here so a malformed listing is refused before any slot is charged.
+        PalwConsensusObjectV2::AdapterClassListed { payload, .. } => crate::palw_adapter_class_v1::palw_adapter_listing_shape_v1(payload),
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.

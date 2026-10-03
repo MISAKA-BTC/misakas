@@ -159,6 +159,37 @@ pub fn build_prompt(manifest: &PalwFpWorkerManifestV1, messages: &[Turn]) -> Res
     })
 }
 
+/// **RFC-0001 §2.9: the prompt under the artifact sidecar's chat template.** The same roles and the
+/// same entrance rules as [`build_prompt`], rendered by the declarative spec
+/// ([`misaka_palw_base0::sidecar::render_chat_template_spec_v1`]); every control token is looked up by
+/// name in the worker's own manifest. `ids` is `(plain, tools)`: the template's id, and the id of a
+/// prompt that spoke the tool convention (two transforms are two ids).
+pub fn build_prompt_with_sidecar_spec(
+    manifest: &PalwFpWorkerManifestV1,
+    spec: &misaka_palw_base0::sidecar::ChatTemplateSpecV1,
+    ids: (&'static str, &'static str),
+    tool_turns: &ToolTurns,
+) -> Result<PromptPlan, String> {
+    let messages = &tool_turns.turns;
+    if !messages.iter().any(|m| m.role == "user") {
+        return Err("the request carries no user message".into());
+    }
+    for message in messages {
+        match message.role.as_str() {
+            "system" | "user" | "assistant" => {}
+            other => return Err(format!("unsupported role {other:?} (system|user|assistant)")),
+        }
+    }
+    let turns: Vec<(&str, &str)> = messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+    let plan = misaka_palw_base0::sidecar::render_chat_template_spec_v1(spec, &manifest.special_tokens, &turns)?;
+    Ok(PromptPlan {
+        template_id: if tool_turns.spoke_tool_convention { ids.1 } else { ids.0 },
+        segments: plan.segments,
+        declared_specials: plan.declared_specials,
+        displayed: plan.displayed,
+    })
+}
+
 /// **[`build_prompt`] for turns that may have spoken the tool convention** (ADR-0096 Decision 2).
 ///
 /// The segments are the same — a tool block is a `Text` segment like any other user text, and

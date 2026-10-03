@@ -71,6 +71,9 @@ mod chain;
 mod wire;
 // ADR-0096 Decision 1: the request shape, and every refusal, before the worker.
 mod surface;
+// RFC-0001 §2.7: the worker pool and the per-source bounds.
+mod pool;
+mod tensor;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -151,6 +154,15 @@ const MAX_CONNECTIONS: usize = 64;
 /// **The in-flight queue.** One job runs; at most this many wait for the slot. Past it the answer
 /// is a 503 with a Retry-After, never a queue whose depth silently eats deadlines.
 const MAX_IN_FLIGHT_JOBS: usize = 8;
+/// **The in-flight cap with `processes` job slots** (RFC-0001 §2.7): the slots plus the bounded
+/// queue behind them. One process keeps the cap it always had ([`MAX_IN_FLIGHT_JOBS`], one running
+/// and seven waiting).
+fn in_flight_cap(processes: usize) -> usize {
+    processes + (MAX_IN_FLIGHT_JOBS - 1)
+}
+/// Default per-source bounds (RFC-0001 §2.7): open connections and jobs in flight for one address.
+const DEFAULT_MAX_CONNECTIONS_PER_SOURCE: u32 = 8;
+const DEFAULT_MAX_JOBS_PER_SOURCE: u32 = 4;
 /// The public-job budget window.
 const PUBLIC_BUDGET_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 /// The per-source window (SA-8: secondary).
@@ -240,6 +252,124 @@ struct Config {
     /// When this process started, in Unix seconds — `GET /v1/models` reports it as the model's
     /// `created`, the moment the class became reachable here.
     booted_at_unix: u64,
+    /// **RFC-0001 §2.7 stage 1: resident worker processes for this class** (`--worker-processes`).
+    worker_processes: usize,
+    /// Extra arguments every worker process is started with (`--kv-cache-budget-mib`, …).
+    worker_args: Vec<String>,
+    /// **RFC-0001 §2.6/§2.7: answer a job that will not be committed WITHOUT folding it** (on by
+    /// default; `--no-answer-fast-path` turns it off). A worker that does not serve the path says
+    /// so once and the gateway stops asking.
+    answer_fast_path: bool,
+    /// Per-source open connections and in-flight jobs (RFC-0001 §2.7: connection limits).
+    max_connections_per_source: u32,
+    max_jobs_per_source: u32,
+    /// **RFC-0001 §2.9: the artifact sidecar this gateway reads** (`--sidecar`): its chat template
+    /// (preferred over the built-in one) and its generation defaults (gateway defaults, applied
+    /// through the entrance's own admission).
+    sidecar: Option<SidecarRuntime>,
+}
+
+/// A loaded, verified sidecar and the two template ids it runs under (leaked once at boot: the
+/// prompt plan's id is a `&'static str` and a boot-time constant is the honest lifetime).
+struct SidecarRuntime {
+    digest: String,
+    path: PathBuf,
+    template: Option<misaka_palw_base0::sidecar::ChatTemplateSpecV1>,
+    template_ids: Option<(&'static str, &'static str)>,
+    generation: Option<misaka_palw_base0::sidecar::GenerationConfigV1>,
+}
+
+impl SidecarRuntime {
+    fn load(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let side = misaka_palw_base0::sidecar::parse_sidecar_v2(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let template_ids = side.template_id().map(|id| {
+            let plain: &'static str = Box::leak(id.clone().into_boxed_str());
+            let tools: &'static str = Box::leak(format!("{id}+tools").into_boxed_str());
+            (plain, tools)
+        });
+        Ok(Self {
+            digest: faster_hex::hex_string(side.digest().as_byte_slice()),
+            path: path.to_path_buf(),
+            template: side.chat_template,
+            template_ids,
+            generation: side.generation_config,
+        })
+    }
+
+    /// Fill what the request omitted from the sidecar's generation defaults — through the same
+    /// admission as anything else: the sampler's defaults only where the chain has armed it, the
+    /// knobs this lane has no rule for never. Returns the report the response carries.
+    fn apply_defaults(&self, chat: &mut ChatRequest, facts: &chain::ChainFacts) -> serde_json::Value {
+        let mut applied: Vec<String> = Vec::new();
+        let mut not_applied: Vec<serde_json::Value> = Vec::new();
+        if let Some(g) = &self.generation {
+            if chat.max_tokens.is_none() && chat.max_completion_tokens.is_none()
+                && let Some(n) = g.max_new_tokens
+            {
+                chat.max_tokens = Some(n);
+                applied.push("max_new_tokens".to_string());
+            }
+            let sampler = facts.fp_decode_rules_armed;
+            let reason = "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): a sampler default would be refused";
+            macro_rules! fill {
+                ($field:ident, $name:literal) => {
+                    if let Some(v) = g.$field
+                        && chat.$field.is_none()
+                    {
+                        if sampler {
+                            chat.$field = Some(v);
+                            applied.push($name.to_string());
+                        } else {
+                            not_applied.push(serde_json::json!({ "field": $name, "reason": reason }));
+                        }
+                    }
+                };
+            }
+            fill!(temperature, "temperature");
+            fill!(repeat_penalty, "repeat_penalty");
+            fill!(frequency_penalty, "frequency_penalty");
+            fill!(presence_penalty, "presence_penalty");
+            if let Some(n) = g.repeat_last_n
+                && chat.repeat_last_n.is_none()
+            {
+                if sampler {
+                    chat.repeat_last_n = Some(n);
+                    applied.push("repeat_last_n".to_string());
+                } else {
+                    not_applied.push(serde_json::json!({ "field": "repeat_last_n", "reason": reason }));
+                }
+            }
+            if !g.stop.is_empty() && chat.stop.as_ref().is_none_or(|v| v.is_null()) {
+                if sampler {
+                    chat.stop = Some(serde_json::json!(g.stop));
+                    applied.push("stop".to_string());
+                } else {
+                    not_applied.push(serde_json::json!({ "field": "stop", "reason": reason }));
+                }
+            }
+            for (name, present) in [("top_p", g.top_p.is_some()), ("top_k", g.top_k.is_some())] {
+                if present {
+                    not_applied.push(serde_json::json!({ "field": name, "reason": "this lane has no rule for it (ADR-0096 Decision 4)" }));
+                }
+            }
+        }
+        serde_json::json!({
+            "digest": self.digest,
+            "template_id": self.template_ids.map(|(plain, _)| plain),
+            "defaults_applied": applied,
+            "defaults_not_applied": not_applied,
+        })
+    }
+}
+
+/// The template id the gateway advertises: the sidecar's when it has a chat template, the model's
+/// own selection otherwise.
+fn advertised_template_id(config: &Config, manifest: &PalwFpWorkerManifestV1) -> String {
+    match config.sidecar.as_ref().and_then(|s| s.template_ids) {
+        Some((plain, _)) => plain.to_string(),
+        None => wire::template_id_for(manifest).to_string(),
+    }
 }
 
 /// The exposure numbers actually in force for one job: the operator's declaration where they made
@@ -475,9 +605,10 @@ struct ResidentWorker {
 }
 
 impl ResidentWorker {
-    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path) -> Result<Self, String> {
+    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path, extra_args: &[String]) -> Result<Self, String> {
         let mut command = confinement.command(worker);
         command.args(["--mode", "v3-serve", "--trace-out", &trace_out.display().to_string()]);
+        command.args(extra_args);
         // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
         // operator environment, no PATH, and a working directory that is not the operator's home.
         harden_worker_command(&mut command, workdir);
@@ -564,9 +695,158 @@ impl ResidentWorker {
                 PalwFpWorkerFrameV1::Manifest(_) => {
                     return Err("the worker re-announced its manifest mid-session".to_string());
                 }
+                PalwFpWorkerFrameV1::Answered(_)
+                | PalwFpWorkerFrameV1::AnsweredBatch(_)
+                | PalwFpWorkerFrameV1::BatchToken { .. }
+                | PalwFpWorkerFrameV1::Embedded(_) => {
+                    return Err("the worker answered a committed job with an answer-only frame".to_string());
+                }
             }
         }
     }
+
+    /// **RFC-0001 §2.6/§2.7: one job, answered with no commitment.** The same request, behind the
+    /// answer-only magic; the worker runs the same decoder with no fold and may resume from its
+    /// KV prefix cache. [`AnswerRun::Unsupported`] is the worker saying it serves no such path
+    /// (a family without one, or a build older than this contract) — the caller runs the committed
+    /// path instead, and the worker is untouched.
+    fn run_answer(
+        &mut self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+    ) -> Result<AnswerRun, String> {
+        let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
+        let request_hash = fp_worker_request_hash_v3(&payload);
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&payload);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the job frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
+        loop {
+            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+                return Err("the worker stream ended before a terminator frame".to_string());
+            };
+            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+                PalwFpWorkerFrameV1::Token { token_id, rendered } => on_token(token_id, &rendered),
+                PalwFpWorkerFrameV1::Answered(answer) => {
+                    if answer.request_hash != request_hash {
+                        return Err("the worker's answer does not bind the request it was asked".to_string());
+                    }
+                    return Ok(AnswerRun::Answered(*answer));
+                }
+                PalwFpWorkerFrameV1::Refused { reason } => {
+                    return if reason.contains("serves no answer-only path") || reason.contains("not a v3 request") {
+                        Ok(AnswerRun::Unsupported)
+                    } else {
+                        Err(format!("the worker refused the job: {reason}"))
+                    };
+                }
+                PalwFpWorkerFrameV1::Result(_)
+                | PalwFpWorkerFrameV1::AnsweredBatch(_)
+                | PalwFpWorkerFrameV1::BatchToken { .. }
+                | PalwFpWorkerFrameV1::Embedded(_) => {
+                    return Err("the worker answered an answer-only request with a frame of another kind".to_string());
+                }
+                PalwFpWorkerFrameV1::Manifest(_) => {
+                    return Err("the worker re-announced its manifest mid-session".to_string());
+                }
+            }
+        }
+    }
+
+    /// **RFC-0001 §2.8: one embedding.** Bound to the request's bytes; `Unsupported` is a worker that
+    /// serves no embedding path (the route answers 501 and the worker is untouched).
+    fn run_embed(&mut self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String> {
+        let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the embed request: {e}"))?;
+        let request_hash = fp_worker_request_hash_v3(&payload);
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_EMBED_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&payload);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the embed frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the embed frame: {e}"))?;
+        let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+            return Err("the worker stream ended before a terminator frame".to_string());
+        };
+        match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+            PalwFpWorkerFrameV1::Embedded(e) => {
+                if e.request_hash != request_hash {
+                    return Err("the worker's embedding does not bind the request it was asked".to_string());
+                }
+                Ok(EmbedRun::Embedded(*e))
+            }
+            PalwFpWorkerFrameV1::Refused { reason } => {
+                if reason.contains("serves no embedding path") || reason.contains("not a v3 request") {
+                    Ok(EmbedRun::Unsupported)
+                } else {
+                    Err(format!("the worker refused the job: {reason}"))
+                }
+            }
+            _ => Err("the worker answered an embed request with a frame of another kind".to_string()),
+        }
+    }
+
+    /// **RFC-0001 §2.7 stage 2: `requests` answered in ONE batched decode.** Answers come back in
+    /// request order, each bound to its own request bytes.
+    fn run_answer_batch(
+        &mut self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String> {
+        let payloads: Vec<Vec<u8>> =
+            requests.iter().map(|r| borsh::to_vec(r).map_err(|e| format!("cannot serialize a worker request: {e}"))).collect::<Result<_, _>>()?;
+        let hashes: Vec<Hash64> = payloads.iter().map(|p| fp_worker_request_hash_v3(p)).collect();
+        let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
+        framed.extend_from_slice(&borsh::to_vec(&payloads).map_err(|e| format!("cannot serialize the batch: {e}"))?);
+        write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the batch frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the batch frame: {e}"))?;
+        loop {
+            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+                return Err("the worker stream ended before a terminator frame".to_string());
+            };
+            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+                PalwFpWorkerFrameV1::BatchToken { index, token_id, rendered } => {
+                    if index as usize >= hashes.len() {
+                        return Err("the worker streamed an id for a request the batch does not have".to_string());
+                    }
+                    on_token(index as usize, token_id, &rendered)
+                }
+                PalwFpWorkerFrameV1::AnsweredBatch(answers) => {
+                    if answers.len() != hashes.len() || answers.iter().zip(&hashes).any(|(a, h)| a.request_hash != *h) {
+                        return Err("the worker's batch does not bind the requests it was asked".to_string());
+                    }
+                    return Ok(AnswerBatchRun::Answered(answers));
+                }
+                PalwFpWorkerFrameV1::Refused { reason } => {
+                    return if reason.contains("serves no answer-only path")
+                        || reason.contains("not a v3 request")
+                        || reason.contains("not a list of requests")
+                    {
+                        Ok(AnswerBatchRun::Unsupported)
+                    } else {
+                        Err(format!("the worker refused the job: {reason}"))
+                    };
+                }
+                _ => return Err("the worker answered a batch with a frame of another kind".to_string()),
+            }
+        }
+    }
+}
+
+/// What an embedding request came to.
+enum EmbedRun {
+    Embedded(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1),
+    Unsupported,
+}
+
+/// What a batch request came to.
+enum AnswerBatchRun {
+    Answered(Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1>),
+    Unsupported,
+}
+
+/// What an answer-only request came to.
+enum AnswerRun {
+    Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
+    /// The worker serves no answer-only path: run the committed one.
+    Unsupported,
 }
 
 impl Drop for ResidentWorker {
@@ -578,7 +858,12 @@ impl Drop for ResidentWorker {
     }
 }
 
-/// The one worker slot, respawned when its stream dies.
+/// **The class's worker pool** (RFC-0001 §2.7 stage 1), each slot respawned when its stream dies.
+///
+/// `--worker-processes N` resident workers serve one class: the artifact is mapped read-only by
+/// every process, so the weights live once in the OS page cache and each process adds its own KV and
+/// scratch; a request takes the next idle slot in arrival order ([`pool::SlotPool`]). With `N = 1`
+/// this is exactly the one worker slot it replaces.
 ///
 /// A transport failure is not a bad job: the artifact took minutes to map and the next request
 /// deserves a worker, so the supervisor drops the corpse and maps again on the next call. A
@@ -589,19 +874,60 @@ struct WorkerSupervisor {
     workdir: PathBuf,
     trace_out: PathBuf,
     confinement: Confinement,
-    current: Mutex<Option<ResidentWorker>>,
+    worker_args: Vec<String>,
+    pool: pool::SlotPool<Option<ResidentWorker>>,
     manifest: PalwFpWorkerManifestV1,
+    /// Cleared the first time a worker says it serves no answer-only path, so the gateway stops
+    /// asking (and stops paying a round trip) for the rest of its life.
+    answer_only: std::sync::atomic::AtomicBool,
 }
 
 impl WorkerSupervisor {
-    fn boot(confinement: Confinement, worker: PathBuf, workdir: PathBuf, trace_out: PathBuf) -> Result<Self, String> {
-        let resident = ResidentWorker::spawn(&confinement, &worker, &workdir, &trace_out)?;
-        let manifest = resident.manifest.clone();
-        Ok(Self { worker, workdir, trace_out, confinement, current: Mutex::new(Some(resident)), manifest })
+    fn boot(
+        confinement: Confinement,
+        worker: PathBuf,
+        workdir: PathBuf,
+        trace_out: PathBuf,
+        processes: usize,
+        worker_args: Vec<String>,
+    ) -> Result<Self, String> {
+        let processes = processes.clamp(1, MAX_WORKER_PROCESSES);
+        let mut residents = Vec::with_capacity(processes);
+        for _ in 0..processes {
+            residents.push(Some(ResidentWorker::spawn(&confinement, &worker, &workdir, &trace_out, &worker_args)?));
+        }
+        let manifest = residents[0].as_ref().expect("just spawned").manifest.clone();
+        // Every process must be the same class: a pool whose members disagree answers one class
+        // with several models.
+        if residents.iter().flatten().any(|r| r.manifest != manifest) {
+            return Err("the pool's workers announced different manifests".to_string());
+        }
+        Ok(Self {
+            worker,
+            workdir,
+            trace_out,
+            confinement,
+            worker_args,
+            pool: pool::SlotPool::new(residents),
+            manifest,
+            answer_only: std::sync::atomic::AtomicBool::new(true),
+        })
     }
 
     fn manifest(&self) -> &PalwFpWorkerManifestV1 {
         &self.manifest
+    }
+
+    fn processes(&self) -> usize {
+        self.pool.slots()
+    }
+
+    fn waiting(&self) -> usize {
+        self.pool.waiting()
+    }
+
+    fn answer_only_supported(&self) -> bool {
+        self.answer_only.load(Ordering::Relaxed)
     }
 
     fn run(
@@ -610,9 +936,10 @@ impl WorkerSupervisor {
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         on_token: &mut dyn FnMut(u32, &[u8]),
     ) -> Result<PalwFpWorkerResultV3, String> {
-        let mut slot = self.current.lock().expect("the worker lock is never poisoned");
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
         if slot.is_none() {
-            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out)?);
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
         }
         let outcome = slot.as_mut().expect("just spawned").run_job(request, prompt_ids_form, on_token);
         if let Err(e) = &outcome
@@ -625,7 +952,73 @@ impl WorkerSupervisor {
         }
         outcome
     }
+
+    /// RFC-0001 §2.6/§2.7: the answer with no commitment, on the next idle worker.
+    fn run_answer(&self, request: &PalwFpWorkerRequestV3, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<AnswerRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_answer(request, on_token);
+        match &outcome {
+            Ok(AnswerRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
+            Err(e) if !e.starts_with("the worker refused the job") => {
+                *slot = None;
+                eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+            }
+            _ => {}
+        }
+        outcome
+    }
 }
+
+impl WorkerSupervisor {
+    /// RFC-0001 §2.7 stage 2: a batch of answers on the next idle worker, decoded together.
+    fn run_answer_batch(
+        &self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_answer_batch(requests, on_token);
+        match &outcome {
+            Ok(AnswerBatchRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
+            Err(e) if !e.starts_with("the worker refused the job") => {
+                *slot = None;
+                eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+            }
+            _ => {}
+        }
+        outcome
+    }
+}
+
+impl WorkerSupervisor {
+    /// RFC-0001 §2.8: an embedding on the next idle worker.
+    fn run_embed(&self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String> {
+        let mut guard = self.pool.acquire();
+        let slot = guard.get_mut();
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_embed(request);
+        if let Err(e) = &outcome
+            && !e.starts_with("the worker refused the job")
+        {
+            *slot = None;
+            eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+        }
+        outcome
+    }
+}
+
+/// The most worker processes one gateway runs for one class (`--worker-processes`).
+const MAX_WORKER_PROCESSES: usize = 16;
 
 // ---------------------------------------------------------------------------------------------
 // OpenAI-compatible request/response shapes: the request lives in `surface` (ADR-0096 Decision 1);
@@ -918,19 +1311,33 @@ fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64
 /// `chat` is the parsed request and `admitted` is what `surface::admit_request` made of it: every
 /// refusal the surface can raise has already been raised, before the queue and before the worker
 /// (ADR-0096 invariant 6). `facts` were read once, by the caller, for this job.
-#[allow(clippy::too_many_arguments)]
-fn handle_chat(
+/// Everything a job needs before any worker is asked: the prompt plan, the decode limit and the
+/// worker request, built once for a single choice and once per candidate (RFC-0001 §2.4).
+struct PreparedJob {
+    plan: PromptPlan,
+    decode_limit: u32,
+    request: PalwFpWorkerRequestV3,
+    anchor_daa: u64,
+}
+
+fn prepare_request(
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
-    budget: &Mutex<PublicJobBudget>,
+    manifest: &PalwFpWorkerManifestV1,
     facts: &chain::ChainFacts,
-    chain_source: &chain::ChainSource,
-    chat: &ChatRequest,
-    admitted: AdmittedRequest,
-    sink: &mut dyn ChatSink,
-) -> Result<serde_json::Value, String> {
-    let manifest = worker.manifest();
+    admitted: &AdmittedRequest,
+    sampling: ([u8; 32], u32),
+) -> Result<PreparedJob, String> {
+    // RFC-0001 §2.11: the request's images are decoded tensors, committed as a V5 job's slot references; the family worker
+    // behind this gateway reads token ids and runs no image encoder, so a request that carries one is refused HERE, by name,
+    // rather than answered as if the picture had been read.
+    if !admitted.images.is_empty() {
+        return Err(format!(
+            "this request carries {} image(s) and the class behind this gateway has no image slots: its worker runs no image encoder, \
+             so the images would be dropped from a prompt the person wrote (RFC-0001 §2.11; V5 slots are a class's, RFC-0003 §II.2.1)",
+            admitted.images.len()
+        ));
+    }
     // ADR-0096 Decision 2: tool turns and the tool list become the model's own text; Decision 3:
     // the format instruction rides the system turn as text. Both BEFORE the template, which then
     // sees plain turns and nothing else.
@@ -938,7 +1345,12 @@ fn handle_chat(
     if let Some(format) = &admitted.format {
         wire::append_to_system_turn(&mut tool_turns.turns, &format.instruction());
     }
-    let plan: PromptPlan = wire::build_prompt_with_tools(manifest, &tool_turns)?;
+    // RFC-0001 §2.9: the sidecar's chat template wins over the built-in one; absent, the model's own
+    // selection (`wire::build_prompt`) is what it always was.
+    let plan: PromptPlan = match config.sidecar.as_ref().and_then(|s| s.template.as_ref().zip(s.template_ids)) {
+        Some((spec, ids)) => wire::build_prompt_with_sidecar_spec(manifest, spec, ids, &tool_turns)?,
+        None => wire::build_prompt_with_tools(manifest, &tool_turns)?,
+    };
     // ADR-0079 Decision 10: every bound is mandatory, and exceeding one is a 4xx rather than a
     // queue. Checked BEFORE the job is sent, which is the point of having it here.
     if plan.displayed_len() > config.max_prompt_bytes {
@@ -955,29 +1367,26 @@ fn handle_chat(
         return Err(facts.read_error.clone().unwrap_or_else(|| "no anchor is available for this job".to_string()));
     }
     let (anchor_block, anchor_daa) = (facts.anchor_block, facts.anchor_daa);
-    expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
-
-    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
-    // the inference whether this one may spend exposure — the answer is produced either way; only
-    // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
-    // outage, and what makes an uncertified class an answer rather than a refusal.
-    let mut price = ExposurePrice::resolve(config, facts);
-    let mut commit_refusal = facts.commit_refusal();
-    if commit_refusal.is_none() {
-        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
-    }
     let mut job_nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
 
     // ADR-0082 Decision 11, decided from the request and the CHAIN by `admit_request` — before the
     // model is loaded, so a refusal cost a 4xx rather than an inference.
-    let (sampling_seed, temperature_q) = admitted.sampling;
+    let (sampling_seed, temperature_q) = sampling;
 
     // **RFC-0001 §A: past the decode-rules fence every job is FP Job V4** — its controls in the one
     // canonical form `admit_request` normalized (the no-op when nothing was asked), its stop strings
     // for the worker to spell with the class's tokenizer; below it, a V3 job exactly as before.
-    let request_version =
-        if admitted.decode.is_some() { kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION } else { PALW_FP_V3_VERSION };
+    // **ADR-0096 Decisions 7–8: where the network has armed `palw_fp_decode_constraint`, a `response_format` is COMMITTED** — the
+    // job is FP job version 6 carrying the compiled constraint, and the answer is the argmax over the lanes it admits.
+    let constraint = committed_constraint_v1(admitted, facts, sampling)?;
+    let request_version = if constraint.is_some() {
+        kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION
+    } else if admitted.decode.is_some() {
+        kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
+    } else {
+        PALW_FP_V3_VERSION
+    };
     let request = PalwFpWorkerRequestV3 {
         version: request_version,
         network_domain: identity.network_domain,
@@ -1000,9 +1409,92 @@ fn handle_chat(
         runtime_class_id: manifest.runtime_class_id,
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
-        decode: admitted.decode.clone(),
-        stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
+        decode: if constraint.is_some() { None } else { admitted.decode.clone() },
+        stop_texts: if constraint.is_some() { Vec::new() } else { admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect() },
+        constraint,
     };
+    Ok(PreparedJob { plan, decode_limit, request, anchor_daa })
+}
+
+/// **The decode constraint a request commits, if the network commits formats** (ADR-0096 Decisions 7–8): `Ok(None)` where
+/// the fence is dormant or no format was asked (the advisory path, unchanged); otherwise the canonical bytes of the
+/// `response_format`'s automaton — `json_object` the pinned any-object form, `json_schema` its compiled schema (the first
+/// subset, `misaka-palw-constraint::compile`). A committed job is a V3 job under a mask: it is greedy, and carries no sampler
+/// controls or stop strings — a request that asks for them beside a committed format is refused by name rather than
+/// answered under a rule it did not choose. A schema outside the first subset is refused by name.
+fn committed_constraint_v1(
+    admitted: &AdmittedRequest,
+    facts: &chain::ChainFacts,
+    sampling: ([u8; 32], u32),
+) -> Result<Option<Vec<u8>>, String> {
+    use surface::FormatKind;
+    if !facts.fp_decode_constraint_armed {
+        return Ok(None);
+    }
+    let Some(format) = &admitted.format else { return Ok(None) };
+    let automaton = match (&format.kind, &format.schema) {
+        (FormatKind::JsonObject, _) => misaka_palw_constraint::compile::compile_json_object_v1(),
+        (FormatKind::JsonSchema, Some(schema)) => misaka_palw_constraint::compile::compile_v1(schema)
+            .map_err(|e| format!("this response_format's schema is outside the first constraint subset and cannot be committed: {e}"))?,
+        (FormatKind::JsonSchema, None) => return Err("a json_schema format without its schema".to_string()),
+    };
+    if sampling.1 != kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY {
+        return Err("a committed response_format is a greedy job under a mask: a temperature beside it is refused by name".to_string());
+    }
+    if admitted.decode.as_ref().is_some_and(|d| !d.is_noop()) || !admitted.stop_texts.is_empty() {
+        return Err(
+            "a committed response_format carries no sampler controls or stop strings (penalties, logit_bias, stop): the job is a V3 job under \
+             a mask, and a control beside it would be answered under a rule the request did not choose"
+                .to_string(),
+        );
+    }
+    Ok(Some(automaton.to_bytes()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_chat(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    budget: &Mutex<PublicJobBudget>,
+    facts: &chain::ChainFacts,
+    chain_source: &chain::ChainSource,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    // ADR-0082 Decision 11's `(sampling_seed, temperature_q)` THIS job runs under — the request's
+    // own for a single choice, `H(base_seed ‖ i)` for candidate `i` of `n` (RFC-0001 §2.4).
+    sampling: ([u8; 32], u32),
+    sink: &mut dyn ChatSink,
+) -> Result<serde_json::Value, String> {
+    let manifest = worker.manifest();
+    let PreparedJob { plan, decode_limit, request, anchor_daa } =
+        prepare_request(config, identity, manifest, facts, admitted, sampling)?;
+    expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
+
+    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
+    // the inference whether this one may spend exposure — the answer is produced either way; only
+    // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
+    // outage, and what makes an uncertified class an answer rather than a refusal.
+    let mut price = ExposurePrice::resolve(config, facts);
+    let mut commit_refusal = facts.commit_refusal();
+    if commit_refusal.is_none() {
+        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
+    }
+    let (sampling_seed, temperature_q) = sampling;
+
+    // **RFC-0001 §2.6/§2.7: a job that will not be committed is answered, not folded.** The refusal
+    // is known before the run (the chain's facts, the budget, `--answer-never-commit`), so the
+    // worker is asked for the ANSWER ONLY: the same decoder, no capture, and the KV prefix cache
+    // where it holds one. A worker that serves no such path says so once and the committed path
+    // below runs as it always did.
+    if let Some(why) = &commit_refusal
+        && config.answer_fast_path
+        && worker.answer_only_supported()
+        && let Some(body) = answer_only_response(config, worker, chat, admitted, &request, &plan, why, sink)?
+    {
+        budget.lock().expect("the budget lock is never poisoned").answered_without_commit += 1;
+        return Ok(body);
+    }
 
     // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**
     // A V4 job with stop strings holds its last 16 ids back: a stop sequence ends the run, so it is
@@ -1376,6 +1868,7 @@ fn handle_chat(
         // ADR-0096 Decisions 1 and 4.
         "sampling": sampling,
         "ignored_fields": admitted.ignored_fields,
+        "sidecar": admitted.sidecar_report,
         // ADR-0097 Decision 2: what was asked for the answer's length, beside what ran. The cap
         // is the operator's and the window is the class's; a request past either is clamped, and
         // a clamp nobody is told about is a downgrade nobody agreed to.
@@ -1410,6 +1903,344 @@ fn handle_chat(
     }))
 }
 
+/// **RFC-0001 §2.6/§2.7: the response for a job answered without a commitment.** `Ok(None)` when
+/// the worker serves no answer-only path (the caller runs the committed one). Every binding the
+/// committed path makes that does not need a commitment is made here: the prompt ids are the ones
+/// the gateway's own template placed (SA-3), and the streamed bytes are the rendering of the ids
+/// the worker returned (W5). What is absent is exactly what was refused up front — a trace, a
+/// root, a claim — and the response says so in `misaka.not_committed_because`.
+#[allow(clippy::too_many_arguments)]
+fn answer_only_response(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    request: &PalwFpWorkerRequestV3,
+    plan: &PromptPlan,
+    why_not_committed: &str,
+    sink: &mut dyn ChatSink,
+) -> Result<Option<serde_json::Value>, String> {
+    let manifest = worker.manifest();
+    let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
+    let mut stream = if admitted.stop_texts.is_empty() {
+        AnswerStream::new()
+    } else {
+        AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
+    };
+    let answer = {
+        let mut on_token = |token_id: u32, rendered: &[u8]| {
+            if let Some(delta) = stream.push(token_id, rendered, &eog) {
+                sink.delta(&delta);
+            }
+        };
+        match worker.run_answer(request, &mut on_token)? {
+            AnswerRun::Answered(answer) => answer,
+            AnswerRun::Unsupported => return Ok(None),
+        }
+    };
+    Ok(Some(answer_only_body(config, worker, chat, admitted, request, plan, why_not_committed, &mut stream, answer, sink)?))
+}
+
+/// The body of an answer-only response, from the run's stream and the worker's answer — one
+/// spelling for the single answer and for each candidate of a batch.
+#[allow(clippy::too_many_arguments)]
+fn answer_only_body(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    request: &PalwFpWorkerRequestV3,
+    plan: &PromptPlan,
+    why_not_committed: &str,
+    stream: &mut AnswerStream,
+    answer: kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1,
+    sink: &mut dyn ChatSink,
+) -> Result<serde_json::Value, String> {
+    let manifest = worker.manifest();
+    let stop_len = answer.stop_sequence_len.map(|n| n as usize);
+    if let Some(delta) = stream.finish_with_stop(stop_len) {
+        sink.delta(&delta);
+    }
+    // W5 without a commitment: the shown bytes are the rendering of the returned ids.
+    if stream.streamed() && (stream.ids() != answer.output_token_ids.as_slice() || stream.bytes() != answer.rendered.as_slice()) {
+        return Err("W5: the streamed answer is not the rendering of the ids the worker returned".to_string());
+    }
+    wire::check_committed_prompt_ids(plan, &answer.prompt_token_ids, &wire::control_token_ids(manifest))?;
+
+    let rendered_string = String::from_utf8_lossy(&answer.rendered).into_owned();
+    let shown = if stream.streamed() { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
+    let parsed = wire::parse_tool_calls(&shown);
+    let format_report = admitted.format.as_ref().map(|format| format.check(&shown));
+    let format_json = admitted.format.as_ref().zip(format_report.as_ref()).map(|(format, report)| format.report_json(report));
+    let answer_id = hex(answer.request_hash);
+    let tool_calls_json: Vec<serde_json::Value> = parsed
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(index, call)| {
+            let arguments = misaka_palw_constraint::canonical::to_rfc8785(&call.arguments)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_else(|_| call.arguments.to_string());
+            serde_json::json!({
+                "id": format!("call_{}_{index}", &answer_id[..16]),
+                "type": "function",
+                "function": { "name": call.name, "arguments": arguments },
+            })
+        })
+        .collect();
+    let finish_reason = if !parsed.calls.is_empty() {
+        "tool_calls"
+    } else if stop_len.is_some() || answer.ended_on_stop_id {
+        "stop"
+    } else {
+        "length"
+    };
+    let completion_tokens = answer.output_token_ids.len() as u32;
+    let prompt_tokens = answer.prompt_token_ids.len() as u32;
+    let mut message = serde_json::json!({ "role": "assistant", "content": shown });
+    if !parsed.calls.is_empty() {
+        message["content"] = if parsed.text.is_empty() { serde_json::Value::Null } else { serde_json::json!(parsed.text) };
+        message["tool_calls"] = serde_json::Value::Array(tool_calls_json);
+    }
+    eprintln!(
+        "[misaka-palw-gateway] answer-only {}: prefill {prompt_tokens} (cached {}), decode {completion_tokens} — not committed: {why_not_committed}",
+        &answer_id[..16],
+        answer.cached_prefix_tokens
+    );
+    Ok(serde_json::json!({
+        "id": format!("palwcmpl-{}", &answer_id[..24]),
+        "object": "chat.completion",
+        "model": chat.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+        "misaka": {
+            "committed": false,
+            "not_committed_because": why_not_committed,
+            "output_token_ids": answer.output_token_ids,
+            "answer_untrimmed": rendered_string,
+            "template_id": plan.template_id,
+            "format": format_json,
+            "tool_calls_unparsed": parsed.unparsed_blocks,
+            "ignored_fields": admitted.ignored_fields,
+            "sidecar": admitted.sidecar_report,
+            // RFC-0001 §2.6/§2.7, I-3: a node-local fact about HOW the answer was served — never an
+            // input to any claim, because there is none.
+            "serving": {
+                "answer_only": true,
+                "cached_prefix_tokens": answer.cached_prefix_tokens,
+                "execute_ms": answer.execute_ms,
+                "worker_processes": worker.processes(),
+            },
+            "sampling": {
+                "requested": admitted.sampling_requested,
+                "applied": {
+                    "temperature": request.temperature_q as f64 / kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_T_ONE as f64,
+                    "seed": faster_hex::hex_string(&request.sampling_seed),
+                },
+                "not_a_rule_on_this_lane": admitted.not_a_rule_on_this_lane,
+            },
+            "decode": {
+                "requested_max_tokens": admitted.max_tokens,
+                "applied_limit": request.decode_token_limit,
+                "cap": config.max_decode_cap,
+                "clamped": admitted.max_tokens.is_some_and(|asked| asked != request.decode_token_limit),
+            },
+        },
+    }))
+}
+
+/// **RFC-0001 §2.7 stage 2 for the `n` candidates of one request**: every candidate's request is
+/// built (its own seed, `H(base_seed ‖ i)`), the worker decodes them in one batch, and each answer
+/// gets the same response body a single answer-only job would. `Ok(None)` when the worker serves no
+/// batch path (the caller runs the candidates as separate jobs).
+fn answer_batch_candidates(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    facts: &chain::ChainFacts,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+    why_not_committed: &str,
+) -> Result<Option<Vec<serde_json::Value>>, String> {
+    let manifest = worker.manifest();
+    let (base_seed, temperature_q) = admitted.sampling;
+    let mut prepared = Vec::with_capacity(admitted.candidates as usize);
+    for i in 0..admitted.candidates {
+        prepared.push(prepare_request(config, identity, manifest, facts, admitted, (surface::candidate_seed_v1(&base_seed, i), temperature_q))?);
+    }
+    let requests: Vec<PalwFpWorkerRequestV3> = prepared.iter().map(|p| p.request.clone()).collect();
+    let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
+    let new_stream = || {
+        if admitted.stop_texts.is_empty() {
+            AnswerStream::new()
+        } else {
+            AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
+        }
+    };
+    let mut streams: Vec<AnswerStream> = (0..requests.len()).map(|_| new_stream()).collect();
+    let answers = {
+        let mut on_token = |index: usize, token_id: u32, rendered: &[u8]| {
+            let _ = streams[index].push(token_id, rendered, &eog);
+        };
+        match worker.run_answer_batch(&requests, &mut on_token)? {
+            AnswerBatchRun::Answered(answers) => answers,
+            AnswerBatchRun::Unsupported => return Ok(None),
+        }
+    };
+    let mut bodies = Vec::with_capacity(answers.len());
+    for ((answer, prepared), stream) in answers.into_iter().zip(&prepared).zip(streams.iter_mut()) {
+        let mut sink = BufferedSink;
+        bodies.push(answer_only_body(config, worker, chat, admitted, &prepared.request, &prepared.plan, why_not_committed, stream, answer, &mut sink)?);
+    }
+    Ok(Some(bodies))
+}
+
+/// **RFC-0001 §2.4: `n` candidates are `n` jobs.** Each candidate is its own inference, its own
+/// commitment and its own claim, under its own seed `H(base_seed ‖ i)`
+/// ([`surface::candidate_seed_v1`]); they run on the worker pool in parallel (the pool's slots and
+/// the entrance's in-flight cap bound how many at once) and come back as one `choices` array. The
+/// first failure fails the request — the other candidates' outbox files stay (each is a complete,
+/// separate job) and the error says so.
+#[allow(clippy::too_many_arguments)]
+fn handle_chat_candidates(
+    config: &Config,
+    identity: &Identity,
+    worker: &WorkerSupervisor,
+    budget: &Mutex<PublicJobBudget>,
+    facts: &chain::ChainFacts,
+    chain_source: &chain::ChainSource,
+    chat: &ChatRequest,
+    admitted: &AdmittedRequest,
+) -> Result<serde_json::Value, String> {
+    let (base_seed, temperature_q) = admitted.sampling;
+    let n = admitted.candidates;
+    // **RFC-0001 §2.7 stage 2: when the refusal to commit is static** (the chain's facts, or
+    // `--answer-never-commit` — not the budget, which moves per job) every candidate is an answer
+    // and none a claim, so the worker decodes them TOGETHER, each in its own sequence.
+    let static_refusal = facts.commit_refusal().or_else(|| {
+        config.answer_never_commit.then(|| "this gateway runs in `answer, never commit` mode (ADR-0077 SA-1c)".to_string())
+    });
+    let bodies_from_batch = match static_refusal {
+        Some(why) if config.answer_fast_path && worker.answer_only_supported() => {
+            answer_batch_candidates(config, identity, worker, facts, chat, admitted, &why)?
+        }
+        _ => None,
+    };
+    let results: Vec<Result<serde_json::Value, String>> = match bodies_from_batch {
+        Some(bodies) => bodies.into_iter().map(Ok).collect(),
+        None => std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let seed = surface::candidate_seed_v1(&base_seed, i);
+                scope.spawn(move || {
+                    let mut sink = BufferedSink;
+                    handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("a candidate's job panicked".to_string()))).collect()
+        }),
+    };
+    let mut bodies = Vec::with_capacity(results.len());
+    for (i, result) in results.into_iter().enumerate() {
+        bodies.push(result.map_err(|e| {
+            format!("candidate {i} of {n} failed: {e} (the other candidates are separate jobs; any that completed is in the outbox)")
+        })?);
+    }
+    let mut merged = bodies[0].clone();
+    let mut choices = Vec::with_capacity(bodies.len());
+    let (mut prompt_tokens, mut completion_tokens) = (0u64, 0u64);
+    let mut candidate_reports = Vec::with_capacity(bodies.len());
+    for (i, body) in bodies.iter().enumerate() {
+        let mut choice = body["choices"][0].clone();
+        choice["index"] = serde_json::json!(i);
+        choices.push(choice);
+        prompt_tokens += body["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        completion_tokens += body["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+        candidate_reports.push(serde_json::json!({
+            "index": i,
+            "seed": faster_hex::hex_string(&surface::candidate_seed_v1(&base_seed, i as u32)),
+            "misaka": body["misaka"].clone(),
+        }));
+    }
+    merged["choices"] = serde_json::Value::Array(choices);
+    merged["usage"] = serde_json::json!({
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    });
+    merged["misaka"]["n"] = serde_json::json!(n);
+    merged["misaka"]["candidate_seed_rule"] = serde_json::json!("sha256(\"misaka.palw.fp.n-candidate-seed.v1\" || base_seed || u32_le(i))");
+    merged["misaka"]["candidates"] = serde_json::Value::Array(candidate_reports);
+    Ok(merged)
+}
+
+/// **RFC-0001 §2.8: `POST /v1/embeddings`** — the pooled final-layer hidden state of each input, as
+/// OpenAI's list shape. Local serving: no job, no claim, no reward, nothing committed; the response
+/// says so (`misaka.committed: false`). Each input is one worker forward pass, run on the pool.
+/// `Ok(None)` means the worker serves no embedding path (the route answers 501).
+fn handle_embeddings(
+    config: &Config,
+    worker: &WorkerSupervisor,
+    request: &surface::EmbeddingsRequest,
+    admitted: &surface::AdmittedEmbeddings,
+) -> Result<Option<serde_json::Value>, String> {
+    use kaspa_consensus_core::palw_embedding_pool_v1::palw_embedding_l2_q24_v1;
+    let manifest = worker.manifest();
+    let mut data = Vec::with_capacity(admitted.inputs.len());
+    let mut prompt_tokens = 0u64;
+    let mut cached = 0u64;
+    let mut dims = 0usize;
+    for (index, text) in admitted.inputs.iter().enumerate() {
+        let embed = kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1,
+            class_id: manifest.class_id,
+            shape_profile_id: manifest.shape_profile_id,
+            input: PalwFpWorkerInputV3::Text(text.as_bytes().to_vec()),
+            pool: admitted.pool as u8,
+        };
+        let answer = match worker.run_embed(&embed)? {
+            EmbedRun::Embedded(answer) => answer,
+            EmbedRun::Unsupported => return Ok(None),
+        };
+        prompt_tokens += answer.prompt_token_ids.len() as u64;
+        cached += u64::from(answer.cached_prefix_tokens);
+        dims = answer.raw.len();
+        let q24 = if admitted.normalize { palw_embedding_l2_q24_v1(&answer.raw) } else { answer.raw.clone() };
+        let scale = if admitted.normalize { (1u64 << 24) as f64 } else { 1.0 };
+        data.push(serde_json::json!({
+            "object": "embedding",
+            "index": index,
+            "embedding": q24.iter().map(|v| *v as f64 / scale).collect::<Vec<f64>>(),
+            // The exact integers the floats are made of (Q24 when normalized, the pooled A16 codes
+            // when not): what a client that compares embeddings bit for bit reads.
+            "embedding_integers": q24,
+        }));
+    }
+    let _ = config;
+    Ok(Some(serde_json::json!({
+        "object": "list",
+        "data": data,
+        "model": request.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
+        "usage": { "prompt_tokens": prompt_tokens, "total_tokens": prompt_tokens },
+        "misaka": {
+            // RFC-0001 §2.8 / I-3: a local service. There is no job, no claim and no reward here.
+            "committed": false,
+            "not_committed_because": "embeddings are served locally (RFC-0001 §2.8): the claim form is RFC-0003's embedding profile, not this route",
+            "pool": admitted.pool.name(),
+            "normalized": admitted.normalize,
+            "scale": if admitted.normalize { "q24_unit_vector" } else { "a16_hidden_code" },
+            "dimensions": dims,
+            "cached_prefix_tokens": cached,
+            "ignored_fields": admitted.ignored_fields,
+        },
+    })))
+}
+
 fn main() {
     let mut args: VecDeque<String> = std::env::args().skip(1).collect();
     let mut listen = "127.0.0.1:8790".to_string();
@@ -1432,6 +2263,12 @@ fn main() {
     let mut answer_never_commit = false;
     let mut privacy_mode: u8 = PALW_FP_PRIVACY_PUBLIC_DA;
     let mut per_source_jobs_per_window: u32 = 120;
+    let mut worker_processes: usize = 1;
+    let mut worker_args: Vec<String> = Vec::new();
+    let mut answer_fast_path = true;
+    let mut max_connections_per_source = DEFAULT_MAX_CONNECTIONS_PER_SOURCE;
+    let mut max_jobs_per_source = DEFAULT_MAX_JOBS_PER_SOURCE;
+    let mut sidecar_path: Option<PathBuf> = None;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -1472,11 +2309,34 @@ fn main() {
                     other => die(format!("--privacy {other}: expected `public-da` or `panel-da`")),
                 }
             }
+            "--worker-processes" => worker_processes = value("--worker-processes").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            // The KV prefix cache lives in each worker process (RFC-0001 §2.6): the budget is PER
+            // process, and these two are forwarded to every one.
+            "--kv-cache-budget-mib" => {
+                let mib: u64 = value("--kv-cache-budget-mib").parse().unwrap_or_else(|e| die(format!("{e}")));
+                worker_args.extend(["--kv-cache-budget-mib".to_string(), mib.to_string()]);
+            }
+            "--kv-cache-verify-every" => {
+                let n: u64 = value("--kv-cache-verify-every").parse().unwrap_or_else(|e| die(format!("{e}")));
+                worker_args.extend(["--kv-cache-verify-every".to_string(), n.to_string()]);
+            }
+            "--no-answer-fast-path" => answer_fast_path = false,
+            // RFC-0001 §2.9: the artifact sidecar — read here for its chat template and defaults,
+            // and forwarded to every worker for its tokenizer.
+            "--sidecar" => {
+                let path = PathBuf::from(value("--sidecar"));
+                worker_args.extend(["--sidecar".to_string(), path.display().to_string()]);
+                sidecar_path = Some(path);
+            }
+            "--max-connections-per-source" => {
+                max_connections_per_source = value("--max-connections-per-source").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
+            "--max-jobs-per-source" => max_jobs_per_source = value("--max-jobs-per-source").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--per-source-jobs-per-window" => {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -1509,6 +2369,12 @@ fn main() {
         per_source_jobs_per_window,
         confinement: Confinement::none(),
         booted_at_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        worker_processes: worker_processes.clamp(1, MAX_WORKER_PROCESSES),
+        worker_args,
+        answer_fast_path,
+        max_connections_per_source: max_connections_per_source.max(1),
+        max_jobs_per_source: max_jobs_per_source.max(1),
+        sidecar: sidecar_path.as_deref().map(|p| SidecarRuntime::load(p).unwrap_or_else(|e| die(e))),
     };
 
     // -----------------------------------------------------------------------------------------
@@ -1583,8 +2449,15 @@ fn main() {
     let trace_dir = config.outbox.join("traces");
     std::fs::create_dir_all(&trace_dir).unwrap_or_else(|e| die(format!("cannot create the trace retention dir: {e}")));
     // ADR-0077 Decision 1: the artifact is mapped ONCE, here, before the listener opens.
-    let worker = WorkerSupervisor::boot(config.confinement.clone(), config.worker.clone(), config.workdir.clone(), trace_dir)
-        .unwrap_or_else(|e| die(e));
+    let worker = WorkerSupervisor::boot(
+        config.confinement.clone(),
+        config.worker.clone(),
+        config.workdir.clone(),
+        trace_dir,
+        config.worker_processes,
+        config.worker_args.clone(),
+    )
+    .unwrap_or_else(|e| die(e));
     // ADR-0096 Decision 10: an answer-only gateway that named no class adopts its worker's — the
     // one value the worker would refuse any other of (`check_identity_v1` pins it per job).
     if identity.class_id == Hash64::default() {
@@ -1599,7 +2472,7 @@ fn main() {
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,
-        wire::template_id_for(worker.manifest()),
+        advertised_template_id(&config, worker.manifest()),
     );
     // ADR-0077 Decision 16's disclosure, verbatim, on every boot that files private commitments:
     // the operator is the one who reads it, and it says what "private" buys and does not.
@@ -1615,9 +2488,11 @@ fn main() {
         boot_facts.source, boot_facts.registered, boot_facts.fp_certified, boot_facts.bond_active, boot_facts.exposure_room_sompi
     );
     eprintln!(
-        "[misaka-palw-gateway] confinement backend {} | one job slot, {MAX_IN_FLIGHT_JOBS} may queue, {MAX_CONNECTIONS} connections | \
+        "[misaka-palw-gateway] confinement backend {} | {} job slot(s), {} may queue, {MAX_CONNECTIONS} connections | \
          prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | public-job budget {}‰",
         backend.name(),
+        worker.processes(),
+        in_flight_cap(worker.processes()) - worker.processes(),
         config.max_prompt_bytes,
         config.max_decode_cap,
         config.public_job_budget_permille,
@@ -1634,6 +2509,8 @@ fn main() {
     let connections = Arc::new(AtomicUsize::new(0));
     let budget = Arc::new(Mutex::new(PublicJobBudget::new()));
     let sources = Arc::new(Mutex::new(SourceRates::default()));
+    // RFC-0001 §2.7: per-source open connections and jobs in flight.
+    let gate = Arc::new(pool::SourceGate::new(config.max_connections_per_source, config.max_jobs_per_source));
 
     let listener = TcpListener::bind(&config.listen).unwrap_or_else(|e| die(format!("cannot bind {}: {e}", config.listen)));
     for stream in listener.incoming() {
@@ -1647,7 +2524,18 @@ fn main() {
             (Arc::clone(&config), Arc::clone(&identity), Arc::clone(&worker), Arc::clone(&chain_source));
         let (in_flight, budget, sources) = (Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
         let connections = Arc::clone(&connections);
+        let gate = Arc::clone(&gate);
         let acknowledged_bind = acknowledged;
+        // The per-source connection share: counted here, before the thread, so a source over its
+        // share costs a 503 and not a thread.
+        let peer = stream.peer_addr().map(|a| a.ip()).ok();
+        if let Some(peer) = peer
+            && gate.open_connection(peer).is_err()
+        {
+            connections.fetch_sub(1, Ordering::AcqRel);
+            respond(&mut stream, "429 Too Many Requests", &error_body("per-source connection share exceeded"));
+            continue;
+        }
         std::thread::spawn(move || {
             serve_connection(
                 &mut stream,
@@ -1660,7 +2548,11 @@ fn main() {
                 &sources,
                 backend,
                 acknowledged_bind,
+                &gate,
             );
+            if let Some(peer) = peer {
+                gate.close_connection(peer);
+            }
             connections.fetch_sub(1, Ordering::AcqRel);
         });
     }
@@ -1678,6 +2570,7 @@ fn serve_connection(
     sources: &Mutex<SourceRates>,
     backend: ConfinementBackend,
     acknowledged_bind: bool,
+    gate: &pool::SourceGate,
 ) {
     let source = stream.peer_addr().map(|a| a.ip()).ok();
     let request = match read_http_request(stream) {
@@ -1712,7 +2605,8 @@ fn serve_connection(
                 &serde_json::json!({
                     "status": "ok",
                     "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
-                    "template_id": wire::template_id_for(worker.manifest()),
+                    "template_id": advertised_template_id(config, worker.manifest()),
+                    "sidecar": config.sidecar.as_ref().map(|s| serde_json::json!({ "digest": s.digest, "path": s.path.display().to_string() })),
                     "n_ctx": worker.manifest().n_ctx,
                     // ADR-0097 Decision 2: the same limits object `GET /v1/models` serves.
                     "limits": surface::limits_body(worker.manifest(), &surface_limits(config), &facts),
@@ -1743,9 +2637,13 @@ fn serve_connection(
                         "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
                         "max_prompt_bytes": config.max_prompt_bytes,
                         "max_decode_cap": config.max_decode_cap,
-                        "job_slots": 1,
-                        "max_in_flight_jobs": MAX_IN_FLIGHT_JOBS,
+                        "job_slots": worker.processes(),
+                        "max_in_flight_jobs": in_flight_cap(worker.processes()),
+                        "queued_jobs": worker.waiting(),
                         "max_connections": MAX_CONNECTIONS,
+                        "max_connections_per_source": config.max_connections_per_source,
+                        "max_jobs_per_source": config.max_jobs_per_source,
+                        "answer_fast_path": config.answer_fast_path && worker.answer_only_supported(),
                         "per_source_jobs_per_window": config.per_source_jobs_per_window,
                         "per_source_window_secs": PER_SOURCE_WINDOW.as_secs(),
                     },
@@ -1784,8 +2682,15 @@ fn serve_connection(
             // request that was admitted. The chain is read once, for this job; `handle_chat`
             // prices and anchors against the same facts the sampler and the format were gated on.
             let facts = chain_source.read();
-            let (chat, admitted) = match surface::parse_and_admit(&request.body, &facts) {
-                Ok(parsed) => parsed,
+            let (chat, admitted) = match surface::parse_and_admit_with(&request.body, &facts, |chat| {
+                // RFC-0001 §2.9: the sidecar's defaults fill what the request omitted, BEFORE the
+                // entrance admits — so a default is held to every rule an explicit field is.
+                config.sidecar.as_ref().map(|s| s.apply_defaults(chat, &facts))
+            }) {
+                Ok((chat, mut admitted, report)) => {
+                    admitted.sidecar_report = report;
+                    (chat, admitted)
+                }
                 Err(e) => {
                     respond(stream, "400 Bad Request", &error_body(&e));
                     return;
@@ -1793,16 +2698,32 @@ fn serve_connection(
             };
             let streaming = chat.stream == Some(true);
             // The bounded in-flight queue. Reserved BEFORE the slot is contended, so the depth of
-            // the wait is a number this process chose rather than one the network chose for it.
-            if in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT_JOBS {
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+            // the wait is a number this process chose rather than one the network chose for it. A
+            // request for `n` candidates is `n` jobs (RFC-0001 §2.4), against the queue and against
+            // its source's share alike.
+            let jobs = admitted.candidates.max(1);
+            if in_flight.fetch_add(jobs as usize, Ordering::AcqRel) + jobs as usize > in_flight_cap(worker.processes()) {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
                 respond(
                     stream,
                     "503 Service Unavailable",
-                    &error_body("the in-flight queue is full; one job runs at a time and the queue is bounded"),
+                    &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"),
                 );
                 return;
             }
+            if let Some(source) = source
+                && gate.start_jobs(source, jobs).is_err()
+            {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
+                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                return;
+            }
+            let finish = |in_flight: &AtomicUsize| {
+                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
+                if let Some(source) = source {
+                    gate.finish_jobs(source, jobs);
+                }
+            };
             if streaming {
                 // **A slow reader must not wedge the one job slot.** The deltas are written from
                 // inside the worker's mutex, so a client that stops reading would otherwise block
@@ -1817,8 +2738,8 @@ fn serve_connection(
                 let include_usage = admitted.include_usage;
                 let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink);
+                finish(in_flight);
                 match outcome {
                     Ok(body) => {
                         // The terminal chunk carries the finish reason and, in the same event, the
@@ -1856,13 +2777,68 @@ fn serve_connection(
                     }
                 }
             } else {
-                let mut sink = BufferedSink;
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
-                in_flight.fetch_sub(1, Ordering::AcqRel);
+                let outcome = if admitted.candidates > 1 {
+                    handle_chat_candidates(config, identity, worker, budget, &facts, chain_source, &chat, &admitted)
+                } else {
+                    let mut sink = BufferedSink;
+                    handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink)
+                };
+                finish(in_flight);
                 match outcome {
                     Ok(body) => respond(stream, "200 OK", &body),
                     Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
                 }
+            }
+        }
+        // **RFC-0001 §2.8 (P1): the local embeddings route.** The same entrance bounds as a chat job
+        // (the in-flight cap, the per-source share, the source's hourly rate); one request is one
+        // job whatever its input count, and its inputs run in order on the worker pool.
+        ("POST", "/v1/embeddings") => {
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit(source, config.per_source_jobs_per_window)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source job rate exceeded"));
+                return;
+            }
+            if request.body.len() > MAX_REQUEST_BODY_BYTES {
+                respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
+                return;
+            }
+            let parsed: surface::EmbeddingsRequest = match serde_json::from_slice(&request.body) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    respond(stream, "400 Bad Request", &error_body(&format!("request body is not an embeddings request: {e}")));
+                    return;
+                }
+            };
+            let admitted = match surface::admit_embeddings(&parsed, config.max_prompt_bytes) {
+                Ok(admitted) => admitted,
+                Err(e) => {
+                    respond(stream, "400 Bad Request", &error_body(&e));
+                    return;
+                }
+            };
+            if in_flight.fetch_add(1, Ordering::AcqRel) + 1 > in_flight_cap(worker.processes()) {
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                respond(stream, "503 Service Unavailable", &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"));
+                return;
+            }
+            if let Some(source) = source
+                && gate.start_jobs(source, 1).is_err()
+            {
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                return;
+            }
+            let outcome = handle_embeddings(config, worker, &parsed, &admitted);
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+            if let Some(source) = source {
+                gate.finish_jobs(source, 1);
+            }
+            match outcome {
+                Ok(Some(body)) => respond(stream, "200 OK", &body),
+                Ok(None) => respond(stream, "501 Not Implemented", &error_body("this class's worker serves no embeddings path")),
+                Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
             }
         }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
@@ -1895,7 +2871,7 @@ fn serve_connection(
             &surface::models_body(
                 &hex(identity.class_id),
                 worker.manifest(),
-                wire::template_id_for(worker.manifest()),
+                &advertised_template_id(config, worker.manifest()),
                 config.booted_at_unix,
                 surface::limits_body(worker.manifest(), &surface_limits(config), &chain_source.read()),
             ),
@@ -1904,7 +2880,7 @@ fn serve_connection(
             stream,
             "404 Not Found",
             &error_body(
-                "this gateway serves POST /v1/chat/completions, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
+                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
             ),
         ),
     }
@@ -1912,6 +2888,33 @@ fn serve_connection(
 
 #[cfg(test)]
 mod tests {
+    /// **ADR-0096 Decisions 7-8 at the entrance**: where the network commits formats, a `response_format` becomes a
+    /// constraint the job carries (version 6); where it does not, or none was asked, nothing changes; and a committed format
+    /// beside sampler controls is refused by name.
+    #[test]
+    fn a_response_format_is_committed_only_where_the_fence_is_armed_and_beside_no_sampler_controls() {
+        let body = |extra: serde_json::Value| {
+            let mut v = serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }], "response_format": { "type": "json_object" } });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::to_vec(&v).unwrap()
+        };
+        let armed = chain::ChainFacts { fp_decode_constraint_armed: true, fp_decode_rules_armed: true, ..Default::default() };
+        let dormant = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let admit = |facts: &chain::ChainFacts, extra| surface::parse_and_admit(&body(extra), facts).map(|(_, a)| a);
+        let ok = admit(&armed, serde_json::json!({})).expect("admitted");
+        let bytes = committed_constraint_v1(&ok, &armed, ok.sampling).unwrap().expect("committed on an armed network");
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&bytes).expect("the bytes are an admitted constraint");
+        let advisory = admit(&dormant, serde_json::json!({})).expect("admitted");
+        assert_eq!(committed_constraint_v1(&advisory, &dormant, advisory.sampling).unwrap(), None, "dormant: advisory, as before");
+        let plain = surface::parse_and_admit(&serde_json::to_vec(&serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap(), &armed)
+            .map(|(_, a)| a)
+            .unwrap();
+        assert_eq!(committed_constraint_v1(&plain, &armed, plain.sampling).unwrap(), None, "no format asked");
+        let with_stop = admit(&armed, serde_json::json!({ "stop": ["END"] })).expect("admitted");
+        let err = committed_constraint_v1(&with_stop, &armed, with_stop.sampling).unwrap_err();
+        assert!(err.contains("no sampler controls or stop strings"), "{err}");
+    }
+
     /// **ADR-0096 Decision 10: a bond-less identity is admitted exactly when the gateway never
     /// commits.** Without the flag the refusal names what is missing and the flag that would
     /// admit it; with it the bond is the zero outpoint and the key is empty, which `/health`
@@ -1988,6 +2991,12 @@ mod tests {
             derive_seed: None,
             artifact_inline_max: 4 << 20,
             booted_at_unix: 0,
+            worker_processes: 1,
+            worker_args: Vec::new(),
+            answer_fast_path: true,
+            max_connections_per_source: DEFAULT_MAX_CONNECTIONS_PER_SOURCE,
+            max_jobs_per_source: DEFAULT_MAX_JOBS_PER_SOURCE,
+            sidecar: None,
         }
     }
 
@@ -2380,5 +3389,74 @@ mod tests {
 
         let stream: ChatRequest = serde_json::from_str(r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#).unwrap();
         assert_eq!(stream.stream, Some(true));
+    }
+
+    fn sidecar_with(generation: misaka_palw_base0::sidecar::GenerationConfigV1) -> SidecarRuntime {
+        SidecarRuntime {
+            digest: "00".repeat(64),
+            path: PathBuf::from("/nonexistent/sidecar"),
+            template: None,
+            template_ids: None,
+            generation: Some(generation),
+        }
+    }
+
+    fn bare_chat() -> ChatRequest {
+        serde_json::from_value(serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] })).unwrap()
+    }
+
+    /// **RFC-0001 §2.9: the sidecar's generation defaults fill what a request omitted, through the
+    /// entrance's own admission** — an explicit field always wins; the sampler's defaults only where
+    /// the chain armed it (and are reported as not applied where it did not); the knobs this lane has
+    /// no rule for are never applied.
+    #[test]
+    fn a_sidecars_generation_defaults_fill_the_gaps_and_never_override_or_outrun_the_chain() {
+        let generation = misaka_palw_base0::sidecar::GenerationConfigV1 {
+            max_new_tokens: Some(77),
+            temperature: Some(0.7),
+            repeat_penalty: Some(1.2),
+            repeat_last_n: Some(32),
+            stop: vec!["###".into()],
+            top_p: Some(0.8),
+            ..Default::default()
+        };
+        let side = sidecar_with(generation);
+        // Dormant network: only the length default applies; the sampler's are reported, not applied.
+        let dormant = chain::ChainFacts::default();
+        let mut chat = bare_chat();
+        let report = side.apply_defaults(&mut chat, &dormant);
+        assert_eq!(chat.max_tokens, Some(77));
+        assert!(chat.temperature.is_none() && chat.repeat_penalty.is_none() && chat.stop.is_none());
+        let not_applied: Vec<String> =
+            report["defaults_not_applied"].as_array().unwrap().iter().map(|r| r["field"].as_str().unwrap().to_string()).collect();
+        for field in ["temperature", "repeat_penalty", "repeat_last_n", "stop", "top_p"] {
+            assert!(not_applied.contains(&field.to_string()), "{field} is reported as not applied: {not_applied:?}");
+        }
+        assert_eq!(report["defaults_applied"], serde_json::json!(["max_new_tokens"]));
+        assert!(surface::admit_request(&chat, &dormant).is_ok(), "the request with the defaults the network allows is admissible");
+        // Armed network: the sampler's defaults apply, and the request is admitted with them.
+        let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let mut chat = bare_chat();
+        let report = side.apply_defaults(&mut chat, &armed);
+        assert_eq!((chat.temperature, chat.repeat_penalty, chat.repeat_last_n), (Some(0.7), Some(1.2), Some(32)));
+        assert_eq!(chat.stop, Some(serde_json::json!(["###"])));
+        assert!(surface::admit_request(&chat, &armed).is_ok());
+        assert!(report["defaults_applied"].as_array().unwrap().len() >= 5);
+        // An explicit field always wins.
+        let mut explicit = bare_chat();
+        explicit.max_tokens = Some(5);
+        explicit.temperature = Some(0.1);
+        side.apply_defaults(&mut explicit, &armed);
+        assert_eq!((explicit.max_tokens, explicit.temperature), (Some(5), Some(0.1)));
+        let mut aliased = bare_chat();
+        aliased.max_completion_tokens = Some(9);
+        side.apply_defaults(&mut aliased, &armed);
+        assert_eq!(aliased.max_tokens, None, "an alias counts as the request having named a length");
+    }
+
+    #[test]
+    fn the_pool_sizes_and_the_in_flight_cap_keep_the_single_worker_numbers() {
+        assert_eq!(in_flight_cap(1), MAX_IN_FLIGHT_JOBS, "one process: one running and seven waiting, as it always was");
+        assert_eq!(in_flight_cap(4), 4 + 7);
     }
 }

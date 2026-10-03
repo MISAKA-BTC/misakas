@@ -2477,8 +2477,15 @@ fn fp_verify_capture_under_job_v1(
     roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
 ) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
     let committed = misaka_palw_base0::fp_interval::base0_fp_capture_committed_ids_v1(capture).unwrap_or_default();
-    let rule = kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, &committed);
-    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || backend.verify_material(capture, roots))
+    // ADR-0096 Decision 8: a constrained claim is judged through its mask; a host without the class's table abstains.
+    let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, backend.token_table_for_job_v1(job)) {
+        Ok(mask) => mask,
+        Err(_) => return kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Unverifiable,
+    };
+    kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+        let rule = kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, &committed);
+        kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || backend.verify_material(capture, roots))
+    })
 }
 
 fn fp_capture_view(
@@ -10742,7 +10749,7 @@ impl PalwPanelService {
                             // and commit no banned id. Pure in the job and the answer, which the chain
                             // already bound; an answer that fails it is not one this seat vouches for.
                             if let Some(output_ids) = output_ids.as_ref()
-                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.is_v4())
+                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.decodes_under_v4_rules())
                                 && let Err(why) = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
                                     decode,
                                     material.job.decode_token_limit,
@@ -13826,6 +13833,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::GenShardCourtAccused { .. } => "GenShardCourtAccused",
         // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
+        PalwConsensusObjectV2::AdapterClassListed { .. } => "AdapterClassListed",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
@@ -15267,12 +15275,27 @@ impl PalwPanelService {
                         return None;
                     }
                 }
+                // RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) names the K/V state its
+                // prefix reached; the seat derives that state from the claim's own prompt ids (from its cache or
+                // by recomputation) and a disagreement is a fault in the claim, filed as the court's question.
+                if let Some(job) = fp_job.filter(|job| job.is_prefix_state()).cloned() {
+                    let ids = prompt_ids.to_vec();
+                    let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+                        return None;
+                    };
+                    backend = returned;
+                    if let Err(why) = checked {
+                        warn!("[{PALW_PANEL}] claim {}: its named prefix state does not hold ({why}) — filing nothing", duty.claim_id);
+                        self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                        return None;
+                    }
+                }
                 let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
                 let work_leaves = duty.work_leaves;
                 let interval = *index;
                 // RFC-0001 §A (G5): a V4 claim's rows are replayed under the claim's rule — its job's
                 // pipeline over the committed answer — and a V3 claim's under the V3 verifier.
-                let v4 = fp_job.filter(|job| job.is_v4()).cloned().map(|job| (job, output_ids.to_vec()));
+                let v4 = fp_job.filter(|job| job.decodes_under_v4_rules()).cloned().map(|job| (job, output_ids.to_vec()));
                 let Ok((returned, verdict)) = offload(backend, move |b| match &v4 {
                     Some((job, answer)) => {
                         b.verify_fp_interval_opening_under_job_v1(&candidate, roots, interval, &prompt_owned, work_leaves, job, answer)

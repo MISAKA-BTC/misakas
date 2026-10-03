@@ -207,6 +207,10 @@ where
             held: false,
             derived_work: PalwFpDerivedWorkCapV1::Declared,
             logits_q24: true,
+            prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
+            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
         },
         ruleset_caps_armed,
         held_armed,
@@ -236,6 +240,18 @@ pub struct PalwFpClassCapsV1<'a> {
     /// ([`crate::palw_freeprompt_v3::palw_fp_decode_controls_offered_v1`]); greedy selection, the
     /// repeat penalty, stop sequences and constraints are offered to every class.
     pub logits_q24: bool,
+    /// **RFC-0001 §2.6 stage 2: whether `Params::palw_fp_prefix_state` is in force at the accepting block** — a
+    /// prefix-state claim (FP job version 11) is skipped by name where it is not.
+    pub prefix_state_armed: bool,
+    /// **ADR-0096 Decision 8: whether `Params::palw_fp_decode_constraint` is in force at the accepting block** — a
+    /// constrained claim (FP job version 6) is skipped by name where it is not.
+    pub constraint_armed: bool,
+    /// **RFC-0001 §2.5: whether `Params::palw_fp_constraint_v2` is in force at the accepting block** — a constraint of
+    /// the second form is skipped by name where it is not.
+    pub constraint_v2_armed: bool,
+    /// **RFC-0001 §2.9: the class's tokenizer listing under `Params::palw_fp_tokenizer_match`**
+    /// ([`crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1`]).
+    pub tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1,
 }
 
 /// **ADR-0145 §5, as the walk sees it** — three states, not two, because "the fence is dormant"
@@ -311,16 +327,45 @@ where
                 if caps.held { crate::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1 } else { freeprompt.max_prompt_tokens() };
             (prompt_cap, freeprompt.max_decode_tokens())
         });
+        // **RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) is judged on its V4 stand-in** — every rule
+        // below runs on the same payload at version 7 with no tail — and carries its state to the fold; every other payload
+        // is its own view and names no state.
+        let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(&payload, caps.prefix_state_armed) {
+            Ok(v) => v,
+            Err(why) => {
+                out.skipped.push((id, why));
+                continue;
+            }
+        };
+        // **ADR-0096 Decision 7: a constrained claim (FP job version 6) is judged on its V3 stand-in** — a constrained job
+        // is a V3 job, so its view meets the V3 rule whatever the decode-rules fence says.
+        let constrained = payload.commitment.job.is_constraint();
+        let view = if constrained {
+            match crate::palw_fp_constraint_job_v1::palw_fp_constraint_walk_view_v1(&payload, caps.constraint_armed, caps.constraint_v2_armed) {
+                Ok(v) => v,
+                Err(why) => {
+                    out.skipped.push((id, why));
+                    continue;
+                }
+            }
+        } else {
+            view
+        };
+        // **RFC-0001 §2.9: the job's tokenizer is its class's listed one** (a class that lists none is not asked).
+        if let Err(why) = caps.tokenizer.check(&payload.commitment.job.tokenizer_id) {
+            out.skipped.push((id, why));
+            continue;
+        }
         // RFC-0001 §A.4 at the ACCEPTING block: below `Params::palw_fp_decode_rules` a V3 job only,
         // from it a V4 job only — a V3 claim accepted before the fence stays what it was.
-        if payload
+        if view
             .validate_stateless_under_ruleset_v4(
                 network_domain,
                 panel_da_armed,
                 caps.step_ladder,
                 ruleset_caps,
                 prompt_ids_form,
-                decode_rules,
+                if constrained { crate::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant } else { decode_rules },
             )
             .is_err()
         {
@@ -447,7 +492,7 @@ where
                 // is hashed into nothing; the rule that prices KvReused sits in the transition
                 // past `palw_fp_derived_work`. A later payload version that carries the object
                 // is how Studio names a local cache on the wire.
-                consumed_prefix_state: payload.consumed_prefix_state_v1(),
+                consumed_prefix_state: consumed_state,
             },
         });
     }
@@ -649,6 +694,10 @@ mod tests {
                     held: false,
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
+            prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
+            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,
@@ -714,6 +763,10 @@ mod tests {
                     held: false,
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24,
+            prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
+            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,
@@ -832,6 +885,10 @@ mod tests {
                         // side of a ladder, which no graph would ever count.
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
                         logits_q24: true,
+                        prefix_state_armed: false,
+            constraint_armed: false,
+            constraint_v2_armed: false,
+                        tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                     }
                 },
                 false,
@@ -1331,7 +1388,7 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true }
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
                 },
                 false,
                 true,

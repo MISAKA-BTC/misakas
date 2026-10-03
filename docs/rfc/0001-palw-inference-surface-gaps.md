@@ -365,3 +365,19 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 4. **KV キャッシュの段階 2**(キャッシュ分を払わない報酬)の時期:容量再設計の ×10 flag day より前か後か。
 5. **embeddings の claim 化**(P3)をするか、ローカルサービスのままにするか。
 6. **マルチモーダルの入力形**:デコード済み整数 tensor に限定する案でよいか。
+
+### 7.1 採択記録(2026-10-03、lane U / `rfc1/serve`)
+
+1〜3 は P0(§A、Job V4 / fence `palw_fp_decode_rules`)で実装済み。4〜6 を次のとおり採択し、実装した(いずれも休眠 fence、どの preset でも arm しない)。
+
+4. **KV キャッシュ段階 2 は今、専用の休眠 fence で**:`palw_fp_prefix_state`(FP Job version 11、`PalwFpPrefixStateV1` を carry)。段階 1(node のみ)は answer-only 経路で出荷済み。報酬側(credit)のみで、fold は全 prefill leaf を ctx 束縛 hash で畳むままなので、**キャッシュした prefix は commit 実行を速くしない**(段階 2b「継承 leaf」は残課題)。decode rules が有効な状況では D10 が既に prefill を 0 として credit するため、version 11 が価格を動かすのは「宣言された状態を seat が検証する」点であり、価格差ではない(e2e で等値を確認)。
+5. **embeddings の claim 化は RFC-0003 の Embedding profile で**:ローカル `/v1/embeddings` は claim 無しのまま、claim 形は `PalwGenJobV1`(`Embedding` body)。gateway に job 構築器と `misaka.claim` の名前付き拒否を置いた(free-prompt レーンの worker しか持たない gateway は拒否する)。
+6. **マルチモーダルはデコード済み整数 tensor のみ**:`palw_image_tensor` 部品(`u8` HWC RGB の hex)だけを受け、URL・エンコード済み画像は名前付きで拒否。画像は FP Job V5 の slot 参照(`input_root`)になる。encoder を持たない class の背後では実行時に名前付きで拒否する。
+
+追加した休眠 fence:`palw_fp_prefix_state`(§2.6 段階 2)、`palw_fp_tokenizer_match`(§2.9)、`palw_fp_constraint_v2`(§2.5、前提の `palw_fp_decode_constraint` が未実装のため arm 不能)、`palw_adapter_class_v1`(§2.10、ADR-0163、object tag 94)。
+
+### 7.2 追記(2026-10-03、lane U 第 2 弾)
+
+- **ADR-0096 D6-8(`palw_fp_decode_constraint`)を実装した**:FP job version 6(V3 job + constraint bytes)、producer と seat の replay が同じ mask(class の token table 経由)を通る、`validate_palw_v2` の arm 拒否を解除、drill 旗 `--palw-drill-fp-constraint-at`、gateway の `response_format` は fence 有効網で committed(version 6)になる。これで `palw_fp_constraint_v2` を drill で arm できる。**未了**:court の第 3 arm(`check_tiled_decode_token_refutation_v3` は純関数として既存)を wire 上の proof kind にすること、`render_answer_v2`(D6)、kaspad seat への token table の配布(table が無い seat は `Unverifiable` で棄権)。
+- **KV キャッシュ段階 2b(継承 leaf)は未実装**:commit の leaf は job context 全体に束縛されるため、cache 済み prefix の leaf の継承には「prefix context」を全 leaf 束縛関数と court の binding に通す必要がある(consensus の再設計)。行(per-position rows)を cache する案は model サイズで 1 position あたり GB 級で不成立。段階 2(受領証)は credit 側のみで、decode rules 有効下では D10 が既に prefill を 0 とするため価格差は出ない。
+- 画像・embedding claim は、tiny な in-repo vision class(toy VLM / toy vision encoder)で gateway → FP Job V5 / tensor job → worker → seat の in-process e2e を通した(`misaka-palw-gateway/src/tensor.rs` tests)。実 class(vision tower)は tir/generic の統合待ち。

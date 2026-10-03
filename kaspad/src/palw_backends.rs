@@ -3564,3 +3564,63 @@ mod tests {
         assert_eq!(priced.total_bytes(), palw_dense_capture_bytes_v1(at_cap, tile_len) + PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
     }
 }
+
+
+/// **Load the token tables a node was started with** (`--palw-token-table`, ADR-0096 Decision 8) into the process's table set
+/// and return `(path, root, ids)` for each, for the boot line. A file that does not decode is a refusal to start, by name: a seat
+/// that silently held no table would abstain on every constrained claim and look exactly like a seat whose material never arrived.
+pub fn load_token_tables_v1(paths: &[std::path::PathBuf]) -> Result<Vec<(std::path::PathBuf, kaspa_hashes::Hash64, usize)>, String> {
+    let mut loaded = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(path).map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?;
+        let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_decode_v1(&bytes)
+            .map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?;
+        let ids = table.entries.len();
+        let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1().register(table);
+        loaded.push((path.clone(), root, ids));
+    }
+    Ok(loaded)
+}
+
+#[cfg(test)]
+mod token_table_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+
+    #[test]
+    fn a_token_table_file_loads_by_its_derived_root_and_a_hostile_one_is_refused_by_name() {
+        let table = PalwTokenTableV1 {
+            entries: vec![Some(b"a".to_vec()), Some(b"b".to_vec()), None, Some(b"<eos>".to_vec())],
+            eog_token_ids: vec![3],
+            tokenizer_id: kaspa_hashes::Hash64::from_u64_word(0x70),
+        };
+        let dir = std::env::temp_dir().join(format!("palw-token-table-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("table.bin");
+        std::fs::write(&good, palw_token_table_file_encode_v1(&table)).unwrap();
+        let loaded = load_token_tables_v1(std::slice::from_ref(&good)).expect("loads");
+        assert_eq!((loaded[0].1, loaded[0].2), (table.root(), 4), "the loader derives the root itself");
+        assert_eq!(palw_token_tables_v1().for_root(&table.root()).as_deref(), Some(&table));
+        for (name, bytes, needle) in [
+            ("magic", b"NOTATABLE".to_vec(), "bad magic"),
+            ("truncated", palw_token_table_file_encode_v1(&table)[..12].to_vec(), "does not decode"),
+            (
+                "no-eog",
+                palw_token_table_file_encode_v1(&PalwTokenTableV1 { eog_token_ids: vec![], ..table.clone() }),
+                "end-of-generation",
+            ),
+            (
+                "eog-outside",
+                palw_token_table_file_encode_v1(&PalwTokenTableV1 { eog_token_ids: vec![9], ..table.clone() }),
+                "end-of-generation",
+            ),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let err = load_token_tables_v1(&[path]).unwrap_err();
+            assert!(err.contains(needle) && err.contains("--palw-token-table"), "{name}: {err}");
+        }
+        assert!(load_token_tables_v1(&[dir.join("absent")]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -1182,7 +1182,8 @@ pub fn base0_position_tiles_v1<E: From<Base0SparseCaptureError>>(
 /// `NotACanonicalCoordinate`, or as the short capture its `finish` rejects) — the fold names them
 /// where they happen instead.
 pub struct Base0SparseStepCaptureV1 {
-    ctx_hash: Hash64,
+    /// The job context: a step leaf is bound to the context its COORDINATE belongs to (stage 2b), not to one hash.
+    ctx: kaspa_consensus_core::palw_v2::PalwJobContextV2,
     profile_hash: Hash64,
     prefill: u32,
     decode_calls: u32,
@@ -1215,7 +1216,7 @@ impl Base0SparseStepCaptureV1 {
         max_step_leaf_count: u64,
     ) -> Result<Self, Base0SparseCaptureError> {
         Ok(Self {
-            ctx_hash: ctx.context_hash(),
+            ctx: ctx.clone(),
             profile_hash: profile.shape_profile_id(),
             prefill: ctx.declared_prefill_tokens,
             decode_calls: ctx.exact_decode_tokens.saturating_sub(1),
@@ -1255,9 +1256,9 @@ impl Base0SparseStepCaptureV1 {
                 got: (call_index, position),
             });
         }
-        let (ctx_hash, profile_hash) = (self.ctx_hash, self.profile_hash);
+        let (ctx, profile_hash) = (&self.ctx, self.profile_hash);
         base0_position_tiles_v1(profile, self.prefill, call_index, position, rows, |leaf| {
-            self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf))?;
+            self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf))?;
             self.cursor += 1;
             Ok(())
         })?;

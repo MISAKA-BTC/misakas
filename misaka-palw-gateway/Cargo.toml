@@ -40,6 +40,9 @@ misaka-palw.workspace = true
 # the constraint id. The gateway validates with it after the run (advisory); Part B's compiler is
 # meant to be built beside it.
 misaka-palw-constraint.workspace = true
+# RFC-0001 §2.8, §2.11: the decoded image a V5 slot references and the embedding output kind a claim's job names.
+misaka-palw-tir.workspace = true
+misaka-palw-gen.workspace = true
 # ADR-0077 Decision 4: the ONE submit path's shared vocabulary — the anchor TTL and the `.expired`
 # suffix, so the gateway's sweep and the rail's refusal cannot disagree about what "stale" is.
 misaka-palw-fp-submit.workspace = true

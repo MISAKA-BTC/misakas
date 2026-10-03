@@ -386,6 +386,13 @@ pub struct AdmittedRequest {
     /// Accepted fields that changed nothing, by name.
     pub ignored_fields: Vec<String>,
     pub include_usage: bool,
+    /// RFC-0001 §2.4: how many candidate jobs (1: the ordinary single choice).
+    pub candidates: u32,
+    /// RFC-0001 §2.9: what the artifact sidecar's defaults did to this request (`None`: no sidecar).
+    pub sidecar_report: Option<Value>,
+    /// **RFC-0001 §2.11: the request's decoded images**, in the order the messages carried them (the V5 slot order).
+    /// Decoded integer tensors only ([`crate::tensor`]); empty for a text request.
+    pub images: Vec<crate::tensor::DecodedImageV1>,
 }
 
 /// The identity value of each knob ADR-0096 Decision 4 names: the value a stock SDK sends by
@@ -404,11 +411,164 @@ fn not_a_rule(name: &str, value: impl std::fmt::Display) -> String {
     format!("{name} {value} is not a rule on this lane (ADR-0096 Decision 4): the seat replays a greedy decode and nothing else")
 }
 
-/// **Parse a request body and admit it** — the route's and the conformance corpus's ONE path.
+/// The most inputs one `/v1/embeddings` request may carry (RFC-0001 §2.8). Each is a forward pass.
+pub const MAX_EMBEDDING_INPUTS: usize = 16;
+
+/// The `misaka` extension of an embeddings request: how the positions are pooled and whether the
+/// vector is scaled to unit length ([`kaspa_consensus_core::palw_embedding_pool_v1`]).
+#[derive(Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingsExt {
+    /// `"mean"` (default) or `"last"`.
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// Scale to a unit vector in Q24 (default `true`, what an OpenAI client expects); `false`
+    /// returns the pooled hidden-state codes as they are.
+    #[serde(default)]
+    pub normalize: Option<bool>,
+    /// **RFC-0001 §2.8: ask for the embedding to be a CLAIM** (RFC-0003's `Embedding` profile). Refused by name on a
+    /// gateway whose worker serves the free-prompt lane only (every build today): the job is a tensor job on a registered
+    /// `Embedding` class ([`crate::tensor::embedding_claim_job_v1`]), not the local forward pass.
+    #[serde(default)]
+    pub claim: Option<bool>,
+}
+
+/// OpenAI's `POST /v1/embeddings` body, with this lane's own extension.
+#[derive(Deserialize, Default)]
+pub struct EmbeddingsRequest {
+    #[serde(default)]
+    pub model: Option<String>,
+    pub input: Value,
+    #[serde(default)]
+    pub encoding_format: Option<String>,
+    #[serde(default)]
+    pub dimensions: Option<Value>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub misaka: Option<EmbeddingsExt>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// What the entrance admitted of an embeddings request.
+#[derive(Debug)]
+pub struct AdmittedEmbeddings {
+    pub inputs: Vec<String>,
+    pub pool: kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    pub normalize: bool,
+    pub ignored_fields: Vec<String>,
+}
+
+/// **Every refusal of an embeddings request, before the worker** (RFC-0001 §2.8): fields this
+/// surface does not serve; an input that is not text (token-id arrays are the OpenAI form this lane
+/// refuses by name — the tokenizer is the class's, not the caller's); an empty or over-long input;
+/// more than [`MAX_EMBEDDING_INPUTS`] inputs; an `encoding_format` other than `float`;
+/// `dimensions` (the vector is the class's hidden width); an unknown pool.
+pub fn admit_embeddings(request: &EmbeddingsRequest, max_input_bytes: usize) -> Result<AdmittedEmbeddings, String> {
+    if !request.extra.is_empty() {
+        let names: Vec<String> = request.extra.keys().map(|k| format!("`{k}`")).collect();
+        return Err(format!("{} is not a field the embeddings surface serves; refused rather than dropped", names.join(", ")));
+    }
+    let inputs: Vec<String> = match &request.input {
+        Value::String(text) => vec![text.clone()],
+        Value::Array(items) => {
+            if items.is_empty() {
+                return Err("input is an empty list".to_string());
+            }
+            let mut texts = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    Value::String(text) => texts.push(text.clone()),
+                    other => {
+                        return Err(format!(
+                            "input[{i}] is {}: this surface embeds TEXT — token-id arrays are refused by name, because the tokenizer \
+                             is the class's and not the caller's",
+                            kind_of(other)
+                        ));
+                    }
+                }
+            }
+            texts
+        }
+        other => return Err(format!("input is {} where a string or a list of strings was expected", kind_of(other))),
+    };
+    if inputs.len() > MAX_EMBEDDING_INPUTS {
+        return Err(format!("{} inputs exceed the {MAX_EMBEDDING_INPUTS}-input cap (each is a forward pass)", inputs.len()));
+    }
+    for (i, text) in inputs.iter().enumerate() {
+        if text.is_empty() {
+            return Err(format!("input[{i}] is empty: an empty text has no embedding"));
+        }
+        if text.len() > max_input_bytes {
+            return Err(format!("input[{i}] is {} bytes and the cap is {max_input_bytes}", text.len()));
+        }
+    }
+    match request.encoding_format.as_deref() {
+        None | Some("float") => {}
+        Some(other) => {
+            return Err(format!("encoding_format {other:?} is refused by name: only \"float\" is served (the exact Q24 integers ride `misaka`)"));
+        }
+    }
+    if request.dimensions.as_ref().is_some_and(|v| !v.is_null()) {
+        return Err("dimensions is refused by name: the vector is the class's hidden width and is not truncated".to_string());
+    }
+    let ext = request.misaka.clone().unwrap_or_default();
+    if ext.claim == Some(true) {
+        return Err("misaka.claim is refused by name: an embedding claim is an RFC-0003 `Embedding`-profile tensor job (FP job version 10) on a \
+                    registered class with palw_gen_v1 armed, and this gateway's worker serves the free-prompt lane only — the pooled vector \
+                    is served locally without `claim`"
+            .to_string());
+    }
+    let pool = match ext.pool.as_deref() {
+        None | Some("mean") => kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::Mean,
+        Some("last") => kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::LastToken,
+        Some(other) => return Err(format!("misaka.pool {other:?} is neither \"mean\" nor \"last\"")),
+    };
+    let mut ignored = Vec::new();
+    if request.user.is_some() {
+        ignored.push("user".to_string());
+    }
+    Ok(AdmittedEmbeddings { inputs, pool, normalize: ext.normalize.unwrap_or(true), ignored_fields: ignored })
+}
+
+/// The most candidates one request may ask for (RFC-0001 §2.4). Each is a whole job.
+pub const MAX_CANDIDATES: u32 = 8;
+
+/// **Candidate `i`'s sampling seed: `H(base_seed ‖ i)`** (RFC-0001 §2.4) — SHA-256 under a domain,
+/// the 32-byte base seed, then the index as a little-endian `u32`. Every candidate, the first
+/// included, takes a derived seed, so no candidate's seed is the caller's own and any two differ
+/// whatever the base; and the derivation is public, so a verifier handed the base seed and `n`
+/// rebuilds every job's seed.
+pub fn candidate_seed_v1(base_seed: &[u8; 32], index: u32) -> [u8; 32] {
+    use sha2::Digest as _;
+    let mut h = sha2::Sha256::new();
+    h.update(b"misaka.palw.fp.n-candidate-seed.v1");
+    h.update(base_seed);
+    h.update(index.to_le_bytes());
+    h.finalize().into()
+}
+
+/// **Parse a request body and admit it** — the conformance corpus's path (the route calls
+/// [`parse_and_admit_with`], which this is the no-op case of).
+#[cfg(test)]
 pub fn parse_and_admit(body: &[u8], facts: &ChainFacts) -> Result<(ChatRequest, AdmittedRequest), String> {
-    let chat: ChatRequest = serde_json::from_slice(body).map_err(|e| format!("request body is not a chat completion: {e}"))?;
+    parse_and_admit_with(body, facts, |_| ()).map(|(chat, admitted, ())| (chat, admitted))
+}
+
+/// [`parse_and_admit`] with a step between parse and admission: `prepare` may change the parsed
+/// request (the artifact sidecar's generation defaults, RFC-0001 §2.9) and returns what the caller
+/// wants to keep. The change is made BEFORE admission, so a default is held to every rule an
+/// explicit field is.
+pub fn parse_and_admit_with<R>(
+    body: &[u8],
+    facts: &ChainFacts,
+    prepare: impl FnOnce(&mut ChatRequest) -> R,
+) -> Result<(ChatRequest, AdmittedRequest, R), String> {
+    let mut chat: ChatRequest = serde_json::from_slice(body).map_err(|e| format!("request body is not a chat completion: {e}"))?;
+    let kept = prepare(&mut chat);
     let admitted = admit_request(&chat, facts)?;
-    Ok((chat, admitted))
+    Ok((chat, admitted, kept))
 }
 
 /// **Every refusal, in one function, before the worker** (ADR-0096 Decision 1; invariant 6).
@@ -442,13 +602,42 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
                 .to_string(),
         );
     }
-    if let Some(n) = chat.n
-        && n != 1
-    {
+    // **RFC-0001 §2.4 (P1): `n` candidates are `n` jobs** — one inference is one claim, so the
+    // gateway issues `n` separate jobs for the same prompt under per-candidate seeds
+    // `H(base_seed ‖ i)` ([`candidate_seed_v1`]) and returns the `choices` together. The bounds are
+    // the entrance's, and each is a refusal by name: a count outside `1..=MAX_CANDIDATES`; a
+    // streamed response (one SSE stream cannot interleave jobs whose commitments differ); greedy
+    // decoding (`n` copies of one answer is `n` claims for the price of nothing); and a network
+    // whose decode-rules fence is dormant (a seed is refused there, so no two candidates differ).
+    let candidates = chat.n.unwrap_or(1);
+    if candidates == 0 || candidates > MAX_CANDIDATES {
         return Err(format!(
-            "n {n} is refused by name (ADR-0096 Decision 1): one inference is one claim (ADR-0077 R0), so this surface returns exactly \
-             one choice"
+            "n {candidates} is outside 1..={MAX_CANDIDATES} (RFC-0001 §2.4): each candidate is its own job and its own claim, so the \
+             count is bounded by name"
         ));
+    }
+    if candidates > 1 {
+        if chat.stream == Some(true) {
+            return Err(format!(
+                "n {candidates} with stream: true is refused by name (RFC-0001 §2.4): the candidates are separate jobs with separate \
+                 commitments and cannot share one stream — request them without streaming"
+            ));
+        }
+        if !facts.fp_decode_rules_armed {
+            // The sentence is ADR-0096 Decision 1's own (the conformance corpus pins it on a dormant
+            // network, where the Studio's copy reads it too), with what RFC-0001 §2.4 adds.
+            return Err(format!(
+                "n {candidates} is refused by name (ADR-0096 Decision 1): one inference is one claim (ADR-0077 R0), so this surface \
+                 returns exactly one choice while ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) is dormant — RFC-0001 \
+                 §2.4 serves n > 1 as n jobs under derived seeds on a network that has armed it"
+            ));
+        }
+        if chat.temperature.is_none_or(|t| t == 0.0) {
+            return Err(format!(
+                "n {candidates} needs temperature > 0 (RFC-0001 §2.4): at temperature 0 the {candidates} candidates are the same \
+                 answer, and each would be a claim"
+            ));
+        }
     }
     if chat.logprobs.as_ref().is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false))) {
         return Err(
@@ -560,6 +749,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         return Err(format!("{} messages exceeds the {}-message cap", chat.messages.len(), crate::MAX_CHAT_MESSAGES));
     }
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(chat.messages.len());
+    let mut images: Vec<crate::tensor::DecodedImageV1> = Vec::new();
     for (i, message) in chat.messages.iter().enumerate() {
         if !matches!(message.role.as_str(), "system" | "user" | "assistant" | "tool") {
             return Err(format!(
@@ -599,7 +789,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
                 ignored.push(name.to_string());
             }
         }
-        let content = flatten_content(i, message.content.as_ref())?;
+        let content = flatten_content(i, message.content.as_ref(), &mut images)?;
         let mut tool_calls = Vec::new();
         if let Some(calls) = &message.tool_calls
             && !calls.is_empty()
@@ -761,6 +951,9 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         stop_texts,
         ignored_fields: ignored,
         include_usage,
+        candidates,
+        sidecar_report: None,
+        images,
     })
 }
 
@@ -768,7 +961,7 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
 /// `null`. A non-text part is refused by NAME with its position — the class's model reads token
 /// ids and nothing else, and an image the entrance dropped would be a prompt the person did not
 /// write.
-fn flatten_content(i: usize, content: Option<&Value>) -> Result<String, String> {
+fn flatten_content(i: usize, content: Option<&Value>, images: &mut Vec<crate::tensor::DecodedImageV1>) -> Result<String, String> {
     match content {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(text)) => Ok(text.clone()),
@@ -783,6 +976,20 @@ fn flatten_content(i: usize, content: Option<&Value>) -> Result<String, String> 
                         Some(text) => texts.push(text),
                         None => return Err(format!("messages[{i}].content[{j}] is a text part without a `text` string")),
                     },
+                    // RFC-0001 §2.11: a decoded integer tensor, and nothing a codec would have to decode.
+                    Some(crate::tensor::IMAGE_TENSOR_PART) => {
+                        if images.len() >= crate::tensor::MAX_IMAGES {
+                            return Err(format!(
+                                "messages[{i}].content[{j}] is image {} and a job carries at most {}",
+                                images.len() + 1,
+                                crate::tensor::MAX_IMAGES
+                            ));
+                        }
+                        images.push(crate::tensor::parse_image_tensor_part(&format!("messages[{i}].content[{j}]"), members)?);
+                    }
+                    Some(other) if crate::tensor::is_encoded_image_kind(other) => {
+                        return Err(crate::tensor::refuse_encoded_image(&format!("messages[{i}].content[{j}]"), other));
+                    }
                     Some(other) => {
                         return Err(format!(
                             "messages[{i}].content[{j}] is a `{other}` part, and this lane carries text only (ADR-0096 Decision 1): the \
@@ -1276,7 +1483,6 @@ mod tests {
         assert_eq!(admitted.turns[0], ChatTurn::text("system", "s"));
 
         for (kind, needle) in [
-            ("image_url", "messages[1].content[1] is a `image_url` part"),
             ("input_audio", "`input_audio` part"),
             ("file", "`file` part"),
         ] {
@@ -1285,6 +1491,19 @@ mod tests {
             assert!(err.contains(needle), "{err}");
             assert!(err.contains("this lane carries text only (ADR-0096 Decision 1)"), "{err}");
         }
+        // RFC-0001 §2.11: an encoded image is refused by name with what to send; a decoded tensor is admitted.
+        for kind in ["image_url", "input_image"] {
+            let bad = json!([{ "role": "user", "content": [{ "type": "text", "text": "look" }, { "type": kind, kind: {} }] }]);
+            let err = admit(json!({ "messages": bad })).unwrap_err();
+            assert!(err.contains("messages[0].content[1]") && err.contains("decoded integer tensors only"), "{err}");
+        }
+        let tensor = json!({ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "0a0b0c0d0e0f" });
+        let admitted = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "text", "text": "look" }, tensor.clone(), tensor] }] })).unwrap();
+        assert_eq!(admitted.turns[0], ChatTurn::text("user", "look"), "an image part adds no text");
+        assert_eq!(admitted.images.len(), 2);
+        assert_eq!((admitted.images[0].h, admitted.images[0].w, admitted.images[0].rgb.as_slice()), (1, 2, &[10, 11, 12, 13, 14, 15][..]));
+        let err = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "00" }] }] })).unwrap_err();
+        assert!(err.contains("hex characters"), "{err}");
         let err = admit(json!({ "messages": [{ "role": "user", "content": ["plain string part"] }] })).unwrap_err();
         assert!(err.contains("messages[0].content[0] is a string where a {type, …} part was expected"), "{err}");
         let err = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "text" }] }] })).unwrap_err();
@@ -1482,7 +1701,7 @@ mod tests {
         let _: fn(&ChatRequest, &ChainFacts) -> Result<AdmittedRequest, String> = admit_request;
         let source = std::include_str!("main.rs");
         let post_arm = source.find("(\"POST\", \"/v1/chat/completions\")").expect("the POST route");
-        let admitted_at = source[post_arm..].find("surface::parse_and_admit(").expect("the route admits") + post_arm;
+        let admitted_at = source[post_arm..].find("surface::parse_and_admit_with(").expect("the route admits") + post_arm;
         let reserved_at = source[post_arm..].find("in_flight.fetch_add(").expect("the route reserves") + post_arm;
         let handled_at = source[post_arm..].find("handle_chat(config").expect("the route runs") + post_arm;
         assert!(admitted_at < reserved_at && reserved_at < handled_at, "admit, then reserve the queue, then touch the worker");
@@ -1517,6 +1736,8 @@ mod tests {
                 json!({ "messages": [{ "role": "user", "content": "u", "audio": { "id": "x" } }] }),
                 "messages[0].audio is refused by name",
             ),
+            (json!({ "messages": user("u"), "n": 0 }), "n 0 is outside 1..=8 (RFC-0001 §2.4)"),
+            (json!({ "messages": user("u"), "n": 9 }), "n 9 is outside 1..=8 (RFC-0001 §2.4)"),
             (
                 json!({ "messages": user("u"), "n": 2 }),
                 "n 2 is refused by name (ADR-0096 Decision 1): one inference is one claim (ADR-0077 R0)",
@@ -1894,5 +2115,88 @@ mod tests {
             digest, OPENAI_SURFACE_V1_CORPUS_SHA256,
             "the corpus changed: update OPENAI_SURFACE_V1_CORPUS_SHA256 here, the Studio's copy of the directory and its constant, and ADR-0096 §9"
         );
+    }
+
+    fn admit_on(request: Value, facts: &ChainFacts) -> Result<AdmittedRequest, String> {
+        parse_and_admit(&serde_json::to_vec(&request).unwrap(), facts).map(|(_, admitted)| admitted)
+    }
+
+    /// **RFC-0001 §2.4: `n` candidates, each its own job under `H(base_seed ‖ i)`.** The bounds are
+    /// refusals by name — a count outside 1..=8, a stream, greedy decoding, a dormant sampler — and an
+    /// armed network admits `n` with a temperature and counts it.
+    #[test]
+    fn n_candidates_are_admitted_where_they_can_differ_and_refused_by_name_where_they_cannot() {
+        let armed = ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let ok = admit_on(json!({ "messages": user("u"), "n": 4, "temperature": 0.8, "seed": "11".repeat(32) }), &armed).unwrap();
+        assert_eq!(ok.candidates, 4);
+        assert_eq!(admit_on(json!({ "messages": user("u") }), &armed).unwrap().candidates, 1);
+        for (request, needle) in [
+            (json!({ "messages": user("u"), "n": 4, "temperature": 0.8, "stream": true }), "n 4 with stream: true is refused by name"),
+            (json!({ "messages": user("u"), "n": 4 }), "n 4 needs temperature > 0"),
+            (json!({ "messages": user("u"), "n": 4, "temperature": 0.0 }), "n 4 needs temperature > 0"),
+            (json!({ "messages": user("u"), "n": 9, "temperature": 0.8 }), "n 9 is outside 1..=8"),
+            (json!({ "messages": user("u"), "n": 0, "temperature": 0.8 }), "n 0 is outside 1..=8"),
+        ] {
+            let err = admit_on(request.clone(), &armed).expect_err(&format!("{request} must be refused"));
+            assert!(err.contains(needle), "{needle:?} in {err}");
+        }
+        let err = admit_on(json!({ "messages": user("u"), "n": 2, "temperature": 0.8 }), &dormant()).unwrap_err();
+        assert!(err.contains("n 2 is refused by name (ADR-0096 Decision 1)") && err.contains("RFC-0001 §2.4"), "{err}");
+    }
+
+    #[test]
+    fn candidate_seeds_are_the_domain_separated_hash_of_the_base_seed_and_the_index() {
+        let base = [7u8; 32];
+        let seeds: Vec<[u8; 32]> = (0..8).map(|i| candidate_seed_v1(&base, i)).collect();
+        for (i, a) in seeds.iter().enumerate() {
+            assert_ne!(a, &base, "no candidate runs under the caller's own seed");
+            for b in &seeds[i + 1..] {
+                assert_ne!(a, b, "every candidate has its own seed");
+            }
+        }
+        assert_eq!(candidate_seed_v1(&base, 3), seeds[3], "deterministic");
+        assert_ne!(candidate_seed_v1(&[8u8; 32], 3), seeds[3], "a different base is a different seed");
+        // The rule is public: sha256(domain || base || u32_le(i)).
+        use sha2::Digest as _;
+        let mut h = sha2::Sha256::new();
+        h.update(b"misaka.palw.fp.n-candidate-seed.v1");
+        h.update(base);
+        h.update(2u32.to_le_bytes());
+        assert_eq!(<[u8; 32]>::from(h.finalize()), seeds[2]);
+    }
+
+    fn embeddings(request: Value) -> Result<AdmittedEmbeddings, String> {
+        let parsed: EmbeddingsRequest = serde_json::from_value(request).map_err(|e| e.to_string())?;
+        admit_embeddings(&parsed, 1024)
+    }
+
+    /// **RFC-0001 §2.8: every refusal of an embeddings request, by name, before the worker.**
+    #[test]
+    fn an_embeddings_request_is_admitted_as_text_and_refused_by_name_otherwise() {
+        let ok = embeddings(json!({ "input": ["a", "b"], "model": "m", "user": "u", "misaka": { "pool": "last", "normalize": false } })).unwrap();
+        assert_eq!((ok.inputs.len(), ok.normalize), (2, false));
+        assert_eq!(ok.pool, kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::LastToken);
+        assert_eq!(ok.ignored_fields, vec!["user"]);
+        let default = embeddings(json!({ "input": "one text" })).unwrap();
+        assert_eq!((default.inputs, default.normalize), (vec!["one text".to_string()], true));
+        assert_eq!(default.pool, kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::Mean);
+        for (request, needle) in [
+            (json!({ "input": [1, 2, 3] }), "input[0] is a number: this surface embeds TEXT"),
+            (json!({ "input": [[1, 2]] }), "token-id arrays are refused by name"),
+            (json!({ "input": [] }), "input is an empty list"),
+            (json!({ "input": "" }), "input[0] is empty"),
+            (json!({ "input": 5 }), "input is a number where a string or a list of strings"),
+            (json!({ "input": "x".repeat(2000) }), "input[0] is 2000 bytes and the cap is 1024"),
+            (json!({ "input": (0..17).map(|_| "x").collect::<Vec<_>>() }), "17 inputs exceed the 16-input cap"),
+            (json!({ "input": "x", "encoding_format": "base64" }), "encoding_format \"base64\" is refused by name"),
+            (json!({ "input": "x", "dimensions": 64 }), "dimensions is refused by name"),
+            (json!({ "input": "x", "misaka": { "pool": "max" } }), "misaka.pool \"max\" is neither"),
+            (json!({ "input": "x", "misaka": { "claim": true } }), "misaka.claim is refused by name"),
+            (json!({ "input": "x", "task_type": "retrieval" }), "`task_type` is not a field the embeddings surface serves"),
+        ] {
+            let err = embeddings(request.clone()).expect_err(&format!("{request} must be refused"));
+            assert!(err.contains(needle), "{needle:?} in {err}");
+        }
+        assert!(embeddings(json!({ "input": "x", "encoding_format": "float", "dimensions": null })).is_ok());
     }
 }
