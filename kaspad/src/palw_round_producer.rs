@@ -53,6 +53,10 @@ pub const PALW_ROUND_PRODUCER: &str = "palw-round-producer";
 /// times the expected work — enough that a miss means something is wrong rather than unlucky.
 const NONCES_PER_ROUND_BLOCK: u64 = 1 << 20;
 
+/// The refusal text of a round the chain's clock floor would refuse (`round_adapt_block_template` asks the header stage's
+/// own predicate): the ticket is passed over without a signature, as an expired one is.
+const ROUND_PAST_THE_CLOCK_FLOOR: &str = "the round is past the clock floor (not signed)";
+
 /// How often the worker looks at the clock between rounds.
 const POLL_MS: u64 = 200;
 
@@ -186,6 +190,9 @@ impl PalwRoundProducerService {
                             info!("[{PALW_ROUND_PRODUCER}] {produced} round blocks produced (latest round {round})");
                         }
                     }
+                    Err(err) if err.starts_with(ROUND_PAST_THE_CLOCK_FLOOR) => {
+                        trace!("[{PALW_ROUND_PRODUCER}] round {round} not signed: {err}")
+                    }
                     Err(err) => warn!("[{PALW_ROUND_PRODUCER}] round {round}: {err}"),
                 }
             }
@@ -212,8 +219,14 @@ impl PalwRoundProducerService {
             .get_block_template(session, MinerData::new(payout.clone(), Vec::new()))
             .await
             .map_err(|e| format!("no block template: {e}"))?;
-        let mut adapted =
-            session.round_adapt_block_template(template, round, payout).map_err(|e| format!("the lane refused the template: {e}"))?;
+        let mut adapted = session.round_adapt_block_template(template, round, payout).map_err(|e| match e {
+            // A round whose start the clock floor (H5) has passed: nothing is solved or signed for it (the 986 refused
+            // back-signed rounds of 2026-10-01). Said once as a short line by the caller, not as a warning per ticket.
+            kaspa_consensus_core::errors::block::RuleError::ClockStepBeforeItsSlot(..) => {
+                format!("{ROUND_PAST_THE_CLOCK_FLOOR}: {e}")
+            }
+            e => format!("the lane refused the template: {e}"),
+        })?;
         let header0 = adapted.block.header.clone();
         let network_id = self.config.network_id;
         let nonce = tokio::task::spawn_blocking(move || {

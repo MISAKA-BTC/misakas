@@ -132,3 +132,12 @@ drops out of the order, so the next tick starts further down the same oldest-fir
 Tests: `the_licence_collector_rests_a_claim_whose_candidates_came_to_nothing_and_a_tick_has_a_budget`; kaspad lib `-- palw` 446/0. Node-only; a licence whose candidates did not change and whose state did can wait at most 2 DAA longer.
 Expected: tail ≤ ~45 s (20 s + 20 s + the carrier work) on a 5.104 seat, the tick toward 100-120 s with the sweep's 75 s (the sweep is the next phase: its per-duty cost is now state reads and the receipt pool).
 Not done, and the structural fix: a fold should not clone the state (copy-on-write rows in `TransitionBuilder`) — consensus-core, node-only, its own lane.
+
+## 8. The execution lane's wedge (int-10.7): a stale round tip, and back-signed rounds
+
+(`lanes/evidence/multi-block-gap-1003.md` R1/R2.) b0's round producer: 0 round blocks since 10-01 10:12, 10,106 refusals `violating bounded merge depth`, because `round_adapt_block_template` chose round-tip parents by
+"older round" and "anchor is a chain ancestor" alone, and an unmerged round tip older than the merge-depth window (`7c0bb084`) is a parent the header stage cannot take — every template parented on it, and it can never be merged, so a restart did not clear it.
+**F6**: `BlockDepthManager::merge_breaking_reds(ghostdag_data, merge_depth_root)` is `check_bounded_merge_depth`'s predicate extracted verbatim; the header stage, the virtual's `remove_bounded_merge_breaking_parents` and the round template all call it
+(the validator's behaviour is unchanged), and the template skips a tip whose tentative mergeset names a red. **F7**: the template asks the header stage's own H5 predicate (`daa_window.clock.step_stamp_admits(timestamp)`) and returns
+`ClockStepBeforeItsSlot` before anything is solved or signed; the producer passes such a round over at `trace`. Tests: `the_round_templates_merge_depth_predicate_names_the_stale_tip_the_validator_refuses` (stale side chain: named and refused by the header stage; kosherized: empty and accepted);
+consensus lib `-- round merge_depth bounded` 24/0 (incl. the t12 round-lane e2e); kaspad palw 447/0. The stale tip itself stays in b0's DAG (a round block is a red sidecar nothing needs merged); with F6 it no longer stops production.

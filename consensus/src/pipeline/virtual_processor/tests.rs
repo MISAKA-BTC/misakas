@@ -16782,3 +16782,66 @@ mod msk26a_slash_genuineness {
         assert!(g.is_ok());
     }
 }
+
+/// **The merge-depth predicate the round lane's template asks is the validator's** (the 2026-10-03 execution-lane wedge).
+///
+/// A tip older than the merge-depth window that no chain block ever merged made every round template parent on it,
+/// and the header stage refused every block with `ViolatingBoundedMergeDepth` — 10,106 times on b0, the lane's only 8k
+/// producer. `round_adapt_block_template` now drops a tip whose merge `BlockDepthManager::merge_breaking_reds` names,
+/// the very function `check_bounded_merge_depth` and the virtual's parent selection run. This is the DAG of
+/// `bounded_merge_depth_test` (a stale side chain against a long selected chain), asking the predicate where the
+/// header stage's verdict is known: stale tip → named (and refused), kosherized tip → empty (and accepted).
+#[tokio::test]
+async fn the_round_templates_merge_depth_predicate_names_the_stale_tip_the_validator_refuses() {
+    let mut params = DEVNET_PARAMS;
+    params.evm_activation_daa_score = u64::MAX;
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.ghostdag_k = 5;
+            p.merge_depth = 7;
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let genesis = config.genesis.hash;
+
+    let mut selected_chain = vec![genesis];
+    for i in 1..(config.merge_depth + 3) {
+        let hash: BlockHash = (i + 1).into();
+        consensus.add_header_only_block_with_parents(hash, vec![*selected_chain.last().unwrap()]).await.unwrap();
+        selected_chain.push(hash);
+    }
+    let mut stale_chain = vec![genesis];
+    for i in 1..(config.merge_depth + 2) {
+        let hash: BlockHash = (i + config.merge_depth + 3).into();
+        consensus.add_header_only_block_with_parents(hash, vec![*stale_chain.last().unwrap()]).await.unwrap();
+        stale_chain.push(hash);
+    }
+    let services = &consensus.services;
+    let pruning_point = consensus.pruning_point();
+    let asks = |parents: Vec<BlockHash>| {
+        let data = services.ghostdag_manager.ghostdag(&parents);
+        let root = services.depth_manager.calc_merge_depth_root(&data, pruning_point);
+        services.depth_manager.merge_breaking_reds(&data, root)
+    };
+
+    // The stale tip beside the selected chain: red, outside the window, kosherized by nobody — named, and the validator refuses it.
+    let stale = vec![stale_chain[1], *selected_chain.last().unwrap()];
+    assert!(!asks(stale.clone()).is_empty(), "a stale tip no blue covers is named by the predicate");
+    assert!(
+        matches!(
+            consensus.add_header_only_block_with_parents(100.into(), stale).await,
+            Err(kaspa_consensus_core::errors::block::RuleError::ViolatingBoundedMergeDepth)
+        ),
+        "and the header stage refuses exactly that merge"
+    );
+    // The selected chain alone merges nothing red: empty, as a template with no stale tip.
+    assert!(asks(vec![*selected_chain.last().unwrap()]).is_empty(), "no reds, nothing to refuse");
+    // A tip a blue kosherizes is empty — and the validator accepts it (`bounded_merge_depth_test`'s kosherizing block).
+    let kosherized = vec![stale_chain[stale_chain.len() - 3], selected_chain[selected_chain.len() - 3]];
+    assert!(asks(kosherized.clone()).is_empty(), "within the window the predicate names nothing");
+    consensus.add_header_only_block_with_parents(102.into(), kosherized).await.expect("the validator accepts what the predicate passes");
+
+    consensus.shutdown(wait_handles);
+}
