@@ -277,6 +277,90 @@ pub fn palw_floor_state_change_v1(entries: &[crate::palw_state_v2::PalwDeltaEntr
     (from != to).then_some((from, to))
 }
 
+// ---- ADR-0165 §00.9: anchor duty — the pure rule, ONE spelling for the producer and the tests -----------------------------
+
+/// **How long a claim waits for an operator attempt, in DAA slots, before an operator's floor producer that holds only because of the
+/// idle-only policy mines ONE binder.** Half an hour is 15 slots, a day 720: 30 slots (an hour) is far inside the bind window's
+/// backstop (580 DAA past the slot) and far beyond the 3-slot gap at which operator REAL attempts anchor on their own (so it never
+/// fires while they do). At most one binder a node a wait, and the wait is staggered by bond ([`palw_floor_anchor_duty_stagger_v1`]) so
+/// the operators do not all fire in one slot. A node policy: it is no consensus rule and moves no fingerprint.
+pub const PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1: u64 = 30;
+
+/// The stagger's width: operators fire 0..8 slots apart.
+pub const PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1: u64 = 8;
+
+/// The stagger between operators' anchor duty, 0..8 slots, from the first byte of the bond's own transaction id — one operator fires
+/// first, and its binder clears `binder_due` at the others before their waits end.
+pub const fn palw_floor_anchor_duty_stagger_v1(bond_txid_first_byte: u8) -> u64 {
+    (bond_txid_first_byte as u64) % PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1
+}
+
+/// **How long a claim has waited for an anchor, as the producer's loop keeps it**: the DAA at which `binder_due` last turned true and
+/// has stayed so. It restarts when the duty fires (one binder, then the wait begins again) and breaks the moment a claim is no longer
+/// due. Pure, so the producer and the pipeline tests keep it one way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwFloorAnchorDutyWaitV1 {
+    since: Option<u64>,
+}
+
+impl PalwFloorAnchorDutyWaitV1 {
+    /// Observe the facts at `daa`: the wait starts when `binder_due` turns true and breaks when it turns false. Returns how many slots
+    /// the claim has waited (0 at the first observation).
+    pub fn observe(&mut self, binder_due: bool, daa: u64) -> u64 {
+        match (binder_due, self.since) {
+            (true, None) => self.since = Some(daa),
+            (false, _) => self.since = None,
+            (true, Some(_)) => {}
+        }
+        self.since.map_or(0, |since| daa.saturating_sub(since))
+    }
+
+    /// The duty fired at `daa`: the wait starts again from it.
+    pub fn fired(&mut self, daa: u64) {
+        self.since = Some(daa);
+    }
+
+    /// The DAA the current wait began at, if one is running.
+    pub fn since(&self) -> Option<u64> {
+        self.since
+    }
+}
+
+/// What the anchor duty's rule reads, from the producer's facts and its readiness verdict.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwFloorAnchorDutyInputV1<'a> {
+    /// `PalwProducerFactsV2::binder_due`: the fence in force at the candidate, the bond an operator's past lane A, a claim `Provisional`
+    /// past its anchor slot.
+    pub binder_due: bool,
+    /// `PalwProducerFactsV2::is_base_class`: this producer mines the floor.
+    pub is_base_class: bool,
+    /// The readiness verdict IS "the model registry admits no new claim of this class now"
+    /// (`PALW_NOT_READY_CLASS_NOT_ADMITTING_V2`) — not another hold.
+    pub hold_is_class_not_admitting: bool,
+    /// `PalwProducerFactsV2::class_admission_refusal`, the registry's own words.
+    pub class_refusal: Option<&'a str>,
+    /// Slots the claim has waited ([`PalwFloorAnchorDutyWaitV1::observe`]).
+    pub due_slots: u64,
+    /// The wait: [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] unless a salted drill shortened it.
+    pub after_slots: u64,
+    /// This bond's stagger ([`palw_floor_anchor_duty_stagger_v1`]).
+    pub stagger: u64,
+}
+
+/// **Does the floor producer's idle-only hold give way to ANCHOR DUTY?** Past lane A a claim binds only in a block that is or merges
+/// an OPERATOR's attempt at or past its slot; while the chain is Normal the operators' floor producers hold, and where the REAL work
+/// comes from non-operators no operator attempt exists — the claim waits for the bind window's backstop. A floor attempt the fold
+/// refuses (`FloorNotIdle`) is still an operator attempt by its header, so it anchors: the producer mines it, once, when a claim has
+/// waited `after_slots` slots plus its stagger for one. True only for the floor class, only where the hold is the idle-only refusal
+/// and nothing else, and only with `binder_due`. Pure, so the rule is tested without a node.
+pub fn palw_floor_anchor_duty_v1(input: &PalwFloorAnchorDutyInputV1<'_>) -> bool {
+    input.binder_due
+        && input.is_base_class
+        && input.hold_is_class_not_admitting
+        && input.class_refusal.is_some_and(palw_is_floor_not_idle_refusal_v1)
+        && input.due_slots >= input.after_slots.saturating_add(input.stagger)
+}
+
 /// **The entries a testnet-12 flag-day list takes to arm the Useful Work Transition's two consensus
 /// fences** (ADR-0165), through their own `set`, which writes the bundle's mirror.
 pub const PALW_T12_FLOOR_RESERVE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
@@ -758,6 +842,56 @@ mod tests {
         assert_eq!(palw_floor_state_change_v1(&[rw(Some(normal), None), rw(None, Some(probe))]), Some((normal, probe)));
         // A move that ends where it began is no move.
         assert_eq!(palw_floor_state_change_v1(&[rw(Some(normal), Some(idle)), rw(Some(idle), Some(normal))]), None);
+    }
+
+    /// **The anchor duty's rule and its wait** (ADR-0165 §00.9): floor class, the idle-only refusal, a due claim, the wait and the
+    /// stagger — and nothing else.
+    #[test]
+    fn the_anchor_duty_fires_for_a_claim_that_has_waited_and_for_nothing_else() {
+        let refusal = crate::palw_state_v2::PalwStateV2Error::FloorNotIdle {
+            class: crate::Hash64::default(),
+            daa: 9,
+            state: PalwFloorStateV1::default(),
+        }
+        .to_string();
+        let base = PalwFloorAnchorDutyInputV1 {
+            binder_due: true,
+            is_base_class: true,
+            hold_is_class_not_admitting: true,
+            class_refusal: Some(&refusal),
+            due_slots: PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
+            after_slots: PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
+            stagger: 0,
+        };
+        assert!(palw_floor_anchor_duty_v1(&base), "the wait is over: one binder");
+        assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { due_slots: base.after_slots - 1, ..base }), "not yet");
+        assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 4, ..base }), "this bond waits four slots longer");
+        assert!(palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 4, due_slots: base.after_slots + 4, ..base }));
+        assert!(palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { after_slots: 5, due_slots: 5, ..base }), "a drill's shorter wait is the wait");
+        for (what, input) in [
+            ("no claim due", PalwFloorAnchorDutyInputV1 { binder_due: false, ..base }),
+            ("a REAL class", PalwFloorAnchorDutyInputV1 { is_base_class: false, ..base }),
+            ("another hold", PalwFloorAnchorDutyInputV1 { hold_is_class_not_admitting: false, ..base }),
+            ("another registry refusal", PalwFloorAnchorDutyInputV1 { class_refusal: Some("class … is Prefetching under the model registry"), ..base }),
+            ("no refusal", PalwFloorAnchorDutyInputV1 { class_refusal: None, ..base }),
+        ] {
+            assert!(!palw_floor_anchor_duty_v1(&input), "{what}: no duty");
+        }
+        // The stagger spreads operators over eight slots and never beyond.
+        let staggers: std::collections::BTreeSet<u64> = (0..=255u8).map(palw_floor_anchor_duty_stagger_v1).collect();
+        assert_eq!(staggers, (0..PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1).collect());
+        // The wait: starts when a claim turns due, counts slots, breaks when it is not due, restarts when the duty fires.
+        let mut wait = PalwFloorAnchorDutyWaitV1::default();
+        assert_eq!(wait.observe(false, 100), 0);
+        assert_eq!(wait.since(), None);
+        assert_eq!(wait.observe(true, 100), 0, "the wait starts at the first due observation");
+        assert_eq!(wait.observe(true, 112), 12);
+        assert_eq!(wait.observe(false, 113), 0, "a claim that is no longer due breaks it");
+        assert_eq!(wait.observe(true, 120), 0, "and a new wait starts afresh");
+        assert_eq!(wait.observe(true, 150), 30);
+        wait.fired(150);
+        assert_eq!(wait.observe(true, 151), 1, "one binder, then the wait starts again");
+        assert_eq!(wait.since(), Some(150));
     }
 
     /// **The refusal's words are the ones the drill greps** — `FloorNotIdle`'s message carries the marker, and the producer's text

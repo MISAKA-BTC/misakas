@@ -512,27 +512,19 @@ pub(crate) fn palw_producer_binds_at_ceiling_v1(facts: &PalwProducerFactsV2, hol
     facts.binder_due && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)
 }
 
-/// **ADR-0165 §00.9: how long a claim waits for an operator attempt, in DAA slots, before an operator's floor producer that holds
-/// only because of the idle-only policy mines ONE binder.** Half an hour is 15 slots, a day 720: 30 slots (an hour) is far inside the
-/// bind window's backstop (580 DAA past the slot) and far beyond the 3-slot gap at which operator REAL attempts anchor on their own
-/// (so it never fires while they do). At most one binder a node a wait, and the wait is staggered by bond
-/// ([`palw_floor_anchor_duty_stagger_v1`]) so the operators do not all fire in one slot.
-pub(crate) const PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1: u64 = 30;
+/// **ADR-0165 §00.9: how long a claim waits for an operator attempt before an operator's floor producer that holds only because of
+/// the idle-only policy mines ONE binder** — consensus-core's constant, the one the pipeline tests run the rule with.
+pub(crate) use kaspa_consensus_core::palw_real_share_v1::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1;
 
-/// The stagger between operators' anchor duty, 0..=7 slots, from the bond's own transaction id — one operator fires first, its binder
-/// clears `binder_due` at the others before their waits end.
+/// The stagger between operators' anchor duty, 0..8 slots, from the bond's own transaction id (consensus-core's rule).
 pub(crate) fn palw_floor_anchor_duty_stagger_v1(bond: &TransactionOutpoint) -> u64 {
-    u64::from(bond.transaction_id.as_byte_slice()[0] % 8)
+    kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_stagger_v1(bond.transaction_id.as_byte_slice()[0])
 }
 
-/// **ADR-0165 §00.9: does the floor producer's idle-only hold give way to ANCHOR DUTY?** Past lane A a claim binds only in a block
-/// that is or merges an OPERATOR's attempt at or past its slot; while the chain is Normal the operators' floor producers hold, and
-/// where the REAL work comes from non-operators no operator attempt exists — the claim waits for the bind window's backstop. A floor
-/// attempt the fold refuses (`FloorNotIdle`) is still an operator attempt by its header, so it anchors: the producer mines it, once,
-/// when a claim has waited `after_slots` ([`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`], 30, unless a drill shortened it) slots plus its
-/// stagger for one. True only for the floor class,
-/// only where the hold is the idle-only refusal and nothing else, and only with `PalwProducerFactsV2::binder_due` (the fence in force,
-/// the bond an operator's, a claim `Provisional` past its slot). Pure, so the rule is tested without a node.
+/// **ADR-0165 §00.9: does the floor producer's idle-only hold give way to ANCHOR DUTY?** Consensus-core's rule
+/// ([`kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_v1`]) over this producer's facts and verdict — the one function
+/// the pipeline tests run on the real chain's facts. True only for the floor class, only where the hold is the idle-only refusal and
+/// nothing else, only with `PalwProducerFactsV2::binder_due`, and only once a claim has waited `after_slots` slots plus its stagger.
 pub(crate) fn palw_floor_anchor_duty_v1(
     facts: &PalwProducerFactsV2,
     hold: &PalwProducerHoldV1,
@@ -541,11 +533,15 @@ pub(crate) fn palw_floor_anchor_duty_v1(
     stagger: u64,
 ) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
-    facts.binder_due
-        && facts.is_base_class
-        && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)
-        && facts.class_admission_refusal.as_deref().is_some_and(kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1)
-        && due_slots >= after_slots.saturating_add(stagger)
+    kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_v1(&kaspa_consensus_core::palw_real_share_v1::PalwFloorAnchorDutyInputV1 {
+        binder_due: facts.binder_due,
+        is_base_class: facts.is_base_class,
+        hold_is_class_not_admitting: *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
+        class_refusal: facts.class_admission_refusal.as_deref(),
+        due_slots,
+        after_slots,
+        stagger,
+    })
 }
 
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
@@ -939,7 +935,7 @@ impl PalwProducerService {
         let mut last_hold_at: Option<std::time::Instant> = None;
         let mut last_floor_ignore_at: Option<std::time::Instant> = None;
         // ADR-0165 §00.9: the DAA at which a claim began waiting for an anchor (`binder_due` true and unbroken).
-        let mut binder_due_since_daa: Option<u64> = None;
+        let mut anchor_duty_wait = kaspa_consensus_core::palw_real_share_v1::PalwFloorAnchorDutyWaitV1::default();
         // When this producer last made progress — started, or produced a block. A hold measured from
         // here past `PALW_PRODUCER_STARVED_AFTER` is logged as the failure it is (`log_producer_hold_v1`).
         let mut last_progress_at = std::time::Instant::now();
@@ -1120,12 +1116,7 @@ impl PalwProducerService {
             // **ADR-0165 §00.9: how long a claim has waited for an anchor** — the DAA at which `binder_due` last turned true and has
             // stayed so, so the floor producer's anchor duty (below) fires only for a claim that has waited, never for one the
             // operators' own REAL attempts are about to anchor.
-            match (facts.binder_due, binder_due_since_daa) {
-                (true, None) => binder_due_since_daa = Some(facts.daa_score),
-                (false, _) => binder_due_since_daa = None,
-                (true, Some(_)) => {}
-            }
-            let due_slots = binder_due_since_daa.map_or(0, |since| facts.daa_score.saturating_sub(since));
+            let due_slots = anchor_duty_wait.observe(facts.binder_due, facts.daa_score);
             let floor_duty = matches!(
                 &ready,
                 Err(hold) if palw_floor_anchor_duty_v1(
@@ -1155,9 +1146,9 @@ impl PalwProducerService {
                     "[{PALW_PRODUCER}] anchor duty: the floor is held as the idle-only fallback, and a claim has waited {due_slots} slots \
                      (since DAA {}) for an operator attempt — mining ONE binder, refused by the fold (no claim, no weight) and still an \
                      operator attempt that binds the due claims",
-                    binder_due_since_daa.unwrap_or(facts.daa_score)
+                    anchor_duty_wait.since().unwrap_or(facts.daa_score)
                 );
-                binder_due_since_daa = Some(facts.daa_score);
+                anchor_duty_wait.fired(facts.daa_score);
             } else if let Err(hold) = ready {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
@@ -3077,8 +3068,10 @@ mod p6_tests {
         // And the worker feeds it the unbroken wait, resets it after the duty fires, and only on the branch that mines.
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
-        assert!(src.contains("(true, None) => binder_due_since_daa = Some(facts.daa_score),"), "the wait starts when binder_due turns true");
-        assert!(src.contains("(false, _) => binder_due_since_daa = None,"), "and breaks when it turns false");
+        assert!(
+            src.contains("let due_slots = anchor_duty_wait.observe(facts.binder_due, facts.daa_score);"),
+            "the wait starts when binder_due turns true and breaks when it turns false (consensus-core's tracker)"
+        );
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("anchor_duty_after_slots: match args.palw_drill_anchor_duty_after_slots {"));
         assert!(
@@ -3087,7 +3080,7 @@ mod p6_tests {
         );
         let fire = src.find("} else if floor_duty {").expect("the duty branch");
         let tail = &src[fire..fire + 1200];
-        assert!(tail.contains("binder_due_since_daa = Some(facts.daa_score);"), "one binder, then the wait starts again");
+        assert!(tail.contains("anchor_duty_wait.fired(facts.daa_score);"), "one binder, then the wait starts again");
         assert!(!tail[..tail.find("} else if let Err(hold) = ready {").expect("the hold branch")].contains("continue;"), "the duty branch mines");
     }
 
