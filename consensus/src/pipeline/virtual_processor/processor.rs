@@ -6979,6 +6979,8 @@ impl VirtualStateProcessor {
                 prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
                 // RFC-0001 §2.6 stage 2b, at the ACCEPTING block's DAA.
                 prefix_inherit_armed: self.palw_fp_prefix_inherit.is_some_and(|fence| fence.is_active(block_daa)),
+                // RFC-0001 stage 2b: whether the class's leaves are inheritance-safe (refused by name otherwise).
+                prefix_inherit_class_safe: state.class_prefix_inherit_safe_v1(class_id).is_ok(),
                 // ADR-0096 Decision 8 and RFC-0001 §2.5, at the ACCEPTING block's DAA.
                 constraint_armed: self.palw_fp_decode_constraint.is_some_and(|fence| fence.is_active(block_daa)),
                 constraint_v2_armed: self.palw_fp_constraint_v2.is_some_and(|fence| fence.is_active(block_daa)),
@@ -15437,6 +15439,8 @@ impl VirtualStateProcessor {
                 prefix_state_armed: self.palw_fp_prefix_state.is_some_and(|fence| fence.is_active(block_daa)),
                 // RFC-0001 §2.6 stage 2b, at the ACCEPTING block's DAA.
                 prefix_inherit_armed: self.palw_fp_prefix_inherit.is_some_and(|fence| fence.is_active(block_daa)),
+                // RFC-0001 stage 2b: whether the class's leaves are inheritance-safe (refused by name otherwise).
+                prefix_inherit_class_safe: state.class_prefix_inherit_safe_v1(class_id).is_ok(),
                 // ADR-0096 Decision 8 and RFC-0001 §2.5, at the ACCEPTING block's DAA.
                 constraint_armed: self.palw_fp_decode_constraint.is_some_and(|fence| fence.is_active(block_daa)),
                 constraint_v2_armed: self.palw_fp_constraint_v2.is_some_and(|fence| fence.is_active(block_daa)),
@@ -15490,7 +15494,7 @@ impl VirtualStateProcessor {
                     logits_q24: state.class_commits_q24_logits_v1(class_id),
                     // An evaluation claim is not a prefix-state claim; its class's tokenizer listing binds it as any job's.
                     prefix_state_armed: false,
-                    prefix_inherit_armed: false,
+                    prefix_inherit_armed: false, prefix_inherit_class_safe: false,
                     constraint_armed: false,
                     constraint_v2_armed: false,
                     tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::of(

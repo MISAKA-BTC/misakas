@@ -174,6 +174,21 @@ fn walk_all(
     constraint_armed: bool,
     constraint_v2_armed: bool,
 ) -> Vec<PalwConsensusObjectV2> {
+    walk_full(p, s, payload, rules, prefix_state_armed, prefix_inherit_armed, None, constraint_armed, constraint_v2_armed)
+}
+
+/// `class_safe`: `None` = the real answer off the state (`class_prefix_inherit_safe_v1`), `Some(b)` = forced.
+fn walk_full(
+    p: &Params,
+    s: &PalwChainStateV2,
+    payload: &PalwFpCommitmentTxPayloadV3,
+    rules: PalwFpDecodeRulesV1,
+    prefix_state_armed: bool,
+    prefix_inherit_armed: bool,
+    class_safe: Option<bool>,
+    constraint_armed: bool,
+    constraint_v2_armed: bool,
+) -> Vec<PalwConsensusObjectV2> {
     let tx = kaspa_consensus_core::tx::Transaction::new(
         0,
         vec![],
@@ -201,6 +216,7 @@ fn walk_all(
             logits_q24: s.class_commits_q24_logits_v1(class_id),
             prefix_state_armed,
             prefix_inherit_armed,
+            prefix_inherit_class_safe: class_safe.unwrap_or_else(|| s.class_prefix_inherit_safe_v1(class_id).is_ok()),
             constraint_armed,
             constraint_v2_armed,
             tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -686,4 +702,71 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
     let s4 = fold_at(&p, &s3, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
         .expect("the Valid quorum licenses");
     assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+}
+
+#[test]
+fn an_inherited_prefix_claim_is_admitted_only_over_a_class_proven_inheritance_safe() {
+    use kaspa_consensus_core::palw_fp_prefix_v1::{
+        PALW_DRILL_FP_PREFIX_INHERIT_ENTRY, PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_INHERIT_VERSION, palw_fp_prefix_state_root_v1,
+    };
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+
+    const STATE_FENCE: u64 = 111;
+    const INHERIT_FENCE: u64 = 113;
+    let mut p = t12_with_v4();
+    (PALW_DRILL_FP_PREFIX_STATE_ENTRY.set)(&mut p, Some(ForkActivation::new(STATE_FENCE)));
+    (PALW_DRILL_FP_PREFIX_INHERIT_ENTRY.set)(&mut p, Some(ForkActivation::new(INHERIT_FENCE)));
+    p.validate_palw_v2().expect("testnet-12 with both prefix fences assembles");
+    let (s, floor) = chain(&p);
+    assert_eq!(s.class_prefix_inherit_safe_v1(&floor), Ok(()), "the floor (integer lane, no KV aux, no fused window, not held) is proven");
+    let backend = common::floor_backend(PalwPromptIdsFormV1::MerkleV1);
+    let prompt: Vec<usize> = vec![17, 3, 911, 44, 5];
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
+    let state = PalwFpPrefixStateV1 { state_root: palw_fp_prefix_state_root_v1(&floor, 3, &Hash64::from_u64_word(0xCAFE)), prefix_tokens: 3, class_id: floor };
+    let mut job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: domain,
+        class_id: floor,
+        executor_bond: bond_key(1).0,
+        executor_pubkey: pubkey_of(1),
+        operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey_of(1)),
+        anchor_block: h(0xA0),
+        anchor_daa: 100,
+        job_nonce: [0x6C; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
+            .expect("the ids commit"),
+        prompt_tokens: ids.len() as u32,
+        decode_token_limit: 6,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: [0x3C; 32],
+        temperature_q: 1 << 24,
+        decode: None,
+        tail: None,
+    }
+    .into_v4(DecodeConfigV4::NOOP);
+    job.version = PALW_FP_PREFIX_INHERIT_VERSION;
+    job.tail = Some(PalwFpJobTailV1::Prefix(state));
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: floor,
+        cu_ruleset_id: Hash64::default(),
+    };
+    let sig = vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
+    let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs the version-12 job");
+    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 9_999_999).expect("the run commits");
+    let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids.clone(), signature: sig };
+    let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
+    let at = INHERIT_FENCE + 1;
+    assert!(walk_full(&p, &s, &payload, rules(INHERIT_FENCE - 1), true, false, None, false, false).is_empty(), "below the inherit fence");
+    assert_eq!(walk_full(&p, &s, &payload, rules(at), true, true, None, false, false).len(), 1, "armed, over the proven floor, it opens");
+    assert!(
+        walk_full(&p, &s, &payload, rules(at), true, true, Some(false), false, false).is_empty(),
+        "over a class that is not inheritance-safe it is refused by name"
+    );
 }

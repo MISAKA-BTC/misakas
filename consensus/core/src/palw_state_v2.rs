@@ -12875,6 +12875,17 @@ impl PalwChainStateV2 {
         !self.tir_classes.contains_key(class_id) && !self.gen_classes.contains_key(class_id)
     }
 
+    /// **RFC-0001 stage 2b: may this class carry inherited prefix leaves** (FP job version 12)? See
+    /// [`crate::palw_fp_prefix_v1::palw_fp_prefix_inherit_class_safe_v1`].
+    pub fn class_prefix_inherit_safe_v1(&self, class_id: &Hash64) -> Result<(), &'static str> {
+        crate::palw_fp_prefix_v1::palw_fp_prefix_inherit_class_safe_v1(
+            self.fp_work_profile_of(class_id),
+            self.class_is_held_v1(class_id),
+            !self.class_commits_q24_logits_v1(class_id),
+            self.class_model_court_window_v1(class_id).is_some(),
+        )
+    }
+
     /// **RFC-0001 §2.9: the tokenizer commitment a class's registry row lists** — an IR class's record's `tokenizer_id`, a
     /// generative class's row's — or `None` for a class whose row lists none (a dense legacy class: its tokenizer
     /// commitment is inside an artifact digest the chain cannot read). The one read `palw_fp_tokenizer_match` compares a
