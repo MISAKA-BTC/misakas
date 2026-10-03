@@ -33,7 +33,8 @@ use misaka_palw_tir_exec::node::{TirResidencyDeclinedV1, TirResidencyPolicyV1, T
 
 /// RFC-0006: a shard-only holder's fetch (D-S6).
 pub use misaka_palw_tir_exec::node::{
-    TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1, tir_shard_cells_over_v1, tir_verify_capture_cells_over_v1,
+    TirFileMirrorV1, TirHeldRowsV1, TirRowFetcherV1, TirRowPursuitV1, TirShardHoldingV1, fetch_shard_params_v1, serve_rows_v1,
+    tir_shard_cells_over_v1, tir_verify_capture_cells_over_v1,
 };
 
 /// RFC-0006: the out-of-process device (the GPU helper's client).

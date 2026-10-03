@@ -102,6 +102,47 @@ pub const PALW_TIR_SHARD_V1_ALL_DOMAINS: &[&[u8]] = &[
     PALW_TIR_SHARD_READINESS_LEAVES_DOMAIN_V1,
 ];
 
+// ---------------------------------------------------------------------------------------------
+// The row request (D-S6 over the network): an interval-lane request index naming inventory rows
+// ---------------------------------------------------------------------------------------------
+
+/// **The request-index kind a shard-only seat asks inventory rows under** (RFC-0006 §4.2, D-S6). The interval lane's signed request
+/// carries a `u32` index whose bits 29, 30 and 31 are the leaf-evidence/segment, resume and block-leaves kinds; a plain interval
+/// index is far under 2^28. Bit 28 alone, with bits 29..31 clear, is none of those, and the low 28 bits name the FIRST inventory
+/// leaf asked: the server answers the run of rows from there that fits the lane. The index is inside the signed request, so one
+/// signature is one ask, not a standing right.
+pub const PALW_TIR_ROWS_REQUEST_BIT_V1: u32 = 1 << 28;
+
+/// The most rows one reply carries (the serving node may answer fewer, whatever fits the lane's byte cap).
+pub const PALW_TIR_ROWS_PER_REPLY_MAX_V1: u32 = 256;
+
+/// The request index asking for inventory rows from `first_leaf`; `None` past the 28 bits.
+pub fn palw_tir_rows_request_index_v1(first_leaf: u32) -> Option<u32> {
+    (first_leaf < PALW_TIR_ROWS_REQUEST_BIT_V1).then_some(PALW_TIR_ROWS_REQUEST_BIT_V1 | first_leaf)
+}
+
+/// **The request-index kind a seat asks a RUN of step leaves under** (RFC-0006 §3, off chain): bit 27 alone, bits 28..31 clear —
+/// none of the other kinds, and the row kind needs bit 28. The low 27 bits name the first step leaf and the request's leaf slot
+/// carries the run's length (at most [`crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1`]); both are inside the signed
+/// request. The answer is the same `PalwTirStepRunDisclosureV1` the chain's `TirStepRun` unit is answered with, so one verifier
+/// (`check_tir_step_run_disclosure_v1`) checks it on and off chain; the off-chain ask carries no session, so a job of any size can be
+/// pursued, and the four sessions of a seat are kept for the demands that enforce.
+pub const PALW_TIR_RUNS_REQUEST_BIT_V1: u32 = 1 << 27;
+
+pub fn palw_tir_runs_request_index_v1(first_leaf: u32) -> Option<u32> {
+    (first_leaf < PALW_TIR_RUNS_REQUEST_BIT_V1).then_some(PALW_TIR_RUNS_REQUEST_BIT_V1 | first_leaf)
+}
+
+/// `Some(first_leaf)` for a run request index, `None` for any other kind.
+pub fn palw_tir_runs_request_decode_v1(index: u32) -> Option<u32> {
+    (index & (15 << 28) == 0 && index & PALW_TIR_RUNS_REQUEST_BIT_V1 != 0).then_some(index & !PALW_TIR_RUNS_REQUEST_BIT_V1)
+}
+
+/// `Some(first_leaf)` for a row request index, `None` for any other kind.
+pub fn palw_tir_rows_request_decode_v1(index: u32) -> Option<u32> {
+    (index & (7 << 29) == 0 && index & PALW_TIR_ROWS_REQUEST_BIT_V1 != 0).then_some(index & !PALW_TIR_ROWS_REQUEST_BIT_V1)
+}
+
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
 }
@@ -1400,6 +1441,31 @@ mod tests {
         assert_eq!(palw_tir_shard_room_v1(&[], &[], 1_000, 10, 100), 0);
         assert_eq!(palw_tir_shard_room_v1(&[8, 8], &[0, 0], 1_000, 10, 100), 0, "no shard costs anything: no room is claimed");
         assert_eq!(palw_tir_shard_room_v1(&[8], &[500], 1_000, 10, 0), 0, "a class that costs nothing has no room");
+    }
+
+    #[test]
+    fn a_row_request_is_none_of_the_other_interval_kinds() {
+        let packed = palw_tir_rows_request_index_v1(12_345).unwrap();
+        assert_eq!(palw_tir_rows_request_decode_v1(packed), Some(12_345));
+        assert!(palw_tir_rows_request_index_v1(PALW_TIR_ROWS_REQUEST_BIT_V1).is_none());
+        // Not read as a plain interval kind by any of the others' decoders.
+        assert!(crate::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(packed).is_none());
+        assert!(crate::palw_segment_resume_v1::palw_segment_opening_request_decode_v1(packed).is_none());
+        assert_eq!(packed & (7 << 29), 0);
+        // And none of the others' indices is read as a row request.
+        for other in [3u32, 1 << 29 | 7, 1 << 30 | 7, 1 << 31 | 7, 1 << 29 | 1 << 30] {
+            assert!(palw_tir_rows_request_decode_v1(other).is_none(), "{other:#x}");
+        }
+        assert!(PALW_TIR_ROWS_PER_REPLY_MAX_V1 <= crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1);
+        // The run kind is neither the row kind nor any other, and they do not read each other's indices.
+        let run = palw_tir_runs_request_index_v1(9_999).unwrap();
+        assert_eq!(palw_tir_runs_request_decode_v1(run), Some(9_999));
+        assert!(palw_tir_rows_request_decode_v1(run).is_none());
+        assert!(palw_tir_runs_request_decode_v1(packed).is_none());
+        assert!(palw_tir_runs_request_decode_v1(palw_tir_rows_request_index_v1(1 << 27 | 5).unwrap()).is_none());
+        assert!(crate::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(run).is_none());
+        assert!(crate::palw_segment_resume_v1::palw_segment_opening_request_decode_v1(run).is_none());
+        assert!(palw_tir_runs_request_index_v1(PALW_TIR_RUNS_REQUEST_BIT_V1).is_none());
     }
 
     #[test]

@@ -575,6 +575,11 @@ pub struct Args {
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
+    /// RFC-0006 (D-S6 over the network): a seat that holds no copy of a class and has no mirror asks peers for its shard's inventory
+    /// rows through the interval lane (`--palw-tir-shard-fetch`), each row proven against the registered root.
+    pub palw_tir_shard_fetch: bool,
+    /// RFC-0006: the length of the runs a seat without a capture asks for (`--palw-tir-shard-run-leaves=N`, at most 256).
+    pub palw_tir_shard_run_leaves: Option<u32>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
@@ -878,6 +883,8 @@ impl Default for Args {
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
             palw_tir_shard_mirror: None,
+            palw_tir_shard_fetch: false,
+            palw_tir_shard_run_leaves: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
@@ -2407,6 +2414,26 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-shard-run-leaves")
+                .long("palw-tir-shard-run-leaves")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32))
+                .help(
+                    "RFC-0006: how many step leaves one run is when a seat that holds no capture pursues the job's leaves (default and \
+                     maximum 256). Runs are asked off chain first and demanded on chain only for what stays unanswered.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-fetch")
+                .long("palw-tir-shard-fetch")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: a seat that holds no copy of a class (and names no --palw-tir-shard-mirror) asks peers for its shard's \
+                     inventory rows over the signed interval lane, a reply at a time, keeping only rows proven by their Merkle path against \
+                     the root the chain registered; a reply with one false row is refused whole.",
+                ),
+        )
+        .arg(
             Arg::new("palw-tir-shard-demand-runs")
                 .long("palw-tir-shard-demand-runs")
                 .action(clap::ArgAction::SetTrue)
@@ -3490,6 +3517,8 @@ impl Args {
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
+            palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
+            palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")

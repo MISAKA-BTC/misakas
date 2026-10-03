@@ -653,6 +653,8 @@ pub struct PalwNodeRuntimeV1 {
     pub verification_producer: String,
     /// RFC-0007: this seat's verification vertices (`vertex_*=` pairs), published by the panel; empty below the fence.
     pub verification_vertex: String,
+    /// RFC-0006's pre-fence shadow: the cell verifier's agreement with the whole replay (`shard_shadow_*` pairs).
+    pub verification_shard_shadow: String,
 }
 
 /// One class this node's panel is (or is not) serving.

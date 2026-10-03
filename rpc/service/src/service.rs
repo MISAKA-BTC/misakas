@@ -1880,6 +1880,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 rt.verification_producer.as_str(),
                 // RFC-0007: the seat's vertices, and the vertex tables at the tip.
                 rt.verification_vertex.as_str(),
+                rt.verification_shard_shadow.as_str(),
             ]
                 .iter()
                 .filter(|part| !part.is_empty())
