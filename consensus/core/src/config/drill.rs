@@ -1976,7 +1976,13 @@ mod tests {
         use crate::config::params::palw_t12_shipped_params;
         let drill = dormant_drill(0x5E);
         let public = palw_t12_shipped_params();
-        assert!(public.palw_tir_shard_v1.is_none() && !public.palw_tir_shard_active_at(u64::MAX - 1), "dormant on testnet-12");
+        // int-12: testnet-12 ships it armed at the release's height (5,300), through the list; the UNARMED drill chain has it dormant.
+        assert_eq!(
+            public.palw_tir_shard_v1,
+            crate::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(crate::config::params::ForkActivation::new),
+            "armed at the release's height on testnet-12"
+        );
+        assert!(!public.palw_tir_shard_active_at(crate::config::params::PALW_T12_INT11_FLAG_DAY_DAA.unwrap() - 1));
         assert!(drill.palw_tir_shard_v1.is_none() && drill.validate_palw_v2().is_ok());
         let mut p = palw_t12_shipped_params();
         assert!(palw_drill_tir_shard_at_v1(&mut p, 1_234).unwrap_err().contains("PUBLIC testnet-12"));

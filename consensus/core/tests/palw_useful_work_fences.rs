@@ -7,7 +7,7 @@
 
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -21,7 +21,7 @@ fn ids(p: &Params) -> (String, String, String) {
 }
 
 fn armed(at: ForkActivation) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v5_params();
     for f in PALW_T12_USEFUL_WORK_FENCES_V1 {
         (f.set)(&mut p, Some(at));
     }
@@ -39,6 +39,11 @@ fn mirror(p: &Params) -> Option<u64> {
 fn dormant_on_every_ruleset_and_listed_as_a_pair() {
     let names: Vec<&str> = PALW_T12_USEFUL_WORK_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_floor_reserve_v1", "palw_real_clock_tick_v1"]);
+    // int-12: both are on the 5,300 list, so testnet-12 as shipped arms them there.
+    let shipped = palw_t12_shipped_params();
+    let h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA;
+    assert_eq!(shipped.palw_floor_reserve_v1.map(|a| a.daa_score()), h);
+    assert_eq!(shipped.palw_real_clock_tick_v1.map(|a| a.daa_score()), h);
     for (name, p) in [
         ("MAINNET_PARAMS", MAINNET_PARAMS),
         ("TESTNET_PARAMS", TESTNET_PARAMS),
@@ -48,7 +53,8 @@ fn dormant_on_every_ruleset_and_listed_as_a_pair() {
         ("mainnet_shipped_params", mainnet_shipped_params()),
         ("devnet_shipped_params", devnet_shipped_params()),
         ("palw_rc_shipped_params", palw_rc_shipped_params()),
-        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        // int-12: the shipped ruleset arms both at the 5,300 flag day; the dormant baseline is the int-10 release.
+        ("palw_t12_release_v5_params", palw_t12_release_v5_params()),
     ] {
         assert_eq!(p.palw_floor_reserve_v1, None, "{name}");
         assert_eq!(p.palw_real_clock_tick_v1, None, "{name}");
@@ -62,7 +68,7 @@ fn dormant_on_every_ruleset_and_listed_as_a_pair() {
 
 #[test]
 fn armed_they_move_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_id_gates_them() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v5_params();
     let p = armed(ForkActivation::new(AT));
     p.validate_palw_v2().expect("testnet-12 with the Useful Work Transition armed validates (every prerequisite is a genesis rule)");
     assert_eq!(mirror(&p), Some(AT), "the fold's mirror");
@@ -78,9 +84,9 @@ fn armed_they_move_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_
     let below = fork_id_v1(&shipped, AT - 1);
     assert!(!evaluate_fork_id_v1(&p, AT - 1, below.fired.as_bytes().as_slice(), below.next).refuses(), "kept below it");
     // Each fence is its own identity input: arming one alone differs from arming the other alone and from both.
-    let mut only_tick = palw_t12_shipped_params();
+    let mut only_tick = palw_t12_release_v5_params();
     (PALW_T12_USEFUL_WORK_FENCES_V1[1].set)(&mut only_tick, Some(ForkActivation::new(AT)));
-    let mut only_reserve = palw_t12_shipped_params();
+    let mut only_reserve = palw_t12_release_v5_params();
     (PALW_T12_USEFUL_WORK_FENCES_V1[0].set)(&mut only_reserve, Some(ForkActivation::new(AT)));
     only_tick.validate_palw_v2().expect("the tick alone");
     only_reserve.validate_palw_v2().expect("the reserve alone");
@@ -99,7 +105,7 @@ fn armed_they_move_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_
 
 #[test]
 fn they_are_refused_without_their_prerequisites_and_with_the_mirror_unsynced() {
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_release_v5_params();
     unsynced.palw_floor_reserve_v1 = Some(ForkActivation::new(AT));
     assert!(unsynced.validate_palw_useful_work_v1().is_err(), "the mirror disagrees with the fence");
     let mut stale = armed(ForkActivation::new(AT));
@@ -107,7 +113,7 @@ fn they_are_refused_without_their_prerequisites_and_with_the_mirror_unsynced() {
     assert!(stale.validate_palw_useful_work_v1().is_err(), "a mirror with no fence");
     stale.sync_palw_floor_reserve_v1();
     assert_eq!(ids(&stale).0, {
-        let mut only_tick = palw_t12_shipped_params();
+        let mut only_tick = palw_t12_release_v5_params();
         (PALW_T12_USEFUL_WORK_FENCES_V1[1].set)(&mut only_tick, Some(ForkActivation::new(AT)));
         ids(&only_tick).0
     });
@@ -119,14 +125,14 @@ fn they_are_refused_without_their_prerequisites_and_with_the_mirror_unsynced() {
         ("palw_single_lottery", |p| p.palw_single_lottery = None),
         ("palw_anchor_clock", |p| p.palw_anchor_clock = None),
     ] {
-        let mut p = palw_t12_shipped_params();
+        let mut p = palw_t12_release_v5_params();
         (PALW_T12_USEFUL_WORK_FENCES_V1[1].set)(&mut p, Some(ForkActivation::new(AT)));
         strip(&mut p);
         let e = p.validate_palw_useful_work_v1().expect_err(what);
         assert!(format!("{e:?}").contains("palw_real_clock_tick_v1"), "{what}: {e:?}");
     }
     // The reserve needs the registry at or below it.
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v5_params();
     (PALW_T12_USEFUL_WORK_FENCES_V1[0].set)(&mut p, Some(ForkActivation::new(AT)));
     p.palw_model_registry = None;
     assert!(p.validate_palw_useful_work_v1().is_err(), "no registry, no real class");

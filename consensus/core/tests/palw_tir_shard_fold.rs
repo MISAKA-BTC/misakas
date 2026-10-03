@@ -922,11 +922,11 @@ fn the_tags_of_the_family_are_pinned() {
         }),
         93
     );
-    // The DA unit 7 and the delta entries 101 and 102.
+    // The DA unit 7 and the delta entries 102 and 103 (101 is RFC-0007's vertex row).
     assert_eq!(borsh::to_vec(&PalwDaUnitV1::TirStepRun { first: 0, count: 1 }).unwrap()[0], 7);
     let plan_row = PalwTirShardPlanV1 { s_l: 2, s_p: 1, declared_daa: 5, cell_permille: vec![500, 500] };
-    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardPlan { key: h64(1), old: None, new: Some(plan_row) }).unwrap()[0], 101);
-    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardClaim { key: h64(1), old: None, new: None }).unwrap()[0], 102);
+    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardPlan { key: h64(1), old: None, new: Some(plan_row) }).unwrap()[0], 102);
+    assert_eq!(borsh::to_vec(&PalwDeltaEntryV2::TirShardClaim { key: h64(1), old: None, new: None }).unwrap()[0], 103);
     let _ = std::mem::size_of::<PalwSeatReadinessRowV1>();
 }
 

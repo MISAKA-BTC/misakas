@@ -97,6 +97,17 @@ fn armed_with(witness: Option<u64>, vertex: Option<u64>, audit: Option<u64>, cap
 #[test]
 fn every_ruleset_leaves_all_three_dormant_and_no_flag_day_list_names_them() {
     for (name, p) in rulesets() {
+        // int-12: testnet-12's release arms all three at the 5,300 flag day (the list), so its shipped rulesets are armed there.
+        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" {
+            let listed = p.palw_fences_v1();
+            for fence in NAMES {
+                assert!(
+                    listed.iter().any(|(n, a)| *n == fence && a.map(|a| a.daa_score()) == kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA),
+                    "{name}: {fence} arms at the int-12 flag day"
+                );
+            }
+            continue;
+        }
         assert!(
             p.palw_witness_manifest_v1.is_none() && p.palw_audit_mesh_v1.is_none() && p.palw_capped_onboarding_v1.is_none(),
             "{name}: dormant"
@@ -135,11 +146,12 @@ fn every_ruleset_leaves_all_three_dormant_and_no_flag_day_list_names_them() {
         PALW_T12_CAPACITY_RHO10_FENCES_V1,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
         PALW_T12_TIR_FENCE2_FENCES_V1,
-        PALW_T12_INT11_FENCES_V1,
         PALW_T12_INT11_RHO100_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| !NAMES.contains(&f.name)), "no testnet-12 release arms a mesh fence");
+        assert!(list.iter().all(|f| !NAMES.contains(&f.name)), "no earlier testnet-12 flag day arms a mesh fence");
     }
+    // int-12: the 5,300 list arms all three, in prerequisite order.
+    assert!(NAMES.iter().all(|n| PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == *n)), "the int-12 list arms the mesh fences");
     for (list, name) in [
         (PALW_DRILL_WITNESS_FENCES_V1, NAMES[0]),
         (PALW_DRILL_AUDIT_MESH_FENCES_V1, NAMES[1]),

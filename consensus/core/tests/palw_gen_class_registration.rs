@@ -198,7 +198,9 @@ fn it_rides_statelessly_rents_nothing_and_takes_no_slot() {
 
 #[test]
 fn below_the_fence_the_fold_refuses_it_by_name() {
-    let p = palw_t12_shipped_params();
+    // int-12: testnet-12 as shipped arms `palw_gen_v1` at 5,300, so "above every height" is no longer below it; the baseline is the
+    // int-10 ruleset (the fence dormant), as the int-11 flag-day tests take it.
+    let p = kaspa_consensus_core::config::params::palw_t12_release_v5_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is V2") };
     for daa_score in [10, 2_500, u64::MAX - 1] {
         let ctx = PalwBlockContextV2 { block: Default::default(), daa_score, blue_score: 10, subsidy: 0 };

@@ -239,7 +239,15 @@ fn t90_the_folds_jury_reads_neither_the_stake_nor_the_fence() {
         assert!(!seated.contains(forbidden), "{name} reads `{forbidden}`: the jury must stay unweighted (SW-A4)");
     }
     // The population's one collateral read is a threshold at the floor the body names, not a weight.
-    assert!(seated.contains("palw_bond_may_take_work_v2(bond, floor)"), "{name}: the population is thresholded at `floor`");
+    // int-12 (RFC-0002 Part II): the jury's filter is the ONE base population (`palw_base_population_v1`, which the seating floor and
+    // the outsider draw read as well); its collateral read is the same threshold at `floor`, there.
+    assert!(seated.contains("palw_base_population_v1("), "{name}: the population is the one base-population function");
+    let seating = include_str!("../src/palw_class_seating_v1.rs");
+    let population = body_of(seating, "pub(super) fn palw_base_population_v1");
+    assert!(population.contains("palw_bond_may_take_work_v2(bond, floor)"), "palw_base_population_v1: the population is thresholded at `floor`");
+    for forbidden in ["PalwPanelStakeDrawV1", "palw_panel_draw_policy_at", "weight"] {
+        assert!(!population.contains(forbidden), "palw_base_population_v1 reads `{forbidden}`: the jury must stay unweighted (SW-A4)");
+    }
     let registry = include_str!("../src/palw_model_registry_v1.rs");
     for helper in [
         "pub fn palw_admission_jury_seed_v1(",

@@ -23198,6 +23198,16 @@ mod consensus_params_id_tests {
         }
         let refused_with = |edit: &dyn Fn(&mut Params), needle: &str| {
             let mut p = t12.clone();
+            // int-12: the RFC-0007 fences ride the 5,300 list and need `palw_objective_offence`; take them away first, so the
+            // edit below meets the attribution fence's own refusal (the release's list is not what this test asks about).
+            p.palw_capped_onboarding_v1 = None;
+            p.sync_palw_capped_onboarding_v1();
+            p.palw_audit_mesh_v1 = None;
+            p.sync_palw_audit_mesh_v1();
+            p.palw_witness_manifest_v1 = None;
+            p.sync_palw_witness_manifest_v1();
+            p.palw_verification_vertex_v1 = None;
+            p.sync_palw_verification_vertex_v1();
             edit(&mut p);
             let refused = p.validate_palw_v2();
             assert!(

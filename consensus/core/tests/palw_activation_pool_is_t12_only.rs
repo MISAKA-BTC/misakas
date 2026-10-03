@@ -160,6 +160,9 @@ fn the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit() {
     // And the same fence off validates: the pool is optional, never required.
     let mut off = t12.clone();
     off.palw_activation_pool = None;
+    // int-12: `palw_class_seating` rides the 5,300 list and reads the pool's base population; without the pool it goes too.
+    off.palw_class_seating = None;
+    off.sync_palw_class_seating();
     off.validate_palw_v2().expect("testnet-12 without the pool is still a legal ruleset");
 }
 

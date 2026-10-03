@@ -96,6 +96,17 @@ fn every_rfc1_fence_is_dormant_on_every_shipped_preset_and_named() {
         ("from(devnet)", Params::from(NetworkId::new(NetworkType::Devnet))),
     ];
     for (name, p) in &shipped {
+        // int-12: testnet-12's release arms every RFC-0001 fence at the 5,300 flag day (the list); the baseline rows stay dormant.
+        if *name == "palw_t12_shipped_params" || *name == "from(testnet-12)" {
+            for (fence, _, _) in fences() {
+                assert_eq!(
+                    get(p, fence).map(|a| a.daa_score()),
+                    PALW_T12_INT11_FLAG_DAY_DAA,
+                    "{name}: {fence} arms at the int-12 flag day"
+                );
+            }
+            continue;
+        }
         for (fence, _, _) in fences() {
             assert!(get(p, fence).is_none(), "{name}: {fence} is dormant");
             assert!(p.palw_fences_v1().contains(&(fence, None)), "{name}: {fence} is named by palw_fences_v1");
@@ -108,8 +119,9 @@ fn every_rfc1_fence_is_dormant_on_every_shipped_preset_and_named() {
 fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
     let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
     let at = h + 1_000;
-    let base = palw_t12_shipped_params();
-    base.validate_palw_v2().expect("the shipped testnet-12 assembles");
+    // int-12: the baseline is the int-10 ruleset (dormant), as the int-11 flag-day tests take it; the shipped one arms these already.
+    let base = palw_t12_release_v5_params();
+    base.validate_palw_v2().expect("the baseline testnet-12 assembles");
     for (fence, entry, _) in fences() {
         let mut armed = base.clone();
         (entry.set)(&mut armed, Some(ForkActivation::new(at)));
@@ -132,7 +144,7 @@ fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
 fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
     let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
     let at = h + 1_000;
-    let base = palw_t12_shipped_params();
+    let base = palw_t12_release_v5_params();
     for (fence, entry, prereqs) in fences() {
         let mut armed = base.clone();
         (entry.set)(&mut armed, Some(ForkActivation::new(at)));
@@ -185,7 +197,7 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
 }
 
 #[test]
-fn the_fences_are_in_no_testnet_12_release_list() {
+fn the_fences_are_in_no_testnet_12_release_list_before_the_int12_flag_day() {
     use kaspa_consensus_core::config::params::{
         PALW_T12_INT11_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
@@ -195,10 +207,13 @@ fn the_fences_are_in_no_testnet_12_release_list() {
         PALW_T12_POST_LAUNCH_FENCES_V2,
         PALW_T12_POST_LAUNCH_FENCES_V3,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
-        PALW_T12_INT11_FENCES_V1,
     ] {
         for (fence, _, _) in fences() {
-            assert!(list.iter().all(|f| f.name != fence), "{fence} is in no testnet-12 flag-day list");
+            assert!(list.iter().all(|f| f.name != fence), "{fence} is in no earlier testnet-12 flag-day list");
         }
+    }
+    // int-12: the 5,300 list arms every one of them.
+    for (fence, _, _) in fences() {
+        assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == fence), "{fence} is on the int-12 list");
     }
 }

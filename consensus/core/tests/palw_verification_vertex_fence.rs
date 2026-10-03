@@ -84,6 +84,15 @@ fn armed(at: ForkActivation) -> Params {
 #[test]
 fn every_ruleset_leaves_it_dormant_and_no_flag_day_list_names_it() {
     for (name, p) in rulesets() {
+        // int-12: testnet-12's release arms the vertex at the 5,300 flag day (the list).
+        if name == "from(testnet-12)" || name == "palw_t12_shipped_params" {
+            assert_eq!(
+                p.palw_verification_vertex_v1.map(|a| a.daa_score()),
+                kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA,
+                "{name}: armed at the int-12 flag day"
+            );
+            continue;
+        }
         assert!(p.palw_verification_vertex_v1.is_none(), "{name}: dormant");
         assert!(
             p.palw_verification_vertex_fence().is_none() && !p.palw_verification_vertex_active_at(u64::MAX),
@@ -107,11 +116,11 @@ fn every_ruleset_leaves_it_dormant_and_no_flag_day_list_names_it() {
         PALW_T12_CAPACITY_RHO10_FENCES_V1,
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
         PALW_T12_TIR_FENCE2_FENCES_V1,
-        PALW_T12_INT11_FENCES_V1,
         PALW_T12_INT11_RHO100_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| f.name != "palw_verification_vertex_v1"), "no testnet-12 release arms the verification vertex");
+        assert!(list.iter().all(|f| f.name != "palw_verification_vertex_v1"), "no earlier testnet-12 flag day arms the verification vertex");
     }
+    assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == "palw_verification_vertex_v1"), "the int-12 list arms it");
     let names: Vec<&str> = PALW_DRILL_VERTEX_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_verification_vertex_v1"]);
 }

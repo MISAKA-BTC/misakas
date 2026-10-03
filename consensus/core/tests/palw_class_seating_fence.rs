@@ -138,8 +138,10 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_asks_nothing_below_its_heigh
         assert_eq!(params.palw_class_seating, None);
     }
     let t12 = P::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
-    assert_eq!(t12.palw_class_seating, None, "testnet-12 ships it dormant");
-    assert_eq!(palw_t12_shipped_params().palw_class_seating, None);
+    // int-12: testnet-12 ships it armed at the 5,300 flag day (the list), at the drill's floor (3, no raise).
+    let at_h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(kaspa_consensus_core::config::params::ForkActivation::new);
+    assert_eq!(t12.palw_class_seating.map(|f| f.activation).map(Some), at_h.map(Some), "testnet-12 arms it at the flag day");
+    assert_eq!(palw_t12_shipped_params().palw_class_seating, t12.palw_class_seating);
     // Below the height the terms are absent and the door is `Ok` whatever the seats.
     let fx = Fx::new(armed());
     let sp = &fx.sp;

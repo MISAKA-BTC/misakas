@@ -248,7 +248,12 @@ fn every_rule_is_in_force_from_genesis() {
         kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new),
         "the decode rules are the int-11 flag day's, at its height"
     );
-    assert!(p.palw_fp_decode_constraint.is_none(), "this build carries no constraint automaton");
+    // int-12: the constraint automaton exists (ADR-0096 D6-D8) and the fence is the int-11 flag day's, at its height — not a genesis rule.
+    assert_eq!(
+        p.palw_fp_decode_constraint,
+        kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new),
+        "the decode constraint is the flag day's, at its height"
+    );
     assert!(p.palw_shard_licensing.is_none(), "refused beside palw_admission_independence (ADR-0147)");
     // MSK-26A (2026-09 pre-freeze security review): the slashing-evidence UTXO genuineness fence is
     // armed with the rest of the post-launch release at its one height (DAA 750,
