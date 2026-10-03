@@ -52,3 +52,13 @@ composite admission without a governed line.
 
 Images enter as decoded `u8` HWC RGB only; an image becomes an FP Job V5 slot reference (`input_root` at the slot's tile length).
 An embedding claim is an RFC-0003 `Embedding`-profile tensor job. Neither adds a rule to consensus.
+
+## 18.x Stage 2b: inherited prefix leaves (FP job version 12, fence `palw_fp_prefix_inherit`, dormant)
+
+A version-12 job is a version-11 prefix-state job whose step leaves over the prefix positions are hashed under a job-independent
+prefix context (version-3 `PalwJobContextV3`-style context: `job_nullifier` carries k, `assignment_id` the prefix state root;
+`step_tile_leaf_hash_ctx_v1`). Leaves over a shared prefix are therefore byte-identical across jobs, equal the recomputed root,
+and a lie in an inherited range is convictable through the earlier claim that committed the honest leaf. Version-2 contexts and
+leaves are unchanged bit for bit. Limits: checkpoint leaves, KV aux chunks and fused-attention (attn court) paths are not
+inheritance-aware (the admission rule restricting version 12 to non-fused, non-aux classes is not yet written); no executor
+compute saving or seat prefix-leaf cache yet. Drill flag: `--palw-drill-fp-prefix-inherit-at`.
