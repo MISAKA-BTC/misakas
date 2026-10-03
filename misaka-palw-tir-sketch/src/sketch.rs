@@ -50,6 +50,35 @@ pub struct TirNodeSketchV1 {
     pub weight_elements: u64,
     /// Bytes of that weight at its param width.
     pub weight_bytes: u64,
+    /// **Row-block sketches** (§II.8): the free-axis blocks (`ceil(weight_bytes / F)`, `F` = [`TIR_BLOCK_FETCH_CAP_BYTES_V1`]) and, per
+    /// modulus, the sketch of each (`experts × s_len` entries, expert-major). Their sum is `s`. With one block (a weight within the
+    /// fetch cap) nothing extra is stored: block 0 is the whole sketch.
+    pub blocks: usize,
+    pub s_blocks: Vec<Vec<Vec<u64>>>,
+}
+
+/// **The fetch cap `F`** of a failed check's escalation (§II.8, proposed 2 MiB): a seat names the failing block and fetches only its
+/// `|W| / B <= F` bytes of weight.
+pub const TIR_BLOCK_FETCH_CAP_BYTES_V1: u64 = 2 * 1024 * 1024;
+
+/// **How many blocks a weight of `weight_bytes` is sketched in**: `ceil(weight_bytes / F)`, at least one.
+pub fn tir_block_count_v1(weight_bytes: u64) -> usize {
+    weight_bytes.div_ceil(TIR_BLOCK_FETCH_CAP_BYTES_V1).max(1) as usize
+}
+
+impl TirNodeSketchV1 {
+    /// The bytes of weight one block stands for (the transfer bound of one escalation: at most `F`, or the whole weight if smaller).
+    pub fn block_fetch_bytes(&self) -> u64 {
+        self.weight_bytes.div_ceil(self.blocks.max(1) as u64)
+    }
+
+    /// Block `b`'s sketch over modulus `mi` (`experts × s_len` entries): the whole sketch when there is one block.
+    pub fn block_sketch(&self, mi: usize, b: usize) -> Option<&[u64]> {
+        if self.blocks <= 1 {
+            return (b == 0).then(|| &self.s[mi][..]);
+        }
+        self.s_blocks.get(mi)?.get(b).map(|v| &v[..])
+    }
 }
 
 /// What a store holds, in numbers (the measurement's sketch-to-weight ratio).
@@ -134,6 +163,30 @@ impl TirSketchStoreV1 {
         keys: &TirSketchKeysV1,
         moduli: Option<&[TirSketchModulusV1]>,
     ) -> TirResult<Self> {
+        Self::build_inner(plan, analysis, params, keys, moduli, None)
+    }
+
+    /// [`Self::build`] with every weight sketched in `blocks` free-axis blocks (clamped to its free extent): the tests' way of showing
+    /// §II.8's localisation on weights far below the fetch cap. No seat does this.
+    #[doc(hidden)]
+    pub fn build_blocked(
+        plan: &TirPlan,
+        analysis: &TirSketchAnalysisV1,
+        params: &dyn ParamSource,
+        keys: &TirSketchKeysV1,
+        blocks: usize,
+    ) -> TirResult<Self> {
+        Self::build_inner(plan, analysis, params, keys, None, Some(blocks))
+    }
+
+    fn build_inner(
+        plan: &TirPlan,
+        analysis: &TirSketchAnalysisV1,
+        params: &dyn ParamSource,
+        keys: &TirSketchKeysV1,
+        moduli: Option<&[TirSketchModulusV1]>,
+        force_blocks: Option<usize>,
+    ) -> TirResult<Self> {
         let p = &plan.program;
         let interp = Interpreter::new(p)?;
         // 1. Ranges, in one pass over every instance the plan reads.
@@ -180,15 +233,36 @@ impl TirSketchStoreV1 {
                 }
                 let mut v_all = Vec::with_capacity(mods.len());
                 let mut s_all = Vec::with_capacity(mods.len());
+                let mut sb_all = Vec::with_capacity(mods.len());
+                let nblocks = force_blocks
+                    .unwrap_or_else(|| tir_block_count_v1(data.data.len() as u64 * data.dtype.width() as u64))
+                    .clamp(1, g.free().max(1));
                 for md in &mods {
                     let v = keys.site_vector(occ, site.node, *md, g.v_len());
                     let mut s = Vec::with_capacity(experts * g.s_len());
+                    let mut sb: Vec<Vec<u64>> = if nblocks > 1 { vec![Vec::with_capacity(experts * g.s_len()); nblocks] } else { Vec::new() };
                     for e in 0..experts {
-                        s.extend(g.sketch(&data.data[e * body..(e + 1) * body], &v, *md));
+                        let slice = &data.data[e * body..(e + 1) * body];
+                        if nblocks > 1 {
+                            let parts = g.sketch_blocks(slice, &v, *md, nblocks);
+                            let mut whole = vec![0u64; g.s_len()];
+                            for part in &parts {
+                                for (w, x) in whole.iter_mut().zip(part) {
+                                    *w = md.add(*w, *x);
+                                }
+                            }
+                            s.extend(whole);
+                            for (dst, part) in sb.iter_mut().zip(parts) {
+                                dst.extend(part);
+                            }
+                        } else {
+                            s.extend(g.sketch(slice, &v, *md));
+                        }
                     }
-                    stats.entries += (v.len() + s.len()) as u64;
+                    stats.entries += (v.len() + s.len() + sb.iter().map(Vec::len).sum::<usize>()) as u64;
                     v_all.push(v);
                     s_all.push(s);
+                    sb_all.push(sb);
                 }
                 stats.sites += 1;
                 stats.wide_sites += (mods.len() == 2) as u64;
@@ -199,7 +273,17 @@ impl TirSketchStoreV1 {
                 stats.weight_bytes += weight_bytes;
                 sketches.insert(
                     (occ, site.node),
-                    TirNodeSketchV1 { moduli: mods, v: v_all, s: s_all, experts, s_len: g.s_len(), weight_elements, weight_bytes },
+                    TirNodeSketchV1 {
+                        moduli: mods,
+                        v: v_all,
+                        s: s_all,
+                        experts,
+                        s_len: g.s_len(),
+                        weight_elements,
+                        weight_bytes,
+                        blocks: nblocks,
+                        s_blocks: sb_all,
+                    },
                 );
             }
         }

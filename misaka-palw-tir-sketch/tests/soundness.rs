@@ -522,3 +522,72 @@ fn a_seat_that_recomputes_short_products_holds_only_their_weights() {
     let f = fault(c.check(&pol, &w));
     assert_eq!((f.pos, f.node), (2, Some(down)));
 }
+
+
+// ---- §II.8: row-block sketches ------------------------------------------------------------------------------------------------
+
+impl Class {
+    /// A seat check whose store sketches every weight in `blocks` free-axis blocks.
+    fn blocked_check(&self, blocks: usize, w: &TirWitnessV1) -> Result<TirCheckReportV1, Box<TirCheckFailureV1>> {
+        let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
+        let store = TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
+        let held = self.held(&served());
+        TirSketchCheckerV1::new(&self.plan, &self.analysis, &store, &keys, &held, served()).expect("a checker").check(&job(), &JOB_ID, w)
+    }
+}
+
+/// The blocks sum to the whole sketch, on every geometry the fixtures have (static left and right, routed), at every modulus.
+#[test]
+fn the_row_block_sketches_sum_to_the_whole_sketch() {
+    for fx in [dense_moe_v1(4), wide_v1(4)] {
+        let c = class(fx);
+        let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
+        let one = TirSketchStoreV1::build_blocked(&c.plan, &c.analysis, &c.fx.params, &keys, 1).unwrap();
+        let many = TirSketchStoreV1::build_blocked(&c.plan, &c.analysis, &c.fx.params, &keys, 3).unwrap();
+        let mut seen = 0;
+        for (occ, &(block, _)) in c.plan.occurrences.iter().enumerate() {
+            for site in &c.analysis.blocks[block as usize].matmuls {
+                let (Some(a), Some(b)) = (one.get(occ as u16, site.node), many.get(occ as u16, site.node)) else { continue };
+                assert_eq!(a.s, b.s, "the whole sketch is the sum of its blocks (occurrence {occ}, node {})", site.node);
+                assert!(b.blocks >= 1 && (b.blocks == 1 || b.s_blocks.iter().all(|m| m.len() == b.blocks)));
+                seen += 1;
+            }
+        }
+        assert!(seen > 0);
+    }
+}
+
+/// An honest witness passes at any block count; a lie in one accumulator is refused, and the failure names the blocks whose own check fails.
+#[test]
+fn a_failed_check_names_the_failing_blocks_and_an_honest_witness_passes_at_any_block_count() {
+    let c = class(dense_moe_v1(4));
+    let dense = c.block_named("dense");
+    let occ = c.occurrence_of(dense);
+    let honest = c.honest(&served());
+    for blocks in [1usize, 2, 3, 8] {
+        assert!(c.blocked_check(blocks, &honest).is_ok(), "{blocks} blocks: an honest witness passes");
+    }
+    for node in c.matmuls(dense, is_weight) {
+        let w = c.produce(&served(), &mut add_at(0, occ, node, 0, 1));
+        for blocks in [1usize, 2, 3, 8] {
+            let f = fault(c.blocked_check(blocks, &w));
+            assert_eq!((f.pos, f.occurrence, f.node), (0, occ, Some(node)), "{f:?}");
+            assert!(matches!(f.fault, TirCheckFaultV1::Freivalds { .. }), "{f:?}");
+            assert!(!f.blocks.is_empty(), "{blocks} blocks: the failure names a block: {f:?}");
+            assert!(f.blocks.iter().all(|b| (*b as usize) < blocks.max(1)), "{f:?}");
+        }
+    }
+}
+
+/// The count and the transfer bound: `ceil(bytes / F)` blocks, each standing for at most `F` bytes; the RFC's worked head.
+#[test]
+fn the_block_count_and_the_fetch_bound() {
+    assert_eq!(tir_block_count_v1(0), 1);
+    assert_eq!(tir_block_count_v1(TIR_BLOCK_FETCH_CAP_BYTES_V1), 1);
+    assert_eq!(tir_block_count_v1(TIR_BLOCK_FETCH_CAP_BYTES_V1 + 1), 2);
+    // Qwen2.5-1.5B's head: 151,936 rows of 1,536 i16 weights = 466.8 MB: 223 blocks of at most 2 MiB (the RFC's B = 256 is the nearest power).
+    let head = 151_936u64 * 1_536 * 2;
+    let b = tir_block_count_v1(head) as u64;
+    assert!(head.div_ceil(b) <= TIR_BLOCK_FETCH_CAP_BYTES_V1, "no block exceeds the cap");
+    assert!(b * 1_536 * 8 < 3_300_000, "the extra sketch is about 3 MB ({} B)", b * 1_536 * 8);
+}

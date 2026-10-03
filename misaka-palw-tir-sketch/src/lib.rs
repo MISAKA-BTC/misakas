@@ -55,5 +55,5 @@ pub use history::TirHistorySketchV1;
 pub use mirror::{TirMirrorAgreementV1, TirMirrorOutcomeV1, TirMirrorTotalsV1, tir_mirror_agreement_v1, tir_mirror_check_v1};
 pub use field::{TirSketchModulusV1, tir_sketch_moduli_for_span_v1};
 pub use secret::{TirSeatSketchSecretV1, TirSketchKeysV1};
-pub use sketch::{TirSketchStatsV1, TirSketchStoreV1};
+pub use sketch::{TIR_BLOCK_FETCH_CAP_BYTES_V1, TirSketchStatsV1, TirSketchStoreV1, tir_block_count_v1};
 pub use witness::{TirSketchJobV1, TirTamperSiteV1, TirWitnessV1, tir_commit_root_v1, tir_witness_capture_v1, tir_witness_produce_v1};

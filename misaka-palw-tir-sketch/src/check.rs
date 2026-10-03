@@ -71,6 +71,9 @@ pub struct TirCheckFailureV1 {
     pub occurrence: u16,
     pub node: Option<u16>,
     pub fault: TirCheckFaultV1,
+    /// For a weight `MatMul` that failed its check: the free-axis blocks whose own check fails (§II.8), so a seat fetches only those
+    /// blocks' `block_fetch_bytes` of weight instead of the whole site. Empty for every other fault.
+    pub blocks: Vec<u32>,
 }
 
 /// What a passed check did (the measurement's per-job counts).
@@ -151,7 +154,7 @@ impl<'a> TirSketchCheckerV1<'a> {
     ) -> Result<TirCheckReportV1, Box<TirCheckFailureV1>> {
         let p = &self.plan.program;
         let fail = |pos: u32, occurrence: u16, node: Option<u16>, fault: TirCheckFaultV1| -> Fail {
-            Box::new(TirCheckFailureV1 { pos, occurrence, node, fault })
+            Box::new(TirCheckFailureV1 { pos, occurrence, node, fault, blocks: Vec::new() })
         };
         let positions = job.positions();
         let prompt_len = job.prompt.len() as u32;
@@ -308,7 +311,7 @@ impl<'a> TirSketchCheckerV1<'a> {
         let node = &p.blocks[ctx.block as usize].nodes[ni];
         let np = &self.occ_plans[occ as usize].nodes[ni];
         let fail =
-            |fault: TirCheckFaultV1| Box::new(TirCheckFailureV1 { pos: ctx.pos, occurrence: occ, node: Some(ni as u16), fault });
+            |fault: TirCheckFaultV1| Box::new(TirCheckFailureV1 { pos: ctx.pos, occurrence: occ, node: Some(ni as u16), fault, blocks: Vec::new() });
         let operand =
             |r| ref_value(&self.interp, self.params, ctx, run, values, r).map_err(|e| fail(TirCheckFaultV1::Recompute(e.to_string())));
         let out = values[ni].as_ref().expect("served");
@@ -348,7 +351,28 @@ impl<'a> TirSketchCheckerV1<'a> {
                         .ok_or_else(|| fail(TirCheckFaultV1::Recompute("a routed index names no expert".into())))?;
                     report.check_terms += g.check_terms();
                     if lhs != rhs {
-                        return Err(fail(TirCheckFaultV1::Freivalds { modulus: md.p() }));
+                        let mut failure = fail(TirCheckFaultV1::Freivalds { modulus: md.p() });
+                        // §II.8: name the failing blocks (each is a check of its own with the vector masked to it).
+                        for b in 0..sk.blocks {
+                            let Some(sb) = sk.block_sketch(mi, b) else { continue };
+                            let vb = if sk.blocks > 1 { g.mask_block(&sk.v[mi], sk.blocks, b) } else { sk.v[mi].clone() };
+                            let lhs_b = g.lhs(&out.data, &vb, *md);
+                            let mut block_of = |beta: &[usize]| -> Option<&[u64]> {
+                                let e = match &idx {
+                                    None => 0usize,
+                                    Some(t) => {
+                                        let coords = g.routed_coords(beta);
+                                        let flat = t.shape.iter().zip(coords).fold(0usize, |acc, (e, c)| acc * e + c);
+                                        usize::try_from(*t.data.get(flat)?).ok()?
+                                    }
+                                };
+                                (e < sk.experts).then(|| &sb[e * sk.s_len..(e + 1) * sk.s_len])
+                            };
+                            if g.rhs(&x.data, &mut block_of, *md).is_none_or(|r| r != lhs_b) {
+                                failure.blocks.push(b as u32);
+                            }
+                        }
+                        return Err(failure);
                     }
                 }
                 report.weight_checks += 1;

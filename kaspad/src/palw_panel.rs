@@ -21778,7 +21778,7 @@ mod p2_6_da_accusation_policy {
             "the supplementary collector rides the Licences site: after the licences, before the priority lane's turn after them"
         );
         assert_eq!(gate("PriorityAfterLicences"), 1);
-        assert_eq!(gate("OwnReceipts"), 2, "a seat's own receipt, and (RFC-0007) its sealed vertex");
+        assert_eq!(gate("OwnReceipts"), 3, "a seat's own receipt, and (RFC-0007) its sealed vertex and its trap object (Part IV.1)");
         assert!(
             sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && self.config.canonical_claims")
         );
@@ -23011,8 +23011,8 @@ mod readiness_memory_and_stuck_carrier_tests {
         let (sites, tail) = tick.split_at(tail_at);
         assert_eq!(
             sites.matches("self.submit_carrier_v1(&session, tx)").count(),
-            5,
-            "class registration, licences, sets, receipts, and (RFC-0007) the seat's vertex"
+            6,
+            "class registration, licences, sets, receipts, and (RFC-0007) the seat's vertex and its trap object"
         );
         assert_eq!(sites.matches("self.flow_context.submit_rpc_transaction(").count(), 1, "the canonical claim alone");
         let canonical = sites.find("self.flow_context.submit_rpc_transaction(").unwrap();

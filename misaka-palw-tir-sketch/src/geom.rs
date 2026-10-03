@@ -225,6 +225,79 @@ impl TirCheckGeomV1 {
         s
     }
 
+    /// **One expert's sketch split into free-axis blocks** (RFC-0007 §II.8's row-block sketches): `blocks` sketches of `s_len` entries
+    /// each, block `b` summing only the free-axis positions `f` with `f / block_size == b`, where `block_size = ceil(free / blocks)`.
+    /// Their entrywise sum is [`Self::sketch`] (`tests/blocks.rs`); each block is, with the vector masked to it, a check of its own.
+    pub fn sketch_blocks(&self, body: &[i128], v: &[u64], md: TirSketchModulusV1, blocks: usize) -> Vec<Vec<u64>> {
+        debug_assert_eq!(body.len(), self.body_len());
+        debug_assert_eq!(v.len(), self.v_len());
+        let (k, free) = (self.k, self.free());
+        let blocks = blocks.clamp(1, free.max(1));
+        let bsize = self.block_size(blocks);
+        let mut out = vec![vec![0u64; self.s_len()]; blocks];
+        let body_axes: Vec<usize> = (self.wb_first + self.routed_rank..self.nb()).collect();
+        let cb_ext = self.cb_extents();
+        let kept_ext: Vec<usize> = self.kept_axes().iter().map(|i| self.ew[*i]).collect();
+        let mut cb_idx = Vec::with_capacity(cb_ext.len());
+        let mut kept_idx = Vec::with_capacity(kept_ext.len());
+        let mut row = vec![0u64; free];
+        let mut wrow = vec![0u64; k];
+        let bb = self.body_batch();
+        for_each_index(&bb, |wb| {
+            cb_idx.clear();
+            kept_idx.clear();
+            for (j, &i) in body_axes.iter().enumerate() {
+                if self.cb[i] {
+                    cb_idx.push(wb[j]);
+                } else {
+                    kept_idx.push(wb[j]);
+                }
+            }
+            let vbase = row_major(&cb_ext, &cb_idx) * free;
+            let sbase = row_major(&kept_ext, &kept_idx) * k;
+            let off = row_major(&bb, wb) * k * free;
+            let vv = &v[vbase..vbase + free];
+            match self.side {
+                TirSideV1::Right => {
+                    for t in 0..k {
+                        for (c, x) in row.iter_mut().enumerate() {
+                            *x = md.reduce_i128(body[off + t * free + c]);
+                        }
+                        for (b, sk) in out.iter_mut().enumerate() {
+                            let (lo, hi) = (b * bsize, ((b + 1) * bsize).min(free));
+                            if lo < hi {
+                                sk[sbase + t] = md.add(sk[sbase + t], md.dot(&row[lo..hi], &vv[lo..hi]));
+                            }
+                        }
+                    }
+                }
+                TirSideV1::Left => {
+                    for (r, vr) in vv.iter().enumerate() {
+                        for (t, x) in wrow.iter_mut().enumerate() {
+                            *x = md.reduce_i128(body[off + r * k + t]);
+                        }
+                        let sk = &mut out[r / bsize];
+                        for t in 0..k {
+                            sk[sbase + t] = md.add(sk[sbase + t], md.mul(*vr, wrow[t]));
+                        }
+                    }
+                }
+            }
+        });
+        out
+    }
+
+    /// The free-axis positions one block spans: `ceil(free / blocks)`.
+    pub fn block_size(&self, blocks: usize) -> usize {
+        self.free().div_ceil(blocks.clamp(1, self.free().max(1))).max(1)
+    }
+
+    /// `v` with every entry outside free-axis block `block` zeroed (the vector of that block's own check).
+    pub fn mask_block(&self, v: &[u64], blocks: usize, block: usize) -> Vec<u64> {
+        let (free, bsize) = (self.free().max(1), self.block_size(blocks));
+        v.iter().enumerate().map(|(i, x)| if (i % free) / bsize == block { *x } else { 0 }).collect()
+    }
+
     /// The A-rows in check order: every uncompressed batch index (compressed coordinates 0), then
     /// the activation's free index.
     fn for_each_a_row(&self, mut f: impl FnMut(&[usize], usize)) {

@@ -470,6 +470,7 @@ the fold reads how a seat checked.
   publish the block. `palw_witness_chunk_v1` serves a chunk only while it matches its digest. The transport that carries a chunk to a seat is the
   interval lane's off-chain path (RFC-0007 §II.7); this chapter pins the count and the naming, not the wire.
 - **A failed check is not a verdict** (PALW-AV-4): the seat files no `Valid` and escalates through the exact court, unchanged (§II.8).
+- **Row-block sketches** (§II.8, node-local, not consensus): each weight is sketched in `B = ceil(|W| / F)` free-axis blocks, `F` = 2 MiB (`TIR_BLOCK_FETCH_CAP_BYTES_V1`); the blocks sum entrywise to the whole-site sketch the routine check uses (`tests/soundness.rs`). After a failed check each block is checked with the vector masked to it, and the failure names the failing blocks (`TirCheckFailureV1::blocks`), so the seat fetches at most `F` bytes of weight per failing block (inventory openings from the producer or a holder, then ADR-0111's bounded on-chain request) or hands the interval to a holder, and the unchanged court tries the named leaf. A weight within `F` has one block and stores nothing extra.
 
 ---
 
