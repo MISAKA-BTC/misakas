@@ -1385,6 +1385,8 @@ async function renderHome(){
       <div class="ov-title">Network overview</div>
       <div id="ovGrid"><div class="loading">Loading network overview…</div></div>
     </section>
+    <div class="sec-row"><h2 class="sec">Consensus composition</h2></div>
+    <div id="compCard" class="note"><div class="spin">Sampling the selected chain…</div></div>
     <div class="sec-row"><h2 class="sec">Model economy</h2></div>
     <div class="cards">
       <a class="card" href="#/registry"><b>Registry</b><span>class lifecycle · ready seats</span></a>
@@ -1565,6 +1567,7 @@ async function refreshHomeInner(){
   paintOverview(boxes);
   maybeRefreshTxFeed(dag.sink);   // throttled node-direct sweep → latest-tx feed + miners + TPS
   await updateRecent(dag.sink, liveBlue);
+  scanCompTick(dag.sink);   // consensus composition: its own selected-chain sampler, one RPC per block ever seen
 }
 
 // Paint the unified Network-overview grid. Every box is the same size (.ovbox); the array is
@@ -1712,6 +1715,68 @@ function scanPaintBlocks(){
   }
 }
 
+// ---- Consensus composition: the last 600 selected-chain blocks, by kind / model class, and which kind carried each DAA tick.
+//   Chain blocks only (round/execution blocks are never on the chain and are counted on their own line, from the recent window).
+//   Kind: the node's blockKind when sent, else derived (algo 8 heartbeat, floor class = PALW-BASE-0, other attempt = REAL + model name).
+const COMP_N = 600, COMP_KEY = "msk_comp_v1";
+let compMiss = 0, compRows = new Map(), compBusy = false, compSink = null, compProgress = 0;
+try { const c = JSON.parse(localStorage.getItem(COMP_KEY) || "null"); if (c && Array.isArray(c.rows)) compRows = new Map(c.rows.map(r => [r.h, r])); } catch {}
+function compLabelOf(r){
+  const x = scanKindOf({ algo: r.algo, classId: r.classId, nodeKind: r.nodeKind, laneClass: "" });
+  if (x.k === "FALLBACK") return x.legacy ? (x.what === "heartbeat" ? "heartbeat (legacy)" : "PALW-BASE-0 floor (legacy)") : "FALLBACK";
+  if (x.k === "REAL" || x.k === "REAL_ROUND") return r.classId ? scanClaimClassName(r.classId) : "real model (class unknown)";
+  return r.algo == null ? "unknown" : "other (algo-" + r.algo + ")";
+}
+async function scanCompTick(sink){
+  if (!$("#compCard") || !sink || compBusy || sink === compSink) { scanCompPaint(); return; }
+  compBusy = true;
+  try {
+    let h = sink, n = 0, complete = true;
+    while (h && n < COMP_N) {
+      const have = compRows.get(h);   // a block's header never changes: a cached one costs no RPC
+      if (!have) {
+        let r; try { r = await rpc("getBlock", { hash: h, includeTransactions: false }); } catch { complete = false; break; }   // a dropped call: retry on the next tick, the cached rows keep the progress
+        if (!r || !r.block) { if (n > 0 && compMiss >= 3) break; compMiss++; complete = false; break; }   // an empty answer: retry a few times, then take it as the end of what the node keeps (pruned / genesis)
+        compMiss = 0;
+        const sm = summarize(r.block);
+        compRows.set(h, { h, sp: sm.selectedParent, daa: Number(sm.daaScore), algo: sm.algo, classId: sm.classId, nodeKind: sm.nodeKind });
+      }
+      h = compRows.get(h).sp; n++;
+      if (n % 25 === 0) { compProgress = n; compSink = null; scanCompPaintFrom(sink); }
+    }
+    compSink = (complete || compMiss >= 3) ? sink : null;
+    // keep only what the latest chain uses
+    if (compRows.size > COMP_N * 2) {   // a reorg leaves a few orphaned rows: drop the oldest beyond twice the window
+      const old = Array.from(compRows.values()).sort((a, b) => a.daa - b.daa).slice(0, compRows.size - COMP_N * 2);
+      for (const r of old) compRows.delete(r.h);
+    }
+    try { localStorage.setItem(COMP_KEY, JSON.stringify({ rows: Array.from(compRows.values()) })); } catch {}
+  } finally { compBusy = false; }
+  scanCompPaintFrom(sink);
+  if (!compSink && compMiss < 4) setTimeout(() => { if ($("#compCard")) scanCompTick(sink); }, 2500);   // a dropped call or a moved tip: continue from the cached rows
+}
+function compChain(sink){ const out = []; let h = sink; while (h && compRows.has(h) && out.length < COMP_N) { const r = compRows.get(h); out.push(r); h = r.sp; } return out; }   // newest first
+function scanCompPaint(){ if (compSink) scanCompPaintFrom(compSink); }
+function scanCompPaintFrom(sink){
+  const el = $("#compCard"); if (!el) return;
+  const chain = compChain(sink).filter(r => r.algo !== 10);   // a round block is never a chain block
+  if (chain.length < 2) { el.innerHTML = `<div class="spin">Sampling the selected chain…</div>`; return; }
+  const blocks = new Map(), daa = new Map(); let totalDaa = 0;
+  for (let i = 0; i < chain.length; i++) {
+    const r = chain[i], label = compLabelOf(r);
+    blocks.set(label, (blocks.get(label) || 0) + 1);
+    const parent = chain[i + 1];
+    if (parent) { const d = Math.max(0, r.daa - parent.daa); if (d) { daa.set(label, (daa.get(label) || 0) + d); totalDaa += d; } }
+  }
+  const labels = Array.from(new Set([...blocks.keys(), ...daa.keys()])).sort((a, b) => (blocks.get(b) || 0) - (blocks.get(a) || 0));
+  const pct = (v, t) => t ? (100 * v / t).toFixed(1) + " %" : "—";
+  const nRound = (recent || []).filter(scanIsRound).length;
+  el.innerHTML = `<table class="tbl"><thead><tr><th>Kind / model</th><th class="num">Blocks</th><th class="num">Share</th><th class="num" title="DAA ticks whose first selected-chain block was of this kind">DAA advanced by</th></tr></thead><tbody>${labels.map(l =>
+      `<tr><td>${esc(l)}</td><td class="num">${num(blocks.get(l) || 0)}</td><td class="num">${pct(blocks.get(l) || 0, chain.length)}</td><td class="num">${pct(daa.get(l) || 0, totalDaa)} <span class="dim">(${num(daa.get(l) || 0)})</span></td></tr>`).join("")}
+      <tr class="dim"><td>model execution blocks (not consensus)</td><td class="num">${num(nRound)}</td><td class="num" colspan="2">in the last ${num((recent || []).length)} blocks seen, listed below</td></tr></tbody></table>
+    <div class="dim" style="margin-top:6px">The last ${num(chain.length)} selected-chain blocks${compBusy ? " (sampling…)" : ""}: how many each kind produced, and which kind carried each DAA tick (the first chain block of that score). Execution round blocks are never on the chain.</div>`;
+}
+
 function renderRecent(){
   const w = $("#recentWrap"); if (!w) return;
   if (!recent.length){ w.innerHTML = `<div class="spin">No blocks yet…</div>`; shownHashes = new Set(); return; }
@@ -1728,6 +1793,7 @@ function renderRecent(){
     (Number(b.daaScore)  - Number(a.daaScore)));
   scanRefreshExecutions(all);
   scanPaintLaneCard(all);
+  scanCompPaint();
   scanAll = all;
   scanPaintBlocks();
 }
