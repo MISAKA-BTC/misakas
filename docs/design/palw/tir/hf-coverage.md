@@ -1408,3 +1408,7 @@ reference against `transformers`, the integer program against the float referenc
 entries is preflighted at the `shape` depth on testnet-12, from its committed light spec written back as header-only safetensors, at a declared
 context of 128 positions, and its convert/register/mine statuses and blocker codes are pinned. The pins are the claim a user would be shown; a
 change to a feature, an adapter, a check or a code moves one by name.
+
+On the preflight's terms 67 of the 100 reach `convert: ok`, against 83 that read at Level A or B: the 16 that differ are chiefly the kinds the
+preflight does not yet carry (encoder–decoders, vision towers, diffusers components and audio are refused `ARCH_REFUSED` — R1 judges text decoders
+and encoders), plus entries whose committed light spec has no tensor list (`internlm2`, `minicpm`). The pins record exactly that.

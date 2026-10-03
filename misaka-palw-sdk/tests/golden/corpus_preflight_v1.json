@@ -1,10 +1,8 @@
 {
   "albert": {
     "convert": {
-      "blockers": [
-        "TENSOR_SHAPE(embed.pos_table)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
@@ -30,6 +28,7 @@
     }
   },
   "arcee": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -163,10 +162,8 @@
   },
   "dbrx": {
     "convert": {
-      "blockers": [
-        "TENSOR_MISSING(moe.experts.gate)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
@@ -304,6 +301,7 @@
     }
   },
   "ernie4_5": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -319,10 +317,8 @@
   },
   "ernie4_5_moe": {
     "convert": {
-      "blockers": [
-        "TENSOR_SHAPE(moe.sel_bias)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
@@ -568,10 +564,8 @@
   },
   "granitemoehybrid": {
     "convert": {
-      "blockers": [
-        "TENSOR_SHAPE(moe.shared.up.w)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "mine": {
       "blockers": [],
@@ -597,6 +591,7 @@
     }
   },
   "hunyuan_v1_dense": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -611,6 +606,7 @@
     }
   },
   "hunyuan_v1_moe": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -625,6 +621,7 @@
     }
   },
   "idefics3": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -885,6 +882,7 @@
     }
   },
   "minimax_m2": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -1043,6 +1041,7 @@
     }
   },
   "persimmon": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -1183,6 +1182,7 @@
     }
   },
   "qwen3_vl": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -1257,6 +1257,7 @@
     }
   },
   "seed_oss": {
+    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
