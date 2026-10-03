@@ -654,7 +654,15 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
             backend.verify_fp_interval_opening_under_job_v1(&opening, roots, index, &ids, run.facts.step_leaf_count, &job, answer)
         })
     };
+    // A seat that holds no table for the claim abstains (`Unverifiable`) — never a fault, never a verdict.
+    assert_eq!(verify(None, &run.output_token_ids, 0), PalwFpIntervalVerdictV1::Unverifiable, "no table held: the seat abstains");
+    // Distribution: the table file a worker writes loads into the process's set, and the seat then judges by the claim's root.
+    let file = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table);
+    let held = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_decode_v1(&file).expect("the file decodes");
+    assert_eq!(held.root(), table.root());
+    kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1().register(held);
     for index in 0..count {
+        assert_eq!(verify(None, &run.output_token_ids, index), PalwFpIntervalVerdictV1::Valid, "interval {index} through the held table");
         assert_eq!(verify(Some(mask.clone()), &run.output_token_ids, index), PalwFpIntervalVerdictV1::Valid, "interval {index}");
     }
 
