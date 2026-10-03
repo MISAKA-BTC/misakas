@@ -107,7 +107,8 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 102 | `TrapCommittedV1` | RFC-0007 Part IV.1 (spec 18): a trap setter's commitment `H(claim ‖ fault leaf ‖ tiles ‖ salt)`, under the dormant fence `palw_audit_mesh_v1` | yes |
 | 103 | `TrapRevealedV1` | RFC-0007 Part IV.1 (spec 18): a trap's reveal; slashes the auditors who matched the planted tile, voids the trap claim | yes |
 | 94 | `AdapterClassListed` | RFC-0001 §2.10 (ADR-0163): an adapter class's listing in the registry of composite classes, signed by the lister's bond, under the dormant fence `palw_adapter_class_v1` (lane U) | yes |
-| 95–99 and 104–109 | free | the next tags are 95 (core) and 104 (RFC-0007's range) | |
+| 95 | `AttemptRidersV1` | ADR-0164 F-M1 (ADR-0167): up to `PALW_RIDERS_MAX_V1` further attempts of a lead claim's own bond, each its own claim, paid out of the lead's carve; under the dormant fence `palw_capacity_multi_claim` (lane CAP) | yes |
+| 96–99 and 104–109 | free | the next tags are 96 (core) and 104 (RFC-0007's range) | |
 
 **Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
 a held leaf challenge opens is at a fused IR or pipeline terminal with no phase open, where the court clocks the
@@ -193,8 +194,8 @@ Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that alrea
 or fault is added only if A6/A7 show one is needed, and takes the next number here. A6 needed three proofs
 (13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
 analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
-evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 95
-and up (91–93 RFC-0006's, 94 RFC-0001's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 96
+and up (91–93 RFC-0006's, 94 RFC-0001's, 95 ADR-0167's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
 object tags 83–92 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
