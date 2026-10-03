@@ -577,6 +577,29 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
     - `token_bound`.
     - Committed operands are checked against their proven intervals (PALW-TIR-33: out of interval is a malformed commitment and the producer loses).
     - Params get a 2^40 sanity bound instead of the 2^28 cap.
+- **Lane R2 (`rfc2/rest`, 2026-10-03): the rest of Parts I and II on one branch.**
+  - **Frontend (`tir/generic` merged, the corpus v2 harness merged).** The corpus of 100 curated architectures reads as **A 8, B 75, C 17**
+    (83 %; usage-weighted 84.7 %; text-generation 50 of 57) on the features the tree has; every golden preflight is pinned
+    (`misaka-palw-sdk/tests/golden/corpus_preflight_v1.json`) and the quantised fixtures' decode is pinned
+    (`misaka-palw-tir-lower/tests/golden/quant_decode_v1.json`, L4's offline half). The 17 Level-C entries each name the feature they lack
+    (`docs/design/palw/tir/hf-coverage.md` §23); 90 % needs those features, not more data. HF fixtures: 93.
+  - **Part II Proposal A** (`palw_class_seating`, dormant on every preset, written in the four places, drilled by `--palw-drill-class-seating-at`):
+    one predicate for every class kind (possession floor and independence floor over the base population), the doors of attempts,
+    free prompts, improvement evaluations and generative claims, the lifecycle gate, the registry read and the RPC (`blocking`,
+    licensable share); tests SEAT-1..11 in `consensus/core/tests/palw_class_seating_fence.rs`. **Proposal B**: a seat runs the executor
+    conformance (the node's own executor against the reference evaluator, streamed, three sampled positions) once per `(class, artifact root)`
+    before its first possession proof (`EXECUTOR_NOT_CONFORMANT`; `--palw-no-seat-conformance` for a drill). **C1**: probation stays paid; the
+    gates are in front of it (`Prefetching`/`Held` → `Probation` and `Probation` → `ActiveLimited` ask the independence floor).
+  - **Phase H** (`palw_tir_only_v1`) is implemented dormant with its test and not armed.
+  - **Phase 0(a)** (`palw_gdn_key_heads`) is merged; its exit drill is `scripts/misaka-palw-rfc2r-fence-drill.sh`.
+  - **§8 verdicts**: `ADMISSIBLE_GENERIC` (estimated slowdown) and `LOWERABLE_UNVERIFIED` in `check-architecture` (04b §17).
+  - **R1 gaps (§II.2.9)**: `--node`, the `full` depth (`PACK_NOT_VERIFIED`, `ARTIFACT_ROOT_KNOWN`), the per-class court window and remote
+    HF-by-range (against a local HTTP fixture server only).
+  - **Phase G**: fused kernels `l2_unit_q15`, `rms_unit_q24`, `rms_norm_wide_q36` with the F-4 gate and a broken variant each, and a Metal
+    backend for the unit-row kernels behind `--palw-tir-metal` (04b §17).
+  - **Limitations**: L1 closed (row-streamed calibration: lazy params in the float reference, a stack of experts read by the selected
+    experts); L2 closed for packs and for the seat (streamed reference, sampled positions); L4 half (decode pinned; the libraries'
+    own output still needs the libraries); L7 measured (below, `lanes/evidence/rfc2-rest/l7`).
 - **Gate 2 (running):** the composite library, conformance against the live kernels, `tir_admit_v1`, quantisation and fidelity, the independent second implementation, and the Phase F integration design.
 - **Found on the way (legacy code, outside this RFC):**
   - A court arm that could panic on hostile committed lanes. It is being fixed as a node update.

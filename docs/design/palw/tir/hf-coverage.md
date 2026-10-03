@@ -1379,3 +1379,32 @@ natural-log units × 2^24 in an `i32`, whatever the model.**
   `2^24` agree with transformers' on eight head shapes (plain, tied, soft-capped, scaled, MoE,
   recurrent, learned-position, Gemma-4) within the quantisation's error and top-1 agrees wherever
   transformers leads by more than 8× that error; a head scaled to hundreds is refused by name.
+
+## 23. The corpus measured on the integrated tree (lane R2, 2026-10-03)
+
+`tir/generic` (the feature lowerers, the data adapters, fixtures 93) and `tir/corpus` (the 100-architecture harness, `corpus-v2.md`) are
+merged on `rfc2/rest`, and the harness's data-route probe (vision towers, convolutional networks, encoder–decoders, diffusers components)
+is part of it. **Existing features only** — nothing was added to a lowerer for the measurement.
+
+| Level | Entries | Share |
+| --- | ---: | ---: |
+| A — the standard keys and names | 8 | 8 % |
+| B — a data adapter (built in, or a file the corpus carries) | 75 | 75 % |
+| **A + B** | **83** | **83 %** (usage-weighted 84.7 %; text-generation 50 of 57) |
+| C — a capability is missing | 17 | 17 % |
+
+**The target was 90 % and is not reached with existing features**; the corpus itself says why. The 17 Level-C entries each name what they lack:
+the text models need features (`diffllama`: differential attention; `gemma3n_text`: AltUp/LAuReL/activation sparsity, FR-12; `jetmoe`:
+mixture-of-attention heads; `longcat_flash`: zero-computation experts with a shortcut branch; `deepseek_v4`: hyper-connections with compressed
+sparse attention and hash routing; `zamba2`: one shared attention block at several depths; `kimi_linear`: channel-wise gated delta rule),
+the multimodal ones capabilities (`mllama`: cross-attention to vision states, FR-21; the diffusers denoisers `unet2d_condition`, `unet_sdxl`,
+`dit`, `flux`: FR-22; the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec`: FR-23) and `chatglm3` a remote-code reference (FR-24).
+Seven more entries would be needed for 90 %; the cheapest are the seven text features, each a general lowerer and not a per-model path.
+
+**The weights-bearing stages are unchanged** from `corpus-v2.md`: of the entries that read, every one with weights passes admission, the float
+reference against `transformers`, the integer program against the float reference, reference ↔ ref2 ↔ exec bit identity and the court property.
+
+**A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each of the 100
+entries is preflighted at the `shape` depth on testnet-12, from its committed light spec written back as header-only safetensors, at a declared
+context of 128 positions, and its convert/register/mine statuses and blocker codes are pinned. The pins are the claim a user would be shown; a
+change to a feature, an adapter, a check or a code moves one by name.
