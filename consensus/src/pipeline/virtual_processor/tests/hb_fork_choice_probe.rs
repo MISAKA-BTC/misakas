@@ -207,6 +207,9 @@ struct Released {
     flipped_after_public_beats: Option<usize>,
     /// Released blocks that reached the top of the heap and did NOT become the sink.
     vetoed_while_offered: usize,
+    /// The honest public beats the victim mined after the release (the ones counted by `flipped_after_public_beats`), in order — part
+    /// of the order the victim's node saw its DAG in.
+    beats: Vec<Block>,
     /// Blue work above the fork point: the public tip's, and the heaviest private block's.
     public_bw: i128,
     private_bw_max: i128,
@@ -281,6 +284,7 @@ async fn release(tag: &str, v: &mut T12Chain, private: &[Block], fork: BlockHash
         for k in 1..=public_beats {
             let clock = v.ctx.simulated_time + 1_000;
             let beat = layer(v, nonce, 1, clock, Vec::new()).await.expect("an honest public beat").remove(0);
+            r.beats.push(beat.clone());
             let sink = v.sink();
             eprintln!(
                 "[hb-probe {tag}]   public beat {k} after the release: blue work +{} (the private max +{}); victim sink {}",
@@ -958,6 +962,10 @@ struct AbsorbRun {
     held: (bool, bool),
     duel: Duel,
     private: Vec<Block>,
+    /// **The order the victim's node saw its DAG in** (every block it holds but genesis): the shared prefix and its own public blocks as it
+    /// mined them, then the private branch as released (a refused block is not in it), then the public beats it mined after the release.
+    /// The sink is a function of this ORDER, not of the DAG alone (the deep-reorg gate compares a candidate with the INCUMBENT).
+    arrival: Vec<Block>,
 }
 
 impl AbsorbRun {
@@ -976,8 +984,9 @@ impl AbsorbRun {
 async fn absorb(tag: &str, slots: usize, m: usize, x_in_attempt: bool, release_it: bool, same_chain: Option<u64>) -> AbsorbRun {
     kaspa_core::log::try_init_logger("warn");
     let mut d = duel_armed(None, same_chain);
+    let mut prefix: Vec<Block> = Vec::new();
     for _ in 0..3 {
-        honest_slot_mirrored(&mut d).await;
+        prefix.extend(honest_slot_mirrored(&mut d).await);
     }
     let fork = d.victim.sink();
     let mut private = private_slot(&mut d.attacker, &mut d.nonce, m, vec![d.y.clone()]).await;
@@ -1031,7 +1040,14 @@ async fn absorb(tag: &str, slots: usize, m: usize, x_in_attempt: bool, release_i
     if release_it {
         assert_same_coloring(tag, &d.attacker, &d.victim, &private);
     }
-    AbsorbRun { seen, released, held, duel: d, private }
+    let refused: HashSet<usize> = released.refused.iter().map(|(n, _)| *n).collect();
+    let mut arrival = prefix;
+    arrival.extend(public.iter().cloned());
+    if release_it {
+        arrival.extend(private.iter().enumerate().filter(|(i, _)| !refused.contains(&(i + 1))).map(|(_, b)| b.clone()));
+        arrival.extend(released.beats.iter().cloned());
+    }
+    AbsorbRun { seen, released, held, duel: d, private, arrival }
 }
 
 /// The rule, stated over what the attacker's node did: past the fence a public attempt is blue in a
@@ -1093,16 +1109,44 @@ fn blocks_in_topological_order(c: &T12Chain) -> Vec<Block> {
     order.into_iter().map(|h| c.ctx.consensus.get_block(h).unwrap_or_else(|e| panic!("{h}: {e}"))).collect()
 }
 
-/// Feed every block `from` holds to `to`, parents first, and demand `to` colors each one exactly as
-/// `from` did and ends on the same sink. Returns how many blocks were compared.
-async fn replay_and_compare(tag: &str, from: &T12Chain, to: &mut T12Chain) -> usize {
-    let blocks = blocks_in_topological_order(from);
-    for b in &blocks {
+/// Feed `order` (blocks, each after all its parents) to `to` and demand `to` colors each one exactly as `from` did. Returns how many
+/// blocks were compared. The COLORING is a function of the DAG: it agrees whatever the order. The sink is not (see below).
+async fn replay_colors(tag: &str, from: &T12Chain, to: &mut T12Chain, order: &[Block]) -> usize {
+    for b in order {
         mirror(to, b).await;
     }
-    assert_same_coloring(tag, from, to, &blocks);
+    assert_same_coloring(tag, from, to, order);
+    order.len()
+}
+
+/// Feed every block `from` holds to `to`, in a topological order of this file's own (a DFS from `get_tips()`, NOT the order `from` saw
+/// them in), and demand `to` colors each one exactly as `from` did. Returns how many blocks were compared.
+///
+/// **The sink is reported, not asserted.** It is not a function of the DAG alone: `dns_reorg_outcome` judges every non-extension sink
+/// move against the INCUMBENT (a candidate that is the incumbent, or extends it, is never judged), so a node that saw sibling tips in
+/// another order can keep another sink — the heavier tip is refused as a reorg when the PALW keys (frontier, safe weight, live total and,
+/// below `palw_reorg_strict_economic_win`, the candidate hash) rank it under the incumbent, and a node whose incumbent it IS never weighs
+/// the other. They re-converge when a later block merges both tips. This test asserted `from.sink() == to.sink()` here and failed in
+/// ~7 % of runs on the attack DAG and ~2 % on the honest crossing (P2, 2026-10-03; 150 and 100 runs); [`replay_in_order`] asserts
+/// it where the order is the one `from` saw.
+async fn replay_and_compare(tag: &str, from: &T12Chain, to: &mut T12Chain) -> usize {
+    let blocks = blocks_in_topological_order(from);
+    let n = replay_colors(tag, from, to, &blocks).await;
+    if from.sink() != to.sink() {
+        eprintln!(
+            "[hb-regression {tag}] the replay in another order ended on another sink ({} vs {}): the sink follows the arrival order, the coloring does not",
+            from.sink(),
+            to.sink()
+        );
+    }
+    n
+}
+
+/// [`replay_and_compare`], in the order `from`'s node saw its blocks: now the twin must end on the same sink too — one build on one history.
+async fn replay_in_order(tag: &str, from: &T12Chain, to: &mut T12Chain, order: &[Block]) -> usize {
+    let n = replay_colors(tag, from, to, order).await;
     assert_eq!(from.sink(), to.sink(), "{tag}: the same sink");
-    blocks.len()
+    n
 }
 
 /// **g2 — the verifier's headline case: X in a public holder, two public attempts, a bondless
@@ -1203,7 +1247,7 @@ async fn hb_regression_the_fence_splits_an_attack_at_the_candidates_own_daa() {
 
 /// **Below its height the armed build IS the launched build, on the DAG where the two rules differ.**
 /// g2's attack as testnet-12 launched it (the double spend lands), replayed block for block into a node
-/// that has the fence scheduled far above this chain: every block colored identically — selected
+/// that has the fence scheduled far above this chain, in the order the victim saw them: every block colored identically — selected
 /// parent, blue score, blue work, blues and reds — the same sink, and the same (double-spent) UTXO set.
 /// A fleet can install the armed build before the height with nothing to disagree about.
 #[tokio::test]
@@ -1213,7 +1257,8 @@ async fn hb_regression_below_the_fence_the_armed_build_is_the_launched_build() {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let scheduled = with_same_chain(&config, Some(1_000_000));
     let mut twin = t12_genesis_chain(&scheduled, &bundle, &premine, &floats);
-    let compared = replay_and_compare("scheduled twin", &launched.duel.victim, &mut twin).await;
+    assert_eq!(launched.arrival.len(), blocks_in_topological_order(&launched.duel.victim).len(), "the arrival order is every block the victim holds");
+    let compared = replay_in_order("scheduled twin", &launched.duel.victim, &mut twin, &launched.arrival).await;
     let x_out = TransactionOutpoint::new(launched.duel.x.id(), 0);
     let y_out = TransactionOutpoint::new(launched.duel.y.id(), 0);
     assert_eq!((has_utxo(&twin, x_out), has_utxo(&twin, y_out)), launched.held, "the same UTXO set: the twin double-spent too");
@@ -1404,8 +1449,9 @@ async fn hb_regression_an_8k_draw_200s_late_stays_blue_on_its_own_chain() {
 ///   stopped whatever ticked the clock) cannot hide here, because the slots are counted one by one.
 /// * **Every draw is blue**, on both sides of the height: a late draw hangs from the chain it lands on.
 /// * **The launched build agrees, block for block**: a node with the fence absent, fed this chain,
-///   colors every block identically and ends on the same sink — on an honest chain the flag day has
-///   nothing to disagree about, so a straggler is refused by the fork id, not by a fork.
+///   colors every block identically — on an honest chain the flag day has nothing to disagree about,
+///   so a straggler is refused by the fork id, not by a fork. (Its SINK is not asserted: the straggler is
+///   fed in a DFS order of its own, and the sink follows the order blocks arrive in — `replay_and_compare`.)
 #[tokio::test]
 async fn hb_regression_the_fence_crosses_an_honest_chain_and_the_clock_runs() {
     const H: u64 = 8;
