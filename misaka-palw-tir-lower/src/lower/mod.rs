@@ -64,6 +64,7 @@ pub mod cnn;
 pub mod encdec;
 pub mod qlinear;
 pub mod vision;
+mod altup;
 mod dsa;
 pub mod fill;
 mod generic;
@@ -926,6 +927,16 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
                     && want[j as usize].is_none()
                 {
                     want[j as usize] = Some(w.clone());
+                } else if w.dt == DType::I32 {
+                    // A residual made of several values (AltUp's streams): each part is produced at the residual scale and the
+                    // concatenation is wide.
+                    for r in &n.inputs {
+                        if let hl::Ref::Node(j, 0) = r
+                            && want[*j as usize].is_none()
+                        {
+                            want[*j as usize] = Some(w.clone());
+                        }
+                    }
                 }
             }
             // `x · p` keeps the key: the product is formed in integers.
@@ -1623,17 +1634,38 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::ScaleParam => {
             // Gemma-4's `layer_scalar`: `x · p` at x's own scale, `p` in Q24.
             let x = operand(lb, node.inputs[0])?;
-            let x = coerce(b, cx, lb, &x, want.dt, &want.key)?;
             let pp = pidx(node.inputs[1])?;
+            // One scalar, or one factor per element (Gemma-3n's `correct_output_scale`).
+            let np = hl.params[pp as usize].shape.iter().product::<usize>();
+            if np > 1 {
+                // A vector of factors changes the magnitude per lane: the product is formed at `x`'s own scale (exact in `i64`) and
+                // narrowed once to the scale the consumers want, which is calibrated on the PRODUCT, not on `x`.
+                let c = decl(
+                    b,
+                    cx,
+                    lb,
+                    &format!("{site}.c"),
+                    DType::I32,
+                    &[np],
+                    per_layer(lb),
+                    Arc::new(move |c| Ok(IntTensor::i32(vec![np], c.f(pp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+                )?;
+                let c = b.clamp(c, -(1 << 30), 1 << 30, DType::I32);
+                let p = b.mul(x.r, c, DType::I64);
+                let kx = x.key.clone();
+                let want = if want.dt == DType::I16 || want.dt == DType::I32 { want } else { default_want(lb, i, &site) };
+                return one(generic::narrow_to(b, cx, lb, p, out_len, Arc::new(move |f| Ok(f.scale(&kx)? / (1u64 << 24) as f64)), &site, &want)?);
+            }
+            let x = coerce(b, cx, lb, &x, want.dt, &want.key)?;
             let c = decl(
                 b,
                 cx,
                 lb,
                 &format!("{site}.c"),
                 DType::I32,
-                &[1],
+                &[np],
                 per_layer(lb),
-                Arc::new(move |c| Ok(IntTensor::i32(vec![1], vec![q24_wide(c.f(pp)?.data[0] as f64)]))),
+                Arc::new(move |c| Ok(IntTensor::i32(vec![np], c.f(pp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
             )?;
             let p = b.mul(x.r, c, DType::I64);
             let p = b.shr(p, 24, Rounding::HalfAwayFromZero, DType::I64);
@@ -1844,6 +1876,21 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 note_resid(cx, lb, &v);
                 return one(v);
             }
+            // A residual made of several values: every part at the wanted `i32` scale, concatenated wide.
+            if want.dt == DType::I32 && lb.wants[i].is_some() {
+                if parts.len() > 8 {
+                    return Err(LowerError::not_lowerable("a concat of more than 8 values"));
+                }
+                let mut refs = Vec::with_capacity(parts.len());
+                for p in &parts {
+                    refs.push(coerce(b, cx, lb, p, DType::I32, &want.key)?.r);
+                }
+                let r = b.concat(&refs, 0);
+                let site = if site.is_empty() { parts[0].site.clone() } else { site };
+                let v = Val { r, dt: DType::I32, key: want.key.clone(), len: out_len, site };
+                note_resid(cx, lb, &v);
+                return one(v);
+            }
             let first = codes(b, cx, lb, &parts[0])?;
             let mut refs = vec![first.r];
             for p in &parts[1..] {
@@ -1943,6 +1990,25 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let w = operand(lb, node.inputs[1])?;
             let w = codes(b, cx, lb, &w)?;
             one(generic::stream_outer(b, cx, lb, &o, &w, *streams, &site, &want)?)
+        }
+        Op::StreamMix { n_in, n_out, transpose } => {
+            let x = operand(lb, node.inputs[0])?;
+            let c = operand(lb, node.inputs[1])?;
+            let c = codes(b, cx, lb, &c)?;
+            one(altup::stream_mix(b, cx, lb, &x, &c, *n_in, *n_out, *transpose, &site, &want)?)
+        }
+        Op::RmsMatch { floor } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let r = operand(lb, node.inputs[1])?;
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(altup::rms_match(b, cx, lb, &x, &r, *floor, &site, &want)?)
+        }
+        Op::GaussianTopK { layers } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(altup::gaussian_topk(b, cx, lb, &x, layers, &site, &want)?)
         }
         Op::GroupDot { groups } => {
             let a = operand(lb, node.inputs[0])?;
@@ -2081,6 +2147,9 @@ fn image_token(b: &mut BlockBuilder<'_>, cursor: tir::Ref, img: ImageRows) -> ti
     let zero = b.c(DType::I8, 0);
     b.select(is_ph, room, zero, DType::I8)
 }
+    // A table with fewer rows than the vocabulary (Gemma-3n's per-layer table: 262,144 rows, 262,400 token ids — the ids past it are
+    // the multimodal placeholders, which transformers never looks up) holds its last row for them: the program stays total.
+    let at = if rows < hl.vocab && matches!(at, tir::Ref::Input(i) if i == INPUT_TOKEN) { b.clamp(at, 0, rows as i64 - 1, DType::Idx) } else { at };
 
 /// Qwen2-VL's M-RoPE positions `(t, h, w)` at this position, from the stream position and the image
 /// cursor as this step starts (the image rows placed before this position). A layer block reads its

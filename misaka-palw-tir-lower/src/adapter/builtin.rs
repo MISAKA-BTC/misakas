@@ -71,6 +71,7 @@ pack!(
     "gemma2",
     "gemma3-text",
     "gemma4-text",
+    "gemma3n-text",
     "glm",
     "glm4",
     "glm4-moe",

@@ -196,6 +196,15 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         m.lin("hc.final.down", "hc.final.down", false)?;
         m.lin("hc.final.up", "hc.final.up", false)?;
     }
+    // AltUp: the projections that make the other streams from the embedding and bring them back (`{I}` is the projection's index, 0-based).
+    if let Some(au) = &spec.altup {
+        for i in 1..au.streams {
+            for (name, role) in [("altup.proj", "altup.proj"), ("altup.unembed", "altup.unembed")] {
+                let t = m.role(role)?.replace("{I}", &(i - 1).to_string());
+                m.put(format!("{name}{i}.w"), Src::t(format!("{t}.weight")))?;
+            }
+        }
+    }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
@@ -262,6 +271,17 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
 }
 
+/// Gemma-3n/4's per-layer input: the layer's slices of the two tensors packed over the layers, the norms and the branch's projections.
+fn bind_ple(m: &mut M, p: &PleSpec) -> Result<()> {
+    m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
+    m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
+    m.norm("ple.norm", "ple.norm", &p.norm)?;
+    m.lin("ple.gate", "ple.gate", false)?;
+    m.lin("ple.out", "ple.out", false)?;
+    m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+    Ok(())
+}
+
 fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> Result<()> {
     match &ls.residual {
         Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, .. } => {
@@ -290,16 +310,32 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
                 m.norm(name, name, n)?;
             }
             if let Some(p) = ple {
-                // The layer's slices of the two tensors packed over the layers.
-                m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
-                m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
-                m.norm("ple.norm", "ple.norm", &p.norm)?;
-                m.lin("ple.gate", "ple.gate", false)?;
-                m.lin("ple.out", "ple.out", false)?;
-                m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+                bind_ple(m, p)?;
             }
             if *layer_scalar {
                 m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
+            }
+        }
+        Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } => {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
+                m.norm(name, name, n)?;
+            }
+            m.norm("altup.router_norm", "altup.router_norm", router_norm)?;
+            for name in ["altup.router", "altup.pred_coefs", "altup.correction_coefs"] {
+                m.lin(name, name, false)?;
+            }
+            if spec.altup.as_ref().is_some_and(|a| a.correct_scale) && ple.is_some() {
+                m.put("altup.correct_scale", Src::t(m.role("altup.correct_scale")?))?;
+            }
+            if let Some(l) = laurel {
+                m.lin("laurel.left", "laurel.left", false)?;
+                m.lin("laurel.right", "laurel.right", false)?;
+                m.norm("laurel.norm", "laurel.norm", &l.post_norm)?;
+            }
+            if let Some(p) = ple {
+                bind_ple(m, p)?;
             }
         }
         Residual::HyperConnection { ple } => {
@@ -816,6 +852,7 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             down_bias: false,
             inner_norm: None,
             name: None,
+            sparsity: None,
         };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {

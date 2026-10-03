@@ -36,6 +36,7 @@ code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Cla
 | FR-30 separate output gate | **landed** (`ATTN_OUTPUT_GATE_SEPARATE_V1`) | `afmoe`, `laguna` Level B |
 | FR-31 attention value scale | **landed** (`ATTN_VALUE_SCALE_V1`) | `mimo_v2_flash` Level B (and the `_unscaled` variant) |
 | FR-35 rotation by -theta | **landed** (`ROPE_REVERSED_V1`) | `nanochat` Level B |
+| FR-12 Gemma-3n set | **landed** (`Residual::AltUp`, `ModelSpec.altup`, `MlpSpec.sparsity`; HL `StreamMix`, `RmsMatch`, `GaussianTopK`; `lower/altup.rs`) | `gemma3n_text` Level B (built-in `gemma3n-text`): float reference = transformers to 1e-5, integer vs float top-1 1.00 / KL 5e-4, ref = ref2 = exec, court replays every node; the real E4B text decoder lowers and is admitted. Deviations from the request, recorded: LAuReL is a field of `Residual::AltUp` (not `LayerSpec`: a `LayerSpec` literal is built in a dozen places); the K streams ride in a carry of `(K+1)·D` lanes (the extra slot is the layer's intermediate between its two blocks); the activation sparsity of a layer is DATA of the block (`Op::GaussianTopK::layers`), so dense and sparse layers run one block — a program is capped at 16 blocks and the real model has 8 layer kinds otherwise |
 | FR-03, 04, 05, 06, 08..17, 19..24, 27, 28, 32..34 | open | see each |
 
 ## Findings for lane G (from the re-measure on `239179132`)

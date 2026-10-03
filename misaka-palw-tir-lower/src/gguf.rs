@@ -1363,8 +1363,8 @@ impl GgufModel {
                             w(n);
                         }
                     }
-                    // No GGUF architecture stores hyper-connections.
-                    Residual::HyperConnection { .. } => {}
+                    // No GGUF architecture stores hyper-connections or AltUp streams.
+                    Residual::HyperConnection { .. } | Residual::AltUp { .. } => {}
                 }
                 if let crate::spec::Mixer::Attention(a) = &mut ls.mixer
                     && let Some(qk) = a.qk_norm.as_mut()

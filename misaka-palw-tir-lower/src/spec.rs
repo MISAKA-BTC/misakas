@@ -607,6 +607,12 @@ pub struct MlpSpec {
     /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
     #[serde(default)]
     pub name: Option<String>,
+    /// **`FFN_ACTIVATION_SPARSITY_V1`** (Gemma-3n's `activation_sparsity_pattern`): the target sparsity `p ∈ (0.5, 1)` of the
+    /// gate activation. Before the activation the gate row keeps only what lies above `mean + z·std` of its own width
+    /// (`z = Φ⁻¹(p)`, the biased standard deviation): `gate ← relu(gate − (mean + z·std))`. `z` is a registration-time
+    /// constant the HL builder computes from `p` with a fixed algorithm ([`crate::detmath::norm_inv_cdf`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparsity: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -788,6 +794,53 @@ pub enum Residual {
         #[serde(default)]
         ple: Option<NgramPleSpec>,
     },
+    /// **`RESIDUAL_ALTUP_V1`** (+ **`RESIDUAL_LAUREL_V1`**) — Gemma-3n's alternating updates over [`AltUpSpec::streams`] streams.
+    /// Per layer, with `K` streams `h_i` and the router `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`:
+    ///
+    /// ```text
+    ///   pred_i = h_i + Σ_j C[i,j]·h_j,   C = prediction_coefs(m(h_0))                      // K×K, per position
+    ///   an     = pre_mixer(pred_0)
+    ///   lo     = an + laurel_norm(laurel_right(laurel_left(an)))                            // LAuReL, when present
+    ///   a      = (pred_0 + post_mixer(mixer(an)) + lo) / √2
+    ///   f      = a + post_ffn(ffn(pre_ffn(a)))                                              // the activated stream
+    ///   cor_i  = pred_i + (f − pred_0)·(correction_coefs(m(f))_i + 1)
+    ///   y      = per_layer_gate(cor_0 ⊙ correct_output_scale)  →  act · ple  →  per_layer_out  →  post_norm
+    ///   h'_0 = cor_0,   h'_i = cor_i + y            (i ≥ 1)
+    /// ```
+    ///
+    /// The `K` streams ride in carry 0 (`(K + 1)·D` lanes: the extra slot holds the layer's intermediate between its two blocks).
+    AltUp {
+        pre_mixer: NormSpec,
+        post_mixer: NormSpec,
+        pre_ffn: NormSpec,
+        post_ffn: NormSpec,
+        /// The router's norm (`altup.router_norm`, gain `w`).
+        router_norm: NormSpec,
+        /// **`RESIDUAL_LAUREL_V1`**: the learned low-rank branch beside the mixer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        laurel: Option<LaurelSpec>,
+        /// Gemma-3n's per-layer input, added to streams `1..K`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ple: Option<PleSpec>,
+    },
+}
+
+/// **`RESIDUAL_LAUREL_V1`** — LAuReL's low-rank residual branch: `x + norm(right(left(x)))` with `left [rank, D]` and `right [D, rank]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LaurelSpec {
+    pub rank: usize,
+    pub post_norm: NormSpec,
+}
+
+/// The model-wide half of [`Residual::AltUp`]: the number of streams (the embedding is the first; the others are projections of it
+/// brought to its magnitude), and the floor under the mean square in the magnitude match `x·rms(h_0)/√max(ms(x), floor)`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AltUpSpec {
+    pub streams: usize,
+    /// `epsilon_tensor` of `Gemma3nTextModel.forward` (1e-5).
+    pub floor: f64,
+    /// `altup_correct_scale`: the per-layer gate reads `cor_0 ⊙ correct_output_scale`.
+    pub correct_scale: bool,
 }
 
 /// The model-wide half of [`Residual::HyperConnection`]: how many streams the residual carries
@@ -982,6 +1035,9 @@ pub struct ModelSpec {
     /// The residual's multiple streams, when the layers are [`Residual::HyperConnection`].
     #[serde(default)]
     pub hyper: Option<HyperSpec>,
+    /// The residual's multiple streams, when the layers are [`Residual::AltUp`] (**`RESIDUAL_ALTUP_V1`**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub altup: Option<AltUpSpec>,
     /// Logits, or an encoder's embedding.
     #[serde(default)]
     pub output: OutputSpec,

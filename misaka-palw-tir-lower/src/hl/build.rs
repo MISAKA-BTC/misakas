@@ -32,7 +32,7 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     for (li, ls) in spec.layers.iter().enumerate() {
         // Layers that differ only in constants the program reads as data (a PLE layer's hash
         // constants follow from its index) run the same block.
-        let ls = &block_kind(ls);
+        let ls = &block_kind(spec, ls);
         let bis = match kinds.iter().find(|(s, _)| s == ls) {
             Some((_, bis)) => bis.clone(),
             None => {
@@ -91,6 +91,32 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     p.validate().map_err(|e| LowerError::eval(format!("internal: built program is malformed: {e}")))?;
     Ok(p)
 }
+    // The activation sparsity of every layer that runs a block with a Gaussian top-k: `z`, or none for a dense layer.
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let Ffn::Mlp(m) = &ls.ffn else { continue };
+        if !spec.layers.iter().any(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity.is_some())) {
+            continue;
+        }
+        let z = match m.sparsity {
+            Some(p) => Some(crate::detmath::norm_inv_cdf(p).ok_or_else(|| {
+                LowerError::not_lowerable(format!("FFN_ACTIVATION_SPARSITY_V1: a sparsity of {p} (it is a fraction in (0, 1))"))
+            })?),
+            None => None,
+        };
+        for (slot, l) in layer_of.iter().enumerate() {
+            if *l != li {
+                continue;
+            }
+            let bi = schedule[slot] as usize;
+            for n in &mut b.blocks[bi].nodes {
+                if let Op::GaussianTopK { layers } = &mut n.op
+                    && !layers.iter().any(|(ml, _)| *ml == li)
+                {
+                    layers.push((li, z));
+                }
+            }
+        }
+    }
 
 struct Builder<'a> {
     s: &'a ArchSpec,
@@ -108,7 +134,7 @@ struct Builder<'a> {
 
 /// A layer spec as the block builder sees it: the hash constants of a PLE layer (its index among
 /// the PLE layers) are data the lowering fills per layer, not part of the block.
-fn block_kind(ls: &LayerSpec) -> LayerSpec {
+fn block_kind(spec: &ArchSpec, ls: &LayerSpec) -> LayerSpec {
     let mut k = ls.clone();
     if let Residual::HyperConnection { ple: Some(p) } = &mut k.residual {
         p.layer_index = 0;
@@ -132,9 +158,32 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
             "RESIDUAL_GATED_HC_V1: {} streams of {} with a low rank of {} are past what a program carries (1..=64 streams, `streams × hidden` ≤ 2^24, rank ≤ 65,536)",
             h.streams, spec.hidden_size, h.lowrank
         )));
+    // The activation sparsity of a layer is data (`Op::GaussianTopK::layers`): a model that sparsifies some of its layers
+    // gives every layer's MLP the same block.
+    if spec.layers.iter().any(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity.is_some()))
+        && let Ffn::Mlp(m) = &mut k.ffn
+    {
+        m.sparsity = Some(0.5);
+    }
     }
     let streams = spec.hyper.as_ref().map_or(1, |h| h.streams);
-    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size * streams] }];
+    // AltUp: the streams and one more slot — the layer's intermediate between its two blocks.
+    let lanes = match &spec.altup {
+        Some(a) => {
+            if spec.hyper.is_some() {
+                return Err(LowerError::not_lowerable("RESIDUAL_ALTUP_V1 and RESIDUAL_GATED_HC_V1 in one model"));
+            }
+            if a.streams < 2 || a.streams > 7 || (a.streams + 1).saturating_mul(spec.hidden_size) > 1 << 24 {
+                return Err(LowerError::not_lowerable(format!(
+                    "RESIDUAL_ALTUP_V1: {} streams of {} (2..=7 streams, `(streams + 1) × hidden` ≤ 2^24)",
+                    a.streams, spec.hidden_size
+                )));
+            }
+            (a.streams + 1) * spec.hidden_size
+        }
+        None => spec.hidden_size * streams,
+    };
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![lanes] }];
     // slot → the (kv heads, head width, value width) of the one layer that fills it.
     let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
     for (li, ls) in spec.layers.iter().enumerate() {
@@ -339,6 +388,16 @@ impl Builder<'_> {
         if let Some(hy) = s.hyper.as_ref().filter(|h| h.streams > 1) {
             x = bk.st(Op::Concat, vec![x; hy.streams], d * hy.streams);
         }
+        // AltUp: stream 0 is the embedding; stream `i` is a projection of it brought to its magnitude; the last slot repeats stream 0.
+        if let Some(au) = &s.altup {
+            let mut parts = vec![x];
+            for i in 1..au.streams {
+                let p = self.linear(&mut bk, x, &format!("altup.proj{i}"), d, d, false, false, &format!("altup.proj{i}"))?;
+                parts.push(bk.f(Op::RmsMatch { floor: au.floor }, vec![p, x], d, &format!("altup.stream{i}")));
+            }
+            parts.push(x);
+            x = bk.st(Op::Concat, parts, d * (au.streams + 1));
+        }
         // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
         // row 0 into its position rows; a per-position program never reads it.
         if let Some(rows) = e.type_rows {
@@ -386,6 +445,18 @@ impl Builder<'_> {
         // stands where the final norm would).
         if s.hyper.is_some() {
             x = self.hc_mix(&mut bk, x, "final", false, false)?.0;
+        }
+        // AltUp: the other streams come back through their own projections at stream 0's magnitude, and the streams are averaged.
+        if let Some(au) = &s.altup {
+            let h0 = bk.st(Op::Slice { start: 0, len: d }, vec![x], d);
+            let mut parts = vec![h0];
+            for i in 1..au.streams {
+                let hi = bk.st(Op::Slice { start: i * d, len: d }, vec![x], d);
+                let p = self.linear(&mut bk, hi, &format!("altup.unembed{i}"), d, d, false, false, &format!("altup.unembed{i}"))?;
+                parts.push(bk.f(Op::RmsMatch { floor: au.floor }, vec![p, h0], d, &format!("altup.merge{i}")));
+            }
+            let cat = bk.st(Op::Concat, parts, d * au.streams);
+            x = bk.f(Op::StreamMean { streams: au.streams }, vec![cat], d, "altup.mean");
         }
         if let Some(n) = s.final_norm {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
@@ -451,6 +522,9 @@ impl Builder<'_> {
     /// mixer half and its FFN half (with the per-layer input and the layer scalar), the residual
     /// carried between them.
     fn layer_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        if let Residual::AltUp { .. } = &ls.residual {
+            return self.altup_blocks(ls, kind_index);
+        }
         if let Residual::Sandwich { pre_mixer, post_mixer, .. } = &ls.residual {
             let d = self.s.hidden_size;
             let mut bk = Bk { nodes: vec![] };
@@ -538,6 +612,117 @@ impl Builder<'_> {
             return Ok(blocks);
         }
         Ok(vec![self.layer_block(ls, kind_index)?])
+    }
+
+    fn altup(&self) -> Result<AltUpSpec> {
+        self.s.altup.ok_or_else(|| LowerError::not_lowerable("RESIDUAL_ALTUP_V1: an AltUp layer needs the model's streams (ModelSpec::altup)"))
+    }
+
+    /// AltUp's router: `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`, `[K]`.
+    fn altup_router(&mut self, bk: &mut Bk, x: Ref, norm: NormSpec, tag: &str) -> Result<Ref> {
+        let (k, d) = (self.altup()?.streams, self.s.hidden_size);
+        let n = self.full_norm(bk, x, norm, "altup.router_norm", d, true)?;
+        let s = bk.f(Op::Scale { c: 1.0 / d as f64 }, vec![n], d, &format!("{tag}.router_in"));
+        let r = self.linear(bk, s, "altup.router", k, d, false, true, &format!("{tag}.router"))?;
+        Ok(bk.f(Op::Act(Act::Tanh), vec![r], k, &format!("{tag}.modalities")))
+    }
+
+    /// **`RESIDUAL_ALTUP_V1`** (Gemma-3n): a layer is two blocks. The mixer half predicts the streams, runs the (LAuReL-joined) mixer on the
+    /// first and carries out the predictions and the joined stream `a` — `(K + 1)·D` lanes. The FFN half runs the FFN on `a`, corrects the
+    /// predictions by the innovation, and adds the per-layer input to streams `1..K`.
+    fn altup_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        let Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } = &ls.residual else {
+            return Err(LowerError::eval("internal: altup_blocks of a layer that is not AltUp"));
+        };
+        if ls.ffn == Ffn::None || matches!(ls.ffn, Ffn::MlpMoe(_)) || matches!(ls.mixer, Mixer::None) {
+            return Err(LowerError::not_lowerable("RESIDUAL_ALTUP_V1: a layer is a mixer and an FFN (Mlp or Moe)"));
+        }
+        let au = self.altup()?;
+        let (k, d) = (au.streams, self.s.hidden_size);
+        let n = k * d;
+        let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        // ── the mixer half ──
+        let mut bk = Bk { nodes: vec![] };
+        let c0 = Ref::Carry(0);
+        let h0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
+        let m = self.altup_router(&mut bk, h0, *router_norm, "altup.pred")?;
+        let coefs = self.linear(&mut bk, m, "altup.pred_coefs", k * k, k, false, true, "altup.pred_coefs")?;
+        let hs = bk.st(Op::Slice { start: 0, len: n }, vec![c0], n);
+        let mix = bk.f(Op::StreamMix { n_in: k, n_out: k, transpose: false }, vec![hs, coefs], n, "altup.mix");
+        let pred = bk.f(Op::Add, vec![hs, mix], n, "altup.pred");
+        let p0 = bk.st(Op::Slice { start: 0, len: d }, vec![pred], d);
+        let an = self.full_norm(&mut bk, p0, *pre_mixer, "norm.mix", d, true)?;
+        let lo = match laurel {
+            Some(l) => {
+                let a = self.linear(&mut bk, an, "laurel.left", l.rank, d, false, true, "laurel.left")?;
+                let b = self.linear(&mut bk, a, "laurel.right", d, l.rank, false, true, "laurel.right")?;
+                let nb = self.full_norm(&mut bk, b, l.post_norm, "laurel.norm", d, true)?;
+                Some(bk.f(Op::Add, vec![an, nb], d, "laurel.out"))
+            }
+            None => None,
+        };
+        let att = self.mixer(&mut bk, &ls.mixer, an)?;
+        let att = self.full_norm(&mut bk, att, *post_mixer, "norm.post_mix", d, true)?;
+        let ag = bk.f(Op::Add, vec![p0, att], d, "altup.attn_sum");
+        let joined = match lo {
+            Some(lo) => {
+                let s = bk.f(Op::Add, vec![ag, lo], d, "altup.laurel_sum");
+                bk.f(Op::Scale { c: std::f64::consts::FRAC_1_SQRT_2 }, vec![s], d, "altup.joined")
+            }
+            None => ag,
+        };
+        let out = bk.st(Op::Concat, vec![pred, joined], n + d);
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        let first = self.blocks.len() - 1;
+        // ── the FFN half ──
+        let mut bk = Bk { nodes: vec![] };
+        let c0 = Ref::Carry(0);
+        let pred = bk.st(Op::Slice { start: 0, len: n }, vec![c0], n);
+        let p0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
+        let a = bk.st(Op::Slice { start: n, len: d }, vec![c0], d);
+        let n2 = self.full_norm(&mut bk, a, *pre_ffn, "norm.ffn", d, true)?;
+        let f = self.ffn(&mut bk, &ls.ffn, n2)?;
+        let f = self.full_norm(&mut bk, f, *post_ffn, "norm.post_ffn", d, true)?;
+        let act = bk.f(Op::Add, vec![a, f], d, "altup.activated");
+        let m2 = self.altup_router(&mut bk, act, *router_norm, "altup.cor")?;
+        let cc = self.linear(&mut bk, m2, "altup.correction_coefs", k, k, false, true, "altup.correction_coefs")?;
+        let inn = bk.f(Op::Sub, vec![act, p0], d, "altup.innovation");
+        // `innovation · (coef + 1)` for every stream: the outer product with the coefficients, plus the innovation itself.
+        let outer = bk.f(Op::StreamOuter { streams: k }, vec![inn, cc], n, "altup.correction");
+        let rep = bk.st(Op::Concat, vec![inn; k], n);
+        let t = bk.f(Op::Add, vec![pred, outer], n, "altup.cor_a");
+        let cor = bk.f(Op::Add, vec![t, rep], n, "altup.corrected");
+        let c0s = bk.st(Op::Slice { start: 0, len: d }, vec![cor], d);
+        let y = match ple {
+            Some(p) => {
+                let mut first = c0s;
+                if au.correct_scale {
+                    let sp = self.param("altup.correct_scale", vec![d], true, Init::Uniform(0.8, 1.2))?;
+                    first = bk.f(Op::ScaleParam, vec![first, sp], d, "altup.scaled_first");
+                }
+                let pv = self.ple(&mut bk, p)?;
+                let g = self.linear(&mut bk, first, "ple.gate", p.dim, d, false, true, "ple.gate")?;
+                let g = bk.f(Op::Act(plain_act(p.act, "a per-layer embedding gate")?), vec![g], p.dim, "ple.act");
+                let gm = bk.f(Op::Mul, vec![g, pv], p.dim, "ple.gated");
+                let o = self.linear(&mut bk, gm, "ple.out", d, p.dim, false, true, "ple.out")?;
+                Some(self.full_norm(&mut bk, o, p.post_norm, "ple.post_norm", d, true)?)
+            }
+            None => None,
+        };
+        let mut parts = vec![c0s];
+        for i in 1..k {
+            let ci = bk.st(Op::Slice { start: i * d, len: d }, vec![cor], d);
+            parts.push(match y {
+                Some(y) => bk.f(Op::Add, vec![ci, y], d, &format!("altup.stream{i}")),
+                None => ci,
+            });
+        }
+        parts.push(c0s);
+        let out = bk.st(Op::Concat, parts, n + d);
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.ffn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        Ok(vec![first, self.blocks.len() - 1])
     }
 
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
@@ -640,6 +825,7 @@ impl Builder<'_> {
                 }
                 h
             }
+            Residual::AltUp { .. } => return Err(LowerError::eval("internal: an AltUp layer is built by `altup_blocks`")),
             // The FFN half: the mixer half ([`Builder::layer_blocks`]) carries in the streams.
             Residual::HyperConnection { .. } => {
                 if ls.ffn == Ffn::None {
@@ -1454,7 +1640,14 @@ impl Builder<'_> {
         let i = m.intermediate;
         let u = self.linear(bk, x, &format!("{pfx}.up"), i, d, m.up_bias, true, &format!("{pfx}.up"))?;
         let mut hdn = if m.gated {
-            let g = self.linear(bk, x, &format!("{pfx}.gate"), i, d, m.up_bias, true, &format!("{pfx}.gate"))?;
+            let mut g = self.linear(bk, x, &format!("{pfx}.gate"), i, d, m.up_bias, true, &format!("{pfx}.gate"))?;
+            // `FFN_ACTIVATION_SPARSITY_V1`: only what lies above `mean + z·std` of the gate row survives the activation.
+            if m.sparsity.is_some() {
+                if !matches!(m.glu, Glu::Standard) {
+                    return Err(LowerError::not_lowerable("FFN_ACTIVATION_SPARSITY_V1 under a clamped SwiGLU"));
+                }
+                g = bk.f(Op::GaussianTopK { layers: vec![] }, vec![g], i, &format!("{pfx}.sparse"));
+            }
             match m.glu {
                 Glu::Standard => {
                     let a = self.activation(bk, m.act, g, i, &format!("{pfx}.act"))?;
@@ -1560,6 +1753,7 @@ impl Builder<'_> {
                 down_bias: false,
                 inner_norm: None,
                 name: None,
+                sparsity: None,
             };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
             if sh.sigmoid_gate {

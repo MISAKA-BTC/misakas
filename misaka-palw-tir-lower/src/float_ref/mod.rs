@@ -646,6 +646,41 @@ impl<'a> Session<'a> {
                 }
                 one((0..*streams).flat_map(|k| o.iter().map(move |v| *v * w[k]).collect::<Vec<f32>>()).collect())
             }
+            Op::StreamMix { n_in, n_out, transpose } => {
+                let (v, c) = (x(0)?, x(1)?);
+                if v.len() % n_in != 0 || c.len() != n_in * n_out {
+                    return Err(LowerError::eval(format!("StreamMix: {} values over {n_in} streams, {} coefficients for {n_out}×{n_in}", v.len(), c.len())));
+                }
+                let d = v.len() / n_in;
+                let coef = |i: usize, j: usize| if *transpose { c[j * n_out + i] } else { c[i * n_in + j] } as f64;
+                one((0..*n_out)
+                    .flat_map(|i| (0..d).map(move |k| (i, k)))
+                    .map(|(i, k)| (0..*n_in).map(|j| coef(i, j) * v[j * d + k] as f64).sum::<f64>() as f32)
+                    .collect())
+            }
+            Op::RmsMatch { floor } => {
+                let (v, r) = (x(0)?, x(1)?);
+                let ms = |s: &[f32]| s.iter().map(|a| (*a as f64) * (*a as f64)).sum::<f64>() / s.len() as f64;
+                let k = ms(r).sqrt() / ms(v).max(*floor).sqrt();
+                one(v.iter().map(|a| (*a as f64 * k) as f32).collect())
+            }
+            Op::GaussianTopK { layers } => {
+                let v = x(0)?;
+                let l = self.prog.model_layer(layer.ok_or_else(|| LowerError::eval("GaussianTopK outside a layer"))?);
+                let z = layers
+                    .iter()
+                    .find(|(ml, _)| *ml == l)
+                    .ok_or_else(|| LowerError::eval(format!("GaussianTopK: layer {l} does not run this block")))?
+                    .1;
+                // A dense layer of a model that sparsifies others: the row passes through.
+                let Some(z) = z else { return one(v.to_vec()) };
+                let n = v.len() as f64;
+                let mean = v.iter().map(|a| *a as f64).sum::<f64>() / n;
+                let std = (v.iter().map(|a| (*a as f64 - mean) * (*a as f64 - mean)).sum::<f64>() / n).sqrt();
+                // transformers casts the multiplier to the activation's dtype (float32).
+                let cut = mean + std * (z as f32) as f64;
+                one(v.iter().map(|a| (*a as f64 - cut).max(0.0) as f32).collect())
+            }
             Op::GroupDot { groups } => {
                 let (a, b) = (x(0)?, x(1)?);
                 let g = a.len() / groups;
@@ -749,8 +784,14 @@ impl<'a> Session<'a> {
                 one(x(0)?.iter().map(|v| v * t).collect())
             }
             Op::ScaleParam => {
-                let c = self.param(ins[1], layer)?.data[0];
-                one(x(0)?.iter().map(|v| v * c).collect())
+                let p = self.param(ins[1], layer)?;
+                let v = x(0)?;
+                // One scalar, or one factor per element (`correct_output_scale`).
+                match p.data.len() {
+                    1 => one(v.iter().map(|a| a * p.data[0]).collect()),
+                    n if n == v.len() => one(v.iter().zip(&p.data).map(|(a, c)| a * c).collect()),
+                    n => Err(LowerError::eval(format!("ScaleParam: {n} factors for {} values", v.len()))),
+                }
             }
             Op::HistAppend => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("HistAppend without a state")) };

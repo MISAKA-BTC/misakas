@@ -256,6 +256,12 @@ fn residual(r: &Residual) -> String {
             ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default(),
             if *layer_scalar { ", × layer scalar" } else { "" }
         ),
+        Residual::AltUp { pre_mixer, laurel, ple, .. } => format!(
+            "AltUp ({}){}{}",
+            norm(pre_mixer),
+            laurel.as_ref().map(|l| format!(", LAuReL rank {}", l.rank)).unwrap_or_default(),
+            ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default()
+        ),
         Residual::HyperConnection { ple } => format!(
             "hyper-connections{}",
             ple.as_ref().map(|p| format!(", n-gram per-layer embedding ({}-grams × {} heads)", p.ngram_size, p.heads_per_ngram)).unwrap_or_default()

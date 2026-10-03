@@ -493,7 +493,7 @@ fn refusals_name_their_reason() {
     refused("rwkv7-fla-1.5b", "flash-linear-attention");
     refused("t5-small", "encoder–decoder");
     refused("bert-base-uncased", "no adapter");
-    refused("gemma-3n-e4b", "AltUp");
+    refused("gemma-3n-e4b", "multimodal Gemma-3n");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();

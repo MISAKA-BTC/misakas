@@ -267,3 +267,27 @@ mod tests {
 
     const PINNED: &str = "556a7d8266e4340e720c13f596fe5f244170f5b1b3adb5c856bf7c2981a49150";
 }
+
+/// **`Φ⁻¹(p)`**, the standard normal quantile (`torch.distributions.Normal(0, 1).icdf`), for `p` in `(0, 1)`: bisection on
+/// `Φ(z) = ½(1 + erf(z/√2))` with the series `erf` of the float reference, which is plain `+ − × ÷` below `|x| = 3` — so the
+/// value is the same on every platform (a registration-time constant of `FFN_ACTIVATION_SPARSITY_V1` is part of the program).
+/// Accurate to ~1e-13 absolute for `p` in `[1e-3, 1 − 1e-3]`; `None` outside `(0, 1)`.
+pub fn norm_inv_cdf(p: f64) -> Option<f64> {
+    if !(p > 0.0 && p < 1.0) {
+        return None;
+    }
+    if p < 0.5 {
+        return norm_inv_cdf(1.0 - p).map(|z| -z);
+    }
+    let (mut lo, mut hi) = (0.0f64, 9.0f64);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        let phi = 0.5 * (1.0 + crate::float_ref::erf(mid / std::f64::consts::SQRT_2));
+        if phi < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(0.5 * (lo + hi))
+}

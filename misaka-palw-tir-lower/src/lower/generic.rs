@@ -133,14 +133,14 @@ fn bp_after(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     r
 }
 
-fn unsplit(v: &Val, what: &str) -> Result<()> {
+pub(super) fn unsplit(v: &Val, what: &str) -> Result<()> {
     if v.key.split() > 0 {
         return Err(LowerError::eval(format!("internal: `{what}` reads a value with per-channel scales")));
     }
     Ok(())
 }
 
-fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
+pub(super) fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
     match b.shape(r).as_slice() {
         [Dim::Fixed(n)] => Ok(*n as usize),
         s => Err(LowerError::eval(format!("internal: a vector was expected, got {s:?}"))),
@@ -150,7 +150,7 @@ fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
 /// One uniform narrowing of `x` (an `i64`/`i32` accumulator at `ratio_of` float units per unit) into
 /// `want` — the shape every composite below ends in.
 #[allow(clippy::too_many_arguments)]
-fn narrow_to(
+pub(super) fn narrow_to(
     b: &mut BlockBuilder<'_>,
     cx: &mut Cx<'_>,
     lb: &mut Lb,

@@ -156,7 +156,8 @@ pub enum Op {
     PosScale {
         temp: QTemperature,
     },
-    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`). In: `[x, p [1]]`.
+    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`), or — when `p` has as many elements as `x` — `x ⊙ p`
+    /// (Gemma-3n's `correct_output_scale`). In: `[x, p [1] or [n]]`.
     ScaleParam,
     /// **xIELU** (`ACT_LEARNED_POINTWISE_V1`, Apertus): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
     /// `αp = softplus(p)` and `αn = β + softplus(n)`, the layer's own scalars. In: `[x, p [1], n [1], β [1], ε [1]]`.
@@ -259,6 +260,25 @@ pub enum Op {
     /// Per-group dot product: `out[g] = Σ_{j in group g} a[j]·b[j]`. In: `[a, b]`.
     GroupDot {
         groups: usize,
+    },
+    /// **A data-dependent mix of streams** (`RESIDUAL_ALTUP_V1`): `out[i·D + d] = Σ_j C[i,j]·x[j·D + d]` for the coefficients `C` the second
+    /// input holds — row-major `[n_out, n_in]`, or with `transpose` stored `[n_in, n_out]` (`C[i,j]` is then element `j·n_out + i`).
+    /// In: `[x [n_in·D], C [n_out·n_in]]`.
+    StreamMix {
+        n_in: usize,
+        n_out: usize,
+        transpose: bool,
+    },
+    /// **A magnitude match** (`RESIDUAL_ALTUP_V1`): `x · rms(r) / √max(mean(x²), floor)` with `rms(r) = √mean(r²)`. In: `[x, r]`.
+    RmsMatch {
+        floor: f64,
+    },
+    /// **`FFN_ACTIVATION_SPARSITY_V1`**: `relu(x − (mean(x) + z·std(x)))` over the whole row, `std` the biased one — for the layers
+    /// of `layers` that name a `z`; the others (`None`: a dense layer of a model that sparsifies some) pass the row through. The
+    /// constants are DATA of the layer, so layers that differ only in them run one block (the block count of a program is capped).
+    /// `(model layer, z)` of every layer that runs this block. In: `[x]`.
+    GaussianTopK {
+        layers: Vec<(usize, Option<f64>)>,
     },
     /// Each element repeated `size` times: `out[g·size + j] = a[g]` (a per-head gate over the head's width). In: `[a [groups]]`.
     GroupRepeat {
@@ -366,6 +386,9 @@ impl Op {
             Op::StreamOuter { .. } => "StreamOuter",
             Op::GroupDot { .. } => "GroupDot",
             Op::GroupRepeat { .. } => "GroupRepeat",
+            Op::StreamMix { .. } => "StreamMix",
+            Op::RmsMatch { .. } => "RmsMatch",
+            Op::GaussianTopK { .. } => "GaussianTopK",
             Op::NgramIds { .. } => "NgramIds",
             Op::GatherRows { .. } => "GatherRows",
             Op::BlockMean { .. } => "BlockMean",

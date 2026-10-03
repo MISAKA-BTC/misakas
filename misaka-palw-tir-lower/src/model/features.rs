@@ -272,9 +272,10 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("GEN_SAMPLER_AFFINE_V1", Model, "an Euler sampler step as an integer affine update over pinned sigma tables", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The schedule is data; the latent update is one affine map."),
     feature!("IMAGE_INIT_NOISE_V1", Model, "the initial latent noise drawn from a seed by the pinned Gaussian (PALW_GAUSS_Q24_V1)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Deterministic from the job's seed."),
     // ───────────────────────────── known gaps (Level C): named, not implemented ─────────────────────────────
-    feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: a predicted/corrected multi-stream residual", Missing, [], NoReq, [], "Gemma-3n. Expressible with the existing primitives once described; not in the vocabulary yet."),
-    feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Missing, [], NoReq, [], "Gemma-3n."),
-    feature!("FFN_ACTIVATION_SPARSITY_V1", Ffn, "Gaussian top-k sparsity of the gate activation", Missing, [], NoReq, [], "Gemma-3n."),
+    // ───────────────────────────── Gemma-3n (FR-12) ─────────────────────────────
+    feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: K residual streams, a per-position K×K prediction from a tanh router, a correction by the innovation, magnitude-matched stream creation and merge", Implemented, ["Concat", "Slice", "Compare", "Select"], NoReq, ["altup::gemma3n_float_matches_hf", "altup::gemma3n_integer_follows_float", "altup::the_altup_program_is_the_same_on_all_three_implementations"], "Gemma-3n's alternating updates (lower/altup.rs). The K streams ride in carry 0 with one more slot (the layer's intermediate between its two blocks). Per layer: the router m = tanh(modality_router(router_norm(h_0)/D)) gives the coefficients C = prediction_coefs(m); pred_i = h_i + sum_j C[i,j]*h_j is ONE batched product of the coefficient codes with the stream rows (StreamMix: exact i64 products, one narrowing); the active stream runs the sandwich block; the corrected streams are pred_i + (f - pred_0)*(correction_coefs(m(f))_i + 1); the per-layer input is added to streams 1..K-1. Stream creation and the final merge are magnitude matches x * rms(h_0) / sqrt(max(mean x^2, 1e-5)) (RmsMatch: the two means in i128, their ratio in Q40, one integer square root). Both halves of a layer read the coefficients from the SAME router weights, so they are one param each."),
+    feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Implemented, [], NoReq, ["altup::gemma3n_float_matches_hf", "altup::gemma3n_integer_follows_float"], "Gemma-3n: lo = an + norm(right(left(an))) beside the mixer on the layer's normed input, joined as (a + lo)/sqrt(2). Two projections of rank r, one norm, one add: no node of its own kind."),
+    feature!("FFN_ACTIVATION_SPARSITY_V1", Ffn, "Gaussian top-k sparsity of the gate activation: relu(gate - (mean + z*std)) before the activation", Implemented, [], NoReq, ["altup::a_gaussian_top_k_keeps_what_lies_above_mean_plus_z_std", "altup::gemma3n_float_matches_hf"], "Gemma-3n's activation_sparsity_pattern: z = Phi^-1(sparsity) is a registration-time constant (detmath::norm_inv_cdf: bisection on the series erf, platform independent). The row is centred exactly (c = n*x - sum x = n*(x - mean), no division), sum c^2 = n^3*Var in i128, the cutoff z*sqrt(sum c^2 / n) = z*n*std through one integer square root, and relu(c - cutoff) is narrowed at s_x/n."),
     feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Missing, [], NoReq, [], "Mllama's decoder layers reading vision states; needs a second history input."),
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
     feature!("ATTN_BLOCKSPARSE_PATTERN_V1", Attention, "a fixed block-sparse pattern of visible keys", Missing, [], NoReq, [], "Phi-3-small."),
@@ -544,6 +545,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             if m.act == Act::Xielu {
                 u.add("ACT_LEARNED_POINTWISE_V1", lay, "xIELU");
             }
+            if let Some(p) = m.sparsity {
+                u.add("FFN_ACTIVATION_SPARSITY_V1", lay, format!("{p}"));
+            }
         };
         let moe = |u: &mut Uses, m: &MoeSpec| {
             u.add("MLP_MOE_TOPK_V1", lay, format!("E = {}, k = {}", m.experts, m.top_k));
@@ -639,6 +643,21 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 }
                 if *layer_scalar {
                     u.add("RESIDUAL_LAYER_SCALAR_V1", lay, "");
+                }
+            }
+            Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } => {
+                let streams = s.altup.as_ref().map(|a| a.streams).unwrap_or(0);
+                u.add("RESIDUAL_ALTUP_V1", lay, format!("{streams} streams"));
+                u.add("RESIDUAL_SANDWICH_V1", lay, "");
+                for n in [pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm] {
+                    norm_features(&mut u, n, lay);
+                }
+                if let Some(l) = laurel {
+                    u.add("RESIDUAL_LAUREL_V1", lay, format!("rank {}", l.rank));
+                    norm_features(&mut u, &l.post_norm, lay);
+                }
+                if let Some(p) = ple {
+                    u.add("EMBED_PER_LAYER_INPUT_V1", lay, format!("{}", p.dim));
                 }
             }
             Residual::HyperConnection { ple } => {
