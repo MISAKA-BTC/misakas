@@ -25,6 +25,12 @@
 //!    to a node running testnet-12 as released, are each accepted and fold the same PALW root;
 //! 5. **the anchors are chain data**: a second armed node fed the whole chain reaches the same sink,
 //!    the same root, and the same seed and seats on every bound claim.
+//! 6. **the Useful Work Transition rides along** (ADR-0165 — the DAA-5,300 release's two fences,
+//!    `PALW_T12_USEFUL_WORK_FENCES_V1`, set at the same `H` through their own entries): the floor
+//!    reserve is LIVE past `H` — an all-floor network is Idle and accepts every floor attempt, so the
+//!    floor state is never written and the carriage carries nothing (a chain that never saw REAL work
+//!    roots exactly as one without the rule: step 4 compares roots below `H`, step 5 the whole chain) —
+//!    and an attempt-lane block is a tick source beside the heartbeat, with the clock still running.
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
@@ -35,6 +41,7 @@ use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_panel_v2::{palw_panel_anchor_execution_v1, palw_panel_draw_seed_v1};
+use kaspa_consensus_core::palw_real_share_v1::PALW_T12_USEFUL_WORK_FENCES_V1;
 use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -60,12 +67,21 @@ fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine)
     for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
         (fence.set)(&mut params, Some(ForkActivation::new(H)));
     }
+    // ADR-0165: the Useful Work Transition's two fences, through their own entries, at the same height.
+    for fence in PALW_T12_USEFUL_WORK_FENCES_V1 {
+        (fence.set)(&mut params, Some(ForkActivation::new(H)));
+    }
     params.validate_palw_v2().expect("every post-launch fence at one height is a runnable testnet-12 ruleset");
     for (name, at) in params.palw_fences_v1() {
-        if PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == name) {
+        if PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_USEFUL_WORK_FENCES_V1).any(|f| f.name == name) {
             assert_eq!(at, Some(ForkActivation::new(H)), "{name} is set to {H} by its entry");
         }
     }
+    assert!(
+        params.palw_floor_reserve_active_at(H) && !params.palw_floor_reserve_active_at(H - 1),
+        "the floor reserve is live from {H}, not below"
+    );
+    assert!(params.palw_real_clock_tick_active_at(H) && !params.palw_real_clock_tick_active_at(H - 1), "and so is the real clock tick");
     let operators = params.palw_operator_anchor.as_ref().expect("lane A is listed").operators.len();
     assert_eq!(operators, 8, "lane A trusts every genesis bond, testnet-12's armed value");
     // Phase 2b's five are live from `H` and not below it too — V02's two lock fences with the fold's
@@ -227,6 +243,25 @@ async fn every_post_launch_fence_at_one_height_is_crossed_with_the_clock_running
     assert!(below >= 1, "a claim was bound below the fence");
     assert!(past >= 2, "claims were bound past the fence");
     assert!(straddling >= 1, "a claim whose slot is below the fence was bound past it");
+
+    // ---- 6: the floor reserve is live past H on an all-floor chain: Idle, nothing rooted, nothing refused --------
+    let armed_bundle = match &armed.chain.config.params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => unreachable!("testnet-12 is ConsensusV2"),
+    };
+    assert!(
+        armed_bundle.state.floor_reserve_active_at(H) && !armed_bundle.state.floor_reserve_active_at(H - 1),
+        "the fold's mirror of the floor reserve fence is {H}"
+    );
+    assert!(state.floor_state_v1().is_default(), "no REAL work anywhere: the floor state never left Idle ({})", state.floor_state_v1());
+    assert!(
+        kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state).floor_state.is_none(),
+        "and the carriage carries no floor state: an all-floor chain roots as one without the rule"
+    );
+    assert!(
+        armed.blocks.iter().filter(|(_, daa, _)| *daa >= H).count() > 2 * delay as usize,
+        "and the chain kept producing blocks past the fence"
+    );
 
     // ---- 4: below the fence an armed node is a released node -------------------------------------------
     let (config, bundle, premine, floats) = t12_release(false);

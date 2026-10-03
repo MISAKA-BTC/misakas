@@ -2893,13 +2893,15 @@ pub struct Params {
     /// it, or with the bundle's mirror unsynced.
     pub palw_tir_fence2: Option<ForkActivation>,
 
-    /// **ADR-0165 (the Useful Work Transition), A: the base floor is a reserve**
-    /// (`crate::palw_real_share_v1`). Past it a `PALW-BASE-0` attempt is refused by name
-    /// (`FloorDormant`; no claim, no reward, no weight) while Final real-class claims in a 60-DAA
-    /// rolling window stand at or above 12, and the reserve returns below 3. A bare height; `None` on
-    /// every preset until the DAA-5,300 flag day arms it. Hashed Some-only (with the ledger's constants)
-    /// in every writer with the `never()` collapse. Refused by [`Self::validate_palw_useful_work_v1`] off
-    /// ConsensusV2, without `palw_model_registry` at or below it, or with the bundle's mirror unsynced.
+    /// **ADR-0165 (the Useful Work Transition), A″: the base floor is the idle-only bonded fallback**
+    /// (`crate::palw_real_share_v1`). Past it a `PALW-BASE-0` attempt is accepted only while the rooted floor
+    /// state — Idle, Probe or Normal, moved by `palw_floor_step_v1` from the REAL attempts the fold fully accepted
+    /// (`floor_idle_slots` 20, `probe_slots` 8, `probe_cooldown_slots` 20) — is Idle, and is refused by name
+    /// (`FloorNotIdle`; no claim, no reward, no PALW weight) otherwise. It does NOT make a floor block invalid in
+    /// GHOSTDAG (ADR-0165 §00.2). A bare height; `None` on every preset until the DAA-5,300 flag day arms it. Hashed
+    /// Some-only (with the three constants) in every writer with the `never()` collapse. Refused by
+    /// [`Self::validate_palw_useful_work_v1`] off ConsensusV2, without `palw_model_registry` at or below it, or with the
+    /// bundle's mirror unsynced.
     pub palw_floor_reserve_v1: Option<ForkActivation>,
 
     /// **ADR-0165, B: an attempt-lane block is a clock tick source beside the heartbeat.** The DAA still

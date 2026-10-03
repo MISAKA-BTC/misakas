@@ -2564,6 +2564,9 @@ impl VirtualStateProcessor {
                                         }
                                         // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
                                         extras.own_job_anchor = own_job_anchor;
+                                        // **ADR-0165: the reds of this block's mergeset** — the floor state machine reads a merged
+                                        // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
+                                        extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
                                         extras
                                     },
                                 ) {
@@ -2593,6 +2596,15 @@ impl VirtualStateProcessor {
                                                     state_params.window_court()
                                                 );
                                             }
+                                        }
+                                        // **ADR-0165: the floor state moved** — one `[palw-floor-state]` line per chain block whose
+                                        // fold changed it (idle/probe/normal, with the DAA and the numbers it is made of), so the
+                                        // drill and an operator read the machine without a debugger. Empty below the fence.
+                                        if let Some((from, to)) = kaspa_consensus_core::palw_real_share_v1::palw_floor_state_change_v1(&delta.entries) {
+                                            info!(
+                                                "{}",
+                                                kaspa_consensus_core::palw_real_share_v1::palw_floor_state_log_line_v1(&current, point.daa_score, &from, &to)
+                                            );
                                         }
                                         *state = next;
                                         // Launch blockers §8: say it out loud. A voided claim's
@@ -13207,6 +13219,10 @@ impl VirtualStateProcessor {
             _ => None,
         };
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            // ADR-0165: the reds of the accepting block's mergeset belong to the chain walk's own fold (a block's GHOSTDAG
+            // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
+            // pre-object base) merges no work, so nothing in it is red.
+            merged_reds: Default::default(),
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
