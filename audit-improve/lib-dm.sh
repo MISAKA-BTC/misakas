@@ -214,7 +214,7 @@ node_args() {
     d=$WORK_DIR/$n
     local a=(--testnet --netsuffix=12 "--palw-drill-genesis-salt=$(salt)" "--appdir=$d/app" --yes
              --nodnsseed --disable-upnp
-             "--listen=127.0.0.1:$((P2P_BASE + k + $([ "${ISOLATE_NODE:-}" = "$n" ] && echo "${ISO_PORT_SHIFT:-800}" || echo 0))))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
+             "--listen=127.0.0.1:$((P2P_BASE + k + $([ "${ISOLATE_NODE:-}" = "$n" ] && echo "${ISO_PORT_SHIFT:-800}" || echo 0)))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
              "--rpclisten-json=127.0.0.1:$((JSON_BASE + k))" "--evm-rpc-listen=127.0.0.1:$((EVM_BASE + k))"
              --utxoindex --unsaferpc --nogrpc)
     local bin=$KASPAD_BIN

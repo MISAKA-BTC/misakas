@@ -7,7 +7,7 @@
 #   SHARE  PALW blocks dominate             dcwatch.py share   (sliding windows past H': REAL + EXEC >= 90 % of non-RED blocks, heartbeats <= 10 %,
 #                                                              floor attempts only in idle windows; blockKind / laneClass from getBlock verboseData)
 # It is audit-improve/dm.sh (the D-M and DG drills, the capacity sampler, the post-genesis bonds, the just-in-time liars) with INT11=1 INT12=1 and the load
-# of this file: see `dc.sh plan`. Commands: plan | dry | up | run | status | verdicts | gates | panel | share | redblue | recovery | gen <dgN> | evidence | down.
+# of this file: see `dc.sh plan`. Commands: plan | dry | up | run | status | verdicts | fences | gates | panel | share | redblue | recovery | gen <dgN> | evidence | down.
 #   BIN_DIR=<dir with kaspad misaka palw-class> [OLD_KASPAD_BIN=<the fleet's release at the crossing>] bash audit-combined/dc.sh dry
 set -euo pipefail
 C=$(cd "$(dirname "$0")" && pwd)
@@ -85,7 +85,7 @@ cat <<EOF
             FORK-a (old and new refuse each other past the fence: the new node drops the old peer AT the crossing — the re-judgement; a restart is not what shows it) | FORK-b (a fresh node IBDs from genesis
             across the fence) | FORK-c (new2 partitioned across the fence rejoins and reorganises onto the chain)
             + per-lane verdicts: D-M5's crossing, DG-1, DG-2 here; the lane pre-checks' verdict.txt (rfc7v, rfc6s, rfc1, rfc2r) from tonight
-  anchor fix (P2, anchor/window)   G-A1: a class registered with REAL flowing and floors held (the driver registers `lose` at DAA $((STALE_END_DAA+12)), in Normal) reaches Probation within 2 audit periods (<= 200 DAA);
+  anchor fix (P2, anchor/window)   G-A1: a class registered with REAL flowing and floors held (the driver registers 'lose' at DAA $((STALE_END_DAA+12)), in Normal) reaches Probation within 2 audit periods (<= 200 DAA);
             G-A2: the execution lane's schedule seeding >= 95 % of the snapshots created past the fence (getPalwRoundLane per span, sampled every 30 s into roundlane.tsv; an APPROXIMATION of the fold's queue
             rule — the raw samples are kept for P2's exact replay); G-A3: the panel bind wait (claim accepted -> PanelBound) of REAL claims p95 <= 20 DAA, split operator bond / non-operator bond (new9, the
             outsider, makes REAL attempts of class win from leg B1 on; it is stopped with the operator producers in leg A). Report-only leg O (O_DAA=$O_DAA, off by default): the operator producers stopped, only the
@@ -119,22 +119,42 @@ extra_checks() {
   grep -aq "LEGACY_HEARTBEAT" "$k" && echo "  ok   the node reports blockKind (REAL / FALLBACK / LEGACY_*) in getBlock verboseData" || { echo "  FAIL no blockKind in the binary: SHARE cannot be read"; ok=0; }
   python3 -m py_compile "$C/dcwatch.py" && echo "  ok   dcwatch.py compiles" || ok=0
   [ -x "$OLD_KASPAD_BIN" ] && echo "  ok   old relay $OLD_KASPAD_BIN" || { echo "  FAIL OLD_KASPAD_BIN missing"; ok=0; }
-  local n; n=$("$k" --testnet --netsuffix=12 --appdir="$(mktemp -d)/app" "--palw-drill-genesis-salt=$(openssl rand -hex 32)" --palw-drill-fence-at=6 --palw-drill-fence2-at=10 --palw-drill-fence3-at=14 \
-     --palw-drill-tir-at=$TIR_AT --palw-drill-tir2-at=24 --palw-drill-int11-at=$INT11_AT --palw-drill-write-keyring="$(mktemp -d)/kr" 2>&1 | tr -d '\r' | grep -ci "moved from") || true
-  echo "  note the keyring export with the int11 flag reports $n 'moved from' lines (one per fence the flag moves)"
-  local ks; ks=$(grep -o "PALW_REAL_IDLE_K_SLOTS_V1: u64 = [0-9]*" "$WT/consensus/core/src/palw_real_share_v1.rs" 2>/dev/null | grep -o "[0-9]*$" || true)
-  if [ -n "$ks" ] && [ "$ks" != "$K_SLOTS" ]; then echo "  note the source tree under $WT has K = $ks, this plan K_SLOTS = $K_SLOTS: the recovery leg is right only on a binary with K = $K_SLOTS"; else echo "  ok   K = ${ks:-?} matches K_SLOTS"; fi
+  # the identity the binary computes: the keyring export prints the public t12 ids; compare them with the BUILD-INFO the builder wrote beside the binary
+  local T; T=$(mktemp -d)
+  "$k" --testnet --netsuffix=12 --appdir="$T/app" "--palw-drill-genesis-salt=$(openssl rand -hex 32)" --palw-drill-fence-at=6 --palw-drill-fence2-at=10 --palw-drill-fence3-at=14 \
+     --palw-drill-tir-at=$TIR_AT --palw-drill-tir2-at=24 --palw-drill-int11-at=$INT11_AT --palw-drill-write-keyring="$T/kr" > "$T/out" 2>&1 || true
+  if [ -s "$T/kr/manifest.json" ]; then
+    local pub; pub=$(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print(m.get('public_consensus_params_id',''), m.get('public_genesis_hash','')[:16])" "$T/kr/manifest.json")
+    local want; want=$(awk '/^t12 params/ {print $3}' "$BIN_DIR/BUILD-INFO" 2>/dev/null || true)
+    echo "  note the binary's public t12 params id / genesis: $pub"
+    if [ -n "$want" ]; then [ "${pub%% *}" = "$want" ] && echo "  ok   the public t12 params id equals BUILD-INFO's ($want)" || { echo "  FAIL the public t12 params id ${pub%% *} differs from BUILD-INFO's $want"; ok=0; }; fi
+  else echo "  FAIL the keyring export of the int11 flag set failed: $(tail -2 "$T/out" | tr '\n' ' ')"; ok=0; fi
+  local ksrc="$WT/consensus/core/src/palw_real_share_v1.rs" c1 c2 c3
+  c1=$(grep -o "PALW_FLOOR_IDLE_SLOTS_V1: u64 = [0-9]*" "$ksrc" 2>/dev/null | grep -o "[0-9]*$" || true); c2=$(grep -o "PALW_FLOOR_PROBE_SLOTS_V1: u64 = [0-9]*" "$ksrc" 2>/dev/null | grep -o "[0-9]*$" || true)
+  c3=$(grep -o "PALW_FLOOR_PROBE_COOLDOWN_SLOTS_V1: u64 = [0-9]*" "$ksrc" 2>/dev/null | grep -o "[0-9]*$" || true)
+  if [ "$c1/$c2/$c3" = "$K_SLOTS/$PROBE_SLOTS/$COOLDOWN" ]; then echo "  ok   the source tree's floor constants (idle $c1, probe $c2, cooldown $c3) equal the plan's"; else echo "  FAIL the source tree's floor constants (idle ${c1:-?}, probe ${c2:-?}, cooldown ${c3:-?}) differ from the plan's ($K_SLOTS / $PROBE_SLOTS / $COOLDOWN)"; ok=0; fi
+  grep -aq "palw-floor-state" "$k" && echo "  ok   the binary carries the [palw-floor-state] transition log" || { echo "  FAIL no [palw-floor-state] in the binary: the FLOOR gates fall back to the model"; ok=0; }
+  grep -aq "idle-only fallback" "$k" && echo "  ok   the binary carries the hold wording (idle-only fallback)" || echo "  note no 'idle-only fallback' text in the binary: HOLD_PATTERN may not match"
+  for f in --palw-drill-anchor-duty-after-slots; do "$k" --help 2>/dev/null | grep -q -- "$f" && echo "  ok   kaspad lists $f (ANCHOR_DUTY_AFTER_SLOTS unset: the release's 30 applies)" || echo "  note kaspad lacks $f"; done
   [ "$ok" = 1 ]
 }
 
 case $cmd in
   plan) plan ;;
-  dry) plan; bash "$DM" dry "$@" 2>&1 | grep -vE '^  ok ' | cut -c1-400 | tail -80; echo "== fence heights the int11 flag sets (from the keyring export; useful-work = palw_floor_reserve_v1 / palw_real_clock_tick_v1)"; bash "$DM" dry "$@" 2>&1 | grep "keyring manifest names the fences" | cut -c1-900; echo "== combined-drill checks"; extra_checks; echo "== DRY RUN done" ;;
+  dry) plan; D=$(bash "$DM" dry "$@" 2>&1) || true; echo "== preflight (dm.sh dry): failures and notes"; echo "$D" | grep -E '^  (FAIL|note)|REFUSED: [^b]|preflight failures' | cut -c1-400
+       echo "== fence heights the int11 flag sets (from the keyring export; the useful-work pair = palw_floor_reserve_v1 / palw_real_clock_tick_v1)"; echo "$D" | grep "keyring manifest names the fences" | cut -c1-1200
+       echo "== per-node argv (first nodes)"; echo "$D" | grep -E '^-- (new0|new4|new6|new9|extfloor)' | cut -c1-700
+       echo "== combined-drill checks"; extra_checks || true; echo "== DRY RUN done" ;;
   up) REAL_SUBMIT_DELAY_S=$STALE_DELAY_S HEAD_PRODUCE=0 bash "$DM" up "$@" ;;      # leg S first: new6 stale, new4 a seat only
   status|verdicts|down|model|keys|plan-dm) bash "$DM" "$cmd" "$@" ;;
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
+  fences) L="$WORK_DIR/new0/kaspad.out"; [ -s "$L" ] || { echo "no $L yet (dc.sh up first)"; exit 3; }
+          grep -a "PALW DRILL FLAG DAY" "$L" | sed -E 's/^.*PALW DRILL FLAG DAY: //' | cut -c1-120 | sort -u > /tmp/dc-fences.$$; n=$(grep -c "to DAA $INT11_AT\|at DAA $INT11_AT\|ARMED at DAA $INT11_AT" /tmp/dc-fences.$$ || true)
+          echo "== fences the node moved to H' = $INT11_AT, or armed there: $n (the candidate's list: 29 with P2's anchor window)"; cat /tmp/dc-fences.$$
+          for f in palw_floor_reserve_v1 palw_real_clock_tick_v1 palw_anchor_window_v1 palw_capacity_multi_claim palw_capacity_rho_breaker palw_capacity_emission_budget palw_class_seating palw_panel_unavailable_expiry palw_gen_v1 palw_improvement_v1; do
+            grep -q "$f.*DAA $INT11_AT" /tmp/dc-fences.$$ && echo "  ok   $f at $INT11_AT" || echo "  MISSING $f at $INT11_AT"; done; rm -f /tmp/dc-fences.$$ ;;
   gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --fences "6 10 14 $TIR_AT 24 $INT11_AT $((INT11_AT+95)) $((INT11_AT+190)) $((INT11_AT+285))" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
   recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
