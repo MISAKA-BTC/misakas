@@ -230,6 +230,9 @@ node_args() {
         return
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576 ))")
+    # INT12=1 (the combined drill): p2p flow_context and the heartbeat relay at DEBUG, so H2's 'kept, not announced' line (a second beat for a slot is validated but not announced: a 1-slot sink split)
+    # is captured directly. Few debug lines in those modules; LOGLEVEL overrides.
+    [ "${INT12:-0}" = 1 ] && a+=("--loglevel=${LOGLEVEL:-info,kaspa_p2p_flows::flow_context=debug,kaspa_p2p_flows::palw_heartbeat_relay=debug}")
     if [ "$seat" != - ] && [ "$seat" -lt 8 ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
@@ -304,6 +307,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export USEFUL_WORK_AT ANCHOR_DUTY_AFTER_SLOTS OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export LOGLEVEL INT12 USEFUL_WORK_AT ANCHOR_DUTY_AFTER_SLOTS OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

@@ -884,6 +884,143 @@ def gate_riders(objs, claims, blocks, work, tip, windows=None, mature=60):
     return 0, "PASS: " + txt
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# sink splits: a 1-slot H2 split (a second heartbeat for a slot is kept but not announced) vs a fence-caused partition
+# --------------------------------------------------------------------------------------------------------------------
+def sink_sampler(a):
+    """Background sampler: every --interval s one row 'ts<TAB>node=daa:sink8 ...' of every node's getBlockDagInfo (the nodes that answer) appended to --out."""
+    import time
+    nodes = [tuple(x.split(":")) for x in a.nodes.split(",") if x]
+    while True:
+        row = []
+        for n, k in nodes:
+            try:
+                r = call(a.json_base + int(k), "getBlockDagInfo", {}, timeout=5)
+                if pick(r, "sink", default=None):
+                    row.append(f"{n}={int(pick(r, 'virtualDaaScore', default=0) or 0)}:{str(pick(r, 'sink'))[:16]}")
+            except Exception:  # noqa: BLE001
+                pass
+        if row:
+            with open(os.path.expanduser(a.out), "a") as f:
+                f.write(time.strftime("%F %T") + "\t" + " ".join(row) + "\n")
+        time.sleep(a.interval)
+
+
+def read_sinks(path):
+    import time
+    rows = []
+    p = os.path.expanduser(path)
+    if os.path.exists(p):
+        for ln in open(p):
+            parts = ln.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            try:
+                t = time.mktime(time.strptime(parts[0], "%Y-%m-%d %H:%M:%S"))
+            except ValueError:
+                continue
+            view = {}
+            for tok in parts[1].split():
+                n, _, v = tok.partition("=")
+                daa, _, sink = v.partition(":")
+                if daa.isdigit():
+                    view[n] = (int(daa), sink)
+            rows.append((t, view))
+    return rows
+
+
+def find_splits(rows, exclude=None, interval=10, min_samples=2):
+    """Streaks of >= min_samples consecutive samples in which the SYNCED nodes (DAA >= top - 1) hold more than one sink. exclude = {node: (daa_lo, daa_hi)}: a node deliberately partitioned
+    (FORK-c) while the chain's top DAA is inside the range does not count. -> [{t0, t1, daa0, daa1, samples, nodes, sinks}]"""
+    exclude = exclude or {}
+    out, cur = [], None
+    for t, view in rows:
+        if not view:
+            continue
+        top = max(v[0] for v in view.values())
+        use = {n: v for n, v in view.items() if v[0] >= top - 1 and not (n in exclude and exclude[n][0] <= top <= exclude[n][1])}
+        split = len({v[1] for v in use.values()}) > 1
+        if split:
+            if cur is None:
+                cur = {"t0": t, "t1": t, "daa0": top, "daa1": top, "samples": 0, "nodes": {}, "sinks": set()}
+            cur["t1"], cur["daa1"] = t, top
+            cur["samples"] += 1
+            cur["sinks"] |= {v[1] for v in use.values()}
+            for n, v in use.items():
+                cur["nodes"].setdefault(n, set()).add(v[1])
+        elif cur is not None:
+            out.append(cur)
+            cur = None
+    if cur is not None:
+        out.append(cur)
+    return [dict(x, nodes={n: sorted(v) for n, v in x["nodes"].items()}, sinks=sorted(x["sinks"])) for x in out if x["samples"] >= min_samples]
+
+
+def classify_split(sp, work, margin=90):
+    """H2 when a node logged 'kept, not announced' (the debug line of the H2 rule) or two nodes were granted a heartbeat for the same slot within 3 s inside the split's window; FENCE when a
+    fork-id refusal ('Fork-id mismatch', 'crossed fence') was logged on any node in that window; else UNKNOWN."""
+    import glob, re, time
+    h2 = fence = False
+    granted = []
+    for lg in glob.glob(os.path.join(os.path.expanduser(work), "*", "kaspad.out")):
+        node = os.path.basename(os.path.dirname(lg))
+        with open(lg, errors="replace") as f:
+            for ln in f:
+                m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\.(\d+)", ln)
+                if not m:
+                    continue
+                t = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) + float("0." + m.group(2))
+                if t < sp["t0"] - margin or t > sp["t1"] + margin:
+                    continue
+                if "kept, not announced" in ln:
+                    h2 = True
+                if re.search(r"Fork-id mismatch|crossed fence", ln):
+                    fence = True
+                if "granted: it merges the beat that held the slot" in ln:
+                    granted.append((t, node))
+    granted.sort()
+    if any(b[0] - a[0] <= 3.0 and a[1] != b[1] for a, b in zip(granted, granted[1:])):
+        h2 = True
+    return "FENCE" if fence else ("H2" if h2 else "UNKNOWN")
+
+
+def split_census(a):
+    """The table: every split with its class and the crossing it sits on, and the count per crossing."""
+    rows = read_sinks(os.path.join(os.path.expanduser(a.evd), "sinks.tsv"))
+    ex = {}
+    fj = os.path.join(os.path.expanduser(a.evd), "fork.json")
+    if os.path.exists(fj):
+        pt = json.load(open(fj)).get("partition")
+        if pt and "rejoin_daa" in pt:
+            ex[pt["node"]] = (int(pt["start_daa"]), int(pt["rejoin_daa"]) + 3)
+    sps = find_splits(rows, ex)
+    fences = sorted(int(x) for x in str(a.fences).replace(",", " ").split() if x.isdigit())
+    for sp in sps:
+        sp["class"] = classify_split(sp, a.work)
+        near = [f for f in fences if f - 1 <= sp["daa0"] <= f + 3]
+        sp["crossing"] = near[0] if near else None
+        sp["slots"] = round((sp["t1"] - sp["t0"] + 10) / 125.0, 1)
+    return rows, sps
+
+
+def gate_splits(rows, sps, max_slots=3.0):
+    """RELEASE GATE: a sink split between synced nodes is an H2 split (a second beat for a slot, self-converging inside max_slots) — never a fence-caused partition (a fork-id refusal logged in its
+    window) and never one that outlives max_slots. The count per crossing is reported."""
+    if not rows:
+        return 3, "INCOMPLETE: no sink samples (sinks.tsv)"
+    if not sps:
+        return 0, f"PASS: no sink split between synced nodes in {len(rows)} samples"
+    bad = [sp for sp in sps if sp["class"] != "H2" or sp["slots"] > max_slots]
+    per = {}
+    for sp in sps:
+        k = sp["crossing"] if sp["crossing"] is not None else "no crossing"
+        per.setdefault(k, {"H2": 0, "FENCE": 0, "UNKNOWN": 0})[sp["class"]] += 1
+    txt = f"{len(sps)} splits, per crossing {per}; durations (slots) {[sp['slots'] for sp in sps][:10]}"
+    if bad:
+        return 1, "FAIL: " + "; ".join(f"DAA {sp['daa0']}..{sp['daa1']} {sp['class']} {sp['slots']} slots" for sp in bad[:5]) + " | " + txt
+    return 0, "PASS: every split is an H2 split (a second beat for a slot, not announced) that self-converged: " + txt
+
+
 def user_metrics(blocks, claims, fence, tip=None):
     """The user's three metrics, past the fence: the REAL attempts' BLUE rate, the REAL share of the selected chain (chain blocks whose kind is REAL or EXEC), and the
     REAL work that reached Final (claims accepted in a REAL block, old enough to have had the time, that are Final)."""
@@ -1157,6 +1294,8 @@ def gates(a):
     except (OSError, ValueError, KeyError):
         pass
     rows.append(("G-R1", *gate_riders(rider_objects(a.port, fence), claims, blocks, a.work, tipd, capw)))
+    srows, ssp = split_census(argparse.Namespace(evd=a.evd, work=a.work, fences=getattr(a, "fences", "")))
+    rows.append(("SPLITS", *gate_splits(srows, ssp)))
     a.json_base = int(os.environ.get("JSON_BASE", "53200"))
     for nm, c, t in fork_checks(a, blocks):
         rows.append((nm, c, t))
@@ -1530,6 +1669,28 @@ def selftest():
     assert gate_riders(objs, cr, bl, wr, 300)[0] == 1                                                                  # a transition at a block with no REAL attempt
     bl2 = [dict(_blk("bh", [], 101, "LEGACY_HEARTBEAT", "BLUE"), merged=["rb"]), dict(_blk("rb", [], 101, "REAL", "BLUE"), merged=[])]
     assert gate_riders(objs, cr, bl2, wr, 300)[0] in (0, 3), gate_riders(objs, cr, bl2, wr, 300)                       # the REAL attempt is in its mergeset: the attempt stepped it
+    # sink splits: one 12-sample split with two beats granted 76 ms apart (an H2 split); another with a fork-id refusal in its window (a fence split); a planned partition is excluded
+    sd = tempfile.mkdtemp()
+    os.makedirs(os.path.join(sd, "g0"))
+    os.makedirs(os.path.join(sd, "g1"))
+    open(os.path.join(sd, "g0", "kaspad.out"), "w").write("2026-10-03 20:14:00.326+09:00 [INFO ] [palw-heartbeat-miner] heartbeat #26 aa — granted: it merges the beat that held the slot and advanced the clock to DAA 22\n")
+    open(os.path.join(sd, "g1", "kaspad.out"), "w").write("2026-10-03 20:14:00.402+09:00 [INFO ] [palw-heartbeat-miner] heartbeat #19 bb — granted: it merges the beat that held the slot and advanced the clock to DAA 22\n")
+    import time as _t
+    t0 = _t.mktime(_t.strptime("2026-10-03 20:14:07", "%Y-%m-%d %H:%M:%S"))
+    rows = [(t0 + 10 * i, {"g0": (22, "8224ca1b"), "g1": (22, "87899580")}) for i in range(12)] + [(t0 + 130, {"g0": (23, "64b9494b"), "g1": (23, "64b9494b")})]
+    rows = [(t0 - 20, {"g0": (21, "x"), "g1": (21, "x")})] + rows
+    sps = find_splits(rows)
+    assert len(sps) == 1 and sps[0]["samples"] == 12 and sps[0]["daa0"] == 22, sps
+    sps[0]["class"] = classify_split(sps[0], sd)
+    assert sps[0]["class"] == "H2", sps[0]
+    sps[0]["slots"] = round((sps[0]["t1"] - sps[0]["t0"] + 10) / 125.0, 1)
+    sps[0]["crossing"] = 22
+    assert gate_splits(rows, sps)[0] == 0 and gate_splits([], [])[0] == 3
+    open(os.path.join(sd, "g1", "kaspad.out"), "a").write("2026-10-03 20:14:30.000+09:00 [WARN ] P2P, handshake failed for inbound peer 127.0.0.1:1: Fork-id mismatch on network x at DAA 22 - this node has crossed fence 22\n")
+    assert classify_split(sps[0], sd) == "FENCE"
+    sps[0]["class"] = "FENCE"
+    assert gate_splits(rows, sps)[0] == 1
+    assert find_splits(rows, {"g1": (20, 30)}) == []                        # g1 partitioned on purpose while the chain is at DAA 20..30: no split counts
     print("selftest ok")
     return 0
 
@@ -1576,6 +1737,7 @@ def main():
     g.add_argument("--state", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/recovery.json")
     g.add_argument("--evd", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill")
     g.add_argument("--lanes", default="~/Downloads/MISAKA-wt-b/lanes/evidence", help="directory of <lane>/verdict.txt files (the pre-checks)")
+    g.add_argument("--fences", default="6 10 14 18 24", help="the fence heights the chain crosses (a split near one is labelled with it)")
     g.add_argument("--k", type=int, default=20)
     g.add_argument("--margin", type=int, default=6)
     g.add_argument("--idle-slots", type=int, default=IDLE_SLOTS)
@@ -1590,9 +1752,14 @@ def main():
     e.add_argument("--port", type=int, required=True)
     e.add_argument("--out", required=True)
     e.add_argument("--interval", type=int, default=30)
+    w = sub.add_parser("sinkwatch")
+    w.add_argument("--json-base", type=int, required=True)
+    w.add_argument("--nodes", required=True, help="name:k,name:k (the node's JSON port is json-base + k)")
+    w.add_argument("--out", required=True)
+    w.add_argument("--interval", type=int, default=10)
     sub.add_parser("selftest")
     a = p.parse_args()
-    sys.exit({"share": share, "gates": gates, "redblue": redblue, "recovery": recovery, "panel": panel, "execsample": exec_sampler, "selftest": lambda _a: selftest()}[a.cmd](a))
+    sys.exit({"share": share, "gates": gates, "redblue": redblue, "recovery": recovery, "panel": panel, "execsample": exec_sampler, "sinkwatch": sink_sampler, "selftest": lambda _a: selftest()}[a.cmd](a))
 
 
 if __name__ == "__main__":

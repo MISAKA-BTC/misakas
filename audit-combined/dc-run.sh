@@ -36,6 +36,7 @@ json.dump(d, open(p, "w"), indent=1)
 PY
 }
 JSON_BASE_3=$((JSON_BASE + 3))
+FENCES="6 10 14 $TIR_AT 24 $H $((H+95)) $((H+190)) $((H+285))"
 GATE_ARGS=(--port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers "$PRODUCERS" --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json"
            --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN")
 snap() { local d; d=$(now); python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel-$d.txt" 2>&1
@@ -43,7 +44,10 @@ snap() { local d; d=$(now); python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "
          python3 "$C/dcwatch.py" gates "${GATE_ARGS[@]}" > "$EVD/gates-$d.txt" 2>&1; }
 
 python3 "$C/dcwatch.py" execsample --port "$JSON_BASE_3" --out "$EVD/roundlane.tsv" --interval 30 & SAMPLER=$!      # G-A2: getPalwRoundLane per span
-trap 'kill $SAMPLER 2>/dev/null' EXIT
+# sink splits (FORK gates must tell a 1-slot H2 split from a fence-caused partition): every node's sink every 10 s -> sinks.tsv; `dcwatch gates` classifies each split from the logs
+NODESPEC=$(for n in $(all_nodes); do printf '%s:%s,' "$n" "$(kof "$n")"; done)
+python3 "$C/dcwatch.py" sinkwatch --json-base "$JSON_BASE" --nodes "$NODESPEC" --out "$EVD/sinks.tsv" --interval 10 & SINKS=$!
+trap 'kill $SAMPLER $SINKS 2>/dev/null' EXIT
 ( run dg1 bash "$WT/audit-improve/dm.sh" gen dg1 ) & P1=$!
 ( run dg2 bash "$WT/audit-improve/dm.sh" gen dg2 ) & P2=$!
 ( d=$((H + 100)); while :; do at "$d"; snap; d=$((d + 30)); [ "$d" -gt $((RECOVERY_AT + STOP_DAA + POST_DAA + CAP_WINDOW_DAA + 80)) ] && break; done ) &

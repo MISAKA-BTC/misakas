@@ -95,6 +95,10 @@ cat <<EOF
             within 9 DAA), each priced sanely against its lead (committed / reserved <= 4x the lead's and nowhere near u64-max: a rider priced without the work-target fold would saturate), riders bound and
             licensed like the leads of the same age, and no [palw-floor-state] transition at a block with no REAL attempt in it or in its mergeset (riders must not step the state machine).
             The RPC shows neither a claim's pwu nor a rider flag, so admission and price are read from the claim rows (escrow, committed, reserved).
+  splits    SPLITS (a gate): every node's sink is sampled every 10 s (sinks.tsv); a split between synced nodes is classed H2 (a node logged "kept, not announced" — H2: a second heartbeat for a slot is validated but not
+            announced — or two beats were granted for one slot within 3 s) or FENCE (a "Fork-id mismatch" / "crossed fence" line in its window) or UNKNOWN, and labelled with the crossing it sits on; the gate
+            passes only when every split is H2 and self-converged within 3 slots; the count per crossing is printed. The planned FORK-c partition is excluded. The nodes run at DEBUG for
+            kaspa_p2p_flows::flow_context and ::palw_heartbeat_relay (LOGLEVEL) so the H2 line is captured. (rfc2r drill, DAA 22: a 1-slot H2 split, not fence-related.)
   test-level, not drill   FORK-d (IBD via the pruning proof across the fence): RS's T49-style carriage test (capture in Probe/Normal -> import -> identical decisions) and the combined-fence test with the floor rule live
   report    (never a gate) the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time; leg X (off unless X_DAA > 0): one policy-IGNORING floor producer
             ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
@@ -131,7 +135,7 @@ case $cmd in
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
-  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
+  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --fences "6 10 14 $TIR_AT 24 $INT11_AT $((INT11_AT+95)) $((INT11_AT+190)) $((INT11_AT+285))" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
   recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
   share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 "$@" ;;
