@@ -517,8 +517,32 @@ def build_config_only(e, outdir, probe):
     return {"model": "(config only)"}
 
 
+def build_remote(e, outdir, probe):
+    """A remote-code family: a tiny model built from the family's modelling FILES by `tools/remote_reference.py` (trust_remote_code, local files only),
+    with the sha256 pin of those files beside it. The files under `tools/corpus/remote/<id>/` of this corpus are RECONSTRUCTIONS (no network): the
+    report says the reference is unverified."""
+    import tempfile
+    sys.path.insert(0, os.path.dirname(HERE))
+    import remote_reference as R
+
+    code_dir = os.path.join(HERE, e["options"]["code_dir"])
+    d = os.path.join(outdir, e["id"])
+    if probe:
+        return {"model": "(remote code, not built in probe)"}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(e["cfg"]["config"], f)
+        cfg_path = f.name
+    try:
+        info = R.build(code_dir, cfg_path, d, seed=seed_of(e))
+    finally:
+        os.unlink(cfg_path)
+    return {"model": info["model"], "max_logit": info["max_logit"]}
+
+
 def build(e, outdir, probe=False):
     b = e["builder"]
+    if b == "remote":
+        return build_remote(e, outdir, probe)
     if b in ("causal", "vlm"):
         return build_causal(e, outdir, probe)
     if b == "encoder":

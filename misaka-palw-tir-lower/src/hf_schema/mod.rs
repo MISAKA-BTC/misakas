@@ -538,7 +538,17 @@ fn read_with(
                     "{arch}: trust_remote_code module `{module}` is not modelled — its forward may differ from any transformers class"
                 ))));
             }
-            Reference::RemoteCode { module }
+            // `REFERENCE_REMOTE_CODE_V1`: the file the adapter says its lowering follows, by hash (declared by the adapter, never attested).
+            let pin = match a.value.get("remote_code_pin").and_then(|p| p.get(module.as_str())) {
+                None | Some(Value::Null) => None,
+                Some(Value::String(h)) if h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) => Some(h.clone()),
+                Some(other) => {
+                    return Err(f(LowerError::bad(format!(
+                        "{arch}: remote_code_pin of `{module}` is a lowercase sha256 (64 hex characters), got {other}"
+                    ))));
+                }
+            };
+            Reference::RemoteCode { module, pin }
         }
         None => {
             let required = match a.value.get("remote_code_required") {

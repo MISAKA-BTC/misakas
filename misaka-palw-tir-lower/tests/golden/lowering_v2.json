@@ -861,6 +861,11 @@
     "params": 116,
     "program": "cffb6e44318d88596c912976d47fe8fe1e2be31f9a1e046a1fc8f14de9de3f831267ce4b5f114da8b872859b417ea5dc57c2a8f0c2b69411ecd5e0b95a03b60f"
   },
+  "real/chatglm3-6b.json": {
+    "nodes": 341,
+    "params": 74,
+    "program": "e68b590686af903ed3884f25e6fdfb0db5abd59748b344197e3cab022522bb4c9ef56a8ff1735b475bdb4d6c5732a73ea39cf5aa6e0f10e1761dc455f30a1697"
+  },
   "real/deepseek-v2-lite.json": {
     "nodes": 778,
     "params": 159,

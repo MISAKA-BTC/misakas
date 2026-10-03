@@ -1,1 +1,166 @@
-{}
+{
+ "transformer.embedding.word_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.encoder.final_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.0.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "transformer.encoder.layers.0.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.encoder.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.0.self_attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.encoder.layers.0.self_attention.query_key_value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "transformer.encoder.layers.0.self_attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.encoder.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.1.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "transformer.encoder.layers.1.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.encoder.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.1.self_attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.encoder.layers.1.self_attention.query_key_value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "transformer.encoder.layers.1.self_attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.encoder.layers.2.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.2.mlp.dense_4h_to_h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "transformer.encoder.layers.2.mlp.dense_h_to_4h.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.encoder.layers.2.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.encoder.layers.2.self_attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.encoder.layers.2.self_attention.query_key_value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "transformer.encoder.layers.2.self_attention.query_key_value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.output_layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "transformer.rotary_pos_emb.inv_freq": {
+  "dtype": "BF16",
+  "shape": [
+   2
+  ]
+ }
+}

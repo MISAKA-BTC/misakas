@@ -500,18 +500,20 @@ add("encodec", "audio", "audio", "EncodecModel", "encodec", "audio:EncodecModel"
     examples=["facebook/encodec_24khz"])
 
 # ─────────────────────────────── M. remote-code families (no offline fixture: published-style configs) ───────────────────────────────
-add("chatglm3", "remote-code", "remote", "ChatGLMModel", "chatglm", "config-only",
+add("chatglm3", "remote-code", "decoder", "ChatGLMModel", "chatglm", "remote",
     dict(config={"architectures": ["ChatGLMModel"], "model_type": "chatglm",
                  "auto_map": {"AutoConfig": "configuration_chatglm.ChatGLMConfig", "AutoModel": "modeling_chatglm.ChatGLMForConditionalGeneration",
                               "AutoModelForCausalLM": "modeling_chatglm.ChatGLMForConditionalGeneration"},
                  "add_bias_linear": False, "add_qkv_bias": True, "apply_query_key_layer_scaling": True, "apply_residual_connection_post_layernorm": False,
-                 "attention_dropout": 0.0, "attention_softmax_in_fp32": True, "bias_dropout_fusion": True, "ffn_hidden_size": 13696,
-                 "fp32_residual_connection": False, "hidden_dropout": 0.0, "hidden_size": 4096, "kv_channels": 128, "layernorm_epsilon": 1e-05,
-                 "multi_query_attention": True, "multi_query_group_num": 2, "num_attention_heads": 32, "num_layers": 28, "original_rope": True,
-                 "padded_vocab_size": 65024, "post_layer_norm": True, "rmsnorm": True, "seq_length": 8192, "use_cache": True, "torch_dtype": "float16",
-                 "tie_word_embeddings": False, "eos_token_id": 2, "pad_token_id": 0}),
-    usage="h", why="trust_remote_code: THUDM/chatglm3-6b is among the most downloaded Chinese chat models; its forward lives in the repository, not in transformers", examples=["THUDM/chatglm3-6b"], tiny=False,
-    note="config written from the published repository as remembered; there is no offline reference implementation")
+                 "attention_dropout": 0.0, "attention_softmax_in_fp32": True, "bias_dropout_fusion": True, "ffn_hidden_size": 64,
+                 "fp32_residual_connection": False, "hidden_dropout": 0.0, "hidden_size": 32, "kv_channels": 8, "layernorm_epsilon": 1e-05,
+                 "multi_query_attention": True, "multi_query_group_num": 2, "num_attention_heads": 4, "num_layers": 3, "original_rope": True,
+                 "padded_vocab_size": 64, "post_layer_norm": True, "rmsnorm": True, "seq_length": 128, "use_cache": True,
+                 "tie_word_embeddings": False, "eos_token_id": 2, "pad_token_id": 0, "rope_ratio": 1}),
+    options={"code_dir": "remote/chatglm3"}, real_config="chatglm3-6b",
+    usage="h", why="trust_remote_code: THUDM/chatglm3-6b is among the most downloaded Chinese chat models; its forward lives in the repository, not in transformers", examples=["THUDM/chatglm3-6b"],
+    note="FR-24: the tiny model is built by tools/remote_reference.py from tools/corpus/remote/chatglm3/, a RECONSTRUCTION of the repository's modelling file written from its documented forward "
+         "(the repository is not available offline): every stage that can run passes, and the reference stage is marked unverified (level label `B (reference unverified)`)")
 add("internlm2", "remote-code", "remote", "InternLM2ForCausalLM", "internlm2", "config-only", dict(config_file="internlm2.5-7b-chat"),
     usage="m", share=0.5, why="trust_remote_code Llama-lineage with fused wqkv (InternLM2/2.5)", examples=["internlm/internlm2_5-7b-chat"], real_config="internlm2.5-7b-chat", tiny=False)
 add("minicpm", "remote-code", "remote", "MiniCPMForCausalLM", "minicpm", "config-only", dict(config_file="minicpm-2b-sft-bf16"),

@@ -735,7 +735,15 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
                 if top1_miss > 0 || rel > 1e-4 {
                     return Err(format!("float reference vs HF ({which}): max|Δ|/scale {rel:.2e}, {top1_miss} argmax differences beyond a near-tie"));
                 }
-                Ok(json!({"positions": got.len(), "reference": which, "max_rel_vs_hf": rel, "near_ties": near_ties}))
+                // FR-24: a remote-code architecture's reference is the registrant's / the corpus's own file run through trust_remote_code,
+                // not a transformers class: the stage passes and says what it was passed against.
+                let remote = matches!(read.spec.reference, Reference::RemoteCode { .. });
+                let mut j = json!({"positions": got.len(), "reference": which, "max_rel_vs_hf": rel, "near_ties": near_ties});
+                if remote {
+                    j["reference_unverified"] = json!(true);
+                    j["reference_kind"] = json!("remote code (trust_remote_code, local files): the corpus's reconstruction of the repository's modelling file, not the repository's");
+                }
+                Ok(j)
             });
             let ok = s.ok;
             st.insert("float_vs_hf", s);
@@ -1519,7 +1527,15 @@ fn run_entry(e: &Entry, full: bool) -> Value {
     // FR-26 (accepted): a Level A with no reference check is labelled "A (unconfirmed)"; the check is the float reference
     // against the transformers/diffusers class on the same weights (`float_vs_hf`).
     let confirmed = stages.get("float_vs_hf").and_then(|s| s["ok"].as_bool()).unwrap_or(false);
-    let level_label = if level == "A" && !confirmed { "A (unconfirmed)".to_string() } else { level.clone() };
+    // FR-24: a Level B whose float reference is remote code this harness cannot attest reads "B (reference unverified)": every stage that can run passed.
+    let unverified_ref = stages.get("float_vs_hf").and_then(|s| s["reference_unverified"].as_bool()).unwrap_or(false);
+    let level_label = if level == "A" && !confirmed {
+        "A (unconfirmed)".to_string()
+    } else if level == "B" && unverified_ref {
+        "B (reference unverified)".to_string()
+    } else {
+        level.clone()
+    };
     out.insert("level_label".into(), json!(level_label));
     out.insert("level".into(), json!(level));
     out.insert("via".into(), json!(via));

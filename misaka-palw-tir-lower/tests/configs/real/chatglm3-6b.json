@@ -4,7 +4,7 @@
   "apply_query_key_layer_scaling": true,
   "apply_residual_connection_post_layernorm": false,
   "architectures": [
-    "ChatGLMForConditionalGeneration"
+    "ChatGLMModel"
   ],
   "attention_dropout": 0.0,
   "attention_softmax_in_fp32": true,
@@ -14,30 +14,25 @@
     "AutoModelForCausalLM": "modeling_chatglm.ChatGLMForConditionalGeneration"
   },
   "bias_dropout_fusion": true,
-  "classifier_dropout": null,
-  "dtype": "bfloat16",
   "eos_token_id": 2,
-  "ffn_hidden_size": 64,
+  "ffn_hidden_size": 13696,
   "fp32_residual_connection": false,
   "hidden_dropout": 0.0,
-  "hidden_size": 32,
-  "kv_channels": 8,
+  "hidden_size": 4096,
+  "kv_channels": 128,
   "layernorm_epsilon": 1e-05,
   "model_type": "chatglm",
   "multi_query_attention": true,
   "multi_query_group_num": 2,
-  "num_attention_heads": 4,
-  "num_layers": 3,
+  "num_attention_heads": 32,
+  "num_layers": 28,
   "original_rope": true,
   "pad_token_id": 0,
-  "padded_vocab_size": 64,
+  "padded_vocab_size": 65024,
   "post_layer_norm": true,
-  "pre_seq_len": null,
-  "prefix_projection": false,
-  "quantization_bit": 0,
   "rmsnorm": true,
-  "rope_ratio": 1,
-  "seq_length": 128,
+  "seq_length": 8192,
   "tie_word_embeddings": false,
-  "transformers_version": "5.17.0"
+  "torch_dtype": "float16",
+  "use_cache": true
 }

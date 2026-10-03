@@ -286,7 +286,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
     feature!("ATTN_BLOCKSPARSE_PATTERN_V1", Attention, "a fixed block-sparse pattern of visible keys", Missing, [], NoReq, [], "Phi-3-small."),
     feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches, projection chunks and logits", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1's multipliers, each realised by the feature that already scales that place: the embedding and the logits (EMBED_SCALE_V1, the head's logit scale), a branch's input and output (an `Op::Scale` on the branch, a change of scale key and no node of the integer program), the Mamba-2 projection's five chunks (MAMBA2_MUP_V1), the MLP's gate and down (folded exactly into the gate and down weights by the adapter's weights expressions) and the attention key (folded into the score scale)."),
-    feature!("REFERENCE_REMOTE_CODE_V1", Storage, "a reference implementation that is remote Python code outside transformers", Missing, [], NoReq, [], "The semantics cannot be pinned to a library version; confirm against the module before an adapter may claim it."),
+    feature!("REFERENCE_REMOTE_CODE_V1", Storage, "a reference implementation that is remote Python code outside transformers: the adapter names the module it follows (and may pin its file's hash), and the architecture is LOWERABLE_UNVERIFIED", Implemented, [], NoReq, ["chatglm3::a_remote_code_adapter_pins_the_file_its_lowering_follows_and_the_verdict_stays_unverified"], "FR-24: no part of the chain runs remote code, so the program's own verdict stands and the reference column is empty; `remote_code_pin` records which modelling file (sha256, from tools/remote_reference.py) the registrant's tiny fixture came from. Declared, not attested."),
     feature!("WEIGHTS_QKV_MP_PARTITIONED_V1", Storage, "mp_num-partitioned fused qkv weight layout", Missing, [], NoReq, [], "CodeGen."),
     feature!("LAYER_FFN_ONLY_V1", Mixer, "layers that are a single block (a mixer or an FFN, not both)", Implemented, [], NoReq, ["fidelity_tiny::nemotron_h", "hf_fixtures::nemotron_h"], "Nemotron-H: each layer is Mamba-2, attention, an MLP or a MoE under ONE pre-norm and its residual add; an FFN-only layer is `x + ffn(norm(x))`, a mixer-only layer `x + mixer(norm(x))`. `Mixer::None` with an FFN; no node of its own."),
     feature!("MIXER_PARALLEL_BRANCH_V1", Mixer, "several mixers in parallel in one layer, summed", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1: x + (ssm_out · mamba2(ssm_in · n) + attn_out · attention(attn_in · n)), n the layer's one normed input, then the layer's MLP. Each branch has its own input and output scale; a sum of the branch outputs (an Add) and nothing else."),
@@ -540,6 +540,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if s.embed_carry {
         u.add("EMBED_CARRY_V1", None, "");
+    }
+    if let Reference::RemoteCode { module, .. } = &s.reference {
+        u.add("REFERENCE_REMOTE_CODE_V1", None, module.clone());
     }
     if s.hf.names.values().any(|n| n.contains('|')) {
         u.add("TENSOR_NAME_ALTERNATIVES_V1", None, "");

@@ -3461,10 +3461,10 @@
   {
    "id": "chatglm3",
    "category": "remote-code",
-   "route": "remote",
+   "route": "decoder",
    "hf_arch": "ChatGLMModel",
    "model_type": "chatglm",
-   "builder": "config-only",
+   "builder": "remote",
    "cfg": {
     "config": {
      "architectures": [
@@ -3483,26 +3483,26 @@
      "attention_dropout": 0.0,
      "attention_softmax_in_fp32": true,
      "bias_dropout_fusion": true,
-     "ffn_hidden_size": 13696,
+     "ffn_hidden_size": 64,
      "fp32_residual_connection": false,
      "hidden_dropout": 0.0,
-     "hidden_size": 4096,
-     "kv_channels": 128,
+     "hidden_size": 32,
+     "kv_channels": 8,
      "layernorm_epsilon": 1e-05,
      "multi_query_attention": true,
      "multi_query_group_num": 2,
-     "num_attention_heads": 32,
-     "num_layers": 28,
+     "num_attention_heads": 4,
+     "num_layers": 3,
      "original_rope": true,
-     "padded_vocab_size": 65024,
+     "padded_vocab_size": 64,
      "post_layer_norm": true,
      "rmsnorm": true,
-     "seq_length": 8192,
+     "seq_length": 128,
      "use_cache": true,
-     "torch_dtype": "float16",
      "tie_word_embeddings": false,
      "eos_token_id": 2,
-     "pad_token_id": 0
+     "pad_token_id": 0,
+     "rope_ratio": 1
     }
    },
    "usage": "h",
@@ -3511,10 +3511,12 @@
    "examples": [
     "THUDM/chatglm3-6b"
    ],
-   "options": {},
-   "real_config": null,
-   "tiny": false,
-   "note": "config written from the published repository as remembered; there is no offline reference implementation"
+   "options": {
+    "code_dir": "remote/chatglm3"
+   },
+   "real_config": "chatglm3-6b",
+   "tiny": true,
+   "note": "FR-24: the tiny model is built by tools/remote_reference.py from tools/corpus/remote/chatglm3/, a RECONSTRUCTION of the repository's modelling file written from its documented forward (the repository is not available offline): every stage that can run passes, and the reference stage is marked unverified (level label `B (reference unverified)`)"
   },
   {
    "id": "internlm2",

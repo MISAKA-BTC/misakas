@@ -51,8 +51,15 @@ pub enum Reference {
     /// `transformers`' own modeling file for `model_type`.
     #[default]
     Native,
-    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice).
-    RemoteCode { module: String },
+    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice). **`REFERENCE_REMOTE_CODE_V1`**: `pin` is the
+    /// sha256 of the modelling file the lowering follows, as the adapter DECLARES it (`remote_code_pin`, the hash `tools/remote_reference.py` records when
+    /// a registrant builds the tiny reference from that file); `None` when the adapter names no file. Declared, never attested: no part of the chain runs
+    /// remote code, so a model of this kind is `LOWERABLE_UNVERIFIED` pinned or not.
+    RemoteCode {
+        module: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+    },
     /// A third-party library the checkpoint names (e.g. flash-linear-attention for RWKV-7).
     ExternalLibrary { name: String },
 }

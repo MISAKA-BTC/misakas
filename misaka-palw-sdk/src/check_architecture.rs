@@ -286,9 +286,15 @@ pub fn check_ir_config_shaped_v1(
     let mut r = check_ir_program_at_v1(params, &prep.program, tile_len, h_chunk);
     r.architecture = arch;
     r.architecture_report = report;
-    if matches!(spec.reference, misaka_palw_tir_lower::spec::Reference::RemoteCode { .. }) {
-        r.unverified
-            .push("the architecture is remote code: the lowering follows its source, no installed transformers reference".into());
+    if let misaka_palw_tir_lower::spec::Reference::RemoteCode { module, pin } = &spec.reference {
+        r.unverified.push(match pin {
+            Some(h) => format!(
+                "the architecture is remote code (`{module}`, pinned by its adapter to sha256 {h}): the lowering follows that file, declared and not attested, with no installed transformers reference"
+            ),
+            None => format!(
+                "the architecture is remote code (`{module}`, no file pinned): the lowering follows its source, no installed transformers reference"
+            ),
+        });
         r.verdict = ArchVerdictV1::LowerableUnverified { inner: Box::new(r.verdict.clone()) };
     }
     r
@@ -1573,6 +1579,20 @@ mod tests {
         assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
         assert!(r.verdict.is_admissible());
         assert!(r.verdict.to_string().starts_with("LOWERABLE_UNVERIFIED ("), "{}", r.verdict);
+    }
+
+    #[test]
+    fn chatglm3_is_lowerable_unverified_and_the_report_says_which_file_it_follows_or_that_none_is_pinned() {
+        let (params, _, _) = network("testnet-11");
+        let text = std::fs::read_to_string(lower_dir("tools/corpus/specs/chatglm3/config.json")).expect("the tiny ChatGLM3 config");
+        let r = check_ir_config_v1(&params, &text, false);
+        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else { panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict) };
+        assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
+        assert!(
+            r.unverified.iter().any(|u| u.contains("modeling_chatglm.ChatGLMForConditionalGeneration") && u.contains("no file pinned")),
+            "{:?}",
+            r.unverified
+        );
     }
 
     #[test]

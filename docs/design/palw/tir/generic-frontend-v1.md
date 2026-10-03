@@ -792,6 +792,38 @@ rotary embedding and two Mamba-2 groups: float `1.2·10^-5` absolute on logits o
 every commit. The corpus entry `zamba2` (3 layers, one hybrid): Level B, every stage (float `1.5·10^-6`, top-1 0.972, KL 0.0013, court equal on 1,296 commit points).
 The class-default configuration (54 layers, nine hybrid, one shared block) binds every tensor.
 
+### 9.16 ChatGLM3 and a way to pin a remote-code reference (`REFERENCE_REMOTE_CODE_V1`; FR-24)
+
+ChatGLM3's forward is the repository's `modeling_chatglm.py`, not a transformers class: no data can express a model whose semantics are not pinned to a library
+version, and the chain has no way to run remote code. **Policy, as built**: the lowering follows the repository's source; the architecture's verdict is
+`LOWERABLE_UNVERIFIED` (the program's own verdict stands, the reference column is empty, `check-architecture` says which module and, when the adapter pins one, which file);
+what a registrant can add is a PIN and a fixture.
+
+*The adapter* (`chatglm3`, built in; its refusal deleted). Follows the file AS RECALLED — there is no copy offline. Per layer `input_layernorm` (RMSNorm, LayerNorm when `rmsnorm` is false),
+multi-query attention with a fused `query_key_value` (rows `[q | k | v]`, `multi_query_group_num` key/value groups; per-head `[q_h | k_h | v_h]` without
+`multi_query_attention`) with a bias under `add_qkv_bias` or `add_bias_linear`, a rotary embedding over the FIRST HALF of each head's channels on ADJACENT pairs (`rotary_dim // 2`
+frequencies of base `10000 * rope_ratio`: the existing partial interleaved rotary, factor 0.5), `dense`, `post_attention_layernorm`, a SwiGLU MLP (`dense_h_to_4h` rows `[gate | up]`,
+silu on the gate), a final norm (`post_layer_norm`) and `transformer.output_layer`; the scale is `1/sqrt(kv_channels)` (`apply_query_key_layer_scaling` moves a layer-number factor
+that cancels). No new feature of the model is needed: **ChatGLM3 is Llama-shaped data**; the whole gap was the reference. Refused by name: `apply_residual_connection_post_layernorm`, P-tuning
+prefixes, `quantization_bit`. One numeric difference is left open: the release stores its rotary table in half precision (the checkpoint's dtype); this program's table is exact.
+
+*The pin* (`Reference::RemoteCode { module, pin }`). An adapter may declare `"remote_code_pin": {"<module>": "<sha256 of the modelling file>"}` (lowercase, 64 hex characters, refused
+otherwise): the file its lowering follows. `tools/remote_reference.py CODE_DIR CONFIG.json OUT_DIR` is the registrant's side, offline and in one process: it loads the repository's
+`*.py` through `AutoConfig` / `AutoModelForCausalLM` with `trust_remote_code=True` from the LOCAL directory only, builds a tiny model with the repository's `auto_map` (a model that is not
+tiny is refused on the meta device first), randomises it, rounds it to bfloat16, saves it, reloads it, runs fixed tokens, and writes `config.json`, `model.safetensors`,
+`reference.json` (the corpus layout) and `pin.json` (`sha256` of every file). `--check` verifies a fixture's pin against a code directory. **The pin is declared, not attested**: it says which
+file the registrant's fixture came from, not that the file is the repository's; the verdict stays `LOWERABLE_UNVERIFIED` pinned or not, and `check-architecture` prints
+`remote code (`module`, pinned by its adapter to sha256 ...)` or `(no file pinned)`. The built-in adapter cannot pin (no file to hash); a registrant's own adapter does.
+
+*The corpus entry* (`chatglm3`, tiny: 3 layers, 4 heads, 2 groups of 8). Built by that script from `tools/corpus/remote/chatglm3/` — a RECONSTRUCTION of the repository's `configuration_chatglm.py`
+and `modeling_chatglm.py` written from the documented forward (module and tensor names as the checkpoint's; PyTorch >= 2 path), NOT the repository's files. The harness runs every stage
+that can run — read, lower, admit, bind (every tensor read), float reference against the logits the file gave, integer against float, reference/ref2/exec identity, court — and marks the reference
+stage `reference_unverified` (report: `float_vs_hf.reference_kind`); the entry's level reads **`B (reference unverified)`**. It is Level B in the sense that matters (a registrant who runs the
+flow above on the real file gets the same stages against the real reference) and NOT in the sense that ChatGLM3 as shipped has been confirmed: only a run against the repository's file does that.
+
+Evidence. Tiny model (reconstruction): float `< 1·10^-4` of the logit scale against the file's logits, integer top-1 and KL as the other tiny fixtures, reference, ref2 and exec equal; the
+published-style 6B configuration (28 layers, 32 heads over 2 groups of 128, 13,696 FFN, 65,024 vocabulary) binds every tensor and is admitted.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

@@ -38,7 +38,8 @@ code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Cla
 | FR-35 rotation by -theta | **landed** (`ROPE_REVERSED_V1`) | `nanochat` Level B |
 | FR-16 Kimi delta attention, NoPE latent attention | **landed** (`Mixer::Kda`, `MlaSpec.rope: None`; no primitive) | `kimi_linear` Level B, every stage incl. court; `generic-frontend-v1.md` §9.14 |
 | FR-13 shared attention block (Zamba2) | **landed** (`PreBranch`, `ModelSpec.embed_carry`, `AttnSpec.in_dim`, global shared params, `TENSOR_NAME_ALTERNATIVES_V1`; no primitive) | `zamba2` Level B, every stage incl. court; `generic-frontend-v1.md` §9.15 |
-| FR-03, 04, 05, 06, 08..12, 14, 15, 17, 19..24, 27, 28, 32..34 | open | see each |
+| FR-24 a way to pin a remote-code reference | **landed as policy + tooling** (`Reference::RemoteCode.pin`, adapter `remote_code_pin`, `tools/remote_reference.py`; ChatGLM3 is data, no feature) | `chatglm3` Level `B (reference unverified)`: every stage that can run passes against a RECONSTRUCTED modelling file; the verdict is LOWERABLE_UNVERIFIED; `generic-frontend-v1.md` §9.16 |
+| FR-03, 04, 05, 06, 08..12, 14, 15, 17, 19..23, 27, 28, 32..34 | open | see each |
 
 ## Findings for lane G (from the re-measure on `239179132`)
 

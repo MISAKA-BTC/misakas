@@ -177,7 +177,7 @@ pub fn parse_legacy(v: &Value) -> Result<ArchSpec> {
                     "{arch}: trust_remote_code module `{module}` is not modelled — its forward may differ from any transformers class"
                 )));
             }
-            Reference::RemoteCode { module }
+            Reference::RemoteCode { module, pin: None }
         }
         None => {
             if REMOTE_ONLY.contains(&arch.as_str()) {
