@@ -19,6 +19,9 @@ pub struct PeerProperties {
     /// (`fork_id_refusal_height_v1`), `None` if it never does. A peer kept on a warning below the
     /// disputed height is judged again when the node reaches it.
     pub fork_id_refusal_height: Option<u64>,
+    /// The local DAA score this node stood at when it judged that fork id (the handshake's). A connection judged below a
+    /// gate fence this node has since crossed is judged again (`fork_id_crossing_rejudge_v1`).
+    pub fork_id_judged_at_daa: u64,
 }
 
 #[derive(Debug)]

@@ -146,6 +146,9 @@ pub enum ForkIdMismatch {
     /// The peer's fired set IS a prefix of this build's schedule, but it expects a different fence
     /// next — so the two agree about the past and disagree about the very next rule change.
     NextFenceDiffers { expected: u64, got: u64 },
+    /// The peer's fork id was taken below a gate fence this node has since crossed, and it does not prove the peer carries
+    /// that fence (`fork_id_crossing_rejudge_v1`): the connection is dropped and judged again on a fresh announcement.
+    NotCarriedPastCrossedFence { fence: u64 },
 }
 
 impl std::fmt::Display for ForkIdMismatch {
@@ -158,6 +161,10 @@ impl std::fmt::Display for ForkIdMismatch {
             Self::NextFenceDiffers { expected, got } => {
                 write!(f, "the peer agrees about every fence crossed so far but expects fence {got} next, not {expected}")
             }
+            Self::NotCarriedPastCrossedFence { fence } => write!(
+                f,
+                "the peer's fork id was taken before this node crossed fence {fence} and does not prove it carries it; reconnect to be judged again"
+            ),
         }
     }
 }
@@ -437,6 +444,42 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
         // which is a fork-choice question and not a reason to refuse a peer.
         _ => ForkIdVerdict::Agree,
     }
+}
+
+/// **The highest gate fence at or below `daa_score`** — the last one this node has crossed — or `None`.
+pub fn fork_id_last_crossed_gate_fence_v1(params: &Params, daa_score: u64) -> Option<u64> {
+    fork_id_gate_fences_v1(params).into_iter().filter(|&fence| fence <= daa_score).max()
+}
+
+/// **Whether a peer's advertised fired-fence digest PROVES it carries `fence`**: it is the digest of a prefix of this
+/// build's schedule that includes `fence`. A peer that has not crossed the fence yet cannot prove it, whatever it will do
+/// later — which is why a connection judged below a fence has to be judged again once this node is past it
+/// ([`fork_id_crossing_rejudge_v1`]).
+pub fn fork_id_peer_carries_fence_v1(params: &Params, peer_fired: &[u8], fence: u64) -> bool {
+    let schedule = params.fence_schedule_v1();
+    (1..=schedule.len()).any(|k| {
+        schedule[k - 1] >= fence
+            && schedule[..k].contains(&fence)
+            && fired_fences_digest_v1(params.genesis.hash, &schedule[..k]).as_bytes().as_slice() == peer_fired
+    })
+}
+
+/// **The re-judgement a CROSSED fence owes a connection kept since before it** (the int-11 drill, 2026-10-03).
+///
+/// A handshake is one snapshot. [`fork_id_refusal_height_v1`] re-judges a peer whose snapshot already DISAGREES; it
+/// cannot see a peer whose snapshot AGREES because it was taken below this build's first disputed fence — a
+/// launched peer met below fence `F1` announces `next = F1`, the same as an armed build, and nothing in that
+/// announcement says whether the peer carries the fence after it (the gap `palw_hb_transparency_same_chain_fence` measured).
+/// Such a peer stays connected across the fence: it keeps relaying, disqualifies every block past it and stalls at `H − 1`
+/// without a word on the new side. So once this node's score is at or past a gate fence, a peer whose fork id was taken
+/// at a local score BELOW that fence and does not prove it carries it is refused; it reconnects and is judged on a
+/// fresh announcement (one that carries the fence agrees at once). `true` = refuse. Pure.
+pub fn fork_id_crossing_rejudge_v1(params: &Params, local_daa_score: u64, judged_at_daa: u64, peer_fired: &[u8]) -> Option<u64> {
+    if !fork_id_gate_armed_v1(params) {
+        return None;
+    }
+    let crossed = fork_id_last_crossed_gate_fence_v1(params, local_daa_score)?;
+    (judged_at_daa < crossed && !fork_id_peer_carries_fence_v1(params, peer_fired, crossed)).then_some(crossed)
 }
 
 /// **The lowest local DAA score, from `local_daa_score` on, at which [`evaluate_fork_id_v1`] would

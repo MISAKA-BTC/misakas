@@ -141,3 +141,14 @@ Not done, and the structural fix: a fold should not clone the state (copy-on-wri
 (the validator's behaviour is unchanged), and the template skips a tip whose tentative mergeset names a red. **F7**: the template asks the header stage's own H5 predicate (`daa_window.clock.step_stamp_admits(timestamp)`) and returns
 `ClockStepBeforeItsSlot` before anything is solved or signed; the producer passes such a round over at `trace`. Tests: `the_round_templates_merge_depth_predicate_names_the_stale_tip_the_validator_refuses` (stale side chain: named and refused by the header stage; kosherized: empty and accepted);
 consensus lib `-- round merge_depth bounded` 24/0 (incl. the t12 round-lane e2e); kaspad palw 447/0. The stale tip itself stays in b0's DAG (a round block is a red sidecar nothing needs merged); with F6 it no longer stops production.
+
+## 9. An old node connected across a fence is dropped at the crossing (int-10.7)
+
+The int-11 drill: an old node that stayed connected across a fence kept relaying, disqualified every block past it ("PALW state root") and stalled at H−1; the refusal was only logged on a reconnect.
+Cause: `rejudge_fork_ids` re-judges only a peer whose handshake snapshot already DISAGREED (`fork_id_refusal_height`). A peer met below this build's first disputed fence announces the same `next` as this build, so its snapshot
+agrees, carries no refusal height, and says nothing about the fence after it (the gap `palw_hb_transparency_same_chain_fence` measured).
+**F8**: `PeerProperties.fork_id_judged_at_daa` (the local score at the handshake) and `fork_id_crossing_rejudge_v1`: once this node's score is at or past a gate fence, a peer judged below it whose announcement does not PROVE it
+carries it (`fork_id_peer_carries_fence_v1`: its fired digest is a prefix of this schedule that includes the fence) is refused with the handshake's own line (`Fork-id mismatch … this node has crossed fence F; …`) and a Reject to the peer;
+it reconnects and is judged on a fresh announcement (a carrier agrees at once, the old build is refused at the handshake). The named refusal still wins when both apply. Cost: every connection made before a gate fence is re-made once
+when it is crossed (an honest peer reconnects immediately; a node past the fence proves it and is kept). Test: `a_connection_kept_since_before_a_fence_is_dropped_when_this_node_crosses_it` (two schedules, the t11 build with and without the fence at 2,400);
+p2p-flows lib 132/0, consensus-core `fork_id` 20/0. On the old side nothing can be done: its refusal remains the reconnect.
