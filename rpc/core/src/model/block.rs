@@ -92,6 +92,12 @@ pub struct RpcBlockVerboseData {
     pub merge_set_blues_hashes: Vec<RpcHash>,
     pub merge_set_reds_hashes: Vec<RpcHash>,
     pub is_chain_block: bool,
+    /// **ADR-0165: the block's kind** — `"REAL"` (a non-floor attempt), `"FALLBACK"` (a floor attempt past
+    /// `palw_floor_reserve_v1`), `"LEGACY_FLOOR"` (a floor attempt before it), `"LEGACY_HEARTBEAT"` (algo 8),
+    /// `"EXEC"` (a round block), `""` otherwise. JSON/serde only: the borsh wire is unchanged (an old peer reads
+    /// the same bytes), and a borsh-decoded value is empty.
+    #[serde(default)]
+    pub block_kind: String,
 }
 
 impl Serializer for RpcBlockVerboseData {
@@ -140,6 +146,7 @@ impl Deserializer for RpcBlockVerboseData {
             merge_set_blues_hashes,
             merge_set_reds_hashes,
             is_chain_block,
+            block_kind: String::new(),
         })
     }
 }

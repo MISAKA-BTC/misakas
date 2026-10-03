@@ -723,6 +723,15 @@ pub fn palw_drill_panel_liveness_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_PANEL_LIVENESS_V1)
 }
 
+/// **A drill crosses the Useful Work Transition at a low height** (ADR-0165; `--palw-drill-useful-work-at`)
+/// — ARMS `palw_floor_reserve_v1` and `palw_real_clock_tick_v1` at `at` through their entries' own `set`
+/// (which writes the bundle's mirror) and moves nothing else. `validate_palw_v2` refuses the result unless the
+/// model registry and the anchor clock, single lottery, cursor, floor and lead cap are in force at or below `at`
+/// (all genesis rules on testnet-12).
+pub fn palw_drill_useful_work_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_USEFUL_WORK_V1)
+}
+
 /// **A drill crosses testnet-12's DAA-3,600 flag day at a low height** (`--palw-drill-tir2-at`) —
 /// [`palw_drill_post_launch_fences_at_v1`] for
 /// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: MOVES `palw_tir_fence2` from the release's
@@ -863,6 +872,12 @@ const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_CLASS_SEATING_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
     list: crate::palw_class_seating_fence_v1::PALW_DRILL_CLASS_SEATING_FENCES_V1,
     flag: "--palw-drill-class-seating-at",
+};
+
+/// The Useful Work Transition's two fences (`--palw-drill-useful-work-at`, ADR-0165): a drill-only list.
+const PALW_DRILL_FLAG_DAY_USEFUL_WORK_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_real_share_v1::PALW_DRILL_USEFUL_WORK_FENCES_V1,
+    flag: "--palw-drill-useful-work-at",
 };
 
 /// The held leaf challenge alone (`--palw-drill-held-chunks-at`): a drill-only list.

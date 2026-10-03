@@ -106,5 +106,7 @@ try_from!(item: &protowire::RpcBlockVerboseData, kaspa_rpc_core::RpcBlockVerbose
             .map(|x| RpcHash::from_str(x))
             .collect::<Result<Vec<kaspa_rpc_core::RpcHash>, faster_hex::Error>>()?,
         is_chain_block: item.is_chain_block,
+        // ADR-0165: JSON/serde only; the gRPC proto is unchanged.
+        block_kind: String::new(),
     }
 });

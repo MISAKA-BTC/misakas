@@ -413,6 +413,11 @@ pub struct Args {
     /// its own. Command line only.
     #[serde(skip)]
     pub palw_drill_gen_at: Option<u64>,
+    /// **DRILL ONLY: cross the Useful Work Transition (ADR-0165) at this DAA** — `palw_floor_reserve_v1`
+    /// and `palw_real_clock_tick_v1` are armed together at this height on the drill chain
+    /// (`config::drill::palw_drill_useful_work_at_v1`). Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_useful_work_at: Option<u64>,
     /// **DRILL ONLY: arm the decode rules (`palw_fp_decode_rules`, ADR-0082 D10/D11) at this DAA**
     /// (`config::drill::palw_drill_decode_rules_at_v1`) — the prerequisite FP Job V5 and RFC-0004's
     /// improvement fence name: each needs it in force at or below its own height. Command line only.
@@ -866,6 +871,7 @@ impl Default for Args {
             palw_drill_capped_at: None,
             palw_drill_class_seating_at: None,
             palw_drill_panel_liveness_at: None,
+            palw_drill_useful_work_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
@@ -2119,6 +2125,17 @@ pub fn cli() -> Command {
                 .help(
                     "With --palw-drill-genesis-salt only: arm the decode constraint (palw_fp_decode_constraint, FP job version 6) at this DAA on the drill chain. Nothing else moves. Refused \
                      without the salt, at 0, at a height another fence uses, and unless the network is ConsensusV2.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-useful-work-at")
+                .long("palw-drill-useful-work-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: cross the Useful Work Transition (ADR-0165: palw_floor_reserve_v1 — the \
+                     base floor becomes a reserve — and palw_real_clock_tick_v1 — an attempt carries the slot's clock tick) at this \
+                     DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, and at a height another fence uses.",
                 ),
         )
         .arg(
@@ -3511,6 +3528,7 @@ impl Args {
             palw_vertex_full_refs: arg_match_unwrap_or::<bool>(&m, "palw-vertex-full-refs", defaults.palw_vertex_full_refs),
             palw_drill_class_seating_at: m.get_one::<u64>("palw-drill-class-seating-at").copied(),
             palw_drill_panel_liveness_at: m.get_one::<u64>("palw-drill-panel-liveness-at").copied(),
+            palw_drill_useful_work_at: m.get_one::<u64>("palw-drill-useful-work-at").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
