@@ -479,6 +479,12 @@
     "params": 142,
     "program": "add6798af9edd6ed4b1f8fc55745d8d63552e6eb3aa803439b6792d1134628727565096667bf514f5800280f2b7dba503eb614ab5a006b0bd4eda2040083aaba"
   },
+  "hf/kimi_linear": {
+    "artifact": "b72633bb36a2dc05b0daa5799600c5acf88f6121e53392e169ead35da6f3b9b72b1d7136764f3f434ca5888acb167449d90c33ee56a5185bc6e055083e822832",
+    "nodes": 1390,
+    "params": 284,
+    "program": "62bbc6b469dcc44377b7cf02f1f501d0f1c660f47244c44d113c0f4a4d70a0863935709320ed64ecf0fbb714a13e1ae0f000c864e2a930d34a69601dd84d9058"
+  },
   "hf/lfm2": {
     "artifact": "7aa1e354b9e335daedfe128680ad7707cae8065f50037915ab5b4d958dd34336bb2c82573cd1e176440b3d70b9733b4b9d79e8a67adac54b70af9db28dd1996e",
     "nodes": 581,
@@ -971,6 +977,11 @@
     "nodes": 995,
     "params": 221,
     "program": "0bff738ec86a21fa0c9f2a03b4647d1c540e7e1e1885fb154a276d8ce670cedd24c88a002b1e744c60d4f6db57b2fb6b577f31c8a7f57f67ddff73edc267e6df"
+  },
+  "real/kimi-linear-48b-a3b.json": {
+    "nodes": 1390,
+    "params": 284,
+    "program": "e6153c517312502dcb85c2279df51420fb55916e1630d59e0780bc1e96a3aca54fc1b36f455345bfdec2defbe6cbb850dfb41db1b323627ad2deac23ccbe0ee7"
   },
   "real/lfm2-1.2b.json": {
     "nodes": 571,

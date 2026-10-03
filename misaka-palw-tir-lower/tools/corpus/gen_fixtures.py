@@ -216,11 +216,37 @@ def instantiate(e, cfg):
     return _build(e, cfg)
 
 
+def hub_rename(d, rules):
+    """Rewrite tensor names of a saved checkpoint by `[regex, replacement]` rules (re.sub, in order), keeping dtype and values.
+
+    `save_pretrained` writes the REVERSE of the conversion mapping `transformers` applies when it loads a hub checkpoint, and a blanket
+    reverse rule can name a tensor differently from the hub's own checkpoint (Kimi-Linear: the dense layers' `mlp.*` are saved as
+    `block_sparse_moe.*`, the MoE layers' name; the hub keeps `mlp.*` for the dense layers). A rule here puts the saved name back to the hub's;
+    the model is then RELOADED from the renamed files, so the reference proves `transformers` reads the hub's names.
+    """
+    if not rules:
+        return
+    import re
+    from safetensors.torch import load_file, save_file
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".safetensors"):
+            continue
+        t = load_file(os.path.join(d, fn))
+        out = {}
+        for k, v in t.items():
+            for pat, rep in rules:
+                k = re.sub(pat, rep, k)
+            assert k not in out, f"hub_rename: two tensors named {k}"
+            out[k] = v
+        save_file(out, os.path.join(d, fn), metadata={"format": "pt"})
+
+
 def save_and_reload(e, model, cfg, outdir, cls=None):
     d = os.path.join(outdir, e["id"])
     os.makedirs(d, exist_ok=True)
     model.to(torch.bfloat16)
     model.save_pretrained(d)
+    hub_rename(d, e["options"].get("hub_rename", []))
     gc = os.path.join(d, "generation_config.json")
     if os.path.exists(gc):
         os.remove(gc)

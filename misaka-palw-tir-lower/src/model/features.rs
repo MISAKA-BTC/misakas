@@ -179,6 +179,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MIXER_MLA_V1", Mixer, "multi-head latent attention", Implemented, ["HistAppend", "ReduceMax", "Transpose", "Concat", "Slice"], NoReq, ["fidelity_tiny::deepseek_v2", "fidelity_tiny::deepseek_v3"], "A compressed latent history; the absorbed query reads it."),
     feature!("ATTN_TOKEN_INDEXER_V1", Attention, "DeepSeek sparse attention: the softmax runs over the top-k tokens of a learned token indexer", Implemented, ["Iota", "Compare", "ReduceSum", "ReduceMax", "Select", "Transpose"], NoReq, ["dsa::deepseek_v32_float_matches_hf", "dsa::deepseek_v32_integer_follows_float", "dsa::the_dsa_program_is_the_same_on_all_three_implementations"], "A latent-query indexer (wq_b over the MLA's q-latent, a LayerNorm'd key from the layer input, learned head weights; the first qk_rope_head_dim lanes rotated, half-split for DeepSeek-V3.2 and interleaved for GLM-MoE-DSA) scores every token; the MLA softmax keeps the min(topk, H) best, ties to the lowest index of the window. TopK needs a Fixed axis, so the selection is the exact mask kappa >= tau' of a threshold found by a 16-ary radix search by counting (B/4 reductions over H, one committed lane), then Select before the library softmax. Masked-dense: the exact function, no arithmetic saved. See lower/dsa.rs."),
     feature!("MIXER_GDN_V1", Mixer, "gated delta rule (any key:value head ratio)", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "S ← S·exp(g); S += k (β(v − Sᵀk))ᵀ per value head, the key heads mapped to the value heads by grouping."),
+    feature!("MIXER_KDA_V1", Mixer, "Kimi delta attention: the gated delta rule with a channel-wise (per key channel) forget gate, a low-rank output gate and a sigmoid-gated per-head norm", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "gdn_step_q36 with the decay broadcast [heads, 1, d_k] instead of [heads, 1, 1] (the only change); the decay chain exp(-exp(A_log[h])·softplus(f_b(f_a x) + dt_bias)) runs on nheads·d_k channels (two IntExp and two IntLn each); q, k, v have a depthwise causal convolution each. No primitive."),
+    feature!("MIXER_MLA_NOPE_V1", Mixer, "latent attention with no rotation at all: the rope slice of q and the shared key are raw projections", Implemented, [], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "Kimi-Linear's MLA layers: MIXER_MLA_V1 with its two Rope nodes left out (MlaSpec.rope = None); no primitive."),
     feature!("MIXER_MAMBA_V1", Mixer, "Mamba-1 selective scan", Implemented, ["StateWrite", "IntLn", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba", "fidelity_tiny::falcon_mamba"], "Per-channel, per-state decay."),
     feature!("MIXER_MAMBA2_V1", Mixer, "Mamba-2 state-space duality step", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba2"], "Scalar decay per head, grouped B/C."),
     feature!("MIXER_RWKV4_V1", Mixer, "RWKV-4 time mix", Implemented, ["StateWrite", "Compare", "Select"], NoReq, ["fidelity_tiny::rwkv"], "WKV with the (num, den, max) stabilised state."),
@@ -449,12 +451,19 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
             if let Some(ix) = &m.indexer {
                 u.add("ATTN_TOKEN_INDEXER_V1", lay, format!("{} heads x {}, top {}", ix.heads, ix.head_dim, ix.topk));
             }
-            rope_features(u, &m.rope, m.qk_rope_head_dim, l);
+            match &m.rope {
+                Some(r) => rope_features(u, r, m.qk_rope_head_dim, l),
+                None => u.add("MIXER_MLA_NOPE_V1", lay, "no rotation: the rope slice of q and the shared key are raw projections"),
+            }
             norm_features(u, &m.kv_a_norm, lay);
         }
         Mixer::GatedDeltaNet(g) => {
             u.add("MIXER_GDN_V1", lay, format!("k:v heads {}:{}", g.k_heads, g.v_heads));
             u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", g.conv_kernel));
+        }
+        Mixer::Kda(k) => {
+            u.add("MIXER_KDA_V1", lay, format!("{} heads × {}", k.heads, k.head_dim));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", k.conv_kernel));
         }
         Mixer::Mamba(m) => {
             u.add("MIXER_MAMBA_V1", lay, format!("inner {} state {}", m.inner, m.state));

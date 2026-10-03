@@ -1877,7 +1877,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             b.commit(r);
             one(Val { r, dt: DType::I16, key: ScaleKey { base: Base::Fixed(1.0 / 32768.0), factor: 1.0 }, len: out_len, site })
         }
-        Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale } => {
+        Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale, channel_decay } => {
             let q = operand(lb, node.inputs[0])?;
             let k = operand(lb, node.inputs[1])?;
             let v = operand(lb, node.inputs[2])?;
@@ -1886,7 +1886,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let gi = lb.gdn.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: GDN inputs not matched"))?;
             let a = lb.vals[gi.a as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `a` not lowered"))?;
             let bb = lb.vals[gi.b as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `b` not lowered"))?;
-            let dims = GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale };
+            let dims = GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale, channel: *channel_decay };
             one(lower_gdn(b, cx, lb, &q, &k, &v, &a, &bb, &gi, st, dims, &site, &want)?)
         }
         Op::GatedRmsNorm { eps, groups, gate_first, act } => {
@@ -3838,6 +3838,8 @@ struct GdnDims {
     dv: usize,
     map: crate::spec::HeadMap,
     q_scale: f64,
+    /// The decay is per key channel (`MIXER_KDA_V1`): `nv·dk` values, not `nv`.
+    channel: bool,
 }
 
 /// The gated delta rule, one position (library `gdn_step_q36`), from the HL pieces: q and k as
@@ -3862,7 +3864,9 @@ fn lower_gdn(
     want: &Want,
 ) -> Result<Val> {
     let hl = cx.hl;
-    let GdnDims { nk, nv, dk, dv, map, q_scale } = dims;
+    let GdnDims { nk, nv, dk, dv, map, q_scale, channel } = dims;
+    // The width of the decay chain: one value per head, or one per key channel of each head.
+    let nd = if channel { nv * dk } else { nv };
     let (nk32, nv32, dk32, dv32) = (nk as u32, nv as u32, dk as u32, dv as u32);
     let r = (nv / nk) as u32;
     let unit = ScaleKey { base: Base::Fixed(1.0 / 32768.0), factor: 1.0 };
@@ -3903,9 +3907,9 @@ fn lower_gdn(
         lb,
         &format!("{site}.dt_bias"),
         DType::I32,
-        &[nv],
+        &[nd],
         pl,
-        Arc::new(move |c| Ok(IntTensor::i32(vec![nv], c.f(dtb)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
+        Arc::new(move |c| Ok(IntTensor::i32(vec![nd], c.f(dtb)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
     )?;
     let cp = decl(
         b,
@@ -3913,11 +3917,11 @@ fn lower_gdn(
         lb,
         &format!("{site}.decay_c"),
         DType::I64,
-        &[nv],
+        &[nd],
         pl,
         Arc::new(move |c| {
             Ok(IntTensor::i64(
-                vec![nv],
+                vec![nd],
                 c.f(an)?.data.iter().map(|v| (-(*v as f64) * (1u64 << 24) as f64).round().max(0.0) as i64).collect(),
             ))
         }),

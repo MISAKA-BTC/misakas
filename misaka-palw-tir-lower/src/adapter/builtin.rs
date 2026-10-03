@@ -51,6 +51,7 @@ pack!(
     "bitnet",
     "apertus",
     "lfm2",
+    "kimi-linear",
     "nemotron-h",
     "falcon-h1",
     "bert",
