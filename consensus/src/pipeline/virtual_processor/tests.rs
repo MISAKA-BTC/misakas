@@ -15031,6 +15031,18 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     let none = vp.palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa).expect("the lane is open");
     assert_eq!(none.round_blocks.len(), 3);
     assert!(none.permitted.is_empty(), "no schedule, no permit");
+    // Lane SCAN: the verdict's named reasons are the SAME decision as `permitted`, block for block.
+    let agrees = |v: &super::utxo_validation::PalwRoundVerdictsV1| {
+        assert_eq!(v.judged.len(), v.round_blocks.len(), "every round block is judged once");
+        for (block, judged) in &v.judged {
+            assert_eq!(judged.is_ok(), v.permitted.contains(block), "a named verdict and the permit set never disagree");
+        }
+    };
+    let reason_of = |v: &super::utxo_validation::PalwRoundVerdictsV1, block| {
+        v.judged.iter().find(|(b, _)| *b == block).and_then(|(_, j)| j.as_ref().err().copied())
+    };
+    agrees(&none);
+    assert_eq!(reason_of(&none, e1_hash), Some(kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1::NoSchedule));
 
     let schedule = adr0125_schedule_of(
         0,
@@ -15057,11 +15069,15 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert!(verdicts.permitted.contains(&e1_hash) && verdicts.permitted.contains(&e2_hash), "both even-round permits are granted");
     assert!(!verdicts.permitted.contains(&e3_hash), "a round block paying a stranger is not its bond's");
     assert_eq!(verdicts.uses.len(), 2);
+    agrees(&verdicts);
+    assert_eq!(reason_of(&verdicts, e3_hash), Some(kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1::PayoutMismatch));
     assert!(verdicts.uses.iter().all(|u| u.span == 0 && u.permit_index == 0));
 
     let spent = with_schedule(&[(0, first_round)]);
     let verdicts = vp.palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa).expect("open");
     assert!(!verdicts.permitted.contains(&e1_hash), "a permit in the ledger is not granted again");
+    agrees(&verdicts);
+    assert_eq!(reason_of(&verdicts, e1_hash), Some(kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1::PermitAlreadyUsed));
     assert!(verdicts.permitted.contains(&e2_hash));
 
     // The template's coinbase pays nothing for an unpermitted round block, and the block it becomes

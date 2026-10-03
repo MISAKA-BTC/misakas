@@ -13010,49 +13010,62 @@ impl VirtualStateProcessor {
         let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
         ordered.sort();
         for block in ordered {
-            let permitted = (|| -> Option<PalwExecPermitUseV1> {
-                let header = self.headers_store.get_header(block).ok()?;
-                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).ok()?;
-                let anchor = self.ghostdag_store.get_selected_parent(block).ok()?;
-                let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, span_daa);
+            use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundLineageV1, PalwRoundRefusalV1 as Refusal};
+            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1), Refusal> {
+                let header = self.headers_store.get_header(block).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                let anchor = self.ghostdag_store.get_selected_parent(block).map_err(|_| Refusal::SpanOutsideWindow)?;
+                let span = palw_execution_span_v1(
+                    self.headers_store.get_daa_score(anchor).map_err(|_| Refusal::SpanOutsideWindow)?,
+                    span_daa,
+                );
                 if span > span_now || span + 1 < span_now {
-                    return None;
+                    return Err(Refusal::SpanOutsideWindow);
                 }
                 // §7.3: a permit proven signed twice is granted to no block.
                 if state.round_equivocated(span, envelope.round, envelope.permit_index) {
-                    return None;
+                    return Err(Refusal::PermitEquivocated);
                 }
-                let schedule = state.round_schedule(span)?;
+                let schedule = state.round_schedule(span).ok_or(Refusal::NoSchedule)?;
                 // §7.2: the width of the anchor's span — the width the schedule was drawn at.
-                palw_execution_permit_of_v2(
+                let permit = palw_execution_permit_of_v2(
                     schedule,
                     envelope.round,
                     lane.width_of_span_len(span, span_daa),
                     envelope.permit_index,
                     &envelope.bond,
                     tickets_only,
-                )?;
-                let bond = state.bond(&envelope.bond)?;
+                )
+                .ok_or(Refusal::PermitNotGranted)?;
+                let bond = state.bond(&envelope.bond).ok_or(Refusal::BondNotActiveOrKeyMismatch)?;
                 if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
                     || bond.pubkey != envelope.pubkey
                 {
-                    return None;
+                    return Err(Refusal::BondNotActiveOrKeyMismatch);
                 }
-                let transactions = self.block_transactions_store.get(block).ok()?;
-                let coinbase = self.coinbase_manager.deserialize_coinbase_payload(&transactions.first()?.payload).ok()?;
+                let transactions = self.block_transactions_store.get(block).map_err(|_| Refusal::PayoutMismatch)?;
+                let coinbase = self
+                    .coinbase_manager
+                    .deserialize_coinbase_payload(&transactions.first().ok_or(Refusal::PayoutMismatch)?.payload)
+                    .map_err(|_| Refusal::PayoutMismatch)?;
                 if coinbase.miner_data.script_public_key
                     != kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes())
                 {
-                    return None;
+                    return Err(Refusal::PayoutMismatch);
                 }
                 if state.round_permit_used(span, envelope.round, envelope.permit_index) {
-                    return None;
+                    return Err(Refusal::PermitAlreadyUsed);
                 }
-                Some(PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index })
+                let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
+                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
             })();
-            if let Some(used) = permitted {
-                verdicts.permitted.insert(block);
-                verdicts.uses.push(used);
+            match judged {
+                Ok((used, lineage)) => {
+                    verdicts.permitted.insert(block);
+                    verdicts.uses.push(used);
+                    verdicts.judged.push((block, Ok(lineage)));
+                }
+                Err(refusal) => verdicts.judged.push((block, Err(refusal))),
             }
         }
         verdicts.uses.sort();
