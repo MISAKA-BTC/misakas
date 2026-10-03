@@ -140,9 +140,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_panel_unavailable_expiry = Some(at);
             params.sync_palw_panel_unavailable_expiry();
         }
-        "palw_panel_standby" => {
-            params.palw_panel_standby = Some(at);
-            params.sync_palw_panel_standby();
+        "palw_panel_fast_switch" => {
+            params.palw_panel_fast_switch = Some(at);
+            params.sync_palw_panel_fast_switch();
         }
         "palw_seat_availability" => {
             params.palw_seat_availability = Some(at);

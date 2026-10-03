@@ -493,6 +493,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::CourtHeldVerdict => "court_held_verdict",
                 // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
                 R::AggregateForfeit => "aggregate_forfeit",
+                // Lane PL part C (ADR-0166): an expiry of unavailable verifiers, no producer fault.
+                R::PanelUnavailable => "panel_unavailable",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

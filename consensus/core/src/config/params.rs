@@ -2561,14 +2561,15 @@ pub struct Params {
     /// below it. Mirrored by [`Self::sync_palw_panel_unavailable_expiry`]; dormant on every shipped preset; hashed
     /// Some-only with the `never()` collapse.
     pub palw_panel_unavailable_expiry: Option<ForkActivation>,
-    /// **Panel-liveness lane PL, part D (ADR-0166): standby seats and a fast switch.** Past this fence a panel is drawn
-    /// with [`crate::palw_panel_v2::PALW_PANEL_STANDBY_SEATS_V1`] standby seats beside its primary five — the next
-    /// ranks of the SAME stake race, so the seed rules and the outsider rule are unchanged — and from
-    /// `bound_daa + T_fast` a standby seat's full-replay `Valid` is admissible and counts toward the quorum and the
-    /// coverage. Refused by `validate_palw_v2` off ConsensusV2 and without `palw_panel_unavailable_expiry`,
-    /// `palw_panel_economy` and `palw_rcore_plus` at or below it. Mirrored by [`Self::sync_palw_panel_standby`];
-    /// dormant on every shipped preset; hashed Some-only with the `never()` collapse.
-    pub palw_panel_standby: Option<ForkActivation>,
+    /// **Panel-liveness lane PL, part D (ADR-0166): a fast switch to a fresh panel.** Past this fence the FIRST panel of a
+    /// claim has `T_fast = clamp(W_r(c) / 20, 30, W_r(c) / 2)` DAA from its bind (30 DAA at the shipped 600-DAA window) to
+    /// conclude, not the whole receipt window: a silent panel is replaced by the redraw — a fresh panel, anchored on the
+    /// sweep, which the existing machinery already deals — at the fast deadline, and the redraw gets the whole window
+    /// (`T_hard`), after which the claim ends as part C says. Nobody is charged by the switch (a first timeout never was).
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without `palw_panel_unavailable_expiry` and `palw_rcore_plus` at or
+    /// below it. Mirrored by [`Self::sync_palw_panel_fast_switch`]; dormant on every shipped preset; hashed Some-only with
+    /// the `never()` collapse.
+    pub palw_panel_fast_switch: Option<ForkActivation>,
     /// **Panel-liveness lane PL, part E (ADR-0166): positive liveness in panel ASSIGNMENT only.** Past this fence the
     /// stake-weighted draw weighs an operator by its stake weight times an availability factor (0.5x new or inactive,
     /// 1.0x normal, 1.2x long high availability) derived from on-chain SUCCESS only — credited receipts filed before
@@ -4000,7 +4001,7 @@ impl Params {
         self.validate_palw_capacity_stage2_v1()?;
         self.validate_palw_capacity_network_verify_v1()?;
         self.validate_palw_panel_unavailable_expiry_v1()?;
-        self.validate_palw_panel_standby_v1()?;
+        self.validate_palw_panel_fast_switch_v1()?;
         self.validate_palw_seat_availability_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
@@ -6103,8 +6104,8 @@ impl Params {
         if self.palw_panel_unavailable_expiry == Some(ForkActivation::never()) {
             self.palw_panel_unavailable_expiry = None;
         }
-        if self.palw_panel_standby == Some(ForkActivation::never()) {
-            self.palw_panel_standby = None;
+        if self.palw_panel_fast_switch == Some(ForkActivation::never()) {
+            self.palw_panel_fast_switch = None;
         }
         if self.palw_seat_availability == Some(ForkActivation::never()) {
             self.palw_seat_availability = None;
@@ -8338,46 +8339,46 @@ impl Params {
         Ok(())
     }
 
-    /// **The part-D fence** ([`Self::palw_panel_standby`]), resolved like F-N's verification term.
-    pub fn palw_panel_standby_fence(&self) -> Option<ForkActivation> {
-        match (&self.palw_consensus_mode, self.palw_panel_standby) {
+    /// **The part-D fence** ([`Self::palw_panel_fast_switch`]), resolved like F-N's verification term.
+    pub fn palw_panel_fast_switch_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_panel_fast_switch) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
             _ => None,
         }
     }
 
-    /// **The fold's mirror of [`Self::palw_panel_standby`]**: its height on the `#[borsh(skip)]` copy of `PalwStateParamsV2`. Written
+    /// **The fold's mirror of [`Self::palw_panel_fast_switch`]**: its height on the `#[borsh(skip)]` copy of `PalwStateParamsV2`. Written
     /// here and nowhere else; call it wherever the fence is set on an assembled ruleset.
-    pub fn sync_palw_panel_standby(&mut self) {
-        let at = self.palw_panel_standby.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+    pub fn sync_palw_panel_fast_switch(&mut self) {
+        let at = self.palw_panel_fast_switch.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_panel_standby_mirror(at);
+            bundle.state = bundle.state.clone().with_panel_fast_switch_mirror(at);
         }
     }
 
-    /// **What [`Self::palw_panel_standby`] refuses** (lane PL). Called by `validate_palw_v2`, public so a test can name each refusal:
+    /// **What [`Self::palw_panel_fast_switch`] refuses** (lane PL). Called by `validate_palw_v2`, public so a test can name each refusal:
     /// armed off ConsensusV2; armed without a prerequisite at or below it; the mirror unequal. Below the fence it checks only
     /// that the bundle's mirror is empty.
-    pub fn validate_palw_panel_standby_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+    pub fn validate_palw_panel_fast_switch_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::PalwModeV2Error::Invalid;
-        let fence = self.palw_panel_standby.filter(|fence| *fence != ForkActivation::never());
+        let fence = self.palw_panel_fast_switch.filter(|fence| *fence != ForkActivation::never());
         let bundle = match &self.palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
             _ => None,
         };
         let Some(fence) = fence else {
             if let Some(bundle) = bundle
-                && bundle.state.panel_standby_from_daa().is_some()
+                && bundle.state.panel_fast_switch_from_daa().is_some()
             {
                 return Err(Invalid(
-                    "the V2 bundle mirrors palw_panel_standby without the fence armed: mirror it with \
-                     Params::sync_palw_panel_standby after the bundle is assembled",
+                    "the V2 bundle mirrors palw_panel_fast_switch without the fence armed: mirror it with \
+                     Params::sync_palw_panel_fast_switch after the bundle is assembled",
                 ));
             }
             return Ok(());
         };
         let Some(bundle) = bundle else {
-            return Err(Invalid("palw_panel_standby is armed off ConsensusV2: the fold that reads it is not running"));
+            return Err(Invalid("palw_panel_fast_switch is armed off ConsensusV2: the fold that reads it is not running"));
         };
         let h = fence.daa_score();
         let palw_panel_unavailable_expiry_below = self
@@ -8386,16 +8387,7 @@ impl Params {
             .is_some_and(|f| f.daa_score() <= h);
         if !palw_panel_unavailable_expiry_below {
             return Err(Invalid(
-                "palw_panel_standby is armed without palw_panel_unavailable_expiry at or below it: a standby panel's hard window must end in the uncharged expiry"
-            ));
-        }
-        let palw_panel_economy_below = self
-            .palw_panel_economy
-            .filter(|f| *f != ForkActivation::never())
-            .is_some_and(|f| f.daa_score() <= h);
-        if !palw_panel_economy_below {
-            return Err(Invalid(
-                "palw_panel_standby is armed without palw_panel_economy at or below it: standby seats go on duty through the duty row"
+                "palw_panel_fast_switch is armed without palw_panel_unavailable_expiry at or below it: the redraw's hard window must end in the uncharged expiry"
             ));
         }
         let palw_rcore_plus_below = self
@@ -8404,13 +8396,13 @@ impl Params {
             .is_some_and(|f| f.daa_score() <= h);
         if !palw_rcore_plus_below {
             return Err(Invalid(
-                "palw_panel_standby is armed without palw_rcore_plus at or below it: the standby seats are the next ranks of the stake-weighted race"
+                "palw_panel_fast_switch is armed without palw_rcore_plus at or below it: the fast switch rides the redraw of the stake-weighted draw (SW-8)"
             ));
         }
-        if bundle.state.panel_standby_from_daa() != Some(h) {
+        if bundle.state.panel_fast_switch_from_daa() != Some(h) {
             return Err(Invalid(
-                "palw_panel_standby disagrees with the V2 bundle's mirror: mirror it with \
-                 Params::sync_palw_panel_standby after the bundle is assembled",
+                "palw_panel_fast_switch disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_panel_fast_switch after the bundle is assembled",
             ));
         }
         Ok(())
@@ -9630,7 +9622,7 @@ impl Params {
             palw_capacity_network_room,
             palw_capacity_network_verify,
             palw_panel_unavailable_expiry,
-            palw_panel_standby,
+            palw_panel_fast_switch,
             palw_seat_availability,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -9872,7 +9864,7 @@ impl Params {
             ("palw_capacity_network_room", *palw_capacity_network_room),
             ("palw_capacity_network_verify", *palw_capacity_network_verify),
             ("palw_panel_unavailable_expiry", *palw_panel_unavailable_expiry),
-            ("palw_panel_standby", *palw_panel_standby),
+            ("palw_panel_fast_switch", *palw_panel_fast_switch),
             ("palw_seat_availability", *palw_seat_availability),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
@@ -10462,8 +10454,8 @@ impl Params {
             h.write(b"palw_panel_unavailable_expiry");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = self.palw_panel_standby {
-            h.write(b"palw_panel_standby");
+        if let Some(activation) = self.palw_panel_fast_switch {
+            h.write(b"palw_panel_fast_switch");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = self.palw_seat_availability {
@@ -10664,7 +10656,7 @@ impl Params {
             palw_capacity_network_room,
             palw_capacity_network_verify,
             palw_panel_unavailable_expiry,
-            palw_panel_standby,
+            palw_panel_fast_switch,
             palw_seat_availability,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -11258,7 +11250,7 @@ impl Params {
         if let Some(activation) = palw_panel_unavailable_expiry.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_panel_standby.as_mut() {
+        if let Some(activation) = palw_panel_fast_switch.as_mut() {
             fork(activation, visit);
         }
         if let Some(activation) = palw_seat_availability.as_mut() {
@@ -11817,7 +11809,7 @@ impl Params {
             palw_capacity_network_room,
             palw_capacity_network_verify,
             palw_panel_unavailable_expiry,
-            palw_panel_standby,
+            palw_panel_fast_switch,
             palw_seat_availability,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -12479,8 +12471,8 @@ impl Params {
             h.write(b"palw_panel_unavailable_expiry");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = palw_panel_standby {
-            h.write(b"palw_panel_standby");
+        if let Some(activation) = palw_panel_fast_switch {
+            h.write(b"palw_panel_fast_switch");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_seat_availability {
@@ -13242,7 +13234,7 @@ impl Params {
             palw_capacity_network_room: self.palw_capacity_network_room,
             palw_capacity_network_verify: self.palw_capacity_network_verify,
             palw_panel_unavailable_expiry: self.palw_panel_unavailable_expiry,
-            palw_panel_standby: self.palw_panel_standby,
+            palw_panel_fast_switch: self.palw_panel_fast_switch,
             palw_seat_availability: self.palw_seat_availability,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
@@ -14308,7 +14300,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_capacity_network_room: None,
     palw_capacity_network_verify: None,
     palw_panel_unavailable_expiry: None,
-    palw_panel_standby: None,
+    palw_panel_fast_switch: None,
     palw_seat_availability: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -14570,7 +14562,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_capacity_network_room: None,
     palw_capacity_network_verify: None,
     palw_panel_unavailable_expiry: None,
-    palw_panel_standby: None,
+    palw_panel_fast_switch: None,
     palw_seat_availability: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -14814,7 +14806,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_capacity_network_room: None,
     palw_capacity_network_verify: None,
     palw_panel_unavailable_expiry: None,
-    palw_panel_standby: None,
+    palw_panel_fast_switch: None,
     palw_seat_availability: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -20157,14 +20149,14 @@ pub const PALW_T12_PANEL_UNAVAILABLE_EXPIRY_V1: PalwPostLaunchFenceV1 = PalwPost
     },
 };
 
-/// **Lane PL part D as a flag-day entry** (`palw_panel_standby`, ADR-0166). In no list and at no height on any preset — the
+/// **Lane PL part D as a flag-day entry** (`palw_panel_fast_switch`, ADR-0166). In no list and at no height on any preset — the
 /// flag day that arms it names its height; a drill moves the whole panel-liveness list with
 /// `--palw-drill-panel-liveness-at`.
-pub const PALW_T12_PANEL_STANDBY_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
-    name: "palw_panel_standby",
+pub const PALW_T12_PANEL_FAST_SWITCH_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_panel_fast_switch",
     set: |params, at| {
-        params.palw_panel_standby = at;
-        params.sync_palw_panel_standby();
+        params.palw_panel_fast_switch = at;
+        params.sync_palw_panel_fast_switch();
     },
 };
 
@@ -20182,7 +20174,7 @@ pub const PALW_T12_SEAT_AVAILABILITY_V1: PalwPostLaunchFenceV1 = PalwPostLaunchF
 /// **Lane PL's flag-day list (ADR-0166): parts C, D and E in the order their prerequisites need.** Dormant on every preset: the
 /// flag day that arms it (lane INT's DAA-5,300 list) names its height; a drill's `--palw-drill-panel-liveness-at` moves it.
 pub const PALW_T12_PANEL_LIVENESS_FENCES_V1: &[PalwPostLaunchFenceV1] =
-    &[PALW_T12_PANEL_UNAVAILABLE_EXPIRY_V1, PALW_T12_PANEL_STANDBY_V1, PALW_T12_SEAT_AVAILABILITY_V1];
+    &[PALW_T12_PANEL_UNAVAILABLE_EXPIRY_V1, PALW_T12_PANEL_FAST_SWITCH_V1, PALW_T12_SEAT_AVAILABILITY_V1];
 
 /// **ADR-0160 stage 3: the ready ρ = 25 variant — F-L's second step** (`…_step_2`), at its own flag day's
 /// height above the ρ = 10 flag day's. Its own fence value, never dynamic: the fork id names the step's
@@ -22118,7 +22110,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_capacity_network_room: None,
     palw_capacity_network_verify: None,
     palw_panel_unavailable_expiry: None,
-    palw_panel_standby: None,
+    palw_panel_fast_switch: None,
     palw_seat_availability: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080

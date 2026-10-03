@@ -663,7 +663,7 @@ pub fn palw_drill_held_close_chunks_at_v1(
 }
 
 /// **A drill arms lane PL's panel-liveness list at a low height** (ADR-0166; `--palw-drill-panel-liveness-at`):
-/// `palw_panel_unavailable_expiry` (C), `palw_panel_standby` (D) and `palw_seat_availability` (E) at `at`, through each
+/// `palw_panel_unavailable_expiry` (C), `palw_panel_fast_switch` (D) and `palw_seat_availability` (E) at `at`, through each
 /// entry's own `set` (mirrors included), nothing else moving. All three are dormant on every ruleset, so the move ARMS them;
 /// `validate_palw_v2` refuses the result unless their prerequisites (`palw_audit_2026_09_23`, `palw_panel_economy`,
 /// `palw_rcore_plus`) are in force at or below `at`. Every refusal of the post-launch moves applies, named for this flag.

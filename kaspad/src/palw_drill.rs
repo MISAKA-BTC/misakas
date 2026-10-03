@@ -87,7 +87,7 @@ pub struct PalwDrillExtraFencesV1 {
     pub fp_v5_at: Option<u64>,
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
-    /// Lane PL's panel-liveness list (ADR-0166; `palw_panel_unavailable_expiry`, `palw_panel_standby`, `palw_seat_availability`).
+    /// Lane PL's panel-liveness list (ADR-0166; `palw_panel_unavailable_expiry`, `palw_panel_fast_switch`, `palw_seat_availability`).
     pub panel_liveness_at: Option<u64>,
     pub improve_at: Option<u64>,
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the

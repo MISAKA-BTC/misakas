@@ -355,6 +355,8 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::CourtHeldVerdict => "court_held_verdict",
         // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
         PalwVoidReasonV2::AggregateForfeit => "aggregate_forfeit",
+        // Lane PL part C (ADR-0166): an expiry of unavailable verifiers, no producer fault.
+        PalwVoidReasonV2::PanelUnavailable => "panel_unavailable",
     }
 }
 

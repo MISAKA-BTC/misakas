@@ -175,12 +175,20 @@ pub struct PalwPanelStakeDrawV1 {
     pub weight_cap_msk: u64,
     /// SW-10's floor, in permille of the base weight ([`PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1`]).
     pub eligible_floor_permille: u16,
+    /// **Lane PL part E (ADR-0166): the DAA the class seats' availability factor is read at** — `Some(anchor_daa)` where
+    /// `Params::palw_seat_availability` is in force at the anchor, `None` everywhere else (the draw before it, byte for byte).
+    /// Only the class seats' RACE weight is scaled by it ([`palw_panel_stake_entries_availability_v1`]); SW-10's floor, the
+    /// outsider's race and every security weight stay stake-only.
+    pub availability_at: Option<u64>,
 }
 
 impl PalwPanelStakeDrawV1 {
     /// The terms ADR-0152 v3.1 fixes: the 1,000,000 MSK cap and the 875‰ floor.
-    pub const V1: Self =
-        Self { weight_cap_msk: PALW_DRAW_WEIGHT_CAP_MSK_V1, eligible_floor_permille: PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1 };
+    pub const V1: Self = Self {
+        weight_cap_msk: PALW_DRAW_WEIGHT_CAP_MSK_V1,
+        eligible_floor_permille: PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1,
+        availability_at: None,
+    };
 }
 
 /// **What a seat must be able to lock to be drawn at all**, resolved by the processor for ONE claim
@@ -1385,7 +1393,7 @@ pub fn derive_panel_v2_with_policy(
             params.seat_count,
         )?;
         let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
-        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, executor_weight, &stake, outsider_floor)?
+        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, executor_weight, &stake, outsider_floor, Some(state))?
     } else if policy.economy.is_some() {
         palw_panel_operator_lottery_of_v1(needed, claim_id, anchor_block, &eligible)?
     } else {
@@ -1937,6 +1945,29 @@ pub fn palw_panel_stake_entries_v1(
     palw_panel_stake_entries_under_v1(claim_id, anchor_block, eligible, palw_panel_stake_ticket_v1, stake)
 }
 
+/// **Lane PL part E (ADR-0166): the class seats' race with the availability factor.** [`palw_panel_stake_entries_v1`] and, where
+/// `stake.availability_at` is `Some(now)` and a `state` is given, each entry's weight scaled by its candidate bond's factor
+/// ([`crate::palw_seat_availability_v1`]: 0.5x new or inactive, 1.0x normal, 1.2x long high availability; integer permille)
+/// and the race re-sorted. The factor reads rooted state only (the bond's availability row at the draw's state) and `now`,
+/// so every node sorts one population into one sequence; with `availability_at: None` this IS `palw_panel_stake_entries_v1`.
+pub fn palw_panel_stake_entries_availability_v1(
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    stake: &PalwPanelStakeDrawV1,
+    state: Option<&PalwChainStateV2>,
+) -> Vec<PalwPanelStakeEntryV1> {
+    let mut entries = palw_panel_stake_entries_v1(claim_id, anchor_block, eligible, stake);
+    if let (Some(now), Some(state)) = (stake.availability_at, state) {
+        for entry in entries.iter_mut() {
+            let factor = crate::palw_seat_availability_v1::palw_seat_availability_factor_v1(state.seat_availability_of_v1(&entry.bond), now);
+            entry.weight_msk = crate::palw_seat_availability_v1::palw_seat_availability_scale_weight_v1(entry.weight_msk, factor);
+        }
+        entries.sort_by(|a, b| a.key_cmp(b));
+    }
+    entries
+}
+
 /// **ADR-0152 SW-10: a population's weight** — the sum, over its operators, of SW-2's capped
 /// weights (the same `W` the race keys on, so the floor and the race cannot weigh one operator
 /// two ways). Operators are counted once however many bonds they hold on the list.
@@ -1991,7 +2022,7 @@ pub fn palw_panel_stake_race_of_v1(
     base: &[(&PalwBondKeyV2, &PalwBondStateV2)],
     stake: &PalwPanelStakeDrawV1,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
-    palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, eligible, base, 0, stake, None)
+    palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, eligible, base, 0, stake, None, None)
 }
 
 /// [`palw_panel_stake_race_of_v1`] with an outsider's floor `(eligible, base)` checked between the
@@ -2009,8 +2040,9 @@ fn palw_panel_stake_race_with_v1(
     executor_weight: u128,
     stake: &PalwPanelStakeDrawV1,
     outsider_floor: Option<(u128, u128)>,
+    availability: Option<&PalwChainStateV2>,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
-    let entries = palw_panel_stake_entries_v1(claim_id, anchor_block, eligible, stake);
+    let entries = palw_panel_stake_entries_availability_v1(claim_id, anchor_block, eligible, stake, availability);
     if entries.len() < needed as usize {
         return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available: entries.len() as u16 });
     }
@@ -7376,6 +7408,46 @@ mod tests {
             assert_ne!(palw_panel_operator_ticket_v1(anchor, &claim, &operator), ticket, "and the lottery's is not reused");
         }
 
+        // ---- lane PL part E: the availability factor scales the RACE weight and nothing else -----------------
+
+        /// **A seat with zero successful receipts is drawn at 0.5x weight; a long high-availability seat at 1.2x; the entries
+        /// stay a total order.** Dormant (`availability_at: None`) the entries are today's, byte for byte.
+        #[test]
+        fn pl_e_a_seat_with_no_successes_is_drawn_at_half_weight() {
+            use crate::palw_seat_availability_v1::*;
+            let (mut state, claim_id) = sw_state(&genesis_and_small(1), &[]);
+            let (eligible, _) = populations(&state, &claim_id);
+            let at = anchor(7);
+            let plain = palw_panel_stake_entries_v1(&claim_id, at, &eligible, &PalwPanelStakeDrawV1::V1);
+            let dormant = palw_panel_stake_entries_availability_v1(&claim_id, at, &eligible, &PalwPanelStakeDrawV1::V1, Some(&state));
+            assert_eq!(plain, dormant, "dormant: byte for byte");
+            let now = 3 * PALW_AVAIL_EPOCH_DAA_V1 * PALW_AVAIL_WINDOW_EPOCHS_V1;
+            let boosted = plain[0].bond;
+            let normal = plain[1].bond;
+            let mut high = PalwSeatAvailabilityV1 { first_credit_daa: Some(0), epochs: vec![] };
+            for i in 0..30u64 {
+                high.note_assigned(now - 100 + i);
+                high.note_credited(now - 100 + i);
+            }
+            let mut ok = PalwSeatAvailabilityV1::default();
+            for i in 0..3u64 {
+                ok.note_credited(now - 100 + i);
+            }
+            state.set_seat_availability_row_for_tests(boosted, high);
+            state.set_seat_availability_row_for_tests(normal, ok);
+            let (eligible, _) = populations(&state, &claim_id);
+            let armed = PalwPanelStakeDrawV1 { availability_at: Some(now), ..PalwPanelStakeDrawV1::V1 };
+            let entries = palw_panel_stake_entries_availability_v1(&claim_id, at, &eligible, &armed, Some(&state));
+            let weight = |bond: PalwBondKeyV2, list: &[PalwPanelStakeEntryV1]| list.iter().find(|e| e.bond == bond).unwrap().weight_msk;
+            assert_eq!(weight(boosted, &entries), palw_seat_availability_scale_weight_v1(weight(boosted, &plain), 1_200));
+            assert_eq!(weight(normal, &entries), weight(normal, &plain), "1.0x");
+            let nobody = plain.iter().map(|e| e.bond).find(|b| *b != boosted && *b != normal).unwrap();
+            assert_eq!(weight(nobody, &entries), weight(nobody, &plain) / 2, "zero successful receipts: 0.5x");
+            assert!(entries.windows(2).all(|w| w[0].key_cmp(&w[1]) != std::cmp::Ordering::Greater), "still sorted by key");
+            // Deterministic: the same inputs, the same entries.
+            assert_eq!(entries, palw_panel_stake_entries_availability_v1(&claim_id, at, &eligible, &armed, Some(&state)));
+        }
+
         // ---- T86: the law ---------------------------------------------------------------------------
 
         /// **T86 (SW-3, SW-6): the draw is successive sampling.** Eight genesis seats and three
@@ -8136,11 +8208,11 @@ mod tests {
             let (eligible, base) = populations(&plain, &plain_claim);
             let stake = PalwPanelStakeDrawV1::V1;
             assert_eq!(
-                palw_panel_stake_race_with_v1(9, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
+                palw_panel_stake_race_with_v1(9, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1)), None),
                 Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 9, available: 8 })
             );
             assert_eq!(
-                palw_panel_stake_race_with_v1(5, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
+                palw_panel_stake_race_with_v1(5, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1)), None),
                 Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 0, base: 1 })
             );
         }

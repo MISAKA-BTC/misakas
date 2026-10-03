@@ -1123,6 +1123,9 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 // at every mutation), and what actually was a network constant — the base class's identity, the
 // retarget clamp, the budget tolerance — lives directly on [`PalwStateParamsV2`].
 
+/// **Lane PL part D (ADR-0166): the least `T_fast`**, in DAA — 5x the healthy floor quorum's 6 DAA (measured 2-6 DAA on 10-02).
+pub const PALW_PANEL_FAST_SWITCH_MIN_DAA_V1: u64 = 30;
+
 /// The state machine's network constants. Constructed only through [`PalwStateParamsV2::new`],
 /// which refuses out-of-range values — there is no `Default`, because a defaulted consensus
 /// parameter is a flipped fence wearing a convenience API.
@@ -1495,10 +1498,10 @@ pub struct PalwStateParamsV2 {
     /// shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
     panel_unavailable_expiry_from_daa: Option<u64>,
-    /// **Lane PL part D: `Params::palw_panel_standby`'s height**, mirrored by `Params::sync_palw_panel_standby`. `None` on every
+    /// **Lane PL part D: `Params::palw_panel_fast_switch`'s height**, mirrored by `Params::sync_palw_panel_fast_switch`. `None` on every
     /// shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
-    panel_standby_from_daa: Option<u64>,
+    panel_fast_switch_from_daa: Option<u64>,
     /// **Lane PL part E: `Params::palw_seat_availability`'s height**, mirrored by `Params::sync_palw_seat_availability`. `None` on every
     /// shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
@@ -1827,7 +1830,7 @@ impl PalwStateParamsV2 {
             capacity_network_anchor_delay: 0,
             capacity_network_verify_from_daa: None,
             panel_unavailable_expiry_from_daa: None,
-            panel_standby_from_daa: None,
+            panel_fast_switch_from_daa: None,
             seat_availability_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
@@ -2825,20 +2828,40 @@ impl PalwStateParamsV2 {
         self.panel_unavailable_expiry_from_daa.is_some_and(|from| daa_score >= from)
     }
 
-    /// **Lane PL part D: the mirror's setter** (`Params::palw_panel_standby`).
-    pub fn with_panel_standby_mirror(mut self, from_daa: Option<u64>) -> Self {
-        self.panel_standby_from_daa = from_daa;
+    /// **Lane PL part D: the mirror's setter** (`Params::palw_panel_fast_switch`).
+    pub fn with_panel_fast_switch_mirror(mut self, from_daa: Option<u64>) -> Self {
+        self.panel_fast_switch_from_daa = from_daa;
         self
     }
 
-    /// Lane PL part D: `Params::palw_panel_standby`'s height, if armed (the mirror).
-    pub fn panel_standby_from_daa(&self) -> Option<u64> {
-        self.panel_standby_from_daa
+    /// Lane PL part D: `Params::palw_panel_fast_switch`'s height, if armed (the mirror).
+    pub fn panel_fast_switch_from_daa(&self) -> Option<u64> {
+        self.panel_fast_switch_from_daa
     }
 
-    /// **Lane PL part D: is `Params::palw_panel_standby` in force at `daa_score`?** `false` on every shipped preset.
-    pub fn panel_standby_active_at(&self, daa_score: u64) -> bool {
-        self.panel_standby_from_daa.is_some_and(|from| daa_score >= from)
+    /// **Lane PL part D: is `Params::palw_panel_fast_switch` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn panel_fast_switch_active_at(&self, daa_score: u64) -> bool {
+        self.panel_fast_switch_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane PL part D: `T_fast`, the first panel's fast window** for a receipt window `window` (`W_r(c)`): `W_r / 20`, at
+    /// least 30 DAA, at most half of `W_r` — 30 DAA at the shipped 600-DAA window, ~700 at the 2M class's 13,995. Healthy
+    /// panels conclude in 2–6 DAA at the floor (the 10-02 measurement), so `T_fast` is 5x that at the floor and scales with the
+    /// class's own verification window above it.
+    pub fn panel_fast_switch_window_v1(window: u64) -> u64 {
+        (window / 20).max(PALW_PANEL_FAST_SWITCH_MIN_DAA_V1).min(window.div_ceil(2)).max(1)
+    }
+
+    /// **Lane PL part D: how long after its bind the sweep waits on a `PanelBound` claim** — `window` (`W_r(c)`), except that a
+    /// claim still holding its one redraw (`rebound_daa == None`) bound past `palw_panel_fast_switch` waits
+    /// [`Self::panel_fast_switch_window_v1`]. The redraw's panel gets the whole window (`T_hard`). The one spelling the arm
+    /// sites, DL-1 and the load check read, so the index cannot disagree with itself.
+    pub fn panel_bound_sweep_window_v1(&self, claim: &PalwClaimStateV2, bound_daa: u64, window: u64) -> u64 {
+        if claim.rebound_daa.is_none() && self.panel_fast_switch_active_at(bound_daa) {
+            Self::panel_fast_switch_window_v1(window)
+        } else {
+            window
+        }
     }
 
     /// **Lane PL part E: the mirror's setter** (`Params::palw_seat_availability`).
@@ -4806,11 +4829,15 @@ pub fn palw_rcore_deadline_v1(
         PalwClaimPhaseV2::Provisional => Some(palw_provisional_bind_deadline_v1(state, params, claim_id, claim)?),
         PalwClaimPhaseV2::PanelBound { bound_daa } => Some(
             bound_daa
-                .checked_add(params.receipt_window_for_claim_v1(
-                    state,
-                    &claim.class_id,
-                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                .checked_add(params.panel_bound_sweep_window_v1(
+                    claim,
                     bound_daa,
+                    params.receipt_window_for_claim_v1(
+                        state,
+                        &claim.class_id,
+                        crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                        bound_daa,
+                    ),
                 ))
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
         ),
@@ -5461,6 +5488,15 @@ pub enum PalwVoidReasonV2 {
     /// names no void of this reason, so no `Valid` signer is convicted by it. Borsh discriminant 9,
     /// appended; written only past `Params::palw_capacity_aggregate_liability`.
     AggregateForfeit,
+    /// **Lane PL part C (ADR-0166): the claim expired because its verifiers were unavailable — NOT because its producer
+    /// did anything wrong.** Written only past `Params::palw_panel_unavailable_expiry`, in the place the second
+    /// `ReceiptTimeout` (and an S2 licence a second panel did not back by replay, `NotReplayBacked`) charged the producer:
+    /// two independently drawn panels failed to conclude, which the chain cannot tell from a Sybil's silence or an honest
+    /// outage (ADR-0064: silence is not observable). The claim ends with no reward, its reservation and bond lock return
+    /// at once (no E-4 obligation hold: nobody abandoned anything), nothing is slashed, no strike is written, the seats are
+    /// paid nothing and the fee is not refunded. A producer is slashed only on a proven producer fault — a court loss, an
+    /// invalid commitment, an unanswered data-availability demand. Borsh discriminant 10, appended.
+    PanelUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -10361,6 +10397,10 @@ pub struct PalwChainStateV2 {
     /// release's retention bound; a class is never removed, so a row never outlives its class. Enters the root
     /// and the carriage (tail `0xE0`) only once written, which nothing below the fence can do.
     class_court_windows: BTreeMap<Hash64, u64>,
+    /// **Lane PL part E (ADR-0166): each bond's availability row** — assignments and credited receipts over a rolling window,
+    /// read only by the stake-weighted draw's weight past `Params::palw_seat_availability`. Enters the root and the carriage
+    /// (tail `0xE6`) only once written, which nothing below the fence can do.
+    seat_availability: BTreeMap<PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -10858,6 +10898,7 @@ impl PalwChainStateV2 {
             held_leaf_demands: BTreeMap::new(),
             class_step_ladders: BTreeMap::new(),
             class_court_windows: BTreeMap::new(),
+            seat_availability: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -12054,6 +12095,17 @@ impl PalwChainStateV2 {
         self.class_court_windows.get(class_id).copied()
     }
 
+    /// Lane PL part E (tests): install an availability row directly.
+    #[cfg(test)]
+    pub(crate) fn set_seat_availability_row_for_tests(&mut self, bond: PalwBondKeyV2, row: crate::palw_seat_availability_v1::PalwSeatAvailabilityV1) {
+        self.seat_availability.insert(bond, row);
+    }
+
+    /// Lane PL part E: a bond's availability row, if it has one.
+    pub fn seat_availability_of_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_seat_availability_v1::PalwSeatAvailabilityV1> {
+        self.seat_availability.get(bond)
+    }
+
     /// The registered class's finite dispute backstop, or the network default.
     pub fn class_court_window_v1(&self, class_id: &Hash64, network_window: u64) -> u64 {
         self.class_model_court_window_v1(class_id).unwrap_or(network_window)
@@ -13049,6 +13101,9 @@ impl PalwChainStateV2 {
         }
         if !self.class_court_windows.is_empty() {
             state.update(collection_root(b"class_court_windows", &self.class_court_windows).as_byte_slice());
+        }
+        if !self.seat_availability.is_empty() {
+            state.update(collection_root(b"seat_availability", &self.seat_availability).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
@@ -14213,11 +14268,15 @@ impl PalwChainStateV2 {
                 PalwClaimPhaseV2::PanelBound { bound_daa } => {
                     expected.insert((
                         bound_daa
-                            .checked_add(params.receipt_window_for_claim_v1(
-                                self,
-                                &claim.class_id,
-                                crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                            .checked_add(params.panel_bound_sweep_window_v1(
+                                claim,
                                 bound_daa,
+                                params.receipt_window_for_claim_v1(
+                                    self,
+                                    &claim.class_id,
+                                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                                    bound_daa,
+                                ),
                             ))
                             .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
                         *id,
@@ -15039,6 +15098,14 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<u64>,
         new: Option<u64>,
+    },
+    /// A bond's availability row was written or removed (lane PL part E, ADR-0166; **delta number 105**: declared last on this
+    /// branch, it sits at 105 where the integration places it). `palw_seat_availability` is armed on no network, so no stored
+    /// delta carries this variant.
+    SeatAvailability {
+        key: PalwBondKeyV2,
+        old: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
+        new: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
     },
 }
 
@@ -18649,6 +18716,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassCourtWindow { key, old, new });
+        }
+    }
+
+    fn write_seat_availability(&mut self, key: PalwBondKeyV2, new: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>) {
+        let old = match new.clone() {
+            Some(row) => self.state.seat_availability.insert(key, row),
+            None => self.state.seat_availability.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::SeatAvailability { key, old, new });
         }
     }
 
@@ -24355,6 +24432,14 @@ impl<'a> TransitionBuilder<'a> {
             self.write_exposure(seat.bond, Some(next));
         }
         self.write_panel_duties(claim_id, Some(PalwPanelDutyRowV1 { seats: on_duty, seat_exposure }));
+        // Lane PL part E (ADR-0166): each seat named on a bound panel is one assignment in its availability window.
+        if self.params.seat_availability_active_at(now_daa) {
+            for bond in &reserved {
+                let mut row = self.state.seat_availability.get(bond).cloned().unwrap_or_default();
+                row.note_assigned(now_daa);
+                self.write_seat_availability(*bond, Some(row));
+            }
+        }
         Ok(())
     }
 
@@ -24382,6 +24467,7 @@ impl<'a> TransitionBuilder<'a> {
     fn credit_seat_receipts(&mut self, claim_id: Hash64, receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2], daa_score: u64) {
         let Some(mut row) = self.state.panel_duties.get(&claim_id).cloned() else { return };
         let mut moved = false;
+        let mut credited: Vec<PalwBondKeyV2> = Vec::new();
         for receipt in receipts {
             // ADR-0152 Q-1 (§9.1 Q3): a `Sampled` seat is paid as a `Valid` one is. The verdict
             // reaches the fold only past `Params::palw_rcore_plus`, so every other network credits
@@ -24397,10 +24483,20 @@ impl<'a> TransitionBuilder<'a> {
             {
                 *at = daa_score.max(1);
                 moved = true;
+                credited.push(receipt.seat_bond);
             }
         }
         if moved {
             self.write_panel_duties(claim_id, Some(row));
+        }
+        // Lane PL part E (ADR-0166): a credited receipt is one success in its seat's availability window (once per seat and
+        // claim: the duty row's `0 -> credited` edge is the only writer).
+        if self.params.seat_availability_active_at(daa_score) {
+            for bond in credited {
+                let mut avail = self.state.seat_availability.get(&bond).cloned().unwrap_or_default();
+                avail.note_credited(daa_score);
+                self.write_seat_availability(bond, Some(avail));
+            }
         }
     }
 
@@ -25428,6 +25524,11 @@ impl<'a> TransitionBuilder<'a> {
             (0, 0)
         };
         self.void_claim(id, claim, voided_daa, reason)?;
+        // **Lane PL part C (ADR-0166): an expiry of unavailable verifiers is never a charge.** Whatever route a caller reaches
+        // here by, `PanelUnavailable` ends the claim and takes nothing: no forfeit, no strike, no action.
+        if matches!(reason, PalwVoidReasonV2::PanelUnavailable) {
+            return Ok(0);
+        }
         // **Option A: a PROVEN fraud forfeits the whole fraud gain it reached for — weight and
         // escrow.** The escrow was never paid (it is released at Final, and a void is pre-Final), so
         // this is not a claw-back: it is what makes a lie cost what it would have earned.
@@ -25454,6 +25555,9 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0160 AG-2: the forfeiture's own void (`aggregate_on_conviction_v1` calls
             // `void_claim`, never this) — the collateral is taken whole beside it.
             PalwVoidReasonV2::AggregateForfeit => false,
+            // Lane PL part C: an expiry of unavailable verifiers charges the producer nothing (never reaches here: the sweep voids it
+            // through `void_claim`, and the guard below returns before any charge).
+            PalwVoidReasonV2::PanelUnavailable => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
         // so they go on the same reasons. The escrow slot is the ledger's (ADR-0160 E-5): past
@@ -25495,7 +25599,8 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::NotReplayBacked
                 | PalwVoidReasonV2::BindTimeout
                 | PalwVoidReasonV2::NoCapablePanel
-                | PalwVoidReasonV2::AggregateForfeit => 0,
+                | PalwVoidReasonV2::AggregateForfeit
+                | PalwVoidReasonV2::PanelUnavailable => 0,
             }
         };
         let nominal = claim.reserved.saturating_add(escrow).saturating_add(action);
@@ -28917,11 +29022,15 @@ fn rearm_claim_after_da_session(
         }
         PalwClaimPhaseV2::PanelBound { bound_daa } => {
             let at = bound_daa
-                .checked_add(builder.params.receipt_window_for_claim_v1(
-                    &builder.state,
-                    &claim.class_id,
-                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                .checked_add(builder.params.panel_bound_sweep_window_v1(
+                    claim,
                     bound_daa,
+                    builder.params.receipt_window_for_claim_v1(
+                        &builder.state,
+                        &claim.class_id,
+                        crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                        bound_daa,
+                    ),
                 ))
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(at, claim_id);
@@ -31350,6 +31459,17 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                         .ok_or(PalwStateV2Error::Overflow("redraw bind deadline"))?;
                     builder.write_claim(claim_id, Some(revived));
                     builder.arm_deadline(deadline, claim_id);
+                } else if builder.params.panel_unavailable_expiry_active_at(ctx.daa_score) {
+                    // **Lane PL part C (ADR-0166): two panels failing to conclude is verifier unavailability, not producer
+                    // fraud.** The chain cannot tell a silent Sybil seat or an honest outage from a withholding producer by
+                    // this event alone (ADR-0064), and charging the producer for it let ANY seat holder burn an honest
+                    // producer's reservation by saying nothing — so heavier models, whose panels are silent more often, were
+                    // the more dangerous to run. The claim expires: no reward, the reservation and bond lock returned at once
+                    // (`PanelUnavailable` keeps no E-4 hold), no slash, no strike; the fee is spent and the seats get nothing.
+                    // Withholding is NOT made free by this: an unanswered data-availability demand still convicts through the
+                    // DA court (`ProducerWithholding`), and a false execution through the court (`CourtFraud`) — the
+                    // producer-fault paths do not run through this sweep.
+                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
                 } else {
                     builder.slash_silent_seats(&claim_id, &claim, &[])?;
                     // **Past the 2026-09-23 audit fence the second timeout charges the producer**
@@ -31398,6 +31518,10 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 );
                 if claim.rebound_daa.is_none() {
                     builder.redraw_unreplayed_licence_v1(claim_id, &claim, ctx.daa_score)?;
+                } else if builder.params.panel_unavailable_expiry_active_at(ctx.daa_score) {
+                    // Lane PL part C: two panels that did not back an S2 licence by replay are verifiers that did not show up —
+                    // the licence expires uncharged, as a second silent receipt window does (see above).
+                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
                 } else {
                     builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::NotReplayBacked)?;
                 }
@@ -33592,12 +33716,15 @@ fn apply_object(
             bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
             let class_id = bound.class_id;
             let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&bound);
+            // Lane PL part D: a first panel past `palw_panel_fast_switch` is swept at `T_fast`, not at the whole window.
+            let sweep_window = builder.params.panel_bound_sweep_window_v1(
+                &bound,
+                ctx.daa_score,
+                builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, shape, ctx.daa_score),
+            );
             builder.write_claim(*claim_id, Some(bound));
             builder.disarm_deadline(*claim_id);
-            let deadline = ctx
-                .daa_score
-                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, shape, ctx.daa_score))
-                .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+            let deadline = ctx.daa_score.checked_add(sweep_window).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
         }
         PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts } => {
@@ -37915,6 +38042,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.improvement_composite_classes, key, old, new)
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
+        PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -38290,6 +38418,7 @@ pub struct PalwStateCarriageV2 {
     pub class_step_ladders: BTreeMap<Hash64, u64>,
     /// Model-specific court backstops in appended tail `0xC2`, present only when non-empty.
     pub class_court_windows: BTreeMap<Hash64, u64>,
+    pub seat_availability: BTreeMap<PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -38614,6 +38743,8 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
 /// carriage written here would decode as another lane's table the day those merge. Nothing is allocated at
 /// `0xE0` or above in any branch; `model_court_window_tail_is_pinned_at_0xe0` pins the value.
 const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
+/// **Lane PL part E (ADR-0166): the seat-availability table's carriage tail.** Written last, only when the table is non-empty.
+const PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1: u8 = 0xE6;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -38924,6 +39055,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1.serialize(writer)?;
             self.class_court_windows.serialize(writer)?;
         }
+        if !self.seat_availability.is_empty() {
+            PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1.serialize(writer)?;
+            self.seat_availability.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -39097,6 +39232,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_eval_jobs = false;
         let mut class_court_windows = BTreeMap::new();
         let mut seen_class_court_windows = false;
+        let mut seat_availability = BTreeMap::new();
+        let mut seen_seat_availability = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -39335,6 +39472,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_court_windows = true;
                     class_court_windows = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
+                    seen_seat_availability = true;
+                    seat_availability = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -39465,6 +39606,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_composite_classes,
             improvement_eval_jobs,
             class_court_windows,
+            seat_availability,
         })
     }
 }
@@ -39573,6 +39715,7 @@ impl PalwStateCarriageV2 {
             improvement_composite_classes: state.improvement_composite_classes.clone(),
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             class_court_windows: state.class_court_windows.clone(),
+            seat_availability: state.seat_availability.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -39784,6 +39927,7 @@ impl PalwStateCarriageV2 {
             improvement_licence_expiries: BTreeSet::new(),
             improvement_eval_claims: BTreeMap::new(),
             class_court_windows: self.class_court_windows,
+            seat_availability: self.seat_availability,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -43744,6 +43888,8 @@ pub(crate) mod tests {
                 (PalwVoidReasonV2::ReceiptTimeout, weight, whole),
                 (PalwVoidReasonV2::BindTimeout, weight, weight),
                 (PalwVoidReasonV2::NoCapablePanel, weight, weight),
+                // Lane PL part C: an expiry of unavailable verifiers takes nothing by ANY route, fence or no fence.
+                (PalwVoidReasonV2::PanelUnavailable, 0, 0),
             ] {
                 for (extras, want) in [(&priced, below), (&armed, past)] {
                     let mut b = TransitionBuilder::new(&s8, &p, false, false, false, false, extras);
@@ -47175,6 +47321,145 @@ pub(crate) mod tests {
         let (past_fence, _) = fold_chain(true);
         assert!(reserved > 0, "the premise: the claim reserved something to charge");
         assert_eq!(before_fence - past_fence, reserved, "past the fence the producer pays its reservation");
+    }
+
+    /// **Lane PL part C (ADR-0166): an honest producer whose panels are ALL silent loses no bond.** The chain of
+    /// `past_the_audit_fence_the_second_silent_panel_charges_the_producer` with `palw_panel_unavailable_expiry` armed: the
+    /// second silent panel expires the claim `PanelUnavailable` — the bond's collateral is exactly what it was, nothing is
+    /// reserved against it any more, no strike is written, and the escrow is not paid. With the fence dormant the same chain
+    /// still charges the reservation (byte for byte the audit's rule).
+    #[test]
+    fn panel_liveness_c_an_all_silent_panel_pair_expires_the_claim_without_a_slash() {
+        let fold_chain = |armed: bool| {
+            let p = if armed { params().with_panel_unavailable_expiry_mirror(Some(0)) } else { params() };
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..Default::default() };
+            let step = |parent: &PalwChainStateV2,
+                        c: PalwBlockContextV2,
+                        objects: &[PalwConsensusObjectV2],
+                        att: Option<&PalwAttemptEnvelopeV2>| {
+                let out = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, false, &extras)
+                    .expect("transition applies");
+                out.0.assert_internal_consistency(&p).expect("internal consistency after apply");
+                out.0.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+                out.0
+            };
+            let genesis = PalwChainStateV2::genesis();
+            let s1 = step(&genesis, ctx(1, 100, 1), &register_class_and_bond(), None);
+            let before = {
+                let env = attempt(40, 1);
+                s1.bond(&PalwBondKeyV2(env.attempt.executor_bond)).expect("bond").collateral as u128
+            };
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, ctx(2, 101, 2), &[], Some(&env));
+            let seats = || vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let bind = |anchor| PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: seats() };
+            let s3 = step(&s2, ctx(3, 105, 3), &[bind(h64(77))], None);
+            let s4 = step(&s3, ctx(4, 116, 4), &[], None);
+            let s5 = step(&s4, ctx(5, 120, 5), &[bind(h64(78))], None);
+            let s6 = step(&s5, ctx(6, 131, 6), &[], None);
+            let phase = s6.claim(&claim_id).expect("kept").phase.clone();
+            let bond = PalwBondKeyV2(env.attempt.executor_bond);
+            (phase, before, s6.bond(&bond).expect("the producer's bond").collateral as u128)
+        };
+        let (phase, before, after) = fold_chain(true);
+        assert!(
+            matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. }),
+            "armed: the second silent panel expires the claim, got {phase:?}"
+        );
+        assert_eq!(before, after, "armed: the honest producer loses no bond");
+        let (phase, before, after) = fold_chain(false);
+        assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. }), "dormant: unchanged");
+        assert!(after < before, "dormant: the audit's charge stands");
+    }
+
+    /// **Lane PL part D (ADR-0166): a silent FIRST panel is replaced at `T_fast`, not at the whole receipt window; the redraw
+    /// gets the whole window.** The fixture's window is 10 DAA, so `T_fast = min(max(10/20, 30), ceil(10/2)) = 5`. Dormant, the
+    /// same chain keeps the first panel to DAA 115. Every block holds the deadline index's consistency.
+    #[test]
+    fn panel_liveness_d_a_silent_first_panel_is_replaced_at_t_fast_and_the_redraw_gets_the_whole_window() {
+        assert_eq!(PalwStateParamsV2::panel_fast_switch_window_v1(600), 30, "30 DAA at the shipped window");
+        assert_eq!(PalwStateParamsV2::panel_fast_switch_window_v1(13_995), 699, "the 2M class scales");
+        assert_eq!(PalwStateParamsV2::panel_fast_switch_window_v1(10), 5, "never more than half the window");
+        let run = |armed: bool| {
+            let p = if armed {
+                params().with_panel_fast_switch_mirror(Some(0)).with_panel_unavailable_expiry_mirror(Some(0))
+            } else {
+                params()
+            };
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..Default::default() };
+            let step = |parent: &PalwChainStateV2, c: PalwBlockContextV2, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+                let out = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, false, &extras)
+                    .expect("transition applies");
+                out.0.assert_internal_consistency(&p).expect("internal consistency after apply");
+                out.0.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+                out.0
+            };
+            let s1 = step(&PalwChainStateV2::genesis(), ctx(1, 100, 1), &register_class_and_bond(), None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, ctx(2, 101, 2), &[], Some(&env));
+            let seats = || vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let bind = |anchor| PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: seats() };
+            let s3 = step(&s2, ctx(3, 105, 3), &[bind(h64(77))], None);
+            // DAA 111: past bound + T_fast (110) but inside bound + the whole window (115).
+            let s4 = step(&s3, ctx(4, 111, 4), &[], None);
+            let early = s4.claim(&claim_id).unwrap().phase.clone();
+            if !armed {
+                return (early, None, None, None);
+            }
+            let rebound = s4.claim(&claim_id).unwrap().rebound_daa;
+            // The second panel (anchor slot 111 + 4 = 115) binds at 120 and has the whole 10-DAA window.
+            let s5 = step(&s4, ctx(5, 120, 5), &[bind(h64(78))], None);
+            let s6 = step(&s5, ctx(6, 129, 6), &[], None);
+            let mid = s6.claim(&claim_id).unwrap().phase.clone();
+            let s7 = step(&s6, ctx(7, 131, 7), &[], None);
+            (early, rebound, Some(mid), Some(s7.claim(&claim_id).unwrap().phase.clone()))
+        };
+        let (early, ..) = run(false);
+        assert!(matches!(early, PalwClaimPhaseV2::PanelBound { .. }), "dormant: the first panel keeps its whole window, {early:?}");
+        let (early, rebound, mid, end) = run(true);
+        assert!(matches!(early, PalwClaimPhaseV2::Provisional), "armed: replaced at T_fast, {early:?}");
+        assert_eq!(rebound, Some(111), "the redraw anchors on the sweep");
+        assert!(matches!(mid, Some(PalwClaimPhaseV2::PanelBound { .. })), "the redraw is NOT fast-switched: {mid:?}");
+        assert!(
+            matches!(end, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. })),
+            "and expires uncharged after its whole window: {end:?}"
+        );
+    }
+
+    /// **Lane PL part E (ADR-0166): assignments and credited receipts are counted in rooted, journalled state** — the delta
+    /// reproduces and reverts each block (`apply_economy` asserts both roots), a seat is assigned at the bind and credited
+    /// once at the licence, and dormant nothing is written.
+    #[test]
+    fn panel_liveness_e_assignments_and_credits_are_counted_in_reorg_safe_state() {
+        let armed = params().with_worker_carve_permille(620).unwrap().with_seat_availability_mirror(Some(0));
+        let (s3, claim_id) = economy_bound(&armed);
+        for n in 1..=3u64 {
+            let row = s3.seat_availability_of_v1(&bond_key(n)).expect("a bound seat is assigned");
+            assert_eq!(row.window_totals(102), (1, 0), "assigned once, nothing credited");
+            assert_eq!(row.factor_permille(102), 500, "a seat that has not answered is new");
+        }
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let (s4, _) =
+            apply_economy(&s3, &armed, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], None);
+        assert_eq!(s4.seat_availability_of_v1(&bond_key(1)).unwrap().window_totals(103), (1, 1));
+        assert_eq!(s4.seat_availability_of_v1(&bond_key(2)).unwrap().window_totals(103), (1, 1));
+        assert_eq!(s4.seat_availability_of_v1(&bond_key(3)).unwrap().window_totals(103), (1, 0), "silence is never counted against");
+        // The carriage round-trips and the root commits to it.
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
+        let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap();
+        assert_eq!(back.seat_availability.len(), 3);
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (dormant, _) = economy_bound(&p);
+        assert!(dormant.seat_availability_of_v1(&bond_key(1)).is_none(), "dormant: nothing is written");
+        assert_ne!(dormant.state_root(), s3.state_root());
+    }
+
+    /// Lane PL part C: the new reason is appended (Borsh 10) and charges nothing through the slash funnel either.
+    #[test]
+    fn panel_liveness_c_the_reason_is_borsh_ten() {
+        assert_eq!(borsh::to_vec(&PalwVoidReasonV2::PanelUnavailable).unwrap(), vec![10]);
     }
 
     /// **ADR-0065 D4 — an `Unavailable` quorum stops taking the producer's stake.**
@@ -56762,6 +57047,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassWalk { .. } => "class_walk",
                     PalwDeltaEntryV2::Class { .. } => "class",
                     PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
+                    PalwDeltaEntryV2::SeatAvailability { .. } => "seat_availability",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -57799,6 +58085,7 @@ pub(crate) mod tests {
             improvement_composite_classes: _,
             improvement_eval_jobs: _,
             class_court_windows: _,
+            seat_availability: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
