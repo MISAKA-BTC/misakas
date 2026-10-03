@@ -37,11 +37,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was c5e9fd82…, 686f65ea…)
+// re-pin 2026-10-03 @bd9d63bc4bcc: int-11: RFC-0003/0004 + L_ver + capacity rho25 armed at DAA 5,300, rho100 at 5,395 (was 25450953…, 1e39c738…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "254509533bb693ced0fed823a4c25e166ba2542d576e4021b0e4b4d6fe4079e1",
+    "eb3a6c5f597ddb1f8f3a10708f31677dcca9b1e0cf0bce8b3de8841fa048abcb",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1e39c738b97a695c8a2c2d4129660eda8fa7ac5f1e8b529b916314c01750c593",
+    "57c5927a50434286be7ed1ef90463684132cb0c5a201ffc8d9644db9fcccff68",
 );
 
 /// The post-launch release's height (DAA 500, the user's decision of 2026-09-26) and two more an

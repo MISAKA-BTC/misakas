@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
         --bin-dir) BIN_DIR=$2; export BIN_DIR; shift 2 ;;
         --bin-dir=*) BIN_DIR=${1#--bin-dir=}; export BIN_DIR; shift ;;
         --force) FORCE=1; shift ;;
-        *) echo "unknown argument $1"; exit 2 ;;
+        *) case $cmd in gen|seat) break ;; *) echo "unknown argument $1"; exit 2 ;; esac ;;
     esac
 done
 . "$A/lib-dm.sh"
@@ -62,7 +62,7 @@ note() { echo "  note $*"; }
 # the plan
 # ---------------------------------------------------------------------------------------------------------------------
 plan() {
-    FENCE_LIST="$(fence_rows | awk -F'|' '{printf "%s@%s ", $1, $3}')" python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
+    INT11=$INT11 CAP2_AT=$CAP2_AT CAP3_AT=$CAP3_AT FENCE_LIST="$(fence_rows | awk -F'|' '{printf "%s@%s ", $1, $3}')" python3 - "$A/drill.json" "$FENCE_AT" "$FENCE2_AT" "$FENCE3_AT" "$TIR_AT" "$TIR2_AT" "$GEN_AT" "$DECODE_AT" "$IMPROVE_AT" "$CAND_FORM" <<'PY'
 import json, math, os, sys
 p = json.load(open(sys.argv[1])); f = list(map(int, sys.argv[2:10])); cand_form = sys.argv[10]
 base = p["policy"]["windows"]
@@ -123,7 +123,8 @@ open2 = math.ceil((r["dec"] + 190) / gr) * gr
 dec2 = open2 + r["w"]["w_collect"] + r["w"]["w_submit"] + r["w"]["w_holdout"] + r["w"]["w_eval"] + 170
 print(f"  {open2:>9}  R's epoch 2 (the regression check; `Previous` = H vs the promoted `win` on the reg pool's items, where W regresses) opens at the first boundary after W's own claims are Final")
 print(f"  ~{dec2:>8}  it is decided  {H(dec2)}: the rollback by proof (D-M4) — the D-M part's end; R's grants vest in 3 units of L_e {r['le']} from ~{r['dec']} (first due ~{r['dec'] + r['le']}, {H(r['dec'] + r['le'])}), the unvested remainder is forfeited by the rollback")
-print(f"  capacity  rho 25 at {os.environ.get('FENCE_LIST','').split('capacity_step2@')[-1].split()[0] if 'capacity_step2@' in os.environ.get('FENCE_LIST','') else '?'}, rho 100 at {os.environ.get('FENCE_LIST','').split('capacity_step3@')[-1].split()[0] if 'capacity_step3@' in os.environ.get('FENCE_LIST','') else '?'}: the load line (accepted/DAA, licensed/DAA, licence latency p50/p95, backlog trend, seat occupancy) runs 570-650 at rho 25 and 665-745 at rho 100, clear of the evaluation windows (R's epoch 2 claims from ~{open2 + 78})")
+c2 = int(os.environ.get("CAP2_AT", "560")); c3 = int(os.environ.get("CAP3_AT", "655")); cs = int(p.get("capacity", {}).get("settle_daa", 10)); cw = int(p.get("capacity", {}).get("window_daa", 80))
+print(f"  capacity  rho 25 at {c2}, rho 100 at {c3} (INT11={os.environ.get('INT11', '1')}: the whole int-11 list at {c2}): the load line (accepted/DAA, licensed/DAA, licence latency p50/p95, backlog trend, seat occupancy) runs {c2 + cs}-{c2 + cs + cw} at rho 25 and {c3 + cs}-{c3 + cs + cw} at rho 100; R's epoch 2 claims from ~{open2 + 78}")
 print( "  lane D  RFC-0003 (dm.sh gen dg1..dg7b, audit-gen/dg.sh over this harness's lib; Plan B classes loaded on every IR holder from the start): DG-1 the crossings (gen 28, fp-v5 104, held chunks 140),")
 print( "          DG-2 the readiness gate (embedding class registered at 103), DG-3 honest claims to Final, DG-4 cone/output lies (bonds 10, 11), DG-5 the caps, DG-6/7a the held leaf challenge")
 print( "          (bond 12, with the kill/restart), DG-7b the lapse (bond 13): the liars' bonds are post-genesis, registered by the driver from DAA 44 (lane D's first, then the D-M3 liars' 8, 9)")
