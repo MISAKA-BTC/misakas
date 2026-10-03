@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::palw_real_share_v1::*;
+use crate::palw_real_share_v1::PALW_REAL_IDLE_K_SLOTS_V1 as K;
 
 const FENCE: u64 = 100;
 
@@ -68,8 +69,10 @@ fn a_busy_network_refuses_the_floor_and_an_idle_one_accepts_it_with_its_bonded_w
     let why = palw_class_admits_claim_v1(&busy, &p, &PalwTransitionExtrasV1::default(), &h64(1), 107).unwrap_err();
     assert!(matches!(why, PalwStateV2Error::FloorNotIdle { last_real: 105, .. }), "{why:?}");
     assert!(palw_class_admits_claim_v1(&busy, &p, &PalwTransitionExtrasV1::default(), &h64(2), 107).is_ok());
-    // K slots later it is idle again and the floor is accepted.
-    let (back, _) = apply(&busy, &p, &ctx(3, 108, 3), &[], Some(&floor2));
+    // One slot short of K it is still held; K slots later it is idle again and the floor is accepted.
+    let (short, _) = apply(&busy, &p, &ctx(3, 105 + K - 1, 3), &[], Some(&floor2));
+    assert!(short.claim(&attempt_id_v2(&floor2.attempt)).is_none(), "K - 1 slots after the last REAL acceptance: still refused");
+    let (back, _) = apply(&busy, &p, &ctx(3, 105 + K, 3), &[], Some(&floor2));
     assert!(back.claim(&attempt_id_v2(&floor2.attempt)).is_some(), "idle again: the fallback is accepted");
     // Reorg determinism: every delta reverts and re-applies exactly.
     for (parent, child, d) in [(&s, &busy, &real_delta), (&busy, &refused, &refused_delta)] {
@@ -134,7 +137,7 @@ fn an_all_floor_network_crossing_the_fence_is_idle_and_stays_live() {
     assert!(palw_real_idle_at_v1(&a.real_work, 201));
     let real = env(h64(2), 11);
     let (b, _) = apply(&a, &p, &ctx(3, 201, 3), &[], Some(&real));
-    assert!(!palw_real_idle_at_v1(&b.real_work, 202) && palw_real_idle_at_v1(&b.real_work, 204));
+    assert!(!palw_real_idle_at_v1(&b.real_work, 201 + K - 1) && palw_real_idle_at_v1(&b.real_work, 201 + K));
 }
 
 #[test]

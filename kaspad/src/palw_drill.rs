@@ -574,6 +574,12 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
                  release's, and every node must agree on them"
             )));
         }
+        if let Some(delay) = args.palw_drill_real_submit_delay_s {
+            return Err(refused(format!(
+                "--palw-drill-real-submit-delay-s={delay} holds this node's REAL attempts back to emulate an 8k inference and needs \
+                 --palw-drill-genesis-salt: on a real network a producer that sat on its blocks would only be losing them"
+            )));
+        }
         return Ok(());
     };
     let network = args.network();
@@ -1311,6 +1317,37 @@ mod tests {
         let path = dir.join(name);
         write_private(&path, faster_hex::hex_string(seed).as_bytes()).unwrap();
         path.to_str().unwrap().to_owned()
+    }
+
+    /// **`--palw-drill-real-submit-delay-s` is a drill node's flag and nobody else's**: refused without the salt, by name; a
+    /// salted drill node takes it; and the range is 1..=3600 s.
+    #[test]
+    fn the_real_submit_delay_is_refused_off_a_salted_chain() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
+        let why = refusal(&with(&["--palw-drill-real-submit-delay-s=300"]));
+        assert!(why.contains("--palw-drill-real-submit-delay-s=300") && why.contains("needs --palw-drill-genesis-salt"), "{why}");
+        let public = parse(&["--testnet", "--netsuffix=12", "--palw-drill-real-submit-delay-s=5"]);
+        assert!(refusal(&public).contains("needs --palw-drill-genesis-salt"), "public testnet-12 refuses it");
+        let salted = with(&[&salt_flag, "--palw-drill-real-submit-delay-s=300"]);
+        assert_eq!(salted.palw_drill_real_submit_delay_s, Some(300));
+        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes it");
+        assert_eq!(with(&[&salt_flag]).palw_drill_real_submit_delay_s, None, "off by default");
+        let bare = with(&[&salt_flag, "--palw-drill-real-submit-delay-s"]);
+        assert_eq!(bare.palw_drill_real_submit_delay_s, Some(340), "the bare flag is the 8k producer's median inference, 340 s");
+        palw_drill_validate_args_v1(&bare).expect("a salted drill node takes the bare flag"); 
+        for bad in ["0", "3601", "-1", "x"] {
+            let mut argv: Vec<String> = base.iter().map(|s| (*s).to_owned()).collect();
+            argv.push(salt_flag.clone());
+            argv.push(format!("--palw-drill-real-submit-delay-s={bad}"));
+            let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
+            assert!(Args::parse(argv).is_err(), "{bad} is out of range");
+        }
     }
 
     /// **The flag's own rules**: testnet-12 only, a well-formed salt, no discovery, an explicit peer
