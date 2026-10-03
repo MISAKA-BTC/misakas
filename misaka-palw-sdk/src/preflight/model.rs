@@ -302,7 +302,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             if r.missing.is_empty() && r.unmapped_config_keys.is_empty() && !quant_refusal_in_reason(reason) {
                 let (code, what) = if reason.contains("bad config") {
                     ("CONFIG_INVALID", "the configuration is malformed")
-                } else if reason.contains("remote code") || reason.contains("auto_map") {
+                } else if reason.contains("remote code") || reason.contains("trust_remote_code") || reason.contains("auto_map") {
                     ("REMOTE_CODE", "the architecture is defined by remote code")
                 } else {
                     ("ARCH_REFUSED", "the generic frontend refuses this architecture")
