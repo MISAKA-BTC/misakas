@@ -18,9 +18,11 @@ export OUTSIDER=${OUTSIDER:-1} RIDERS=${RIDERS:-4}
 export GEN_PARTIAL_CLASS=${GEN_PARTIAL_CLASS-toy-embed} GEN_PARTIAL_HOLDERS=${GEN_PARTIAL_HOLDERS-"new4 new5 new6"}   # DG-2: toy-embed on three nodes only
 export WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-combined-drill}
 export P2P_BASE=${P2P_BASE:-51200} BORSH_BASE=${BORSH_BASE:-52200} JSON_BASE=${JSON_BASE:-53200} EVM_BASE=${EVM_BASE:-54200} GRPC_BASE=${GRPC_BASE:-50200}
-export REAL_SUBMIT_DELAY_S=${REAL_SUBMIT_DELAY_S-300}   # lane RS's --palw-drill-real-submit-delay-s on ONE REAL producer (new6): emulates an 8k model's inference time; set it to the 8k p50 P2 measures
+export REAL_SUBMIT_DELAY_S=${REAL_SUBMIT_DELAY_S-340}   # lane RS's --palw-drill-real-submit-delay-s on ONE REAL producer (new6): the 8k model's inference time (P2 live: p50 342 s, p95 418 s; floors 3 per slot)
+export K_SLOTS=${K_SLOTS:-20}                              # the release's K: idle slots before a floor attempt is accepted (20; the int-12 tip still reads 3 — dry notes it)
+export STOP_DAA=${STOP_DAA:-$((2*K_SLOTS+4))} POST_DAA=${POST_DAA:-$((K_SLOTS+16))}   # the recovery leg: both REAL producers down for >= 2K slots (+4), observed K+16 after the restart
 export XB_ORDER=${XB_ORDER:-"14 10 11 12 13 8 9"}          # the outsider's bond (14) first: panels have an outsider from the start; 10..13 are DG's liars, 8 and 9 D-M3's
-export RECOVERY_AT=${RECOVERY_AT:-600}                     # after the rho windows (end H'+375) and after T's evaluation window (~558): the recovery leg
+export RECOVERY_AT=${RECOVERY_AT:-566}                     # after the rho windows (end H'+375) and T's evaluation window (closes 558): the leg ends ~$((566+44+36)); new6 is back before W's claims must be Final for R's epoch 2 (765)
 export GEN_DIR=${GEN_DIR:-$HOME/Downloads/MISAKA-wt-b/gen-drill-classes}
 export OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-$HOME/Downloads/MISAKA-wt-b/lifecycle-run/bin/2483c570cea4/kaspad}
 EVD=${EVD:-$HOME/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill}
@@ -38,14 +40,15 @@ cat <<EOF
   panels    7 genesis seats + the outsider; one panel per claim; the capacity sampler (every tick, from H' to the last window) records per claim bound/licensed/final DAA,
             the panel-bound backlog, each seat's live claims, the oldest unlicensed wait
   windows   rho25 [H'+10, H'+90), rho100 [H'+105, H'+185), rho250 [H'+200, H'+280), rho1000 [H'+295, H'+375) — 80 DAA each, 10 settle after the step
-  8k model  ONE REAL producer (new6) runs with --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (lane RS; 300 s until P2 measures the 8k p50): its attempts take that long
+  8k model  ONE REAL producer (new6) runs with --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (lane RS; 340 s = P2's live 8k p50 (p95 418 s)): its attempts take that long
             to submit, so fast floor attempts fill their anticone meanwhile, as on live t12. new4 (the other REAL producer) stays fast. A binary without the flag runs
             without it and 'dc.sh dry' says so (the 8k emulation is then missing).
   verdicts  PANEL (dcwatch panel: PASS only if no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; latency also from accepted)
             [acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the PANEL metric] and SHARE (dcwatch share: per-window table over ELIGIBLE windows — both REAL producers up and not held — REAL+EXEC >= 90 %, heartbeats <= 10 %, floor only idle; the
             table adds the REAL attempts that turned RED, the kinds of BLUE blocks in their anticones before vs after H', DAA per hour and the longest slot gap per window);
-            RECOVERY (dc-run.sh at DAA $RECOVERY_AT: both REAL producers stopped for 18 DAA (>= 2K, K = 3 idle slots), floors must resume after K slots with the DAA advancing,
-            then restarted: floors must stop and REAL turn BLUE again; dcwatch recovery); D-M1..D-M6, DG-1..DG-7b as in the int-11 drill (dm.sh verdicts)
+            RECOVERY (dc-run.sh at DAA $RECOVERY_AT: both REAL producers stopped for $STOP_DAA DAA (>= 2K, K = $K_SLOTS idle slots; ~$((STOP_DAA*125/60)) min at drill pace), floors must resume only after K idle
+            slots with the DAA advancing, then restarted ($POST_DAA DAA observed): floors must stop and REAL turn BLUE again; dcwatch recovery); D-M1..D-M6, DG-1..DG-7b as in the int-11 drill.
+            SHARE is reported as measured per window: REAL vs heartbeat vs floor; with two REAL producers the heartbeat share is a supply fact, reported, not tuned away.
   gaps      from the int-11 drill, fixed in the kit: operator-id manifest step, registrar parse, D-M5 reconnect, pack-verify flag, embedding seed, drop regex;
             in the kit now: toy-embed is held by new4/new5/new6 only (GenClassNotReady, DG-2 then restarts the other IR holders with it) and the head's admission slot
             (the driver logs every class's slot at registration; the head registers before DAA 20 so slot 91 is reachable)
@@ -67,6 +70,8 @@ extra_checks() {
   local n; n=$("$k" --testnet --netsuffix=12 --appdir="$(mktemp -d)/app" "--palw-drill-genesis-salt=$(openssl rand -hex 32)" --palw-drill-fence-at=6 --palw-drill-fence2-at=10 --palw-drill-fence3-at=14 \
      --palw-drill-tir-at=$TIR_AT --palw-drill-tir2-at=24 --palw-drill-int11-at=$INT11_AT --palw-drill-write-keyring="$(mktemp -d)/kr" 2>&1 | tr -d '\r' | grep -ci "moved from") || true
   echo "  note the keyring export with the int11 flag reports $n 'moved from' lines (one per fence the flag moves)"
+  local ks; ks=$(grep -o "PALW_REAL_IDLE_K_SLOTS_V1: u64 = [0-9]*" "$WT/consensus/core/src/palw_real_share_v1.rs" 2>/dev/null | grep -o "[0-9]*$" || true)
+  if [ -n "$ks" ] && [ "$ks" != "$K_SLOTS" ]; then echo "  note the source tree under $WT has K = $ks, this plan K_SLOTS = $K_SLOTS: the recovery leg is right only on a binary with K = $K_SLOTS"; else echo "  ok   K = ${ks:-?} matches K_SLOTS"; fi
   [ "$ok" = 1 ]
 }
 
@@ -77,7 +82,7 @@ case $cmd in
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
-  recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" ;;
+  recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
   share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 "$@" ;;
   evidence) mkdir -p "$EVD"; cp -R "$WORK_DIR"/verdict "$WORK_DIR"/capacity "$WORK_DIR"/drive.log "$WORK_DIR"/drive.out "$WORK_DIR"/milestones.tsv "$WORK_DIR"/memory.tsv "$WORK_DIR"/samples.tsv "$EVD"/ 2>/dev/null || true

@@ -6,7 +6,7 @@ set -uo pipefail
 C=$(cd "$(dirname "$0")" && pwd); WT=$(cd "$C/.." && pwd)
 EVD=${EVD:-$HOME/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill}; mkdir -p "$EVD"
 cd "$WT/audit-improve"; . ./lib-dm.sh 2>/dev/null
-H=$INT11_AT; RECOVERY_AT=${RECOVERY_AT:-600}; STOP_DAA=${STOP_DAA:-18}; POST_DAA=${POST_DAA:-24}
+H=$INT11_AT; RECOVERY_AT=${RECOVERY_AT:-566}; K_SLOTS=${K_SLOTS:-20}; STOP_DAA=${STOP_DAA:-$((2*K_SLOTS+4))}; POST_DAA=${POST_DAA:-$((K_SLOTS+16))}
 now() { tip new3 2>/dev/null || echo 0; }
 at() { while [ "$(now)" -lt "$1" ]; do sleep 20; done; }
 stamp() { echo "$(date '+%F %T') DAA $(now) $*" >> "$EVD/timeline.log"; }
@@ -28,7 +28,7 @@ stamp "recovery: restarting new4 and new6 (stopped for $((RESTART - STOP)) DAA)"
 bash nodes.sh start new4 new6 >> "$EVD/recovery.log" 2>&1
 at $((RESTART + POST_DAA)); END=$(now)
 printf '{"stop_daa": %s, "restart_daa": %s, "end_daa": %s}\n' "$STOP" "$RESTART" "$END" > "$EVD/recovery.json"
-python3 "$C/dcwatch.py" recovery --port "$JSON_BASE_3" --state "$EVD/recovery.json" > "$EVD/recovery.verdict.txt" 2>&1; rc=$?
+python3 "$C/dcwatch.py" recovery --port "$JSON_BASE_3" --state "$EVD/recovery.json" --k "$K_SLOTS" > "$EVD/recovery.verdict.txt" 2>&1; rc=$?
 mkdir -p "$WORK_DIR/verdict"; { case $rc in 0) echo PASS;; 1) echo FAIL;; *) echo INCOMPLETE;; esac; tail -1 "$EVD/recovery.verdict.txt"; } | tr '\n' '\t' > "$WORK_DIR/verdict/recovery.verdict"; echo >> "$WORK_DIR/verdict/recovery.verdict"
 stamp "recovery verdict rc=$rc"
 

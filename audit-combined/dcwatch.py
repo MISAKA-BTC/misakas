@@ -22,7 +22,7 @@
         the same RED/BLUE table without the verdict, over the whole chain (before the fence too), one row per window, and the anticone kinds of up to 40
         RED REAL attempts per window named by hash.
 
-  recovery --port P --state recovery.json [--k 3 --margin 4 --post 24]
+  recovery --port P --state recovery.json [--k 20 --margin 6]
         the recovery leg's verdict. recovery.json (written by `dc.sh recovery`) holds stop_daa (both REAL producers stopped), restart_daa (started again) and
         end_daa. PASS only if: (a) the DAA kept advancing over the stop — a block at every DAA and no stamp gap over 4 slots (the drill's own slots reach ~270 s); (b) floors resumed after K
         idle slots — no BLUE FALLBACK block earlier than (the last REAL attempt + K) and the first one no later than that + --margin; (c) after the restart the
@@ -156,6 +156,7 @@ def window_row(blocks, dag, a, w, idle, anticone_cap=40, span=8):
     is_idle = any(i0 <= a and a + w <= i1 for i0, i1 in idle) or c["REAL"] == 0
     return {"lo": a, "hi": a + w, "n": n, **c, "share": round((c["REAL"] + c["EXEC"]) / n, 3) if n else None,
             "hb": round(c["LEGACY_HEARTBEAT"] / n, 3) if n else None, "floor": c["FALLBACK"] + c["LEGACY_FLOOR"], "idle": is_idle,
+            "real_pct": round(c["REAL"] / n, 3) if n else None, "floor_pct": round((c["FALLBACK"] + c["LEGACY_FLOOR"]) / n, 3) if n else None,
             "real_total": len(real_all), "real_red": len(real_red), "floor_red": sum(1 for b in floor_all if b["lane"] == "RED"),
             "anticone_of_red_real": ac, "daa_per_h": dph, "max_gap_s": gap}
 
@@ -169,14 +170,14 @@ def windows(blocks, lo, hi, w, step, idle):
     return out
 
 
-HEAD = (f"{'window':>13} {'n':>4} {'REAL':>5} {'RED':>4} {'EXEC':>5} {'FALLB':>5} {'LFLOOR':>6} {'LHB':>4} {'other':>5} {'share':>6} {'hb':>6} floor "
+HEAD = (f"{'window':>13} {'n':>4} {'REAL':>5} {'RED':>4} {'EXEC':>5} {'FALLB':>5} {'LFLOOR':>6} {'LHB':>4} {'other':>5} {'share':>6} {'hb':>6} {'fl%':>6} floor "
         f"{'DAA/h':>6} {'gap_s':>6}  anticone(RED REAL): floor/hb/real/exec  idle")
 
 
 def line(w):
     ac = w["anticone_of_red_real"]
     return (f"{w['lo']:>6}-{w['hi']:<6} {w['n']:>4} {w['REAL']:>5} {w['real_red']:>4} {w['EXEC']:>5} {w['FALLBACK']:>5} {w['LEGACY_FLOOR']:>6} {w['LEGACY_HEARTBEAT']:>4} {w['other']:>5} "
-            f"{w['share'] if w['share'] is not None else '-':>6} {w['hb'] if w['hb'] is not None else '-':>6} {w['floor']:>5} "
+            f"{w['share'] if w['share'] is not None else '-':>6} {w['hb'] if w['hb'] is not None else '-':>6} {w['floor_pct'] if w['floor_pct'] is not None else '-':>6} {w['floor']:>5} "
             f"{str(w['daa_per_h']) if w['daa_per_h'] is not None else '-':>6} {str(w['max_gap_s']) if w['max_gap_s'] is not None else '-':>6}  "
             f"{ac['floor']}/{ac['hb']}/{ac['real']}/{ac['exec']}  {'idle' if w['idle'] else ''}")
 
@@ -295,6 +296,11 @@ def share(a):
         red, real, t = sum_anticone(grp)
         print(f"RED REAL attempts {name}: {red} of {real} REAL attempts; blue blocks in their anticones (up to 40 attempts per window): floor {t['floor']}, "
               f"heartbeat {t['hb']}, other REAL {t['real']}, exec {t['exec']}")
+    comp = {k: sum(w[k] for w in elig) for k in ("n", "REAL", "EXEC", "FALLBACK", "LEGACY_FLOOR", "LEGACY_HEARTBEAT", "other")}
+    if comp["n"]:
+        pc = lambda x: f"{100.0 * x / comp['n']:.1f} %"  # noqa: E731
+        print(f"composition of the {len(elig)} eligible windows ({comp['n']} non-RED blocks): REAL {pc(comp['REAL'])}, EXEC {pc(comp['EXEC'])}, heartbeat {pc(comp['LEGACY_HEARTBEAT'])}, "
+              f"floor {pc(comp['FALLBACK'] + comp['LEGACY_FLOOR'])}, other {pc(comp['other'])} — reported as measured: with two REAL producers the heartbeat share is a supply fact, not tuned")
     if inel:
         print(f"NOT ELIGIBLE ({len(inel)} windows, not counted: a producer was down or held): " + ", ".join(f"{w['lo']}-{w['hi']} [{w['why']}]" for w in inel[:12]))
     if not any(w["n"] and not w["idle"] for w in elig):
@@ -331,7 +337,7 @@ def redblue(a):
 # --------------------------------------------------------------------------------------------------------------------
 # recovery
 # --------------------------------------------------------------------------------------------------------------------
-def recovery_verdict(blocks, st, k=3, margin=4):
+def recovery_verdict(blocks, st, k=20, margin=6):
     """(code, lines) from the blocks and the leg's record {stop_daa, restart_daa, end_daa}."""
     stop, restart, end = int(st["stop_daa"]), int(st["restart_daa"]), int(st["end_daa"])
     out, bad, wait = [], [], []
@@ -485,17 +491,28 @@ def selftest():
         kind = "REAL" if (d <= 20 or d >= 36) else ("LEGACY_HEARTBEAT" if d < 23 else "FALLBACK")
         chain.append(_blk(f"x{d}", [f"x{d - 1}"] if d > 10 else [], d, kind, "BLUE"))
     st = {"stop_daa": 21, "restart_daa": 35, "end_daa": 55}
-    code, lines = recovery_verdict(chain, st)
+    code, lines = recovery_verdict(chain, st, k=3, margin=4)
     assert code == 0, lines
     # a floor too early, a stalled slot, floors that never stop: each is a FAIL
     early = [dict(b) for b in chain]
     early[11]["kind"] = "FALLBACK"          # DAA 21: one slot after the last REAL attempt
-    assert recovery_verdict(early, st)[0] == 1
+    assert recovery_verdict(early, st, k=3, margin=4)[0] == 1
     stalled = [b for b in chain if b["daa"] != 28]
-    assert recovery_verdict(stalled, st)[0] == 1
+    assert recovery_verdict(stalled, st, k=3, margin=4)[0] == 1
     never = [dict(b) for b in chain]
     never[-3]["kind"] = "FALLBACK"          # DAA 57: a floor long after the REAL attempts resumed
-    assert recovery_verdict(never, {"stop_daa": 21, "restart_daa": 35, "end_daa": 58})[0] == 1
+    assert recovery_verdict(never, {"stop_daa": 21, "restart_daa": 35, "end_daa": 58}, k=3, margin=4)[0] == 1
+    # the release's K = 20: REAL until DAA 20, heartbeats while idle, floors from DAA 40, a 44-slot stop (21..65), REAL again from 66, no floor after 86
+    chain20 = []
+    for d in range(10, 130):
+        kind = "REAL" if (d <= 20 or d >= 66) else ("LEGACY_HEARTBEAT" if d < 40 else "FALLBACK")
+        chain20.append(_blk(f"y{d}", [f"y{d - 1}"] if d > 10 else [], d, kind, "BLUE"))
+    st20 = {"stop_daa": 21, "restart_daa": 65, "end_daa": 110}
+    code, lines = recovery_verdict(chain20, st20)
+    assert code == 0, lines
+    early20 = [dict(b) for b in chain20]
+    early20[21]["kind"] = "FALLBACK"             # DAA 31: eleven idle slots after the last REAL attempt (DAA 20), well before K = 20
+    assert recovery_verdict(early20, st20)[0] == 1
     print("selftest ok")
     return 0
 
@@ -522,8 +539,8 @@ def main():
     c = sub.add_parser("recovery")
     c.add_argument("--port", type=int, required=True)
     c.add_argument("--state", required=True)
-    c.add_argument("--k", type=int, default=3)
-    c.add_argument("--margin", type=int, default=4)
+    c.add_argument("--k", type=int, default=20)
+    c.add_argument("--margin", type=int, default=6)
     q = sub.add_parser("panel")
     q.add_argument("--work", default="~/.misaka-palw-improve-drill")
     q.add_argument("--p50-max", type=int, default=6)
