@@ -33,6 +33,21 @@ pub fn palw_weight_block_request_decode_v1(index: u32) -> Option<(u32, u32)> {
     (index >> 28 == 1).then_some(((index >> 12) & 0xFFFF, index & 0xFFF))
 }
 
+/// Bit 27 of the interval index, bits 31 to 28 clear: **a witness-chunk request** (§II.7). The index is this bit and the chunk number (16 bits, 0-based
+/// within the witness; the manifest's chunk `1 + index`); the request names no class — the claim in the message names the witness. The answer is the
+/// chunk's bytes. A weight-block request has bit 28 set, so `index >> 27` is 1 only here.
+pub const PALW_WITNESS_CHUNK_REQUEST_BIT_V1: u32 = 1 << 27;
+
+/// The request index for witness chunk `chunk`; `None` past 16 bits.
+pub fn palw_witness_chunk_request_index_v1(chunk: u32) -> Option<u32> {
+    (chunk <= 0xFFFF).then_some(PALW_WITNESS_CHUNK_REQUEST_BIT_V1 | chunk)
+}
+
+/// `Some(chunk)` for a witness-chunk request index, `None` for any other kind.
+pub fn palw_witness_chunk_request_decode_v1(index: u32) -> Option<u32> {
+    (index & !(PALW_WITNESS_CHUNK_REQUEST_BIT_V1 | 0xFFFF) == 0 && index & PALW_WITNESS_CHUNK_REQUEST_BIT_V1 != 0).then_some(index & 0xFFFF)
+}
+
 /// The `leafIndex` that names a class by its artifact root.
 pub fn palw_weight_block_root_tag_v1(artifact_root: &Hash64) -> u64 {
     let mut b = [0u8; 8];
@@ -58,6 +73,23 @@ mod tests {
         for other in [0u32, 7, 1 << 29, 1 << 30, 1 << 31, (1 << 29) | 5, (1 << 28) | (1 << 29)] {
             assert_eq!(palw_weight_block_request_decode_v1(other), None, "{other:#x}");
         }
+    }
+
+    #[test]
+    fn a_witness_chunk_index_round_trips_and_is_no_other_kind() {
+        for chunk in [0u32, 1, 255, 0xFFFF] {
+            let index = palw_witness_chunk_request_index_v1(chunk).unwrap();
+            assert_eq!(palw_witness_chunk_request_decode_v1(index), Some(chunk));
+            assert!(palw_weight_block_request_decode_v1(index).is_none(), "not a weight block");
+            assert!(crate::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(index).is_none());
+            assert!(crate::palw_segment_resume_v1::palw_segment_opening_request_decode_v1(index).is_none());
+        }
+        assert_eq!(palw_witness_chunk_request_index_v1(0x1_0000), None);
+        for other in [0u32, 5, 1 << 28, (1 << 27) | (1 << 28), (1 << 27) | (1 << 16), 1 << 29, 1 << 30, 1 << 31] {
+            assert_eq!(palw_witness_chunk_request_decode_v1(other), None, "{other:#x}");
+        }
+        let w = palw_weight_block_request_index_v1(0x8000, 3).unwrap();
+        assert!(palw_witness_chunk_request_decode_v1(w).is_none(), "a high-site weight request is not a witness chunk");
     }
 
     #[test]

@@ -258,7 +258,7 @@ impl PalwSketchServiceV1 {
 
     /// **The mirror check on a witness the producer served** (the same comparison; a refusal of a served witness of a claim the replay
     /// reproduces is no disagreement, a served witness of a claim it does not reproduce that the checker ACCEPTS is the alarm).
-    #[allow(clippy::too_many_arguments, dead_code)] // the transport that carries a served witness is the interval lane's (RFC-0007 §II.7)
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn mirror_served_v1(
         &self,
         entry: &PalwTirClassEntryV1,
@@ -396,7 +396,6 @@ pub(crate) fn palw_witness_retain_v1(retention_dir: &Path, claim: &Hash64, image
 
 /// **Serve one witness chunk of a retained claim** (`index` 0-based within the witness; the manifest's chunk `1 + index`): the bytes, or
 /// `None` where the claim's witness is not kept here, the index is past its chunks, or the retained piece no longer matches its digest.
-#[allow(dead_code)] // served by the interval lane's transport once it exists (RFC-0007 §II.7); the tests read it today
 pub(crate) fn palw_witness_chunk_v1(retention_dir: &Path, claim: &Hash64, index: u32) -> Option<Vec<u8>> {
     let manifest = std::fs::read(palw_witness_chunks_path_v1(retention_dir, claim)).ok()?;
     let count = u32::from_le_bytes(manifest.get(..4)?.try_into().ok()?);

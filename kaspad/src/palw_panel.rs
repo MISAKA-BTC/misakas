@@ -3775,6 +3775,8 @@ pub struct PalwPanelService {
     sketch: Option<std::sync::Arc<sketch::PalwSketchServiceV1>>,
     /// **RFC-0007 §II.8: the failed-block refetches in flight**, by claim ([`refetch::WeightRefetchV1`] with the held class entry and the refused
     /// witness it concludes on). Bounded by [`refetch::REFETCH_PURSUITS_CAP_V1`].
+    /// **RFC-0007 §II.7: the served witnesses being fetched**, by claim ([`refetch::WitnessFetchV1`]); bounded by [`refetch::REFETCH_PURSUITS_CAP_V1`].
+    witness_fetches: std::sync::Mutex<HashMap<Hash64, refetch::WitnessFetchV1>>,
     weight_refetch: std::sync::Mutex<HashMap<Hash64, (refetch::WeightRefetchV1, misaka_palw_sdk::lineage::PalwTirClassEntryV1, std::sync::Arc<sketch::RefusedServedV1>)>>,
     /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
     /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
@@ -4170,6 +4172,7 @@ impl PalwPanelService {
             vertex_equivocations_sent: std::sync::Mutex::new(HashMap::new()),
             sketch,
             weight_refetch: std::sync::Mutex::new(HashMap::new()),
+            witness_fetches: std::sync::Mutex::new(HashMap::new()),
             readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
             readiness_read_at: std::sync::Mutex::new(None),
@@ -8286,6 +8289,7 @@ impl PalwPanelService {
 
             // **RFC-0007 §II.8: the failed-block refetches** (only a node run with `--palw-sketch-check` ever holds one).
             if self.sketch.is_some() {
+                self.witness_fetch_tick_v1(&interval_openings, network_domain, current_daa).await;
                 self.weight_refetch_tick_v1(&interval_openings, network_domain, current_daa).await;
             }
 
@@ -14262,6 +14266,16 @@ impl PalwPanelService {
 
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
+        // **RFC-0007 §II.7: a witness-chunk request (bit 27)** — the producer serves the chunk of the claim's retained witness, on the lane's own
+        // authentication; `None` (silence) where it keeps no such witness or the retained piece no longer matches its digest.
+        if let Some(chunk) = kaspa_consensus_core::palw_weight_block_v1::palw_witness_chunk_request_decode_v1(interval_index) {
+            let served = sketch::palw_witness_chunk_v1(&self.config.retention_dir, &claim, chunk);
+            match &served {
+                Some(bytes) => info!("[{PALW_PANEL}] claim {claim}: served witness chunk {chunk} ({} bytes) — RFC-0007 §II.7", bytes.len()),
+                None => info!("[{PALW_PANEL}] claim {claim}: witness chunk {chunk} is not kept here"),
+            }
+            return served;
+        }
         // **RFC-0007 §II.8: a weight-block request (bit 28)** — any node holding the class answers with the inventory openings of the block's bytes,
         // on the lane's own authentication. The class is named by the root tag the signature binds; the seat verifies the answer against the root.
         if let (Some((site, block)), Some(tag)) =
@@ -15918,6 +15932,48 @@ impl PalwPanelService {
         asked
     }
 
+    /// **RFC-0007 §II.7, one tick of the witness fetches**: each pending claim asks the producer for its witness chunks (once), reads the pool, and when the
+    /// chunks are in decodes the witness and runs the sketch checker beside the replay (`mirror_served_v1`); a refusal at a weight product is picked up
+    /// by the refetch tick that follows. A chunk nobody served by the patience is named in the log by its manifest index.
+    async fn witness_fetch_tick_v1(&self, openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>, network_domain: Hash64, daa: u64) {
+        let Some(sketch) = self.sketch.clone() else { return };
+        let claims: Vec<Hash64> = self.witness_fetches.lock().unwrap().keys().copied().collect();
+        for claim in claims {
+            let Some(mut fetch) = self.witness_fetches.lock().unwrap().remove(&claim) else { continue };
+            match fetch.step(openings, daa) {
+                refetch::WitnessStepV1::Ask(indices) => {
+                    let asked = self.request_fp_interval_openings(network_domain, claim, &indices, daa).await;
+                    info!("[{PALW_PANEL}] claim {claim}: asked for {asked} witness chunk(s) (RFC-0007 §II.7)");
+                    self.witness_fetches.lock().unwrap().insert(claim, fetch);
+                }
+                refetch::WitnessStepV1::Waiting => {
+                    self.witness_fetches.lock().unwrap().insert(claim, fetch);
+                }
+                refetch::WitnessStepV1::Unavailable { chunk_index } => warn!(
+                    "[{PALW_PANEL}] claim {claim}: UNAVAILABLE — witness chunk {chunk_index} of the manifest was not served; the served witness is not \
+                     checked (the replay stands, RFC-0007 §II.7)"
+                ),
+                refetch::WitnessStepV1::Ready(image) => {
+                    let Some(entry) = self.backends().tir_entry_v1(fetch.class_id, fetch.artifact_root) else { continue };
+                    let (sketch, prompt, decode, reproduces) = (sketch.clone(), fetch.prompt.clone(), fetch.decode, fetch.replay_reproduces);
+                    tokio::task::spawn_blocking(move || {
+                        match misaka_palw_tir_sketch::codec::decode(&image) {
+                            Ok(witness) => {
+                                if let Err(why) = sketch.mirror_served_v1(&entry, claim, &prompt, decode, &witness, reproduces, daa) {
+                                    warn!("[{PALW_PANEL}] claim {claim}: the served witness did not check ({why})");
+                                }
+                            }
+                            Err(why) => warn!(
+                                "[{PALW_PANEL}] claim {claim}: the served witness is refused before any check — it does not decode ({why}); the witness is wrong, \
+                                 not the claim (RFC-0007 §II.7)"
+                            ),
+                        };
+                    });
+                }
+            }
+        }
+    }
+
     /// **RFC-0007 §II.8, one tick of the refetches**: pursuits are opened from the refused served witnesses the sketch service holds, stepped with
     /// the interval pool, and concluded — an accusation is recorded as a fault at its named leaf (the existing IR court takes it up), a cleared
     /// check and a withheld block are logged by name.
@@ -16073,6 +16129,27 @@ impl PalwPanelService {
                     && let Some(entry) = self.backends().tir_entry_v1(duty.class_id, duty.artifact_root)
                 {
                     let reproduced = step == PalwSeatReplayStepV1::Licensed;
+                    // **RFC-0007 §II.7: and the producer's served witness, beside it** — asked for by the tick that follows, checked when its chunks
+                    // are in. Not this node's own claim (it would ask itself), and only a class whose attempts commit witness chunks.
+                    if self.bond != Some(duty.executor_bond.0)
+                        && let Some(facts) = session.palw_producer_facts_v2(duty.class_id, None)
+                        && facts.witness_chunks > 0
+                    {
+                        let mut pending = self.witness_fetches.lock().unwrap();
+                        if pending.len() < refetch::REFETCH_PURSUITS_CAP_V1 {
+                            pending.entry(duty.claim_id).or_insert_with(|| {
+                                refetch::WitnessFetchV1::new(
+                                    duty.claim_id,
+                                    duty.class_id,
+                                    duty.artifact_root,
+                                    facts.witness_chunks,
+                                    prompt.to_vec(),
+                                    ctx.exact_decode_tokens,
+                                    reproduced,
+                                )
+                            });
+                        }
+                    }
                     let (claim, prompt, decode, daa) = (duty.claim_id, prompt.to_vec(), ctx.exact_decode_tokens, current_daa);
                     tokio::task::spawn_blocking(move || {
                         if let Err(why) = sketch.mirror_replay_v1(&entry, claim, &prompt, decode, reproduced, daa) {
