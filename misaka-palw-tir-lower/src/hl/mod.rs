@@ -156,7 +156,8 @@ pub enum Op {
     PosScale {
         temp: QTemperature,
     },
-    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`). In: `[x, p [1]]`.
+    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`), or — when `p` has as many elements as `x` — `x ⊙ p`
+    /// (Gemma-3n's `correct_output_scale`). In: `[x, p [1] or [n]]`.
     ScaleParam,
     /// **xIELU** (`ACT_LEARNED_POINTWISE_V1`, Apertus): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
     /// `αp = softplus(p)` and `αn = β + softplus(n)`, the layer's own scalars. In: `[x, p [1], n [1], β [1], ε [1]]`.
@@ -262,6 +263,78 @@ pub enum Op {
     /// Per-group dot product: `out[g] = Σ_{j in group g} a[j]·b[j]`. In: `[a, b]`.
     GroupDot {
         groups: usize,
+    },
+    /// **A data-dependent mix of streams** (`RESIDUAL_ALTUP_V1`): `out[i·D + d] = Σ_j C[i,j]·x[j·D + d]` for the coefficients `C` the second
+    /// input holds — row-major `[n_out, n_in]`, or with `transpose` stored `[n_in, n_out]` (`C[i,j]` is then element `j·n_out + i`).
+    /// In: `[x [n_in·D], C [n_out·n_in]]`.
+    StreamMix {
+        n_in: usize,
+        n_out: usize,
+        transpose: bool,
+    },
+    /// **Manifold-constrained hyper-connections' weights** (`RESIDUAL_MHC_SINKHORN_V1`) from the mix logits `m = fn·RMS(h)` of the `H = streams`
+    /// streams: `pre = σ(m₀·s₀ + b₀) + ε`, `post = 2σ(m₁·s₁ + b₁)` and `comb = sinkhorn(softmax_rows(m₂·s₂ + b₂) + ε)` — the row-softmax of the
+    /// `H × H` logits, `+ ε`, one division by the column sums (`+ ε`), then `iters − 1` times a division by the row sums and one by the column
+    /// sums (every sum `+ ε`). In: `[m [(2 + H)·H], base [(2 + H)·H] (Param), scale [3] (Param)]`. Out: `pre [H]`, `post [H]`, `comb [H·H]`
+    /// row-major (`comb[j, k]` at `j·H + k`).
+    MhcMap {
+        streams: usize,
+        iters: usize,
+        eps: f64,
+    },
+    /// The final collapse's weights (`HyperHead`): `σ(m·s + b) + ε`. In: `[m [H], base [H] (Param), scale [1] (Param)]`.
+    MhcPre {
+        eps: f64,
+    },
+    /// **A window buffer** (`ATTN_COMPRESSED_KV_V1`): row `pos mod ratio` of a `[ratio, w]` `Fixed` state becomes the input. In:
+    /// `[row [w], State(buf), Pos]`; writes the state.
+    WindowWrite {
+        ratio: usize,
+    },
+    /// **The pooled entry of the window just closing** (`ATTN_COMPRESSED_KV_V1`): per channel, the softmax over the window's rows of
+    /// `gate + ape` weights the `kv` rows and they are summed — `[dim]`. Without `overlap` the buffers hold `dim` lanes per row. With it they
+    /// hold `2·dim`: the entry pools the previous window's first series (`prev_kv`, `prev_gate`, `[ratio, dim]` states, weight 0 for window 0)
+    /// with this window's second, and — when this position closes a window — the states become this window's first series (after being read).
+    /// Only the value at a position that closes a window is meaningful. In: `[State(kv), State(gate), ape [ratio, cin] (Param), Pos]`, with
+    /// `overlap` `[…, State(prev_kv), State(prev_gate)]`.
+    WindowPool {
+        ratio: usize,
+        dim: usize,
+        overlap: bool,
+    },
+    /// **Attention over the window and the compressed entries** (`ATTN_COMPRESSED_KV_V1`): one head of keys (= values), the `window` last rows
+    /// of the history and the entries `t < (pos + 1)/ratio` of the `[blocks, head_dim]` store — only those `ids` name, when a selection is given —
+    /// in one softmax with the per-head sink. In: `[q [heads·head_dim], State(window history), State(entries), sinks (Param [heads]), Pos]`,
+    /// then `ids [topk]` (an [`Op::EntrySelect`]'s) when selecting. The entry that closes at this position is already in the store (its
+    /// [`Op::BlockWrite`] comes before).
+    EntryAttention {
+        heads: usize,
+        head_dim: usize,
+        ratio: usize,
+        blocks: usize,
+        scale: f64,
+        select: bool,
+    },
+    /// **The lightning indexer's selection** (`ATTN_ENTRY_INDEXER_V1`): entry `t < (pos + 1)/ratio` scores `Σ_h w_h·ReLU(q_h·k_t)/√dim`
+    /// (the entry that closes at this position is the candidate row, not yet in the store); the `top` best, ties to the lowest index, as
+    /// a fixed-size id vector. In: `[q [heads·dim], w [heads], cand [dim], State(keys), Pos]`.
+    EntrySelect {
+        heads: usize,
+        dim: usize,
+        ratio: usize,
+        blocks: usize,
+        top: usize,
+    },
+    /// **A magnitude match** (`RESIDUAL_ALTUP_V1`): `x · rms(r) / √max(mean(x²), floor)` with `rms(r) = √mean(r²)`. In: `[x, r]`.
+    RmsMatch {
+        floor: f64,
+    },
+    /// **`FFN_ACTIVATION_SPARSITY_V1`**: `relu(x − (mean(x) + z·std(x)))` over the whole row, `std` the biased one — for the layers
+    /// of `layers` that name a `z`; the others (`None`: a dense layer of a model that sparsifies some) pass the row through. The
+    /// constants are DATA of the layer, so layers that differ only in them run one block (the block count of a program is capped).
+    /// `(model layer, z)` of every layer that runs this block. In: `[x]`.
+    GaussianTopK {
+        layers: Vec<(usize, Option<f64>)>,
     },
     /// Each element repeated `size` times: `out[g·size + j] = a[g]` (a per-head gate over the head's width). In: `[a [groups]]`.
     GroupRepeat {
@@ -369,6 +442,15 @@ impl Op {
             Op::StreamOuter { .. } => "StreamOuter",
             Op::GroupDot { .. } => "GroupDot",
             Op::GroupRepeat { .. } => "GroupRepeat",
+            Op::StreamMix { .. } => "StreamMix",
+            Op::MhcMap { .. } => "MhcMap",
+            Op::MhcPre { .. } => "MhcPre",
+            Op::WindowWrite { .. } => "WindowWrite",
+            Op::WindowPool { .. } => "WindowPool",
+            Op::EntryAttention { .. } => "EntryAttention",
+            Op::EntrySelect { .. } => "EntrySelect",
+            Op::RmsMatch { .. } => "RmsMatch",
+            Op::GaussianTopK { .. } => "GaussianTopK",
             Op::NgramIds { .. } => "NgramIds",
             Op::GatherRows { .. } => "GatherRows",
             Op::BlockMean { .. } => "BlockMean",

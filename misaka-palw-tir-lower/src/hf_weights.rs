@@ -197,6 +197,21 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         m.lin("hc.final.down", "hc.final.down", false)?;
         m.lin("hc.final.up", "hc.final.up", false)?;
     }
+    // Manifold-constrained hyper-connections: the head's collapse (bare tensors).
+    if spec.mhc.is_some() {
+        m.put("mhc.head.fn.w", Src::t(m.role("mhc.head.fn")?))?;
+        m.put("mhc.head.base", Src::t(m.role("mhc.head.base")?))?;
+        m.put("mhc.head.scale", Src::t(m.role("mhc.head.scale")?))?;
+    }
+    // AltUp: the projections that make the other streams from the embedding and bring them back (`{I}` is the projection's index, 0-based).
+    if let Some(au) = &spec.altup {
+        for i in 1..au.streams {
+            for (name, role) in [("altup.proj", "altup.proj"), ("altup.unembed", "altup.unembed")] {
+                let t = m.role(role)?.replace("{I}", &(i - 1).to_string());
+                m.put(format!("{name}{i}.w"), Src::t(format!("{t}.weight")))?;
+            }
+        }
+    }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
@@ -263,6 +278,17 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
 }
 
+/// Gemma-3n/4's per-layer input: the layer's slices of the two tensors packed over the layers, the norms and the branch's projections.
+fn bind_ple(m: &mut M, p: &PleSpec) -> Result<()> {
+    m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
+    m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
+    m.norm("ple.norm", "ple.norm", &p.norm)?;
+    m.lin("ple.gate", "ple.gate", false)?;
+    m.lin("ple.out", "ple.out", false)?;
+    m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+    Ok(())
+}
+
 fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> Result<()> {
     match &ls.residual {
         Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, .. } => {
@@ -291,16 +317,42 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
                 m.norm(name, name, n)?;
             }
             if let Some(p) = ple {
-                // The layer's slices of the two tensors packed over the layers.
-                m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
-                m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
-                m.norm("ple.norm", "ple.norm", &p.norm)?;
-                m.lin("ple.gate", "ple.gate", false)?;
-                m.lin("ple.out", "ple.out", false)?;
-                m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+                bind_ple(m, p)?;
             }
             if *layer_scalar {
                 m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
+            }
+        }
+        Residual::Mhc { pre_mixer, pre_ffn } => {
+            for tag in ["attn", "ffn"] {
+                // The mixing parameters are bare tensors (`hc_attn_fn`, `hc_attn_base`, `hc_attn_scale`).
+                m.put(format!("mhc.{tag}.fn.w"), Src::t(m.role(&format!("mhc.{tag}.fn"))?))?;
+                m.put(format!("mhc.{tag}.base"), Src::t(m.role(&format!("mhc.{tag}.base"))?))?;
+                m.put(format!("mhc.{tag}.scale"), Src::t(m.role(&format!("mhc.{tag}.scale"))?))?;
+            }
+            m.norm("norm.mix", "norm.mix", pre_mixer)?;
+            m.norm("norm.ffn", "norm.ffn", pre_ffn)?;
+        }
+        Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } => {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
+                m.norm(name, name, n)?;
+            }
+            m.norm("altup.router_norm", "altup.router_norm", router_norm)?;
+            for name in ["altup.router", "altup.pred_coefs", "altup.correction_coefs"] {
+                m.lin(name, name, false)?;
+            }
+            if spec.altup.as_ref().is_some_and(|a| a.correct_scale) && ple.is_some() {
+                m.put("altup.correct_scale", Src::t(m.role("altup.correct_scale")?))?;
+            }
+            if let Some(l) = laurel {
+                m.lin("laurel.left", "laurel.left", false)?;
+                m.lin("laurel.right", "laurel.right", false)?;
+                m.norm("laurel.norm", "laurel.norm", &l.post_norm)?;
+            }
+            if let Some(p) = ple {
+                bind_ple(m, p)?;
             }
         }
         Residual::HyperConnection { ple } => {
@@ -354,6 +406,44 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
             for b in bs {
                 bind_mixer(m, spec, &b.mixer, rescale)?;
             }
+        }
+        Mixer::SharedKv(a) => shared_kv(m, a)?,
+    }
+    Ok(())
+}
+
+/// DeepSeek-V4's attention: the low-rank query, the one key/value head, the sinks, the grouped output projection (the `o_a` weight is one
+/// tensor of `groups·rank` rows: group `g` is its rows `[g·rank, (g+1)·rank)`) and the compressors.
+fn shared_kv(m: &mut M, a: &SharedKvSpec) -> Result<()> {
+    m.lin("attn.wq_a", "attn.wq_a", false)?;
+    m.norm("attn.q_a_norm", "attn.q_a_norm", &a.q_a_norm)?;
+    m.lin("attn.wq_b", "attn.wq_b", false)?;
+    m.norm("attn.q_b_norm", "attn.q_b_norm", &a.q_b_norm)?;
+    m.lin("attn.wkv", "attn.wkv", false)?;
+    m.norm("attn.kv_norm", "attn.kv_norm", &a.kv_norm)?;
+    if a.sinks {
+        m.put("attn.sinks", Src::t(m.role("attn.sinks")?))?;
+    }
+    let full = Src::t(format!("{}.weight", m.role("attn.wo_a")?));
+    for g in 0..a.o_groups {
+        m.put(format!("attn.wo_a{g}.w"), full.clone().rows(Pick::Range { start: g * a.o_rank, len: a.o_rank }))?;
+    }
+    m.lin("attn.wo_b", "attn.wo_b", false)?;
+    if let Some(c) = &a.compressed {
+        for pfx in [if c.overlap { "attn.csa" } else { "attn.hca" }] {
+            m.lin(&format!("{pfx}.wkv"), &format!("{pfx}.wkv"), false)?;
+            m.lin(&format!("{pfx}.wgate"), &format!("{pfx}.wgate"), false)?;
+            m.put(format!("{pfx}.ape"), Src::t(m.role(&format!("{pfx}.ape"))?))?;
+            m.norm(&format!("{pfx}.norm"), &format!("{pfx}.norm"), &c.norm)?;
+        }
+        if let Some(ix) = &c.indexer {
+            let pfx = "attn.idx.comp";
+            m.lin(&format!("{pfx}.wkv"), &format!("{pfx}.wkv"), false)?;
+            m.lin(&format!("{pfx}.wgate"), &format!("{pfx}.wgate"), false)?;
+            m.put(format!("{pfx}.ape"), Src::t(m.role(&format!("{pfx}.ape"))?))?;
+            m.norm(&format!("{pfx}.norm"), &format!("{pfx}.norm"), &ix.norm)?;
+            m.lin("attn.idx.wq_b", "attn.idx.wq_b", false)?;
+            m.lin("attn.idx.weights_proj", "attn.idx.weights_proj", false)?;
         }
     }
     Ok(())
@@ -779,6 +869,9 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;
     }
+    if s.router.scoring == Scoring::SqrtSoftplusHash {
+        m.put("moe.tid2eid", Src::t(m.role("moe.tid2eid")?))?;
+    }
     if s.router.per_expert_scale {
         m.put("moe.expert_scale", Src::t(m.role("moe.expert_scale")?))?;
     }
@@ -832,11 +925,12 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             intermediate: sh.intermediate,
             act: s.act,
             gated: s.gated,
-            glu: Glu::Standard,
+            glu: if matches!(s.glu, Glu::LimitedGlu { .. }) { s.glu } else { Glu::Standard },
             up_bias: false,
             down_bias: false,
             inner_norm: None,
             name: None,
+            sparsity: None,
         };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {

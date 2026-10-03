@@ -646,6 +646,180 @@ impl<'a> Session<'a> {
                 }
                 one((0..*streams).flat_map(|k| o.iter().map(move |v| *v * w[k]).collect::<Vec<f32>>()).collect())
             }
+            Op::StreamMix { n_in, n_out, transpose } => {
+                let (v, c) = (x(0)?, x(1)?);
+                if v.len() % n_in != 0 || c.len() != n_in * n_out {
+                    return Err(LowerError::eval(format!("StreamMix: {} values over {n_in} streams, {} coefficients for {n_out}×{n_in}", v.len(), c.len())));
+                }
+                let d = v.len() / n_in;
+                let coef = |i: usize, j: usize| if *transpose { c[j * n_out + i] } else { c[i * n_in + j] } as f64;
+                one((0..*n_out)
+                    .flat_map(|i| (0..d).map(move |k| (i, k)))
+                    .map(|(i, k)| (0..*n_in).map(|j| coef(i, j) * v[j * d + k] as f64).sum::<f64>() as f32)
+                    .collect())
+            }
+            Op::RmsMatch { floor } => {
+                let (v, r) = (x(0)?, x(1)?);
+                let ms = |s: &[f32]| s.iter().map(|a| (*a as f64) * (*a as f64)).sum::<f64>() / s.len() as f64;
+                let k = ms(r).sqrt() / ms(v).max(*floor).sqrt();
+                one(v.iter().map(|a| (*a as f64 * k) as f32).collect())
+            }
+            Op::GaussianTopK { layers } => {
+                let v = x(0)?;
+                let l = self.prog.model_layer(layer.ok_or_else(|| LowerError::eval("GaussianTopK outside a layer"))?);
+                let z = layers
+                    .iter()
+                    .find(|(ml, _)| *ml == l)
+                    .ok_or_else(|| LowerError::eval(format!("GaussianTopK: layer {l} does not run this block")))?
+                    .1;
+                // A dense layer of a model that sparsifies others: the row passes through.
+                let Some(z) = z else { return one(v.to_vec()) };
+                let n = v.len() as f64;
+                let mean = v.iter().map(|a| *a as f64).sum::<f64>() / n;
+                let std = (v.iter().map(|a| (*a as f64 - mean) * (*a as f64 - mean)).sum::<f64>() / n).sqrt();
+                // transformers casts the multiplier to the activation's dtype (float32).
+                let cut = mean + std * (z as f32) as f64;
+                one(v.iter().map(|a| (*a as f64 - cut).max(0.0) as f32).collect())
+            }
+            Op::MhcMap { streams, iters, eps } => {
+                let (m, base, scale) = (x(0)?.to_vec(), self.param(ins[1], layer)?, self.param(ins[2], layer)?);
+                let hc = *streams;
+                if m.len() != (2 + hc) * hc || base.data.len() != m.len() || scale.data.len() != 3 {
+                    return Err(LowerError::eval(format!("MhcMap: {} mixes for {hc} streams", m.len())));
+                }
+                let sg = |v: f64| 1.0 / (1.0 + (-v).exp());
+                let (s0, s1, s2) = (scale.data[0] as f64, scale.data[1] as f64, scale.data[2] as f64);
+                let pre: Vec<f32> = (0..hc).map(|i| (sg(m[i] as f64 * s0 + base.data[i] as f64) + eps) as f32).collect();
+                let post: Vec<f32> = (0..hc).map(|i| (2.0 * sg(m[hc + i] as f64 * s1 + base.data[hc + i] as f64)) as f32).collect();
+                let comb = sinkhorn(&(0..hc * hc).map(|i| m[2 * hc + i] as f64 * s2 + base.data[2 * hc + i] as f64).collect::<Vec<_>>(), hc, *iters, *eps);
+                let comb: Vec<f32> = comb.into_iter().map(|v| v as f32).collect();
+                for (sub, v) in [("pre", &pre), ("post", &post), ("comb", &comb)] {
+                    self.sub_site(prefix, &node.site, sub, v);
+                }
+                Ok(vec![pre, post, comb])
+            }
+            Op::MhcPre { eps } => {
+                let (m, base, scale) = (x(0)?, self.param(ins[1], layer)?, self.param(ins[2], layer)?);
+                one(m
+                    .iter()
+                    .zip(&base.data)
+                    .map(|(a, b)| (1.0 / (1.0 + (-(*a as f64 * scale.data[0] as f64 + *b as f64)).exp()) + eps) as f32)
+                    .collect())
+            }
+            Op::WindowWrite { ratio } => {
+                let Ref::State(s) = ins[1] else { return Err(LowerError::eval("WindowWrite without a state")) };
+                let row = x(0)?.to_vec();
+                let w = row.len();
+                let slot = pos % ratio;
+                self.fixed_mut(s, lyr)[slot * w..(slot + 1) * w].copy_from_slice(&row);
+                Ok(vec![vec![]])
+            }
+            Op::WindowPool { ratio, dim, overlap } => {
+                let (Ref::State(sk), Ref::State(sg)) = (ins[0], ins[1]) else { return Err(LowerError::eval("WindowPool without its buffers")) };
+                let ape = self.param(ins[2], layer)?;
+                let m = *ratio;
+                let cin = dim * if *overlap { 2 } else { 1 };
+                if ape.data.len() != m * cin {
+                    return Err(LowerError::eval(format!("WindowPool: ape of {} for {m}×{cin}", ape.data.len())));
+                }
+                let (kvb, gb) = (self.fixed_mut(sk, lyr).clone(), self.fixed_mut(sg, lyr).clone());
+                let prev = if *overlap {
+                    let (Ref::State(pk), Ref::State(pg)) = (ins[4], ins[5]) else { return Err(LowerError::eval("WindowPool without its overlap states")) };
+                    Some((pk, pg, self.fixed_mut(pk, lyr).clone(), self.fixed_mut(pg, lyr).clone()))
+                } else {
+                    None
+                };
+                let off = if *overlap { *dim } else { 0 };
+                // The window just closing (its index is `pos / ratio` at the position that closes it); window 0 has no previous half.
+                let have_prev = pos / m >= 1;
+                let mut pooled = vec![0f32; *dim];
+                for (ch, out) in pooled.iter_mut().enumerate() {
+                    let mut rows: Vec<(f64, f64)> = Vec::with_capacity(2 * m);
+                    if let (Some((_, _, pk, pg)), true) = (&prev, have_prev) {
+                        for j in 0..m {
+                            rows.push((pg[j * dim + ch] as f64 + ape.data[j * cin + ch] as f64, pk[j * dim + ch] as f64));
+                        }
+                    }
+                    for j in 0..m {
+                        rows.push((gb[j * cin + off + ch] as f64 + ape.data[j * cin + off + ch] as f64, kvb[j * cin + off + ch] as f64));
+                    }
+                    let mx = rows.iter().fold(f64::NEG_INFINITY, |a, (g, _)| a.max(*g));
+                    let den: f64 = rows.iter().map(|(g, _)| (g - mx).exp()).sum();
+                    *out = (rows.iter().map(|(g, v)| (g - mx).exp() / den * v).sum::<f64>()) as f32;
+                }
+                // At the end of a window its FIRST series (rows `[0, dim)`) becomes the next window's previous half.
+                if let Some((pk, pg, ..)) = prev
+                    && (pos + 1) % m == 0
+                {
+                    let dimu = *dim;
+                    let (nk, ng): (Vec<f32>, Vec<f32>) = (0..m * dimu).map(|i| (kvb[(i / dimu) * cin + i % dimu], gb[(i / dimu) * cin + i % dimu])).unzip();
+                    *self.fixed_mut(pk, lyr) = nk;
+                    *self.fixed_mut(pg, lyr) = ng;
+                }
+                one(pooled)
+            }
+            Op::EntrySelect { heads, dim, ratio, blocks, top } => {
+                let Ref::State(s) = ins[3] else { return Err(LowerError::eval("EntrySelect without a state")) };
+                let (q, w, cand) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec());
+                let keys = self.fixed_mut(s, lyr).clone();
+                let complete_old = pos / ratio;
+                let completing = (pos + 1) % ratio == 0;
+                let score = |key: &[f32]| -> f64 {
+                    (0..*heads)
+                        .map(|h| w[h] as f64 * (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0))
+                        .sum::<f64>()
+                        / (*dim as f64).sqrt()
+                };
+                let scores: Vec<f64> = (0..*blocks)
+                    .map(|b| {
+                        if b < complete_old {
+                            score(&keys[b * dim..(b + 1) * dim])
+                        } else if b == complete_old && completing {
+                            score(&cand)
+                        } else {
+                            f64::NEG_INFINITY
+                        }
+                    })
+                    .collect();
+                one(top_k_indices(&scores, *top).into_iter().map(|i| i as f32).collect())
+            }
+            Op::EntryAttention { heads, head_dim, ratio, blocks, scale, select } => {
+                let (Ref::State(hs), Ref::State(es)) = (ins[1], ins[2]) else { return Err(LowerError::eval("EntryAttention without its states")) };
+                let q = x(0)?.to_vec();
+                let sinks = self.param(ins[3], layer)?.data.clone();
+                let window = match self.prog.states[hs as usize].kind {
+                    StateKind::Hist { window } => window,
+                    StateKind::Fixed => return Err(LowerError::eval("EntryAttention over a Fixed history")),
+                };
+                let rows: &[Vec<f32>] = self.hist.get(&(hs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
+                let keep_from = window.map_or(0, |w| rows.len().saturating_sub(w));
+                let win: Vec<Vec<f32>> = rows[keep_from..].to_vec();
+                let store = self.fixed_mut(es, lyr).clone();
+                let count = ((pos + 1) / ratio).min(*blocks);
+                let chosen: Option<std::collections::BTreeSet<usize>> =
+                    if *select { Some(x(5)?.iter().map(|v| *v as usize).collect()) } else { None };
+                let hd = *head_dim;
+                let entry_rows: Vec<&[f32]> =
+                    (0..count).filter(|t| chosen.as_ref().is_none_or(|c| c.contains(t))).map(|t| &store[t * hd..(t + 1) * hd]).collect();
+                let mut out = vec![0f32; heads * hd];
+                for h in 0..*heads {
+                    let qh = &q[h * hd..(h + 1) * hd];
+                    let dot = |k: &[f32]| qh.iter().zip(k).map(|(a, b)| *a as f64 * *b as f64).sum::<f64>() * scale;
+                    let mut logits: Vec<f64> = win.iter().map(|k| dot(k)).collect();
+                    logits.extend(entry_rows.iter().map(|k| dot(k)));
+                    let all: Vec<&[f32]> = win.iter().map(|r| r.as_slice()).chain(entry_rows.iter().copied()).collect();
+                    let sink = sinks[h] as f64;
+                    let mx = logits.iter().fold(sink, |a, l| a.max(*l));
+                    let den: f64 = logits.iter().map(|l| (l - mx).exp()).sum::<f64>() + (sink - mx).exp();
+                    for (l, k) in logits.iter().zip(&all) {
+                        let p = (l - mx).exp() / den;
+                        for (o, kv) in out[h * hd..(h + 1) * hd].iter_mut().zip(*k) {
+                            *o += (p * *kv as f64) as f32;
+                        }
+                    }
+                }
+                one(out)
+            }
             Op::GroupDot { groups } => {
                 let (a, b) = (x(0)?, x(1)?);
                 let g = a.len() / groups;
@@ -749,8 +923,14 @@ impl<'a> Session<'a> {
                 one(x(0)?.iter().map(|v| v * t).collect())
             }
             Op::ScaleParam => {
-                let c = self.param(ins[1], layer)?.data[0];
-                one(x(0)?.iter().map(|v| v * c).collect())
+                let p = self.param(ins[1], layer)?;
+                let v = x(0)?;
+                // One scalar, or one factor per element (`correct_output_scale`).
+                match p.data.len() {
+                    1 => one(v.iter().map(|a| a * p.data[0]).collect()),
+                    n if n == v.len() => one(v.iter().zip(&p.data).map(|(a, c)| a * c).collect()),
+                    n => Err(LowerError::eval(format!("ScaleParam: {n} factors for {} values", v.len()))),
+                }
             }
             Op::HistAppend => {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("HistAppend without a state")) };
@@ -914,10 +1094,22 @@ impl<'a> Session<'a> {
             Op::Route { router, experts, top_k } => {
                 let logits = x(0)?.to_vec();
                 let sel_bias = if router.selection_bias { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
-                let (idx, mut w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
+                // Hash routing: the frozen table's row of this token (the param right after the selection bias).
+                let hash_row: Option<Vec<usize>> = if router.scoring == Scoring::SqrtSoftplusHash {
+                    let at = 1 + usize::from(router.selection_bias);
+                    let t = self.param(ins[at], layer)?;
+                    let width = *t.shape.last().ok_or_else(|| LowerError::eval("a hash table without a shape"))?;
+                    if width != *top_k || (token + 1) * width > t.data.len() {
+                        return Err(LowerError::eval(format!("hash table of width {width} for top-{top_k}, token {token}")));
+                    }
+                    Some(t.data[token * width..(token + 1) * width].iter().map(|v| *v as usize).collect())
+                } else {
+                    None
+                };
+                let (idx, mut w) = route_hashed(&logits, sel_bias.as_deref(), hash_row.as_deref(), router, *experts, *top_k);
                 // Gemma-4: a learned per-expert scale on each selected weight.
                 if router.per_expert_scale {
-                    let pes = self.param(ins[1 + usize::from(router.selection_bias)], layer)?;
+                    let pes = self.param(ins[1 + usize::from(router.selection_bias) + usize::from(router.scoring == Scoring::SqrtSoftplusHash)], layer)?;
                     for (wj, e) in w.iter_mut().zip(&idx) {
                         *wj *= pes.data[*e];
                     }
@@ -953,12 +1145,18 @@ impl<'a> Session<'a> {
                     let db = biases.map(|(_, _, c)| slice(c, e)).transpose()?;
                     // Llama-4: the expert reads `w · x` (in float32, as transformers scales it).
                     let xs: Vec<f32> = if *input_scaled { xv.iter().map(|v| v * w[j]).collect() } else { xv.clone() };
-                    let uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
+                    let mut uv = linear_raw(&xs, &uw, e_i, ub.as_deref());
                     let (gv, hv): (Vec<f32>, Vec<f32>) = match &gw {
                         Some(gw) => {
-                            let gv = linear_raw(&xs, gw, e_i, gb.as_deref());
+                            let mut gv = linear_raw(&xs, gw, e_i, gb.as_deref());
+                            // DeepSeek-V4's `swiglu_limit`: `min(gate, L)` and `clamp(up, −L, L)` before the product; the sites hold the clamped rows.
+                            if let Glu::LimitedGlu { limit } = glu {
+                                let l = *limit as f32;
+                                gv.iter_mut().for_each(|g| *g = g.min(l));
+                                uv.iter_mut().for_each(|u| *u = u.clamp(-l, l));
+                            }
                             let hv = match glu {
-                                Glu::Standard => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
+                                Glu::Standard | Glu::LimitedGlu { .. } => gv.iter().zip(&uv).map(|(g, u)| act(*a, *g) * *u).collect(),
                                 Glu::ClampedSwiGlu { alpha, limit } => {
                                     gv.iter().zip(&uv).map(|(g, u)| clamped_swiglu(*g, *u, *alpha, *limit)).collect()
                                 }
@@ -1656,6 +1854,48 @@ pub fn top_k_indices(v: &[f64], k: usize) -> Vec<usize> {
 /// with 0 and weight by the masked scores (DeepSeek-V2); sigmoid routers mask with −∞ on the
 /// bias-corrected choice scores and weight by the raw scores (DeepSeek-V3).
 pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize, k: usize) -> (Vec<usize>, Vec<f32>) {
+    route_hashed(logits, sel_bias, None, r, e, k)
+}
+
+/// The Sinkhorn projection of mHC's `comb` (`DeepseekV4HyperConnection.forward`): the row-softmax of the `h × h` logits plus `eps`, one
+/// division by the column sums (plus `eps`), then `iters − 1` times a division by the row sums and one by the column sums.
+pub fn sinkhorn(logits: &[f64], h: usize, iters: usize, eps: f64) -> Vec<f64> {
+    let mut c = vec![0f64; h * h];
+    for j in 0..h {
+        let row = &logits[j * h..(j + 1) * h];
+        let mx = row.iter().fold(f64::NEG_INFINITY, |a, v| a.max(*v));
+        let den: f64 = row.iter().map(|v| (v - mx).exp()).sum();
+        for k in 0..h {
+            c[j * h + k] = (row[k] - mx).exp() / den + eps;
+        }
+    }
+    let cols = |c: &mut [f64]| {
+        for k in 0..h {
+            let s: f64 = (0..h).map(|j| c[j * h + k]).sum::<f64>() + eps;
+            (0..h).for_each(|j| c[j * h + k] /= s);
+        }
+    };
+    let rows = |c: &mut [f64]| {
+        for j in 0..h {
+            let s: f64 = c[j * h..(j + 1) * h].iter().sum::<f64>() + eps;
+            c[j * h..(j + 1) * h].iter_mut().for_each(|v| *v /= s);
+        }
+    };
+    cols(&mut c);
+    for _ in 0..iters.saturating_sub(1) {
+        rows(&mut c);
+        cols(&mut c);
+    }
+    c
+}
+
+/// `√softplus(x)` as torch computes it: `softplus` returns `x` past 20, `log1p(exp(x))` below.
+pub fn sqrt_softplus(x: f64) -> f64 {
+    (if x > 20.0 { x } else { crate::detmath::ln_1p(crate::detmath::exp(x)) }).sqrt()
+}
+
+/// [`route`] with the row of the frozen token table a hash router reads (`tid2eid[token]`).
+pub fn route_hashed(logits: &[f32], sel_bias: Option<&[f32]>, hash_row: Option<&[usize]>, r: &RouterSpec, e: usize, k: usize) -> (Vec<usize>, Vec<f32>) {
     let l: Vec<f64> = logits.iter().map(|x| *x as f64).collect();
     if r.scoring == Scoring::SparseMixer {
         return sparsemixer(&l, r.jitter_eps, r.scale);
@@ -1670,6 +1910,12 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
         }
         Scoring::Sigmoid => {
             let s: Vec<f64> = l.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
+            let c = s.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
+            (s, c)
+        }
+        // DeepSeek-V4: `√softplus(logit)`, the selection bias joining the CHOICE scores only.
+        Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => {
+            let s: Vec<f64> = l.iter().map(|x| sqrt_softplus(*x)).collect();
             let c = s.iter().enumerate().map(|(i, v)| v + sel_bias.map(|b| b[i] as f64).unwrap_or(0.0)).collect();
             (s, c)
         }
@@ -1699,13 +1945,17 @@ pub fn route(logits: &[f32], sel_bias: Option<&[f32]>, r: &RouterSpec, e: usize,
             }
         }
     }
-    let idx = top_k_indices(&choice, k);
+    // Hash routing picks the table's row (in the table's order); every other router the top-k of the choice scores.
+    let idx = match hash_row {
+        Some(row) if r.scoring == Scoring::SqrtSoftplusHash => row.to_vec(),
+        _ => top_k_indices(&choice, k),
+    };
     let mut w: Vec<f64> = match r.scoring {
         Scoring::TopKThenSoftmax | Scoring::SparseMixer => softmax_with_sink(&idx.iter().map(|i| l[*i]).collect::<Vec<_>>(), None),
         // Softmax weights are the choice scores — masked experts (DeepSeek-V2's group-limited greedy) weigh 0 — unless a
         // selection bias made the choice scores something else: then the weights stay the unbiased probabilities.
         Scoring::Softmax if sel_bias.is_none() => idx.iter().map(|i| choice[*i]).collect(),
-        Scoring::Softmax | Scoring::Sigmoid => idx.iter().map(|i| scores[*i]).collect(),
+        Scoring::Softmax | Scoring::Sigmoid | Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => idx.iter().map(|i| scores[*i]).collect(),
         Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {
