@@ -227,6 +227,45 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     let (storage, quant_blockers) = storage_of(src, reg);
     blockers.extend(quant_blockers);
 
+    // ---- a kind the decoder pipeline does not run: its RFC-0003 route (a vision tower, a convolutional network, an encoder–decoder, a
+    // diffusers component) is read, lowered to its version-2 programs and admitted, and that is the convert stage's verdict ------------
+    let mut routed_ok = false;
+    let is_route = src.gguf_model.is_none() && src.config.as_ref().is_some_and(misaka_palw_tir_lower::model::route::is_data_route);
+    if let (Some(config), None) = (&src.config, &src.gguf_model)
+        && misaka_palw_tir_lower::model::route::is_data_route(config)
+    {
+        let dir = (src.kind == InputKind::HfDirectory).then(|| std::path::PathBuf::from(&src.label)).filter(|d| d.is_dir());
+        let probe = misaka_palw_tir_lower::model::route::probe_data_route(config, tindex.as_ref(), dir.as_deref());
+        if probe["ok"] == serde_json::json!(true) {
+            routed_ok = true;
+            let programs = probe["programs"].as_array().cloned().unwrap_or_default();
+            notes.push(format!(
+                "a {} class (adapter {}): lowered to {} RFC-0003 program(s), each admitted ({}); it registers as a pipeline class, whose rules are the generative lane's (RFC-0003) and are not judged here",
+                probe["kind"].as_str().unwrap_or("?"),
+                probe["adapter"].as_str().unwrap_or("?"),
+                programs.len(),
+                programs
+                    .iter()
+                    .map(|p| format!("{} nodes, {:.0} MACs", p["nodes"], p["macs"].as_f64().unwrap_or(0.0)))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        } else {
+            blockers.push(
+                Blocker::new(Stage::Convert, "ARCH_REFUSED", "the model's data route (RFC-0003 programs) refuses it")
+                    .evidence([short(probe["error"].as_str().unwrap_or("no reason given"))]),
+            );
+            routed_ok = false;
+        }
+        // Either way the decoder pipeline's own refusal is not the verdict of a kind it does not run.
+        report = report.map(|mut r| {
+            r.result = ReportResult::Lowerable;
+            r.missing.clear();
+            r
+        });
+        lowerable = false;
+    }
+
     // ---- the frontend's verdict ------------------------------------------------------------------------------------------
     if let Some(r) = &report {
         if let ReportResult::NotLowerable { reason } = &r.result {
@@ -290,7 +329,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             spec_digest: None,
             history_bound,
         });
-        for f in r.features.iter().filter(|f| f.status == FeatureStatus::Missing) {
+        for f in r.features.iter().filter(|f| f.status == FeatureStatus::Missing && !is_route) {
             // Reported as blockers above through `missing`; a feature without a `missing` row still blocks.
             if !r.missing.iter().any(|m| m.what == f.id)
                 && !blockers.iter().any(|b| b.code == "ARCH_NEEDS_FEATURE" && b.arg.as_deref() == Some(&f.id))
@@ -400,7 +439,8 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         InputKind::Gguf => src.gguf_file.as_ref().map(|g| g.meta.contains_key("tokenizer.ggml.tokens")),
         _ => None,
     };
-    if tokenizer_known == Some(false) {
+    let needs_tokenizer = !is_route || src.config.as_ref().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
+    if tokenizer_known == Some(false) && needs_tokenizer {
         blockers.push(
             Blocker::new(
                 Stage::Convert,
