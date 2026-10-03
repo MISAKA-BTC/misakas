@@ -367,9 +367,31 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                  build before it needs a height"
             ));
         }
-        other => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
+        // **Every fence the testnet-12 flag days arm, and the ones armed nowhere (the model court window, `palw_tir_only_v1`),
+        // by the fence's OWN entry** — the setter the release list, the drill and the tests use, which writes the field and the
+        // fold's mirror together. One table, so a fence added to a flag-day list is spelled here by being on it; a name on no list
+        // still needs its own arm above.
+        other => match palw_candidate_entry_v1(other) {
+            Some(entry) => (entry.set)(params, Some(at)),
+            None => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
+        },
     }
     Ok(())
+}
+
+/// The flag-day entry that spells `name`, if one does: the int-11/int-12 list, the IR flag days' lists and the two fences no
+/// testnet-12 list arms.
+fn palw_candidate_entry_v1(name: &str) -> Option<&'static kaspa_consensus_core::config::params::PalwPostLaunchFenceV1> {
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_INT11_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_ENTRY, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
+    };
+    PALW_T12_INT11_FENCES_V1
+        .iter()
+        .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
+        .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
+        .chain(std::iter::once(&PALW_T12_MODEL_COURT_WINDOW_ENTRY))
+        .chain(kaspa_consensus_core::palw_tir_only_v1::PALW_DRILL_TIR_ONLY_FENCES_V1)
+        .find(|entry| entry.name == name)
 }
 
 /// The four fingerprints of one `Params`, as the report prints them.
