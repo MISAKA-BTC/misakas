@@ -3009,6 +3009,18 @@ pub struct Params {
     /// the cursor, the floor and the lead cap at or below it.
     pub palw_real_clock_tick_v1: Option<ForkActivation>,
 
+    /// **ADR-0170 (lane anchor/window): the seed anchor is a window, not a span**
+    /// (`crate::palw_anchor_window_v1`). Past it a chain block's MERGED admitted attempts (blue or red) record the
+    /// execution lane's seed anchor beside its own attempt, the anchor is not cleared at span boundaries, and ADR-0147's
+    /// admission jury and the schedule seeding read the latest anchor within `S − 24 … S − 1` (the jury's population cut at
+    /// the anchor's span). Without it the reserve (`palw_floor_reserve_v1`) leaves 2–3 % of spans anchored and a Candidate's
+    /// audit seats in 2.7 % of its periods. A bare height; its companion values (the window, M1) are hashed with it
+    /// ([`crate::palw_anchor_window_v1::palw_anchor_window_value_v1`]). `None` on every preset until the DAA-5,300 flag day
+    /// arms it. Hashed Some-only in every writer with the `never()` collapse. Refused by
+    /// [`Self::validate_palw_anchor_window_v1`] off ConsensusV2, without the execution lane, the economic-safety bundle, the
+    /// admission jury or the model registry at or below it, or with the bundle's mirror unsynced.
+    pub palw_anchor_window_v1: Option<ForkActivation>,
+
     /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
     /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
     /// jobs, promotion and rewards (spec 17). The value carries the scoring library's and the sign
@@ -4960,7 +4972,9 @@ impl Params {
             // Lane A (the operator anchor, post-launch): over R-core+, likewise.
             self.validate_palw_operator_anchor_v1()?;
             // ADR-0160 lane liab (F-L): over R-core+ and the attribution fence, likewise.
-            return self.validate_palw_capacity_liability_v1();
+            self.validate_palw_capacity_liability_v1()?;
+            // ADR-0170's window: last on this path too (see the ConsensusV2 tail below); a ruleset with no V2 bundle refuses it by name.
+            return self.validate_palw_anchor_window_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -5829,7 +5843,11 @@ impl Params {
         // Lane A (the operator anchor, post-launch): over R-core+, likewise.
         self.validate_palw_operator_anchor_v1()?;
         // ADR-0160 lane liab (F-L): over R-core+ and the attribution fence, likewise.
-        self.validate_palw_capacity_liability_v1()
+        self.validate_palw_capacity_liability_v1()?;
+        // **ADR-0170: the seed anchor window's refusals** (`crate::palw_anchor_window_v1`) — last, after every fence's own refusal, so a
+        // prerequisite it shares with another fence (the execution lane, the economic-safety bundle, ADR-0147's jury, the registry) is
+        // named by that fence's own refusal first.
+        self.validate_palw_anchor_window_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -6408,6 +6426,10 @@ impl Params {
         }
         if self.palw_real_clock_tick_v1 == Some(ForkActivation::never()) {
             self.palw_real_clock_tick_v1 = None;
+        }
+        // ADR-0170's window: Some-only hashed, so the same collapse.
+        if self.palw_anchor_window_v1 == Some(ForkActivation::never()) {
+            self.palw_anchor_window_v1 = None;
         }
         // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -10031,6 +10053,7 @@ impl Params {
             palw_tir_shard_v1,
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
+            palw_anchor_window_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -10291,6 +10314,7 @@ impl Params {
             ("palw_tir_shard_v1", *palw_tir_shard_v1),
             ("palw_floor_reserve_v1", *palw_floor_reserve_v1),
             ("palw_real_clock_tick_v1", *palw_real_clock_tick_v1),
+            ("palw_anchor_window_v1", *palw_anchor_window_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
@@ -10599,6 +10623,15 @@ impl Params {
         if let Some(activation) = self.palw_real_clock_tick_v1 {
             h.write(b"palw_real_clock_tick_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0170, NAMED likewise: the window changes which anchor the jury and the schedule seeding read from its height, and
+        // whether a merged attempt anchors (its companion values are part of the rule, so they are hashed with it).
+        if let Some(activation) = self.palw_anchor_window_v1 {
+            h.write(b"palw_anchor_window_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_anchor_window_v1::palw_anchor_window_value_v1() {
+                h.write(v.to_le_bytes());
+            }
         }
         // RFC-0004, NAMED likewise, with its value reported (not gated).
         if let Some(fence) = self.palw_improvement_v1 {
@@ -11191,6 +11224,7 @@ impl Params {
             palw_tir_shard_v1,
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
+            palw_anchor_window_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -11950,6 +11984,10 @@ impl Params {
         if let Some(activation) = palw_real_clock_tick_v1.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0170's window: Some-only, a bare height.
+        if let Some(activation) = palw_anchor_window_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
         if let Some(fence) = palw_improvement_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -12430,6 +12468,7 @@ impl Params {
             palw_tir_shard_v1,
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
+            palw_anchor_window_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -13252,6 +13291,14 @@ impl Params {
             h.write(b"palw_real_clock_tick_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0170, Some-only: every shipped preset leaves it `None` and fingerprints byte-identically.
+        if let Some(activation) = palw_anchor_window_v1 {
+            h.write(b"palw_anchor_window_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_anchor_window_v1::palw_anchor_window_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
         // RFC-0004, Some-only: every shipped preset leaves it `None` and fingerprints
         // byte-identically to a build without the field. Armed, the ruleset states its scoring
         // library, its sign-test table, the protocol version and its ceilings.
@@ -13960,6 +14007,7 @@ impl Params {
             palw_tir_shard_v1: self.palw_tir_shard_v1,
             palw_floor_reserve_v1: self.palw_floor_reserve_v1,
             palw_real_clock_tick_v1: self.palw_real_clock_tick_v1,
+            palw_anchor_window_v1: self.palw_anchor_window_v1,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
@@ -15044,6 +15092,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_shard_v1: None,
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
+    palw_anchor_window_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15324,6 +15373,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_shard_v1: None,
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
+    palw_anchor_window_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15586,6 +15636,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_shard_v1: None,
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
+    palw_anchor_window_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -21358,6 +21409,11 @@ pub const PALW_T12_INT11_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // Lane RS (ADR-0165): the base floor becomes a reserve, real-model attempts advance the clock.
     crate::palw_real_share_v1::PALW_T12_FLOOR_RESERVE_ENTRY,
     crate::palw_real_share_v1::PALW_T12_REAL_CLOCK_TICK_ENTRY,
+    // Lane anchor/window (ADR-0170, the user's decision of 2026-10-03): the seed anchor is a window — a merged admitted attempt anchors, the
+    // anchor survives span boundaries, and the admission jury and the schedule seeding read the latest anchor of `S − 24 … S − 1`. Without
+    // it the reserve above leaves 2–3 % of spans anchored and a Candidate's audit seats in 2.7 % of its periods. Needs the execution lane,
+    // the economic-safety bundle, the admission jury and the registry, all in force from genesis on testnet-12.
+    crate::palw_anchor_window_v1::PALW_T12_ANCHOR_WINDOW_ENTRY,
     PALW_T12_CAPACITY_NETWORK_VERIFY_V1,
     // ADR-0164 (the user's decision of 2026-10-03: the ×1000 capacity change ships in this release): stage 5's budget and riders and
     // stage 6's breaker arm at H with ρ = 25; the ρ = 250 and ρ = 1000 steps are their own entries at H + 190 and H + 285.
@@ -22807,6 +22863,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_tir_fence2();
     // ADR-0165's reserve fence, likewise.
     params.sync_palw_floor_reserve_v1();
+    // ADR-0170's seed anchor window, likewise.
+    params.sync_palw_anchor_window_v1();
     // RFC-0004's improvement fence, likewise.
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
@@ -23097,6 +23155,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_shard_v1: None,
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
+    palw_anchor_window_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,

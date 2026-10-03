@@ -53,7 +53,7 @@ const LATER: [&str; 3] = [
 ];
 
 /// The names of the list, in the order the entries' prerequisites need.
-const LIST: [&str; 28] = [
+const LIST: [&str; 29] = [
     "palw_fp_decode_rules",
     "palw_gen_v1",
     "palw_fp_job_v5",
@@ -79,6 +79,8 @@ const LIST: [&str; 28] = [
     "palw_seat_availability",
     "palw_floor_reserve_v1",
     "palw_real_clock_tick_v1",
+    // Lane anchor/window (ADR-0170): the seed anchor is a window; the jury and the schedule seeding read the latest anchor of S − 24 … S − 1.
+    "palw_anchor_window_v1",
     "palw_capacity_network_verify",
     // ADR-0164: stage 5's per-DAA budget and riders, stage 6's breaker.
     "palw_capacity_emission_budget",
@@ -430,6 +432,29 @@ fn the_list_holds_its_prerequisites_by_name() {
         let failures = [refused_opt(&missing), refused_opt(&later)];
         assert!(failures.iter().all(Option::is_some), "{dependant} without {prerequisite} at or below it is refused ({failures:?})");
     }
+    // ADR-0170's window: its prerequisites are genesis-armed on testnet-12 (the execution lane, the economic-safety bundle, ADR-0147's
+    // jury, the registry), so each is refused by name where it is later than the window or off — not list entries, and not skippable.
+    let armed = with_list(baseline.clone(), Some(H));
+    armed.validate_palw_v2().expect("the list as a whole validates");
+    let window = |edit: &dyn Fn(&mut Params)| {
+        let mut p = armed.clone();
+        edit(&mut p);
+        // The fence's own validator, so another fence's earlier refusal cannot answer for it.
+        p.validate_palw_anchor_window_v1().err().map(|e| format!("{e:?}")).unwrap_or_default()
+    };
+    assert!(window(&|p| p.palw_execution_lane = None).contains("palw_anchor_window_v1"), "the window without the execution lane");
+    assert!(window(&|p| p.palw_economic_safety = at(H + 1)).contains("palw_anchor_window_v1"), "without economic safety at or below it");
+    assert!(window(&|p| p.palw_admission_independence = None).contains("palw_anchor_window_v1"), "without ADR-0147's jury");
+    assert!(window(&|p| p.palw_model_registry = at(H + 1)).contains("palw_anchor_window_v1"), "without the registry at or below it");
+    let mut unsynced = armed.clone();
+    unsynced.palw_anchor_window_v1 = at(H);
+    if let PalwConsensusMode::ConsensusV2(bundle) = &mut unsynced.palw_consensus_mode {
+        bundle.state = bundle.state.clone().with_anchor_window_from_daa(None);
+    }
+    assert!(
+        unsynced.validate_palw_anchor_window_v1().err().is_some_and(|e| format!("{e:?}").contains("mirror")),
+        "a fence whose bundle mirror is unsynced is refused"
+    );
     // Everything in order validates, and so does ρ = 100 a DAA after ρ = 25.
     let mut ok = with_list(baseline, Some(H));
     (PALW_T12_INT11_RHO100_FENCES_V1[0].set)(&mut ok, at(H + 1));
