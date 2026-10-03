@@ -712,6 +712,42 @@ files); no weights beyond the tiny HF fixtures were run. Falcon-H1's `mamba_proj
 `time_step_limit` (HF's prefill clamps, its decode does not) and `hidden_act` other than silu are refused by name; Nemotron-H's `mlp_bias`
 with a MoE layer is refused (the shared expert's and the latent projections' biases are not modelled).
 
+### 9.14 Kimi-Linear (`MIXER_KDA_V1`, `MIXER_MLA_NOPE_V1`; FR-16)
+
+One data adapter (`kimi-linear`) over two spec features that lower to the existing ops: **no primitive, no court kernel, no consensus change**,
+every earlier golden row byte-identical.
+
+**Kimi delta attention** (`Mixer::Kda`). The gated delta rule of Qwen3-Next with the forget gate per KEY CHANNEL: `g[h, c] = -exp(A_log[h]) ·
+softplus(f_b(f_a(x))[h, c] + dt_bias[h, c])`, `S[i, :] <- S[i, :] · exp(g[h, i])`, `u = beta (v - S^T k)`, `S += k u^T`, `o = S^T q`, with
+`beta = sigmoid(b_proj x)` per head, q and k L2-normalised per head and q scaled by `d^-1/2`, q, k and v each through a depthwise causal
+convolution of their own (SiLU, no bias), and an output norm that is the per-head RMS norm times **sigmoid** of the low-rank gate `g_b(g_a(x))`
+(`KimiLinearRMSNormGated`; the sigmoid is `Op::GatedRmsNorm.act`, which the Qwen4-Exp adapter already read). The only new HL fact is
+`Op::GatedDelta.channel_decay`: the decay input is `[heads · d_k]` instead of `[heads]`. The lowering is `gdn_step_q36` with the decay broadcast
+`[heads, 1, d_k]` instead of `[heads, 1, 1]` (the library function takes either: the shape of `decay` says which; the head-wise program is the same
+nodes as before), and the decay chain `decay_q36(a + dt_bias, c)` runs over `heads · d_k` channels (two `IntExp` and two `IntLn` each: 16,384 per layer
+at the release's 32 heads of 128, below the Mamba-1 precedent). `A_log` is stored `[1, 1, heads, 1]`: the new weight step `{"take": {"axis", "repeat",
+"groups"}}` (`Pick::Repeat`) spreads the head's `-exp(A_log)` over its channels, an exact copy. The three convolutions are bound to the hub's
+`q_conv1d`, `k_conv1d`, `v_conv1d` (transformers concatenates them at load; depthwise channels are independent, so three convolutions are the
+one).
+
+**Latent attention without rotation** (`MlaSpec.rope: Option<RopeSpec>`, `None` = `MIXER_MLA_NOPE_V1`). Kimi-Linear's `full_attention` layers are
+DeepSeek's MLA with no rope at all: the rope slice of q and the shared key are raw projections, scale `qk_head_dim^-1/2`, and the latent norms keep their
+own epsilon `1e-6` (FR-27(c): this adapter writes it, it does not reuse `rms_norm_eps`, which is `1e-5` here). The key is written `null`, never omitted (a missing key is an error: an
+adapter that forgot the rope must not silently become NoPE).
+
+The adapter reads the layer types from `layer_types`, else from `linear_attn_config`'s 1-based `kda_layers` / `full_attn_layers` (the hub's spelling,
+read as HF's `__post_init__` reads it), else every fourth layer from the fifth; the MLP/MoE split from `mlp_layer_types`, else `first_k_dense_replace`.
+It refuses by name a config that turns the rope on (`mla_use_nope`), changes the router's activation, uses a MoE layer frequency other than 1 or has
+multi-token-prediction layers. **The dense layers' MLP is bound as the hub has it (`mlp.*`)**: transformers 5.17's `save_pretrained` writes the REVERSE of its
+load-time rename (`.block_sparse_moe.` to `.mlp.`) and so names the dense layers' MLP like the MoE layers' (`block_sparse_moe.gate_proj`), and reads
+either; the fixtures (`tools/gen_hf_fixtures.py`, `tools/corpus/gen_fixtures.py`: option `hub_rename`) put the saved names back to the hub's and
+RELOAD the renamed files, so the reference proves transformers reads the hub's names. A checkpoint written by 5.17 itself (the unrenamed names) does not
+bind: a second spelling of a tensor name per role is not an adapter feature yet (it would be a small one).
+
+Evidence: tiny HF Kimi-Linear (4 layers: three delta, one NoPE latent; dense and routed MLPs, group-limited routing) float `2.6·10^-7` relative
+to transformers, integer top-1 0.986 / KL 6·10^-4, court three-way and typed backend equal (corpus entry `kimi_linear`: Level B, every stage); the
+27-layer release shape binds every tensor (config written from the class's defaults; its layer lists are as remembered, so that test is of the mechanism).
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

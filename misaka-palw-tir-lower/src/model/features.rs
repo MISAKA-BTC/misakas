@@ -182,6 +182,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MIXER_MLA_V1", Mixer, "multi-head latent attention", Implemented, ["HistAppend", "ReduceMax", "Transpose", "Concat", "Slice"], NoReq, ["fidelity_tiny::deepseek_v2", "fidelity_tiny::deepseek_v3"], "A compressed latent history; the absorbed query reads it."),
     feature!("ATTN_TOKEN_INDEXER_V1", Attention, "DeepSeek sparse attention: the softmax runs over the top-k tokens of a learned token indexer", Implemented, ["Iota", "Compare", "ReduceSum", "ReduceMax", "Select", "Transpose"], NoReq, ["dsa::deepseek_v32_float_matches_hf", "dsa::deepseek_v32_integer_follows_float", "dsa::the_dsa_program_is_the_same_on_all_three_implementations"], "A latent-query indexer (wq_b over the MLA's q-latent, a LayerNorm'd key from the layer input, learned head weights; the first qk_rope_head_dim lanes rotated, half-split for DeepSeek-V3.2 and interleaved for GLM-MoE-DSA) scores every token; the MLA softmax keeps the min(topk, H) best, ties to the lowest index of the window. TopK needs a Fixed axis, so the selection is the exact mask kappa >= tau' of a threshold found by a 16-ary radix search by counting (B/4 reductions over H, one committed lane), then Select before the library softmax. Masked-dense: the exact function, no arithmetic saved. See lower/dsa.rs."),
     feature!("MIXER_GDN_V1", Mixer, "gated delta rule (any key:value head ratio)", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "S ← S·exp(g); S += k (β(v − Sᵀk))ᵀ per value head, the key heads mapped to the value heads by grouping."),
+    feature!("MIXER_KDA_V1", Mixer, "Kimi delta attention: the gated delta rule with a channel-wise (per key channel) forget gate, a low-rank output gate and a sigmoid-gated per-head norm", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "gdn_step_q36 with the decay broadcast [heads, 1, d_k] instead of [heads, 1, 1] (the only change); the decay chain exp(-exp(A_log[h])·softplus(f_b(f_a x) + dt_bias)) runs on nheads·d_k channels (two IntExp and two IntLn each); q, k, v have a depthwise causal convolution each. No primitive."),
+    feature!("MIXER_MLA_NOPE_V1", Mixer, "latent attention with no rotation at all: the rope slice of q and the shared key are raw projections", Implemented, [], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "Kimi-Linear's MLA layers: MIXER_MLA_V1 with its two Rope nodes left out (MlaSpec.rope = None); no primitive."),
     feature!("MIXER_MAMBA_V1", Mixer, "Mamba-1 selective scan", Implemented, ["StateWrite", "IntLn", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba", "fidelity_tiny::falcon_mamba"], "Per-channel, per-state decay."),
     feature!("MIXER_MAMBA2_V1", Mixer, "Mamba-2 state-space duality step", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba2"], "Scalar decay per head, grouped B/C."),
     feature!("MIXER_RWKV4_V1", Mixer, "RWKV-4 time mix", Implemented, ["StateWrite", "Compare", "Select"], NoReq, ["fidelity_tiny::rwkv"], "WKV with the (num, den, max) stabilised state."),
@@ -277,9 +279,20 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("GEN_SAMPLER_AFFINE_V1", Model, "an Euler sampler step as an integer affine update over pinned sigma tables", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "The schedule is data; the latent update is one affine map."),
     feature!("IMAGE_INIT_NOISE_V1", Model, "the initial latent noise drawn from a seed by the pinned Gaussian (PALW_GAUSS_Q24_V1)", Implemented, [], NoReq, ["diffusers_sd3::the_sd3_tiny_pipeline_lowers_validates_and_tracks_the_float_pipeline"], "Deterministic from the job's seed."),
     // ───────────────────────────── known gaps (Level C): named, not implemented ─────────────────────────────
-    feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: a predicted/corrected multi-stream residual", Missing, [], NoReq, [], "Gemma-3n. Expressible with the existing primitives once described; not in the vocabulary yet."),
-    feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Missing, [], NoReq, [], "Gemma-3n."),
-    feature!("FFN_ACTIVATION_SPARSITY_V1", Ffn, "Gaussian top-k sparsity of the gate activation", Missing, [], NoReq, [], "Gemma-3n."),
+    // ───────────────────────────── Gemma-3n (FR-12) ─────────────────────────────
+    feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: K residual streams, a per-position K×K prediction from a tanh router, a correction by the innovation, magnitude-matched stream creation and merge", Implemented, ["Concat", "Slice", "Compare", "Select"], NoReq, ["altup::gemma3n_float_matches_hf", "altup::gemma3n_integer_follows_float", "altup::the_altup_program_is_the_same_on_all_three_implementations"], "Gemma-3n's alternating updates (lower/altup.rs). The K streams ride in carry 0 with one more slot (the layer's intermediate between its two blocks). Per layer: the router m = tanh(modality_router(router_norm(h_0)/D)) gives the coefficients C = prediction_coefs(m); pred_i = h_i + sum_j C[i,j]*h_j is ONE batched product of the coefficient codes with the stream rows (StreamMix: exact i64 products, one narrowing); the active stream runs the sandwich block; the corrected streams are pred_i + (f - pred_0)*(correction_coefs(m(f))_i + 1); the per-layer input is added to streams 1..K-1. Stream creation and the final merge are magnitude matches x * rms(h_0) / sqrt(max(mean x^2, 1e-5)) (RmsMatch: the two means in i128, their ratio in Q40, one integer square root). Both halves of a layer read the coefficients from the SAME router weights, so they are one param each."),
+    feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Implemented, [], NoReq, ["altup::gemma3n_float_matches_hf", "altup::gemma3n_integer_follows_float"], "Gemma-3n: lo = an + norm(right(left(an))) beside the mixer on the layer's normed input, joined as (a + lo)/sqrt(2). Two projections of rank r, one norm, one add: no node of its own kind."),
+    feature!("FFN_ACTIVATION_SPARSITY_V1", Ffn, "Gaussian top-k sparsity of the gate activation: relu(gate - (mean + z*std)) before the activation", Implemented, [], NoReq, ["altup::a_gaussian_top_k_keeps_what_lies_above_mean_plus_z_std", "altup::gemma3n_float_matches_hf"], "Gemma-3n's activation_sparsity_pattern: z = Phi^-1(sparsity) is a registration-time constant (detmath::norm_inv_cdf: bisection on the series erf, platform independent). The row is centred exactly (c = n*x - sum x = n*(x - mean), no division), sum c^2 = n^3*Var in i128, the cutoff z*sqrt(sum c^2 / n) = z*n*std through one integer square root, and relu(c - cutoff) is narrowed at s_x/n."),
+    // ───────────────────────────── DeepSeek-V4 (FR-10) ─────────────────────────────
+    feature!("RESIDUAL_MHC_SINKHORN_V1", Residual, "manifold-constrained hyper-connections: per-site pre/post/comb weights of the streams, comb Sinkhorn-projected, and a final weighted collapse", Implemented, ["Concat", "Slice", "Compare", "Select", "ReduceMax"], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float", "dsv4::the_sinkhorn_projection_is_doubly_stochastic", "dsv4::the_dsv4_program_is_the_same_on_all_three_implementations"], "DeepSeek-V4's mHC (lower/dsv4.rs). The streams ride in carry 0 with the layer's hand-over lanes past them (a layer is three blocks: the mixer site's weights, collapse, norm and query; the attention proper joined into the streams; the FFN site). Per site: RMS of the flattened streams (weightless), one projection to (2+H)·H mixes, then MhcMap — pre = σ(m·s₀ + b) + ε and post = 2σ(m·s₁ + b) through the library's integer sigmoid, comb = the library's row softmax of m·s₂ + b, + ε, one division by the column sums and iters−1 times a division by the row sums and one by the column sums (every sum + ε), all in Q24 i64 with exact floor divisions (about 5 nodes a normalisation) — handed on as Q14/Q15 codes at fixed scales. The collapse Σ_i pre_i·h_i and the join post ⊗ y + comb^T·h are StreamMix (one batched product of i64 coefficient×stream terms) and StreamOuter. The head collapses the streams the same way (MhcPre, one weighted sum) before the final norm. MhcMap is the largest NF-12 consumer: about 200 nodes at 20 iterations."),
+    feature!("ATTN_Q_LOWRANK_V1", Attention, "a low-rank query: wq_b(norm(wq_a x)) with a weightless per-head norm after the up-projection", Implemented, [], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4: qr = RMS_w(q_a x) (the latent, also read by the indexer), q = RMS_unweighted_per_head(q_b qr), then the rotation of the trailing rope lanes. The existing norm and projection lowerings; the weightless grouped norm is NORM_GROUPED_V1 with no gain."),
+    feature!("ATTN_KV_SHARED_ROTATED_V1", Attention, "one key/value head whose row is both key and value: the rope-rotated normed projection; the output's rope slice is rotated back by the query position", Implemented, [], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4: K = V = rope(RMS_w(wkv x)) is ONE history (the attention reads it as its keys and as its values); because V carries the rotation, the context's trailing rope lanes are rotated by −θ at the query's position (ROPE_REVERSED_V1's table) before the output projection. Multi-query: one head of 512 lanes under 64 query heads."),
+    feature!("ATTN_OUT_GROUPED_LOWRANK_V1", Attention, "the attention output through block-diagonal low-rank groups, then one projection", Implemented, [], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4's o_a/o_b: the heads' lanes are cut into o_groups slices, each projected to o_rank by its own matrix (the rows [g·rank, (g+1)·rank) of the stored o_a weight, a weights-expression slice), the results concatenated (a tree of concatenations of at most eight) and projected to the hidden width by o_b."),
+    feature!("ATTN_COMPRESSED_KV_V1", Attention, "compressed entries: every `ratio` tokens close a window whose rows are pooled by a per-channel softmax into one entry the query also attends to, in one softmax with the window and the sink", Implemented, ["Iota", "Compare", "Select", "StateWrite", "ReduceMax", "Transpose", "Concat", "Slice", "HistAppend"], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float", "dsv4::the_dsv4_program_is_the_same_on_all_three_implementations", "dsv4::the_court_replays_every_node_of_the_dsv4_program"], "DeepSeek-V4's HCA (non-overlapping windows) and CSA (overlap: the entry pools the previous window's first series with this window's second). The window's kv and gate rows are Fixed [ratio, cin] i16 states written by one-hot Selects (WindowWrite); the pool (WindowPool) is computed at EVERY position — gate + ape in the narrowing's zero term, the library's softmax over the window after a transpose, one product with the kv rows, one narrowing — and only the value at the position that closes a window is used: it is normed, rotated at the window's first position (RopeAtBlock) and written to the entry store (BlockWrite). The overlapped previous half is a state of its own, read before it is replaced at the window's close and masked to weight 0 for window 0. Attention over window ∪ entries (EntryAttention) is the library's softmax-with-sink over two parts: the maximum over the window's keys, the entries visible at this position (t < (pos+1)/ratio, and — selecting — those the indexer named) and the sink, the exact exponent sums against it, and the probabilities of each part times its own rows (K = V), the two products brought to the output's scale and added. The store is always scanned whole; the visibility mask is a Select. No conditional execution: replay costs the pool's ratio·dim exponentials at every position."),
+    feature!("ATTN_ENTRY_INDEXER_V1", Attention, "the lightning indexer over compressed entries: its own compressor makes keys; entry t scores sum_h w_h·ReLU(q_h·k_t) with learned head weights; a fixed-K TopK keeps the best", Implemented, ["Iota", "Compare", "Select", "TopK", "Transpose", "StateWrite"], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float", "dsv4::the_dsv4_program_is_the_same_on_all_three_implementations", "dsv4::the_court_replays_every_node_of_the_dsv4_program"], "DeepSeek-V4's CSA indexer (EntrySelect): q = rope(wq_b(q-latent)), w = weights_proj(x)/sqrt(heads) (signed), keys from a compressor at index_head_dim over the same windows. The scores of the entries visible at this position (the entry closing now is the candidate row, read before its write) are Σ_h w_h·ReLU(q_h·k) (the positive dim^-½ moves no rank), narrowed down to i32; an invisible entry scores i32::MIN; TopK over the whole store (a Fixed axis, legal) — ties to the lowest index, and a pick that is not visible is masked again by the attention's own visibility."),
+    feature!("MLP_MOE_ROUTER_SQRTSOFTPLUS_V1", Ffn, "sqrt(softplus) router scores, top-k of the scores plus a selection bias, weights the unbiased scores renormalised and scaled", Implemented, ["Compare", "Select", "IntLn"], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4: softplus(y) = max(y, 0) + ln(1 + e^(−|y|)) from IntExp and IntLn on the Q24 logits, the square root the integer square root of its Q48 form (lower/altup.rs `isqrt`); the selection bias joins the ranked scores only, the weights are the unbiased scores renormalised (IntRecip) and scaled by routed_scaling_factor (it lives in their scale)."),
+    feature!("MLP_MOE_ROUTER_HASH_V1", Ffn, "experts chosen by a frozen token→experts table; the learned gate only weights them", Implemented, [], NoReq, ["dsv4::a_hash_layer_routes_by_the_frozen_table", "dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float", "dsv4::the_dsv4_program_is_the_same_on_all_three_implementations"], "DeepSeek-V4's hash_moe layers: tid2eid [vocab, k] is a param (an I64 checkpoint tensor read as the exact floats) the program gathers by the token id — a Gather of the param itself, so a runtime can address the row by offset — and the weights are the √softplus scores of those experts, renormalised. A table entry past the expert count is refused at conversion."),
+    feature!("MLP_GLU_LIMITED_V1", Ffn, "swiglu with a limit: act(min(gate, L)) · clamp(up, −L, L)", Implemented, [], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4 (swiglu_limit; also glm5_next, hy_v4, minimax_m3_vl); step3p7 clamps AFTER the activation and is a different function. Dense: a Clamp before the activation table and one on the up half. Experts: two single-input tables (act(min(g, L)), clamp(u, −L, L)); the sites hold the clamped rows, so the i16 narrowing saturates at the limit by itself."),
     feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Specified, [], NoReq, [], "Mllama's decoder layers reading vision states: CrossAttnSpec describes them (q/k head norms, no rotation, tanh-gated residual branches); binding image rows to such a spec is refused by name. The text-only stage skips the layers (VLM_CROSS_LAYERS_SKIPPED_V1). The states path needs the vision stage's projected rows as a declared input (RFC-0003 §II.2.1) and a stage-0 K/V stack (FR-18's pattern)."),
     feature!("VLM_CROSS_LAYERS_SKIPPED_V1", Attention, "a VLM text stage whose cross-attention layers are skipped (no vision states bound)", Implemented, [], NoReq, ["cross_layers_skipped::mllama_text_only_matches_its_hf_fixture", "cross_layers_skipped::binding_image_rows_to_a_cross_attention_spec_is_refused_by_name"], "Mllama: `MllamaTextModel.forward` skips every cross layer when `cross_attention_states` is None and the cache is empty, so a text-only prompt runs the Llama layers alone. The spec keeps the cross layers (and the model's layer numbering); the HL schedule omits them."),
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
@@ -463,12 +476,19 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
             if let Some(ix) = &m.indexer {
                 u.add("ATTN_TOKEN_INDEXER_V1", lay, format!("{} heads x {}, top {}", ix.heads, ix.head_dim, ix.topk));
             }
-            rope_features(u, &m.rope, m.qk_rope_head_dim, l);
+            match &m.rope {
+                Some(r) => rope_features(u, r, m.qk_rope_head_dim, l),
+                None => u.add("MIXER_MLA_NOPE_V1", lay, "no rotation: the rope slice of q and the shared key are raw projections"),
+            }
             norm_features(u, &m.kv_a_norm, lay);
         }
         Mixer::GatedDeltaNet(g) => {
             u.add("MIXER_GDN_V1", lay, format!("k:v heads {}:{}", g.k_heads, g.v_heads));
             u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", g.conv_kernel));
+        }
+        Mixer::Kda(k) => {
+            u.add("MIXER_KDA_V1", lay, format!("{} heads × {}", k.heads, k.head_dim));
+            u.add("CONV_DEPTHWISE_CAUSAL_V1", lay, format!("kernel {}", k.conv_kernel));
         }
         Mixer::Mamba(m) => {
             u.add("MIXER_MAMBA_V1", lay, format!("inner {} state {}", m.inner, m.state));
@@ -495,6 +515,25 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
         Mixer::None => u.add("LAYER_FFN_ONLY_V1", lay, ""),
         // Text-only: the layer is skipped, as HF skips it without states. (`ATTN_CROSS_V1` is the layer WITH states: not lowered.)
         Mixer::CrossAttention(_) => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", lay, "no states bound: the layer is skipped, as HF does"),
+        Mixer::SharedKv(a) => {
+            u.add("ATTN_GQA_V1", lay, format!("{}q/1kv × {} (K = V)", a.heads, a.head_dim));
+            u.add("ATTN_SLIDING_V1", lay, format!("window {}", a.window));
+            u.add("ATTN_KV_SHARED_ROTATED_V1", lay, "");
+            u.add("ATTN_Q_LOWRANK_V1", lay, format!("rank {}", a.q_rank));
+            u.add("ATTN_OUT_GROUPED_LOWRANK_V1", lay, format!("{} groups × {}", a.o_groups, a.o_rank));
+            if a.sinks {
+                u.add("ATTN_SINKS_V1", lay, "");
+            }
+            norm_features(u, &a.q_a_norm, lay);
+            norm_features(u, &a.q_b_norm, lay);
+            norm_features(u, &a.kv_norm, lay);
+            if let Some(c) = &a.compressed {
+                u.add("ATTN_COMPRESSED_KV_V1", lay, format!("×{}{}", c.ratio, if c.overlap { ", overlapped" } else { "" }));
+                if let Some(i) = &c.indexer {
+                    u.add("ATTN_ENTRY_INDEXER_V1", lay, format!("top-{} of {} heads × {}", i.topk, i.heads, i.head_dim));
+                }
+            }
+        }
         Mixer::Parallel(bs) => {
             u.add("MIXER_PARALLEL_BRANCH_V1", lay, format!("{} branches", bs.len()));
             for b in bs {
@@ -550,6 +589,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             if matches!(m.glu, Glu::ClampedSwiGlu { .. }) {
                 u.add("MLP_GLU_CLAMPED_V1", lay, "");
             }
+            if matches!(m.glu, Glu::LimitedGlu { .. }) {
+                u.add("MLP_GLU_LIMITED_V1", lay, "");
+            }
             if m.up_bias || m.down_bias {
                 u.add("MLP_BIAS_V1", lay, "");
             }
@@ -559,6 +601,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             }
             if m.act == Act::Xielu {
                 u.add("ACT_LEARNED_POINTWISE_V1", lay, "xIELU");
+            }
+            if let Some(p) = m.sparsity {
+                u.add("FFN_ACTIVATION_SPARSITY_V1", lay, format!("{p}"));
             }
         };
         let moe = |u: &mut Uses, m: &MoeSpec| {
@@ -571,10 +616,14 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                     Scoring::TopKThenSoftmax => "MLP_MOE_ROUTER_TOPK_SOFTMAX_V1",
                     Scoring::TopKThenSigmoid => "MLP_MOE_ROUTER_TOPK_SIGMOID_V1",
                     Scoring::SparseMixer => "MLP_MOE_ROUTER_SPARSEMIXER_V1",
+                    Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => "MLP_MOE_ROUTER_SQRTSOFTPLUS_V1",
                 },
                 lay,
                 "",
             );
+            if r.scoring == Scoring::SqrtSoftplusHash {
+                u.add("MLP_MOE_ROUTER_HASH_V1", lay, "");
+            }
             if r.normalize {
                 u.add("MLP_MOE_NORM_TOPK_V1", lay, "");
             }
@@ -613,6 +662,9 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             }
             if matches!(m.glu, Glu::ClampedSwiGlu { .. }) {
                 u.add("MLP_GLU_CLAMPED_V1", lay, "");
+            }
+            if matches!(m.glu, Glu::LimitedGlu { .. }) {
+                u.add("MLP_GLU_LIMITED_V1", lay, "");
             }
         };
         match &ls.ffn {
@@ -671,6 +723,27 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 }
                 if *layer_scalar {
                     u.add("RESIDUAL_LAYER_SCALAR_V1", lay, "");
+                }
+            }
+            Residual::Mhc { pre_mixer, pre_ffn } => {
+                let streams = s.mhc.as_ref().map(|m| m.streams).unwrap_or(0);
+                u.add("RESIDUAL_MHC_SINKHORN_V1", lay, format!("{streams} streams"));
+                norm_features(&mut u, pre_mixer, lay);
+                norm_features(&mut u, pre_ffn, lay);
+            }
+            Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } => {
+                let streams = s.altup.as_ref().map(|a| a.streams).unwrap_or(0);
+                u.add("RESIDUAL_ALTUP_V1", lay, format!("{streams} streams"));
+                u.add("RESIDUAL_SANDWICH_V1", lay, "");
+                for n in [pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm] {
+                    norm_features(&mut u, n, lay);
+                }
+                if let Some(l) = laurel {
+                    u.add("RESIDUAL_LAUREL_V1", lay, format!("rank {}", l.rank));
+                    norm_features(&mut u, &l.post_norm, lay);
+                }
+                if let Some(p) = ple {
+                    u.add("EMBED_PER_LAYER_INPUT_V1", lay, format!("{}", p.dim));
                 }
             }
             Residual::HyperConnection { ple } => {

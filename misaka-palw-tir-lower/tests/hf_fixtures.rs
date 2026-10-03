@@ -153,6 +153,7 @@ fixtures!(
     mllama,
     apertus,
     lfm2,
+    kimi_linear,
     nemotron_h,
     nemotron_h_latent,
     falcon_h1,

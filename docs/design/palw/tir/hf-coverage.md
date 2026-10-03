@@ -1412,3 +1412,19 @@ change to a feature, an adapter, a check or a code moves one by name.
 On the preflight's terms 67 of the 100 reach `convert: ok`, against 83 that read at Level A or B: the 16 that differ are chiefly the kinds the
 preflight does not yet carry (encoder–decoders, vision towers, diffusers components and audio are refused `ARCH_REFUSED` — R1 judges text decoders
 and encoders), plus entries whose committed light spec has no tensor list (`internlm2`, `minicpm`). The pins record exactly that.
+
+### 23.1 `gemma3n_text` and `deepseek_v4` move from Level C to Level B (lane R2 sub-lane C, 2026-10-03)
+
+Two of the 17 Level-C entries read by data now: **`gemma3n_text`** (FR-12: AltUp, LAuReL, activation sparsity — built-in adapter `gemma3n-text`) and
+**`deepseek_v4`** (FR-10: manifold-constrained hyper-connections, shared-KV attention with compressed entries and the lightning indexer,
+hash and √softplus routing, the swiglu limit — built-in adapter `deepseek-v4`). Both pass every later stage of the harness on the committed tiny
+fixtures: lowering, `tir_admit_v1`, the float reference against `transformers` (8e-7 and 1e-5 of the logit scale), the integer program against the
+float reference (top-1 1.00, KL 5e-4 and 5e-4), reference ↔ ref2 ↔ exec bit identity and the court property. A third-party author needs no
+core-developer action for either family: both are new combinations of registered features (nine and three), each lowered once by a generic
+lowerer (`lower/dsv4.rs`, `lower/altup.rs`) from the 25 primitives. The corpus is **85 of 100 at Level A or B**.
+
+What the integer programs cost, measured: Gemma-3n's real E4B text decoder lowers to 14 blocks (the activation sparsity is data of the block, so
+dense and sparse layers share one; a program is capped at 16); DeepSeek-V4's published shape lowers to at most 16 blocks at a declared class of 8,192
+positions, a compressed layer being four blocks and the FFN site one block shared by every attention kind. Registered here as the real configs
+`gemma-3n-e4b-text` and `deepseek-v4-flash` (the latter written from the transformers config class: the hub file may carry the rope keys of
+`rope_parameters` differently — the adapter refuses a config without `rope_parameters` keyed by `main`/`compress` rather than guess).

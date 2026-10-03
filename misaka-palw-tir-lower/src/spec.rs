@@ -19,6 +19,10 @@ fn silu() -> Act {
     Act::Silu
 }
 
+fn sigmoid() -> Act {
+    Act::Sigmoid
+}
+
 fn yes() -> bool {
     true
 }
@@ -29,6 +33,11 @@ fn is_true(b: &bool) -> bool {
 
 fn infinity() -> f64 {
     f64::INFINITY
+}
+
+/// An `Option` that must be written (`null` for `None`): a missing key is an error, not `None`.
+fn present_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> std::result::Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)
 }
 
 fn f64_or_infinity<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<f64, D::Error> {
@@ -432,7 +441,10 @@ pub struct MlaSpec {
     /// Bias on `q_a_proj` / `kv_a_proj_with_mqa` (`attention_bias`).
     #[serde(default)]
     pub a_bias: bool,
-    pub rope: RopeSpec,
+    /// The rotation of the rope slice of q and of the shared key. **`MIXER_MLA_NOPE_V1`** (Kimi-Linear's MLA layers): `None` is no rotation at
+    /// all — the shared key's slice is the raw projection and q's slice is not rotated either. Written `null` in an adapter, never omitted.
+    #[serde(deserialize_with = "present_option")]
+    pub rope: Option<RopeSpec>,
     pub scale: f64,
     /// **`ATTN_TOKEN_INDEXER_V1`**: DeepSeek sparse attention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -470,6 +482,30 @@ pub struct GdnSpec {
     /// The activation of the output norm's gate (`output_gate_type`): SiLU unless the config says
     /// sigmoid.
     #[serde(default = "silu")]
+    pub gate_act: Act,
+}
+
+/// **`MIXER_KDA_V1`** (Kimi delta attention, `modeling_kimi_linear.py:KimiLinearDeltaAttention`): `heads` heads of width `head_dim`. q, k, v are
+/// projections of the input, each through its own depthwise causal convolution of `conv_kernel` taps (no bias, `conv_act`); q and k are
+/// L2-normalised per head (`l2_eps`) and q is scaled by `head_dim^-1/2`. The forget gate is **channel-wise**,
+/// `g[h,c] = -exp(A_log[h]) * softplus(f_b(f_a(x))[h,c] + dt_bias[h,c])` (`f_a: D -> head_dim`, `f_b: head_dim -> heads*head_dim`), and the write
+/// strength is `beta = sigmoid(b_proj x)` per head; per head `S <- S * exp(g)[:, None]`, `u = beta (v - S^T k)`, `S += k u^T`, `o = S^T q`.
+/// The output is `o_norm(o, gate)` — a per-head RMS norm (gain `[head_dim]`, `norm_eps`) times `gate_act(g_b(g_a(x)))` — then `o_proj`.
+/// Tensors: roles `kda.q`, `kda.k`, `kda.v`, `kda.q_conv`, `kda.k_conv`, `kda.v_conv` (`[H*d, 1, K]` each), `kda.f_a`, `kda.f_b`, `kda.dt_bias`,
+/// `kda.A_log`, `kda.b`, `kda.g_a`, `kda.g_b`, `kda.norm`, `kda.out`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KdaSpec {
+    pub heads: usize,
+    pub head_dim: usize,
+    pub conv_kernel: usize,
+    /// The width of the low-rank forget-gate and output-gate projections (`f_a`, `g_a`): `head_dim` in the library's release.
+    pub gate_rank: usize,
+    #[serde(default = "silu")]
+    pub conv_act: Act,
+    pub l2_eps: f64,
+    pub norm_eps: f64,
+    /// The activation of the output norm's gate: the library's `KimiLinearRMSNormGated` is sigmoid.
+    #[serde(default = "sigmoid")]
     pub gate_act: Act,
 }
 
@@ -570,6 +606,8 @@ pub enum Mixer {
     Attention(AttnSpec),
     Mla(MlaSpec),
     GatedDeltaNet(GdnSpec),
+    /// **`MIXER_KDA_V1`** (Kimi-Linear): the gated delta rule with a channel-wise forget gate ([`KdaSpec`]).
+    Kda(KdaSpec),
     Mamba(MambaSpec),
     Mamba2(Mamba2Spec),
     RwkvTime(RwkvTimeSpec),
@@ -587,6 +625,70 @@ pub enum Mixer {
     /// (`MllamaTextModel.forward`), so the text-only stage this lowering builds DROPS these layers from the schedule (their tensors are
     /// dormant, not read); binding image rows to a spec that has them is refused by name (`fidelity::prepare_spec`).
     CrossAttention(CrossAttnSpec),
+    /// **`ATTN_KV_SHARED_ROTATED_V1`** (DeepSeek-V4): multi-query attention whose keys ARE its values ([`SharedKvSpec`]).
+    SharedKv(SharedKvSpec),
+}
+
+/// **DeepSeek-V4's attention** — one key/value head (`K = V = rope(norm(wkv x))`, so the output's rope slice is counter-rotated at the
+/// query's position), a low-rank query with a weightless per-head norm (**`ATTN_Q_LOWRANK_V1`**), the output through block-diagonal
+/// low-rank groups (**`ATTN_OUT_GROUPED_LOWRANK_V1`**), a learned sink per head, a sliding window and — in compressed layers — the
+/// compressed entries ([`CompressedKvSpec`]) the query also attends to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedKvSpec {
+    pub heads: usize,
+    /// The width of the one key/value head.
+    pub head_dim: usize,
+    /// Keys visible to a query: the last `window` positions including itself.
+    pub window: usize,
+    pub scale: f64,
+    /// `q = q_b_norm(wq_b(q_a_norm(wq_a x)))`: the latent's width, its (weighted) norm and the per-head norm of `q` (weightless).
+    pub q_rank: usize,
+    pub q_a_norm: NormSpec,
+    pub q_b_norm: NormSpec,
+    /// The norm of the key/value row (gain `w`).
+    pub kv_norm: NormSpec,
+    /// The rotation of the trailing `rotary_dim` lanes of `q` and of the key/value row, and the same reversed (by `−θ`), applied to
+    /// the attention output at the query's position.
+    pub rope: RopeSpec,
+    pub rope_back: RopeSpec,
+    /// `o_groups` block-diagonal projections of `heads·head_dim / o_groups` lanes to `o_rank` each, then one projection of
+    /// `o_groups·o_rank` lanes to the hidden width.
+    pub o_groups: usize,
+    pub o_rank: usize,
+    /// One learned logit per head that joins the softmax and is dropped.
+    pub sinks: bool,
+    /// **`ATTN_COMPRESSED_KV_V1`**: compressed entries beside the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<CompressedKvSpec>,
+}
+
+/// **`ATTN_COMPRESSED_KV_V1`** — every `ratio` tokens close a window whose rows (`kv`) are pooled into one **entry**:
+/// `softmax` over the window of `gate + ape` per channel weights the `kv` rows, `norm` and a rotation at the window's first position
+/// finish it. With `overlap` (CSA) `kv` and `gate` carry two series of `dim` lanes: entry `w` pools the PREVIOUS window's first
+/// series with this window's second (`2·ratio` rows; window 0's previous half has weight 0). A query at `p` attends to the entries
+/// `w < (p + 1) / ratio` — all of them (HCA), or the `topk` the indexer scores best (CSA) — beside its window, in one softmax.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompressedKvSpec {
+    pub ratio: usize,
+    pub overlap: bool,
+    pub norm: NormSpec,
+    /// The rotation of the entry's trailing lanes (at the window's first position).
+    pub rope: RopeSpec,
+    /// **`ATTN_ENTRY_INDEXER_V1`**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<EntryIndexerSpec>,
+}
+
+/// **`ATTN_ENTRY_INDEXER_V1`** — the lightning indexer: its own compressor (at `head_dim`, same windows) makes keys; entry `t` scores
+/// `Σ_h w_h · ReLU(q_h · k_t) / √head_dim` with `q = rope(wq_b(q-latent))` and `w = weights_proj(x) / √heads`; the `topk` best
+/// among the visible entries are kept (ties to the lowest index).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EntryIndexerSpec {
+    pub heads: usize,
+    pub head_dim: usize,
+    pub topk: usize,
+    pub norm: NormSpec,
+    pub rope: RopeSpec,
 }
 
 /// `q = RMS_head(q_proj x)`, `k = RMS_head(k_proj states)`, `v = v_proj states`, no rotation, grouped heads, scale `head_dim^-½`;
@@ -633,6 +735,8 @@ pub enum Glu {
     Standard,
     /// gpt-oss: `(clamp(up,−l,l)+1) · g·σ(α·g)` with `g = min(gate, l)`.
     ClampedSwiGlu { alpha: f64, limit: f64 },
+    /// **`MLP_GLU_LIMITED_V1`** (DeepSeek-V4's `swiglu_limit`): `act(min(gate, L)) · clamp(up, −L, L)`.
+    LimitedGlu { limit: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -654,6 +758,12 @@ pub struct MlpSpec {
     /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
     #[serde(default)]
     pub name: Option<String>,
+    /// **`FFN_ACTIVATION_SPARSITY_V1`** (Gemma-3n's `activation_sparsity_pattern`): the target sparsity `p ∈ (0.5, 1)` of the
+    /// gate activation. Before the activation the gate row keeps only what lies above `mean + z·std` of its own width
+    /// (`z = Φ⁻¹(p)`, the biased standard deviation): `gate ← relu(gate − (mean + z·std))`. `z` is a registration-time
+    /// constant the HL builder computes from `p` with a fixed algorithm ([`crate::detmath::norm_inv_cdf`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparsity: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -671,6 +781,12 @@ pub enum Scoring {
     /// 2·jitter_eps`, the rest masked — then the argmax `i2` of the others, weighted the same way
     /// (the threshold on the original logits, `i1` masked).
     SparseMixer,
+    /// **`MLP_MOE_ROUTER_SQRTSOFTPLUS_V1`** (DeepSeek-V4): `√softplus(logit)` per expert; the top-k of the scores (plus the selection
+    /// bias, when the router has one) are kept and their UNBIASED scores renormalised and scaled.
+    SqrtSoftplus,
+    /// **`MLP_MOE_ROUTER_HASH_V1`**: the scores of [`Scoring::SqrtSoftplus`], but the experts a token uses are a frozen table's row
+    /// `tid2eid[token]` (`hash_moe` layers): the learned gate only weights them.
+    SqrtSoftplusHash,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,6 +982,77 @@ pub enum Residual {
         #[serde(default)]
         ple: Option<NgramPleSpec>,
     },
+    /// **`RESIDUAL_MHC_SINKHORN_V1`** — manifold-constrained hyper-connections ([`MhcSpec`]). The residual is `streams` rows of the hidden
+    /// width. Each of the layer's two sites (the mixer, then the FFN) reads
+    ///
+    /// ```text
+    ///   [pre, post, comb] = fn · RMS(h.flatten())            pre = σ(·scale₀ + base) + ε,  post = 2σ(·scale₁ + base),
+    ///                                                         comb = sinkhorn(softmax_rows(·scale₂ + base) + ε)
+    ///   y = block(norm(Σ_i pre_i·h_i))
+    ///   h'_k = post_k·y + Σ_j comb[j, k]·h_j
+    /// ```
+    ///
+    /// `pre_mixer` norms the mixer site's collapsed input, `pre_ffn` the FFN site's.
+    Mhc { pre_mixer: NormSpec, pre_ffn: NormSpec },
+    /// **`RESIDUAL_ALTUP_V1`** (+ **`RESIDUAL_LAUREL_V1`**) — Gemma-3n's alternating updates over [`AltUpSpec::streams`] streams.
+    /// Per layer, with `K` streams `h_i` and the router `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`:
+    ///
+    /// ```text
+    ///   pred_i = h_i + Σ_j C[i,j]·h_j,   C = prediction_coefs(m(h_0))                      // K×K, per position
+    ///   an     = pre_mixer(pred_0)
+    ///   lo     = an + laurel_norm(laurel_right(laurel_left(an)))                            // LAuReL, when present
+    ///   a      = (pred_0 + post_mixer(mixer(an)) + lo) / √2
+    ///   f      = a + post_ffn(ffn(pre_ffn(a)))                                              // the activated stream
+    ///   cor_i  = pred_i + (f − pred_0)·(correction_coefs(m(f))_i + 1)
+    ///   y      = per_layer_gate(cor_0 ⊙ correct_output_scale)  →  act · ple  →  per_layer_out  →  post_norm
+    ///   h'_0 = cor_0,   h'_i = cor_i + y            (i ≥ 1)
+    /// ```
+    ///
+    /// The `K` streams ride in carry 0 (`(K + 1)·D` lanes: the extra slot holds the layer's intermediate between its two blocks).
+    AltUp {
+        pre_mixer: NormSpec,
+        post_mixer: NormSpec,
+        pre_ffn: NormSpec,
+        post_ffn: NormSpec,
+        /// The router's norm (`altup.router_norm`, gain `w`).
+        router_norm: NormSpec,
+        /// **`RESIDUAL_LAUREL_V1`**: the learned low-rank branch beside the mixer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        laurel: Option<LaurelSpec>,
+        /// Gemma-3n's per-layer input, added to streams `1..K`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ple: Option<PleSpec>,
+    },
+}
+
+/// The model-wide half of [`Residual::Mhc`]: the streams (the embedding is repeated into each), the Sinkhorn iterations of `comb`, the
+/// epsilons, and the final collapse (`HyperHead`: `pre = σ(fn·RMS(h)·scale + base) + ε`, then one weighted sum) before the final norm.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MhcSpec {
+    pub streams: usize,
+    pub iters: usize,
+    /// `hc_eps`.
+    pub eps: f64,
+    /// The epsilon of the weightless RMS norm over the flattened streams (`rms_norm_eps`).
+    pub norm_eps: f64,
+}
+
+/// **`RESIDUAL_LAUREL_V1`** — LAuReL's low-rank residual branch: `x + norm(right(left(x)))` with `left [rank, D]` and `right [D, rank]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LaurelSpec {
+    pub rank: usize,
+    pub post_norm: NormSpec,
+}
+
+/// The model-wide half of [`Residual::AltUp`]: the number of streams (the embedding is the first; the others are projections of it
+/// brought to its magnitude), and the floor under the mean square in the magnitude match `x·rms(h_0)/√max(ms(x), floor)`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AltUpSpec {
+    pub streams: usize,
+    /// `epsilon_tensor` of `Gemma3nTextModel.forward` (1e-5).
+    pub floor: f64,
+    /// `altup_correct_scale`: the per-layer gate reads `cor_0 ⊙ correct_output_scale`.
+    pub correct_scale: bool,
 }
 
 /// The model-wide half of [`Residual::HyperConnection`]: how many streams the residual carries
@@ -1060,6 +1247,12 @@ pub struct ModelSpec {
     /// The residual's multiple streams, when the layers are [`Residual::HyperConnection`].
     #[serde(default)]
     pub hyper: Option<HyperSpec>,
+    /// The residual's multiple streams, when the layers are [`Residual::Mhc`] (**`RESIDUAL_MHC_SINKHORN_V1`**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mhc: Option<MhcSpec>,
+    /// The residual's multiple streams, when the layers are [`Residual::AltUp`] (**`RESIDUAL_ALTUP_V1`**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub altup: Option<AltUpSpec>,
     /// Logits, or an encoder's embedding.
     #[serde(default)]
     pub output: OutputSpec,

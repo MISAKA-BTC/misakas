@@ -542,7 +542,7 @@ impl BlockBuilder<'_> {
     ///
     /// `k`, `q`: `[heads, d_k]` unit codes (already mapped to the value heads — the head mapping is
     /// an explicit Reshape/Broadcast, [`Self::map_heads_group`] / [`Self::map_heads_tile`], not
-    /// part of the rule); `v`: `[heads, d_v]` codes; `decay`, `beta`: `[heads]` Q24 in `[0, ONE]`.
+    /// part of the rule); `v`: `[heads, d_v]` codes; `decay`: `[heads]`, or `[heads, d_k]` for a per-key-channel gate, and `beta`: `[heads]`, Q24 in `[0, ONE]`.
     /// The narrowings are per-head params: `(m, pow2_s, z)` for the read, the delta and the output,
     /// and `write_shift` (`i32`, left if ≥ 0). Returns the output `[heads, d_v]` as `i32`; the
     /// state write is part of the expansion.
@@ -565,7 +565,10 @@ impl BlockBuilder<'_> {
         let (Dim::Fixed(h), Dim::Fixed(dv), Dim::Fixed(dk)) = (s_shape[0], s_shape[1], s_shape[2]) else { panic!("static state") };
         let col = |b: &mut Self, x: Ref, n: u32| b.reshape_fixed(x, &[h, n, 1]);
         // 1. The gate: S1 = clamp(RSR(S · decay, 24), ±(2^31 − 1)).
-        let dec = b_reshape3(self, decay, h);
+        // `decay` is `[heads]` (the library's gate: one per head) or `[heads, d_k]` (a forget gate per key channel, Kimi delta attention:
+        // the state's last axis is the key channel, so the decay broadcasts as `[heads, 1, d_k]` and nothing else of the step changes).
+        let numel: u64 = self.ty(decay).shape.iter().map(|d| if let Dim::Fixed(n) = d { *n as u64 } else { 0 }).product();
+        let dec = if dk > 1 && numel == h as u64 * dk as u64 { self.reshape_fixed(decay, &[h, 1, dk]) } else { b_reshape3(self, decay, h) };
         let sd = self.mul(Ref::State(state), dec, DType::I64);
         let sd = self.shr(sd, K, Rounding::HalfAwayFromZero, DType::I64);
         let s1 = self.clamp(sd, -smax, smax, DType::I32);

@@ -106,6 +106,37 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.transcendental += *groups as u64;
                 }
                 Op::Rope { heads, rotary_dim, .. } | Op::RopeAtBlock { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::StreamMix { n_in, n_out, .. } => {
+                    c.macs_fixed += (*n_in * *n_out) as u64 * (out / (*n_out).max(1) as u64);
+                    c.elementwise += out;
+                }
+                Op::MhcMap { streams, iters, .. } => {
+                    c.elementwise += (8 * *iters * *streams * *streams + 16 * *streams * *streams) as u64;
+                    c.transcendental += (*streams * *streams + 2 * *streams) as u64;
+                }
+                Op::MhcPre { .. } => {
+                    c.elementwise += 4 * out.max(1);
+                    c.transcendental += out.max(1);
+                }
+                Op::WindowWrite { .. } => c.elementwise += out.max(1),
+                Op::WindowPool { ratio, dim, overlap } => {
+                    let rows = (*ratio * if *overlap { 2 } else { 1 } * *dim) as u64;
+                    c.elementwise += 4 * rows;
+                    c.transcendental += rows;
+                }
+                Op::EntryAttention { heads, head_dim, blocks, .. } => {
+                    c.macs_fixed += (2 * *heads * *head_dim * *blocks) as u64;
+                    c.macs_per_hist_row += (2 * *heads * *head_dim) as u64;
+                    c.transcendental += (*heads * *blocks) as u64;
+                }
+                Op::EntrySelect { heads, dim, blocks, .. } => {
+                    c.macs_fixed += (*heads * *dim * *blocks) as u64;
+                    c.elementwise += *blocks as u64;
+                }
+                Op::RmsMatch { .. } | Op::GaussianTopK { .. } => {
+                    c.elementwise += 3 * out;
+                    c.transcendental += 1;
+                }
                 Op::StreamMean { .. } | Op::StreamOuter { .. } | Op::GroupDot { .. } | Op::GroupRepeat { .. } | Op::GatherRows { .. } | Op::BlockMean { .. } => c.elementwise += out.max(1),
                 // the hash: a few dozen elementwise ops over 63-bit vectors per order
                 Op::NgramIds { ple, .. } => c.elementwise += 63 * 6 * ple.ngram_size as u64,

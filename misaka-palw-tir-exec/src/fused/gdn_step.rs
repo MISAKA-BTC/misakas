@@ -128,6 +128,25 @@ impl FusedKernelV1 for GdnStep {
         let (dm, dd, dz) = (hv(8), hv(9), hv(10));
         let ws = hv(11);
         let (om, od, oz) = (hv(12), hv(13), hv(14));
+        // The GPU, where the backend is on and every operand is in the range its kernel computes in (`metal::gdn_step`); the same integers.
+        if super::metal::metal_enabled() {
+            let kv: Vec<i64> = (0..h * dk).map(|i| k.at(i)).collect();
+            let vv: Vec<i64> = (0..h * dv).map(|i| v.at(i)).collect();
+            let qv: Vec<i64> = (0..h * dk).map(|i| q.at(i)).collect();
+            let heads: Vec<[i128; 12]> =
+                (0..h).map(|a| [decay[a], beta[a], rm[a], rd[a], rz[a], dm[a], dd[a], dz[a], ws[a], om[a], od[a], oz[a]]).collect();
+            if let Some((next_state, mut out)) =
+                super::metal::gdn_step(s_now, &kv, &vv, &qv, (h, dv, dk), (s_lo as i64, s_hi as i64), &heads)
+            {
+                let pending = io.state_next.first_mut().ok_or_else(|| bad("no pending state"))?;
+                *pending = match state_dtype {
+                    DType::I32 => Buf::I32(next_state),
+                    other => Buf::from_i128s(other, &next_state.iter().map(|v| *v as i128).collect::<Vec<_>>()),
+                };
+                super::store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+                return Ok(());
+            }
+        }
         // The pending state's own buffer, reused (it is the instance's double buffer, `s_len` of
         // the state's dtype): a fresh one per step would fault its pages in every position.
         let pending = io.state_next.first_mut().ok_or_else(|| bad("no pending state"))?;

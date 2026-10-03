@@ -12,6 +12,7 @@
 
 use misaka_palw_tir::arith;
 use misaka_palw_tir::builder::BlockBuilder;
+use crate::elem::Buf;
 use misaka_palw_tir::program::Node;
 use misaka_palw_tir::{DType, Ref, TensorType, TirResult};
 use rayon::prelude::*;
@@ -35,14 +36,68 @@ fn rows_of(shape: &[usize]) -> Option<(usize, usize)> {
     Some((shape.iter().product::<usize>() / n, n))
 }
 
-fn run_rows(vals: &[i128], n: usize, out: &mut [i128], row: impl Fn(&[i128], &mut [i128]) + Sync) {
-    if vals.len() >= 1 << 14 {
-        vals.par_chunks(n).zip(out.par_chunks_mut(n)).for_each(|(x, o)| row(x, o));
+/// An operand's rows as native `i32` lanes: a contiguous `i16`/`i32` tensor is borrowed in place, anything else is read once.
+enum Lanes<'a> {
+    I16(&'a [i16]),
+    I32(&'a [i32]),
+    Owned(Vec<i32>),
+}
+
+impl<'a> Lanes<'a> {
+    fn of(op: &crate::kernels::Opd<'a>) -> Lanes<'a> {
+        if let Some(v) = op.contiguous::<i16>() {
+            return Lanes::I16(v);
+        }
+        if let Some(v) = op.contiguous::<i32>() {
+            return Lanes::I32(v);
+        }
+        // The domain is `i16`/`i32` operands, so every value fits.
+        Lanes::Owned(values(op).into_iter().map(|v| v as i32).collect())
+    }
+}
+
+/// Run `f` over the lanes' type — one monomorphised body per storage type.
+macro_rules! with_lanes {
+    ($lanes:expr, $x:ident => $body:expr) => {
+        match $lanes {
+            Lanes::I16($x) => $body,
+            Lanes::I32($x) => $body,
+            Lanes::Owned(v) => {
+                let $x: &[i32] = &v;
+                $body
+            }
+        }
+    };
+}
+
+fn par_rows<T: Copy + Sync, O: Copy + Send>(x: &[T], n: usize, out: &mut [O], row: impl Fn(&[T], &mut [O]) + Sync) {
+    if x.len() >= 1 << 17 {
+        x.par_chunks(n).zip(out.par_chunks_mut(n)).for_each(|(x, o)| row(x, o));
     } else {
-        for (x, o) in vals.chunks(n).zip(out.chunks_mut(n)) {
+        for (x, o) in x.chunks(n).zip(out.chunks_mut(n)) {
             row(x, o);
         }
     }
+}
+
+/// The deliberately broken variant's one-lane move (`FusedIo::fault`), kept inside `[-hi, hi]` or the type.
+fn fault_lane<O: Copy + PartialOrd + std::ops::Add<Output = O> + std::ops::Sub<Output = O> + From<i8>>(out: &mut [O], hi: O) {
+    if let Some(v) = out.first_mut() {
+        *v = if *v < hi { *v + O::from(1) } else { *v - O::from(1) };
+    }
+}
+
+#[inline(always)]
+fn sum_sq<T: Copy + Into<i64>>(x: &[T]) -> i64 {
+    x.iter().fold(0i64, |a, v| {
+        let v: i64 = (*v).into();
+        a.wrapping_add(v.wrapping_mul(v))
+    })
+}
+
+#[inline(always)]
+fn max_abs<T: Copy + Into<i64>>(x: &[T]) -> i64 {
+    x.iter().fold(0i64, |a, v| a.max(Into::<i64>::into(*v).abs()))
 }
 
 // ---- l2_unit_q15 --------------------------------------------------------------------------------
@@ -73,23 +128,32 @@ impl FusedKernelV1 for L2UnitQ15 {
     }
 
     fn run(&self, _bound: &Bound, io: &mut FusedIo<'_, '_>) -> TirResult<()> {
-        let x = values(&io.holes[0]);
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = super::metal::unit_rows(0, &x, n, 0).unwrap_or_default();
-        if out.is_empty() {
-            out = vec![0i128; x.len()];
-            run_rows(&x, n, &mut out, |x, o| {
-                let sum: i128 = x.iter().map(|v| v * v).sum();
-                let h = half_exponent(sum, 20);
-                let m = sum >> (2 * h).clamp(0, 40);
-                let r = int_rsqrt_i64(m as i64) as i128;
-                let sh = (h + 21).clamp(0, 41);
-                for (o, v) in o.iter_mut().zip(x) {
-                    *o = ((v * r) >> sh).clamp(-32767, 32767);
-                }
-            });
+        if super::metal::metal_enabled() {
+            let x = values(&io.holes[0]);
+            if let Some(mut out) = super::metal::unit_rows(0, &x, n, 0) {
+                store(&mut out, io.out, io.out_store, io.fault, 32767);
+                return Ok(());
+            }
         }
-        store(&mut out, io.out, io.out_store, io.fault, 32767);
+        let lanes = Lanes::of(&io.holes[0]);
+        let mut out = vec![0i16; io.holes[0].numel()];
+        with_lanes!(&lanes, x => par_rows(x, n, &mut out, |x, o| {
+            // The exact sum is an `i64` (the plan proved it: `Fast64`); the scalar chain is the template's.
+            let sum = sum_sq(x);
+            let h = half_exponent(sum as i128, 20) as i64;
+            let m = sum >> (2 * h).clamp(0, 40);
+            let r = int_rsqrt_i64(m);
+            let sh = (h + 21).clamp(0, 41);
+            for (o, v) in o.iter_mut().zip(x) {
+                let v: i64 = (*v).into();
+                *o = ((v * r) >> sh).clamp(-32767, 32767) as i16;
+            }
+        }));
+        if io.fault {
+            fault_lane(&mut out, 32767);
+        }
+        *io.out = Buf::I16(out);
         Ok(())
     }
 }
@@ -127,25 +191,41 @@ impl FusedKernelV1 for RmsUnitQ24 {
     }
 
     fn run(&self, _bound: &Bound, io: &mut FusedIo<'_, '_>) -> TirResult<()> {
-        let x = values(&io.holes[0]);
         let eps = values(&io.holes[1]).first().copied().unwrap_or(0).clamp(0, i64::MAX as i128);
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = super::metal::unit_rows(1, &x, n, eps).unwrap_or_default();
-        if out.is_empty() {
-            out = vec![0i128; x.len()];
-            run_rows(&x, n, &mut out, |x, o| {
-                let sum: i128 = x.iter().map(|v| v * v).sum();
-                let mean = ((sum * arith::ONE).div_euclid(n as i128)) + eps;
-                let h = half_exponent(mean, 51);
-                let m = (mean >> (2 * h).clamp(0, 102)).clamp(0, i64::MAX as i128);
-                let r = int_rsqrt_i64(m as i64) as i128;
-                let p = h.clamp(0, 51);
-                for (o, v) in o.iter_mut().zip(x) {
-                    *o = ((v * r) >> p).clamp(i32::MIN as i128, i32::MAX as i128);
-                }
-            });
+        if super::metal::metal_enabled() {
+            let x = values(&io.holes[0]);
+            if let Some(mut out) = super::metal::unit_rows(1, &x, n, eps) {
+                store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+                return Ok(());
+            }
         }
-        store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+        let lanes = Lanes::of(&io.holes[0]);
+        let mut out = vec![0i32; io.holes[0].numel()];
+        with_lanes!(&lanes, x => par_rows(x, n, &mut out, |x, o| {
+            let sum = sum_sq(x) as i128;
+            let mean = (sum * arith::ONE).div_euclid(n as i128) + eps;
+            let h = half_exponent(mean, 51);
+            let m = (mean >> (2 * h).clamp(0, 102)).clamp(0, i64::MAX as i128);
+            let r = int_rsqrt_i64(m as i64);
+            let p = h.clamp(0, 51) as u32;
+            // One machine word where the product provably fits it, two otherwise (the same integers).
+            if (max_abs(x) as i128) * (r as i128) < 1 << 62 {
+                for (o, v) in o.iter_mut().zip(x) {
+                    let v: i64 = (*v).into();
+                    *o = ((v * r) >> p).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                }
+            } else {
+                for (o, v) in o.iter_mut().zip(x) {
+                    let v: i64 = (*v).into();
+                    *o = ((v as i128 * r as i128) >> p).clamp(i32::MIN as i128, i32::MAX as i128) as i32;
+                }
+            }
+        }));
+        if io.fault {
+            fault_lane(&mut out, i32::MAX);
+        }
+        *io.out = Buf::I32(out);
         Ok(())
     }
 }
@@ -167,9 +247,8 @@ impl FusedKernelV1 for RmsNormWideQ36 {
     }
 
     fn variants(&self) -> Vec<Variant> {
-        let probe = || {
-            vec![TensorType::fixed(DType::I32, &[2, 4]), TensorType::fixed(DType::I64, &[1]), TensorType::fixed(DType::I32, &[1])]
-        };
+        let probe =
+            || vec![TensorType::fixed(DType::I32, &[2, 4]), TensorType::fixed(DType::I64, &[1]), TensorType::fixed(DType::I32, &[1])];
         [false, true].map(|exact| Variant { bound: Bound::RmsNormWideQ36 { exact }, probe: probe(), states: Vec::new() }).into()
     }
 
@@ -193,14 +272,21 @@ impl FusedKernelV1 for RmsNormWideQ36 {
     fn run(&self, bound: &Bound, io: &mut FusedIo<'_, '_>) -> TirResult<()> {
         let exact = matches!(bound, Bound::RmsNormWideQ36 { exact: true });
         let (zero_max, shift_max) = wide_caps(exact);
-        let x = values(&io.holes[0]);
         let ez = values(&io.holes[1]).first().copied().unwrap_or(0).clamp(0, zero_max);
         let es = values(&io.holes[2]).first().copied().unwrap_or(0).clamp(0, shift_max);
         let eps = ez << es;
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = vec![0i128; x.len()];
-        run_rows(&x, n, &mut out, |x, o| {
-            let sum: i128 = x.iter().map(|v| v * v).sum();
+        if super::metal::metal_enabled() {
+            let x = values(&io.holes[0]);
+            if let Some(mut out) = super::metal::rms_wide_rows(&x, n, eps) {
+                store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+                return Ok(());
+            }
+        }
+        let lanes = Lanes::of(&io.holes[0]);
+        let mut out = vec![0i32; io.holes[0].numel()];
+        with_lanes!(&lanes, x => par_rows(x, n, &mut out, |x, o| {
+            let sum = sum_sq(x) as i128;
             let mean = (sum * arith::ONE).div_euclid(n as i128) + eps;
             if mean <= 0 {
                 return; // a zero mean is a zero row
@@ -208,14 +294,25 @@ impl FusedKernelV1 for RmsNormWideQ36 {
             let h = (arith::log2_floor(mean) - K).div_euclid(2);
             let two_h = 2 * h;
             let m = if two_h >= 0 { mean >> two_h.clamp(0, 126) } else { mean.clamp(0, arith::ONE) << (-two_h).clamp(0, 24) };
-            let r = int_rsqrt_i64(m.clamp(0, i64::MAX as i128) as i64) as i128;
-            for (o, v) in o.iter_mut().zip(x) {
-                let prod = v * r;
-                let y = if h >= 0 { prod >> h.clamp(0, 126) } else { prod << (-h).clamp(0, 12) };
-                *o = y.clamp(i32::MIN as i128, i32::MAX as i128);
+            let r = int_rsqrt_i64(m.clamp(0, i64::MAX as i128) as i64);
+            if (max_abs(x) as i128) * (r as i128) < 1 << 48 {
+                for (o, v) in o.iter_mut().zip(x) {
+                    let prod: i64 = Into::<i64>::into(*v) * r;
+                    let y = if h >= 0 { prod >> h.clamp(0, 62) as u32 } else { prod << (-h).clamp(0, 12) as u32 };
+                    *o = y.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                }
+            } else {
+                for (o, v) in o.iter_mut().zip(x) {
+                    let prod = Into::<i64>::into(*v) as i128 * r as i128;
+                    let y = if h >= 0 { prod >> h.clamp(0, 126) } else { prod << (-h).clamp(0, 12) };
+                    *o = y.clamp(i32::MIN as i128, i32::MAX as i128) as i32;
+                }
             }
-        });
-        store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
+        }));
+        if io.fault {
+            fault_lane(&mut out, i32::MAX);
+        }
+        *io.out = Buf::I32(out);
         Ok(())
     }
 }

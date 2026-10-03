@@ -152,11 +152,15 @@ fn mixer(m: &Mixer) -> String {
             m.qk_rope_head_dim,
             m.v_head_dim,
             m.scale,
-            position(&Position::Rope(m.rope.clone()))
+            m.rope.as_ref().map_or_else(|| position(&Position::None), |r| position(&Position::Rope(r.clone())))
         ),
         Mixer::GatedDeltaNet(g) => format!(
             "gated delta net {} k-heads × {} / {} v-heads × {}, conv {}, head map {:?}",
             g.k_heads, g.k_dim, g.v_heads, g.v_dim, g.conv_kernel, g.head_map
+        ),
+        Mixer::Kda(k) => format!(
+            "Kimi delta attention {} heads × {}, conv {}, channel-wise forget gate (rank {})",
+            k.heads, k.head_dim, k.conv_kernel, k.gate_rank
         ),
         Mixer::Mamba(m) => format!(
             "Mamba inner {} state {} conv {} dt_rank {}{}",
@@ -189,6 +193,24 @@ fn mixer(m: &Mixer) -> String {
         Mixer::Parallel(bs) => {
             format!("parallel: {}", bs.iter().map(|b| format!("[{}]×{}→×{}", mixer(&b.mixer), b.in_scale, b.out_scale)).collect::<Vec<_>>().join(" + "))
         }
+        Mixer::SharedKv(a) => format!(
+            "shared-KV attention {} heads × {} (K = V), q rank {}, o {} groups × {}, window {}{}",
+            a.heads,
+            a.head_dim,
+            a.q_rank,
+            a.o_groups,
+            a.o_rank,
+            a.window,
+            match &a.compressed {
+                None => String::new(),
+                Some(c) => format!(
+                    ", compressed ×{}{}{}",
+                    c.ratio,
+                    if c.overlap { " (overlapped)" } else { "" },
+                    c.indexer.as_ref().map(|i| format!(", indexer top-{} of {}×{}", i.topk, i.heads, i.head_dim)).unwrap_or_default()
+                ),
+            }
+        ),
     }
 }
 
@@ -263,6 +285,13 @@ fn residual(r: &Residual) -> String {
             norm(pre_mixer),
             ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default(),
             if *layer_scalar { ", × layer scalar" } else { "" }
+        ),
+        Residual::Mhc { pre_mixer, .. } => format!("manifold-constrained hyper-connections ({})", norm(pre_mixer)),
+        Residual::AltUp { pre_mixer, laurel, ple, .. } => format!(
+            "AltUp ({}){}{}",
+            norm(pre_mixer),
+            laurel.as_ref().map(|l| format!(", LAuReL rank {}", l.rank)).unwrap_or_default(),
+            ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default()
         ),
         Residual::HyperConnection { ple } => format!(
             "hyper-connections{}",

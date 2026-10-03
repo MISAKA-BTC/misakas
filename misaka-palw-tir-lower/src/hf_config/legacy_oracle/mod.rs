@@ -532,6 +532,8 @@ impl P<'_> {
             final_norm: s.final_norm,
             head: s.head,
             hyper: None,
+            altup: None,
+            mhc: None,
             output: OutputSpec::Logits,
             adapter: None,
             hf: HfStorage {
@@ -606,11 +608,11 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
+    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
+    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.

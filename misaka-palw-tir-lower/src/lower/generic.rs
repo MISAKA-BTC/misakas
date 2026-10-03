@@ -35,7 +35,12 @@ pub(super) struct Shared {
     pos: BTreeMap<usize, BlockPos>,
     /// HL block-key state → the matrix after this position's write (shared by the selection that
     /// reads it and the write that stores it).
-    keys_new: BTreeMap<u32, tir::Ref>,
+    pub(super) keys_new: BTreeMap<u32, tir::Ref>,
+    /// The scale of the rows an HL block-key state holds (the key of the candidate that wrote it).
+    pub(super) keys_key: BTreeMap<u32, ScaleKey>,
+    /// HL window-buffer state → the buffer after this position's write (`WindowWrite`), and the scale of its rows.
+    pub(super) win_new: BTreeMap<u32, tir::Ref>,
+    pub(super) state_keys: BTreeMap<u32, ScaleKey>,
 }
 
 /// The position arithmetic of keys pooled in blocks of `ratio` positions, made on first use (a
@@ -50,7 +55,7 @@ struct BlockPos {
     after: Option<tir::Ref>,
 }
 
-fn pos_ref() -> tir::Ref {
+pub(super) fn pos_ref() -> tir::Ref {
     tir::Ref::Input(INPUT_POS)
 }
 
@@ -63,7 +68,7 @@ fn bp_put(lb: &mut Lb, ratio: usize, f: impl FnOnce(&mut BlockPos)) {
 }
 
 /// `⌊pos / ratio⌋`: the position's block, `i64`.
-fn bp_blk(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_blk(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).blk {
         return r;
     }
@@ -74,7 +79,7 @@ fn bp_blk(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
 }
 
 /// The first position of the position's block, `i64`.
-fn bp_start(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_start(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).start {
         return r;
     }
@@ -86,7 +91,7 @@ fn bp_start(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
 }
 
 /// `pos mod ratio`, `i64` (a difference: the analysis cannot see that it is non-negative; it is only compared).
-fn bp_pm(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_pm(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).pm {
         return r;
     }
@@ -97,7 +102,7 @@ fn bp_pm(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
 }
 
 /// `pos mod ratio = 0` (`i8`): this position opens a block.
-fn bp_is_first(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_is_first(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).is_first {
         return r;
     }
@@ -109,7 +114,7 @@ fn bp_is_first(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref 
 }
 
 /// `pos mod ratio = ratio − 1` (`i8`): this position completes its block.
-fn bp_completing(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_completing(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).completing {
         return r;
     }
@@ -121,7 +126,7 @@ fn bp_completing(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Re
 }
 
 /// `⌊(pos + 1) / ratio⌋`: the blocks that are complete once this position is in, `i64`.
-fn bp_after(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
+pub(super) fn bp_after(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     if let Some(r) = bp_get(lb, ratio).after {
         return r;
     }
@@ -133,14 +138,14 @@ fn bp_after(b: &mut BlockBuilder<'_>, lb: &mut Lb, ratio: usize) -> tir::Ref {
     r
 }
 
-fn unsplit(v: &Val, what: &str) -> Result<()> {
+pub(super) fn unsplit(v: &Val, what: &str) -> Result<()> {
     if v.key.split() > 0 {
         return Err(LowerError::eval(format!("internal: `{what}` reads a value with per-channel scales")));
     }
     Ok(())
 }
 
-fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
+pub(super) fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
     match b.shape(r).as_slice() {
         [Dim::Fixed(n)] => Ok(*n as usize),
         s => Err(LowerError::eval(format!("internal: a vector was expected, got {s:?}"))),
@@ -150,7 +155,7 @@ fn len_of(b: &BlockBuilder<'_>, r: tir::Ref) -> Result<usize> {
 /// One uniform narrowing of `x` (an `i64`/`i32` accumulator at `ratio_of` float units per unit) into
 /// `want` — the shape every composite below ends in.
 #[allow(clippy::too_many_arguments)]
-fn narrow_to(
+pub(super) fn narrow_to(
     b: &mut BlockBuilder<'_>,
     cx: &mut Cx<'_>,
     lb: &mut Lb,
@@ -672,7 +677,7 @@ pub(super) fn block_mean(
 
 /// The matrix of block keys after this position's write: row `pos / ratio` becomes `cand` when the
 /// position completes its block. Made once per block-key state.
-fn keys_after(
+pub(super) fn keys_after(
     b: &mut BlockBuilder<'_>,
     cx: &mut Cx<'_>,
     lb: &mut Lb,
@@ -703,6 +708,7 @@ fn keys_after(
     let row = b.reshape_fixed(cand.r, &[1, dim as u32]);
     let new = b.select(write, row, tir::Ref::State(ts), DType::I16);
     lb.gx.keys_new.insert(st, new);
+    lb.gx.keys_key.insert(st, cand.key.clone());
     Ok((ts, new))
 }
 

@@ -238,6 +238,24 @@ pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
         "F16" => raw.chunks_exact(sz).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
         "F32" => raw.chunks_exact(sz).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
         "F64" => raw.chunks_exact(sz).map(|c| f64::from_le_bytes(c.try_into().unwrap_or([0; 8])) as f32).collect(),
+        // An integer table (DeepSeek-V4's frozen `tid2eid`): read as the exact float of each value; one past 2^24 would not be exact.
+        "I64" | "I32" | "I16" | "I8" | "U8" => {
+            let mut out = Vec::with_capacity(raw.len() / sz);
+            for c in raw.chunks_exact(sz) {
+                let v: i64 = match dtype {
+                    "I64" => i64::from_le_bytes(c.try_into().unwrap_or([0; 8])),
+                    "I32" => i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64,
+                    "I16" => i16::from_le_bytes([c[0], c[1]]) as i64,
+                    "I8" => c[0] as i8 as i64,
+                    _ => c[0] as i64,
+                };
+                if v.unsigned_abs() > 1 << 24 {
+                    return Err(LowerError::weights(format!("a {dtype} value {v} is not exactly a float32")));
+                }
+                out.push(v as f32);
+            }
+            out
+        }
         other => return Err(LowerError::weights(format!("dtype {other}"))),
     })
 }
@@ -245,8 +263,10 @@ pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
 fn dtype_size(d: &str) -> Option<usize> {
     Some(match d {
         "BF16" | "F16" => 2,
-        "F32" => 4,
-        "F64" => 8,
+        "F32" | "I32" => 4,
+        "F64" | "I64" => 8,
+        "I16" => 2,
+        "I8" | "U8" => 1,
         _ => return None,
     })
 }
@@ -527,6 +547,12 @@ pub enum Pick {
     PerLayer {
         len: usize,
     },
+    /// Each of the `groups` indices `0..groups` repeated `each` times in a row (`0,0,…,1,1,…`): a per-head value spread over the head's
+    /// channels (Kimi delta attention's `A_log[head]` as one decay rate per key channel). Every value is an exact copy.
+    Repeat {
+        each: usize,
+        groups: usize,
+    },
 }
 
 impl Pick {
@@ -537,6 +563,7 @@ impl Pick {
             Pick::Strided { block, offset, len, groups } => {
                 (0..*groups).flat_map(|g| (g * block + offset)..(g * block + offset + len)).collect()
             }
+            Pick::Repeat { each, groups } => (0..*groups).flat_map(|g| std::iter::repeat_n(g, *each)).collect(),
             Pick::PerLayer { len } => {
                 let l = layer.ok_or_else(|| LowerError::weights("a per-layer slice outside a layer"))?;
                 (l * len..(l + 1) * len).collect()
@@ -547,6 +574,7 @@ impl Pick {
         match self {
             Pick::Range { len, .. } | Pick::PerLayer { len } => *len,
             Pick::Strided { len, groups, .. } => len * groups,
+            Pick::Repeat { each, groups } => each * groups,
         }
     }
 }

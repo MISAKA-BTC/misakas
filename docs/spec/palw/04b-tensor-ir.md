@@ -3142,7 +3142,8 @@ variant to be refused with the GPU path in front of it. A node whose build or ma
   in wide (`i128`-working) nodes that no kernel of this build matches. `generic_slowdown_v1` counts a node's work as its output's elements
   (`MatMul`: `m·k·n / 8`, never a fusion target), and a wide node outside every matched region as `GENERIC_WIDE_PASS_FACTOR_V1 = 3` fused passes;
   `S` is the generic total over the all-fused total. It is an estimate from the program alone (before any params exist, so matching is
-  optimistic about the ranges an artifact decides) and the weight is assumed, not measured; `tir-exec-bench --fused-kernels` measures a kernel
-  on a given machine. The verdict is a statement about speed and blocks no registration.
+  optimistic about the ranges an artifact decides). The weight 3 is **measured**: the generic/fused time ratios of the three unit-row patterns at six
+  shapes are 3.17, 3.42, 2.21, 2.95, 2.72 and 5.15 (geometric mean 3.2; release, Apple M-series; `fused_gate`'s `measure_…` test), each including the
+  program's un-fused nodes. The verdict is a statement about speed and blocks no registration.
 * `LOWERABLE_UNVERIFIED (the program's own verdict: V)`: the architecture's float reference is remote code this tool cannot run offline, so
   the fidelity column is empty; `V` is the verdict the program earned, which holds.

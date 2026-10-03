@@ -292,7 +292,7 @@ add("lfm2", "text/hybrid", "decoder", "Lfm2ForCausalLM", "lfm2", "causal",
 add("kimi_linear", "text/hybrid", "decoder", "KimiLinearForCausalLM", "kimi_linear", "causal",
     dict(layer_types=["linear_attention", "full_attention"], mlp_layer_types=["dense", "sparse"], linear_head_dim=8,
          linear_num_heads=4, kv_lora_rank=8, qk_rope_head_dim=4, qk_nope_head_dim=8, v_head_dim=8, head_dim=4,
-         num_experts=8, num_experts_per_token=2, moe_intermediate_size=16, num_shared_experts=1, num_key_value_heads=4), usage="m", why="Kimi Delta Attention (channel-wise gated delta rule) with MLA layers (Kimi-Linear-48B-A3B)", examples=["moonshotai/Kimi-Linear-48B-A3B-Instruct"])
+         num_experts=8, num_experts_per_token=2, moe_intermediate_size=16, num_shared_experts=1, num_key_value_heads=4), options={"hub_rename": [[r"\.layers\.(\d+)\.block_sparse_moe\.(gate_proj|up_proj|down_proj)\.", r".layers.\1.mlp.\2."]]}, usage="m", why="Kimi Delta Attention (channel-wise gated delta rule) with MLA layers (Kimi-Linear-48B-A3B)", examples=["moonshotai/Kimi-Linear-48B-A3B-Instruct"])
 
 
 # ─────────────────────────────── G. encoders and embedding models ───────────────────────────────

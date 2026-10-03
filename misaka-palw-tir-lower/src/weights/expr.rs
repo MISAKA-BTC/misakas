@@ -19,6 +19,7 @@
 //! | `{"take": {"axis", "start", "len"}}` | a range of an axis |
 //! | `{"take": {"axis", "block", "offset", "len", "groups"}}` | per group, `len` indices at `group·block + offset` (per-head interleaving) |
 //! | `{"take": {"axis", "per_layer"}}` | the layer's own `n` indices of a tensor packed over the layers |
+//! | `{"take": {"axis", "repeat", "groups"}}` | each of the `groups` indices repeated `repeat` times in a row (a per-head value over the head's channels) |
 //! | `{"stack": "E", "count": n}` | stack `n` instances of the value so far, `{E}` bound to `0..n`, on a new axis 0 |
 //! | `{"pad_rows": n}` | flatten the leading axes into rows, append zero rows up to `n` |
 //! | `{"map": "neg_exp"}`, `{"map": {"scale": c}}`, `{"map": {"rescale_by_layer": n}}` | the three element-wise maps |
@@ -203,12 +204,18 @@ fn apply_step(
                     return Err(bad(param, "take: groups × block is past 2^40"));
                 }
                 Pick::Strided { block, offset, len, groups }
+            } else if keys == BTreeSet::from(["axis", "groups", "repeat"]) {
+                let (each, groups) = (positive(param, "take.repeat", &t["repeat"])?, positive(param, "take.groups", &t["groups"])?);
+                if (each as u128) * (groups as u128) > MAX_ELEMENTS {
+                    return Err(bad(param, "take: repeat × groups is past 2^40"));
+                }
+                Pick::Repeat { each, groups }
             } else if keys == BTreeSet::from(["axis", "per_layer"]) {
                 Pick::PerLayer { len: positive(param, "take.per_layer", &t["per_layer"])? }
             } else {
                 return Err(bad(
                     param,
-                    "take is one of {axis, start, len}, {axis, block, offset, len, groups} or {axis, per_layer}",
+                    "take is one of {axis, start, len}, {axis, block, offset, len, groups}, {axis, repeat, groups} or {axis, per_layer}",
                 ));
             };
             Src::Take { src: Box::new(src), axis, pick }
@@ -341,6 +348,7 @@ pub fn to_expr(src: &Src) -> Option<Value> {
                         json!({"take": {"axis": axis, "block": block, "offset": offset, "len": len, "groups": groups}})
                     }
                     Pick::PerLayer { len } => json!({"take": {"axis": axis, "per_layer": len}}),
+                    Pick::Repeat { each, groups } => json!({"take": {"axis": axis, "repeat": each, "groups": groups}}),
                 });
                 cur = &**s;
             }
@@ -447,6 +455,23 @@ mod tests {
             .map(MapFn::Scale(0.5))
             .map(MapFn::RescaleByLayer { every: 6 });
         assert_eq!(s, want);
+    }
+
+    #[test]
+    fn a_repeat_step_spreads_a_per_head_value_over_the_head_channels() {
+        let s = parse(json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}])).unwrap();
+        assert_eq!(s, Src::t("a_log").reshape(vec![3]).map(MapFn::NegExp).take(0, Pick::Repeat { each: 2, groups: 3 }));
+        assert_eq!(Pick::Repeat { each: 2, groups: 3 }.indices_at(None).unwrap(), vec![0, 0, 1, 1, 2, 2]);
+        assert_eq!(Pick::Repeat { each: 2, groups: 3 }.count(), 6);
+        // The expression is written back as the same JSON.
+        assert_eq!(super::to_expr(&s).unwrap(), json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}]));
+        for bad_expr in [
+            json!(["a", {"take": {"axis": 0, "repeat": 0, "groups": 3}}]),
+            json!(["a", {"take": {"axis": 0, "repeat": 2}}]),
+            json!(["a", {"take": {"axis": 0, "repeat": 2, "groups": 3, "len": 1}}]),
+        ] {
+            assert!(parse(bad_expr.clone()).is_err(), "{bad_expr} must be refused");
+        }
     }
 
     #[test]

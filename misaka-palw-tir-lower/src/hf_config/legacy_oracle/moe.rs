@@ -424,7 +424,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
         q_a_norm: norm,
         kv_a_norm: norm,
         a_bias,
-        rope,
+        rope: Some(rope),
         scale,
         indexer: None,
     };

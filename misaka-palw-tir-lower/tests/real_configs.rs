@@ -437,8 +437,8 @@ fn deepseek_mla_and_routing() {
     let ix = m.indexer.as_ref().expect("the indexer");
     assert_eq!((ix.heads, ix.head_dim, ix.topk, ix.rope.rotary_dim, ix.rope.offset), (64, 128, 2048, 64, 0));
     assert_eq!(ix.rope.style, crate_rope::RopeStyle::Half);
-    assert_eq!(m.rope.style, crate_rope::RopeStyle::Interleaved);
-    assert_eq!(ix.rope.freqs, m.rope.freqs);
+    assert_eq!(m.rope.as_ref().unwrap().style, crate_rope::RopeStyle::Interleaved);
+    assert_eq!(ix.rope.freqs, m.rope.as_ref().unwrap().freqs);
     assert!(s.layers.iter().all(|l| matches!(&l.mixer, Mixer::Mla(m) if m.indexer.is_some())));
     assert!(matches!(&s.layers[2].ffn, Ffn::Mlp(_)) && matches!(&s.layers[3].ffn, Ffn::Moe(_)));
     assert_eq!(p.schedule.len(), 2 * 61, "a mixer half and an FFN half a layer");
@@ -493,7 +493,7 @@ fn refusals_name_their_reason() {
     refused("rwkv7-fla-1.5b", "flash-linear-attention");
     refused("t5-small", "encoder–decoder");
     refused("bert-base-uncased", "no adapter");
-    refused("gemma-3n-e4b", "AltUp");
+    refused("gemma-3n-e4b", "multimodal Gemma-3n");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
@@ -551,4 +551,82 @@ fn hl_ops_carry_no_checkpoint_names() {
         assert!(stem.len() < 6 || !text.contains(stem), "HL program mentions `{stem}`");
     }
     assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { .. })));
+}
+
+/// **Kimi-Linear** (`MIXER_KDA_V1`, `MIXER_MLA_NOPE_V1`, a data adapter): the class's defaults with the hub's `linear_attn_config` spelling of
+/// the layer lists and the KDA geometry (1-based `kda_layers` / `full_attn_layers`): seven latent-attention layers, twenty delta-attention
+/// layers, a dense first layer and the DeepSeek-V3 router on the other twenty-six. The config is written from the class's defaults and the spelling its
+/// `__post_init__` reads; the layer lists are as remembered, so the test is of the mechanism (the lists decide the layers), not of the release's pattern.
+#[test]
+fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
+    let (s, p) = ok("kimi-linear-48b-a3b");
+    assert_eq!(s.layers.len(), 27);
+    let full = [4usize, 8, 12, 16, 20, 24, 27];
+    for l in 0..27 {
+        match &s.layers[l].mixer {
+            Mixer::Mla(m) => {
+                assert!(full.contains(&(l + 1)), "layer {l}");
+                assert!(m.rope.is_none() && m.q_lora_rank.is_none() && (m.kv_lora_rank, m.qk_nope_head_dim, m.qk_rope_head_dim, m.v_head_dim) == (512, 128, 64, 128));
+                assert_eq!(m.scale, 1.0 / 192f64.sqrt());
+                assert_eq!(m.kv_a_norm.eps, 1e-6, "the latent norms keep their own epsilon, not rms_norm_eps");
+            }
+            Mixer::Kda(k) => {
+                assert!(!full.contains(&(l + 1)), "layer {l}");
+                assert_eq!((k.heads, k.head_dim, k.conv_kernel, k.gate_rank), (32, 128, 4, 128));
+                assert_eq!((k.gate_act, k.conv_act, k.norm_eps), (Act::Sigmoid, Act::Silu, 1e-5));
+            }
+            m => panic!("layer {l}: {m:?}"),
+        }
+        assert_eq!(matches!(s.layers[l].ffn, Ffn::Mlp(_)), l == 0, "layer {l}");
+    }
+    let Ffn::Moe(m) = &s.layers[1].ffn else { panic!() };
+    assert_eq!((m.experts, m.top_k, m.intermediate), (256, 8, 1024));
+    assert_eq!(m.shared.as_ref().map(|x| x.intermediate), Some(1024));
+    assert_eq!(s.hf.names["kda.q_conv"], "model.layers.{L}.self_attn.q_conv1d");
+    assert_eq!(s.hf.names["mla.kv_a"], "model.layers.{L}.self_attn.kv_a_proj_with_mqa");
+    // The delta attention's decay is one gate per key channel: the node carries `channel_decay` and a `[heads · head_dim]` decay chain.
+    assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { channel_decay: true, v_heads: 32, dk: 128, .. })));
+    assert!(p.params.iter().any(|d| d.name == "kda.A" && d.shape == vec![32 * 128]));
+    assert!(!p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Rope { heads: 1, .. })), "no rotation of the shared key");
+    // The features a registrant sees named.
+    let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
+    assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
+}
+
+/// **Gemma-3n's text decoder** (FR-12): four AltUp streams, LAuReL, per-layer inputs, the first ten layers sparse, the last fifteen
+/// sharing keys and values — and no tensor name left unmapped.
+#[test]
+fn gemma_3n_e4b_text_is_altup_with_laurel_and_sparse_layers() {
+    let (s, p) = ok("gemma-3n-e4b-text");
+    assert_eq!(s.num_layers(), 35);
+    assert_eq!(s.altup.map(|a| (a.streams, a.correct_scale)), Some((4, true)));
+    let sparse = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity == Some(0.95))).count();
+    assert_eq!(sparse, 10);
+    assert!(s.layers.iter().all(|l| matches!(&l.residual, Residual::AltUp { laurel: Some(l), .. } if l.rank == 64)));
+    let shared = s.layers.iter().filter(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.kv_share, Some(KvShare::Consumer { .. })))).count();
+    assert_eq!(shared, 15);
+    assert_eq!(p.carries[0].shape, vec![5 * 2048], "four streams and the layer's intermediate");
+}
+
+/// **DeepSeek-V4's text decoder** (FR-10): four mHC streams with 20 Sinkhorn iterations, shared-KV attention (one 512-lane head under 64 query
+/// heads), the first layers hash-routed, compressed entries by layer type (HCA windows of 128; CSA windows of 4 with the indexer over 512
+/// entries) — every tensor name mapped, and a program of at most 16 blocks.
+#[test]
+fn deepseek_v4_flash_is_mhc_over_shared_kv_attention_with_csa_and_hca_layers() {
+    let (s, p) = ok("deepseek-v4-flash");
+    assert_eq!(s.num_layers(), 43);
+    assert_eq!(s.mhc.map(|m| (m.streams, m.iters)), Some((4, 20)));
+    let skv = |l: usize| match &s.layers[l].mixer {
+        Mixer::SharedKv(a) => a,
+        m => panic!("layer {l} is {m:?}"),
+    };
+    assert_eq!((skv(0).heads, skv(0).head_dim, skv(0).o_groups), (64, 512, 8));
+    let c0 = skv(0).compressed.as_ref().expect("a compressed layer");
+    assert_eq!((c0.ratio, c0.overlap, c0.indexer.is_none()), (128, false, true), "the first layers are HCA");
+    let csa: Vec<usize> = (0..43).filter(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.overlap)).collect();
+    assert!(!csa.is_empty() && csa.iter().all(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.ratio == 4 && c.indexer.as_ref().is_some_and(|i| i.topk == 512))));
+    let hash = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Moe(m) if m.router.scoring == Scoring::SqrtSoftplusHash)).count();
+    assert_eq!(hash, 3);
+    assert!(s.layers.iter().all(|l| matches!(&l.ffn, Ffn::Moe(m) if matches!(m.glu, Glu::LimitedGlu { limit } if limit == 10.0))));
+    assert!(p.blocks.len() <= 16, "{} blocks", p.blocks.len());
 }
