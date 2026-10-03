@@ -43,12 +43,26 @@ const H: u64 = 5_300;
 const RHO100: u64 = H + 95;
 
 /// The names of the list, in the order the entries' prerequisites need.
-const LIST: [&str; 7] = [
+const LIST: [&str; 20] = [
     "palw_fp_decode_rules",
     "palw_gen_v1",
     "palw_fp_job_v5",
     "palw_held_close_chunks_v1",
     "palw_improvement_v1",
+    // int-12: RFC-0006, RFC-0007, RFC-0001 and RFC-0002's rest ride the same height.
+    "palw_tir_shard_v1",
+    "palw_verification_vertex_v1",
+    "palw_witness_manifest_v1",
+    "palw_audit_mesh_v1",
+    "palw_capped_onboarding_v1",
+    "palw_fp_decode_constraint",
+    "palw_fp_constraint_v2",
+    "palw_fp_prefix_state",
+    "palw_fp_prefix_inherit",
+    "palw_fp_tokenizer_match",
+    "palw_adapter_class_v1",
+    "palw_class_seating",
+    "palw_gdn_key_heads",
     "palw_capacity_network_verify",
     "palw_capacity_aggregate_liability_step_2",
 ];
@@ -269,6 +283,14 @@ fn the_fork_id_keeps_an_int10_node_below_h_and_refuses_it_from_h() {
     assert!(evaluate_fork_id_v1(&partial, RHO100, n.fired.as_bytes().as_slice(), n.next).refuses(), "…and refuses the build that has it");
 }
 
+fn entry(name: &str) -> &'static kaspa_consensus_core::config::params::PalwPostLaunchFenceV1 {
+    PALW_T12_INT11_FENCES_V1.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} is on the list"))
+}
+
+fn refused_opt(p: &Params) -> Option<String> {
+    p.validate_palw_v2().err().map(|e| format!("{e:?}"))
+}
+
 #[test]
 fn the_list_holds_its_prerequisites_by_name() {
     let baseline = palw_t12_release_v5_params();
@@ -300,7 +322,7 @@ fn the_list_holds_its_prerequisites_by_name() {
     refused(&late_gen, "a generative fence after the fences that need it");
     // L_ver needs F-N (the network room, DAA 1,700) at or below it.
     let mut early_verify = baseline.clone();
-    (PALW_T12_INT11_FENCES_V1[5].set)(&mut early_verify, at(1_699));
+    (entry("palw_capacity_network_verify").set)(&mut early_verify, at(1_699));
     refused(&early_verify, "L_ver below F-N");
     // ρ = 25 needs F-L's ρ = 10 step below it, ρ = 100 a ρ = 25 step below it and heights that strictly increase.
     let panics = |mut p: Params, entry: &'static kaspa_consensus_core::config::params::PalwPostLaunchFenceV1, h: u64| {
@@ -311,8 +333,26 @@ fn the_list_holds_its_prerequisites_by_name() {
     (PALW_T12_INT11_RHO100_FENCES_V1[0].set)(&mut steps, at(H));
     refused(&steps, "ρ = 100 at ρ = 25's own height");
     let mut under = with_list(baseline.clone(), Some(H));
-    (PALW_T12_INT11_FENCES_V1[6].set)(&mut under, at(1_700));
+    (entry("palw_capacity_aggregate_liability_step_2").set)(&mut under, at(1_700));
     refused(&under, "ρ = 25 at ρ = 10's own height");
+    // int-12's entries: each one's prerequisite inside the list, refused where it is missing or later than its dependant.
+    for (dependant, prerequisite) in [
+        ("palw_witness_manifest_v1", "palw_verification_vertex_v1"),
+        ("palw_audit_mesh_v1", "palw_verification_vertex_v1"),
+        ("palw_capped_onboarding_v1", "palw_audit_mesh_v1"),
+        ("palw_fp_constraint_v2", "palw_fp_decode_constraint"),
+        ("palw_fp_prefix_inherit", "palw_fp_prefix_state"),
+        ("palw_adapter_class_v1", "palw_improvement_v1"),
+        ("palw_tir_shard_v1", "palw_verification_vertex_v1"),
+    ] {
+        let _ = dependant;
+        let mut missing = with_list(baseline.clone(), Some(H));
+        (entry(prerequisite).set)(&mut missing, None);
+        let mut later = with_list(baseline.clone(), Some(H));
+        (entry(prerequisite).set)(&mut later, at(H + 1));
+        let failures = [refused_opt(&missing), refused_opt(&later)];
+        assert!(failures.iter().all(Option::is_some), "{dependant} without {prerequisite} at or below it is refused ({failures:?})");
+    }
     // Everything in order validates, and so does ρ = 100 a DAA after ρ = 25.
     let mut ok = with_list(baseline, Some(H));
     (PALW_T12_INT11_RHO100_FENCES_V1[0].set)(&mut ok, at(H + 1));

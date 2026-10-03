@@ -20533,10 +20533,12 @@ fn palw_t12_arm_post_launch_fences_v3(params: &mut Params) {
 /// Entries (lane · fence):
 /// * P0a · `palw_gdn_key_heads` — profile version 3 and the v5 map admitted; a V1/V2 profile whose
 ///   derived key-head count is not its value-head count refused on a recurrence map (hygiene).
-pub const PALW_T12_POST_LAUNCH_FENCES_V4: &[PalwPostLaunchFenceV1] = &[
-    // P0a: a bare height — the gate reads it at the registering block, and nothing is mirrored.
-    PalwPostLaunchFenceV1 { name: "palw_gdn_key_heads", set: |params, at| params.palw_gdn_key_heads = at },
-];
+pub const PALW_T12_POST_LAUNCH_FENCES_V4: &[PalwPostLaunchFenceV1] = &[PALW_GDN_KEY_HEADS_ENTRY_V1];
+
+/// P0a's one entry: a bare height — the gate reads it at the registering block, and nothing is mirrored. Named so the int-12 flag
+/// day's list ([`PALW_T12_INT11_FENCES_V1`]) arms the same entry the fourth list names.
+pub const PALW_GDN_KEY_HEADS_ENTRY_V1: PalwPostLaunchFenceV1 =
+    PalwPostLaunchFenceV1 { name: "palw_gdn_key_heads", set: |params, at| params.palw_gdn_key_heads = at };
 
 /// **The fourth flag day's height — `None` until the user sets it** (Phase F §5 decision 9: "its
 /// height"). While `None` the list is dormant on every ruleset, the shipped one included, and a drill
@@ -20686,6 +20688,25 @@ pub const PALW_T12_INT11_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     crate::palw_fp_job_v5::PALW_DRILL_FP_V5_ENTRY,
     crate::palw_held_close_v1::PALW_HELD_CLOSE_CHUNKS_ENTRY_V1,
     crate::palw_improve_v1::PALW_DRILL_IMPROVE_V1_ENTRY,
+    // ---- int-12 (2026-10-03): every RFC but 0005 rides the same height, in prerequisite order ----
+    // RFC-0006: layer-sharded panels (needs palw_tir_v1 / palw_tir_fence2 from the DAA-3,600 list, palw_rcore_plus, palw_verification_v2).
+    crate::palw_tir_shard_v1::PALW_DRILL_TIR_SHARD_ENTRY,
+    // RFC-0007: Part I vertex, then Part II witness manifest and Part IV.1 audit mesh (both need the vertex), then IV.2 capped onboarding.
+    crate::palw_vertex_v1::PALW_VERTEX_ENTRY_V1,
+    crate::palw_mesh_v1::PALW_WITNESS_MANIFEST_ENTRY_V1,
+    crate::palw_mesh_v1::PALW_AUDIT_MESH_ENTRY_V1,
+    crate::palw_mesh_v1::PALW_CAPPED_ONBOARDING_ENTRY_V1,
+    // RFC-0001: the decode constraint, its second subset (needs the first), the prefix-state receipt and its inheritance (needs the
+    // receipt), the tokenizer-match rule, the adapter class listing (needs palw_improvement_v1).
+    crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY,
+    crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_ENTRY,
+    crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_ENTRY,
+    crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_INHERIT_ENTRY,
+    crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_ENTRY,
+    crate::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_ENTRY,
+    // RFC-0002 rest: the class-seating fence and P0a's GDN key heads (`palw_tir_only_v1` is a MAINNET step and is NOT here).
+    crate::palw_class_seating_fence_v1::PALW_CLASS_SEATING_ENTRY_V1,
+    PALW_GDN_KEY_HEADS_ENTRY_V1,
     PALW_T12_CAPACITY_NETWORK_VERIFY_V1,
     PALW_T12_CAPACITY_RHO25_STEP_2_V1,
 ];

@@ -56,7 +56,7 @@ flag's own height; arm them first (a lower height) or the node refuses the flag 
 | 15 | `--palw-drill-held-chunks-at=H` | arms RFC-0003's held leaf challenge (object tag 90) | `palw_held_close_chunks_v1` | `palw_tir_v1`, `palw_held_context` | `held_chunks_at=` | `held_chunks_at` |
 | 16 | `--palw-drill-class-seating-at=H` | **reserved** — lane F's class-seating fence (the possession floor and the independence read) | `palw_class_seating` (name fixed by lane F) | lane F states them | `class_seating_at=` | `class_seating_at` |
 | 17 | `--palw-drill-improve-at=H` | arms RFC-0004's improvement fence (pipeline-claim data availability, spec 17 §17.14, rides with it) | `palw_improvement_v1` | `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court`, `palw_fp_decode_rules` | `extra_at=…improve:` | `improve_at` |
-| 18 | `--palw-drill-int11-at=H'` | **moves the int-11 flag day's whole list** to H' — decode rules, gen, FP Job V5, the held leaf challenge, improvement, `L_ver`, ρ = 25 — and ρ = 100 to **H' + 95**, as the release arms them; **instead of** rows 8–11, 12–15 and 17, never with them (refused by name) | `PALW_T12_INT11_FENCES_V1` + `PALW_T12_INT11_RHO100_FENCES_V1` | rows 1, 3, 4, 5 below it (`palw_tir_v1`, `palw_tir_fence2`, the capacity flag day: ρ = 10 and F-N) | `int11_at=` | `int11_at` |
+| 18 | `--palw-drill-int11-at=H'` | **moves the flag day's whole list** to H' — decode rules, gen, FP Job V5, the held leaf challenge, improvement, **int-12's additions** (`palw_tir_shard_v1`, `palw_verification_vertex_v1`, `palw_witness_manifest_v1`, `palw_audit_mesh_v1`, `palw_capped_onboarding_v1`, `palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`, `palw_fp_tokenizer_match`, `palw_adapter_class_v1`, `palw_class_seating`, `palw_gdn_key_heads`), `L_ver`, ρ = 25 — and ρ = 100 to **H' + 95**, as the release arms them; **instead of** rows 8–11, 12–15 and 17, never with them (refused by name) | `PALW_T12_INT11_FENCES_V1` + `PALW_T12_INT11_RHO100_FENCES_V1` | rows 1, 3, 4, 5 below it (`palw_tir_v1`, `palw_tir_fence2`, the capacity flag day: ρ = 10 and F-N) | `int11_at=` | `int11_at` |
 
 Marker lines. The release line's own `tir2_at=` and `model_court_at=` are unchanged. The capacity flags share `capacity_at=`
 (`none` when none stands, else `room:…,verify:…,step2:…,step3:…,rho100:…`). The four RFC-0003 / RFC-0004 flags of 12–14 and 17
@@ -147,3 +147,15 @@ kaspad --testnet --netsuffix=12 --nodnsseed --palw-drill-genesis-salt=<64 hex> \
 
 The keyring export takes the same fence flags: `kaspad … --palw-drill-write-keyring=DIR` (add them all, or the manifest
 announces another ruleset's fingerprint).
+
+
+## int-12 addendum (2026-10-03): the list is now 20 entries
+
+The user's directive of 2026-10-03 arms every RFC but 0005 at the same height H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 20
+entries, in prerequisite order: the int-11 five, then RFC-0006 (`palw_tir_shard_v1`), RFC-0007 (vertex, witness manifest, audit mesh, capped
+onboarding), RFC-0001 (decode constraint, constraint v2, prefix state, prefix inherit, tokenizer match, adapter class), RFC-0002's rest
+(`palw_class_seating`, `palw_gdn_key_heads`), then F-N's `L_ver` and ρ = 25. `palw_tir_only_v1` is a MAINNET step and is on no list.
+`--palw-drill-int11-at` moves all of them (a per-fence flag of this file's rows still moves its own entry alone, on a ruleset that arms the
+rest). Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
+(`consensus/core/tests/palw_t12_flag_day_int11.rs`, `the_list_holds_its_prerequisites_by_name`). Object tags: 91–93 RFC-0006, 94 the adapter
+listing, 100–103 RFC-0007; delta 101 vertex rows, 102–103 shard rows; carriage tails `0xE4` (vertex), `0xE1` (shard).

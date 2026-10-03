@@ -16,7 +16,7 @@
 > - **staged (capped) onboarding** (§18.17): the `Capped` lifecycle state, the weight cap, provisional rewards and the re-verification
 >   window (`palw_capped_onboarding_v1`).
 >
-> It applies past the dormant fence `palw_verification_vertex_v1` (Parts I and III) and past each later fence for its part. Below the fence nothing here is read, the vertex tables are empty,
+> **Activation on testnet-12: DAA 5,300 (the int-12 flag day; RFC-0006's `palw_tir_shard_v1` and RFC-0007's four fences arm with the rest of the list).** It applies past the dormant fence `palw_verification_vertex_v1` (Parts I and III) and past each later fence for its part. Below the fence nothing here is read, the vertex tables are empty,
 > and every root, carriage and delta is byte-identical to a build without it. Part II's checker itself
 > is seat-local node software (§18.15.3, §18.15.5): it binds no consensus object.
 >
