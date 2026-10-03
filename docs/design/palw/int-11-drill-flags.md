@@ -174,7 +174,7 @@ and 1000 where the release has them). Lane PL's list has its own flag, `--palw-d
 `--palw-drill-useful-work-at`. Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
 (`consensus/core/tests/palw_t12_flag_day_int11.rs`, `the_list_holds_its_prerequisites_by_name`).
 
-Object tags: 91–93 RFC-0006, 94 the adapter listing, 100–103 RFC-0007 (spec 17 §17.0). State-delta numbers: 101 vertex rows (RFC-0007),
+Object tags: 91–93 RFC-0006, 94 the adapter listing, 95 capacity riders (ADR-0167), 100–103 RFC-0007 (spec 17 §17.0). State-delta numbers: 101 vertex rows (RFC-0007),
 102–103 shard plan / claim (RFC-0006), 104 `RealWork` (ADR-0165), 105 `CapacityLedger` (ADR-0164), 106 `SeatAvailability` (ADR-0166).
 Carriage tails: `0xE4` vertex, `0xE1` shard, `0xEA` real work, `0xE6` seat availability. Interval-request kinds: bit 29 leaf evidence,
 28 shard rows, 27 shard runs, 26 weight blocks, 25 witness chunks.
