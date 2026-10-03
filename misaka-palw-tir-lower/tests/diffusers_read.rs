@@ -120,6 +120,10 @@ fn flux_dit_and_the_unets_are_level_c_naming_what_their_lowering_lacks() {
             assert!(names.contains(&w), "{name}: {w} not named in {names:?}");
         }
         for m in &r.missing {
+            // ATTN_CROSS_V1 is implemented for decoders now (mllama); a denoiser that needs it is still named for its other lacks.
+            if m.what == "ATTN_CROSS_V1" {
+                continue;
+            }
             let info = feature_info(&m.what).unwrap_or_else(|| panic!("{name}: `{}` is not in the registry", m.what));
             assert_eq!(info.lowering, Lowering::Missing, "{}", m.what);
         }
