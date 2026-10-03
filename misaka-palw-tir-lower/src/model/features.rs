@@ -298,7 +298,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MLP_MOE_ROUTER_SQRTSOFTPLUS_V1", Ffn, "sqrt(softplus) router scores, top-k of the scores plus a selection bias, weights the unbiased scores renormalised and scaled", Implemented, ["Compare", "Select", "IntLn"], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4: softplus(y) = max(y, 0) + ln(1 + e^(−|y|)) from IntExp and IntLn on the Q24 logits, the square root the integer square root of its Q48 form (lower/altup.rs `isqrt`); the selection bias joins the ranked scores only, the weights are the unbiased scores renormalised (IntRecip) and scaled by routed_scaling_factor (it lives in their scale)."),
     feature!("MLP_MOE_ROUTER_HASH_V1", Ffn, "experts chosen by a frozen token→experts table; the learned gate only weights them", Implemented, [], NoReq, ["dsv4::a_hash_layer_routes_by_the_frozen_table", "dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float", "dsv4::the_dsv4_program_is_the_same_on_all_three_implementations"], "DeepSeek-V4's hash_moe layers: tid2eid [vocab, k] is a param (an I64 checkpoint tensor read as the exact floats) the program gathers by the token id — a Gather of the param itself, so a runtime can address the row by offset — and the weights are the √softplus scores of those experts, renormalised. A table entry past the expert count is refused at conversion."),
     feature!("MLP_GLU_LIMITED_V1", Ffn, "swiglu with a limit: act(min(gate, L)) · clamp(up, −L, L)", Implemented, [], NoReq, ["dsv4::dsv4_float_matches_hf", "dsv4::dsv4_integer_follows_float"], "DeepSeek-V4 (swiglu_limit; also glm5_next, hy_v4, minimax_m3_vl); step3p7 clamps AFTER the activation and is a different function. Dense: a Clamp before the activation table and one on the up half. Experts: two single-input tables (act(min(g, L)), clamp(u, −L, L)); the sites hold the clamped rows, so the i16 narrowing saturates at the limit by itself."),
-    feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Specified, [], NoReq, [], "Mllama's decoder layers reading vision states: CrossAttnSpec describes them (q/k head norms, no rotation, tanh-gated residual branches); binding image rows to such a spec is refused by name. The text-only stage skips the layers (VLM_CROSS_LAYERS_SKIPPED_V1). The states path needs the vision stage's projected rows as a declared input (RFC-0003 §II.2.1) and a stage-0 K/V stack (FR-18's pattern)."),
+    feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states (a vision stage's projected rows, declared as an input)", Implemented, [], NoReq, ["cross_states::mllama_with_vision_states_matches_its_hf_fixture", "cross_states::the_integer_text_stage_follows_the_float_reference_over_the_declared_states", "cross_states::the_three_implementations_agree_on_both_stages", "cross_states::both_stages_are_admitted_and_the_court_reproduces_their_nodes"], "Mllama's cross layers (q/k head RMS norms, no rotation, grouped heads, tanh-gated attention and MLP branches). The rows are a DECLARED INPUT (`input.cross_states`, i32 [rows, hidden] at a fixed unit; the tower is not computed). Stage 0 (lower::cross) is one position over the rows: every cross layer's K = RMS_head(Wk s) and V = Wv s narrowed to the layer's own code scale, stacked as the Final i16 [Dc, 2, rows, inner] (FR-18's pattern); the text stage reads input.xkv, a per-layer Gather of its slice, scores over the rows, one softmax (no mask: every position sees every row), grouped heads. No primitive. Not modelled: a per-token cross_attention_mask (the text-before-the-first-image row mask) and several images/tiles per prompt; a spec with cross layers and no declared states skips them (VLM_CROSS_LAYERS_SKIPPED_V1)."),
     feature!("VLM_CROSS_LAYERS_SKIPPED_V1", Attention, "a VLM text stage whose cross-attention layers are skipped (no vision states bound)", Implemented, [], NoReq, ["cross_layers_skipped::mllama_text_only_matches_its_hf_fixture", "cross_layers_skipped::binding_image_rows_to_a_cross_attention_spec_is_refused_by_name"], "Mllama: `MllamaTextModel.forward` skips every cross layer when `cross_attention_states` is None and the cache is empty, so a text-only prompt runs the Llama layers alone. The spec keeps the cross layers (and the model's layer numbering); the HL schedule omits them."),
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
     feature!("ATTN_BLOCKSPARSE_PATTERN_V1", Attention, "a fixed block-sparse pattern of visible keys", Missing, [], NoReq, [], "Phi-3-small."),
@@ -518,7 +518,8 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
         }
         Mixer::None => u.add("LAYER_FFN_ONLY_V1", lay, ""),
         // Text-only: the layer is skipped, as HF skips it without states. (`ATTN_CROSS_V1` is the layer WITH states: not lowered.)
-        Mixer::CrossAttention(_) => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", lay, "no states bound: the layer is skipped, as HF does"),
+        // Reported by `detect` (it knows whether states are bound).
+        Mixer::CrossAttention(_) => {}
         Mixer::SharedKv(a) => {
             u.add("ATTN_GQA_V1", lay, format!("{}q/1kv × {} (K = V)", a.heads, a.head_dim));
             u.add("ATTN_SLIDING_V1", lay, format!("window {}", a.window));
@@ -579,6 +580,17 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if let Some(n) = &s.final_norm {
         norm_features(&mut u, n, None);
+    }
+    // Cross-attention layers: read the declared states, or skipped (as HF skips them) when none are bound.
+    if let Some(c) = s.layers.iter().find_map(|l| if let Mixer::CrossAttention(c) = &l.mixer { Some(c) } else { None }) {
+        match &s.cross_states {
+            Some(cs) => {
+                u.add("ATTN_CROSS_V1", None, format!("{} state rows", cs.rows));
+                norm_features(&mut u, &c.q_norm, None);
+                u.add("NORM_GROUPED_V1", None, "");
+            }
+            None => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", None, "no states bound: the layers are skipped, as HF does"),
+        }
     }
     if let Some(h) = &s.hyper {
         norm_features(&mut u, &h.norm, None);

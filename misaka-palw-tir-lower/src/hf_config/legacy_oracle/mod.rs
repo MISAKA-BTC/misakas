@@ -551,6 +551,7 @@ impl P<'_> {
             },
             notes: std::mem::take(&mut self.notes),
             prefix_lm: false,
+            cross_states: None,
             embed_carry: false,
         }
     }

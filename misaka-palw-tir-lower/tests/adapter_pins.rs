@@ -20,6 +20,10 @@ const INTENDED: &[(&str, &str)] = &[
         "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk) — the adapter's weights expressions follow",
     ),
     (
+        "mllama",
+        "lane R2-A (FR-21, ATTN_CROSS_V1): the cross layers' tensors are read when the states are declared (their roles are named, and no longer ignored by prefix: the binder ignores them itself when the layers are skipped)",
+    ),
+    (
         "refusals",
         "ae21eeeec: Nemotron-H, Falcon-H1 and LFM2 lower as data now, so their refusals are deleted from the shared refusal table",
     ),

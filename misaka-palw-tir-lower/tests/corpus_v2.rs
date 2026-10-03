@@ -623,6 +623,143 @@ fn three_way_and_court(p: &tir::TirProgramV1, params: &IntParams, eval: &[Vec<us
     ))
 }
 
+/// **A decoder with cross-attention layers over declared vision states** (`ATTN_CROSS_V1`): when the fixture holds `cross.json`
+/// (transformers over the same checkpoint with seeded `cross_attention_states`; the tower is not run), the text stage is lowered
+/// with those rows declared as an input and run as the two-stage program (stage 0's K/V stack, then the text stage): the float
+/// reference against HF's logits, the integer program against the float one, the three implementations and the court on both
+/// stages, and admission of both. The text-only stages above are unchanged.
+fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static str, Stage> {
+    use misaka_palw_tir_lower::lower::cross::{self, STATES_PARAM, XKV_PARAM};
+    use misaka_palw_tir_lower::lower::{IntTensor, lower};
+    let mut st: BTreeMap<&'static str, Stage> = BTreeMap::new();
+    let Some(meta) = read_json(&dir.join("cross.json")) else { return st };
+    let unit = 1.0 / 4096.0;
+    let mut ctx: Option<(ModelSpec, Vec<usize>, Vec<Vec<f32>>, IntTensor)> = None;
+    let s = stage(|| {
+        let mut spec = read.spec.clone();
+        let rows = meta["rows"].as_u64().ok_or("rows")? as usize;
+        spec.cross_states = Some(misaka_palw_tir_lower::spec::CrossStatesSpec { rows });
+        let d = spec.hidden_size;
+        let ints: Vec<i32> = meta["cross_states"].as_array().ok_or("cross_states")?.iter().flat_map(|r| r.as_array().cloned().unwrap_or_default()).map(|x| (x.as_f64().unwrap_or(0.0) / unit).round() as i32).collect();
+        let states: Vec<Vec<f32>> = ints.chunks(d).map(|r| r.iter().map(|q| (*q as f64 * unit) as f32).collect()).collect();
+        let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
+        let hl = misaka_palw_tir_lower::hl::build_program(&spec).map_err(|e| e.to_string())?;
+        let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).map_err(|e| e.to_string())?;
+        let (params, unused) = ParamStore::from_source(&hl, &binding, ck).map_err(|e| e.to_string())?;
+        if !unused.is_empty() {
+            return Err(format!("checkpoint tensors the program never reads: {}", short(&format!("{unused:?}"), 300)));
+        }
+        let want: Vec<Vec<f64>> = meta["logits_full"].as_array().ok_or("logits")?.iter().map(|r| r.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default()).collect();
+        let mut sess = Session::new(&hl, &params);
+        sess.cross_states = Some(states.clone());
+        let got = sess.run(&tokens).map_err(|e| format!("float reference: {e}"))?;
+        let scale = want.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
+        let max_abs = got.iter().zip(&want).flat_map(|(g, w)| g.iter().zip(w).map(|(a, b)| (*a as f64 - b).abs())).fold(0f64, f64::max);
+        let rel = max_abs / scale;
+        if rel > 1e-4 {
+            return Err(format!("float reference with declared states vs HF: max|Δ|/scale {rel:.2e}"));
+        }
+        ctx = Some((spec, tokens, states, IntTensor::i32(vec![rows, d], ints)));
+        Ok(json!({"positions": got.len(), "rows": rows, "max_rel_vs_hf": rel}))
+    });
+    let ok = s.ok;
+    st.insert("cross_float_vs_hf", s);
+    if !ok {
+        return st;
+    }
+    let (spec, tokens, states, states_i) = ctx.expect("cross context");
+    let mut stages_opt = None;
+    let s = stage(|| {
+        let hl = misaka_palw_tir_lower::hl::build_program(&spec).map_err(|e| e.to_string())?;
+        let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).map_err(|e| e.to_string())?;
+        let (params, _) = ParamStore::from_source(&hl, &binding, ck).map_err(|e| e.to_string())?;
+        let d = spec.hidden_size;
+        let rows = states.len();
+        let mut stats: BTreeMap<String, misaka_palw_tir_lower::float_ref::SiteStat> = Default::default();
+        let mut rng = 17u64;
+        let mut runs: Vec<(Vec<usize>, Vec<Vec<f32>>)> = vec![(tokens.clone(), states.clone())];
+        for sq in fidelity::random_sequences(hl.vocab, 4, 24, 11) {
+            let r: Vec<Vec<f32>> = (0..rows)
+                .map(|_| {
+                    (0..d)
+                        .map(|_| {
+                            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                            (((rng >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32 * 1.2
+                        })
+                        .collect()
+                })
+                .collect();
+            runs.push((sq, r));
+        }
+        for (sq, rs) in runs {
+            let mut sess = Session::new(&hl, &params).with_site_stats();
+            sess.cross_states = Some(rs);
+            sess.run(&sq).map_err(|e| format!("calibration: {e}"))?;
+            for (k, v) in sess.sites.take().unwrap_or_default() {
+                stats.entry(k).or_default().merge(&v);
+            }
+        }
+        let quiet = |_: usize, _: usize| {};
+        let text = lower(&hl, &LowerOpts { max_window: Some(64), ..LowerOpts::default() }).map_err(|e| format!("lower the text stage: {e}"))?;
+        let mat = materialise(&text, &hl, &Resident(Arc::new(params)), &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+        let (hl0, b0) = cross::hl_cross_kv(&spec).map_err(|e| e.to_string())?;
+        let (p0, _) = ParamStore::from_source(&hl0, &b0, ck).map_err(|e| e.to_string())?;
+        let kv = cross::lower_cross_kv(&hl0, &spec, unit).map_err(|e| format!("lower stage 0: {e}"))?;
+        let mat0 = materialise(&kv, &hl0, &Resident(Arc::new(p0)), &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise stage 0: {e}"))?;
+        let inputs = admission::default_inputs();
+        for (name, p) in [("stage 0", &kv.program), ("text", &text.program)] {
+            admission::admit(p, &inputs).map_err(|e| format!("{name}: tir_admit_v1 refuses: {e}"))?;
+        }
+        let with = |p: &tir::TirProgramV1, base: &IntParams, name: &str, t: IntTensor| -> Result<IntParams, String> {
+            let j = p.params.iter().position(|d| d.name == name).ok_or_else(|| format!("no input `{name}`"))?;
+            let mut q = base.clone();
+            q.tensors.insert((j as u16, None), t);
+            Ok(q)
+        };
+        let p0 = with(&kv.program, &mat0.params, STATES_PARAM, states_i.clone())?;
+        let interp = Interpreter::new(&kv.program).map_err(|e| e.to_string())?;
+        let out = interp.step(&p0, &mut RunState::default(), 0).map_err(|e| format!("stage 0: {e}"))?;
+        let ck_ = cross::CrossKv::of(&spec).map_err(|e| e.to_string())?;
+        let xkv = IntTensor::i16(vec![ck_.slots.len(), 2, ck_.rows, ck_.inner()], out.logits.data.iter().map(|v| *v as i16).collect());
+        let pt = with(&text.program, &mat.params, XKV_PARAM, xkv)?;
+        let facts = json!({"stage0_nodes": kv.program.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), "text_nodes": text.program.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), "cross_layers": ck_.slots.len()});
+        stages_opt = Some((hl, mat.logits_scale, text, kv, p0, pt));
+        Ok(facts)
+    });
+    let ok = s.ok;
+    st.insert("cross_lower", s);
+    if !ok {
+        return st;
+    }
+    let (hl, logits_scale, text, kv, p0, pt) = stages_opt.expect("cross stages");
+    let s = stage(|| {
+        let params = ParamStore::from_source(&hl, &misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).map_err(|e| e.to_string())?, ck).map_err(|e| e.to_string())?.0;
+        let mut sess = Session::new(&hl, &params);
+        sess.cross_states = Some(states.clone());
+        let fl = sess.run(&tokens).map_err(|e| e.to_string())?;
+        let il = fidelity::int_logits(&text.program, &pt, &tokens, logits_scale, &|_| {}).map_err(|e| format!("integer run: {e}"))?;
+        let m = fidelity::compare(&[fl], &[il], &[tokens.clone()]);
+        let v = json!({"positions": m.positions, "top1": m.top1_agreement, "kl_mean": m.kl_mean, "kl_max": m.kl_max});
+        if m.top1_agreement < 0.8 || m.kl_mean > 0.02 {
+            return Err(format!("integer vs float with declared states: top-1 {:.3}, KL {:.5}", m.top1_agreement, m.kl_mean));
+        }
+        Ok(v)
+    });
+    let ok = s.ok;
+    st.insert("cross_int_vs_float", s);
+    if !ok {
+        return st;
+    }
+    let s = stage(|| {
+        let (tw0, ct0) = three_way_and_court(&kv.program, &p0, &[vec![0usize]]).map_err(|e| format!("stage 0: {e}"))?;
+        let (tw1, ct1) = three_way_and_court(&text.program, &pt, &[tokens.clone()]).map_err(|e| format!("text stage: {e}"))?;
+        Ok(json!({"stage0": tw0, "text": tw1, "court_stage0": ct0, "court_text": ct1}))
+    });
+    st.insert("cross_three_way_court", s);
+    st
+}
+
+
 /// Per-class thresholds of integer-vs-float fidelity (as `tests/fidelity_tiny.rs`).
 fn thresholds(category: &str) -> (f64, f64) {
     match category {
@@ -815,6 +952,16 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
         return (st, Some("three_way"));
     }
     st.insert("court", Stage { ok: true, ms: 0, data: court.unwrap_or(Value::Null) });
+    // `ATTN_CROSS_V1`: a model with cross-attention layers and a `cross.json` fixture also runs with its vision states declared.
+    if read.spec.layers.iter().any(|l| matches!(l.mixer, misaka_palw_tir_lower::spec::Mixer::CrossAttention(_))) {
+        for (k, v) in run_cross(read, dir, &ck) {
+            let ok = v.ok;
+            st.insert(k, v);
+            if !ok {
+                return (st, Some(k));
+            }
+        }
+    }
     (st, failed)
 }
 

@@ -146,6 +146,13 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += *blocks as u64;
                 }
                 Op::BlockWrite { blocks, .. } => c.elementwise += *blocks as u64,
+                Op::CrossAttention { heads, kv_heads, head_dim, rows, .. } => {
+                    // Per position: the scores and the context over the rows (K and V are stage 0's).
+                    c.macs_fixed += (2 * *heads * *head_dim * *rows) as u64;
+                    c.elementwise += (*heads * *rows) as u64;
+                    c.transcendental += (*heads * *rows) as u64;
+                    let _ = kv_heads;
+                }
                 Op::ExpertLinear { top_k, .. } => {
                     if let Ref::Param(w) = n.inputs[2] {
                         let m = *top_k as u64 * numel(&p.params[w as usize].shape[1..]);

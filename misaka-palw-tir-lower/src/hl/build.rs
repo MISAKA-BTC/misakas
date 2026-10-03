@@ -34,7 +34,7 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     let mut layer_of = Vec::with_capacity(spec.layers.len());
     for (li, ls) in spec.layers.iter().enumerate() {
         // `ATTN_CROSS_V1`, text-only: a cross-attention layer reads no states and HF skips it (`layer_of` keeps the model's numbering).
-        if matches!(ls.mixer, Mixer::CrossAttention(_)) {
+        if matches!(ls.mixer, Mixer::CrossAttention(_)) && spec.cross_states.is_none() {
             continue;
         }
         // Layers that differ only in constants the program reads as data (a PLE layer's hash
@@ -1301,6 +1301,11 @@ impl Builder<'_> {
                     if *multiplier != 1.0 {
                         m = bk.f(Op::Scale { c: *multiplier }, vec![m], d, "mix.scaled");
                     }
+                    // `ATTN_CROSS_V1`: the attention branch enters through `tanh(attn_gate)`.
+                    if matches!(&ls.mixer, Mixer::CrossAttention(c) if c.gated) {
+                        let g = self.param("xattn.attn_gate", vec![1], true, Init::Uniform(0.3, 0.9))?;
+                        m = bk.f(Op::ScaleParam, vec![m, g], d, "xattn.attn_gated");
+                    }
                     bk.f(Op::Add, vec![x, m], d, "resid.mix")
                 };
                 if ls.ffn != Ffn::None {
@@ -1314,6 +1319,10 @@ impl Builder<'_> {
                     }
                     if *multiplier != 1.0 {
                         f = bk.f(Op::Scale { c: *multiplier }, vec![f], d, "ffn.scaled");
+                    }
+                    if matches!(&ls.mixer, Mixer::CrossAttention(c) if c.gated) {
+                        let g = self.param("xattn.mlp_gate", vec![1], true, Init::Uniform(0.3, 0.9))?;
+                        f = bk.f(Op::ScaleParam, vec![f, g], d, "xattn.mlp_gated");
                     }
                     h = bk.f(Op::Add, vec![h, f], d, "resid.ffn");
                 }
@@ -1467,9 +1476,7 @@ impl Builder<'_> {
             Mixer::ShortConv(c) => self.short_conv(bk, c, x),
             Mixer::None => Err(LowerError::eval("internal: a mixer was asked of a layer with none")),
             Mixer::Parallel(branches) => self.parallel(bk, branches, x),
-            Mixer::CrossAttention(_) => Err(LowerError::not_lowerable(
-                "ATTN_CROSS_V1: a cross-attention layer reads vision states; only the text-only stage (the layer skipped, as HF does without states) is lowered",
-            )),
+            Mixer::CrossAttention(c) => self.cross_attention(bk, c, x),
             Mixer::SharedKv(_) => Err(LowerError::eval("internal: a shared-KV attention is built by its layer's blocks (`mhc_blocks`)")),
         }
     }
@@ -2001,6 +2008,36 @@ impl Builder<'_> {
             o = self.full_norm(bk, o, on, &n("sub_norm"), h * vd, true)?;
         }
         self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
+    }
+
+    /// **`ATTN_CROSS_V1`** (Mllama's `cross_attn`): `q = RMS_head(q_proj x)`; the attention over the declared states; `o_proj`. The
+    /// rows' keys and values are not computed here (the float reference computes them from the states; the integer program reads
+    /// stage 0's stack).
+    fn cross_attention(&mut self, bk: &mut Bk, c: &CrossAttnSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let rows = self.s.cross_states.ok_or_else(|| LowerError::eval("internal: a cross-attention layer without states"))?.rows;
+        let (h, kv, hd) = (c.heads, c.kv_heads, c.head_dim);
+        if h == 0 || kv == 0 || h % kv != 0 || hd == 0 || rows == 0 {
+            return Err(LowerError::not_lowerable(format!("ATTN_CROSS_V1: {h} heads over {kv} kv heads of {hd}, {rows} rows")));
+        }
+        let slots: Vec<usize> =
+            self.s.layers.iter().enumerate().filter(|(_, l)| matches!(l.mixer, Mixer::CrossAttention(_))).map(|(i, _)| i).collect();
+        let q = self.linear(bk, x, "xattn.q", h * hd, d, false, true, "xattn.q")?;
+        let qk = QkNorm { norm: c.q_norm, scope: QkNormScope::PerHeadShared };
+        let q = self.qk_norm(bk, q, &qk, "xattn.q_norm", h, hd)?;
+        let wk = self.param("xattn.k.w", vec![kv * hd, d], true, Init::Normal(W_STD))?;
+        let wv = self.param("xattn.v.w", vec![kv * hd, d], true, Init::Normal(W_STD))?;
+        let mut ins = vec![q, wk, wv];
+        if c.k_norm.gain != Gain::None {
+            ins.push(self.param("xattn.k_norm.gain", vec![hd], true, Init::Uniform(0.6, 1.4))?);
+        }
+        let ctx = bk.f(
+            Op::CrossAttention { heads: h, kv_heads: kv, head_dim: hd, scale: 1.0 / (hd as f64).sqrt(), rows, k_norm: c.k_norm, slots },
+            ins,
+            h * hd,
+            "xattn.ctx",
+        );
+        self.linear(bk, ctx, "xattn.o", d, h * hd, false, true, "xattn.out")
     }
 
     /// **`MIXER_MOA_V1`** (JetMoE): the router picks `k` experts; slot `j`'s query is `W_in[e_j]·x`; keys and values are one shared
