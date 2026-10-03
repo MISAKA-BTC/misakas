@@ -90,6 +90,11 @@ cat <<EOF
             rule — the raw samples are kept for P2's exact replay); G-A3: the panel bind wait (claim accepted -> PanelBound) of REAL claims p95 <= 20 DAA, split operator bond / non-operator bond (new9, the
             outsider, makes REAL attempts of class win from leg B1 on; it is stopped with the operator producers in leg A). Report-only leg O (O_DAA=$O_DAA, off by default): the operator producers stopped, only the
             non-operator REAL flowing: its bind wait is expected near 60 slots (the beacon-floor policy's cap); it needs ~80 DAA beyond the ~$(( (INT11_AT+285+CAP_SETTLE_DAA+CAP_WINDOW_DAA+6)*125/3600 )) h of the rest.
+  riders    G-R1 (RS's finding: no REAL-class rider has ever been admitted through the real processor): the REAL producers new4, new6 and new9 run with --palw-riders=$RIDERS from leg B1 on (so through the rho250 and
+            rho1000 regimes). Gate: AttemptRidersV1 (tag 95) objects carried on the chain, riders ADMITTED (companion claims of the lead's bond and class, escrow within n+1 sompi of the lead's, accepted
+            within 9 DAA), each priced sanely against its lead (committed / reserved <= 4x the lead's and nowhere near u64-max: a rider priced without the work-target fold would saturate), riders bound and
+            licensed like the leads of the same age, and no [palw-floor-state] transition at a block with no REAL attempt in it or in its mergeset (riders must not step the state machine).
+            The RPC shows neither a claim's pwu nor a rider flag, so admission and price are read from the claim rows (escrow, committed, reserved).
   test-level, not drill   FORK-d (IBD via the pruning proof across the fence): RS's T49-style carriage test (capture in Probe/Normal -> import -> identical decisions) and the combined-fence test with the floor rule live
   report    (never a gate) the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time; leg X (off unless X_DAA > 0): one policy-IGNORING floor producer
             ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
