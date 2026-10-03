@@ -1,4 +1,47 @@
 {
+  "albert": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "apertus": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "arcee": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
   "bart": {
     "convert": {
       "blockers": [],
@@ -11,6 +54,64 @@
     "register": {
       "blockers": [],
       "status": "unknown"
+    }
+  },
+  "bert": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "bitnet": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "chatglm3": {
+    "convert": {
+      "blockers": [
+        "ARCH_NEEDS_FEATURE(REFERENCE_REMOTE_CODE_V1)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "clip_text": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
     }
   },
   "clip_vision": {
@@ -27,6 +128,634 @@
       "status": "unknown"
     }
   },
+  "cohere2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "cwm": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "dbrx": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "deberta_v2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "deepseek_v3": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "deepseek_v32": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [
+        "ADMISSION_EXCEEDS(operand_count)"
+      ],
+      "status": "blocked"
+    }
+  },
+  "deepseek_v4": {
+    "convert": {
+      "blockers": [
+        "QUANT_NO_DESCRIPTOR(safetensors/I64)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [
+        "CLOSE_SIZE_OVER_CAP(IR dissection root claim bytes)",
+        "COURT_COST_OVER_CEILING"
+      ],
+      "status": "blocked"
+    }
+  },
+  "diffllama": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "distilbert": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "dit": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "encodec": {
+    "convert": {
+      "blockers": [
+        "ARCH_NEEDS_FEATURE(an adapter for `EncodecModel`)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "ernie4_5": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "ernie4_5_moe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "falcon": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "falcon_h1": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "falcon_mamba": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "flux": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "gemma2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gemma3_text": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gemma3_vlm": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gemma3n_text": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [
+        "ADMISSION_EXCEEDS(max_program_bytes)",
+        "ADMISSION_EXCEEDS(program_bytes)"
+      ],
+      "status": "blocked"
+    }
+  },
+  "gemma4_text": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "glm4": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "glm4_moe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gpt2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gpt_neox": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "gpt_oss": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "granite": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "granitemoe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "granitemoehybrid": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "helium": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "hunyuan_v1_dense": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "hunyuan_v1_moe": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "idefics3": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "internlm2": {
+    "convert": {
+      "blockers": [
+        "TENSOR_MISSING(embed.table)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [
+        "SEAT_MEMORY_SHORT"
+      ],
+      "status": "blocked"
+    },
+    "register": {
+      "blockers": [
+        "COURT_COST_OVER_CEILING(IR tile multiply-accumulates)"
+      ],
+      "status": "blocked"
+    }
+  },
+  "jamba": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "jetmoe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "kimi_linear": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "lfm2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "llama": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "llama4_text": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "llava": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "longcat_flash": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
   "longt5": {
     "convert": {
       "blockers": [],
@@ -39,6 +768,391 @@
     "register": {
       "blockers": [],
       "status": "unknown"
+    }
+  },
+  "mamba": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "mamba2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "marian": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "mbart": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "minicpm": {
+    "convert": {
+      "blockers": [
+        "TENSOR_MISSING(embed.table)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "minimax_m2": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "mistral": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "mixtral": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "mllama": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "modernbert": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "mpnet": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "musicgen": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "nemotron_h": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "nomic_bert": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "opt": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "paligemma": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "persimmon": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "phi3": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen2_5_vl": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen2_moe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen2_vl": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen3": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen3_5_moe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen3_moe": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen3_next": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "qwen3_vl": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
     }
   },
   "resnet": {
@@ -55,6 +1169,34 @@
       "status": "unknown"
     }
   },
+  "roberta": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "rwkv": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
   "sd3": {
     "convert": {
       "blockers": [
@@ -69,6 +1211,79 @@
     "register": {
       "blockers": [],
       "status": "unknown"
+    }
+  },
+  "seed_oss": {
+    "adapter_file": true,
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "siglip_vision": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "smollm3": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "speecht5": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "starcoder2": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
     }
   },
   "t5": {
@@ -89,6 +1304,52 @@
     "convert": {
       "blockers": [],
       "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "t5_gated": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "unet2d_condition": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "unet_sdxl": {
+    "convert": {
+      "blockers": [
+        "ARCH_REFUSED"
+      ],
+      "status": "blocked"
     },
     "mine": {
       "blockers": [],
@@ -129,10 +1390,56 @@
       "status": "unknown"
     }
   },
+  "wav2vec2": {
+    "convert": {
+      "blockers": [
+        "ARCH_NEEDS_FEATURE(an adapter for `Wav2Vec2ForCTC`)"
+      ],
+      "status": "blocked"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
   "whisper": {
     "convert": {
       "blockers": [],
       "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "unknown"
+    },
+    "register": {
+      "blockers": [],
+      "status": "unknown"
+    }
+  },
+  "xlm_roberta": {
+    "convert": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "mine": {
+      "blockers": [],
+      "status": "ok"
+    },
+    "register": {
+      "blockers": [],
+      "status": "ok"
+    }
+  },
+  "zamba2": {
+    "convert": {
+      "blockers": [
+        "ARCH_NEEDS_FEATURE(ATTN_SHARED_BLOCK_V1)"
+      ],
+      "status": "blocked"
     },
     "mine": {
       "blockers": [],

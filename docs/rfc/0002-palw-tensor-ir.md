@@ -578,11 +578,11 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
     - Committed operands are checked against their proven intervals (PALW-TIR-33: out of interval is a malformed commitment and the producer loses).
     - Params get a 2^40 sanity bound instead of the 2^28 cap.
 - **Lane R2 (`rfc2/rest`, 2026-10-03): the rest of Parts I and II on one branch.**
-  - **Frontend (`tir/generic` merged, the corpus v2 harness merged).** The corpus of 100 curated architectures reads as **A 8, B 75, C 17**
-    (83 %; usage-weighted 84.7 %; text-generation 50 of 57) on the features the tree has; every golden preflight is pinned
+  - **Frontend (`tir/generic` merged, the corpus v2 harness merged).** The corpus of 100 curated architectures reads as **A 8, B 82, C 10**
+    (90 %) on the features the tree has; every golden preflight is pinned
     (`misaka-palw-sdk/tests/golden/corpus_preflight_v1.json`) and the quantised fixtures' decode is pinned
-    (`misaka-palw-tir-lower/tests/golden/quant_decode_v1.json`, L4's offline half). The 17 Level-C entries each name the feature they lack
-    (`docs/design/palw/tir/hf-coverage.md` §23); 90 % needs those features, not more data. HF fixtures: 93.
+    (`misaka-palw-tir-lower/tests/golden/quant_decode_v1.json`, L4's offline half). The 10 Level-C entries each name the feature they lack
+    (`docs/design/palw/tir/hf-coverage.md` §23). HF fixtures: 93.
   - **Part II Proposal A** (`palw_class_seating`, dormant on every preset, written in the four places, drilled by `--palw-drill-class-seating-at`):
     one predicate for every class kind (possession floor and independence floor over the base population), the doors of attempts,
     free prompts, improvement evaluations and generative claims, the lifecycle gate, the registry read and the RPC (`blocking`,
