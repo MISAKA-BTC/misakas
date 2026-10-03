@@ -9,10 +9,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > launched on 2026-09-25/26 JST from release commit **`0e8ec984e`**; the current fleet lineage is
 > **`4ca695b98`**. Run it with
 > `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
-> * consensus params fingerprint **`89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3`** — the
->   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000, 3600, 5300, 5395`: 3,600 is `palw_tir_fence2` alone; 5,300 is the int-11 flag day — decode rules, generative classes, FP Job V5, held close chunks, model improvement, L_ver and capacity ρ = 25 — and 5,395 is ρ = 100; `palw_model_court_window` stays dormant); a node
+> * consensus params fingerprint **`b41089e3737cbf301bf5ed57cf8d548d8378614c2f298d935a69643ecd1794b9`** — the
+>   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585`: 3,600 is `palw_tir_fence2` alone; 5,300 is the int-12 flag day — decode rules, generative classes, FP Job V5, held close chunks, model improvement, layer-sharded panels (RFC-0006), verification vertices and the audit mesh (RFC-0007), the inference-surface rules (RFC-0001), class seating and GDN key heads (RFC-0002), the Useful Work Transition (ADR-0165, ADR-0166), the anchor window (ADR-0170), L_ver, the ×1000 capacity package and capacity ρ = 25 — and 5,395 / 5,490 / 5,585 are ρ = 100 / 250 / 1000; `palw_model_court_window` stays dormant); a node
 >   still on the launch release (`b8564b88…`) is refused by upgraded peers from DAA 750
-> * genesis `a27f8f44fe4d91a5…` and schedule id `f173efa3077bd234…`
+> * genesis `a27f8f44fe4d91a5…` and schedule id `34b0dc1483b699d7…`
 >
 > Read **[docs/t12-launch-2026-09-25.md](docs/t12-launch-2026-09-25.md)** before relying on it: what the
 > release contains, the known issues (two CRITICAL ones are fixed by post-launch activation fences),

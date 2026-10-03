@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was 5750d39d…, 84551172…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 557a4e64…, 8b41ebe5…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "557a4e64ef2dba5cc2964a97c70d57bfd2919c595defd5926e484661d405a406",
+    "54353a89be714bc2fed4069cfed789aaff79dd5f5438e9652e5afce93b360f0d",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "8b41ebe57dcaf4d4b0100bb56942f6e310102e4a0cc4547a43db3dd331832685",
+    "f0468188200af951536ce2adeecdaa81fa56e95ce11126c5964a49e23aa19779",
 );
 
 #[test]

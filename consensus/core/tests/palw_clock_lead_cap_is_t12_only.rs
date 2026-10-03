@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was a8678745…, 0418ae41…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was b271785f…, 03350a9a…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "b271785fd44b690102e0e4ba56980408fb26d585e08a1d0fa6d842e08d19e288",
+    "9d3a0096f4ec0f87aa96d5375faa2830428b56feae90c52f1c105ca10e5db917",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "03350a9a0beab8c70723781db92ac0f3ae828524224b5498f72515353503a837",
+    "4ae08484ef5390f4afe329ea9d0dc07516e11ffde0893e8cf39616f26eaf9fc4",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was eb3a6c5f…, 57c5927a…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 89a4b627…, f173efa3…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3",
+    "b41089e3737cbf301bf5ed57cf8d548d8378614c2f298d935a69643ecd1794b9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f173efa3077bd234ab0c7ed084912f926fbe87da148d1f58059c62d8d7ca1dea",
+    "34b0dc1483b699d7a1ef4373ffe677173bab1b8774039fe7756d1d7e93036e63",
 );
 
 fn shipped(name: &str) -> Params {

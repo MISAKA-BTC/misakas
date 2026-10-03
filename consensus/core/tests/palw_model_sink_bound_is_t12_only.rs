@@ -48,11 +48,11 @@ use kaspa_hashes::Hash64;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was eb3a6c5f…, 57c5927a…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 89a4b627…, f173efa3…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3",
+    "b41089e3737cbf301bf5ed57cf8d548d8378614c2f298d935a69643ecd1794b9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f173efa3077bd234ab0c7ed084912f926fbe87da148d1f58059c62d8d7ca1dea",
+    "34b0dc1483b699d7a1ef4373ffe677173bab1b8774039fe7756d1d7e93036e63",
 );
 
 /// Heights an operator might pick after launch: the common post-launch height (500), a low one a

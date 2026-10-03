@@ -377,18 +377,18 @@ gate 全体は未達**: item 1（T57 の規則欠と一部の cell）、2、4、
 
 ## 3. testnet-12 の identity（§5 の tool が書く）
 
-**0fec682d での暫定値（出荷値ではない）** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
+**9c5339f1 での暫定値（出荷値ではない）** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
 `REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
 再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
 tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
 release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
 
 ```
-# re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was eb3a6c5f…, 57c5927a…)
-EXPECT_FP=89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3
+# re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 89a4b627…, f173efa3…)
+EXPECT_FP=b41089e3737cbf301bf5ed57cf8d548d8378614c2f298d935a69643ecd1794b9
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id f173efa3077bd234ab0c7ed084912f926fbe87da148d1f58059c62d8d7ca1dea（fence schedule "750, 1000"）
+# schedule id 34b0dc1483b699d7a1ef4373ffe677173bab1b8774039fe7756d1d7e93036e63（fence schedule "750, 1000"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 

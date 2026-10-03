@@ -67,20 +67,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was ae85627e…, 49e92dcf…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was b8a91c35…, b3c8551b…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "b8a91c354c27e49bc40740ae5e3625daaecc808b55a7638ac76383a03b30c620",
+    "b41b4647e1fc13b605586913858d5af8c492fa672d9603f9539a8874b4b9566e",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "b3c8551b12f38ad219703e2e1cbd6b021404ccff2afa34b12b93839691f6b9ea",
+    "133e713268616a181b249e57dda076cc8c93293393995a2f4481a29f26e12008",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was eb3a6c5f…, 57c5927a…)
+// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 89a4b627…, f173efa3…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3",
+    "b41089e3737cbf301bf5ed57cf8d548d8378614c2f298d935a69643ecd1794b9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f173efa3077bd234ab0c7ed084912f926fbe87da148d1f58059c62d8d7ca1dea",
+    "34b0dc1483b699d7a1ef4373ffe677173bab1b8774039fe7756d1d7e93036e63",
 );
 
 fn shipped(name: &str) -> Params {
