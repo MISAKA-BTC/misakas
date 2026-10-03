@@ -2,7 +2,7 @@
 //!
 //! When the sketch check of a weight product fails, [`misaka_palw_tir_sketch::TirCheckFailureV1::blocks`] names the free-axis blocks whose own
 //! check fails. This module carries the seat's side of getting those blocks' weight bytes — **at most `F` = 2 MiB each** — from the producer or
-//! any holder of the class, over the interval lane's existing request/answer messages (request kind: bit 28,
+//! any holder of the class, over the interval lane's existing request/answer messages (request kind: bit 26,
 //! `kaspa_consensus_core::palw_weight_block_v1`), and hands them to the checker's escalation, which recomputes and concludes.
 //!
 //! * **Serving** ([`palw_weight_block_serve_v1`]): any node holding the class opens the inventory leaves that cover a block's byte ranges as one
@@ -279,6 +279,74 @@ impl WeightRefetchV1 {
     }
 }
 
+/// What a witness fetch asks of the node.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WitnessStepV1 {
+    /// Send these requests now (interval indices, one per witness chunk).
+    Ask(Vec<u32>),
+    Waiting,
+    /// Every chunk is in: the witness image (the chunks in order).
+    Ready(Vec<u8>),
+    /// A chunk nobody served by the patience: the manifest's chunk (`1 + index`), named.
+    Unavailable { chunk_index: u32 },
+}
+
+/// **One claim's witness, fetched** (RFC-0007 §II.7): the seat asks the producer for each of the claim's witness chunks (the count the chain pinned
+/// the attempt at, less the trace's chunk 0), reads the answers from the interval pool, and hands the assembled image to the checker. The chunks are
+/// not authenticated one by one — the chain commits only their count (a witness root on chain would be a free draw, ADR-0072 D8): the assembled
+/// witness is decoded and CHECKED, and its committed rows are compared with the claim's, so a changed byte is a refused witness, never a wrong verdict.
+pub(crate) struct WitnessFetchV1 {
+    pub claim: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub chunks: u32,
+    pub prompt: Vec<usize>,
+    pub decode: u32,
+    /// The replay's verdict on the claim, for the mirror's comparison.
+    pub replay_reproduces: bool,
+    asked_daa: Option<u64>,
+    got: BTreeMap<u32, Vec<u8>>,
+}
+
+impl WitnessFetchV1 {
+    pub(crate) fn new(
+        claim: Hash64,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        chunks: u32,
+        prompt: Vec<usize>,
+        decode: u32,
+        replay_reproduces: bool,
+    ) -> Self {
+        Self { claim, class_id, artifact_root, chunks, prompt, decode, replay_reproduces, asked_daa: None, got: BTreeMap::new() }
+    }
+
+    pub(crate) fn step(&mut self, openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>, daa: u64) -> WitnessStepV1 {
+        use kaspa_consensus_core::palw_weight_block_v1::palw_witness_chunk_request_index_v1;
+        let indices: Option<Vec<u32>> = (0..self.chunks).map(palw_witness_chunk_request_index_v1).collect();
+        let Some(indices) = indices.filter(|i| !i.is_empty()) else { return WitnessStepV1::Unavailable { chunk_index: 1 } };
+        let Some(asked) = self.asked_daa else {
+            self.asked_daa = Some(daa);
+            return WitnessStepV1::Ask(indices);
+        };
+        for (i, index) in indices.iter().enumerate() {
+            if !self.got.contains_key(&(i as u32))
+                && let Some(bytes) = openings.get(&(self.claim, *index)).and_then(|answers| answers.first())
+            {
+                self.got.insert(i as u32, bytes.clone());
+            }
+        }
+        if self.got.len() == self.chunks as usize {
+            return WitnessStepV1::Ready(self.got.values().flatten().copied().collect());
+        }
+        if daa >= asked.saturating_add(REFETCH_PATIENCE_DAA_V1) {
+            let missing = (0..self.chunks).find(|i| !self.got.contains_key(i)).unwrap_or(0);
+            return WitnessStepV1::Unavailable { chunk_index: 1 + missing };
+        }
+        WitnessStepV1::Waiting
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +444,66 @@ mod tests {
         let mut pool = HashMap::new();
         pool.insert((claim, asked[0].0), vec![borsh::to_vec(&forged).unwrap()]);
         assert!(matches!(p.step(&entry, &pool, 300 + REFETCH_PATIENCE_DAA_V1, &conclude), RefetchStepV1::Done(TirEscalationV1::Unavailable { .. })));
+    }
+
+    /// **The tick path of a served witness**: the producer retains and serves the claim's witness chunks (the resolver arm's own function), the seat's
+    /// fetch asks once, reads the pool, assembles, and the sketch service checks the served witness beside the replay — `Agree`; a corrupted chunk is a
+    /// refused witness, never an `Agree`; a chunk nobody serves ends in `Unavailable`, naming the manifest chunk.
+    #[test]
+    fn a_served_witness_is_fetched_checked_beside_the_replay_and_a_withheld_chunk_is_named() {
+        use crate::palw_panel::sketch::{PalwSketchServiceV1, palw_witness_chunk_v1, palw_witness_image_v1, palw_witness_retain_v1};
+        use kaspa_consensus_core::palw_weight_block_v1::palw_witness_chunk_request_index_v1;
+        use misaka_palw_tir_sketch::TirMirrorAgreementV1;
+        let (_ir, entry, _) = class_and_site();
+        let claim = Hash64::from_bytes([9; 64]);
+        let (prompt, decode, chunks) = (vec![3usize, 17, 5], 2u32, 3u32);
+        let dir = std::env::temp_dir().join(format!("kaspad-witness-fetch-{}", std::process::id()));
+        let image = palw_witness_image_v1(&entry, &prompt, decode).expect("the producer's witness");
+        palw_witness_retain_v1(&dir, &claim, &image, chunks).expect("kept");
+        let pool_of = |withhold: Option<u32>, corrupt: Option<u32>| {
+            let mut pool = HashMap::new();
+            for i in 0..chunks {
+                if withhold == Some(i) {
+                    continue;
+                }
+                let mut bytes = palw_witness_chunk_v1(&dir, &claim, i).expect("the producer serves its chunk");
+                if corrupt == Some(i) {
+                    let at = bytes.len() / 2;
+                    bytes[at] ^= 0x55;
+                }
+                pool.insert((claim, palw_witness_chunk_request_index_v1(i).unwrap()), vec![bytes]);
+            }
+            pool
+        };
+        let service = PalwSketchServiceV1::with_secret([0x42; 32], misaka_palw_tir_sketch::TirCheckPolicyV1::default());
+        let mirror = |image: &[u8]| -> Result<TirMirrorAgreementV1, String> {
+            let witness = misaka_palw_tir_sketch::codec::decode(image)?;
+            service.mirror_served_v1(&entry, claim, &prompt, decode, &witness, true, 1_000)
+        };
+        let fresh = || WitnessFetchV1::new(claim, entry.class_id(), entry.artifact_root, chunks, prompt.clone(), decode, true);
+
+        // Served: ask once, read the pool, check beside the replay.
+        let mut f = fresh();
+        let none = HashMap::new();
+        let WitnessStepV1::Ask(asked) = f.step(&none, 100) else { panic!("the first step asks") };
+        assert_eq!(asked.len(), chunks as usize);
+        assert_eq!(f.step(&none, 101), WitnessStepV1::Waiting);
+        let WitnessStepV1::Ready(assembled) = f.step(&pool_of(None, None), 102) else { panic!("every chunk is in") };
+        assert_eq!(assembled, image, "the chunks assemble to the producer's witness");
+        assert_eq!(mirror(&assembled), Ok(TirMirrorAgreementV1::Agree), "the served witness checks, and agrees with the replay");
+
+        // A corrupted chunk is not accepted by the check.
+        let mut f = fresh();
+        f.step(&none, 100);
+        let WitnessStepV1::Ready(bad) = f.step(&pool_of(None, Some(1)), 101) else { panic!() };
+        assert_ne!(bad, image);
+        assert!(!matches!(mirror(&bad), Ok(TirMirrorAgreementV1::Agree)), "a changed chunk is a refused witness");
+
+        // Withheld: the chunk nobody served is named — the manifest's chunk 1 + its index.
+        let mut f = fresh();
+        f.step(&none, 200);
+        assert_eq!(f.step(&pool_of(Some(1), None), 200 + REFETCH_PATIENCE_DAA_V1 - 1), WitnessStepV1::Waiting);
+        assert_eq!(f.step(&pool_of(Some(1), None), 200 + REFETCH_PATIENCE_DAA_V1), WitnessStepV1::Unavailable { chunk_index: 2 });
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
