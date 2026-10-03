@@ -234,7 +234,9 @@ covers an attempt-lane header. **Node policy**: `heartbeat_slot_hint_v1` — the
   node runs): `--palw-drill-useful-work-at=H` arms both fences at a low height; **`--palw-drill-real-submit-delay-s[=N]`** holds a
   REAL (non-floor) attempt's submission until N seconds after its template (default 340 s, the 8k median; 1..=3,600) to emulate an
   8k inference's minutes on a drill-sized class; **`--palw-drill-floor-ignore-policy`** makes the floor producer ignore *only* the
-  idle-only refusal — the drill's policy-ignoring floor miner (00.2), a switch that takes no value.
+  idle-only refusal — the drill's policy-ignoring floor miner (00.2), a switch that takes no value; **`--palw-drill-anchor-duty-after-slots=N`**
+  (1..=3,600; the release's wait is 30) moves how long a claim waits for an operator attempt before an operator's floor producer fires its
+  anchor-duty binder (§00.9), so a drill that runs minutes can see it.
 
 ### 00.8 Tests
 
