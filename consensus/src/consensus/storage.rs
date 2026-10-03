@@ -45,6 +45,14 @@ use kaspa_database::registry::DatabaseStorePrefixes;
 use parking_lot::RwLock;
 use std::{ops::DerefMut, sync::Arc};
 
+/// **The least a per-block overlay row cache holds** (`rewarded_epochs`, `block_quality_pool`,
+/// `reserve_balance`): more than the selected-chain overlay window reads of them per virtual commit on
+/// any shipped cadence (`overlay_window_walk_bound` blocks, ~600 at the 120 s PALW cadence, ~4,000 at the
+/// production table's base window), so a steady-state walk is memory-only. Rows are 8-100 bytes: 16,384 of
+/// each is under 2 MB.
+pub const OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS: usize = 16_384;
+const _: () = assert!(OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS >= 8_192, "the overlay window must fit the per-block caches");
+
 pub struct ConsensusStorage {
     // DB
     _db: Arc<DB>,
@@ -398,10 +406,19 @@ impl ConsensusStorage {
         // `virtual-processor` crash. The DB is the source of truth; this cache is only a
         // per-block read accelerator, so an item cap (mirroring `block_data_builder`)
         // suffices.
-        let rewarded_epochs_store = Arc::new(DbRewardedEpochsStore::new(
-            db.clone(),
-            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
-        ));
+        //
+        // **Sized to the overlay window, not to `block_data_cache_size`** (the 2026-10-03 panel
+        // starvation, docs/design/palw/t12-panel-backlog-1003.md §4). Every virtual commit — and the
+        // template and the validation of every block beside it — walks the selected chain back
+        // `overlay_window_walk_bound` and reads these three per-block rows for each ancestor
+        // (`selected_chain_overlay_window`). A 120 s PALW network has `bps() == 1`, so the cache held
+        // 200 rows against a window of hundreds to thousands of blocks: every walk missed, and each miss was a
+        // RocksDB point read — against a 32 MB block cache that cannot hold the 57 MB block the PALW tip row
+        // makes of its neighbours. The virtual processor of the 5.104 seats spent 100-186 % of a core there.
+        // The rows are tens of bytes; the cache is a read accelerator only (the DB is the source of truth).
+        let overlay_rows = perf_params.block_data_cache_size.max(OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS);
+        let rewarded_epochs_store =
+            Arc::new(DbRewardedEpochsStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1). Both values (`EpochTally`,
         // `u64`) are unit-/count-estimable only, so — like `rewarded_epochs_store`
         // — they MUST use an UNTRACKED (Count) policy; a `tracked_bytes` policy
@@ -410,14 +427,10 @@ impl ConsensusStorage {
         // per-block rewarded-keys cache sizing.
         let epoch_accumulator_store =
             Arc::new(DbEpochAccumulatorStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
-        let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
-            db.clone(),
-            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
-        ));
-        let reserve_balance_store = Arc::new(DbReserveBalanceStore::new(
-            db.clone(),
-            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
-        ));
+        let block_quality_pool_store =
+            Arc::new(DbBlockQualityPoolStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
+        let reserve_balance_store =
+            Arc::new(DbReserveBalanceStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
 
         // kaspa-pq Selected-Parent EVM Lane (ADR-0020, v0.4). All values carry
         // real byte estimators, but mirror the per-block stores above with an

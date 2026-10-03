@@ -8,7 +8,7 @@ use kaspa_consensusmanager::{ConsensusFactory, ConsensusInstance, DynConsensusCt
 use kaspa_core::{debug, time::unix_now, warn};
 use kaspa_database::{
     prelude::{
-        BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, RocksDbPreset, StoreError, StoreResult,
+        BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, DirectDbWriter, RocksDbPreset, StoreError, StoreResult,
         StoreResultExt,
     },
     registry::DatabaseStorePrefixes,
@@ -313,6 +313,17 @@ impl Factory {
         factory.delete_inactive_consensus_entries();
         factory
     }
+
+    /// **The block cache a consensus database is opened with.** `--rocksdb-cache-size` (and the HDD preset's own
+    /// figure) when the operator or the preset names one; otherwise, under the default preset, 256 MiB instead of
+    /// RocksDB's built-in 32 MB — the PALW chain state's ~57 MB tip row makes a data block no 32 MB cache can keep, so
+    /// every point read of a row beside it was a 57 MB disk read (the 2026-10-03 panel starvation,
+    /// docs/design/palw/t12-panel-backlog-1003.md §4). Node-local: no consensus rule and no on-disk format reads it.
+    fn consensus_cache_budget(&self) -> Option<usize> {
+        self.cache_budget.or_else(|| {
+            matches!(self.rocksdb_preset, RocksDbPreset::Default).then_some(DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES)
+        })
+    }
 }
 
 impl ConsensusFactory for Factory {
@@ -341,7 +352,7 @@ impl ConsensusFactory for Factory {
             .with_files_limit(self.fd_budget / 2) // active and staging consensuses should have equal budgets
             .with_preset(self.rocksdb_preset)
             .with_wal_dir(self.wal_dir.clone())
-            .with_cache_budget(self.cache_budget)
+            .with_cache_budget(self.consensus_cache_budget())
             .build()
             .unwrap();
 
@@ -379,7 +390,7 @@ impl ConsensusFactory for Factory {
             .with_files_limit(self.fd_budget / 2) // active and staging consensuses should have equal budgets
             .with_preset(self.rocksdb_preset)
             .with_wal_dir(self.wal_dir.clone())
-            .with_cache_budget(self.cache_budget)
+            .with_cache_budget(self.consensus_cache_budget())
             .build()
             .unwrap();
 

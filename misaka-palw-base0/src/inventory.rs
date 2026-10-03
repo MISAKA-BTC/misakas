@@ -111,7 +111,7 @@ fn a16_inventory_digest_key_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
 ) -> (Hash64, Hash64) {
-    (artifact.artifact_digest(), profile.shape_profile_id())
+    (crate::artifact::artifact_digest_memoised(artifact), profile.shape_profile_id())
 }
 
 /// The court-capable A16 inventory, retained after the first walk so registration preflight,

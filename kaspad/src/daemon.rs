@@ -443,6 +443,11 @@ fn configure_rocksdb(args: &Args) -> (RocksDbPreset, Option<usize>, Option<PathB
             info!("RocksDB cache size: {} MB (scaled by ram-scale)", final_cache / 1024 / 1024);
             Some(final_cache)
         }
+    } else if let Some(cache_mb) = args.rocksdb_cache_size {
+        // The default preset used to ignore the flag. It now names the block cache of every database; without it
+        // the consensus databases get `DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES` and the small ones RocksDB's own.
+        info!("Custom RocksDB cache size: {} MB", cache_mb);
+        Some(cache_mb * 1024 * 1024)
     } else {
         None
     };

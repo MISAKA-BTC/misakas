@@ -77,7 +77,7 @@ pub(crate) fn dense_artifact_by_digest(
     holdings: &[PalwLoadedArtifactV1],
     root: kaspa_hashes::Hash64,
 ) -> Option<std::sync::Arc<Base0ArtifactV1>> {
-    holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == root)
+    holdings.iter().filter_map(artifact_of).find(|a| misaka_palw_base0::artifact::artifact_digest_shared(a) == root)
 }
 
 /// The dense holding a CHAIN-REGISTERED root names, under either root form a dense registration
@@ -215,7 +215,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
     /// same file are caught by the registered-class-id filter instead: their root depends on the
     /// class's geometry, so there is no artifact-only key to compare.
     fn registered_weight_keys(&self, artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {
-        artifact_of(artifact).map(|a| vec![a.artifact_digest()]).unwrap_or_default()
+        artifact_of(artifact).map(|a| vec![misaka_palw_base0::artifact::artifact_digest_shared(&a)]).unwrap_or_default()
     }
 
     fn pair(&self, court: &PalwCourtParamsV2, entry: &PalwClassEntryV1, artifact: &PalwLoadedArtifactV1) -> Result<Hash64, String> {

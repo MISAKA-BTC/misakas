@@ -6,6 +6,18 @@
 use rocksdb::Options;
 use std::str::FromStr;
 
+/// The block cache a CONSENSUS database gets under the default preset when `--rocksdb-cache-size` does not name one:
+/// 256 MiB in [`BLOCK_CACHE_SHARD_BITS`] = 1 bit (two 128 MiB shards) — more than twice the ~57 MB PALW tip row's block, so
+/// the block and the rows beside it stay resident while the data the node actually reads fills the rest. The small
+/// databases (address manager, meta, utxo index) keep RocksDB's own default.
+pub const DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+/// **Why two shards.** RocksDB splits an LRU cache into `2^bits` shards and an entry bigger than ONE shard is never
+/// kept: its default (`bits` chosen for 512 KB shards, so 6 for any cache over 32 MB) makes the built-in 32 MB cache
+/// 64 shards of 512 KB, and a 192 MB one 3 MB shards — a 57 MB block fits in neither. Two shards keep the lock
+/// contention of a hot read path low and give each shard room for the block.
+pub const BLOCK_CACHE_SHARD_BITS: i32 = 1;
+
 /// Available RocksDB configuration presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RocksDbPreset {
@@ -57,19 +69,39 @@ impl RocksDbPreset {
     /// * `mem_budget` - Memory budget (only used for Default preset, HDD uses fixed 256MB)
     pub fn apply_to_options(&self, opts: &mut Options, parallelism: usize, mem_budget: usize, cache_budget: Option<usize>) {
         match self {
-            Self::Default => self.apply_default(opts, parallelism, mem_budget),
+            Self::Default => self.apply_default(opts, parallelism, mem_budget, cache_budget),
             Self::Hdd => self.apply_hdd(opts, parallelism, cache_budget),
         }
     }
 
     /// Apply default preset configuration
-    fn apply_default(&self, opts: &mut Options, parallelism: usize, mem_budget: usize) {
+    fn apply_default(&self, opts: &mut Options, parallelism: usize, mem_budget: usize, cache_budget: Option<usize>) {
         if parallelism > 1 {
             opts.increase_parallelism(parallelism as i32);
         }
 
         // Use the provided memory budget (typically 64MB)
         opts.optimize_level_style_compaction(mem_budget);
+
+        // **A block cache that can hold the largest block this database writes** — when the caller names one
+        // (`cache_budget`: `--rocksdb-cache-size`, or the consensus factory's default,
+        // [`DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES`]) (the 2026-10-03 panel
+        // starvation, docs/design/palw/t12-panel-backlog-1003.md §4). RocksDB's own default is a 32 MB LRU cache of
+        // 64 shards of 512 KB, and a cache never keeps an entry bigger than ONE shard: the PALW chain state's tip row is rewritten
+        // at every virtual commit and is ~57 MB, so the data block that carries it (and the small rows that sort
+        // beside it) was read from disk, 57 MB at a time, on EVERY point read that fell in it — measured at ten
+        // 60 MB `pread`s a second on the virtual-processor thread of the 5.104 seats. Every other table option
+        // stays RocksDB's default, so existing files, filters and indexes read exactly as before; only the cache
+        // changes, and it is filled lazily (the resident size is what the node actually reads).
+        if let Some(cache_bytes) = cache_budget {
+            use rocksdb::{BlockBasedOptions, Cache, LruCacheOptions};
+            let mut cache_opts = LruCacheOptions::default();
+            cache_opts.set_capacity(cache_bytes);
+            cache_opts.set_num_shard_bits(BLOCK_CACHE_SHARD_BITS);
+            let mut block_opts = BlockBasedOptions::default();
+            block_opts.set_block_cache(&Cache::new_lru_cache_opts(&cache_opts));
+            opts.set_block_based_table_factory(&block_opts);
+        }
     }
 
     /// Apply HDD preset configuration (HDD-optimized settings)
@@ -198,6 +230,37 @@ impl RocksDbPreset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Resident bytes of RocksDB's block cache after reading `big_key`'s 40 MB value back, under `cache_budget`.
+    fn block_cache_usage_after_reading_a_40_mb_row(cache_budget: Option<usize>) -> u64 {
+        use crate::prelude::{ConnBuilder, RocksDbPreset};
+        use rand::RngCore;
+        let (_life, db) = crate::create_temp_db!(ConnBuilder::default().with_files_limit(10).with_preset(RocksDbPreset::Default).with_cache_budget(cache_budget));
+        let mut big = vec![0u8; 40 << 20];
+        rand::thread_rng().fill_bytes(&mut big);
+        db.put(b"a-small", b"1").unwrap();
+        db.put(b"b-big", &big).unwrap();
+        db.put(b"c-small", b"2").unwrap();
+        db.flush().unwrap();
+        // Several reads of a row that shares the big row's data block, and of the big row itself.
+        for _ in 0..3 {
+            assert_eq!(db.get(b"a-small").unwrap().as_deref(), Some(&b"1"[..]));
+            assert_eq!(db.get(b"b-big").unwrap().map(|v| v.len()), Some(40 << 20));
+            assert_eq!(db.get(b"c-small").unwrap().as_deref(), Some(&b"2"[..]));
+        }
+        db.property_int_value("rocksdb.block-cache-usage").unwrap().unwrap_or(0)
+    }
+
+    /// The 2026-10-03 finding: RocksDB's built-in 32 MB block cache cannot keep a data block bigger than itself, so every
+    /// point read of a row beside the ~57 MB PALW tip row re-read it from disk. A cache sized for the consensus database
+    /// keeps the block, and the rows beside it, resident.
+    #[test]
+    fn a_consensus_sized_block_cache_keeps_a_block_bigger_than_rocksdbs_default_and_the_default_does_not() {
+        let default_cache = block_cache_usage_after_reading_a_40_mb_row(None);
+        let sized = block_cache_usage_after_reading_a_40_mb_row(Some(DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES));
+        assert!(default_cache < 32 << 20, "the built-in 32 MB cache cannot hold a 40 MB block ({default_cache} bytes resident)");
+        assert!(sized >= 40 << 20, "the sized cache holds the whole block ({sized} bytes resident)");
+    }
 
     #[test]
     fn test_preset_from_str() {
