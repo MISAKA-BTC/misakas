@@ -307,7 +307,7 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         if spec.hyper.is_some() {
             return Err(LowerError::not_lowerable("EMBED_CARRY_V1 beside hyper-connection streams"));
         }
-        out.push(CarryDecl { name: "e0".into(), shape: vec![spec.hidden_size] });
+        out.push(CarryDecl { name: "e0".into(), shape: vec![spec.hidden_size], resid: false });
     }
     Ok(out)
 }
