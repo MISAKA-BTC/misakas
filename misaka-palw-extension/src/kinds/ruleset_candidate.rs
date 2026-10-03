@@ -135,6 +135,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_capacity_network_verify = Some(at);
             params.sync_palw_capacity_network_verify();
         }
+        // Lane PL (ADR-0166): bare heights with the fold's mirrors.
+        "palw_panel_unavailable_expiry" => {
+            params.palw_panel_unavailable_expiry = Some(at);
+            params.sync_palw_panel_unavailable_expiry();
+        }
+        "palw_panel_standby" => {
+            params.palw_panel_standby = Some(at);
+            params.sync_palw_panel_standby();
+        }
+        "palw_seat_availability" => {
+            params.palw_seat_availability = Some(at);
+            params.sync_palw_seat_availability();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),

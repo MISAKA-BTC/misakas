@@ -405,6 +405,12 @@ pub struct Args {
     /// line only, like the salt.
     #[serde(skip)]
     pub palw_drill_held_chunks_at: Option<u64>,
+    /// **DRILL ONLY: arm lane PL's panel-liveness list at this DAA** (`config::drill::palw_drill_panel_liveness_at_v1`;
+    /// ADR-0166): `palw_panel_unavailable_expiry` (an expiry of a silent panel is not producer fraud), `palw_panel_standby`
+    /// (two standby seats and a fast switch) and `palw_seat_availability` (positive liveness in panel assignment) together.
+    /// Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_panel_liveness_at: Option<u64>,
     /// **DRILL ONLY: cross the int-11 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int11_at_v1`): the
     /// whole list — decode rules, the generative fence, FP Job V5, the held leaf challenge, the improvement fence, F-N's
     /// verification term and the capacity ramp's ρ = 25 step — at H', and ρ = 100 at H' + 95, the offset the release uses. The
@@ -697,6 +703,7 @@ impl Default for Args {
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
             palw_drill_held_chunks_at: None,
+            palw_drill_panel_liveness_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -1831,6 +1838,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-panel-liveness-at")
+                .long("palw-drill-panel-liveness-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm lane PL's panel-liveness list (palw_panel_unavailable_expiry, \
+                     palw_panel_standby, palw_seat_availability; ADR-0166) at this DAA on the drill chain. Nothing else moves. \
+                     Refused without the salt, at 0 and at a height another fence uses.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-int11-at")
                 .long("palw-drill-int11-at")
                 .require_equals(true)
@@ -2932,6 +2950,7 @@ impl Args {
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
+            palw_drill_panel_liveness_at: m.get_one::<u64>("palw-drill-panel-liveness-at").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),

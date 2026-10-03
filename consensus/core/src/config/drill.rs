@@ -662,6 +662,18 @@ pub fn palw_drill_held_close_chunks_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1)
 }
 
+/// **A drill arms lane PL's panel-liveness list at a low height** (ADR-0166; `--palw-drill-panel-liveness-at`):
+/// `palw_panel_unavailable_expiry` (C), `palw_panel_standby` (D) and `palw_seat_availability` (E) at `at`, through each
+/// entry's own `set` (mirrors included), nothing else moving. All three are dormant on every ruleset, so the move ARMS them;
+/// `validate_palw_v2` refuses the result unless their prerequisites (`palw_audit_2026_09_23`, `palw_panel_economy`,
+/// `palw_rcore_plus`) are in force at or below `at`. Every refusal of the post-launch moves applies, named for this flag.
+pub fn palw_drill_panel_liveness_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_PANEL_LIVENESS_V1)
+}
+
 /// **A drill crosses testnet-12's DAA-3,600 flag day at a low height** (`--palw-drill-tir2-at`) —
 /// [`palw_drill_post_launch_fences_at_v1`] for
 /// [`crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1`]: MOVES `palw_tir_fence2` from the release's
@@ -737,6 +749,12 @@ const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
     list: crate::palw_held_close_v1::PALW_DRILL_HELD_CLOSE_CHUNKS_FENCES_V1,
     flag: "--palw-drill-held-chunks-at",
+};
+
+/// Lane PL's panel-liveness list (parts C, D, E; ADR-0166) at one height (`--palw-drill-panel-liveness-at`).
+const PALW_DRILL_FLAG_DAY_PANEL_LIVENESS_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::config::params::PALW_T12_PANEL_LIVENESS_FENCES_V1,
+    flag: "--palw-drill-panel-liveness-at",
 };
 
 /// The second IR fence alone (`--palw-drill-tir2-at`).

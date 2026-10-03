@@ -1491,6 +1491,18 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_capacity_network_verify`. `None` on every shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
     capacity_network_verify_from_daa: Option<u64>,
+    /// **Lane PL part C: `Params::palw_panel_unavailable_expiry`'s height**, mirrored by `Params::sync_palw_panel_unavailable_expiry`. `None` on every
+    /// shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    panel_unavailable_expiry_from_daa: Option<u64>,
+    /// **Lane PL part D: `Params::palw_panel_standby`'s height**, mirrored by `Params::sync_palw_panel_standby`. `None` on every
+    /// shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    panel_standby_from_daa: Option<u64>,
+    /// **Lane PL part E: `Params::palw_seat_availability`'s height**, mirrored by `Params::sync_palw_seat_availability`. `None` on every
+    /// shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    seat_availability_from_daa: Option<u64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1814,6 +1826,9 @@ impl PalwStateParamsV2 {
             capacity_network_from_daa: None,
             capacity_network_anchor_delay: 0,
             capacity_network_verify_from_daa: None,
+            panel_unavailable_expiry_from_daa: None,
+            panel_standby_from_daa: None,
+            seat_availability_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2792,6 +2807,54 @@ impl PalwStateParamsV2 {
     /// **int-11: does `L_net` carry the verification term at `daa_score`?** `false` on every shipped preset.
     pub fn capacity_network_verify_active_at(&self, daa_score: u64) -> bool {
         self.capacity_network_verify_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane PL part C: the mirror's setter** (`Params::palw_panel_unavailable_expiry`).
+    pub fn with_panel_unavailable_expiry_mirror(mut self, from_daa: Option<u64>) -> Self {
+        self.panel_unavailable_expiry_from_daa = from_daa;
+        self
+    }
+
+    /// Lane PL part C: `Params::palw_panel_unavailable_expiry`'s height, if armed (the mirror).
+    pub fn panel_unavailable_expiry_from_daa(&self) -> Option<u64> {
+        self.panel_unavailable_expiry_from_daa
+    }
+
+    /// **Lane PL part C: is `Params::palw_panel_unavailable_expiry` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn panel_unavailable_expiry_active_at(&self, daa_score: u64) -> bool {
+        self.panel_unavailable_expiry_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane PL part D: the mirror's setter** (`Params::palw_panel_standby`).
+    pub fn with_panel_standby_mirror(mut self, from_daa: Option<u64>) -> Self {
+        self.panel_standby_from_daa = from_daa;
+        self
+    }
+
+    /// Lane PL part D: `Params::palw_panel_standby`'s height, if armed (the mirror).
+    pub fn panel_standby_from_daa(&self) -> Option<u64> {
+        self.panel_standby_from_daa
+    }
+
+    /// **Lane PL part D: is `Params::palw_panel_standby` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn panel_standby_active_at(&self, daa_score: u64) -> bool {
+        self.panel_standby_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane PL part E: the mirror's setter** (`Params::palw_seat_availability`).
+    pub fn with_seat_availability_mirror(mut self, from_daa: Option<u64>) -> Self {
+        self.seat_availability_from_daa = from_daa;
+        self
+    }
+
+    /// Lane PL part E: `Params::palw_seat_availability`'s height, if armed (the mirror).
+    pub fn seat_availability_from_daa(&self) -> Option<u64> {
+        self.seat_availability_from_daa
+    }
+
+    /// **Lane PL part E: is `Params::palw_seat_availability` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn seat_availability_active_at(&self, daa_score: u64) -> bool {
+        self.seat_availability_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **int-11: the verification term's level at `daa_score`** — `Some(L_ver)` (`⌊1.5 × (window_receipt − anchor_delay) / 2⌋`,
