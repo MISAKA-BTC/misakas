@@ -39,9 +39,12 @@
 #   SUBMIT_PREFIX_CMD       produce a prompt with a cached prefix and submit the version-11 claim
 #   SUBMIT_ADAPTER_CMD      register a composite class (a LoRA over the drill class) and list it (tag 94)
 #   Each is called with BELOW=1 while below its fence (the submission must then be refused by name) and BELOW=0 past it.
-#   They are the lane's producers and are NOT in this repository's drill kit yet: without them `below`/`above` are INCOMPLETE,
-#   and the in-process e2e tests (misaka-palw-base0/tests/fp_job_v4_t12_e2e.rs: the V11 and V6 claims; the processor gate
-#   t12_an_adapter_class_listing_is_gated_...) are the evidence of the flow until they exist.
+#   SUBMIT_CONSTRAINT_CMD and SUBMIT_PREFIX_CMD default to scripts/misaka-palw-rfc1-drill-claims.sh (the floor-class producer
+#   `misaka-palw-rfc1-drill-claim` + the executor rail; needs BOND_KEY_SEED and CLASS_ID, see that script; the nodes must hold the
+#   token table it writes). SUBMIT_ADAPTER_CMD has no floor producer (a composite class needs an A16-class fixture): unset, the
+#   adapter steps are INCOMPLETE and the in-process gate test (t12_an_adapter_class_listing_is_gated_...) is the evidence.
+#   The stage-2b kind (`claims.sh inherit`, FP job version 12) needs `--palw-drill-fp-prefix-inherit-at` on the nodes; it is not one
+#   of this script's five fences.
 #
 # ENV: SALT (else $WORK_DIR/SALT), WORK_DIR (~/.misaka-palw-rfc1-drill), KASPAD_BIN (the branch's shipping binary),
 #   OLD_KASPAD_BIN (the int-11 release or earlier), CLI_BIN, the five heights (defaults 6 / 8 / 10 / 12 / 14, all below
@@ -55,6 +58,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
 OLD_KASPAD_BIN="${OLD_KASPAD_BIN:-}"
 CLI_BIN="${CLI_BIN:-$(dirname "$KASPAD_BIN")/misaka}"
+# The claim producers (scripts/misaka-palw-rfc1-drill-claims.sh over misaka-palw-rfc1-drill-claim and the executor rail): the defaults
+# for the three SUBMIT_*_CMD below; set them to override. The adapter listing has no floor producer (it needs a composite class).
+CLAIMS_HELPER="$REPO_ROOT/scripts/misaka-palw-rfc1-drill-claims.sh"
+SUBMIT_CONSTRAINT_CMD="${SUBMIT_CONSTRAINT_CMD:-$CLAIMS_HELPER constraint && $CLAIMS_HELPER constraint2}"
+SUBMIT_PREFIX_CMD="${SUBMIT_PREFIX_CMD:-$CLAIMS_HELPER prefix}"
 CONSTRAINT_AT="${CONSTRAINT_AT:-6}"
 CONSTRAINT2_AT="${CONSTRAINT2_AT:-8}"
 PREFIX_AT="${PREFIX_AT:-10}"
