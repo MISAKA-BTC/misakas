@@ -53,31 +53,9 @@ impl ConsensusConverter {
         self.config.max_difficulty_target_f64 / target.as_f64()
     }
 
-    /// **ADR-0165: the block's kind**, read from the header alone (the lane, and for an attempt the class its
-    /// envelope names against the bundle's base class).
+    /// **ADR-0165: the block's kind**, read from the header alone (see [`palw_block_kind_v1`]).
     pub fn block_kind(&self, header: &kaspa_consensus_core::header::Header) -> String {
-        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, is_palw_attempt_algo_id};
-        let params = &self.config.params;
-        let kind = if header.pow_algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
-            "LEGACY_HEARTBEAT"
-        } else if header.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
-            "EXEC"
-        } else if is_palw_attempt_algo_id(header.pow_algo_id) {
-            let base = match &params.palw_consensus_mode {
-                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
-                _ => None,
-            };
-            match (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment), base) {
-                (Ok(envelope), Some(base)) if envelope.attempt.class_id == base => {
-                    if params.palw_floor_reserve_active_at(header.daa_score) { "FALLBACK" } else { "LEGACY_FLOOR" }
-                }
-                (Ok(_), _) => "REAL",
-                _ => "",
-            }
-        } else {
-            ""
-        };
-        kind.to_owned()
+        palw_block_kind_v1(&self.config.params, header).to_owned()
     }
 
     /// Converts a consensus [`Block`] into an [`RpcBlock`], optionally including transaction verbose data.
@@ -713,5 +691,100 @@ impl Converter for ConsensusConverter {
 impl Debug for ConsensusConverter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConsensusConverter").field("consensus_manager", &"").field("config", &self.config).finish()
+    }
+}
+
+/// **ADR-0165: a block's kind from its header and the ruleset** — the lane, and for an attempt the class its
+/// envelope names against the bundle's base class: `LEGACY_HEARTBEAT` (algo 8), `EXEC` (round block), `FALLBACK` (a
+/// floor attempt past `palw_floor_reserve_v1`), `LEGACY_FLOOR` (before it), `REAL` (any other class), else `""`.
+pub fn palw_block_kind_v1(params: &kaspa_consensus_core::config::params::Params, header: &kaspa_consensus_core::header::Header) -> &'static str {
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, is_palw_attempt_algo_id};
+    if header.pow_algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
+        return "LEGACY_HEARTBEAT";
+    }
+    if header.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
+        return "EXEC";
+    }
+    if !is_palw_attempt_algo_id(header.pow_algo_id) {
+        return "";
+    }
+    let base = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+        _ => None,
+    };
+    match (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment), base) {
+        (Ok(envelope), Some(base)) if envelope.attempt.class_id == base => {
+            if params.palw_floor_reserve_active_at(header.daa_score) { "FALLBACK" } else { "LEGACY_FLOOR" }
+        }
+        (Ok(_), _) => "REAL",
+        _ => "",
+    }
+}
+
+#[cfg(test)]
+mod block_kind_tests {
+    use super::*;
+    use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_ROUND_V1};
+    use kaspa_consensus_core::{Hash64, tx::TransactionOutpoint};
+
+    fn envelope(class_id: Hash64) -> Vec<u8> {
+        let w = Hash64::from_u64_word;
+        PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: w(1),
+                challenge: w(2),
+                class_id,
+                executor_bond: TransactionOutpoint { transaction_id: w(3), index: 0 },
+                executor_pubkey: vec![7; 4],
+                operator_id: w(4),
+                artifact_root: w(5),
+                trace_root: w(6),
+                output_root: w(7),
+                pwu: 40,
+                trace_manifest_root: w(8),
+                trace_chunk_count: 4,
+                trace_retention_daa: 9,
+                execution_root: w(9),
+            },
+            signature: vec![0; 8],
+        }
+        .encode_wire()
+    }
+
+    fn header(algo: u8, daa: u64, commitment: Vec<u8>) -> Header {
+        let mut h = Header::from_precomputed_hash(Hash64::default(), vec![]);
+        h.pow_algo_id = algo;
+        h.daa_score = daa;
+        h.palw_commitment = commitment;
+        h
+    }
+
+    /// **blockKind from a real `palw_commitment`**: a floor attempt is FALLBACK from the fence and LEGACY_FLOOR below it, any
+    /// other class is REAL, algo 8 is LEGACY_HEARTBEAT, a round block is EXEC, and garbage or a non-PALW header is empty.
+    #[test]
+    fn the_block_kind_is_read_from_the_lane_and_the_envelopes_class() {
+        let mut params = palw_t12_shipped_params();
+        params.palw_floor_reserve_v1 = Some(ForkActivation::new(5_300));
+        params.sync_palw_floor_reserve_v1();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is V2") };
+        let (floor, real) = (bundle.base_class_id, Hash64::from_u64_word(0xBEEF));
+        assert_ne!(floor, real);
+        let attempt = |class: Hash64, daa: u64| header(POW_ALGO_ID_PALW_COMMITTED_V2, daa, envelope(class));
+        assert_eq!(palw_block_kind_v1(&params, &attempt(floor, 5_300)), "FALLBACK");
+        assert_eq!(palw_block_kind_v1(&params, &attempt(floor, 5_299)), "LEGACY_FLOOR");
+        assert_eq!(palw_block_kind_v1(&params, &attempt(real, 5_299)), "REAL");
+        assert_eq!(palw_block_kind_v1(&params, &attempt(real, 9_999)), "REAL");
+        assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_HEARTBEAT_V1, 9_999, vec![])), "LEGACY_HEARTBEAT");
+        assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_ROUND_V1, 9_999, vec![])), "EXEC");
+        assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_COMMITTED_V2, 9_999, vec![1, 2, 3])), "", "undecodable commitment");
+        assert_eq!(palw_block_kind_v1(&params, &header(1, 9_999, vec![])), "", "a non-PALW header");
+        // Dormant ruleset: a floor attempt is LEGACY_FLOOR at any height.
+        let shipped = palw_t12_shipped_params();
+        assert_eq!(palw_block_kind_v1(&shipped, &attempt(floor, 9_999)), "LEGACY_FLOOR");
     }
 }
