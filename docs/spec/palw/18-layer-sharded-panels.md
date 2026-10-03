@@ -287,3 +287,21 @@ defaults (`ProducerWithholding`).
 - **Holding a shard.** `--palw-tir-shard-hold` limits the shards a node proves and answers. The executor runs a shard from the
   params of its own occurrences alone (`TirExecutor::new_cell` refuses a cell whose occurrences read an unbound instance).
 - **Registrant.** `--palw-tir-shard-declare=<class>:<S_L>:<S_P>` carries the plan declaration once.
+
+## 18.13 Informative: the shard-only seat over the network
+
+Three node behaviours complete §18.12 without touching consensus (no new tag, no new fence):
+
+- **Rows from peers** (`--palw-tir-shard-fetch`). A seat with no copy and no mirror asks for its shard's inventory rows over the signed
+  interval lane under a request index with bit 28 set and bits 29..31 clear (`palw_tir_rows_request_index_v1`; the low 28 bits name the
+  first leaf and the signed leaf slot carries the row count, at most 256). A serving node that holds the claim's capture and class
+  answers the longest prefix that fits the lane as a borsh list of `PalwArtifactOpeningV1`. The asker keeps only rows that are the leaf
+  asked, are wanted by its shard, and prove against the registered root; a reply with one false row is refused whole.
+- **Accusation from held rows.** A seat holding only its shard's rows keeps the openings it fetched, builds the cone multiproof from
+  those paths and the decode-token door from the capture, and files the same one-move accusation a full holder files. A finding at a
+  dissected leaf opens a dissection the seat cannot play: it is refused by name and a full holder files that one.
+- **Runs beyond four sessions.** A seat without a capture asks each run of its job's leaves off chain first (request bit 27, first leaf
+  in the index, run length in the leaf slot, answered with the `TirStepRun` disclosure and checked by
+  `check_tir_step_run_disclosure_v1`), a few in flight, and demands on chain only runs still unanswered after six DAA, within its four
+  lifetime sessions per claim. The sessions are therefore spent on enforcement, and a job of any size is pursued. Runs the network
+  never serves leave the seat abstaining `Unavailable` (PALW-VF-17).
