@@ -49,7 +49,9 @@ use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_real_share_v1::PalwFloorModeV1::{Idle, Normal, Probe};
 use kaspa_consensus_core::palw_real_share_v1::{
-    PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_FLOOR_PROBE_SLOTS_V1 as PROBE, PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorStateV1,
+    PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as DUTY_AFTER, PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1 as DUTY_STAGGER, PALW_FLOOR_IDLE_SLOTS_V1 as IDLE,
+    PALW_FLOOR_PROBE_SLOTS_V1 as PROBE, PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorAnchorDutyInputV1, PalwFloorAnchorDutyWaitV1,
+    PalwFloorStateV1, palw_floor_anchor_duty_stagger_v1, palw_floor_anchor_duty_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
 use kaspa_hashes::Hash64;
@@ -112,18 +114,28 @@ fn config_of(fences: bool) -> Parts {
     (config, bundle, premine, floats)
 }
 
-/// **testnet-12 with the Useful Work Transition AND lane A** (the operator-anchored panel, with lane F1's seed under it) — the two
-/// post-launch fences a REAL claim's binding and the round lane's anchors answer to — armed from DAA 1 through their own entries,
-/// the operator set cut to the first `operators` genesis cards: those are the operators (the floor producers of the fleet), the rest
-/// are non-operator bonds (an external REAL producer). The release's other fences stay dormant: this isolates what A″ does to
-/// anchors, which is the question the 2026-10-03 head-admission finding asks.
-fn config_lane_a(operators: usize) -> Parts {
+/// **testnet-12 with the Useful Work Transition AND lane A** (the operator-anchored panel, with lane F1's seed under it, and the
+/// bind-deadlock fence whose `binder_due` the anchor duty reads) — the post-launch fences a REAL claim's binding and the round lane's
+/// anchors answer to — armed from DAA 1 through their own entries, the operator set cut to the first `operators` genesis cards: those
+/// are the operators (the floor producers of the fleet), the rest are non-operator bonds (an external REAL producer). With `window`,
+/// ADR-0170's `palw_anchor_window_v1` too (the DAA-5,300 release arms it with the rest). The release's other fences stay dormant: this
+/// isolates what A″ does to anchors, which is the question the 2026-10-03 head-admission finding asks.
+fn config_lane_a(operators: usize, window: bool) -> Parts {
     use kaspa_consensus_core::config::params::PALW_T12_POST_LAUNCH_FENCES_V1;
+    use kaspa_consensus_core::palw_anchor_window_v1::PALW_T12_ANCHOR_WINDOW_FENCES_V1;
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
     let (config, bundle, premine, floats) = config_of(true);
     let mut params = config.params.clone();
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V1.iter().filter(|f| matches!(f.name, "palw_panel_seed_execution" | "palw_operator_anchor")) {
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V1
+        .iter()
+        .filter(|f| matches!(f.name, "palw_panel_seed_execution" | "palw_operator_anchor" | "palw_anchor_at_ceiling"))
+    {
         (fence.set)(&mut params, Some(ForkActivation::new(1)));
+    }
+    if window {
+        for fence in PALW_T12_ANCHOR_WINDOW_FENCES_V1 {
+            (fence.set)(&mut params, Some(ForkActivation::new(1)));
+        }
     }
     let cards: Vec<_> = bundle
         .genesis_objects
@@ -143,6 +155,7 @@ fn config_lane_a(operators: usize) -> Parts {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => unreachable!("testnet-12 is ConsensusV2"),
     };
+    assert_eq!(bundle.state.anchor_window_active_at(1), window, "the fold's mirror of the window follows the fence");
     (config, bundle, premine, floats)
 }
 
@@ -163,9 +176,10 @@ impl Rig {
         Rig::over(config_of(fences)).await
     }
 
-    /// The rig over testnet-12 with the Useful Work Transition and lane A, `operators` of the eight cards being operators.
-    async fn new_lane_a(operators: usize) -> Rig {
-        Rig::over(config_lane_a(operators)).await
+    /// The rig over testnet-12 with the Useful Work Transition and lane A, `operators` of the eight cards being operators, and ADR-0170's
+    /// anchor window when `window`.
+    async fn new_lane_a(operators: usize, window: bool) -> Rig {
+        Rig::over(config_lane_a(operators, window)).await
     }
 
     async fn over((config, bundle, premine, floats): Parts) -> Rig {
@@ -931,42 +945,62 @@ async fn real_share_a_pruned_join_inside_a_probe_decides_the_floor_as_an_archiva
 
 // ---- the head-admission finding (P2, 2026-10-03): what anchors survive Normal with the floor held --------------------------
 //
-// Every anchor the chain has is made by a block that carries an ADMITTED attempt, and until now the floor made most of them
-// (three a slot). Once REAL work holds the floor refused, the producers that mined those attempts hold, and three consumers lose
-// their source — measured here in the pipeline, not assumed:
+// Every anchor the chain had was made by a block that carries an ADMITTED attempt, and the floor made most of them (three a slot).
+// Once REAL work holds the floor refused, the producers that mined those attempts hold, and two consumers lose their source — and the
+// two fixes that ship with the Useful Work Transition are measured here, in the pipeline, against the gap each closes:
 //
-// * **lane A's panel binding.** Past lane A a claim binds only in an anchor block, which must be or merge an OPERATOR's attempt at
-//   or past its slot (`palw_chain_block_as_anchor_v1`). With the operators' floor producers holding, a non-operator REAL producer's
-//   claim waits for an operator attempt that nothing is making;
-// * **the round lane's seed anchor** (ADR-0130): recorded by a chain block whose OWN attempt is admitted, once per span, read by the
-//   next span's schedule and by the ADR-0147 admission jury (`round_seed_anchor.span + 1 == span_now`, else no audit);
-// * (so the model onboarding that the jury gates, and the execution lane that the schedule feeds.)
+// * **lane A's panel binding** — past lane A a claim binds only in an anchor block, which must be or merge an OPERATOR's attempt at or
+//   past its slot (`palw_chain_block_as_anchor_v1`). With the operators' floor producers holding and the REAL work coming from
+//   non-operators, no such attempt exists. ANCHOR DUTY (ADR-0165 §00.9, a producer policy: `palw_floor_anchor_duty_v1`) closes it: an
+//   operator's floor producer that holds only for the idle-only policy mines ONE binder floor when a claim has waited 30 slots (plus a
+//   stagger) — an attempt the fold refuses, and an operator attempt by its header. The tests run consensus-core's rule on the real
+//   chain's own producer facts, pass by pass, exactly as the kaspad worker does;
+// * **the round lane's seed anchor** (ADR-0130), read by the next span's schedule and by the ADR-0147 admission jury — recorded by a
+//   chain block whose OWN attempt is admitted, once per span, and cleared at the span boundary. ADR-0170's `palw_anchor_window_v1`
+//   (lane P2, the same release) closes it: a MERGED admitted attempt records the anchor (M1), it survives span boundaries (M2) and the
+//   readers take the latest of the last 24 spans (M3). `…_the_audit_…` below measures the anchor's coverage; the Candidate class's
+//   admission itself is `t12_anchor_window`'s.
 
-/// What the round lane's seed anchor looks like from outside, slot by slot: the spans the walk crossed and the spans in which an
-/// anchor stood at the end of a slot. The ADR-0147 jury sits at an audit span only if the span before it has an anchor, so the
-/// anchored share of the spans IS the share of audit chances that can seat.
+/// What the round lane's seed anchor looks like from outside, sample by sample: the spans the walk crossed, the spans in which the
+/// anchor was RECORDED (the rule as it was: an anchor of the sink's own span), and the spans after which an audit at the NEXT span
+/// finds a seed in its window ([`palw_anchor_window_admits_v1`]). The ADR-0147 jury sits at an audit span only then.
 #[derive(Default, Debug)]
 struct AnchorMeter {
     spans: std::collections::BTreeSet<u64>,
     anchored: std::collections::BTreeSet<u64>,
+    covered: std::collections::BTreeSet<u64>,
 }
 
 impl AnchorMeter {
-    /// Sample the sink: a span's anchor stands from the chain block whose own attempt recorded it until the FIRST block of the next
-    /// span (the rotation resets it, and the slot's tick-carrying beat is that block), so it is sampled after every block, in the
-    /// sink's own span — never only at the end of a slot, which is already the next span.
+    /// Sample the sink: a span's anchor stands from the chain block that recorded it until the FIRST block of the next span (the
+    /// rotation resets it without the window, and the slot's tick-carrying beat is that block), so it is sampled after every block,
+    /// in the sink's own span — never only at the end of a slot, which is already the next span.
     fn sample(&mut self, rig: &Rig) {
         let daa = rig.c.daa_of(rig.c.sink());
         let lane = rig.c.config.params.palw_execution_lane.expect("testnet-12 opens the execution lane");
         let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(daa, lane.schedule_span_daa_at(daa));
         self.spans.insert(span);
-        if rig.state().round_seed_anchor().is_some_and(|anchor| anchor.span == span) {
-            self.anchored.insert(span);
+        if let Some(anchor) = rig.state().round_seed_anchor() {
+            if anchor.span == span {
+                self.anchored.insert(span);
+            }
+            if kaspa_consensus_core::palw_anchor_window_v1::palw_anchor_window_admits_v1(
+                anchor.span,
+                span + 1,
+                kaspa_consensus_core::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_SPANS_V1,
+            ) {
+                self.covered.insert(span);
+            }
         }
     }
 
     fn share(&self) -> (usize, usize) {
         (self.anchored.len(), self.spans.len())
+    }
+
+    /// The spans from `from` on, and how many of them an audit at the next span would find a seed after.
+    fn covered_from(&self, from: u64) -> (usize, usize) {
+        (self.covered.range(from..).count(), self.spans.range(from..).count())
     }
 }
 
@@ -983,111 +1017,252 @@ async fn honest_slot_sampled(rig: &mut Rig, meter: &mut AnchorMeter) {
     }
 }
 
+/// **The operators' floor producers, one pass each** — what the kaspad worker's loop does with consensus-core's anchor-duty rule: the
+/// real producer facts at the virtual DAA (`palw_producer_facts_v2` for the operator's bond), the readiness verdict, the wait tracker
+/// (`PalwFloorAnchorDutyWaitV1`) and `palw_floor_anchor_duty_v1` with the bond's stagger. A pass that fires mines ONE floor block
+/// ignoring the hold (`rogue_floor`: the producer's draw for its duty) and restarts that operator's wait.
+struct Operators {
+    waits: Vec<PalwFloorAnchorDutyWaitV1>,
+    /// `(card, virtual DAA)` of every binder an operator mined.
+    fired: Vec<(usize, u64)>,
+    /// The wait, in slots (the release's unless a test shortens it).
+    after: u64,
+}
+
+impl Operators {
+    fn new(operators: usize) -> Operators {
+        Operators { waits: vec![PalwFloorAnchorDutyWaitV1::default(); operators], fired: Vec::new(), after: DUTY_AFTER }
+    }
+
+    /// One pass of every operator's producer loop at the current virtual DAA.
+    async fn pass(&mut self, rig: &mut Rig) {
+        for card in 0..self.waits.len() {
+            let bond = rig.c.bonds[card];
+            let facts = rig
+                .c
+                .ctx
+                .consensus
+                .palw_producer_facts_v2(rig.floor(), Some(bond.0))
+                .expect("a V2 network answers for its floor");
+            let rcore_plus = rig.c.config.params.palw_rcore_plus_fence().is_some_and(|f| f.is_active(facts.daa_score));
+            let ready = facts.ready_to_produce_v3(&card_pubkey(card), rcore_plus);
+            let due_slots = self.waits[card].observe(facts.binder_due, facts.daa_score);
+            let fire = palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 {
+                binder_due: facts.binder_due,
+                is_base_class: facts.is_base_class,
+                hold_is_class_not_admitting: ready == Err(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
+                class_refusal: facts.class_admission_refusal.as_deref(),
+                due_slots,
+                after_slots: self.after,
+                stagger: palw_floor_anchor_duty_stagger_v1(bond.0.transaction_id.as_byte_slice()[0]),
+            });
+            if fire {
+                self.fired.push((card, facts.daa_score));
+                self.waits[card].fired(facts.daa_score);
+                rig.rogue_floor(card, 1_000).await;
+            }
+        }
+    }
+}
+
+/// An honest slot, sampled, then the operators' pass.
+async fn slot_with_operators(rig: &mut Rig, meter: &mut AnchorMeter, ops: &mut Operators) {
+    honest_slot_sampled(rig, meter).await;
+    ops.pass(rig).await;
+}
+
 /// **A non-operator's REAL claim under Normal, the floor held.** Card 5 (not an operator) lands a REAL attempt as a chain block — BLUE,
 /// so the chain is Normal and the operators' floor producers hold. Its claim's anchor slot is `anchor_delay` DAA later. Then one
 /// REAL attempt per `producers` entry is templated fourteen slots after the last one, drawn for 340 s under heartbeats only and merged
-/// beside the chain, the way an 8k producer's are (each lands inside `floor_idle_slots` of the one before, so the chain stays Normal;
-/// the last lands past the slot), and the run goes on until fifteen slots past the slot. Returns the rig, the tracked claim, its slot
-/// and what the seed-anchor meter saw. (Few attempts: the 8k class's in-flight cap is 5, and the harness runs no panel to resolve them.)
-async fn non_operator_claim_under_normal(producers: &[usize]) -> (Rig, Hash64, u64, AnchorMeter) {
-    let mut rig = Rig::new_lane_a(4).await;
+/// beside the chain, the way an 8k producer's are (each lands inside `floor_idle_slots` of the one before, so the chain stays Normal),
+/// and the run goes on until the claim is no longer `Provisional` or `slots_past` slots past its anchor slot are reached. The
+/// operators' producers run their passes throughout (`ops`). Returns the rig, the tracked claim, its slot and what the seed-anchor meter saw. (Few attempts: the 8k
+/// class's in-flight cap is 5 and its panel budget about five open claims, and the harness runs no panel to resolve them.)
+async fn non_operator_claim_under_normal(
+    producers: &[usize],
+    window: bool,
+    ops: &mut Operators,
+    slots_past: u64,
+) -> (Rig, Hash64, u64, AnchorMeter) {
+    let mut rig = Rig::new_lane_a(4, window).await;
     let delay = rig.c.bundle.panel.anchor_delay();
-    rig.plant();
+    rig.plant_with(Some(10_000));
     let (r0, claim_id) = rig.real_now(5, 1_000).await;
     let x0 = rig.c.daa_of(r0.header.hash);
     let claim = rig.state().claim(&claim_id).expect("the non-operator's REAL attempt is accepted").clone();
     assert!(matches!(claim.phase, kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional));
     let slot = claim.bind_base_daa() + delay;
+    let until_daa = slot + slots_past;
     assert!(matches!(rig.floor_state().mode, Normal { .. }), "a BLUE REAL attempt: the chain is Normal and the floor is held");
     let mut meter = AnchorMeter::default();
     meter.sample(&rig);
+    let bound = |rig: &Rig| !matches!(rig.state().claim(&claim_id).map(|c| c.phase.clone()), Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional));
     for (k, card) in producers.iter().enumerate() {
         while rig.c.ctx.consensus.get_virtual_daa_score() < x0 + 14 * (k as u64 + 1) {
-            honest_slot_sampled(&mut rig, &mut meter).await;
+            slot_with_operators(&mut rig, &mut meter, ops).await;
+            if bound(&rig) || rig.c.ctx.consensus.get_virtual_daa_score() >= until_daa {
+                return (rig, claim_id, slot, meter);
+            }
         }
-        rig.plant();
+        rig.plant_with(Some(10_000));
         let (d, _id) = rig.real(*card, 1_000);
         let templated_at = d.header.timestamp;
         while rig.c.ctx.simulated_time < templated_at + INFERENCE_MS {
-            honest_slot_sampled(&mut rig, &mut meter).await;
+            slot_with_operators(&mut rig, &mut meter, ops).await;
         }
         let (_merger, colour) = rig.land(&d).await;
         assert!(matches!(colour, Colour::SelectedParent | Colour::Blue), "with the floor held only heartbeats stand in its anticone: {colour:?}");
         meter.sample(&rig);
         assert!(matches!(rig.floor_state().mode, Normal { .. }), "REAL work keeps the chain Normal");
     }
-    while rig.c.ctx.consensus.get_virtual_daa_score() < slot + 15 {
-        honest_slot_sampled(&mut rig, &mut meter).await;
+    while !bound(&rig) && rig.c.ctx.consensus.get_virtual_daa_score() < until_daa {
+        slot_with_operators(&mut rig, &mut meter, ops).await;
     }
     (rig, claim_id, slot, meter)
 }
 
-/// **KNOWN GAP, measured in-tree (the lead's request of 2026-10-03; P2's `head-admission-slip-1003`): with Normal holding the floor
-/// and every REAL producer a non-operator, a REAL claim does not bind.** Four of the eight genesis cards are the operators; card 5's
-/// REAL attempt makes the chain Normal; REAL attempts by cards 6 and 7 keep it Normal; no operator makes an attempt, so past lane
-/// A no block anchors the claim — it is neither bound nor voided; it waits (its backstop is `bind_base + window_bind`, 580 DAA past).
-/// Then ONE operator floor — refused by the fold (`FloorNotIdle`: no claim, no weight) but an operator attempt by its header — binds
-/// it at once: the anchor needs the operator's *attempt*, not its claim. That is the producer-side fix (anchor duty overriding the
-/// floor hold), and the fold needs nothing for it.
-///
-/// **When the fix lands, flip the first assertion** (the claim binds without the binder) and keep the second.
+/// **FIXED: with Normal holding the floor and every REAL producer a non-operator, a REAL claim binds — through ANCHOR DUTY.** Four of
+/// the eight genesis cards are the operators; card 5's REAL attempt makes the chain Normal; REAL attempts by cards 6 and 7 keep it
+/// Normal; no operator makes an attempt of its own, because their floor producers HOLD. The claim waits — its slot passes and nothing
+/// anchors it — until an operator's producer, having seen it due for 30 slots plus its bond's stagger, mines ONE binder floor: the fold
+/// refuses it (`FloorNotIdle`: no claim, no weight) and it is still an operator attempt by its header, so it binds the claim in its own
+/// acceptance. Asserted: nobody fires before the wait is over; the first binder falls inside `[slot + 30, slot + 30 + 7 + slack]`; it is
+/// exactly one binder (the others see the claim bound and their waits break); the claim is bound by it; the chain is still Normal.
 #[tokio::test]
-async fn real_share_gap_under_normal_a_non_operator_real_claim_waits_for_an_operator_attempt_and_one_operator_floor_binds_it() {
+async fn real_share_under_normal_a_non_operator_real_claim_binds_through_anchor_duty() {
     use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2 as Phase;
-    let (mut rig, claim_id, slot, meter) = non_operator_claim_under_normal(&[6, 7]).await;
+    let mut ops = Operators::new(4);
+    let (rig, claim_id, slot, meter) = non_operator_claim_under_normal(&[6, 7, 4], true, &mut ops, 60).await;
     let phase = rig.state().claim(&claim_id).expect("the claim stays").phase.clone();
+    let daa = rig.c.ctx.consensus.get_virtual_daa_score();
     eprintln!(
-        "[real-share-gap] non-operator REAL claim, Normal, floors held: slot DAA {slot}, now DAA {}: {phase:?}; anchored spans {:?} of {:?}",
-        rig.c.ctx.consensus.get_virtual_daa_score(),
-        meter.anchored,
-        meter.spans
+        "[real-share] anchor duty: non-operator REAL claim, Normal, floors held, slot DAA {slot}: now DAA {daa}: {phase:?}; binders mined {:?}; \
+         seed-anchor coverage {:?}",
+        ops.fired,
+        meter.covered_from(0)
     );
+    assert_eq!(ops.fired.len(), 1, "exactly one binder is mined: {:?}", ops.fired);
+    let (card, at) = ops.fired[0];
+    assert!(card < 4, "an operator's");
+    assert!(at >= slot + DUTY_AFTER, "nobody fires before the claim has waited {DUTY_AFTER} slots: fired at DAA {at}, slot {slot}");
     assert!(
-        matches!(phase, Phase::Provisional),
-        "KNOWN GAP: twelve slots past its slot, with REAL work flowing and no operator attempt, the claim has not bound: {phase:?}"
+        at <= slot + DUTY_AFTER + DUTY_STAGGER + 3,
+        "within the wait plus the stagger (and the slots a pass lags the DAA by): fired at DAA {at}, slot {slot}"
     );
-    // One operator's floor, refused by the fold, anchors it.
-    let before = rig.state();
-    assert!(rig.floor_precheck(0).1.is_err(), "the operator's floor producer holds: the pre-check refuses");
-    let (binder, binder_id) = rig.rogue_floor(0, 1_000).await;
-    let after = rig.state();
-    assert!(after.claim(&binder_id).is_none(), "the operator's floor attempt is refused by the fold: no claim");
-    let phase = after.claim(&claim_id).expect("the claim stays").phase.clone();
-    eprintln!("[real-share-gap] after ONE operator floor at DAA {} (refused by the fold): {phase:?}", rig.c.daa_of(binder.header.hash));
-    assert!(
-        !matches!(phase, Phase::Provisional),
-        "an operator attempt — refused or not — is the anchor lane A needs: the claim binds (or is drawn and refused) at its block: {phase:?}"
-    );
-    assert!(matches!(before.claim(&claim_id).map(|c| c.phase.clone()), Some(Phase::Provisional)));
+    assert!(!matches!(phase, Phase::Provisional), "the binder anchors the claim: {phase:?}");
+    assert!(matches!(rig.floor_state().mode, Normal { .. }), "REAL work still holds the floor: the binder was the only floor");
 }
 
-/// **The control: the same claim binds when an OPERATOR is the REAL producer** — an operator's REAL attempt, merged beside the chain,
-/// is an operator attempt like its floors were. So the gap is the regime where REAL work comes from non-operators only, which the
-/// onboarding the chain is for makes the point of the chain.
+/// **The control: the same claim binds with no duty when an OPERATOR is the REAL producer** — an operator's REAL attempt, merged beside
+/// the chain, is an operator attempt like its floors were; the claim is bound inside the wait, so no producer fires.
 #[tokio::test]
-async fn real_share_control_an_operators_real_attempts_anchor_a_non_operators_claim_under_normal() {
+async fn real_share_control_an_operators_real_attempts_anchor_a_non_operators_claim_with_no_duty() {
     use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2 as Phase;
-    let (rig, claim_id, slot, meter) = non_operator_claim_under_normal(&[0, 1]).await;
+    let mut ops = Operators::new(4);
+    let (rig, claim_id, slot, meter) = non_operator_claim_under_normal(&[0, 1], true, &mut ops, 60).await;
     let phase = rig.state().claim(&claim_id).expect("the claim stays").phase.clone();
     eprintln!(
-        "[real-share-gap] control: operator REAL producers, Normal, floors held: slot DAA {slot}, now DAA {}: {phase:?}; anchored spans {:?} of {:?}",
+        "[real-share] control: operator REAL producers, Normal, floors held: slot DAA {slot}, now DAA {}: {phase:?}; binders mined {:?}",
         rig.c.ctx.consensus.get_virtual_daa_score(),
-        meter.anchored,
-        meter.spans
+        ops.fired
     );
     assert!(!matches!(phase, Phase::Provisional), "an operator's REAL attempt anchors the claim: {phase:?}");
+    assert!(ops.fired.is_empty(), "…inside the wait, so no operator's duty fired: {:?}", ops.fired);
+    let _ = meter;
 }
 
-/// **The round lane's seed anchor — and so the ADR-0147 audit's seat — under Normal with the floor held, against honest floors**
-/// (the measurement the finding asks for). Same rig. First Normal: a REAL attempt as a chain block, then four REAL attempts by four
-/// producers, one in flight at a time, each drawn for 340 s under heartbeats and merged beside the chain (the 8k class's panel budget
-/// — replay in flight against its allowance over three spans — admits five open claims in a harness that resolves none), the
-/// floor producers holding. Then the same number of spans with the floor producers mining every slot (the chain Idle, the fallback
-/// doing what it always did). The share of spans that end with an anchor is the share of audit chances whose previous span has one.
+/// **Anchor duty is rare: a claim that binds is bound for good, and nothing else fires.** The same non-operator claim as the duty test,
+/// run on past its binding for thirty more slots: no second binder is mined (the claims left Provisional, `binder_due` is false, every
+/// operator's wait is broken).
 #[tokio::test]
-async fn real_share_gap_the_round_seed_anchor_under_normal_with_the_floor_held_against_honest_floors() {
+async fn real_share_anchor_duty_fires_once_and_then_the_floor_stays_held() {
+    let mut ops = Operators::new(4);
+    let (mut rig, claim_id, _slot, mut meter) = non_operator_claim_under_normal(&[6, 7, 4], true, &mut ops, 60).await;
+    assert_eq!(ops.fired.len(), 1);
+    let bound_at = rig.c.ctx.consensus.get_virtual_daa_score();
+    // REAL work keeps flowing (an operator's attempt now), the operators keep passing: 30 more slots, one more REAL attempt to hold Normal.
+    rig.plant_with(Some(10_000));
+    let (d, _) = rig.real(0, 1_000);
+    let templated_at = d.header.timestamp;
+    while rig.c.ctx.simulated_time < templated_at + INFERENCE_MS {
+        slot_with_operators(&mut rig, &mut meter, &mut ops).await;
+    }
+    rig.land(&d).await;
+    while rig.c.ctx.consensus.get_virtual_daa_score() < bound_at + 30 {
+        slot_with_operators(&mut rig, &mut meter, &mut ops).await;
+    }
+    assert_eq!(ops.fired.len(), 1, "no second binder: {:?}", ops.fired);
+    assert!(
+        !matches!(rig.state().claim(&claim_id).map(|c| c.phase.clone()), Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional)),
+        "the claim stays bound"
+    );
+}
+
+/// **The round seed anchor, under Normal with the floor held — with the window (M1 + M2 + M3) and without it.** Normal: a REAL attempt
+/// as a chain block, then four REAL attempts by four producers, one in flight at a time, each drawn for 340 s under heartbeats and
+/// merged beside the chain (the 8k class's panel budget admits five open claims in a harness that resolves none), the floor
+/// producers holding. With `palw_anchor_window_v1` armed: **each merged admitted attempt records the anchor** (M1: the block is the
+/// attempt's own, the span the merging block's), **it survives span boundaries** (M2: it is still the same anchor at the next slot),
+/// and **every span from the first merged attempt on is followed by an audit that finds a seed in its 24-span window** (M3: the
+/// anchors are at most fourteen slots apart). Without the window — the control — the anchor is the rule as it was, recorded by a chain
+/// block's own attempt and cleared at the span boundary: one span of sixteen has one, against fifteen of sixteen with the floor
+/// producers mining every slot (Idle), the reason the fence exists.
+#[tokio::test]
+async fn real_share_the_round_seed_anchor_is_recorded_from_merged_attempts_and_survives_to_the_audit_window() {
+    use kaspa_consensus_core::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_SPANS_V1 as W;
+    let mut rig = Rig::new_lane_a(4, true).await;
+    rig.plant_with(Some(10_000));
+    rig.real_now(5, 1_000).await;
+    let mut meter = AnchorMeter::default();
+    meter.sample(&rig);
+    let mut first_merged_span = None;
+    let mut last_anchor_block = None;
+    for turn in 1..=4usize {
+        rig.plant_with(Some(10_000));
+        let (d, _id) = rig.real(turn % 8, 1_000);
+        let templated_at = d.header.timestamp;
+        while rig.c.ctx.simulated_time < templated_at + INFERENCE_MS {
+            honest_slot_sampled(&mut rig, &mut meter).await;
+        }
+        let (merger, colour) = rig.land(&d).await;
+        assert!(matches!(colour, Colour::Blue | Colour::SelectedParent), "{colour:?}");
+        meter.sample(&rig);
+        let anchor = *rig.state().round_seed_anchor().expect("M1: a merged admitted attempt recorded the anchor");
+        if colour == Colour::Blue {
+            assert_eq!(anchor.block, d.header.hash, "M1: the anchor is the merged attempt's own block (turn {turn})");
+        }
+        let merger_span = {
+            let lane = rig.c.config.params.palw_execution_lane.expect("the execution lane");
+            let daa = rig.c.daa_of(merger.header.hash);
+            kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(daa, lane.schedule_span_daa_at(daa))
+        };
+        assert_eq!(anchor.span, merger_span, "M1: recorded in the span of the block that folded the merge (turn {turn})");
+        first_merged_span.get_or_insert(merger_span);
+        // M2: the next slot's heartbeats cross a span boundary and the anchor is still this one.
+        honest_slot_sampled(&mut rig, &mut meter).await;
+        assert_eq!(
+            rig.state().round_seed_anchor().map(|a| (a.block, a.span)),
+            Some((anchor.block, anchor.span)),
+            "M2: the anchor survives the span boundary (turn {turn})"
+        );
+        last_anchor_block = Some(anchor.block);
+    }
+    let first = first_merged_span.expect("a merged attempt landed");
+    let (covered, spans) = meter.covered_from(first);
+    eprintln!(
+        "[real-share] seed anchors with the window: from span {first}, an audit at the next span finds a seed in {covered} of {spans} spans \
+         (W = {W}); last anchor {last_anchor_block:?}"
+    );
+    assert_eq!(covered, spans, "M3: every span from the first merged attempt on is followed by an audit that finds a seed in its window");
+}
+
+/// **The control, without the window: the gap as it stood** (the reason the fence exists). Same REAL flow, `palw_anchor_window_v1`
+/// dormant: the anchor is recorded only by a chain block's own attempt and cleared at the span boundary, so most spans end with none
+/// — against fifteen of sixteen with the floor producers mining every slot.
+#[tokio::test]
+async fn real_share_control_without_the_window_most_spans_have_no_anchor_against_honest_floors() {
     // Normal: REAL attempts only, merged beside the chain; the floor producers hold.
-    let mut rig = Rig::new_lane_a(4).await;
+    let mut rig = Rig::new_lane_a(4, false).await;
     rig.plant_with(Some(10_000));
     rig.real_now(5, 1_000).await;
     let mut real = AnchorMeter::default();
@@ -1107,8 +1282,8 @@ async fn real_share_gap_the_round_seed_anchor_under_normal_with_the_floor_held_a
         real.sample(&rig);
         assert!(matches!(rig.floor_state().mode, Normal { .. }), "REAL work keeps the chain Normal");
     }
-    // Control: Idle, honest floors, one a slot, chain blocks — the fallback's own anchors — over the same number of spans.
-    let mut rig = Rig::new_lane_a(4).await;
+    // Idle, honest floors, one a slot, chain blocks — the fallback's own anchors — over the same number of spans.
+    let mut rig = Rig::new_lane_a(4, false).await;
     let mut floors = AnchorMeter::default();
     let mut slot = 0usize;
     while floors.spans.len() < real.spans.len() {
@@ -1121,10 +1296,10 @@ async fn real_share_gap_the_round_seed_anchor_under_normal_with_the_floor_held_a
     let (fa, fs) = floors.share();
     let (ra, rs) = real.share();
     eprintln!(
-        "[real-share-gap] seed anchors over {fs} spans: honest floors {fa} of {fs} anchored; Normal with REAL attempts only {ra} of {rs} \
+        "[real-share] seed anchors WITHOUT the window, over {fs} spans: honest floors {fa} of {fs} anchored; Normal with REAL attempts only {ra} of {rs} \
          anchored ({} of the 4 REAL attempts were the selected parent of the block that merged them, {} merged beside the chain)",
         landed.0, landed.1
     );
     assert!(fa * 10 >= fs * 9, "with floors mined every slot almost every span is anchored: {fa} of {fs}");
-    assert!(ra * 2 < rs, "KNOWN GAP: with the floor held and REAL work merged beside the chain most spans end with no anchor: {ra} of {rs}");
+    assert!(ra * 2 < rs, "without the window, with the floor held and REAL work merged beside the chain, most spans end with no anchor: {ra} of {rs}");
 }
