@@ -35,11 +35,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-03 @bd9d63bc4bcc: int-11: RFC-0003/0004 + L_ver + capacity rho25 armed at DAA 5,300, rho100 at 5,395 (was 25450953…, 1e39c738…)
+// re-pin 2026-10-03 @0fec682d158e: int-12: every RFC except 0005 + capacity x1000 armed at 5,300 (was eb3a6c5f…, 57c5927a…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "eb3a6c5f597ddb1f8f3a10708f31677dcca9b1e0cf0bce8b3de8841fa048abcb",
+    "89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "57c5927a50434286be7ed1ef90463684132cb0c5a201ffc8d9644db9fcccff68",
+    "f173efa3077bd234ab0c7ed084912f926fbe87da148d1f58059c62d8d7ca1dea",
 );
 
 /// Every other preset at the release, as `palw_clock_lead_cap_is_t12_only` pins them there.

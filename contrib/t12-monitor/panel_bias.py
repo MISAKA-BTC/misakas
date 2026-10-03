@@ -90,7 +90,7 @@ T12_GENESIS = ("a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f025
                "42a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23")
 T12_PREMINE = ("5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035"
                "099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669")
-T12_FP = "eb3a6c5f597ddb1f8f3a10708f31677dcca9b1e0cf0bce8b3de8841fa048abcb"
+T12_FP = "89a4b6279e92eee3092dfebc15e9b080fac44dfe52de857f6fbac79e07f3d2f3"
 # The 8 genesis bonds are premine outputs 0..7 = the operator's fleet (contrib/t12-deploy-kit PLAN.md).
 DEFAULT_ROSTER = {
     0: ("ibm", "ibm node0 (8k producer)"),
