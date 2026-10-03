@@ -105,6 +105,11 @@ pub struct PalwTokenTableV1 {
     pub tokenizer_id: Hash64,
 }
 
+/// **The token table's tree bound** — a vocabulary (plus the end-of-generation leaf), NOT a step space: it is not a ladder the
+/// ruleset moves, and a root that depended on the network's ladder would make one table root differ by network and break the
+/// `table_root` a job commits. A fixed bound, named here so the tree builders take it as an argument like every other tree.
+pub const PALW_TOKEN_TABLE_MAX_LEAVES_V1: u64 = 1 << 22;
+
 impl PalwTokenTableV1 {
     pub fn vocab(&self) -> u32 {
         self.entries.len() as u32
@@ -138,19 +143,19 @@ impl PalwTokenTableV1 {
     /// **The table's root** — the Merkle root of [`Self::leaf_hashes`] (the step tree's fold, so one fold spells every tree
     /// the court opens). What a constrained job's tail names and a seat and the court hold the table to.
     pub fn root(&self) -> Hash64 {
-        crate::palw_step_leg::step_merkle_root_v1(&self.leaf_hashes()).expect("a token table has between 1 and 2^25 - 1 ids")
+        crate::palw_step_leg::step_merkle_root_capped_v1(&self.leaf_hashes(), PALW_TOKEN_TABLE_MAX_LEAVES_V1).expect("a token table has between 1 and 2^25 - 1 ids")
     }
 
     /// The opening of one id's rendering against [`Self::root`].
     pub fn opening_of(&self, id: u32) -> Option<PalwTokenTableOpeningV1> {
         let entry = self.entries.get(id as usize)?;
-        let opening = crate::palw_step_leg::step_opening_v1(&self.leaf_hashes(), u64::from(id)).ok()?;
+        let opening = crate::palw_step_leg::step_opening_capped_v1(&self.leaf_hashes(), u64::from(id), PALW_TOKEN_TABLE_MAX_LEAVES_V1).ok()?;
         Some(PalwTokenTableOpeningV1 { id, rendering: entry.clone(), opening })
     }
 
     /// The opening of the end-of-generation list against [`Self::root`].
     pub fn eog_opening(&self) -> Option<PalwTokenTableEogOpeningV1> {
-        let opening = crate::palw_step_leg::step_opening_v1(&self.leaf_hashes(), self.entries.len() as u64).ok()?;
+        let opening = crate::palw_step_leg::step_opening_capped_v1(&self.leaf_hashes(), self.entries.len() as u64, PALW_TOKEN_TABLE_MAX_LEAVES_V1).ok()?;
         let mut ids = self.eog_token_ids.clone();
         ids.sort_unstable();
         Some(PalwTokenTableEogOpeningV1 { ids, opening })
@@ -314,7 +319,7 @@ impl PalwTokenTableOpeningV1 {
         self.opening.leaf_index == u64::from(self.id)
             && self.id < vocab
             && self.opening.leaf_hash == table_leaf_hash_v1(self.id, self.rendering.as_deref())
-            && crate::palw_step_leg::step_opening_root_v1(u64::from(vocab) + 1, &self.opening).is_ok_and(|r| r == *root)
+            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1).is_ok_and(|r| r == *root)
     }
 }
 
@@ -330,7 +335,7 @@ impl PalwTokenTableEogOpeningV1 {
         self.opening.leaf_index == u64::from(vocab)
             && self.ids.windows(2).all(|w| w[0] < w[1])
             && self.opening.leaf_hash == table_eog_leaf_hash_v1(&self.ids)
-            && crate::palw_step_leg::step_opening_root_v1(u64::from(vocab) + 1, &self.opening).is_ok_and(|r| r == *root)
+            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1).is_ok_and(|r| r == *root)
     }
 
     /// The lowest end-of-generation id the opened list names.
@@ -827,7 +832,14 @@ mod tests {
         assert!(PalwConstraintMaskV1::for_job(&j, t.clone()).is_ok());
         assert!(PalwConstraintMaskV1::for_job(&j, Arc::new(same)).unwrap_err().contains("another tokenizer"));
         let no_eog = PalwTokenTableV1 { eog_token_ids: vec![], ..(*t).clone() };
-        assert!(PalwConstraintMaskV1::for_job(&j, Arc::new(no_eog)).unwrap_err().contains("end-of-generation"));
+        // The job must NAME the table (its root) for the end-of-generation check to be the one that fires: a table with another root is
+        // refused earlier, as "not the table the job names" (the test used to ask the root check for the eog message).
+        let mut j_no_eog = j.clone();
+        if let Some(PalwFpJobTailV1::Constraint(tail)) = j_no_eog.tail.as_mut() {
+            tail.table_root = no_eog.root();
+        }
+        assert!(PalwConstraintMaskV1::for_job(&j, Arc::new(no_eog.clone())).unwrap_err().contains("not the table the job names"));
+        assert!(PalwConstraintMaskV1::for_job(&j_no_eog, Arc::new(no_eog)).unwrap_err().contains("end-of-generation"));
         assert!(palw_fp_constraint_mask_for_host_v1(&j, None).is_err(), "no table, no mask");
         assert_eq!(palw_fp_constraint_mask_for_host_v1(&PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, tail: None, ..j }, None).unwrap(), None);
     }
