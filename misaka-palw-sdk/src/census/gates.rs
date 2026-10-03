@@ -250,6 +250,9 @@ pub struct CensusContext {
     pub context_rule: ContextRule,
     /// The chain's judgment shared by identical programs (one process, every worker).
     pub cache: preflight::JudgeCache,
+    /// A wall-clock budget for one class's layout search at one context (`None`: none). A search that spends it leaves the admit gate
+    /// `NOT_RUN_JUDGMENT_BUDGET` — counted as not passing, never as a verdict.
+    pub judge_budget: Option<std::time::Duration>,
     /// A frame's task for a repository that declares none (RFC-0002 §II.12: a GGUF the Hub lists without a task is in the local-LLM
     /// frame as text generation). `None` in the Hub-wide census, where an undeclared task is `TASK_UNKNOWN`.
     pub assume_task: Option<String>,
@@ -275,6 +278,7 @@ impl CensusContext {
             },
             context_rule,
             cache: Default::default(),
+            judge_budget: None,
             assume_task: None,
         }
     }
@@ -290,8 +294,11 @@ impl CensusContext {
 fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32) -> Result<Report, Found> {
     let mut opts = ctx.options.clone();
     opts.max_context = Some(max_context);
+    let deadline = ctx.judge_budget.map(|b| std::time::Instant::now() + b);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        preflight::run_census_source(&cs.source, &cs.label, cs.bytes_read, &opts, Some(&ctx.cache))
+        crate::tir_layout::tir_with_search_deadline_v1(deadline, || {
+            preflight::run_census_source(&cs.source, &cs.label, cs.bytes_read, &opts, Some(&ctx.cache))
+        })
     })) {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => Err(found("ARCH_REFUSED", None, vec![format!("the preflight could not run: {e}")])),
@@ -355,6 +362,10 @@ fn judge_at_contexts(
 
 /// The admit gate of a report (the class is not a pipeline class).
 fn admit_of(r: &Report) -> GateResultV1 {
+    let spent = r.blockers().iter().any(|b| b.evidence.iter().any(|e| e.contains(crate::tir_layout::TIR_SEARCH_BUDGET_SPENT_V1)));
+    if spent {
+        return not_run(Gate::Admit, codes::NOT_RUN_JUDGMENT_BUDGET, vec![crate::tir_layout::TIR_SEARCH_BUDGET_SPENT_V1.into()]);
+    }
     if r.depth.reached == preflight::Depth::Headers {
         // A headers-depth census (the shape depth's admission deferred): not run, never inferred.
         return not_run(Gate::Admit, codes::NOT_RUN_DEPTH_HEADERS, vec![]);
@@ -722,6 +733,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         ruleset: ctx.ruleset.clone(),
                         context_rule: ctx.context_rule,
                         cache: Default::default(),
+                        judge_budget: ctx.judge_budget,
                         assume_task: ctx.assume_task.clone(),
                     };
                     let (r, cx, ar) = judge_at_contexts(&cs, &ctx2, &task);

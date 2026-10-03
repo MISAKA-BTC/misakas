@@ -152,6 +152,27 @@ fn h_tile_bound_refusal(why: &str) -> bool {
 /// first layout admitted is returned, at the widest logits tile, history tile and interval that admit;
 /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
 /// the one an operator acts on.
+thread_local! {
+    /// The instant the current thread's layout search must stop by (`None`: no budget). Set only by a caller that judges many classes
+    /// in a row (the Hugging Face census), through [`tir_with_search_deadline_v1`]; every other caller is unaffected.
+    static SEARCH_DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The refusal a layout search returns when its time budget is spent (the census records it as a gate not run, never as a verdict).
+pub const TIR_SEARCH_BUDGET_SPENT_V1: &str = "the layout search's time budget is spent";
+
+/// Run `f` with the current thread's layout searches bounded by `deadline` (restored afterwards).
+pub fn tir_with_search_deadline_v1<T>(deadline: Option<std::time::Instant>, f: impl FnOnce() -> T) -> T {
+    let before = SEARCH_DEADLINE.with(|d| d.replace(deadline));
+    let out = f();
+    SEARCH_DEADLINE.with(|d| d.set(before));
+    out
+}
+
+fn search_budget_spent() -> bool {
+    SEARCH_DEADLINE.with(|d| d.get().is_some_and(|t| std::time::Instant::now() >= t))
+}
+
 fn tir_declare_search_v1(
     layout_for: &mut dyn FnMut(Option<u32>, u32) -> Result<PalwTirLayoutV1, String>,
     interval: &mut dyn FnMut(&PalwTirLayoutV1) -> Result<u32, String>,
@@ -164,6 +185,9 @@ fn tir_declare_search_v1(
     for &logits_tile in logits_tiles {
         let mut h_tile = h_chunk.max(1);
         loop {
+            if search_budget_spent() {
+                return Err(TIR_SEARCH_BUDGET_SPENT_V1.into());
+            }
             let mut layout = layout_for(logits_tile, h_tile)?;
             let mut admission = match interval(&layout) {
                 Ok(c) => {
@@ -176,6 +200,9 @@ fn tir_declare_search_v1(
             while let Err(why) = &admission {
                 if !recurrent || !interval_bound_refusal(why) || layout.checkpoint_interval <= 1 {
                     break;
+                }
+                if search_budget_spent() {
+                    return Err(TIR_SEARCH_BUDGET_SPENT_V1.into());
                 }
                 layout.checkpoint_interval /= 2;
                 admission = admit(&layout);

@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--dirs FILE [--follow]]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--judge-budget-secs N] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -50,6 +50,10 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
         Some(other) => return Err(format!("--depth {other}: headers | shape")),
     };
     let assume_task = take(&mut args, "--assume-task");
+    let judge_budget = match take(&mut args, "--judge-budget-secs") {
+        Some(b) => Some(std::time::Duration::from_secs(b.parse::<u64>().map_err(|e| format!("--judge-budget-secs {b}: {e}"))?)),
+        None => None,
+    };
     let follow = args.iter().any(|a| a == "--follow");
     args.retain(|a| a != "--follow");
     let max_context = match take(&mut args, "--max-context") {
@@ -64,6 +68,10 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     let mut ctx = CensusContext::new(&snapshot, &network, height, policy, &tree);
     ctx.options.depth = depth;
     ctx.assume_task = assume_task;
+    ctx.judge_budget = judge_budget;
+    if let Some(b) = judge_budget {
+        ctx.ruleset.context_rule = format!("{}; a layout search's budget {} s", ctx.ruleset.context_rule, b.as_secs());
+    }
     if let Some(c) = max_context {
         ctx = ctx.with_context_rule(super::gates::ContextRule::Fixed(c));
     }
