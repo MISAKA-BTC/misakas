@@ -1042,9 +1042,8 @@ function scanPhaseLabel(c){
   return { t: (p || "—").replace(/_/g, " "), k: "scan-warn" };
 }
 
-// ---- group the window's round blocks per claim
-//   exact when the node labels the block (verboseData.exec.claimId); otherwise joined to the producing
-//   bond's claims by ticket range; a block two claims of one bond could both own is shown under the bond.
+// ---- group the window's round blocks per claim. Only the node's judged lineage is exact:
+//   a bond and round range can also contain a lottery permit or another claim's permit.
 function scanGroupExecutions(rows, claimsByBond){
   const groups = new Map();
   const put = (key, init, blk) => { let g = groups.get(key); if (!g) { g = Object.assign({ key, blocks: [] }, init); groups.set(key, g); } g.blocks.push(blk); };
@@ -1053,11 +1052,16 @@ function scanGroupExecutions(rows, claimsByBond){
     const ri = b.round || {};
     const ex = b.exec;
     if (ex && ex.claimId) { put("c:" + ex.claimId, { claimId: ex.claimId, bond: ex.bond || ri.bond, classId: ex.classId || null }, b); continue; }
+    // A domain-lottery permit has no Final, claim or model. The node's granted verdict makes
+    // that distinction exact; a missing verdict must never be guessed to be a lottery permit.
+    if (ex && ex.verdict === "granted" && !ex.quantumId) {
+      put("l:" + ri.round + ":" + (ex.bond || ri.bond || ""), { lottery: true, bond: ex.bond || ri.bond || null }, b);
+      continue;
+    }
     const claims = (ri.bond && claimsByBond.get(ri.bond)) || null;
-    const cand = claims ? claims.filter(c => Number(c.execTickets) > 0 && ri.round >= Number(c.execFirstRound) && ri.round <= Number(c.execLastRound)) : [];
-    if (cand.length === 1) put("c:" + cand[0].claimId, { claimId: cand[0].claimId, bond: ri.bond, classId: cand[0].classId }, b);
-    else if (cand.length > 1) put("b:" + ri.bond, { claimId: null, bond: ri.bond, ambiguous: cand.length, classId: cand[0].classId }, b);
-    else put("b:" + (ri.bond || "?"), { claimId: null, bond: ri.bond || null, unattributed: true }, b);
+    const candidates = claims ? claims.filter(c => Number(c.execTickets) > 0 && ri.round >= Number(c.execFirstRound) && ri.round <= Number(c.execLastRound)) : [];
+    put("u:" + b.hash, { claimId: null, bond: (ex && ex.bond) || ri.bond || null,
+      classId: ex && ex.classId || null, candidates: candidates.length, unattributed: true }, b);
   }
   for (const g of groups.values()) {
     const rowsOf = g.bond && claimsByBond.get(g.bond);
@@ -1074,7 +1078,7 @@ function scanRoundsCell(g){
     const n = Number(c.execTicketsSpent), t = Number(c.execTickets), pct = Math.min(100, Math.round(100 * n / t));
     return `<span class="scan-bar ${n >= t ? "done" : ""}"><i style="width:${pct}%"></i></span> <b>${num(n)}</b>/${num(t)}`;
   }
-  return `<span class="dim" title="tickets of this claim are not known to this page: ${g.ambiguous ? "the producing bond holds " + g.ambiguous + " claims whose ticket ranges overlap this round" : "no claim of the producing bond covers this round"}">${num(g.blocks.length)} seen</span>`;
+  return `<span class="dim" title="${g.lottery ? "a domain-lottery permit has no claim" : "the node did not provide exact claim lineage for this round"}">${num(g.blocks.length)} seen</span>`;
 }
 const scanCanonical = b => scanKindOf(b).k === "REAL_ROUND";   // past the lane-EX fence the node says so; before it, round blocks are merged beside the chain
 function scanRoundLabel(b, g){
@@ -1086,13 +1090,14 @@ function scanRoundLabel(b, g){
 function scanRenderExecutions(rows, claimsByBond){
   const w = $("#execWrap"); if (!w) return;
   const groups = scanGroupExecutions(rows, claimsByBond);
-  if (!groups.length) { w.innerHTML = `<div class="note">No execution round block in this window yet. Round blocks (algo-10) are merged beside the chain, one per permitted round of a Final's tickets.</div>`; return; }
+  if (!groups.length) { w.innerHTML = `<div class="note">No execution lane round block in this window yet.</div>`; return; }
   const body = groups.slice(0, 20).map(g => {
     const c = g.claim, open = scanOpen.has(g.key), newest = g.blocks[0];
-    const model = scanClaimClassName(g.classId || (c && c.classId));
+    const classId = g.classId || (c && c.classId);
+    const model = g.lottery ? "lottery · no model" : classId ? scanClaimClassName(classId) : "class not linked";
     const final = c ? (String(c.phase) === "final" ? "DAA " + num(c.phaseDaa) : scanPhaseLabel(c).t) : "—";
     const claimCell = g.claimId ? `<a class="hash" href="#/claim/${esc(g.claimId)}/${esc(encodeURIComponent(g.bond || ""))}">${esc(short(g.claimId, 8))}</a>`
-      : `<span class="dim">${g.ambiguous ? g.ambiguous + " claims (overlap)" : "claim unknown"}</span>`;
+      : `<span class="dim">${g.lottery ? "no claim · lottery permit" : g.candidates ? g.candidates + " possible claim(s) · unverified" : "claim not linked"}</span>`;
     const anchor = c && c.acceptedBlock ? linkBlock(c.acceptedBlock) : `<span class="dim">—</span>`;
     const sub = !open ? "" : `<tr class="scan-sub"><td colspan="8">${g.blocks.slice(0, 120).map(b =>
         `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanCanonical(b) ? " · BLUE · canonical round" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("")}
@@ -1192,9 +1197,12 @@ async function renderModelClass(arg){
   const classId = await scanResolveClass(arg);
   const head = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/registry">Models</a> › ${esc(scanClaimClassName(classId))}</div>`;
   viewFor(__g).innerHTML = head + `<h1 class="page">${esc(scanClaimClassName(classId))}</h1><div class="loading">Loading…</div>`;
-  const [m, seats, reg] = await Promise.all([
-    palwRead("getPalwModel", { classId }), palwRead("getPalwPanelSeats", { classId }), palwRead("getPalwModelRegistry")]);
+  const [m, seats, reg, panels] = await Promise.all([
+    palwRead("getPalwModel", { classId }), palwRead("getPalwPanelSeats", { classId }),
+    palwRead("getPalwModelRegistry"), palwRead("getPalwPanelAssignments", { claimId:"", seatId:"" })]);
   if (curSeg() !== "models") return;
+  if (m && m.found && m.modelName && !LLM_CLASSES.some(c => c.id === classId))
+    LLM_CLASS_BY_ID[classId] = { id:classId, name:String(m.modelName), model:String(m.modelName), tag:"llm" };
   const regRow = reg && Array.isArray(reg.classes) ? reg.classes.find(c => c.classId === classId || c.class_id === classId) : null;
   const okm = m && !m.__unsupported && !m.__error && m.found;
   const kv = [];
@@ -1207,10 +1215,17 @@ async function renderModelClass(arg){
     kv.push(["Status", stateBadge(regRow.state || regRow.lifecycle || regRow.registryState)], ["Ready seats", num(regRow.readySeatsNow)]);
   } else kv.push(["Status", `<span class="dim">this node does not report the class (getPalwModel / registry)</span>`]);
   kv.push(["Class id", `<span class="hash">${esc(classId)}</span>`]);
-  const seatRows = (seats && Array.isArray(seats.seats) ? seats.seats : []);
+  const panel = llmLivePanelRows(seats, llmRegistryIndex(reg));
+  const seatRows = panel.rows.filter(s => String(s.classId || "").toLowerCase() === classId);
   const seatHtml = seatRows.map(s => `<tr><td class="mono" title="${esc(s.bondOutpoint)}">${esc(short(s.bondOutpoint, 10))}</td>
-    <td>${s.ready ? `<span class="scan-ok">ready</span>` : `<span class="scan-warn">not ready</span>`}</td><td>${s.eligible ? "eligible" : "—"}</td>
-    <td class="num">${num(s.assigned)}</td><td class="dim">${esc(s.hold ? (s.hold.reason || s.hold.kind || JSON.stringify(s.hold)) : "")}</td></tr>`).join("");
+    <td>${s.ready ? `<span class="scan-ok">ready</span>` : `<span class="scan-warn">not ready</span>`}</td><td>${s.eligible == null ? "unreported" : s.eligible ? "eligible" : "held"}</td>
+    <td class="num">${s.assigned == null ? "—" : num(s.assigned)}</td><td class="dim">${esc(s.hold ? (s.hold.message || s.hold.code || JSON.stringify(s.hold)) : "")}</td></tr>`).join("");
+  const assignments = panels && Array.isArray(panels.assignments)
+    ? panels.assignments.filter(a => String(a.classId || "").toLowerCase() === classId) : [];
+  const panelHtml = assignments.map(a => `<tr><td><a class="hash" href="#/claim/${esc(a.claimId)}">${esc(short(a.claimId, 8))}</a></td>
+    <td>${esc(a.licensedState || "—")}</td><td class="num">${num(a.validReceiptSeats)} / ${num(a.selectedPanelSeats)}</td>
+    <td>${(a.seats || []).map(s => `<span class="scan-chip mono" title="${esc(s.seatId)}">${esc(short(s.seatId, 8))} · ${esc(s.receiptStatus || "pending")}</span>`).join("")}</td>
+    <td class="num">${num(a.deadlineDaa)}</td></tr>`).join("");
   // producers + their claims of this class
   const bonds = Array.from(new Set(scanKnownBonds(classId).concat(seatRows.map(x => x.bondOutpoint).filter(Boolean)))).slice(0, 24);   // producers seen on the page + the class's seats (genesis bonds are both)
   const claims = [];
@@ -1227,13 +1242,17 @@ async function renderModelClass(arg){
       <td class="nowrap">${Number(c.execTickets) > 0 ? `${num(c.execTicketsSpent)}/${num(c.execTickets)}` : `<span class="dim">${esc(c.execStage || "—")}</span>`}</td>
       <td class="mono" title="${esc(c.executorBond)}">${esc(short(c.executorBond, 8))}</td></tr>`; }).join("");
   if (curSeg() !== "models") return;
-  viewFor(__g).innerHTML = head + `<h1 class="page">${esc(scanClaimClassName(classId))} <span class="dim" style="font-size:13px">model class</span></h1>
+  const finalHead = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/registry">Models</a> › ${esc(scanClaimClassName(classId))}</div>`;
+  viewFor(__g).innerHTML = finalHead + `<h1 class="page">${esc(scanClaimClassName(classId))} <span class="dim" style="font-size:13px">model class</span></h1>
     <div class="kv">${kv.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>
     <h2 class="sec">Producers (${prod.size})</h2>
     <div class="note">${prod.size ? Array.from(prod, ([b, n]) => `<span class="scan-chip mono" title="${esc(b)}">${esc(short(b, 8))} · ${n} claim(s)</span>`).join("") : "No producer of this class among the bonds this page has seen (those that produced a round block in its window)."}</div>
-    <h2 class="sec">Panel seats (${seatRows.length})</h2>
+    <h2 class="sec">Panel seats (${seatRows.length}) <span class="dim" style="font-size:13px">${esc(panel.source)} · DAA ${num(panel.tipDaa)}</span></h2>
     <div class="tblscroll"><table class="tbl"><thead><tr><th>Seat bond</th><th>Readiness</th><th>Eligible</th><th class="num">Assigned</th><th>Hold</th></tr></thead>
       <tbody>${seatHtml || `<tr><td colspan="5" class="dim">${seats && seats.__unsupported ? "getPalwPanelSeats is not served by this node" : "no seat for this class"}</td></tr>`}</tbody></table></div>
+    <h2 class="sec">Panel assignments (${assignments.length})${panels && panels.truncated ? ' <span class="dim" style="font-size:13px">node response capped at 512 across all classes</span>' : ""}</h2>
+    <div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>State</th><th>Receipts</th><th>Drawn seats</th><th class="num">Deadline DAA</th></tr></thead>
+      <tbody>${panelHtml || `<tr><td colspan="5" class="dim">${panels && panels.__unsupported ? "getPalwPanelAssignments is not served by this node" : "no active panel assignment for this class"}</td></tr>`}</tbody></table></div>
     <h2 class="sec">Claims (${claims.length}) <span class="dim" style="font-size:13px">Final / Court / Expired · rounds spent/permitted</span></h2>
     <div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>State</th><th class="num">Accepted DAA</th><th>Rounds</th><th>Producer</th></tr></thead>
       <tbody>${claimHtml || `<tr><td colspan="5" class="dim">no claim of this class among the known producers</td></tr>`}</tbody></table></div>`;
@@ -1389,7 +1408,7 @@ async function renderHome(){
     <div id="blkFilters" class="scan-filters"></div>
     <div id="recentWrap" class="tblscroll"><div class="spin">Loading blocks…</div></div>
     <div id="blkPager" class="scan-pager"></div>
-    <details id="execDetails" class="scan-exec-d"><summary><b>Recent model executions</b> <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
+    <details id="execDetails" class="scan-exec-d"><summary><b>Recent execution lane rounds</b> <span class="dim" style="font-size:13px">(grouped by claim when the node identifies one)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
       <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div></details>
     <div class="sec-row"><h2 class="sec">Consensus composition</h2></div>
     <div id="compCard" class="note"><div class="spin">Sampling the selected chain…</div></div>
@@ -1658,8 +1677,11 @@ function scanTypeOf(b){
   const kind = scanKindOf(b), lc = String(b.laneClass || "").toUpperCase();
   if (scanIsRound(b)) {
     if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="a round block the node judged without a permit: merged, its transactions not accepted">RED · not selected</span>` };
+    if (b.exec && b.exec.verdict === "granted" && !b.exec.quantumId)
+      return { cat: "exec", pill: `<span class="pill chain" title="the node granted a domain-lottery permit; no Final, claim or model stands behind it">E · lottery permit</span>` };
     if (kind.k === "REAL_ROUND") return { cat: "exec", pill: `<span class="pill blue" title="a canonical member of the DAG (lane EX)">E-BLUE · model execution</span>` };
-    return { cat: "exec", pill: `<span class="pill chain" title="an execution round block: merged into the DAG beside the chain, not yet canonical on this network">E · model execution (merged)</span>` };
+    if (b.exec && b.exec.claimId) return { cat: "exec", pill: `<span class="pill chain" title="a claim-backed round block merged beside the chain">E · model execution (merged)</span>` };
+    return { cat: "exec", pill: `<span class="pill chain" title="an execution lane round block: merged into the DAG beside the chain; claim lineage appears when the node has judged it">E · execution round (merged)</span>` };
   }
   if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="MISAKA-FALLBACK-V1: an idle-time liveness block">FALLBACK</span>` };
   if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, its transactions not accepted">RED · not selected</span>` };
@@ -1670,13 +1692,18 @@ function scanBlockContext(b, lookup){
   if (!scanIsRound(b)) return { model: recentModelCell(b), claim: "" };
   const g = lookup.get(b.hash);
   const classId = (g && (g.classId || (g.claim && g.claim.classId))) || (b.exec && b.exec.classId) || null;
-  const model = classId ? `<span class="pill blue">${esc(scanClaimClassName(classId))}</span>` : `<span class="dim">model unknown</span>`;
+  const lottery = !!(g && g.lottery);
+  const model = classId ? `<span class="pill blue" title="class ${esc(classId)}">${esc(scanClaimClassName(classId))}</span>`
+    : `<span class="dim">${lottery ? "lottery · no model" : "class not linked"}</span>`;
   const cid = (g && g.claimId) || (b.exec && b.exec.claimId);
   const bond = (g && g.bond) || (b.exec && b.exec.bond) || (b.round && b.round.bond) || "";
-  let claim = cid ? `<a class="hash" href="#/claim/${esc(cid)}/${esc(encodeURIComponent(bond))}">${esc(short(cid, 8))}</a>` : `<span class="dim">claim unknown</span>`;
+  let claim = cid ? `<a class="hash" href="#/claim/${esc(cid)}/${esc(encodeURIComponent(bond))}">${esc(short(cid, 8))}</a>`
+    : `<span class="dim" title="${esc(bond ? "producer bond " + bond : "producer bond unavailable")}">${lottery ? "no claim · lottery" : g && g.candidates ? g.candidates + " possible claim(s)" : "claim not linked"}</span>`;
   const t = g && g.claim && Number(g.claim.execTickets);
   const q = b.exec && b.exec.quantumIndex;
-  if (q != null) claim += ` <span class="dim">· Round ${num(Number(q) + 1)}${t ? "/" + num(t) : ""}</span>`;
+  if (q != null) claim += ` <span class="dim">· ticket ${num(Number(q) + 1)}${t ? "/" + num(t) : ""}</span>`;
+  const round = b.round || b.exec;
+  if (round && round.round != null) claim += ` <span class="dim" title="${esc(bond ? "producer bond " + bond : "round block envelope")}">· round ${num(Number(round.round))}${round.permit != null || round.permitIndex != null ? " · permit " + num(Number(round.permit ?? round.permitIndex)) : ""}</span>`;
   return { model, claim };
 }
 function scanPaintBlocks(){
@@ -3426,33 +3453,24 @@ function fmtDur(sec){ sec=Math.max(0,Math.floor(sec)); const m=Math.floor(sec/60
 // have the file. The roster below is deployment; readySeatsNow is the chain's count.
 const PANEL_DRAW = 5;
 const PANEL_QUORUM = 3;
-// **The verifier-seat roster** — which live panel seats HOLD which class artifact. Deployment
-// overlay, not the admission count. Bonds are the on-chain identity — the same `<txid>:N` the
-// receipt rows show. Ready seats DERIVE from getPalwModelRegistry (`readySeatsNow` /
-// SeatReadinessProved), never from this table.
+// Optional launch-era host labels only. Class membership, readiness, eligibility and assignments
+// come from getPalwModelRegistry and getPalwPanelSeats, including seats registered after launch.
 // testnet-12's OWN premine txid (premine_txid_for(testnet-12), salted per network since 2026-09-24;
 // the shared sentinel `6d697361…` is gone from this chain). Read by the deploy kit's probe
 // (contrib/t12-deploy-kit/probe-identity-local.sh → PREMINE_TXID); re-check it against fleet.env at the
 // shipping commit before staging this file (DEPLOY.md §9).
 const PANEL_BOND_TX = "5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669";
-// testnet-12 roster (the R-core+ regenesis, public launch 2026-09-25): eight genesis bonds on
-// PANEL_BOND_TX:0..7, every one a verifier seat that holds the dense 8k artifact
-// (contrib/t12-deploy-kit/PLAN.md §1 and the NODES tables of install-ibm/113/5104.sh). Producers:
-// 8k = bond 0 (ibm node0), floor = bonds 1 (ibm node1) and 6 (.113). Card 7 was re-keyed for
-// testnet-12 (its old key was on no host). No seat holds the 2M artifact: 2M is CLOSED at launch
-// (ADR-0152 §8.3 item 7 / O-11: every 2M attempt and FP claim is refused until 2M's flag day).
-// Deployment truth, updated with the fleet.
+// Historic host names for the eight genesis bonds; these are labels, never panel state.
 const PANEL_SEATS = [
-  { ix:0, host:"seat 0 · ibm node0 (8k producer)",           holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:1, host:"seat 1 · ibm node1 (floor producer)",        holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:2, host:"seat 2 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:3, host:"seat 3 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:4, host:"seat 4 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:5, host:"seat 5 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:6, host:"seat 6 · .113 explorer node (floor producer)", holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:7, host:"seat 7 · 5.104.81.23 (re-keyed for t12)",    holds:["PALW-BASE-0","QWEN25-A16-8K"] },
+  { ix:0, host:"seat 0 · ibm node0 (8k producer)" },
+  { ix:1, host:"seat 1 · ibm node1 (floor producer)" },
+  { ix:2, host:"seat 2 · 5.104.81.23" },
+  { ix:3, host:"seat 3 · 5.104.81.23" },
+  { ix:4, host:"seat 4 · 5.104.81.23" },
+  { ix:5, host:"seat 5 · 5.104.81.23" },
+  { ix:6, host:"seat 6 · .113 explorer node (floor producer)" },
+  { ix:7, host:"seat 7 · 5.104.81.23 (re-keyed for t12)" },
 ];
-function verifierCount(name){ return PANEL_SEATS.filter(s => s.holds.includes(name)).length; }
 function registryAdmitsClaims(state){
   const t = String(state || "");
   return /^Probation/.test(t) || /^ActiveLimited/.test(t) || t === "Active";
@@ -3469,9 +3487,42 @@ function llmRegistryIndex(reg){
     const ix = r.bondIndex;
     const cid = String(r.classId || "").toLowerCase();
     if (ix == null || !cid) continue;
-    proved[ix + ":" + cid] = r;
+    proved[String(r.bondTxid || "") + ":" + ix + ":" + cid] = r;
   }
   return { root, byId, proved };
+}
+function llmLiveClasses(reg){
+  const rows = reg.root && Array.isArray(reg.root.classes) ? reg.root.classes : null;
+  if (!rows) return LLM_CLASSES; // an older node cannot enumerate the registry
+  return rows.map(row => {
+    const id = String(row.classId || "").toLowerCase();
+    const known = LLM_CLASS_BY_ID[id];
+    if (known) return known;
+    const c = { id, name: String(row.modelName || "") || "class " + short(id, 8),
+      model: "Registered artifact " + short(row.artifactRoot || "", 8),
+      tag: row.isBaseClass ? "floor" : "llm" };
+    LLM_CLASS_BY_ID[id] = c; // the work and claim lists use the same live class names
+    return c;
+  }).filter(c => c.id);
+}
+function llmLivePanelRows(reply, reg){
+  const exact = !!(reply && !reply.__unsupported && !reply.__error && reply.available && Array.isArray(reply.seats));
+  const rows = exact ? reply.seats.slice() : [];
+  const seen = new Set(rows.map(r => String(r.bondOutpoint || "") + ":" + String(r.classId || "").toLowerCase()));
+  // A node can serve fresh registry proofs for a newly registered class before its panel-seat
+  // view includes that class. Keep those proofs visible, with eligibility left unreported.
+  for (const r of Object.values(reg.proved)) {
+    const key = String(r.bondTxid || "") + ":" + r.bondIndex + ":" + String(r.classId || "").toLowerCase();
+    if (seen.has(key)) continue;
+    rows.push({
+    bondOutpoint: String(r.bondTxid || "") + ":" + r.bondIndex, classId: r.classId,
+    ready: r.fresh !== false && !r.notReadyReason, eligible: null,
+    readinessProvedDaa: r.provedDaa, hold: r.notReadyReason ? { message: r.notReadyReason } : null,
+    assigned: null,
+    });
+  }
+  return { rows, exact, source: exact ? "getPalwPanelSeats + registry readiness" : "getPalwModelRegistry.readiness",
+    tipDaa: exact ? reply.tipDaa : reg.root && reg.root.tipDaa };
 }
 const LLM_CLASSES = [
   { id:"f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
@@ -3480,15 +3531,16 @@ const LLM_CLASSES = [
     name:"QWEN25-A16-8K", model:"Qwen/Qwen2.5-1.5B/graph-v7@8192 · W8A16 static PTQ, 8k held context (genesis row; Prefetching → Probation once 7 seats prove readiness after the grace)", tag:"llm" },
   { id:"74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
     name:"QWEN25-A16-2M", model:"Qwen/Qwen2.5-1.5B/graph-v7@2097152 · W8A16 static PTQ, 2M held context (genesis row; closed at launch by rule — no claims until a flag day installs its measured row)", tag:"llm" },
-  // testnet-12 registers no hybrid row at genesis (the held map's GDN convolution gather is wrong for
-  // Qwen3.6-35B-A3B's 16/32 key/value heads). A permissionless registration appears here by its
-  // class id from getPalwModelRegistry; name it in this table when it registers.
+  // This catalog supplies names for the genesis classes. Permissionless classes are enumerated
+  // from getPalwModelRegistry and use getPalwModel.modelName when the chain declares one.
 ];
 const LLM_CLASS_BY_ID = Object.fromEntries(LLM_CLASSES.map(c=>[c.id, c]));
 function llmClassName(id){ const c=LLM_CLASS_BY_ID[id]; return c ? c.name : (id ? short(id,6) : "—"); }
 
 let llmSubs = [];            // newest-first decoded submissions
 let llmEvents = [];          // newest-first decoded lifecycle events
+const llmFactCache = new Map();       // class id -> short-lived producer facts
+const llmModelNameCache = new Map();  // class id -> optional declared name and root
 let llmSeenBlocks = new Set();
 let llmTotalSubs = 0;        // every decoded submission ever seen (the arrays below are capped)
 let llmFilter = "llm";       // "llm" (model classes only — the page's point) | "all" | "floor"
@@ -3652,13 +3704,12 @@ function renderLlm(){
       the admission bar. A class is minable only after the registry sees <b><code>requiredReadySeats</code></b>
       possession proofs on chain via <code>SeatReadinessProved</code>. That number is <b>derived per class</b>
       (ADR-0135): at least <b>7</b> (5 panel seats + 2 spare), and more for a class whose canonical job is
-      heavy at the target utilization. On testnet-12 the 8k row starts in <b>Prefetching</b> and moves to
-      <b>Probation</b> once 7 seats of distinct operators have proved readiness after the registry's grace;
-      the 2M row is <b>closed at launch</b> by rule and takes no claim.
-      Prefetching admits nothing, even if five operators have the file. The ticks below that say
-      <i>holds</i> are the operator's deployment (the floor is derived — every seat verifies it by
-      construction); a seat is <b>Ready</b> only when the chain counts it, which is the same
-      <code>${esc(short(PANEL_BOND_TX,4))}:N</code> identity the approvals table shows.</div>
+      heavy at the target utilization. Each class's live registry state and ready count are shown
+      below, including models registered after this explorer was deployed.
+      Prefetching admits nothing, even if five operators have the file. The table below reads
+      registered classes and bonded seats from this node on every refresh. <b>Ready</b> means a fresh
+      possession proof; <b>eligible</b> also means the seat has collateral room to serve a panel.
+      Each class links to its panel and claims. The floor is derived and is not readiness-gated.</div>
     <div id="llmSeatMatrix" class="tblscroll"></div>
     <h2 class="sec">The lifecycle a claim walks</h2>
     <div class="palw-flow" style="margin-bottom:6px">
@@ -3736,12 +3787,46 @@ async function refreshLlm(){
 async function refreshLlmInner(){
   // Class facts — the same RPC the operators read (budget, produced, pwu per class).
   refreshLlmJobs();   // fire-and-forget; the next paint picks it up
-  const [facts, regRaw] = await Promise.all([
-    Promise.all(LLM_CLASSES.map(c =>
-      rpc("getPalwProducerFacts", { classId:c.id, bondTransactionId:"", bondIndex:0, withBond:false }).catch(()=>null))),
-    palwRead("getPalwModelRegistry"),
-  ]);
+  const regRaw = await palwRead("getPalwModelRegistry");
   const llmReg = llmRegistryIndex(regRaw);
+  const classes = llmLiveClasses(llmReg);
+  const unknownClasses = classes.filter(c => !LLM_CLASSES.some(known => known.id === c.id));
+  const factsOf = async c => {
+    const old = llmFactCache.get(c.id);
+    if (old && Date.now() - old.ts < 30000) return old.value;
+    const value = await rpc("getPalwProducerFacts", { classId:c.id, bondTransactionId:"", bondIndex:0, withBond:false }).catch(()=>null);
+    llmFactCache.set(c.id, { ts:Date.now(), value });
+    return value;
+  };
+  const nameOf = async c => {
+    const old = llmModelNameCache.get(c.id);
+    if (old && Date.now() - old.ts < 60000) return old.value;
+    const value = await palwRead("getPalwModel", { classId:c.id });
+    llmModelNameCache.set(c.id, { ts:Date.now(), value });
+    return value;
+  };
+  const [facts, panelRaw, modelDetails] = await Promise.all([
+    Promise.all(classes.map(factsOf)),
+    palwRead("getPalwPanelSeats", { classId:"" }),
+    Promise.all(unknownClasses.map(nameOf)),
+  ]);
+  unknownClasses.forEach((c, i) => {
+    const detail = modelDetails[i];
+    if (detail && detail.found && detail.modelName) {
+      c.name = String(detail.modelName);
+      c.model = `On-chain model name · artifact ${short(detail.artifactRoot || "", 8)}`;
+    }
+  });
+  const panel = llmLivePanelRows(panelRaw, llmReg);
+  const panelByClass = new Map();
+  const panelByBond = new Map();
+  for (const row of panel.rows) {
+    const cid = String(row.classId || "").toLowerCase(), bond = String(row.bondOutpoint || "");
+    if (!cid || !bond) continue;
+    panelByClass.set(cid, [...(panelByClass.get(cid) || []), row]);
+    if (!panelByBond.has(bond)) panelByBond.set(bond, new Map());
+    panelByBond.get(bond).set(cid, row);
+  }
 
   // ---- The two class ratios a miner actually needs, kept SEPARATE because they disagree on
   // purpose. ISSUANCE follows block counts: every block earns the same subsidy carve whatever
@@ -3753,7 +3838,7 @@ async function refreshLlmInner(){
   // most blocks at the same per-block pay, while the LLM classes carry nearly all the weight.
   const wColor = { "PALW-BASE-0":"#675f87", "QWEN36":"#a855f7", "QWEN25-A16-2M":"#67e8f9", "QWEN25-A16-8K":"#34d399" };
   const wSpare = ["#fbbf24","#34d399","#fb7185","#f472b6"];
-  const wRows = LLM_CLASSES.map((c,i)=>{
+  const wRows = classes.map((c,i)=>{
     const f = facts[i];
     const pwu = f ? (Number(f.pwu)||0) : 0;
     const budget = f ? (Number(f.epochBudgetBlocks)||0) : 0;
@@ -3792,7 +3877,7 @@ async function refreshLlmInner(){
     </div>`;
 
   const fc = document.getElementById("llmClasses");
-  if (fc) fc.innerHTML = LLM_CLASSES.map((c,i)=>{
+  if (fc) fc.innerHTML = classes.map((c,i)=>{
     const f = facts[i];
     const prod = f ? `${num(f.epochProducedBlocks)} / ${num(f.epochBudgetBlocks)}` : "—";
     const pwu  = f ? num(f.pwu) : "—";
@@ -3805,7 +3890,7 @@ async function refreshLlmInner(){
     // still hold the artifact to form a 3-of-5 licence; and the per-class epoch must have
     // opened a block budget (a class registered mid-epoch shows 0/0 until the next 1000-DAA
     // retarget boundary). Operator "holds" is not Ready.
-    const nVer = verifierCount(c.name);
+    const nVer = (panelByClass.get(c.id) || []).filter(s => s.eligible === true).length;
     const row = llmReg.byId[String(c.id).toLowerCase()] || null;
     const ready = row && row.readySeatsNow != null ? Number(row.readySeatsNow) : null;
     const need  = row && row.requiredReadySeats != null ? Number(row.requiredReadySeats) : null;
@@ -3814,7 +3899,8 @@ async function refreshLlmInner(){
     // SeatReadinessProved and readySeatsNow stays 0. requiredReadySeats applies to model classes.
     const admits = c.tag === "floor" ? true : (row ? registryAdmitsClaims(st) : false);
     const readyOk = c.tag === "floor" ? true : (need == null ? false : (ready != null && ready >= need));
-    const quorumOk  = nVer >= PANEL_QUORUM || c.tag === "floor";
+    const quorumOk  = !panel.exact || (panelByClass.get(c.id) || []).some(s => s.eligible == null)
+      || nVer >= PANEL_QUORUM || c.tag === "floor";
     const budgetOpen = !f || Number(f.epochBudgetBlocks) > 0;
     const minable = ok && admits && readyOk && quorumOk;
     const readyLbl = (ready == null || need == null) ? "—" : `${num(ready)} / ${num(need)}`;
@@ -3822,7 +3908,7 @@ async function refreshLlmInner(){
     if (!ok)            status = '<span class="dim">unavailable on chain</span>';
     else if (c.tag !== "floor" && !row) status = '<span class="pill blue" title="getPalwModelRegistry did not return this class — admission unread">readiness unread</span>';
     else if (!admits || !readyOk) status = `<span class="pill red" title="${esc((row && row.reason) || "this class does not admit claims until requiredReadySeats ("+need+") seats have proved possession on chain; the panel is 5 drawn / 3-of-5 after that")}">OFF — ${esc(st || "not admitted")} · ready ${readyLbl}</span>`;
-    else if (!quorumOk) status = `<span class="pill red" title="a claim needs ${PANEL_QUORUM} of its ${PANEL_DRAW} drawn seats to verify it; only ${nVer} seat${nVer===1?"":"s"} hold this artifact — blocks mined in this class would default and slash">OFF — panel holders ${nVer}/${PANEL_QUORUM}</span>`;
+    else if (!quorumOk) status = `<span class="pill red" title="the node currently reports fewer than ${PANEL_QUORUM} eligible bonded verifier seats for this class">OFF — eligible seats ${nVer}/${PANEL_QUORUM}</span>`;
     else if (!budgetOpen) status = `<span class="pill blue" title="registered mid-epoch: the block budget opens at the next per-class retarget boundary (every 1000 DAA); registry admission is open">⛏ ready — budget opens next epoch</span>`;
     else                status = `<span class="pill chain" title="registry admits claims; ${num(ready)} / ${num(need)} seats have proved possession; a well-formed claim draws ${PANEL_DRAW} and licenses at ${PANEL_QUORUM}-of-${PANEL_DRAW}">⛏ minable — ready ${readyLbl}</span>`;
     return `<div class="card${minable?"":" off"}"><div class="k">${esc(c.name)} ${c.tag==="floor"?'<span class="pill blue">floor</span>':'<span class="pill chain">LLM</span>'}</div>
@@ -3830,31 +3916,35 @@ async function refreshLlmInner(){
       <div class="sub">${status}</div>
       <div class="sub">epoch: <b>${prod}</b> blocks · claims ${pwu} pwu/block</div>
       <div class="sub">issuance <b>${fmtP(bSum?wRows[i].budget/bSum*100:0)}%</b> of epoch blocks · weight <b>${fmtP(wSum?wRows[i].designed/wSum*100:0)}%</b>${wRows[i].mult?` · ×${num(wRows[i].mult)} floor pwu`:""}</div>
-      <div class="sub mono" title="${esc(c.id)}">class ${esc(short(c.id,8))}</div></div>`;
+      <div class="sub mono" title="${esc(c.id)}">class ${esc(short(c.id,8))} · <a href="#/models/${esc(c.id)}">panel &amp; claims →</a></div></div>`;
   }).join("");
   const sm = document.getElementById("llmSeatMatrix");
   if (sm) sm.innerHTML = `<table class="tbl"><thead><tr>
-      <th>Panel seat (bond)</th>${LLM_CLASSES.map(c=>`<th title="${esc(c.model)}">${esc(c.name)}</th>`).join("")}
-    </tr></thead><tbody>${PANEL_SEATS.map(seat=>{
-      const bond = `${short(PANEL_BOND_TX,4)}:${seat.ix}`;
-      return `<tr><td><span class="mono" title="${esc(PANEL_BOND_TX)}:${seat.ix}">${esc(bond)}</span> <span class="dim">${esc(seat.host)}</span></td>${
-        LLM_CLASSES.map(c=>{
-          const holds = seat.holds.includes(c.name);
-          const proof = llmReg.proved[seat.ix + ":" + String(c.id).toLowerCase()];
-          const provedOk = proof && proof.fresh !== false && !proof.notReadyReason;
-          if (provedOk) return `<td><span class="amt-in" title="SeatReadinessProved on chain at DAA ${esc(String(proof.provedDaa == null ? "—" : proof.provedDaa))} — this seat counts toward requiredReadySeats">✓ ready</span></td>`;
-          if (proof && proof.notReadyReason) return `<td><span class="bad" title="${esc(proof.notReadyReason)}">not ready</span></td>`;
-          if (c.tag === "floor") return `<td><span class="dim" title="every seat verifies the floor by construction">floor</span></td>`;
-          if (holds) return `<td><span class="dim" title="the operator's notes say this seat has the file, but the chain has no fresh SeatReadinessProved — it does not count toward the 7 and is not on any panel for this class">not proved</span></td>`;
-          return `<td><span class="dim" title="no artifact on this seat — drawn onto a panel for this class it files Incapable, which counts toward neither side">—</span></td>`;
+      <th>Panel seat (bond)</th>${classes.map(c=>`<th title="${esc(c.model)}"><a href="#/models/${esc(c.id)}">${esc(c.name)}</a></th>`).join("")}
+    </tr></thead><tbody>${Array.from(panelByBond, ([bond, seats])=>{
+      const ix = Number(bond.split(":").pop());
+      const note = bond.startsWith(PANEL_BOND_TX + ":") ? PANEL_SEATS.find(s => s.ix === ix) : null;
+      return `<tr><td><span class="mono" title="${esc(bond)}">${esc(short(bond, 8))}</span>${note ? ` <span class="dim" title="operator location note, not a chain fact">${esc(note.host)}</span>` : ""}</td>${
+        classes.map(c=>{
+          const seat = seats.get(c.id);
+          if (!seat) return `<td class="dim">${c.tag === "floor" ? "floor" : "—"}</td>`;
+          const title = `proof DAA ${seat.readinessProvedDaa == null ? "—" : seat.readinessProvedDaa}${seat.readinessExpiresDaa ? "; expires DAA " + seat.readinessExpiresDaa : ""}${seat.hold ? "; " + (seat.hold.message || seat.hold.code || "held") : ""}`;
+          const assigned = Number(seat.assigned) > 0 ? ` · ${num(seat.assigned)} assigned` : "";
+          if (seat.eligible === true) return `<td><span class="amt-in" title="${esc(title)}">✓ eligible${assigned}</span></td>`;
+          if (seat.ready) return `<td><span class="${seat.eligible === false ? "bad" : "amt-in"}" title="${esc(title)}">${seat.eligible === false ? "ready · held" : "✓ ready"}${assigned}</span></td>`;
+          return `<td><span class="dim" title="${esc(title)}">not ready${assigned}</span></td>`;
         }).join("")}</tr>`;
     }).join("")}
-    <tr class="sumrow"><td class="dim" title="the operator's deployment notes — not a chain fact, and not a running panel">operator notes: has the file</td>${LLM_CLASSES.map(c=>{
-      if (c.tag === "floor") return `<td class="dim">—</td>`;
-      const n = verifierCount(c.name);
-      return `<td class="dim" title="deployment notes, not proofs: only the row below counts">${n} noted</td>`;
+    <tr class="sumrow"><td class="dim" title="${esc(panel.source)} at DAA ${esc(panel.tipDaa == null ? "—" : panel.tipDaa)}">live seats (ready / eligible)</td>${classes.map(c=>{
+      if (c.tag === "floor") return `<td class="dim">not gated</td>`;
+      const rows = panelByClass.get(c.id) || [];
+      return `<td>${num(rows.filter(s => s.ready).length)} / ${rows.some(s => s.eligible == null) ? "—" : num(rows.filter(s => s.eligible).length)}</td>`;
     }).join("")}</tr>
-    <tr class="sumrow"><td class="dim">chain ready (need requiredReadySeats)</td>${LLM_CLASSES.map(c=>{
+    <tr class="sumrow"><td class="dim">seat assignments now</td>${classes.map(c=>{
+      const rows = panelByClass.get(c.id) || [];
+      return `<td>${rows.some(s => s.assigned == null) ? "—" : num(rows.reduce((n,s) => n + Number(s.assigned || 0), 0))}</td>`;
+    }).join("")}</tr>
+    <tr class="sumrow"><td class="dim">chain ready (need requiredReadySeats)</td>${classes.map(c=>{
       if (c.tag === "floor") return `<td class="dim" title="every node verifies the floor; it is not readiness-gated">not gated</td>`;
       const row = llmReg.byId[String(c.id).toLowerCase()] || null;
       const ready = row && row.readySeatsNow != null ? Number(row.readySeatsNow) : null;
@@ -3863,7 +3953,7 @@ async function refreshLlmInner(){
       const ok = ready >= need;
       return `<td>${ok ? `<b class="amt-in">${num(ready)}</b>` : `<b class="bad">${num(ready)}</b>`} / ${num(need)}</td>`;
     }).join("")}</tr>
-    </tbody></table>`;
+    </tbody></table>${panelByBond.size ? "" : '<div class="dim">No bonded panel seat is reported by this node.</div>'}`;
 
   // Chain sweep — RECENT WINDOW ONLY. The first cursor used to be the pruning point ("young
   // enough to read whole"), and the chain outgrew that within a day: getBlocks with transactions
@@ -3875,7 +3965,7 @@ async function refreshLlmInner(){
   for (const [claim, row] of llmFpJobs){
     if (llmSeenClaims.has(claim)) continue;
     llmSeenClaims.add(claim);
-    const cls = LLM_CLASSES.find(c => c.name === row.class);
+    const cls = classes.find(c => c.id === row.classId || c.id === row.class || c.name === row.class);
     llmTotalSubs++;
     llmSubs.push({ block: row.block || "", ts: Number(row.ts||0), daa: Number(row.daa||0) || null, chain: null,
                    classId: cls ? cls.id : "", pwu: row.work_leaves || null, bondTx: "", bondIx: 0, execRoot: "", claim, fp: true, feedOnly: true });
@@ -3883,7 +3973,7 @@ async function refreshLlmInner(){
   for (const [blockHash, row] of llmJobs){
     if (llmSeenBlocks.has(blockHash)) continue;
     llmSeenBlocks.add(blockHash);
-    const cls = LLM_CLASSES.find(c => c.name === row.class);
+    const cls = classes.find(c => c.id === row.classId || c.id === row.class || c.name === row.class);
     llmTotalSubs++;
     llmSubs.push({ block: blockHash, ts: Number(row.ts||0), daa: Number(row.daa||0) || null,
                    chain: null, classId: cls ? cls.id : "", pwu: null,

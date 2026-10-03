@@ -322,6 +322,8 @@ pub fn palw_panel_network_view_v1(
     // The age the registry judges a row by now (the readiness-age sweep, 2026-09-24), so a seat's
     // `expires` here is the moment the registry stops counting it.
     let max_age_daa = registry.readiness_max_age_daa;
+    let readiness_by_bond_class: std::collections::BTreeMap<_, _> =
+        registry.readiness.iter().map(|r| ((r.bond, r.class_id), r)).collect();
 
     let mut assigned_by_class: std::collections::BTreeMap<(PalwBondKeyV2, Hash64), u32> = std::collections::BTreeMap::new();
     let mut selected_by_class: std::collections::BTreeMap<Hash64, std::collections::BTreeSet<PalwBondKeyV2>> =
@@ -409,11 +411,16 @@ pub fn palw_panel_network_view_v1(
         if class.is_base_class {
             continue;
         }
+        let ancestry = crate::palw_model_registry_v1::palw_composite_ancestry_v1(state, &class.class_id);
         for (bond_key, bond) in state.bonds_iter() {
-            if !palw_bond_may_judge_class_v2(bond, &class.class_id) {
+            let row = readiness_by_bond_class.get(&(*bond_key, class.class_id)).copied();
+            // Past the registry's readiness gate the draw admits a fresh possession proof for a
+            // new class even when the bond's older capable_classes declaration lacks its id.
+            // Keep declared seats in the view too: they need to see their missing/expired proof.
+            let declared = palw_bond_may_judge_class_v2(bond, &class.class_id);
+            if !declared && row.is_none() {
                 continue;
             }
-            let row = registry.readiness.iter().find(|r| r.bond == *bond_key && r.class_id == class.class_id);
             let (ready, hold, version, proved, expires) = match row {
                 Some(r) if r.fresh && r.not_ready_reason.is_empty() => {
                     (true, None, r.row.proof_version, r.row.proved_daa, r.row.proved_daa.saturating_add(max_age_daa))
@@ -427,7 +434,16 @@ pub fn palw_panel_network_view_v1(
             };
             let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
             let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
+            let ancestry_ready = ancestry.as_ref().is_some_and(|ancestors| {
+                ancestors.iter().all(|parent| {
+                    readiness_by_bond_class
+                        .get(&(*bond_key, *parent))
+                        .is_some_and(|r| r.fresh && r.not_ready_reason.is_empty())
+                })
+            });
             let eligible = ready
+                && (declared || registry.active)
+                && ancestry_ready
                 && matches!(bond.status, PalwBondStatusV2::Active)
                 && palw_bond_may_take_work_v2(bond, floor);
             seats.push(PalwPanelSeatViewV1 {
