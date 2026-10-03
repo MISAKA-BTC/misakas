@@ -1,4 +1,4 @@
-//! **ADR-0165 A′ through the fold** — the retired floor: a floor attempt past the fence writes no claim, a REAL class
+//! **ADR-0165 A″ through the fold** — the idle-only bonded fallback: a busy chain refuses the floor, an idle one accepts it, a REAL class
 //! attempt is taken and records the idle ledger's last-accept DAA, claims the floor won earlier settle normally,
 //! an all-floor network crossing the fence stays idle (so FALLBACK-eligible) and live, and a reorg reverts exactly.
 
@@ -46,34 +46,67 @@ fn to_final(p: &PalwStateParamsV2, s: &PalwChainStateV2, e: &PalwAttemptEnvelope
 }
 
 #[test]
-fn a_floor_attempt_past_the_fence_writes_no_claim_and_a_real_one_is_taken_and_recorded() {
+fn a_busy_network_refuses_the_floor_and_an_idle_one_accepts_it_with_its_bonded_weight() {
     let p = fp();
     let s = world(&p);
+    // Idle (no REAL attempt ever): the floor is the bonded fallback — accepted, and it carries weight at Final.
     let floor = env(h64(1), 7);
-    let (out, delta) = apply(&s, &p, &ctx(2, 105, 2), &[], Some(&floor));
-    assert!(out.claim(&attempt_id_v2(&floor.attempt)).is_none(), "the retired floor writes no claim: no reward escrowed, no weight");
-    assert_eq!((out.safe_weight(), out.bounded_immature()), (0, 0));
-    assert!(out.real_work.is_empty(), "a floor attempt is not real work");
+    let (idle_out, _) = apply(&s, &p, &ctx(2, 105, 2), &[], Some(&floor));
+    assert!(idle_out.claim(&attempt_id_v2(&floor.attempt)).is_some(), "idle: the floor attempt is accepted");
+    assert!(idle_out.real_work.is_empty(), "a floor attempt is not real work");
+    let (finalised, id) = to_final(&p, &s, &env(h64(1), 70), 105, 2);
+    assert_eq!(finalised.safe_weight(), 40, "and it keeps today's bonded weight: {id:?}");
+    // A REAL attempt is taken and makes the chain busy.
     let real = env(h64(2), 8);
-    let (out2, delta2) = apply(&s, &p, &ctx(2, 105, 2), &[], Some(&real));
-    assert!(out2.claim(&attempt_id_v2(&real.attempt)).is_some(), "real work is not touched");
-    assert_eq!(palw_real_last_accept_v1(&out2.real_work), Some(105), "and it is the idle ledger's last accept");
-    assert!(!palw_real_idle_at_v1(&out2.real_work, 107) && palw_real_idle_at_v1(&out2.real_work, 108));
-    // Reorg: each delta reverts exactly and re-applies exactly.
-    for (child, d) in [(&out, &delta), (&out2, &delta2)] {
-        let reverted = revert_delta_v2(child, d, &p).expect("revert");
-        assert_eq!(reverted.state_root(), s.state_root(), "a reorg drags no ledger row");
-        assert_eq!(apply_delta_v2(&s, d, &p).expect("apply").state_root(), child.state_root());
+    let (busy, real_delta) = apply(&s, &p, &ctx(2, 105, 2), &[], Some(&real));
+    assert!(busy.claim(&attempt_id_v2(&real.attempt)).is_some(), "real work is not touched");
+    assert_eq!(palw_real_last_accept_v1(&busy.real_work), Some(105));
+    // Busy: a floor attempt inside the K slots is refused by name and writes no claim.
+    let floor2 = env(h64(1), 9);
+    let (refused, refused_delta) = apply(&busy, &p, &ctx(3, 107, 3), &[], Some(&floor2));
+    assert!(refused.claim(&attempt_id_v2(&floor2.attempt)).is_none(), "busy: no claim, no reward, no weight");
+    let why = palw_class_admits_claim_v1(&busy, &p, &PalwTransitionExtrasV1::default(), &h64(1), 107).unwrap_err();
+    assert!(matches!(why, PalwStateV2Error::FloorNotIdle { last_real: 105, .. }), "{why:?}");
+    assert!(palw_class_admits_claim_v1(&busy, &p, &PalwTransitionExtrasV1::default(), &h64(2), 107).is_ok());
+    // K slots later it is idle again and the floor is accepted.
+    let (back, _) = apply(&busy, &p, &ctx(3, 108, 3), &[], Some(&floor2));
+    assert!(back.claim(&attempt_id_v2(&floor2.attempt)).is_some(), "idle again: the fallback is accepted");
+    // Reorg determinism: every delta reverts and re-applies exactly.
+    for (parent, child, d) in [(&s, &busy, &real_delta), (&busy, &refused, &refused_delta)] {
+        assert_eq!(revert_delta_v2(child, d, &p).expect("revert").state_root(), parent.state_root());
+        assert_eq!(apply_delta_v2(parent, d, &p).expect("apply").state_root(), child.state_root());
     }
-    // The producer's pre-check is the same gate.
-    let refusal = palw_class_admits_claim_v1(&s, &p, &PalwTransitionExtrasV1::default(), &h64(1), 105).unwrap_err();
-    assert!(matches!(refusal, PalwStateV2Error::FloorRetired { .. }), "{refusal:?}");
-    assert!(palw_class_admits_claim_v1(&s, &p, &PalwTransitionExtrasV1::default(), &h64(2), 105).is_ok());
-    // Below the fence the floor is taken as ever, and nothing is recorded.
+    // Below the fence nothing is recorded and the floor is taken as ever.
     let below = params();
     let s0 = world(&below);
     let (b, _) = apply(&s0, &below, &ctx(2, 105, 2), &[], Some(&floor));
     assert!(b.claim(&attempt_id_v2(&floor.attempt)).is_some() && b.real_work.is_empty());
+}
+
+/// A fallback-only stretch is exactly today's floor stretch: the same admission checks (bond, producer floor, exposure
+/// ceiling, share, room), the same reservation and the same weight, so its rewrite cost is today's. The rule adds only a
+/// refusal; it never relaxes one.
+#[test]
+fn a_fallback_stretch_is_bonded_exactly_like_todays_floor_stretch() {
+    let p = fp();
+    let s = world(&p);
+    let tight = |bond_collateral: u64, state: &PalwChainStateV2| state.bond(&bond_key(1)).map(|b| b.collateral == bond_collateral);
+    assert_eq!(tight(1_000, &s), Some(true));
+    let floor = env(h64(1), 12);
+    let (with_rule, _) = apply(&s, &p, &ctx(2, 105, 2), &[], Some(&floor));
+    let below = params();
+    let (without_rule, _) = apply(&world(&below), &below, &ctx(2, 105, 2), &[], Some(&floor));
+    let id = attempt_id_v2(&floor.attempt);
+    let (a, b) = (with_rule.claim(&id).unwrap(), without_rule.claim(&id).unwrap());
+    assert_eq!((a.reserved, a.pwu, a.immature_contribution), (b.reserved, b.pwu, b.immature_contribution), "same bonded claim");
+    assert_eq!(with_rule.reserved_exposure(&bond_key(1)), without_rule.reserved_exposure(&bond_key(1)), "same exposure on the bond");
+    // An unbonded producer cannot mint it: a bond-less floor attempt is refused as it is today.
+    let mut stranger = env(h64(1), 13);
+    stranger.attempt.executor_bond = bond_key(99).0;
+    assert!(apply_palw_transition_v2(&s, &p, &ctx(2, 105, 2), &[], Some(&stranger)).is_err() || {
+        let (o, _) = apply_palw_transition_v2(&s, &p, &ctx(2, 105, 2), &[], Some(&stranger)).unwrap();
+        o.claim(&attempt_id_v2(&stranger.attempt)).is_none()
+    });
 }
 
 #[test]
@@ -85,10 +118,10 @@ fn a_floor_claim_won_before_the_fence_settles_to_final_and_pays() {
     let (done, claim_id) = to_final(&p, &s, &floor, 105, 2);
     assert!(matches!(done.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "an open floor claim settles normally");
     assert_eq!(done.safe_weight(), 40, "its weight is credited at Final as ever");
-    // …and a floor attempt AFTER the fence is skipped.
+    // …and past the fence, idle, a new floor attempt is the bonded fallback and is accepted.
     let late = env(h64(1), 10);
     let (after, _) = apply(&done, &p, &ctx(20, 140, 20), &[], Some(&late));
-    assert!(after.claim(&attempt_id_v2(&late.attempt)).is_none());
+    assert!(after.claim(&attempt_id_v2(&late.attempt)).is_some());
 }
 
 #[test]

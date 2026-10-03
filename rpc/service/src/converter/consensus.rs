@@ -53,6 +53,33 @@ impl ConsensusConverter {
         self.config.max_difficulty_target_f64 / target.as_f64()
     }
 
+    /// **ADR-0165: the block's kind**, read from the header alone (the lane, and for an attempt the class its
+    /// envelope names against the bundle's base class).
+    pub fn block_kind(&self, header: &kaspa_consensus_core::header::Header) -> String {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, is_palw_attempt_algo_id};
+        let params = &self.config.params;
+        let kind = if header.pow_algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
+            "LEGACY_HEARTBEAT"
+        } else if header.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
+            "EXEC"
+        } else if is_palw_attempt_algo_id(header.pow_algo_id) {
+            let base = match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+                _ => None,
+            };
+            match (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment), base) {
+                (Ok(envelope), Some(base)) if envelope.attempt.class_id == base => {
+                    if params.palw_floor_reserve_active_at(header.daa_score) { "FALLBACK" } else { "LEGACY_FLOOR" }
+                }
+                (Ok(_), _) => "REAL",
+                _ => "",
+            }
+        } else {
+            ""
+        };
+        kind.to_owned()
+    }
+
     /// Converts a consensus [`Block`] into an [`RpcBlock`], optionally including transaction verbose data.
     ///
     /// _GO-KASPAD: PopulateBlockWithVerboseData_
@@ -79,6 +106,7 @@ impl ConsensusConverter {
             merge_set_blues_hashes: ghostdag_data.mergeset_blues,
             merge_set_reds_hashes: ghostdag_data.mergeset_reds,
             is_chain_block,
+            block_kind: self.block_kind(&block.header),
         });
 
         let transactions = if include_transactions {

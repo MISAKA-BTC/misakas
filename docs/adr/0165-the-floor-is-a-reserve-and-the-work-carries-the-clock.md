@@ -9,12 +9,31 @@ Consensus change behind fences, **dormant on every shipped preset**.
 clock), ADR-0142 (the cursor; §9 the floor), ADR-0105, ADR-0045/0135 (classes, registry), ADR-0149 (an
 attempt's pwu is its weight), ADR-0152/0160 (the share and room gates, J-1's per-bond weight cap).
 
+## 00. The DAA-5,300 rule: A″ + B (coordinator decision of 2026-10-03, supersedes the A′ row below)
+
+FALLBACK-V1 (§5–§8) is the **next fence**, not 5,300. A′ alone (floor retired outright) is not safe: with few REAL
+producers a stretch would be heartbeat-only — unbonded, ~0 weight, cheap to rewrite. So 5,300 ships:
+
+* **A″** — past `palw_floor_reserve_v1`, a `PALW-BASE-0` attempt is accepted **only when the idle ledger says idle**
+  (no REAL attempt accepted for K = 3 slots; absent = idle) and refused by name (`FloorNotIdle`) otherwise, before any
+  write, so a busy chain's floor attempt writes no claim: no reward, no weight. **When accepted it is today's bonded
+  floor attempt, unchanged** — the same bond/producer-floor/exposure/share/room checks, the same reservation, weight and
+  reward — i.e. it *is* the bonded fallback. Hence a fallback-only stretch has exactly today's rewrite cost (§7's argument
+  with `w_fb` = today's floor weight, no new mechanism); the rule only adds a refusal and relaxes none. Claims taken
+  before the fence settle as before.
+* **B** — unchanged (§4): a REAL attempt carries the slot's tick; the heartbeat waits 20 s and remains the last-resort
+  liveness block.
+* **`blockKind`** in `getBlock` verboseData (JSON; the borsh wire is unchanged): `REAL` (non-floor attempt), `FALLBACK`
+  (floor attempt past the fence), `LEGACY_FLOOR` (before it), `LEGACY_HEARTBEAT` (algo 8), `EXEC` (round block).
+* Tests: busy → floor refused; idle → floor accepted and carries weight at Final; bonded-identical claim with and without
+  the rule; reorg determinism (every delta reverts/re-applies to the same root); old floor claims settle past the fence.
+
 ## 0. Where the implementation stands (honest status)
 
 | piece | state |
 |---|---|
 | **B** — a REAL attempt carries the slot's tick, one tick per slot (`palw_real_clock_tick_v1`) | built, tested (§4) |
-| **A′** — no new `PALW-BASE-0` claims past the fence; open claims settle (`palw_floor_reserve_v1`, the fence keeps its name) | built (§3); revision 1's reserve/ledger machinery is replaced by the idle ledger below |
+| **A″** — see §00 (A′ below is superseded: the floor is the idle-only bonded fallback, not retired) | built (§3); revision 1's reserve/ledger machinery is replaced by the idle ledger below |
 | **FALLBACK-V1** — the bonded fallback block, its weight, reward, cap, idle rule, retiring the heartbeat | **designed here (§5–§7), not yet built**: see §8 for what it costs and what it needs decided |
 
 ## 1. The defect

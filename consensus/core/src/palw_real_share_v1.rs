@@ -1,10 +1,11 @@
 //! **The Useful Work Transition's two consensus rules (ADR-0165, revision 2): the floor is retired and the
 //! work carries the clock.**
 //!
-//! * **`Params::palw_floor_reserve_v1` (A′).** Past it a `PALW-BASE-0` attempt is refused by name
-//!   (`FloorRetired`), which the fold skips like every other pre-write refusal, so no new floor claim earns a
-//!   reward or fork-choice weight. Claims the floor won earlier settle normally. The fence keeps its name; the
-//!   class stays registered for settlement only. A rooted ledger records when a REAL attempt (any class other
+//! * **`Params::palw_floor_reserve_v1` (A″).** Past it a `PALW-BASE-0` attempt is the idle-only bonded fallback:
+//!   accepted (with today's bonded weight and reward) only when no REAL attempt was accepted in the last K slots,
+//!   and refused by name (`FloorNotIdle`) otherwise — which the fold skips like every other pre-write refusal,
+//!   so a busy chain's floor attempt earns no reward or fork-choice weight. Claims taken earlier settle
+//!   normally. A rooted ledger records when a REAL attempt (any class other
 //!   than the base) was last accepted — the fallback block's idle rule reads it (ADR-0165 §5.2).
 //! * **`Params::palw_real_clock_tick_v1` (B).** An attempt-lane block is a tick source beside the heartbeat. The
 //!   DAA score still advances **once per clock slot** however many attempts a slot holds.

@@ -225,6 +225,8 @@ mod mockery {
                 merge_set_blues_hashes: mock(),
                 merge_set_reds_hashes: mock(),
                 is_chain_block: mock(),
+                // Not on the borsh wire (ADR-0165): the round trip returns it empty.
+                block_kind: String::new(),
             }
         }
     }

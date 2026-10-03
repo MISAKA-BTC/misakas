@@ -9881,12 +9881,13 @@ pub enum PalwStateV2Error {
         "bond {bond:?} holds {unlicensed} unlicensed claims of class {class}, its share of the class is {share} (ADR-0152 T-2(a))"
     )]
     BondClassShareExceeded { bond: PalwBondKeyV2, class: Hash64, unlicensed: u32, share: u64 },
-    /// **ADR-0165: the base floor is retired** — past `palw_floor_reserve_v1` no new `PALW-BASE-0` claim is accepted.
-    /// Checked before any write, so step 4 skips a refused own attempt and a merged one is skipped generically: no
-    /// claim is written, so the attempt earns no reward and no fork-choice weight. Claims written earlier settle
-    /// normally. The producer's pre-check asks the same question first.
-    #[error("the base class {class} takes no new claim past palw_floor_reserve_v1: the floor is retired (ADR-0165)")]
-    FloorRetired { class: Hash64 },
+    /// **ADR-0165 A″: the base floor is the bonded fallback, accepted only while the chain is idle** — a REAL attempt
+    /// (any class but the base) was accepted within the last `PALW_REAL_IDLE_K_SLOTS_V1` slots (`last_real`). Past
+    /// `palw_floor_reserve_v1` a floor attempt is refused by name; checked before any write, so step 4 skips a refused
+    /// own attempt and a merged one is skipped generically: no claim, so no reward and no fork-choice weight. A floor
+    /// attempt that IS accepted (idle) keeps today's bonded weight and reward. Claims taken before the fence settle as before.
+    #[error("the base class {class} is the idle-only fallback: a REAL attempt was accepted at DAA {last_real}, inside the last K slots (ADR-0165)")]
+    FloorNotIdle { class: Hash64, last_real: u64 },
     /// **ADR-0160 F-B: a batch licence (tag 59) below `Params::palw_capacity_batch_licence`.** The
     /// acceptance layer refuses it first; the block stands and nothing folds.
     #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
@@ -15921,12 +15922,14 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
-        // **ADR-0165: the base floor is retired.** First, before any lifecycle or room question.
+        // **ADR-0165 A″: the base floor is the idle-only bonded fallback.** First, before any lifecycle or room question.
         if incoming == PalwGatedClaimV1::Attempt
             && self.params.floor_reserve_active_at(now_daa)
             && *class_id == self.params.base_class_id()
+            && !crate::palw_real_share_v1::palw_real_idle_at_v1(&self.state.real_work, now_daa)
         {
-            return Err(PalwStateV2Error::FloorRetired { class: *class_id });
+            let last_real = crate::palw_real_share_v1::palw_real_last_accept_v1(&self.state.real_work).unwrap_or(0);
+            return Err(PalwStateV2Error::FloorNotIdle { class: *class_id, last_real });
         }
         // ADR-0160 X-I5: past `palw_capacity_escrow_at_licence` no attempt of a class C7 by its window
         // but absent from C7's list — its escrow term would be priced as attributable.
@@ -27550,8 +27553,8 @@ pub fn apply_palw_transition_v7(
                     | PalwStateV2Error::ProducerBelowFloor { .. }
                     | PalwStateV2Error::BondClassShareExceeded { .. }
                     | PalwStateV2Error::ProducerFrozen { .. }
-                    // ADR-0165: the retired floor's gate is checked first in the class gate, before any write.
-                    | PalwStateV2Error::FloorRetired { .. }
+                    // ADR-0165 A″: the idle-only floor's gate is checked first in the class gate, before any write.
+                    | PalwStateV2Error::FloorNotIdle { .. }
                     // ADR-0160 F-R (J-6): the floor room, for the share's reason — this block's own
                     // objects move the seats' capital under the producer — and checked, like it,
                     // before `apply_attempt`'s first write. Unreachable below the fence.
