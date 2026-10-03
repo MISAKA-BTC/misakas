@@ -26,7 +26,7 @@ Each fence is written in the four places (`Option` field, `for_each_fence`, Some
 `PalwStateParamsV2` (`sync_palw_capacity_s567`), validated by `validate_palw_capacity_s567_v1` (a ρ ≥ 250 step without all three at or
 below its height is refused), and has a drill mover (`--palw-drill-capacity-emission-at`, `-multi-claim-at`, `-rho-breaker-at`,
 `-step4-at`, `-step5-at`; `--palw-drill-int11-at` moves the whole list, ρ = 100 / 250 / 1000 at +95 / +190 / +285). Every other preset
-is dormant. Wire: object tag **95** (`AttemptRidersV1`), delta entry **105** (`CapacityLedger`; 101–104 reserved for RFC-0007, RFC-0006 and lane RS),
+is dormant. Wire: object tag **95** (`AttemptRidersV1`), delta entry (`CapacityLedger`, the last variant: 101 on this branch, 105 in INT's merged order),
 carriage tail **0xBB**, root block `capacity_s567/v1` (Some-only).
 
 ## 2. Stage 5 — emission

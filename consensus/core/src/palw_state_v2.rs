@@ -14867,8 +14867,8 @@ impl PalwChainStateV2 {
                     let _ = lead;
                 }
                 (K::BondBreaker(_), R::Bond(bond)) => {
-                    if bond.level >= crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1 || bond.clean_epochs > 2 {
-                        return bad("a bond's row is lowered and counts at most two clean epochs");
+                    if bond.level > crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1 || bond.clean_epochs > 2 {
+                        return bad("a bond's row holds a level on the ladder and at most two clean epochs");
                     }
                 }
                 (K::Breaker, R::Breaker(breaker)) => {
@@ -20358,7 +20358,7 @@ impl<'a> TransitionBuilder<'a> {
         self.write_capacity_ledger_v1(K::BondBreaker(bond), Some(R::Bond(next)));
     }
 
-    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (105).
+    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (the last variant).
     fn write_capacity_ledger_v1(
         &mut self,
         key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
@@ -38793,7 +38793,7 @@ fn apply_pending_riders_v1(
         if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
             builder.restore(checkpoint);
             builder.seen_exec = seen;
-            skips.push((ctx.block, format!("riders of {lead_id}: {why}")));
+            skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
         }
     }
 }

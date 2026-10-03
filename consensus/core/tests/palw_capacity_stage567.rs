@@ -335,7 +335,7 @@ fn a_lead_and_its_riders_hold_exactly_the_leads_carve() {
             assert_eq!(spent, 1_000, "the lead charged one carve");
             let obj = riders_object(&sim, lead, 90, n, 0x7100);
             sim.step(vec![obj]);
-            assert_eq!(skipped(&sim, "riders of"), 0, "ρ = {rho}, n = {n}: the batch was taken: {:?}", sim.skips);
+            assert_eq!(skipped(&sim, "riders refused"), 0, "ρ = {rho}, n = {n}: the batch was taken: {:?}", sim.skips);
             let kept = sim.c.claim(&lead).escrowed_reward;
             let rider_ids: Vec<Hash64> = sim
                 .c
@@ -381,13 +381,14 @@ fn emission_per_daa_is_invariant_to_the_number_of_claims() {
     assert_eq!(bare, 16 * carve);
     for (i, (n, lead)) in leads.iter().enumerate() {
         let obj = riders_object(&sim, *lead, *n, 1 + i % 5, 0x8100 + 16 * i as u64);
-        sim.step(vec![obj]);
+        // Every batch lands in the DAA the leads were accepted in: a lead's window is 8 DAA.
+        sim.block(day, vec![obj], None);
     }
     let with_riders: u64 = sim.c.s.claims_iter().map(|(_, c)| c.escrowed_reward).sum();
     let claims = sim.c.s.claims_iter().count();
     assert!(claims > 16 + 16, "riders added claims: {claims}");
     assert_eq!(with_riders, bare, "…and not one sompi of escrow");
-    assert_eq!(skipped(&sim, "riders of"), 0, "{:?}", sim.skips);
+    assert_eq!(skipped(&sim, "riders refused"), 0, "{:?}", sim.skips);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -420,7 +421,7 @@ fn a_refused_batch_leaves_the_lead_whole() {
     let ghost = Hash64::from_bytes([0xEE; 64]);
     sim.step(vec![PalwConsensusObjectV2::AttemptRidersV1 { lead: ghost, riders: vec![rider_of(&sim, &lead, 0, 90, 0x9104)] }]);
     sim.step(vec![PalwConsensusObjectV2::AttemptRidersV1 { lead, riders: vec![] }]);
-    assert_eq!(skipped(&sim, "riders of"), 6, "six refusals, all skips: {:?}", sim.skips);
+    assert_eq!(skipped(&sim, "riders refused"), 5, "five refusals, all skips: {:?}", sim.skips);
     assert_eq!(sim.c.claim(&lead), whole, "the lead is exactly as accepted");
     assert_eq!(sim.c.s.claims_iter().count(), before.claims_iter().count(), "no rider claim exists");
     assert_eq!(sim.c.s.reserved_exposure(&bond_key(90)), before.reserved_exposure(&bond_key(90)), "and no commitment moved");
@@ -429,16 +430,16 @@ fn a_refused_batch_leaves_the_lead_whole() {
     let obj = riders_object(&sim, lead, 90, 2, 0x9200);
     sim.step(vec![obj.clone()]);
     assert!(sim.c.s.rider_mark_of_v1(&lead).is_some(), "the lead took its riders");
-    let skips = skipped(&sim, "riders of");
+    let skips = skipped(&sim, "riders refused");
     sim.step(vec![riders_object(&sim, lead, 90, 1, 0x9300)]);
-    assert_eq!(skipped(&sim, "riders of"), skips + 1, "a second batch on the same lead is refused");
+    assert_eq!(skipped(&sim, "riders refused"), skips + 1, "a second batch on the same lead is refused");
     // A lead that is bound is no lead.
     let lead2 = sim.claim(91, 0x9400).expect("a second lead");
     let seats = sim.seats();
     sim.bind(lead2, &seats);
-    let skips = skipped(&sim, "riders of");
+    let skips = skipped(&sim, "riders refused");
     sim.step(vec![riders_object(&sim, lead2, 91, 1, 0x9500)]);
-    assert_eq!(skipped(&sim, "riders of"), skips + 1, "a PanelBound lead takes no riders");
+    assert_eq!(skipped(&sim, "riders refused"), skips + 1, "a PanelBound lead takes no riders");
     // Past the window.
     let lead3 = sim.claim(91, 0x9600).expect("a third lead");
     let at = sim.c.claim(&lead3).accepted_daa + PALW_RIDERS_WINDOW_DAA_V1 + 1;
