@@ -1693,6 +1693,10 @@ pub struct PalwStateParamsV2 {
     /// reads it). `None` on every shipped preset.
     #[borsh(skip)]
     floor_reserve_from_daa: Option<u64>,
+    /// **ADR-0170: `Params::palw_anchor_window_v1`'s height**, mirrored by `Params::sync_palw_anchor_window_v1` (the fold's seed anchor
+    /// recorder and its two readers — the admission jury and the schedule seeding — read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    anchor_window_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1925,6 +1929,7 @@ impl PalwStateParamsV2 {
             class_seating: None,
             tir_only_from_daa: None,
             floor_reserve_from_daa: None,
+            anchor_window_from_daa: None,
         })
     }
 
@@ -2266,6 +2271,35 @@ impl PalwStateParamsV2 {
     /// **Is the base floor a reserve at `daa_score`?** `false` on every shipped preset.
     pub fn floor_reserve_active_at(&self, daa_score: u64) -> bool {
         self.floor_reserve_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0170: the seed anchor window's mirror** — written by `Params::sync_palw_anchor_window_v1` and by nothing else (and by
+    /// fixtures); `None` where the fence is not armed.
+    pub fn with_anchor_window_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.anchor_window_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_anchor_window_v1`'s height, if the network arms it (the mirror).
+    pub fn anchor_window_from_daa(&self) -> Option<u64> {
+        self.anchor_window_from_daa
+    }
+
+    /// **Is the seed anchor a window at `daa_score`?** `false` on every shipped preset.
+    pub fn anchor_window_active_at(&self, daa_score: u64) -> bool {
+        self.anchor_window_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **The window the jury and the schedule seeding read at `daa_score`, in spans** — [`crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_SPANS_V1`]
+    /// past the fence, `None` below it (where the anchor is the span before's, as it was).
+    pub fn anchor_window_spans_at(&self, daa_score: u64) -> Option<u64> {
+        self.anchor_window_active_at(daa_score).then_some(crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_SPANS_V1)
+    }
+
+    /// **M1 at `daa_score`: does an admitted attempt a block MERGES record the seed anchor?** The fence is in force and the variant
+    /// keeps M1 ([`crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_MERGED_V1`]).
+    pub fn anchor_window_records_merged_at(&self, daa_score: u64) -> bool {
+        self.anchor_window_active_at(daa_score) && crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_MERGED_V1
     }
 
     pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
@@ -15996,6 +16030,9 @@ pub fn palw_escrow_destroyed_by_delta_v2(delta: &PalwStateDeltaV2) -> u64 {
 struct PalwAdmissionJuryV1 {
     seated: bool,
     drawn: Vec<(Hash64, Vec<PalwBondKeyV2>)>,
+    /// **The span the jury's seed anchor was recorded in** (`S − 1` below `palw_anchor_window_v1`, anything of the window past it): the
+    /// Activation Pool's (a) pays only a proof that landed before the seed existed.
+    anchor_span: u64,
 }
 
 /// **The fold's read-only inputs — the parent state, the params and the block's extras — for the
@@ -24271,7 +24308,15 @@ impl<'a> TransitionBuilder<'a> {
         if !due {
             return None;
         }
-        let anchor = self.state.round_seed_anchor.as_ref().filter(|anchor| anchor.span.saturating_add(1) == span_now)?;
+        // **ADR-0170 M3: past `palw_anchor_window_v1` the jury's randomness is the latest anchor of the window `S − W … S − 1`**
+        // (the span before's alone below it), and its population is cut at that ANCHOR's span, so a bond registered after the seed
+        // existed is not on the jury it seeds. The audit's own span, one a period at the class's stagger, is untouched.
+        let window = self.params.anchor_window_spans_at(ctx.daa_score);
+        let anchor = self.state.round_seed_anchor.as_ref().filter(|anchor| match window {
+            Some(window) => crate::palw_anchor_window_v1::palw_anchor_window_admits_v1(anchor.span, span_now, window),
+            None => anchor.span.saturating_add(1) == span_now,
+        })?;
+        let cut_span = if window.is_some() { crate::palw_anchor_window_v1::palw_anchor_window_jury_cut_span_v1(anchor.span) } else { span_now };
         // Past the pool's fence the seed leaves the anchor's block hash out (F2: its producer re-rolls
         // the hash for free, and a jury chosen is a set of (a)'s payees chosen).
         let seed = if self.extras.activation_pool.is_some() {
@@ -24290,7 +24335,7 @@ impl<'a> TransitionBuilder<'a> {
             fold,
             class_id,
             ctx.daa_score,
-            span_now,
+            cut_span,
             self.extras.activation_pool.is_some(),
         );
         let seats = fold.globals.seat_count.max(1);
@@ -24315,7 +24360,7 @@ impl<'a> TransitionBuilder<'a> {
                 })
             })
             .count();
-        Some(PalwAdmissionJuryV1 { seated: ready >= palw_admission_jury_quorum_v1(seats) as usize, drawn })
+        Some(PalwAdmissionJuryV1 { seated: ready >= palw_admission_jury_quorum_v1(seats) as usize, drawn, anchor_span: anchor.span })
     }
 
     /// **ADR-0152-adjacent (Activation Pool): one class's pool at its span step** (user decision
@@ -24423,7 +24468,9 @@ impl<'a> TransitionBuilder<'a> {
     ) {
         use crate::palw_activation_pool_v1::{palw_activation_prep_reward_v1, palw_sorted_insert_v1};
         let a = palw_activation_prep_reward_v1(terms, pool.prep_sompi, ctx.daa_score.saturating_sub(pool.opened_daa));
-        let Some(landed_by) = span_now.checked_sub(2) else { return };
+        // (a) pays a proof that LANDED before the seed existed: two spans before the audit for the anchor of the span before it, as always, and
+        // one span before an older anchor's span past `palw_anchor_window_v1` (a juror that sees the seed knows whether it is drawn).
+        let Some(landed_by) = crate::palw_anchor_window_v1::palw_anchor_window_prep_landed_by_v1(span_now, jury.anchor_span) else { return };
         if a == 0 {
             return;
         }
@@ -25280,7 +25327,21 @@ impl<'a> TransitionBuilder<'a> {
                 }
                 let snapshot = self.state.round_pending.get(&target).cloned().expect("the key was just listed");
                 if let Some(safety) = self.extras.economic_safety {
-                    let anchor = self.state.round_seed_anchor.filter(|anchor| anchor.span + 1 == span_now);
+                    // **ADR-0170 M3: past `palw_anchor_window_v1` the seed is the latest anchor of the window `S − W … S − 1`** that was
+                    // recorded at or after the span this snapshot was taken in (participants first, randomness after); below the fence
+                    // only the span before's anchor seeds it.
+                    let anchor = match self.params.anchor_window_spans_at(ctx.daa_score) {
+                        Some(window) => self.state.round_seed_anchor.filter(|anchor| {
+                            crate::palw_anchor_window_v1::palw_anchor_window_seeds_snapshot_v1(
+                                anchor.span,
+                                span_now,
+                                window,
+                                target,
+                                maturity_spans,
+                            )
+                        }),
+                        None => self.state.round_seed_anchor.filter(|anchor| anchor.span + 1 == span_now),
+                    };
                     if let (false, Some(anchor), Some(lane)) = (seeded_this_span, anchor, self.extras.round_lane) {
                         self.write_round_pending(target, None);
                         let mut due = snapshot;
@@ -25360,7 +25421,11 @@ impl<'a> TransitionBuilder<'a> {
                 // The span marker names the finals' span and means nothing without them.
                 self.write_round_span(0);
             }
-            self.write_round_seed_anchor(None);
+            // **ADR-0170 M2: past `palw_anchor_window_v1` the anchor survives the span boundary** — it keeps the span it was recorded
+            // in, and each reader checks its age against the window. Below the fence it is the span before's alone, and cleared.
+            if !self.params.anchor_window_active_at(ctx.daa_score) {
+                self.write_round_seed_anchor(None);
+            }
         }
         let keep_from = span_now.saturating_sub(1);
         for key in self.state.round_schedules.range(..keep_from).map(|(k, _)| *k).collect::<Vec<_>>() {
@@ -25483,12 +25548,16 @@ impl<'a> TransitionBuilder<'a> {
     /// attempt's execution commitment under its own header's anchor — the processor derives it from
     /// the header (`palw_execution_key_v1`) and passes it as the fold's `own_execution_key`.
     fn record_round_seed_anchor(&mut self, ctx: &PalwBlockContextV2, span_daa: u64, execution_key: Hash64) {
+        self.record_round_seed_anchor_of(ctx, span_daa, ctx.block, execution_key);
+    }
+
+    /// **ADR-0170 M1: [`Self::record_round_seed_anchor`] for an attempt another block carried** — a merged one, blue or red, which the
+    /// chain block `ctx` folded. The anchor's span is the span of the block that FOLDED the attempt (the span the fold learned of it
+    /// in, which every node holding the chain agrees on), its `block` the attempt's own carrying block and its execution key the
+    /// attempt's own (`PalwMergedWorkV1::execution_key`, derived by the processor from the merged header).
+    fn record_round_seed_anchor_of(&mut self, ctx: &PalwBlockContextV2, span_daa: u64, block: BlockHash, execution_key: Hash64) {
         let span = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
-        self.write_round_seed_anchor(Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 {
-            span,
-            block: ctx.block,
-            execution_key,
-        }));
+        self.write_round_seed_anchor(Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 { span, block, execution_key }));
     }
 
     /// **ADR-0125: the permits this block accepted.** The processor decided them against the parent
@@ -28951,7 +29020,19 @@ pub fn apply_palw_transition_v7(
                                     floor_event,
                                 },
                             ) {
-                                Ok(()) => None,
+                                Ok(()) => {
+                                    // **ADR-0170 M1 (`palw_anchor_window_v1`): an admitted attempt this block MERGES, blue or red, is
+                                    // a seed anchor as the block's own is.** Under the floor reserve those are the only attempts
+                                    // there are (a REAL attempt is merged, almost never a chain block). Own work first (step 4),
+                                    // then the mergeset in consensus order: the last admitted one wins, as the last chain block of
+                                    // a span always did. Past the fence only, and only where the execution lane records anchors.
+                                    if let Some(lane) = extras.round_lane
+                                        && builder.params.anchor_window_records_merged_at(ctx.daa_score)
+                                    {
+                                        builder.record_round_seed_anchor_of(ctx, lane.schedule_span_daa, merged.carrying_block, merged.execution_key);
+                                    }
+                                    None
+                                }
                                 Err(refused) => {
                                     builder.restore(checkpoint);
                                     // ADR-0160 stage 4 (F-N): a merged attempt's refusal for want of a unit
@@ -47600,6 +47681,9 @@ pub(crate) mod tests {
             // Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on this module's jury and on the
             // registry's ready count.
             mod bond_maturity_ext_v1;
+
+            // ADR-0170 (`palw_anchor_window_v1`): the admission jury reads the latest anchor of the window, its population cut at the anchor's span.
+            mod anchor_window_v1;
 
             fn fold_step(
                 parent: &PalwChainStateV2,
@@ -71682,6 +71766,8 @@ pub(crate) mod tests {
     // RFC-0007 Parts II and IV (spec 18): the witness profile's reads, the audit mesh and its traps.
     mod mesh_fold_v1;
     mod real_work_reserve_v1;
+    // ADR-0170 (`palw_anchor_window_v1`): the execution lane's seed anchor as a window — merged attempts anchor, the anchor survives span boundaries, the schedule seeding reads it.
+    mod anchor_window_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

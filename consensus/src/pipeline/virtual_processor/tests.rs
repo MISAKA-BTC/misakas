@@ -16391,6 +16391,8 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 mod t12_clock_floor;
 // ADR-0165 (the Useful Work Transition): the slow REAL attempt on testnet-12's own GHOSTDAG — what colours it, and what carries its tick.
 mod t12_real_share;
+// ADR-0170 (the seed anchor as a window): with floors held and REAL attempts flowing, a Candidate class is admitted within two periods — and not without the window.
+mod t12_anchor_window;
 // 2026-09-25 question: can a heartbeat miner's private fork carry a double spend? Two nodes, one
 // released private branch, the victim's sink and blue work measured (a probe; no rule changes) — and,
 // below it, the regressions of the absorb hole F1's post-launch fence closes (ADR-0105 §11,
