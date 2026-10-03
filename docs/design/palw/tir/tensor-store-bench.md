@@ -38,7 +38,7 @@
 | id | what | program | geometry | weights (arithmetic) | file |
 | --- | --- | --- | --- | --- | --- |
 | **W1** | Qwen3-30B-A3B shape, MoE | S1-MoE (§1.2); cross-checked against the lowered real config | 48 layers, d 2,048, 32 / 4 heads × 128, 128 experts, 8 a token, expert ff 768, vocab 151,936, untied head | 28.96 GiB in the real lowering (`runtime-residency.md` §7: 1.28 pinned, 27.09 routed, 1.69 a token, floor 3.01, fifth 5.79) | generated |
-| **W2** | the 8k replay | the real class `Qwen/Qwen2.5-1.5B/graph-v7@8192` on base0's A16 engine | Qwen2.5-1.5B | 1,799,359,436 B, manifest digest `f4af38d9…`, class `ebf44d0a…`, inventory root `88096dc1…` (`consensus/core/src/config/class-manifests/qwen25-1.5b-a16-8k.palwmanifest`) | `/Users/wata/pret12/art/qwen25-1.5b-a16-8k.palwart` (Mac); copied with its manifest to the Linux host, digest checked |
+| **W2** | the 8k replay | the real class `Qwen/Qwen2.5-1.5B/graph-v7@8192` on base0's A16 engine | Qwen2.5-1.5B | 1,799,359,436 B, manifest digest `f4af38d9…`, class `ebf44d0a…`, inventory root `88096dc1…` (`consensus/core/src/config/class-manifests/qwen25-1.5b-a16-8k.palwmanifest`) | `~/pret12/art/qwen25-1.5b-a16-8k.palwart` (Mac); copied with its manifest to the Linux host, digest checked |
 | **W3a** | dense 7B | S1 (`qwen2_program`) | Qwen2.5-7B: 28 layers, d 3,584, 28 / 4 × 128, ff 18,944, vocab 152,064 | 7.12 GiB | generated |
 | **W3b** | dense 14B | S1 | Phi-4: 40 layers, d 5,120, 40 / 10 × 128, ff 17,920, vocab 100,352 | 13.69 GiB | generated |
 | **W4** | dense, ≥ 100 GB | S1 | Mistral-Large-2: 88 layers, d 12,288, 96 / 8 × 128, ff 28,672, vocab 32,768 | 114.32 GiB (≈ 122.8 GB) | generated, Linux only |
@@ -308,7 +308,7 @@ sudo systemd-run --scope -p MemoryMax=16G -p MemorySwapMax=0 -- \
   --store stream:13958643712 --cold --repeat 1 --json /data/tsb/out/A4.jsonl
 
 # W2 on the Mac, after `sudo purge`
-palw-a16-replay-bench --artifact /Users/wata/pret12/art/qwen25-1.5b-a16-8k.palwart --hold pinned --widths 64,16 \
+palw-a16-replay-bench --artifact ~/pret12/art/qwen25-1.5b-a16-8k.palwart --hold pinned --widths 64,16 \
   --job canonical --assume-purged --repeat 5 --json ~/Downloads/MISAKA-wt-b/bench-tensor-store/out/R3.jsonl
 
 # the whole matrix, on a host that passes the checks
