@@ -1385,6 +1385,12 @@ async function renderHome(){
       <div class="ov-title">Network overview</div>
       <div id="ovGrid"><div class="loading">Loading network overview…</div></div>
     </section>
+    <div class="sec-row"><h2 class="sec">Recent blocks <span class="dim" style="font-size:13px">(every block in arrival order · each model-execution round block on its own row)</span></h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
+    <div id="blkFilters" class="scan-filters"></div>
+    <div id="recentWrap" class="tblscroll"><div class="spin">Loading blocks…</div></div>
+    <div id="blkPager" class="scan-pager"></div>
+    <details id="execDetails" class="scan-exec-d"><summary><b>Recent model executions</b> <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
+      <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div></details>
     <div class="sec-row"><h2 class="sec">Consensus composition</h2></div>
     <div id="compCard" class="note"><div class="spin">Sampling the selected chain…</div></div>
     <div class="sec-row"><h2 class="sec">Model economy</h2></div>
@@ -1393,14 +1399,6 @@ async function renderHome(){
       <a class="card" href="#/lane"><b>Execution lane</b><span>permits · domains · finals</span></a>
       <a class="card" href="#/llm"><b>LLM jobs</b><span>submissions · verification</span></a>
     </div>
-    <div class="sec-row"><h2 class="sec">Execution lane</h2><a class="sec-more" href="#/lane">Lane detail →</a></div>
-    <div id="laneHealth" class="note"><div class="spin">Reading the lane…</div></div>
-    <div class="sec-row"><h2 class="sec">Recent blocks <span class="dim" style="font-size:13px">(every block in arrival order · each model-execution round block on its own row)</span></h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
-    <div id="blkFilters" class="scan-filters"></div>
-    <div id="recentWrap" class="tblscroll"><div class="spin">Loading blocks…</div></div>
-    <div id="blkPager" class="scan-pager"></div>
-    <details id="execDetails" class="scan-exec-d"><summary><b>Recent model executions</b> <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
-      <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div></details>
     <div class="sec-row"><h2 class="sec">Latest transactions <span class="dim" style="font-size:13px">(node-direct · newest first)</span></h2><a class="sec-more" href="#/transactions">View all →</a></div>
     <div id="txWrap" class="tblscroll"><div class="spin">Loading transactions…</div></div>`;
   if (loadCache()) renderRecent();   // instant paint from the previous session; refreshed below
