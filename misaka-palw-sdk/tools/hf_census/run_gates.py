@@ -17,12 +17,15 @@ ap.add_argument("--depth", default="shape")
 ap.add_argument("--threads", type=int, default=2)
 ap.add_argument("--tree", default="unstated")
 ap.add_argument("--max-load", type=float, default=30.0)
+ap.add_argument("--assume-task")
 a = ap.parse_args()
 snap = Path(a.snapshot).expanduser()
 rows = snap / "rows"
 cmd = ["nice", "-n", "19", a.palw_class, "census", "gates", "--snapshot", snap.name, "--tree", a.tree, "--threads", str(a.threads), "--depth", a.depth, "--dirs", a.dirs]
 if a.follow:
     cmd.append("--follow")
+if a.assume_task:
+    cmd += ["--assume-task", a.assume_task]
 env = dict(os.environ, RAYON_NUM_THREADS="1")
 log = open(rows / f"{a.run}.watch.log", "a")
 with open(rows / f"{a.run}.jsonl", "a") as out, open(rows / f"{a.run}.err", "a") as err:
