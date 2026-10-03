@@ -1869,19 +1869,6 @@ mod tests {
         assert_eq!(a.artifact_digest(), b.artifact_digest());
     }
 
-    /// **Every** shape field must move the class id. This is the test the module docs name: it
-    /// fails when a field is added to the shape and not added to `digest_bytes`, which is the bug
-    /// that would give two differently-computing artifacts one id.
-    /// **Audit H-08: one meaning for "class id" (ADR-0049 Decision G).**
-    ///
-    /// Two different values were called a class id in two places. This crate's was a flat digest
-    /// over a whole artifact — which is not what the chain keys on, and, Decision G's own
-    /// objection, is a value **nothing can be opened against**: a court that wants one weight row
-    /// cannot prove anything about a hash of the file. The chain keys on the shape profile id
-    /// ("a class is its graph"), and `palw_rc_base0_registration_v1` already did.
-    ///
-    /// The two now answer their two questions, and the pair of assertions below is the whole
-    /// point: same graph + different weights is ONE class and TWO artifacts.
     /// The memoised digest is the digest: the same for the same allocation on every call, a different one for different
     /// weights, and a borrowed artifact finds its `Arc`'s entry (the panel resolves a backend per duty per tick).
     #[test]
@@ -1918,6 +1905,19 @@ mod tests {
         assert_eq!(weak.strong_count(), 0, "the memo holds a Weak, not the 1.7 GB");
     }
 
+    /// **Every** shape field must move the class id. This is the test the module docs name: it
+    /// fails when a field is added to the shape and not added to `digest_bytes`, which is the bug
+    /// that would give two differently-computing artifacts one id.
+    /// **Audit H-08: one meaning for "class id" (ADR-0049 Decision G).**
+    ///
+    /// Two different values were called a class id in two places. This crate's was a flat digest
+    /// over a whole artifact — which is not what the chain keys on, and, Decision G's own
+    /// objection, is a value **nothing can be opened against**: a court that wants one weight row
+    /// cannot prove anything about a hash of the file. The chain keys on the shape profile id
+    /// ("a class is its graph"), and `palw_rc_base0_registration_v1` already did.
+    ///
+    /// The two now answer their two questions, and the pair of assertions below is the whole
+    /// point: same graph + different weights is ONE class and TWO artifacts.
     #[test]
     fn the_class_id_is_the_graph_and_the_digest_is_the_bytes() {
         use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
