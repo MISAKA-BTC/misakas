@@ -62,6 +62,7 @@
 pub mod bidir;
 pub mod cnn;
 pub mod encdec;
+pub mod cross;
 pub mod qlinear;
 pub mod vision;
 mod altup;
@@ -1672,6 +1673,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 Some(Val { r: idx, dt: DType::Idx, key: ScaleKey::q24(), len: *top_k, site: format!("{site}.idx") }),
                 Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
             ])
+        }
+        Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, slots, .. } => {
+            let q = operand(lb, node.inputs[0])?;
+            let q = codes(b, cx, lb, &q)?;
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(cross::lower_cross_attention(b, cx, lb, &q, *heads, *kv_heads, *head_dim, *scale, *rows, slots, &site, &want)?)
         }
         Op::ExpertLinear { top_k, per_slot, wide } => {
             let x = operand(lb, node.inputs[0])?;

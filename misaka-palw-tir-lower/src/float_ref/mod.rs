@@ -1095,8 +1095,8 @@ impl<'a> Session<'a> {
                 let st = self.fixed_mut(s, lyr);
                 one(wkv7(&vs[0], &vs[1], &vs[2], &vs[3], &vs[4], &vs[5], st, *heads, *head_size))
             }
-            Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, k_norm } => {
-                let cs = self.cross_states.as_ref().ok_or_else(|| LowerError::eval("a cross-attention layer needs `Session::cross_states`"))?;
+            Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, k_norm, .. } => {
+                let cs = self.cross_states.clone().ok_or_else(|| LowerError::eval("a cross-attention layer needs `Session::cross_states`"))?;
                 if cs.len() != *rows {
                     return Err(LowerError::eval(format!("{} rows of cross states for a program of {rows}", cs.len())));
                 }
@@ -1107,10 +1107,19 @@ impl<'a> Session<'a> {
                 // K = RMS_head(Wk·s) per row (the norm over each head's `head_dim`), V = Wv·s.
                 let mut ks: Vec<Vec<f32>> = Vec::with_capacity(*rows);
                 let mut vs: Vec<Vec<f32>> = Vec::with_capacity(*rows);
-                for r in cs {
+                for r in &cs {
                     let k = linear_raw(r, &wk.data, kvn, None);
                     ks.push(norm(&k, k_norm.kind, k_norm.eps, k_norm.gain, gain.as_deref(), None, *kv_heads));
                     vs.push(linear_raw(r, &wv.data, kvn, None));
+                }
+                // The stage-0 sites (`lower::cross`): the states, the raw key projection, the normed keys and the values.
+                let flat = |rows: &[Vec<f32>]| rows.iter().flatten().copied().collect::<Vec<f32>>();
+                if self.sites.is_some() {
+                    let kraw: Vec<f32> = cs.iter().flat_map(|r| linear_raw(r, &wk.data, kvn, None)).collect();
+                    self.sub_site(prefix, &node.site, "cs", &flat(&cs));
+                    self.sub_site(prefix, &node.site, "kraw", &kraw);
+                    self.sub_site(prefix, &node.site, "k", &flat(&ks));
+                    self.sub_site(prefix, &node.site, "v", &flat(&vs));
                 }
                 let group = heads / kv_heads;
                 let mut out = vec![0f32; heads * hd];

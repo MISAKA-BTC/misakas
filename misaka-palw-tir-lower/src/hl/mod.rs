@@ -432,6 +432,8 @@ pub enum Op {
         scale: f64,
         rows: usize,
         k_norm: NormSpec,
+        /// The model layers that run this op, in order: the index of a layer's slice of stage 0's stack.
+        slots: Vec<usize>,
     },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
     /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.

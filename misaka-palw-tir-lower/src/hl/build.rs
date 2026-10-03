@@ -1913,6 +1913,8 @@ impl Builder<'_> {
         if h == 0 || kv == 0 || h % kv != 0 || hd == 0 || rows == 0 {
             return Err(LowerError::not_lowerable(format!("ATTN_CROSS_V1: {h} heads over {kv} kv heads of {hd}, {rows} rows")));
         }
+        let slots: Vec<usize> =
+            self.s.layers.iter().enumerate().filter(|(_, l)| matches!(l.mixer, Mixer::CrossAttention(_))).map(|(i, _)| i).collect();
         let q = self.linear(bk, x, "xattn.q", h * hd, d, false, true, "xattn.q")?;
         let qk = QkNorm { norm: c.q_norm, scope: QkNormScope::PerHeadShared };
         let q = self.qk_norm(bk, q, &qk, "xattn.q_norm", h, hd)?;
@@ -1923,7 +1925,7 @@ impl Builder<'_> {
             ins.push(self.param("xattn.k_norm.gain", vec![hd], true, Init::Uniform(0.6, 1.4))?);
         }
         let ctx = bk.f(
-            Op::CrossAttention { heads: h, kv_heads: kv, head_dim: hd, scale: 1.0 / (hd as f64).sqrt(), rows, k_norm: c.k_norm },
+            Op::CrossAttention { heads: h, kv_heads: kv, head_dim: hd, scale: 1.0 / (hd as f64).sqrt(), rows, k_norm: c.k_norm, slots },
             ins,
             h * hd,
             "xattn.ctx",
