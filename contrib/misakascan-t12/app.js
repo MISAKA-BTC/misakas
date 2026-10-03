@@ -991,11 +991,12 @@ const scanIsRound = b => Number(b.algo) === 10;
 function scanKindOf(b){
   const nk = String(b.nodeKind || "").toUpperCase();
   const lc = String(b.laneClass || "").toUpperCase();
-  const exact = { REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
+  const exact = { REAL_ROUND: { k: "REAL_ROUND", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
     LEGACY_HEARTBEAT: { k: "FALLBACK", legacy: true, what: "heartbeat" }, LEGACY_FLOOR: { k: "FALLBACK", legacy: true, what: "floor attempt" } };
   if (exact[nk]) return exact[nk];   // lane RS's exact values; the substring matches below tolerate a rename
   if (nk) {
     if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
+    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "REAL_ROUND", legacy: false };
     if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
     if (/EXEC/.test(nk)) return { k: "EXEC", legacy: false };
     if (/LEGACY.*HEARTBEAT|HEARTBEAT/.test(nk)) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
@@ -1010,9 +1011,9 @@ function scanKindOf(b){
 function scanKindPill(b){
   const x = scanKindOf(b);
   if (!x.k) return "";
-  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
-  const cls = x.k === "REAL" ? "blue" : x.k === "EXEC" ? "chain" : "";
-  return `<span class="pill ${cls}" title="${esc(title)}">${x.k}${x.legacy ? " · legacy" : ""}</span>`;
+  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL_ROUND: "a real-model execution round: a canonical member of the DAG (lane EX)", REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
+  const cls = (x.k === "REAL" || x.k === "REAL_ROUND") ? "blue" : x.k === "EXEC" ? "chain" : "";
+  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "REAL_ROUND" ? "BLUE · canonical round" : x.k}${x.legacy ? " · legacy" : ""}</span>`;
 }
 // ---- claims of an executor bond (cached; one call per bond per 20 s)
 const scanClaimCache = new Map();   // bond -> { ts, rows|null }
@@ -1072,6 +1073,7 @@ function scanRoundsCell(g){
   }
   return `<span class="dim" title="tickets of this claim are not known to this page: ${g.ambiguous ? "the producing bond holds " + g.ambiguous + " claims whose ticket ranges overlap this round" : "no claim of the producing bond covers this round"}">${num(g.blocks.length)} seen</span>`;
 }
+const scanCanonical = b => scanKindOf(b).k === "REAL_ROUND";   // past the lane-EX fence the node says so; before it, round blocks are merged beside the chain
 function scanRoundLabel(b, g){
   const q = b.exec && b.exec.quantumIndex;
   const t = g.claim && Number(g.claim.execTickets);
@@ -1090,8 +1092,8 @@ function scanRenderExecutions(rows, claimsByBond){
       : `<span class="dim">${g.ambiguous ? g.ambiguous + " claims (overlap)" : "claim unknown"}</span>`;
     const anchor = c && c.acceptedBlock ? linkBlock(c.acceptedBlock) : `<span class="dim">—</span>`;
     const sub = !open ? "" : `<tr class="scan-sub"><td colspan="8">${g.blocks.slice(0, 120).map(b =>
-        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}</span>`).join("")}
-        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. They are merged beside the chain by design.${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
+        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanCanonical(b) ? " · BLUE · canonical round" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("")}
+        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanCanonical) ? "They are canonical members of the DAG (BLUE)." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
     return `<tr class="scan-row-x" data-k="${esc(g.key)}"><td>${open ? "▾" : "▸"} <span class="pill blue">${esc(model)}</span></td>
       <td>${claimCell}</td><td class="nowrap">${scanRoundsCell(g)}</td><td>${esc(final)}</td>
       <td class="mono" title="${esc(g.bond || "")}">${esc(short(g.bond || "—", 8))}</td>
@@ -1273,7 +1275,7 @@ async function renderClaim(arg){
     <h2 class="sec">Timeline</h2>
     <ol class="scan-tl">${steps.map(s => `<li class="${s.k}"><b>${s.n}</b> <span class="dim">·</span> ${s.d}</li>`).join("")}</ol>
     <h2 class="sec">Round blocks seen (${roundBlocks.length}) <span class="dim" style="font-size:13px">on this page's recent window</span></h2>
-    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
+    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
 }
 /* ===================== end SCAN ===================== */
 
