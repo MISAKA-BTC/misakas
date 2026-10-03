@@ -188,6 +188,17 @@ CONFIGS = {
                       num_expert_group=2, topk_group=1, routed_scaling_factor=2.446, tie_word_embeddings=False,
                       pad_token_id=0, bos_token_id=1, eos_token_id=2),
                      {"hub_rename": [[r"\.layers\.(\d+)\.block_sparse_moe\.(gate_proj|up_proj|down_proj)\.", r".layers.\1.mlp.\2."]]}),
+    # Zamba2: six layers, three of them hybrid with TWO shared blocks (hybrid ordinals 0, 1, 2 use blocks 0, 1, 0), per-depth adapters on the
+    # shared MLP and on q, k, v, the shared attention's rotary embedding, two Mamba-2 groups (ATTN_SHARED_BLOCK_V1, EMBED_CARRY_V1,
+    # LAYER_PRE_BRANCH_V1, LINEAR_LOWRANK_ADAPTER_V1, TENSOR_NAME_ALTERNATIVES_V1). The head is tied (transformers 5.17 shares the
+    # block ONLY under `tie_word_embeddings`: untied, every hybrid layer holds a copy of its own) and the table is scaled by `embed_mul`: with random weights a
+    # tied head puts the logits at +-23, and the integer program's W8 noise through six layers at a KL a tiny fixture's tolerance does not take.
+    "zamba2": (c("zamba2", "Zamba2ForCausalLM", dict(hidden_size=32, intermediate_size=64, num_attention_heads=4, num_key_value_heads=4, vocab_size=V),
+                 num_hidden_layers=6, layers_block_type=["linear_attention", "hybrid", "linear_attention", "hybrid", "hybrid", "linear_attention"],
+                 num_mem_blocks=2, n_mamba_heads=4, mamba_d_state=4, mamba_expand=2, mamba_ngroups=2, adapter_rank=4,
+                 use_shared_attention_adapter=True, use_mem_rope=True, use_mamba_kernels=False, max_position_embeddings=128,
+                 pad_token_id=0, bos_token_id=1, eos_token_id=2, tie_word_embeddings=True),
+               {"dt_bias": (0.5, 1.5), "embed_mul": 0.25}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),
@@ -406,6 +417,11 @@ def make(name, cfg_dict, opts):
     tc = cfg.get_text_config()
     hidden = getattr(tc, "hidden_size", None) or getattr(tc, "n_embd", None) or getattr(tc, "d_model")
     randomise(model, hidden, seed)
+    if "embed_mul" in opts:
+        with torch.no_grad():
+            emb = model.get_input_embeddings().weight
+            emb.mul_(opts["embed_mul"])
+            emb.copy_(emb.to(torch.bfloat16).to(torch.float32))
     if "dt_bias" in opts:
         # Mamba-2's step-size bias: the models' own init (softplus(dt_bias) in 0.001 .. 0.1) leaves transformers' chunked prefill clamping the step
         # size at `time_step_min` (its recurrent decode, and the original code, do not); a bias that keeps the step size well above the clamp makes

@@ -53,6 +53,10 @@ pub struct LoraOp {
     pub den: i64,
 }
 
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum HlType {
     F32,
@@ -156,7 +160,8 @@ pub enum Op {
     PosScale {
         temp: QTemperature,
     },
-    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`). In: `[x, p [1]]`.
+    /// `x · p[0]` for a learned per-layer scalar `p` (Gemma-4's `layer_scalar`), or — when `p` has as many elements as `x` — `x ⊙ p`
+    /// (Gemma-3n's `correct_output_scale`). In: `[x, p [1] or [n]]`.
     ScaleParam,
     /// **xIELU** (`ACT_LEARNED_POINTWISE_V1`, Apertus): `x > 0 ? αp·x² + β·x : (expm1(min(x, ε)) − x)·αn + β·x` with
     /// `αp = softplus(p)` and `αn = β + softplus(n)`, the layer's own scalars. In: `[x, p [1], n [1], β [1], ε [1]]`.
@@ -263,6 +268,78 @@ pub enum Op {
     GroupDot {
         groups: usize,
     },
+    /// **A data-dependent mix of streams** (`RESIDUAL_ALTUP_V1`): `out[i·D + d] = Σ_j C[i,j]·x[j·D + d]` for the coefficients `C` the second
+    /// input holds — row-major `[n_out, n_in]`, or with `transpose` stored `[n_in, n_out]` (`C[i,j]` is then element `j·n_out + i`).
+    /// In: `[x [n_in·D], C [n_out·n_in]]`.
+    StreamMix {
+        n_in: usize,
+        n_out: usize,
+        transpose: bool,
+    },
+    /// **Manifold-constrained hyper-connections' weights** (`RESIDUAL_MHC_SINKHORN_V1`) from the mix logits `m = fn·RMS(h)` of the `H = streams`
+    /// streams: `pre = σ(m₀·s₀ + b₀) + ε`, `post = 2σ(m₁·s₁ + b₁)` and `comb = sinkhorn(softmax_rows(m₂·s₂ + b₂) + ε)` — the row-softmax of the
+    /// `H × H` logits, `+ ε`, one division by the column sums (`+ ε`), then `iters − 1` times a division by the row sums and one by the column
+    /// sums (every sum `+ ε`). In: `[m [(2 + H)·H], base [(2 + H)·H] (Param), scale [3] (Param)]`. Out: `pre [H]`, `post [H]`, `comb [H·H]`
+    /// row-major (`comb[j, k]` at `j·H + k`).
+    MhcMap {
+        streams: usize,
+        iters: usize,
+        eps: f64,
+    },
+    /// The final collapse's weights (`HyperHead`): `σ(m·s + b) + ε`. In: `[m [H], base [H] (Param), scale [1] (Param)]`.
+    MhcPre {
+        eps: f64,
+    },
+    /// **A window buffer** (`ATTN_COMPRESSED_KV_V1`): row `pos mod ratio` of a `[ratio, w]` `Fixed` state becomes the input. In:
+    /// `[row [w], State(buf), Pos]`; writes the state.
+    WindowWrite {
+        ratio: usize,
+    },
+    /// **The pooled entry of the window just closing** (`ATTN_COMPRESSED_KV_V1`): per channel, the softmax over the window's rows of
+    /// `gate + ape` weights the `kv` rows and they are summed — `[dim]`. Without `overlap` the buffers hold `dim` lanes per row. With it they
+    /// hold `2·dim`: the entry pools the previous window's first series (`prev_kv`, `prev_gate`, `[ratio, dim]` states, weight 0 for window 0)
+    /// with this window's second, and — when this position closes a window — the states become this window's first series (after being read).
+    /// Only the value at a position that closes a window is meaningful. In: `[State(kv), State(gate), ape [ratio, cin] (Param), Pos]`, with
+    /// `overlap` `[…, State(prev_kv), State(prev_gate)]`.
+    WindowPool {
+        ratio: usize,
+        dim: usize,
+        overlap: bool,
+    },
+    /// **Attention over the window and the compressed entries** (`ATTN_COMPRESSED_KV_V1`): one head of keys (= values), the `window` last rows
+    /// of the history and the entries `t < (pos + 1)/ratio` of the `[blocks, head_dim]` store — only those `ids` name, when a selection is given —
+    /// in one softmax with the per-head sink. In: `[q [heads·head_dim], State(window history), State(entries), sinks (Param [heads]), Pos]`,
+    /// then `ids [topk]` (an [`Op::EntrySelect`]'s) when selecting. The entry that closes at this position is already in the store (its
+    /// [`Op::BlockWrite`] comes before).
+    EntryAttention {
+        heads: usize,
+        head_dim: usize,
+        ratio: usize,
+        blocks: usize,
+        scale: f64,
+        select: bool,
+    },
+    /// **The lightning indexer's selection** (`ATTN_ENTRY_INDEXER_V1`): entry `t < (pos + 1)/ratio` scores `Σ_h w_h·ReLU(q_h·k_t)/√dim`
+    /// (the entry that closes at this position is the candidate row, not yet in the store); the `top` best, ties to the lowest index, as
+    /// a fixed-size id vector. In: `[q [heads·dim], w [heads], cand [dim], State(keys), Pos]`.
+    EntrySelect {
+        heads: usize,
+        dim: usize,
+        ratio: usize,
+        blocks: usize,
+        top: usize,
+    },
+    /// **A magnitude match** (`RESIDUAL_ALTUP_V1`): `x · rms(r) / √max(mean(x²), floor)` with `rms(r) = √mean(r²)`. In: `[x, r]`.
+    RmsMatch {
+        floor: f64,
+    },
+    /// **`FFN_ACTIVATION_SPARSITY_V1`**: `relu(x − (mean(x) + z·std(x)))` over the whole row, `std` the biased one — for the layers
+    /// of `layers` that name a `z`; the others (`None`: a dense layer of a model that sparsifies some) pass the row through. The
+    /// constants are DATA of the layer, so layers that differ only in them run one block (the block count of a program is capped).
+    /// `(model layer, z)` of every layer that runs this block. In: `[x]`.
+    GaussianTopK {
+        layers: Vec<(usize, Option<f64>)>,
+    },
     /// Each element repeated `size` times: `out[g·size + j] = a[g]` (a per-head gate over the head's width). In: `[a [groups]]`.
     GroupRepeat {
         groups: usize,
@@ -313,10 +390,50 @@ pub enum Op {
     // ── routing ──
     /// Expert selection. Out 0: `top_k` expert ids in index order (ties → lowest index);
     /// out 1: their weights. In: `[logits, (selection bias)]`.
+    ///
+    /// `zero > 0` (`MLP_MOE_ZERO_EXPERT_V1`): `experts` counts the real experts PLUS `zero` identity ones (the router, its bias and
+    /// the top-k run over all of them); out 0 holds ids below `experts − zero` only (a slot that chose an identity expert reads
+    /// expert 0 with weight 0), out 1 the weights with those slots zeroed, out 2 (`[1]`) the sum of the weights of the identity slots.
     Route {
         router: RouterSpec,
         experts: usize,
         top_k: usize,
+        #[serde(skip_serializing_if = "is_zero_usize")]
+        zero: usize,
+    },
+    /// **`MIXER_MOA_V1`**: one projection per selected expert, `y_j = W[e_j] · x_j`. In: `[x, ids, W [E, R, C]]`; `x` is `[C]`, read
+    /// by every slot (`per_slot: false`, the queries), or `[k·C]`, a row per slot (`per_slot`, the outputs). Out `[k·R]`, slot-major.
+    /// `wide`: the result keeps `i32` precision (it is summed by [`Op::WeightedSum`] straight away).
+    ExpertLinear {
+        top_k: usize,
+        per_slot: bool,
+        wide: bool,
+    },
+    /// `Σ_j w_j · y_j (+ bias)` over `[k·D]` rows: the experts' outputs in one exact accumulator, narrowed once. In: `[y, weights, (bias)]`.
+    WeightedSum {
+        top_k: usize,
+        /// A third input, a `[D]` param, is added to the sum.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        out_bias: bool,
+    },
+    /// A `[n0, n1, n2]` value with its first two axes swapped (`[n1, n0, n2]`): the reorder between slot-major and head-major heads.
+    Transpose01 {
+        n0: usize,
+        n1: usize,
+        n2: usize,
+    },
+    /// **`ATTN_CROSS_V1`** (Mllama): attention of one query over declared STATES (`rows` rows of the hidden width, the session's
+    /// `cross_states`): `K = RMS_head(Wk·s)` (the norm `k_norm`, gain `[head_dim]`), `V = Wv·s`, grouped heads, no rotation, no mask.
+    /// In: `[q, Wk [kv·hd, D], Wv [kv·hd, D], k_gain]`. The integer program does not compute `K`/`V`: stage 0 does, as one stack.
+    CrossAttention {
+        heads: usize,
+        kv_heads: usize,
+        head_dim: usize,
+        scale: f64,
+        rows: usize,
+        k_norm: NormSpec,
+        /// The model layers that run this op, in order: the index of a layer's slice of stage 0's stack.
+        slots: Vec<usize>,
     },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
     /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.
@@ -330,6 +447,13 @@ pub enum Op {
         input_scaled: bool,
         #[serde(skip_serializing_if = "is_true")]
         gated: bool,
+        /// `MLP_MOE_ZERO_EXPERT_V1`: one more input after the expert params, a `[1]` weight `z` (the Route's out 2): the output
+        /// adds `z · x` (the identity experts' share).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        identity: bool,
+        /// One more input, last: a `[D]` param added after the experts' weighted sum (JetMoE's `mlp.bias`).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        out_bias: bool,
     },
 }
 
@@ -369,6 +493,15 @@ impl Op {
             Op::StreamOuter { .. } => "StreamOuter",
             Op::GroupDot { .. } => "GroupDot",
             Op::GroupRepeat { .. } => "GroupRepeat",
+            Op::StreamMix { .. } => "StreamMix",
+            Op::MhcMap { .. } => "MhcMap",
+            Op::MhcPre { .. } => "MhcPre",
+            Op::WindowWrite { .. } => "WindowWrite",
+            Op::WindowPool { .. } => "WindowPool",
+            Op::EntryAttention { .. } => "EntryAttention",
+            Op::EntrySelect { .. } => "EntrySelect",
+            Op::RmsMatch { .. } => "RmsMatch",
+            Op::GaussianTopK { .. } => "GaussianTopK",
             Op::NgramIds { .. } => "NgramIds",
             Op::GatherRows { .. } => "GatherRows",
             Op::BlockMean { .. } => "BlockMean",
@@ -388,6 +521,10 @@ impl Op {
             Op::Wkv4 => "Wkv4",
             Op::Wkv6 { .. } => "Wkv6",
             Op::Wkv7 { .. } => "Wkv7",
+            Op::CrossAttention { .. } => "CrossAttention",
+            Op::ExpertLinear { .. } => "ExpertLinear",
+            Op::WeightedSum { .. } => "WeightedSum",
+            Op::Transpose01 { .. } => "Transpose01",
             Op::Route { .. } => "Route",
             Op::MoeExperts { .. } => "MoeExperts",
         }
@@ -465,6 +602,10 @@ pub struct StateDecl {
 pub struct CarryDecl {
     pub name: String,
     pub shape: Vec<usize>,
+    /// A carry past the residual that rides at the RESIDUAL's scale (`i32`), not as `i16` codes of one layer's site
+    /// (`FFN_SHORTCUT_MOE_V1`'s side value, written by many layers): a value several layers write cannot have one site's scale.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub resid: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

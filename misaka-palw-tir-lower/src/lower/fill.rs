@@ -576,6 +576,10 @@ pub(crate) fn residual_scale(lw: &Lowered, stats: &BTreeMap<String, SiteStat>, p
         }
     }
     if !seen {
+        // A program with no residual stream (the cross K/V stage reads declared rows at a fixed unit) has no scale to size.
+        if lw.resid_sites.is_empty() {
+            return Ok(1.0);
+        }
         return Err(LowerError::eval("calibration has no statistics for the residual stream"));
     }
     Ok(code_scale(amax_r, CODE32_MAX, policy.headroom_resid))

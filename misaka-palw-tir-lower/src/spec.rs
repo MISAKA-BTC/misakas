@@ -51,8 +51,15 @@ pub enum Reference {
     /// `transformers`' own modeling file for `model_type`.
     #[default]
     Native,
-    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice).
-    RemoteCode { module: String },
+    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice). **`REFERENCE_REMOTE_CODE_V1`**: `pin` is the
+    /// sha256 of the modelling file the lowering follows, as the adapter DECLARES it (`remote_code_pin`, the hash `tools/remote_reference.py` records when
+    /// a registrant builds the tiny reference from that file); `None` when the adapter names no file. Declared, never attested: no part of the chain runs
+    /// remote code, so a model of this kind is `LOWERABLE_UNVERIFIED` pinned or not.
+    RemoteCode {
+        module: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+    },
     /// A third-party library the checkpoint names (e.g. flash-linear-attention for RWKV-7).
     ExternalLibrary { name: String },
 }
@@ -290,6 +297,39 @@ pub struct AttnSpec {
     /// **`ATTN_VALUE_SCALE_V1`**: a constant on the values after their projection (`attention_value_scale`, MiMo-V2-Flash).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub v_scale: f64,
+    /// The width of the attention's input when it is not the hidden size (`ATTN_SHARED_BLOCK_V1`: Zamba2's shared block reads
+    /// `[hidden state | embedding]`, `2·hidden` wide); `q`, `k`, `v` project from it and `o` returns to the hidden width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_dim: Option<usize>,
+    /// **`ATTN_DIFFERENTIAL_V1`**: differential attention (DiffLlama): every head pair `(i, i + H/2)` shares one value read, the second
+    /// head's context is subtracted from the first's with a learned `λ`, and the result is RMS-normed over the pair's width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub differential: Option<DiffSpec>,
+    /// **`MIXER_MOA_V1`**: mixture of attention (JetMoE): per token a router picks `top_k` of `experts` and each chosen expert
+    /// supplies its own query projection (`W_in[e]`, `[kv_heads·head_dim, D]`) and output projection (`W_out[e]`); keys and values
+    /// are shared (`attn.kv`, `[2·kv_heads·head_dim, D]`) and tiled across the slots. `heads` is `kv_heads · top_k`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moa: Option<MoaSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MoaSpec {
+    pub experts: usize,
+    pub top_k: usize,
+    pub router: RouterSpec,
+    /// A `[D]` bias added to the weighted sum of the output projections (`self_attention.experts.bias`).
+    #[serde(default)]
+    pub out_bias: bool,
+}
+
+/// **`ATTN_DIFFERENTIAL_V1`** (`modular_diffllama.py:DiffLlamaAttention`). The attention runs once over the keys and a DOUBLE-WIDE value
+/// `[V_g | V_{g + Hkv/2}]` per kv head (`Hkv` must be even), giving every head a context `[o1; o2]` of `2·head_dim`; the result is
+/// `(1 − λ_init)·RMSNorm_{2d}(o_{i,first half of the heads} − λ·o_{i + H/2,second half})`, `λ = exp(Σ λq1⊙λk1) − exp(Σ λq2⊙λk2) + λ_init`
+/// a function of the layer's weights only (a Q24 constant per layer at conversion), `λ_init = base − amp·e^{−rate·layer}`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DiffSpec {
+    pub lambda_init: crate::weights::LambdaInit,
+    pub norm_eps: f64,
 }
 
 /// A separate attention output gate: `o ·= act(gate_proj(x))`, the projection `[H·v_dim, D]` per element or `[H, D]` per head.
@@ -591,6 +631,88 @@ pub enum Mixer {
     /// **`MIXER_PARALLEL_BRANCH_V1`** (Falcon-H1): the layer's mixer is the sum of several branches reading the same normed input,
     /// each with its own input and output scale. At most one branch of each kind; no KV sharing inside.
     Parallel(Vec<Branch>),
+    /// **`ATTN_CROSS_V1`** (Mllama's `cross_attn`): a layer whose attention reads another sequence's states (a vision tower's rows),
+    /// never the token history. HF skips such a layer entirely when no states are given and the cache is empty
+    /// (`MllamaTextModel.forward`), so the text-only stage this lowering builds DROPS these layers from the schedule (their tensors are
+    /// dormant, not read); binding image rows to a spec that has them is refused by name (`fidelity::prepare_spec`).
+    CrossAttention(CrossAttnSpec),
+    /// **`ATTN_KV_SHARED_ROTATED_V1`** (DeepSeek-V4): multi-query attention whose keys ARE its values ([`SharedKvSpec`]).
+    SharedKv(SharedKvSpec),
+}
+
+/// **DeepSeek-V4's attention** — one key/value head (`K = V = rope(norm(wkv x))`, so the output's rope slice is counter-rotated at the
+/// query's position), a low-rank query with a weightless per-head norm (**`ATTN_Q_LOWRANK_V1`**), the output through block-diagonal
+/// low-rank groups (**`ATTN_OUT_GROUPED_LOWRANK_V1`**), a learned sink per head, a sliding window and — in compressed layers — the
+/// compressed entries ([`CompressedKvSpec`]) the query also attends to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedKvSpec {
+    pub heads: usize,
+    /// The width of the one key/value head.
+    pub head_dim: usize,
+    /// Keys visible to a query: the last `window` positions including itself.
+    pub window: usize,
+    pub scale: f64,
+    /// `q = q_b_norm(wq_b(q_a_norm(wq_a x)))`: the latent's width, its (weighted) norm and the per-head norm of `q` (weightless).
+    pub q_rank: usize,
+    pub q_a_norm: NormSpec,
+    pub q_b_norm: NormSpec,
+    /// The norm of the key/value row (gain `w`).
+    pub kv_norm: NormSpec,
+    /// The rotation of the trailing `rotary_dim` lanes of `q` and of the key/value row, and the same reversed (by `−θ`), applied to
+    /// the attention output at the query's position.
+    pub rope: RopeSpec,
+    pub rope_back: RopeSpec,
+    /// `o_groups` block-diagonal projections of `heads·head_dim / o_groups` lanes to `o_rank` each, then one projection of
+    /// `o_groups·o_rank` lanes to the hidden width.
+    pub o_groups: usize,
+    pub o_rank: usize,
+    /// One learned logit per head that joins the softmax and is dropped.
+    pub sinks: bool,
+    /// **`ATTN_COMPRESSED_KV_V1`**: compressed entries beside the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<CompressedKvSpec>,
+}
+
+/// **`ATTN_COMPRESSED_KV_V1`** — every `ratio` tokens close a window whose rows (`kv`) are pooled into one **entry**:
+/// `softmax` over the window of `gate + ape` per channel weights the `kv` rows, `norm` and a rotation at the window's first position
+/// finish it. With `overlap` (CSA) `kv` and `gate` carry two series of `dim` lanes: entry `w` pools the PREVIOUS window's first
+/// series with this window's second (`2·ratio` rows; window 0's previous half has weight 0). A query at `p` attends to the entries
+/// `w < (p + 1) / ratio` — all of them (HCA), or the `topk` the indexer scores best (CSA) — beside its window, in one softmax.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompressedKvSpec {
+    pub ratio: usize,
+    pub overlap: bool,
+    pub norm: NormSpec,
+    /// The rotation of the entry's trailing lanes (at the window's first position).
+    pub rope: RopeSpec,
+    /// **`ATTN_ENTRY_INDEXER_V1`**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<EntryIndexerSpec>,
+}
+
+/// **`ATTN_ENTRY_INDEXER_V1`** — the lightning indexer: its own compressor (at `head_dim`, same windows) makes keys; entry `t` scores
+/// `Σ_h w_h · ReLU(q_h · k_t) / √head_dim` with `q = rope(wq_b(q-latent))` and `w = weights_proj(x) / √heads`; the `topk` best
+/// among the visible entries are kept (ties to the lowest index).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EntryIndexerSpec {
+    pub heads: usize,
+    pub head_dim: usize,
+    pub topk: usize,
+    pub norm: NormSpec,
+    pub rope: RopeSpec,
+}
+
+/// `q = RMS_head(q_proj x)`, `k = RMS_head(k_proj states)`, `v = v_proj states`, no rotation, grouped heads, scale `head_dim^-½`;
+/// the layer's residual adds `tanh(attn_gate)·o_proj(·)` and `tanh(mlp_gate)·mlp(·)` when `gated`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrossAttnSpec {
+    pub heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub q_norm: NormSpec,
+    pub k_norm: NormSpec,
+    #[serde(default)]
+    pub gated: bool,
 }
 
 /// One branch of a [`Mixer::Parallel`]: `out_scale · mixer(in_scale · x)`.
@@ -624,6 +746,8 @@ pub enum Glu {
     Standard,
     /// gpt-oss: `(clamp(up,−l,l)+1) · g·σ(α·g)` with `g = min(gate, l)`.
     ClampedSwiGlu { alpha: f64, limit: f64 },
+    /// **`MLP_GLU_LIMITED_V1`** (DeepSeek-V4's `swiglu_limit`): `act(min(gate, L)) · clamp(up, −L, L)`.
+    LimitedGlu { limit: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -645,6 +769,12 @@ pub struct MlpSpec {
     /// (Gemma-4's double-wide KV-sharing layers, Gemma-3n's per-layer widths) need their own.
     #[serde(default)]
     pub name: Option<String>,
+    /// **`FFN_ACTIVATION_SPARSITY_V1`** (Gemma-3n's `activation_sparsity_pattern`): the target sparsity `p ∈ (0.5, 1)` of the
+    /// gate activation. Before the activation the gate row keeps only what lies above `mean + z·std` of its own width
+    /// (`z = Φ⁻¹(p)`, the biased standard deviation): `gate ← relu(gate − (mean + z·std))`. `z` is a registration-time
+    /// constant the HL builder computes from `p` with a fixed algorithm ([`crate::detmath::norm_inv_cdf`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparsity: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -662,6 +792,12 @@ pub enum Scoring {
     /// 2·jitter_eps`, the rest masked — then the argmax `i2` of the others, weighted the same way
     /// (the threshold on the original logits, `i1` masked).
     SparseMixer,
+    /// **`MLP_MOE_ROUTER_SQRTSOFTPLUS_V1`** (DeepSeek-V4): `√softplus(logit)` per expert; the top-k of the scores (plus the selection
+    /// bias, when the router has one) are kept and their UNBIASED scores renormalised and scaled.
+    SqrtSoftplus,
+    /// **`MLP_MOE_ROUTER_HASH_V1`**: the scores of [`Scoring::SqrtSoftplus`], but the experts a token uses are a frozen table's row
+    /// `tid2eid[token]` (`hash_moe` layers): the learned gate only weights them.
+    SqrtSoftplusHash,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -740,6 +876,18 @@ pub struct MoeSpec {
     /// before them, `fc2_latent_proj` after — while the router and the shared expert read the layer's input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latent: Option<usize>,
+    /// **`MLP_MOE_ZERO_EXPERT_V1`** (LongCat-Flash's `zero_expert_num`): this many extra router outputs after the real experts,
+    /// each the IDENTITY — a token routed to one gets `w·x` from it. The router, its selection bias and its top-k run over
+    /// `experts + zero_experts` outputs; the expert tensors keep `experts` rows.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub zero_experts: usize,
+    /// A `[D]` bias added after the experts' weighted sum (JetMoE's `mlp.bias`, `moe.bias`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub out_bias: bool,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,
@@ -756,6 +904,23 @@ pub struct MlpMoeSpec {
     pub router_scale: f64,
 }
 
+/// **`FFN_SHORTCUT_MOE_V1`** (LongCat-Flash's shortcut-connected MoE): a logical layer is TWO layers of the spec; the first runs a
+/// MoE on the same normed vector as its dense MLP but does not add the result — it is carried to the second, whose output adds it
+/// (`h4 = h3 + mlps[1](n3) + moe(n1)`). The carried value rides at the residual scale (a carry of its own).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShortcutSpec {
+    pub mlp: MlpSpec,
+    pub side: ShortcutSide,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ShortcutSide {
+    /// The MoE of this layer's FFN input; its output goes to the side carry.
+    Produce(MoeSpec),
+    /// Adds the side carry to this layer's FFN output.
+    Consume,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Ffn {
     None,
@@ -764,6 +929,8 @@ pub enum Ffn {
     RwkvChannel(RwkvChannelSpec),
     /// Gemma-4 (only under [`Residual::Sandwich`]).
     MlpMoe(Box<MlpMoeSpec>),
+    /// LongCat-Flash: a dense MLP and a MoE carried to the next layer (only under [`Residual::Sequential`]).
+    MlpShortcut(Box<ShortcutSpec>),
 }
 
 /// Gemma-3n/4's per-layer input (PLE), for layer `l` from the token and its scaled embedding `e`:
@@ -826,6 +993,77 @@ pub enum Residual {
         #[serde(default)]
         ple: Option<NgramPleSpec>,
     },
+    /// **`RESIDUAL_MHC_SINKHORN_V1`** — manifold-constrained hyper-connections ([`MhcSpec`]). The residual is `streams` rows of the hidden
+    /// width. Each of the layer's two sites (the mixer, then the FFN) reads
+    ///
+    /// ```text
+    ///   [pre, post, comb] = fn · RMS(h.flatten())            pre = σ(·scale₀ + base) + ε,  post = 2σ(·scale₁ + base),
+    ///                                                         comb = sinkhorn(softmax_rows(·scale₂ + base) + ε)
+    ///   y = block(norm(Σ_i pre_i·h_i))
+    ///   h'_k = post_k·y + Σ_j comb[j, k]·h_j
+    /// ```
+    ///
+    /// `pre_mixer` norms the mixer site's collapsed input, `pre_ffn` the FFN site's.
+    Mhc { pre_mixer: NormSpec, pre_ffn: NormSpec },
+    /// **`RESIDUAL_ALTUP_V1`** (+ **`RESIDUAL_LAUREL_V1`**) — Gemma-3n's alternating updates over [`AltUpSpec::streams`] streams.
+    /// Per layer, with `K` streams `h_i` and the router `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`:
+    ///
+    /// ```text
+    ///   pred_i = h_i + Σ_j C[i,j]·h_j,   C = prediction_coefs(m(h_0))                      // K×K, per position
+    ///   an     = pre_mixer(pred_0)
+    ///   lo     = an + laurel_norm(laurel_right(laurel_left(an)))                            // LAuReL, when present
+    ///   a      = (pred_0 + post_mixer(mixer(an)) + lo) / √2
+    ///   f      = a + post_ffn(ffn(pre_ffn(a)))                                              // the activated stream
+    ///   cor_i  = pred_i + (f − pred_0)·(correction_coefs(m(f))_i + 1)
+    ///   y      = per_layer_gate(cor_0 ⊙ correct_output_scale)  →  act · ple  →  per_layer_out  →  post_norm
+    ///   h'_0 = cor_0,   h'_i = cor_i + y            (i ≥ 1)
+    /// ```
+    ///
+    /// The `K` streams ride in carry 0 (`(K + 1)·D` lanes: the extra slot holds the layer's intermediate between its two blocks).
+    AltUp {
+        pre_mixer: NormSpec,
+        post_mixer: NormSpec,
+        pre_ffn: NormSpec,
+        post_ffn: NormSpec,
+        /// The router's norm (`altup.router_norm`, gain `w`).
+        router_norm: NormSpec,
+        /// **`RESIDUAL_LAUREL_V1`**: the learned low-rank branch beside the mixer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        laurel: Option<LaurelSpec>,
+        /// Gemma-3n's per-layer input, added to streams `1..K`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ple: Option<PleSpec>,
+    },
+}
+
+/// The model-wide half of [`Residual::Mhc`]: the streams (the embedding is repeated into each), the Sinkhorn iterations of `comb`, the
+/// epsilons, and the final collapse (`HyperHead`: `pre = σ(fn·RMS(h)·scale + base) + ε`, then one weighted sum) before the final norm.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MhcSpec {
+    pub streams: usize,
+    pub iters: usize,
+    /// `hc_eps`.
+    pub eps: f64,
+    /// The epsilon of the weightless RMS norm over the flattened streams (`rms_norm_eps`).
+    pub norm_eps: f64,
+}
+
+/// **`RESIDUAL_LAUREL_V1`** — LAuReL's low-rank residual branch: `x + norm(right(left(x)))` with `left [rank, D]` and `right [D, rank]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LaurelSpec {
+    pub rank: usize,
+    pub post_norm: NormSpec,
+}
+
+/// The model-wide half of [`Residual::AltUp`]: the number of streams (the embedding is the first; the others are projections of it
+/// brought to its magnitude), and the floor under the mean square in the magnitude match `x·rms(h_0)/√max(ms(x), floor)`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AltUpSpec {
+    pub streams: usize,
+    /// `epsilon_tensor` of `Gemma3nTextModel.forward` (1e-5).
+    pub floor: f64,
+    /// `altup_correct_scale`: the per-layer gate reads `cor_0 ⊙ correct_output_scale`.
+    pub correct_scale: bool,
 }
 
 /// The model-wide half of [`Residual::HyperConnection`]: how many streams the residual carries
@@ -886,6 +1124,64 @@ pub struct LayerSpec {
     /// Multiplier on the layer output (RWKV `rescale_every`: 0.5 every N layers; else 1).
     #[serde(default = "one")]
     pub post_scale: f64,
+    /// **`LAYER_PRE_BRANCH_V1`**: an attention + MLP branch (Zamba2's shared transformer) computed from `[h | e0]` whose output is ADDED to the
+    /// mixer's input: `h <- h + mixer(norm(h + branch))`. Only under [`Residual::Sequential`] with a mixer norm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_branch: Option<PreBranch>,
+}
+
+/// **`LAYER_PRE_BRANCH_V1`** (with `ATTN_SHARED_BLOCK_V1`, `EMBED_CARRY_V1`, `LINEAR_LOWRANK_ADAPTER_V1`): Zamba2's hybrid layer.
+///
+/// `u = in_norm(concat[h, e0])` (`e0` is [`ModelSpec::embed_carry`]'s carried embedding), `a = attn(u)`, `m = mid_norm(a)`, `f = mlp(m)`,
+/// `t = out(f)`, and the layer's mixer reads `norm(h + t)`. The branch has NO residual of its own. Its weights (`in_norm`, the attention,
+/// `mid_norm`, the MLP) are SHARED by every layer of the same `group`: one set of integer tensors in the artifact (global params named
+/// `pb{group}.*`), each occurrence with its own activation scales, KV history and low-rank adapters. `out` and the adapters are per layer.
+/// The attention's `in_dim` must be `2·hidden`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreBranch {
+    pub in_norm: NormSpec,
+    pub attn: AttnSpec,
+    pub mid_norm: NormSpec,
+    pub mlp: MlpSpec,
+    /// Per-layer low-rank adapters (`LINEAR_LOWRANK_ADAPTER_V1`): `y = W x + B (A x)`, `A: [rank, in]`, `B: [out, rank]`, on the q, k, v
+    /// projections of the attention (`attn`) and on the MLP's fused gate/up projection (`mlp`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lowrank: Option<LowRankSpec>,
+    /// The sharing group: layers of one group read one set of branch weights.
+    pub group: usize,
+    /// The layer whose checkpoint module stores the group's weights (`{B}` in a tensor-name template), and this layer's ordinal among the
+    /// layers with a pre-branch (`{O}`: its adapters' index). Data of the binding, not of the function; they make every pre-branch layer
+    /// a block of its own (its adapters are its own tensors).
+    pub weights_layer: usize,
+    pub ordinal: usize,
+}
+
+impl PreBranch {
+    /// The HL names of the branch's params (frontend-neutral; `crate::hl::build` and `crate::hf_weights` both read them here).
+    pub fn attn_prefix(&self) -> String {
+        format!("pb{}.attn", self.group)
+    }
+    pub fn mlp_name(&self) -> String {
+        format!("pb{}.mlp", self.group)
+    }
+    pub fn in_norm_name(&self) -> String {
+        format!("pb{}.in_norm", self.group)
+    }
+    pub fn mid_norm_name(&self) -> String {
+        format!("pb{}.mid_norm", self.group)
+    }
+    /// The base of the HL names of this layer's adapters.
+    pub fn adapter_base(&self) -> String {
+        format!("pb{}.d{}", self.group, self.ordinal)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LowRankSpec {
+    pub rank: usize,
+    /// The attention's q, k, v projections carry an adapter too (`use_shared_attention_adapter`); the MLP's always does.
+    #[serde(default)]
+    pub attn: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1020,6 +1316,12 @@ pub struct ModelSpec {
     /// The residual's multiple streams, when the layers are [`Residual::HyperConnection`].
     #[serde(default)]
     pub hyper: Option<HyperSpec>,
+    /// The residual's multiple streams, when the layers are [`Residual::Mhc`] (**`RESIDUAL_MHC_SINKHORN_V1`**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mhc: Option<MhcSpec>,
+    /// The residual's multiple streams, when the layers are [`Residual::AltUp`] (**`RESIDUAL_ALTUP_V1`**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub altup: Option<AltUpSpec>,
     /// Logits, or an encoder's embedding.
     #[serde(default)]
     pub output: OutputSpec,
@@ -1038,6 +1340,21 @@ pub struct ModelSpec {
     /// the image tokens would be another function (`fidelity::prepare_spec`; the prefix stage is FR-20's pipeline, not built).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prefix_lm: bool,
+    /// **`ATTN_CROSS_V1`**: the text stage reads this many rows of vision states (a declared input, RFC-0003 §II.2.1: the projected
+    /// tower rows, decoded integers) through its [`Mixer::CrossAttention`] layers. `None`: no states are bound and those layers are
+    /// skipped, as HF skips them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_states: Option<CrossStatesSpec>,
+    /// **`EMBED_CARRY_V1`**: the embedding block's output rides through every layer as one more carry (`e0`, the hidden width), for
+    /// the layers with a [`PreBranch`] to read (Zamba2 concatenates it to the hidden state).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embed_carry: bool,
+}
+
+/// The states the cross-attention layers read: `rows` rows of `hidden_size` values (fixed per class, like a vision class's image size).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrossStatesSpec {
+    pub rows: usize,
 }
 
 impl ModelSpec {

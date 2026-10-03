@@ -71,6 +71,15 @@ fn positive(param: &str, what: &str, v: &Value) -> Result<usize> {
     Ok(n)
 }
 
+/// The length of a `{L/n}` or `{L%n}` at the start of `t` (`n` a positive integer), else `None`.
+fn layer_arithmetic_len(t: &str) -> Option<usize> {
+    let rest = t.strip_prefix("{L")?;
+    let rest = rest.strip_prefix(['/', '%'])?;
+    let end = rest.find('}')?;
+    let n: usize = rest[..end].parse().ok()?;
+    (n > 0 && rest[..end].bytes().all(|c| c.is_ascii_digit())).then_some(2 + 1 + end + 1)
+}
+
 /// The variables a tensor-name template mentions (`{L}` included), validated: every `{` opens one
 /// capital letter and `}`.
 fn template_vars(param: &str, t: &str) -> Result<BTreeSet<char>> {
@@ -83,6 +92,10 @@ fn template_vars(param: &str, t: &str) -> Result<BTreeSet<char>> {
                 if i + 2 < b.len() && b[i + 2] == b'}' && b[i + 1].is_ascii_uppercase() {
                     vars.insert(b[i + 1] as char);
                     i += 3;
+                } else if let Some(n) = layer_arithmetic_len(&t[i..]) {
+                    // `{L/n}` and `{L%n}`: the layer's quotient and remainder (a model whose HF layer holds `n` HL layers).
+                    vars.insert('L');
+                    i += n;
                 } else if t[i..].starts_with("{p}") {
                     return Err(bad(
                         param,
@@ -230,6 +243,7 @@ fn apply_step(
         "map" => {
             let f = match arg {
                 Value::String(s) if s == "neg_exp" => MapFn::NegExp,
+                Value::String(s) if s == "tanh" => MapFn::Tanh,
                 Value::Object(m) if m.len() == 1 => match m.iter().next() {
                     Some((k, v)) if k == "scale" => MapFn::Scale(
                         v.as_f64().filter(|c| c.is_finite()).ok_or_else(|| bad(param, "map.scale is a finite number"))?,
@@ -317,7 +331,8 @@ pub fn to_expr(src: &Src) -> Option<Value> {
                 v.extend(steps);
                 return Some(Value::Array(v));
             }
-            Src::Quant { .. } => return None,
+            // A pre-quantised source and a value combined from several tensors have no one-chain expression.
+            Src::Quant { .. } | Src::Combine { .. } => return None,
             Src::Transpose(s) => {
                 steps.push(json!("transpose"));
                 cur = &**s;
@@ -349,6 +364,7 @@ pub fn to_expr(src: &Src) -> Option<Value> {
             Src::Map { src: s, f } => {
                 steps.push(match f {
                     MapFn::NegExp => json!({"map": "neg_exp"}),
+                    MapFn::Tanh => json!({"map": "tanh"}),
                     MapFn::Scale(c) => json!({"map": {"scale": c}}),
                     MapFn::RescaleByLayer { every } => json!({"map": {"rescale_by_layer": every}}),
                 });

@@ -24,20 +24,49 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         blocks: vec![],
         carries: carries.clone(),
         carry_out: BTreeMap::new(),
+        e0: if spec.embed_carry { Some(carries.len() - 1) } else { None },
+        sharing: false,
+        lowrank: BTreeMap::new(),
     };
     let pre = b.pre_block()?;
     let mut kinds: Vec<(LayerSpec, Vec<u16>)> = Vec::new();
     let mut schedule = Vec::with_capacity(spec.layers.len());
     let mut layer_of = Vec::with_capacity(spec.layers.len());
     for (li, ls) in spec.layers.iter().enumerate() {
+        // `ATTN_CROSS_V1`, text-only: a cross-attention layer reads no states and HF skips it (`layer_of` keeps the model's numbering).
+        if matches!(ls.mixer, Mixer::CrossAttention(_)) && spec.cross_states.is_none() {
+            continue;
+        }
         // Layers that differ only in constants the program reads as data (a PLE layer's hash
         // constants follow from its index) run the same block.
-        let ls = &block_kind(ls);
+        let ls = &block_kind(spec, ls);
         let bis = match kinds.iter().find(|(s, _)| s == ls) {
             Some((_, bis)) => bis.clone(),
             None => {
-                let bis = b
-                    .layer_blocks(ls, kinds.len())?
+                let start = b.blocks.len();
+                let made = b.layer_blocks(ls, kinds.len())?;
+                // A block another kind already built (the FFN site of an mHC layer does not depend on the attention kind) is that block:
+                // a program is capped at 16 blocks.
+                // (Only the mHC layers: every other model's program is as it was, block for block.)
+                let contiguous = spec.mhc.is_some() && made.iter().enumerate().all(|(k, bi)| *bi == start + k);
+                let made: Vec<usize> = if contiguous {
+                    let fresh = b.blocks.split_off(start);
+                    let mut out = Vec::with_capacity(fresh.len());
+                    for blk in fresh {
+                        let same = b.blocks.iter().position(|o| o.role == blk.role && o.nodes == blk.nodes && o.outputs == blk.outputs);
+                        match same {
+                            Some(j) => out.push(j),
+                            None => {
+                                b.blocks.push(blk);
+                                out.push(b.blocks.len() - 1);
+                            }
+                        }
+                    }
+                    out
+                } else {
+                    made
+                };
+                let bis = made
                     .into_iter()
                     .map(|bi| u16::try_from(bi).map_err(|_| LowerError::not_lowerable("more than 65535 blocks")))
                     .collect::<Result<Vec<u16>>>()?;
@@ -65,6 +94,32 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
                     {
                         layers.push((li, p.layer_index));
                     }
+                }
+            }
+        }
+    }
+    // The activation sparsity of every layer that runs a block with a Gaussian top-k: `z`, or none for a dense layer.
+    for (li, ls) in spec.layers.iter().enumerate() {
+        let Ffn::Mlp(m) = &ls.ffn else { continue };
+        if !spec.layers.iter().any(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity.is_some())) {
+            continue;
+        }
+        let z = match m.sparsity {
+            Some(p) => Some(crate::detmath::norm_inv_cdf(p).ok_or_else(|| {
+                LowerError::not_lowerable(format!("FFN_ACTIVATION_SPARSITY_V1: a sparsity of {p} (it is a fraction in (0, 1))"))
+            })?),
+            None => None,
+        };
+        for (slot, l) in layer_of.iter().enumerate() {
+            if *l != li {
+                continue;
+            }
+            let bi = schedule[slot] as usize;
+            for n in &mut b.blocks[bi].nodes {
+                if let Op::GaussianTopK { layers } = &mut n.op
+                    && !layers.iter().any(|(ml, _)| *ml == li)
+                {
+                    layers.push((li, z));
                 }
             }
         }
@@ -104,12 +159,26 @@ struct Builder<'a> {
     carries: Vec<CarryDecl>,
     /// What the block under construction writes to a carry past the residual.
     carry_out: BTreeMap<usize, Ref>,
+    /// The carry that holds the embedding block's output (`EMBED_CARRY_V1`).
+    e0: Option<usize>,
+    /// Building a shared branch (`ATTN_SHARED_BLOCK_V1`): the weights and norm gains declared meanwhile are global (one tensor for every
+    /// layer of the group); the adapters, states and every activation stay the occurrence's.
+    sharing: bool,
+    /// Linears that carry a low-rank adapter (`LINEAR_LOWRANK_ADAPTER_V1`): role → (rank, base name of the adapter's params).
+    lowrank: BTreeMap<String, (usize, String)>,
 }
 
 /// A layer spec as the block builder sees it: the hash constants of a PLE layer (its index among
 /// the PLE layers) are data the lowering fills per layer, not part of the block.
-fn block_kind(ls: &LayerSpec) -> LayerSpec {
+fn block_kind(spec: &ArchSpec, ls: &LayerSpec) -> LayerSpec {
     let mut k = ls.clone();
+    // The activation sparsity of a layer is data (`Op::GaussianTopK::layers`): a model that sparsifies some of its layers
+    // gives every layer's MLP the same block.
+    if spec.layers.iter().any(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity.is_some()))
+        && let Ffn::Mlp(m) = &mut k.ffn
+    {
+        m.sparsity = Some(0.5);
+    }
     if let Residual::HyperConnection { ple: Some(p) } = &mut k.residual {
         p.layer_index = 0;
     }
@@ -134,7 +203,64 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         )));
     }
     let streams = spec.hyper.as_ref().map_or(1, |h| h.streams);
-    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size * streams] }];
+    // AltUp: the streams and one more slot — the layer's intermediate between its two blocks.
+    let lanes = match &spec.altup {
+        Some(a) => {
+            if spec.hyper.is_some() {
+                return Err(LowerError::not_lowerable("RESIDUAL_ALTUP_V1 and RESIDUAL_GATED_HC_V1 in one model"));
+            }
+            if a.streams < 2 || a.streams > 7 || (a.streams + 1).saturating_mul(spec.hidden_size) > 1 << 24 {
+                return Err(LowerError::not_lowerable(format!(
+                    "RESIDUAL_ALTUP_V1: {} streams of {} (2..=7 streams, `(streams + 1) × hidden` ≤ 2^24)",
+                    a.streams, spec.hidden_size
+                )));
+            }
+            (a.streams + 1) * spec.hidden_size
+        }
+        None => spec.hidden_size * streams,
+    };
+    // Manifold-constrained hyper-connections: the streams, and room for what a layer's blocks hand to each other (its mixing weights, the
+    // normed input of the mixer, the query and its latent) — all at the residual scale, packed after the streams.
+    let lanes = match &spec.mhc {
+        Some(m) => {
+            if spec.hyper.is_some() || spec.altup.is_some() {
+                return Err(LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1 beside another multi-stream residual"));
+            }
+            if m.streams == 0 || m.streams > 16 || m.iters == 0 || m.iters > 64 {
+                return Err(LowerError::not_lowerable(format!(
+                    "RESIDUAL_MHC_SINKHORN_V1: {} streams, {} Sinkhorn iterations (1..=16 streams, 1..=64 iterations)",
+                    m.streams, m.iters
+                )));
+            }
+            let d = spec.hidden_size;
+            let extras = spec
+                .layers
+                .iter()
+                .filter_map(|l| match &l.mixer {
+                    Mixer::SharedKv(a) => {
+                        let base = m.streams + m.streams * m.streams + d;
+                        // After the first block: the latent and the query; after the compressors: the query, the entry row and the indexer's rows.
+                        let first = base + a.q_rank + a.heads * a.head_dim;
+                        let second = a.compressed.as_ref().map_or(0, |c| {
+                            base + a.heads * a.head_dim
+                                + a.head_dim
+                                + c.indexer.as_ref().map_or(0, |i| i.head_dim + i.heads * i.head_dim + i.heads)
+                        });
+                        Some(first.max(second))
+                    }
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
+            let total = (m.streams * d).saturating_add(extras);
+            if total > 1 << 24 {
+                return Err(LowerError::not_lowerable(format!("RESIDUAL_MHC_SINKHORN_V1: a carry of {total} lanes is past 2^24")));
+            }
+            total
+        }
+        None => lanes,
+    };
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![lanes], resid: false }];
     // slot → the (kv heads, head width, value width) of the one layer that fills it.
     let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
     for (li, ls) in spec.layers.iter().enumerate() {
@@ -161,10 +287,47 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         if slot != i {
             return Err(LowerError::eval("internal: KV slots are not numbered from 0"));
         }
-        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k] });
-        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v] });
+        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k], resid: false });
+        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v], resid: false });
+    }
+    // `FFN_SHORTCUT_MOE_V1`: the MoE of the layer that produces it rides to the layer that consumes it, at the residual's scale.
+    let produces = |ls: &LayerSpec| matches!(&ls.ffn, Ffn::MlpShortcut(s) if matches!(s.side, ShortcutSide::Produce(_)));
+    let consumes = |ls: &LayerSpec| matches!(&ls.ffn, Ffn::MlpShortcut(s) if matches!(s.side, ShortcutSide::Consume));
+    if spec.layers.iter().any(consumes) && !spec.layers.iter().any(produces) {
+        return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1: a layer consumes a side value that no layer produces"));
+    }
+    if spec.layers.iter().any(produces) {
+        if spec.hyper.is_some() || spec.altup.is_some() || spec.mhc.is_some() {
+            return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1 beside another multi-stream residual is not modelled"));
+        }
+        out.push(CarryDecl { name: "side".into(), shape: vec![spec.hidden_size], resid: true });
+    }
+    // `EMBED_CARRY_V1`: the embedding block's output, past every layer.
+    if spec.embed_carry {
+        if spec.hyper.is_some() {
+            return Err(LowerError::not_lowerable("EMBED_CARRY_V1 beside hyper-connection streams"));
+        }
+        out.push(CarryDecl { name: "e0".into(), shape: vec![spec.hidden_size], resid: false });
     }
     Ok(out)
+}
+
+/// What the compressors of a compressed shared-KV layer hand to its attention block: the entry row and — with an indexer — the indexer's key
+/// row, query and head weights.
+struct CompRows {
+    ent: Ref,
+    index: Option<(Ref, Ref, Ref)>,
+}
+
+/// The next `len` lanes of the carry past the streams' hand-over, as the value they were before they were packed: a slice, and — given a
+/// site — a sited identity (no node in the integer program) so the value is narrowed to codes with its own statistics, not the carry's.
+fn mhc_take(bk: &mut Bk, at: &mut usize, len: usize, site: Option<&str>) -> Ref {
+    let r = bk.st(Op::Slice { start: *at, len }, vec![Ref::Carry(0)], len);
+    *at += len;
+    match site {
+        Some(s) => bk.f(Op::Scale { c: 1.0 }, vec![r], len, s),
+        None => r,
+    }
 }
 
 /// A block under construction.
@@ -259,10 +422,21 @@ impl Builder<'_> {
         per_layer: bool,
         site: &str,
     ) -> Result<Ref> {
-        let w = self.param(&format!("{name}.w"), vec![out, inp], per_layer, Init::Normal(W_STD))?;
+        let weight_per_layer = per_layer && !self.sharing;
+        let w = self.param(&format!("{name}.w"), vec![out, inp], weight_per_layer, Init::Normal(W_STD))?;
         let mut ins = vec![x, w];
         if bias {
-            ins.push(self.param(&format!("{name}.b"), vec![out], per_layer, Init::Uniform(-0.1, 0.1))?);
+            ins.push(self.param(&format!("{name}.b"), vec![out], weight_per_layer, Init::Uniform(-0.1, 0.1))?);
+        }
+        // `LINEAR_LOWRANK_ADAPTER_V1`: a low-rank adapter of the BASE model — `A [r, in]`, `B [out, r]`, the occurrence's own tensors,
+        // `y = W x + B (A x)` — the unmerged path an external LoRA takes, with scale 1.
+        if let Some((rank, base)) = self.lowrank.get(name).cloned() {
+            if self.s.adapter.as_ref().and_then(|a| a.role(name)).is_some() {
+                return Err(LowerError::not_lowerable("a LoRA adapter over a projection that already carries a low-rank adapter"));
+            }
+            ins.push(self.param(&format!("{base}.lora_a"), vec![rank, inp], true, Init::Normal(W_STD))?);
+            ins.push(self.param(&format!("{base}.lora_b"), vec![out, rank], true, Init::Normal(W_STD))?);
+            return Ok(bk.f(Op::Linear { bias, lora: Some(LoraOp { rank, num: 1, den: 1 }) }, ins, out, site));
         }
         // A LoRA adapter on this role (a layer's projection): `A [r, in]`, `B [out, r]`.
         let lora = match self.s.adapter.as_ref().and_then(|a| a.role(name)) {
@@ -294,10 +468,10 @@ impl Builder<'_> {
         let mut ins = vec![x];
         if spec.gain != Gain::None {
             let init = if spec.gain == Gain::OnePlusW { Init::Uniform(-0.3, 0.3) } else { Init::Uniform(0.6, 1.4) };
-            ins.push(self.param(&format!("{name}.gain"), gain_shape.clone(), per_layer, init)?);
+            ins.push(self.param(&format!("{name}.gain"), gain_shape.clone(), per_layer && !self.sharing, init)?);
         }
         if spec.bias {
-            ins.push(self.param(&format!("{name}.bias"), gain_shape, per_layer, Init::Uniform(-0.1, 0.1))?);
+            ins.push(self.param(&format!("{name}.bias"), gain_shape, per_layer && !self.sharing, Init::Uniform(-0.1, 0.1))?);
         }
         Ok(bk.f(Op::Norm { spec, groups }, ins, n, site))
     }
@@ -339,6 +513,25 @@ impl Builder<'_> {
         if let Some(hy) = s.hyper.as_ref().filter(|h| h.streams > 1) {
             x = bk.st(Op::Concat, vec![x; hy.streams], d * hy.streams);
         }
+        // Hyper-connections with a mixing matrix: the embedding repeated into every stream, the rest of the carry zeros.
+        if let Some(mh) = &s.mhc {
+            let pad = self.carries[0].shape[0] - d * mh.streams;
+            let mut parts = vec![x; mh.streams];
+            if pad > 0 {
+                parts.push(bk.st(Op::Zeros, vec![], pad));
+            }
+            x = bk.st(Op::Concat, parts, d * mh.streams + pad);
+        }
+        // AltUp: stream 0 is the embedding; stream `i` is a projection of it brought to its magnitude; the last slot repeats stream 0.
+        if let Some(au) = &s.altup {
+            let mut parts = vec![x];
+            for i in 1..au.streams {
+                let p = self.linear(&mut bk, x, &format!("altup.proj{i}"), d, d, false, false, &format!("altup.proj{i}"))?;
+                parts.push(bk.f(Op::RmsMatch { floor: au.floor }, vec![p, x], d, &format!("altup.stream{i}")));
+            }
+            parts.push(x);
+            x = bk.st(Op::Concat, parts, d * (au.streams + 1));
+        }
         // Declared for the binding only: a bidirectional encoder's lowering (`lower::bidir`) folds
         // row 0 into its position rows; a per-position program never reads it.
         if let Some(rows) = e.type_rows {
@@ -359,9 +552,18 @@ impl Builder<'_> {
             }
         }
         let mut outputs = vec![x];
-        for c in self.carries.clone().iter().skip(1) {
+        for (ci, c) in self.carries.clone().iter().enumerate().skip(1) {
             let n: usize = c.shape.iter().product();
-            outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+            if Some(ci) == self.e0 {
+                // `EMBED_CARRY_V1`: the embedding block's output itself (the width is the hidden one; a model with a projected
+                // table has the projection behind it).
+                if n != self.s.hidden_size {
+                    return Err(LowerError::not_lowerable("EMBED_CARRY_V1: the embedding block's output is not the hidden width"));
+                }
+                outputs.push(x);
+            } else {
+                outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+            }
         }
         self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
@@ -386,6 +588,30 @@ impl Builder<'_> {
         // stands where the final norm would).
         if s.hyper.is_some() {
             x = self.hc_mix(&mut bk, x, "final", false, false)?.0;
+        }
+        // Manifold-constrained hyper-connections: one weighted collapse of the streams (`HyperHead`), before the final norm.
+        if let Some(mh) = &s.mhc {
+            let n = mh.streams * d;
+            let hs = bk.st(Op::Slice { start: 0, len: n }, vec![x], n);
+            let norm = NormSpec { kind: NormKind::Rms, eps: mh.norm_eps, gain: Gain::None, bias: false };
+            let flat = self.norm(&mut bk, hs, norm, "mhc.head.flat", n, 1, vec![n], false, "mhc.head.flat")?;
+            let mixes = self.linear(&mut bk, flat, "mhc.head.fn", mh.streams, n, false, false, "mhc.head.mixes")?;
+            let base = self.param("mhc.head.base", vec![mh.streams], false, Init::Uniform(-0.5, 0.5))?;
+            let scale = self.param("mhc.head.scale", vec![1], false, Init::Uniform(0.5, 1.5))?;
+            let pre = bk.f(Op::MhcPre { eps: mh.eps }, vec![mixes, base, scale], mh.streams, "mhc.head.pre");
+            x = bk.f(Op::StreamMix { n_in: mh.streams, n_out: 1, transpose: false }, vec![hs, pre], d, "mhc.head.collapsed");
+        }
+        // AltUp: the other streams come back through their own projections at stream 0's magnitude, and the streams are averaged.
+        if let Some(au) = &s.altup {
+            let h0 = bk.st(Op::Slice { start: 0, len: d }, vec![x], d);
+            let mut parts = vec![h0];
+            for i in 1..au.streams {
+                let hi = bk.st(Op::Slice { start: i * d, len: d }, vec![x], d);
+                let p = self.linear(&mut bk, hi, &format!("altup.unembed{i}"), d, d, false, false, &format!("altup.unembed{i}"))?;
+                parts.push(bk.f(Op::RmsMatch { floor: au.floor }, vec![p, h0], d, &format!("altup.merge{i}")));
+            }
+            let cat = bk.st(Op::Concat, parts, d * au.streams);
+            x = bk.f(Op::StreamMean { streams: au.streams }, vec![cat], d, "altup.mean");
         }
         if let Some(n) = s.final_norm {
             x = self.full_norm(&mut bk, x, n, "final_norm", d, false)?;
@@ -451,6 +677,12 @@ impl Builder<'_> {
     /// mixer half and its FFN half (with the per-layer input and the layer scalar), the residual
     /// carried between them.
     fn layer_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        if let Residual::AltUp { .. } = &ls.residual {
+            return self.altup_blocks(ls, kind_index);
+        }
+        if let Residual::Mhc { .. } = &ls.residual {
+            return self.mhc_blocks(ls, kind_index);
+        }
         if let Residual::Sandwich { pre_mixer, post_mixer, .. } = &ls.residual {
             let d = self.s.hidden_size;
             let mut bk = Bk { nodes: vec![] };
@@ -540,8 +772,502 @@ impl Builder<'_> {
         Ok(vec![self.layer_block(ls, kind_index)?])
     }
 
+    fn altup(&self) -> Result<AltUpSpec> {
+        self.s.altup.ok_or_else(|| LowerError::not_lowerable("RESIDUAL_ALTUP_V1: an AltUp layer needs the model's streams (ModelSpec::altup)"))
+    }
+
+    /// AltUp's router: `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`, `[K]`.
+    fn altup_router(&mut self, bk: &mut Bk, x: Ref, norm: NormSpec, tag: &str) -> Result<Ref> {
+        let (k, d) = (self.altup()?.streams, self.s.hidden_size);
+        let n = self.full_norm(bk, x, norm, "altup.router_norm", d, true)?;
+        let s = bk.f(Op::Scale { c: 1.0 / d as f64 }, vec![n], d, &format!("{tag}.router_in"));
+        let r = self.linear(bk, s, "altup.router", k, d, false, true, &format!("{tag}.router"))?;
+        Ok(bk.f(Op::Act(Act::Tanh), vec![r], k, &format!("{tag}.modalities")))
+    }
+
+    /// **`RESIDUAL_ALTUP_V1`** (Gemma-3n): a layer is two blocks. The mixer half predicts the streams, runs the (LAuReL-joined) mixer on the
+    /// first and carries out the predictions and the joined stream `a` — `(K + 1)·D` lanes. The FFN half runs the FFN on `a`, corrects the
+    /// predictions by the innovation, and adds the per-layer input to streams `1..K`.
+    fn altup_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        let Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } = &ls.residual else {
+            return Err(LowerError::eval("internal: altup_blocks of a layer that is not AltUp"));
+        };
+        if ls.ffn == Ffn::None || matches!(ls.ffn, Ffn::MlpMoe(_)) || matches!(ls.mixer, Mixer::None) {
+            return Err(LowerError::not_lowerable("RESIDUAL_ALTUP_V1: a layer is a mixer and an FFN (Mlp or Moe)"));
+        }
+        let au = self.altup()?;
+        let (k, d) = (au.streams, self.s.hidden_size);
+        let n = k * d;
+        let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        // ── the mixer half ──
+        let mut bk = Bk { nodes: vec![] };
+        let c0 = Ref::Carry(0);
+        let h0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
+        let m = self.altup_router(&mut bk, h0, *router_norm, "altup.pred")?;
+        let coefs = self.linear(&mut bk, m, "altup.pred_coefs", k * k, k, false, true, "altup.pred_coefs")?;
+        let hs = bk.st(Op::Slice { start: 0, len: n }, vec![c0], n);
+        let mix = bk.f(Op::StreamMix { n_in: k, n_out: k, transpose: false }, vec![hs, coefs], n, "altup.mix");
+        let pred = bk.f(Op::Add, vec![hs, mix], n, "altup.pred");
+        let p0 = bk.st(Op::Slice { start: 0, len: d }, vec![pred], d);
+        let an = self.full_norm(&mut bk, p0, *pre_mixer, "norm.mix", d, true)?;
+        let lo = match laurel {
+            Some(l) => {
+                let a = self.linear(&mut bk, an, "laurel.left", l.rank, d, false, true, "laurel.left")?;
+                let b = self.linear(&mut bk, a, "laurel.right", d, l.rank, false, true, "laurel.right")?;
+                let nb = self.full_norm(&mut bk, b, l.post_norm, "laurel.norm", d, true)?;
+                Some(bk.f(Op::Add, vec![an, nb], d, "laurel.out"))
+            }
+            None => None,
+        };
+        let att = self.mixer(&mut bk, &ls.mixer, an)?;
+        let att = self.full_norm(&mut bk, att, *post_mixer, "norm.post_mix", d, true)?;
+        let ag = bk.f(Op::Add, vec![p0, att], d, "altup.attn_sum");
+        let joined = match lo {
+            Some(lo) => {
+                let s = bk.f(Op::Add, vec![ag, lo], d, "altup.laurel_sum");
+                bk.f(Op::Scale { c: std::f64::consts::FRAC_1_SQRT_2 }, vec![s], d, "altup.joined")
+            }
+            None => ag,
+        };
+        let out = bk.st(Op::Concat, vec![pred, joined], n + d);
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        let first = self.blocks.len() - 1;
+        // ── the FFN half ──
+        let mut bk = Bk { nodes: vec![] };
+        let c0 = Ref::Carry(0);
+        let pred = bk.st(Op::Slice { start: 0, len: n }, vec![c0], n);
+        let p0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
+        let a = bk.st(Op::Slice { start: n, len: d }, vec![c0], d);
+        let n2 = self.full_norm(&mut bk, a, *pre_ffn, "norm.ffn", d, true)?;
+        let f = self.ffn(&mut bk, &ls.ffn, n2)?;
+        let f = self.full_norm(&mut bk, f, *post_ffn, "norm.post_ffn", d, true)?;
+        let act = bk.f(Op::Add, vec![a, f], d, "altup.activated");
+        let m2 = self.altup_router(&mut bk, act, *router_norm, "altup.cor")?;
+        let cc = self.linear(&mut bk, m2, "altup.correction_coefs", k, k, false, true, "altup.correction_coefs")?;
+        let inn = bk.f(Op::Sub, vec![act, p0], d, "altup.innovation");
+        // `innovation · (coef + 1)` for every stream: the outer product with the coefficients, plus the innovation itself.
+        let outer = bk.f(Op::StreamOuter { streams: k }, vec![inn, cc], n, "altup.correction");
+        let rep = bk.st(Op::Concat, vec![inn; k], n);
+        let t = bk.f(Op::Add, vec![pred, outer], n, "altup.cor_a");
+        let cor = bk.f(Op::Add, vec![t, rep], n, "altup.corrected");
+        let c0s = bk.st(Op::Slice { start: 0, len: d }, vec![cor], d);
+        let y = match ple {
+            Some(p) => {
+                let mut first = c0s;
+                if au.correct_scale {
+                    let sp = self.param("altup.correct_scale", vec![d], true, Init::Uniform(0.8, 1.2))?;
+                    first = bk.f(Op::ScaleParam, vec![first, sp], d, "altup.scaled_first");
+                }
+                let pv = self.ple(&mut bk, p)?;
+                let g = self.linear(&mut bk, first, "ple.gate", p.dim, d, false, true, "ple.gate")?;
+                let g = bk.f(Op::Act(plain_act(p.act, "a per-layer embedding gate")?), vec![g], p.dim, "ple.act");
+                let gm = bk.f(Op::Mul, vec![g, pv], p.dim, "ple.gated");
+                let o = self.linear(&mut bk, gm, "ple.out", d, p.dim, false, true, "ple.out")?;
+                Some(self.full_norm(&mut bk, o, p.post_norm, "ple.post_norm", d, true)?)
+            }
+            None => None,
+        };
+        let mut parts = vec![c0s];
+        for i in 1..k {
+            let ci = bk.st(Op::Slice { start: i * d, len: d }, vec![cor], d);
+            parts.push(match y {
+                Some(y) => bk.f(Op::Add, vec![ci, y], d, &format!("altup.stream{i}")),
+                None => ci,
+            });
+        }
+        parts.push(c0s);
+        let out = bk.st(Op::Concat, parts, n + d);
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.ffn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        Ok(vec![first, self.blocks.len() - 1])
+    }
+
+    fn mhc(&self) -> Result<MhcSpec> {
+        self.s.mhc.ok_or_else(|| LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1: an mHC layer needs the model's streams (ModelSpec::mhc)"))
+    }
+
+    /// The carry's lanes past the streams are the layer's own: a block's outputs packed in order and zero-padded to the carry's width.
+    fn mhc_pack(&mut self, bk: &mut Bk, parts: Vec<(Ref, usize)>) -> Result<Ref> {
+        let width = self.carries[0].shape[0];
+        let used: usize = parts.iter().map(|(_, n)| *n).sum();
+        if used > width {
+            return Err(LowerError::eval(format!("internal: a block hands on {used} lanes in a carry of {width}")));
+        }
+        let mut parts = parts;
+        if used < width {
+            let pad = width - used;
+            parts.push((bk.st(Op::Zeros, vec![], pad), pad));
+        }
+        // A node takes at most eight inputs: a longer list is a tree of concatenations.
+        Ok(self.concat_tree(bk, parts).0)
+    }
+
+    /// One site of an mHC layer: the mixing weights of the streams `h` (`pre`, `post`, `comb`), the collapse of the streams by `pre`, and the
+    /// norm of the collapsed row. Returns `(post, comb, normed)`.
+    fn mhc_site(&mut self, bk: &mut Bk, h: Ref, tag: &str, norm: NormSpec, norm_name: &str) -> Result<(Ref, Ref, Ref)> {
+        let mh = self.mhc()?;
+        let (hc, d) = (mh.streams, self.s.hidden_size);
+        let n = hc * d;
+        let mix = (2 + hc) * hc;
+        let flat_norm = NormSpec { kind: NormKind::Rms, eps: mh.norm_eps, gain: Gain::None, bias: false };
+        let flat = self.norm(bk, h, flat_norm, &format!("mhc.{tag}.flat"), n, 1, vec![n], true, &format!("mhc.{tag}.flat"))?;
+        let mixes = self.linear(bk, flat, &format!("mhc.{tag}.fn"), mix, n, false, true, &format!("mhc.{tag}.mixes"))?;
+        let base = self.param(&format!("mhc.{tag}.base"), vec![mix], true, Init::Uniform(-0.5, 0.5))?;
+        let scale = self.param(&format!("mhc.{tag}.scale"), vec![3], true, Init::Uniform(0.5, 1.5))?;
+        let map = bk.push(
+            Op::MhcMap { streams: hc, iters: mh.iters, eps: mh.eps },
+            vec![mixes, base, scale],
+            vec![vec![hc], vec![hc], vec![hc * hc]],
+            vec![HlType::F32, HlType::F32, HlType::F32],
+            Some(&format!("mhc.{tag}.map")),
+            vec![],
+        );
+        let (pre, post, comb) = (Ref::Node(map, 0), Ref::Node(map, 1), Ref::Node(map, 2));
+        let col = bk.f(Op::StreamMix { n_in: hc, n_out: 1, transpose: false }, vec![h, pre], d, &format!("mhc.{tag}.collapsed"));
+        let xn = self.full_norm(bk, col, norm, norm_name, d, true)?;
+        Ok((post, comb, xn))
+    }
+
+    /// The site's output joins every stream: `post ⊗ o + comb^T·h`.
+    fn mhc_apply(&mut self, bk: &mut Bk, h: Ref, post: Ref, comb: Ref, o: Ref, tag: &str) -> Result<Ref> {
+        let hc = self.mhc()?.streams;
+        let n = hc * self.s.hidden_size;
+        let xo = bk.f(Op::StreamOuter { streams: hc }, vec![o, post], n, &format!("mhc.{tag}.delta"));
+        let hm = bk.f(Op::StreamMix { n_in: hc, n_out: hc, transpose: true }, vec![h, comb], n, &format!("mhc.{tag}.mixed"));
+        Ok(bk.f(Op::Add, vec![xo, hm], n, &format!("mhc.{tag}.out")))
+    }
+
+    /// A concatenation of any number of values as a tree of at most eight (a node takes eight inputs).
+    fn concat_tree(&mut self, bk: &mut Bk, mut parts: Vec<(Ref, usize)>) -> (Ref, usize) {
+        while parts.len() > 8 {
+            parts = parts
+                .chunks(8)
+                .map(|c| {
+                    if c.len() == 1 {
+                        c[0]
+                    } else {
+                        let n: usize = c.iter().map(|(_, n)| *n).sum();
+                        (bk.st(Op::Concat, c.iter().map(|(r, _)| *r).collect(), n), n)
+                    }
+                })
+                .collect();
+        }
+        let n: usize = parts.iter().map(|(_, n)| *n).sum();
+        if parts.len() == 1 { parts[0] } else { (bk.st(Op::Concat, parts.iter().map(|(r, _)| *r).collect(), n), n) }
+    }
+
+    /// **`RESIDUAL_MHC_SINKHORN_V1`** over a shared-KV attention (DeepSeek-V4): a layer is three blocks. The first reads the mixer site's mixing
+    /// weights, collapses the streams, norms the row and makes the query; the second is the attention proper (the key/value row, the
+    /// compressed entries and their indexer, the softmax over the window and the entries, the grouped output projection) and joins its output
+    /// into the streams; the third is the FFN site. What a block hands the next rides in the carry past the streams.
+    fn mhc_blocks(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<Vec<usize>> {
+        let Residual::Mhc { pre_mixer, pre_ffn } = &ls.residual else {
+            return Err(LowerError::eval("internal: mhc_blocks of a layer that is not mHC"));
+        };
+        let Mixer::SharedKv(a) = &ls.mixer else {
+            return Err(LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1 is modelled over the shared-KV attention (ATTN_KV_SHARED_ROTATED_V1) only"));
+        };
+        if ls.ffn == Ffn::None || matches!(ls.ffn, Ffn::MlpMoe(_)) {
+            return Err(LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1: a layer is a mixer and an FFN (Mlp or Moe)"));
+        }
+        let mh = self.mhc()?;
+        let (hc, d) = (mh.streams, self.s.hidden_size);
+        let n = hc * d;
+        let (heads, hd, lat) = (a.heads, a.head_dim, a.q_rank);
+        let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
+        // ── block 1: the mixer site's weights, the collapse, the query ──
+        let mut bk = Bk { nodes: vec![] };
+        let h = bk.st(Op::Slice { start: 0, len: n }, vec![Ref::Carry(0)], n);
+        let (post, comb, xn) = self.mhc_site(&mut bk, h, "attn", *pre_mixer, "norm.mix")?;
+        let qa = self.linear(&mut bk, xn, "attn.wq_a", lat, d, false, true, "attn.q_a")?;
+        let qr = self.full_norm(&mut bk, qa, a.q_a_norm, "attn.q_a_norm", lat, true)?;
+        let qb = self.linear(&mut bk, qr, "attn.wq_b", heads * hd, lat, false, true, "attn.q_b")?;
+        let q = self.norm(&mut bk, qb, a.q_b_norm, "attn.q_b_norm", heads * hd, heads, vec![hd], true, "attn.q_b_norm")?;
+        let tq = self.rope_table(&a.rope.freqs);
+        let q = bk.f(
+            Op::Rope { heads, head_dim: hd, rotary_dim: a.rope.rotary_dim, offset: a.rope.offset, style: a.rope.style, table: tq },
+            vec![q, Ref::Pos],
+            heads * hd,
+            "attn.q_rope",
+        );
+        let out = self.mhc_pack(&mut bk, vec![(h, n), (post, hc), (comb, hc * hc), (xn, d), (qr, lat), (q, heads * hd)])?;
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.mhc_attn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        let first = self.blocks.len() - 1;
+        // ── block 2 (compressed layers): the compressors and the indexer's query — the states they write and the rows they hand on ──
+        let mut blocks_out = vec![first];
+        let comp_in = if let Some(c) = &a.compressed {
+            let mut bk = Bk { nodes: vec![] };
+            let mut at = 0usize;
+            let h = mhc_take(&mut bk, &mut at, n, None);
+            let post = mhc_take(&mut bk, &mut at, hc, Some("carry.post"));
+            let comb = mhc_take(&mut bk, &mut at, hc * hc, Some("carry.comb"));
+            let xn = mhc_take(&mut bk, &mut at, d, Some("carry.xn"));
+            // The query's latent is read only by the indexer (a node nothing reads is dead, which normal form forbids).
+            let qr = if c.indexer.is_some() {
+                Some(mhc_take(&mut bk, &mut at, lat, Some("carry.qr")))
+            } else {
+                at += lat;
+                None
+            };
+            let q = mhc_take(&mut bk, &mut at, heads * hd, Some("carry.q"));
+            let ci = self.shared_kv_comp(&mut bk, a, c, xn, qr)?;
+            let mut parts = vec![(h, n), (post, hc), (comb, hc * hc), (xn, d), (q, heads * hd), (ci.ent, hd)];
+            if let (Some(ix), Some((ient, iq, iw))) = (&c.indexer, ci.index) {
+                parts.extend([(ient, ix.head_dim), (iq, ix.heads * ix.head_dim), (iw, ix.heads)]);
+            }
+            let out = self.mhc_pack(&mut bk, parts)?;
+            let outputs = self.layer_outputs(out);
+            self.blocks.push(Block { name: format!("{name}.comp"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+            blocks_out.push(self.blocks.len() - 1);
+            true
+        } else {
+            false
+        };
+        // ── block 3: the attention proper ──
+        let mut bk = Bk { nodes: vec![] };
+        let mut at = 0usize;
+        let h = mhc_take(&mut bk, &mut at, n, None);
+        // What a value was before it was packed keeps its own calibration: a sited identity (no node in the integer program) says which
+        // statistics narrow it to codes — not the whole carry's, whose range is the streams'.
+        let post = mhc_take(&mut bk, &mut at, hc, Some("carry.post"));
+        let comb = mhc_take(&mut bk, &mut at, hc * hc, Some("carry.comb"));
+        let xn = mhc_take(&mut bk, &mut at, d, Some("carry.xn"));
+        let comp = if comp_in {
+            let q = mhc_take(&mut bk, &mut at, heads * hd, Some("carry.q"));
+            let ent = mhc_take(&mut bk, &mut at, hd, Some("carry.ent"));
+            let index = match a.compressed.as_ref().and_then(|c| c.indexer.as_ref()) {
+                Some(ix) => {
+                    let ient = mhc_take(&mut bk, &mut at, ix.head_dim, Some("carry.ient"));
+                    let iq = mhc_take(&mut bk, &mut at, ix.heads * ix.head_dim, Some("carry.iq"));
+                    let iw = mhc_take(&mut bk, &mut at, ix.heads, Some("carry.iw"));
+                    Some((ient, iq, iw))
+                }
+                None => None,
+            };
+            (q, Some(CompRows { ent, index }))
+        } else {
+            at += lat;
+            let q = mhc_take(&mut bk, &mut at, heads * hd, Some("carry.q"));
+            (q, None)
+        };
+        let (q, rows) = comp;
+        let attn_out = self.shared_kv_core(&mut bk, a, xn, q, rows)?;
+        let h1 = self.mhc_apply(&mut bk, h, post, comb, attn_out, "attn")?;
+        let out = self.mhc_pack(&mut bk, vec![(h1, n)])?;
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.attn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        blocks_out.push(self.blocks.len() - 1);
+        // ── block 3: the FFN site ──
+        let mut bk = Bk { nodes: vec![] };
+        let h = bk.st(Op::Slice { start: 0, len: n }, vec![Ref::Carry(0)], n);
+        let (post, comb, xn) = self.mhc_site(&mut bk, h, "ffn", *pre_ffn, "norm.ffn")?;
+        let f = self.ffn(&mut bk, &ls.ffn, xn)?;
+        let h2 = self.mhc_apply(&mut bk, h, post, comb, f, "ffn")?;
+        let out = self.mhc_pack(&mut bk, vec![(h2, n)])?;
+        let outputs = self.layer_outputs(out);
+        self.blocks.push(Block { name: format!("{name}.ffn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
+        blocks_out.push(self.blocks.len() - 1);
+        Ok(blocks_out)
+    }
+
+    /// One compressor (`ATTN_COMPRESSED_KV_V1`) over the normed input `x`: the window buffers, the pooled entry of the window just closing,
+    /// its norm and rotation, and the store of entries. Returns `(entry row, store state)`; the entry row is written to the store at the
+    /// end of the window by [`Op::BlockWrite`] (which this call has NOT emitted: the indexer reads the store before its own write).
+    #[allow(clippy::too_many_arguments)]
+    fn compressor(
+        &mut self,
+        bk: &mut Bk,
+        c: &CompressedKvSpec,
+        dim: usize,
+        x: Ref,
+        pfx: &str,
+        norm_name: &str,
+        norm: NormSpec,
+        rope: &crate::rope::RopeSpec,
+    ) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let m = c.ratio;
+        let cin = dim * if c.overlap { 2 } else { 1 };
+        let ckv = self.linear(bk, x, &format!("{pfx}.wkv"), cin, d, false, true, &format!("{pfx}.kv"))?;
+        let cg = self.linear(bk, x, &format!("{pfx}.wgate"), cin, d, false, true, &format!("{pfx}.gate"))?;
+        let kvb = self.state(&format!("{pfx}.kv_buf"), StateKind::Fixed, vec![m, cin], 0.0)?;
+        let gb = self.state(&format!("{pfx}.gate_buf"), StateKind::Fixed, vec![m, cin], 0.0)?;
+        bk.push(Op::WindowWrite { ratio: m }, vec![ckv, kvb, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(kvb)]);
+        bk.push(Op::WindowWrite { ratio: m }, vec![cg, gb, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(gb)]);
+        let ape = self.param(&format!("{pfx}.ape"), vec![m, cin], true, Init::Normal(0.5))?;
+        let mut ins = vec![kvb, gb, ape, Ref::Pos];
+        let mut writes = vec![];
+        if c.overlap {
+            let pk = self.state(&format!("{pfx}.prev_kv"), StateKind::Fixed, vec![m, dim], 0.0)?;
+            let pg = self.state(&format!("{pfx}.prev_gate"), StateKind::Fixed, vec![m, dim], 0.0)?;
+            ins.extend([pk, pg]);
+            writes = vec![sid(pk), sid(pg)];
+        }
+        let pooled = Ref::Node(
+            bk.push(
+                Op::WindowPool { ratio: m, dim, overlap: c.overlap },
+                ins,
+                vec![vec![dim]],
+                vec![HlType::F32],
+                Some(&format!("{pfx}.pooled")),
+                writes,
+            ),
+            0,
+        );
+        let ent = self.full_norm(bk, pooled, norm, norm_name, dim, true)?;
+        let t = self.rope_table(&rope.freqs);
+        Ok(bk.f(
+            Op::RopeAtBlock {
+                heads: 1,
+                head_dim: dim,
+                rotary_dim: rope.rotary_dim,
+                offset: rope.offset,
+                style: rope.style,
+                table: t,
+                ratio: m,
+            },
+            vec![ent, Ref::Pos],
+            dim,
+            &format!("{pfx}.entry"),
+        ))
+    }
+
+    /// The compressors of a compressed shared-KV layer (the first of the layer's attention blocks): the entry row of the window just closing
+    /// and — with an indexer — its key row, its query and its head weights.
+    fn shared_kv_comp(&mut self, bk: &mut Bk, a: &SharedKvSpec, c: &CompressedKvSpec, xn: Ref, qr: Option<Ref>) -> Result<CompRows> {
+        let (hd, d) = (a.head_dim, self.s.hidden_size);
+        // CSA and HCA layers differ in the widths of their compressors: params and states of their own.
+        let pfx = if c.overlap { "attn.csa" } else { "attn.hca" };
+        let ent = self.compressor(bk, c, hd, xn, pfx, &format!("{pfx}.norm"), c.norm, &c.rope)?;
+        let index = match &c.indexer {
+            Some(ix) => {
+                let (hi, di) = (ix.heads, ix.head_dim);
+                let ient = self.compressor(bk, c, di, xn, "attn.idx.comp", "attn.idx.comp.norm", ix.norm, &ix.rope)?;
+                let qr = qr.ok_or_else(|| LowerError::eval("internal: an indexer without the query's latent"))?;
+                let iq = self.linear(bk, qr, "attn.idx.wq_b", hi * di, a.q_rank, false, true, "attn.idx.q")?;
+                let ti = self.rope_table(&ix.rope.freqs);
+                let iq = bk.f(
+                    Op::Rope { heads: hi, head_dim: di, rotary_dim: ix.rope.rotary_dim, offset: ix.rope.offset, style: ix.rope.style, table: ti },
+                    vec![iq, Ref::Pos],
+                    hi * di,
+                    "attn.idx.q_rope",
+                );
+                let iw = self.linear(bk, xn, "attn.idx.weights_proj", hi, d, false, true, "attn.idx.w")?;
+                let iw = bk.f(Op::Scale { c: (hi as f64).powf(-0.5) }, vec![iw], hi, "attn.idx.w_scaled");
+                Some((ient, iq, iw))
+            }
+            None => None,
+        };
+        Ok(CompRows { ent, index })
+    }
+
+    /// The attention of a shared-KV layer from the normed input `xn`, the rotated query `q` and — in a compressed layer — the rows its
+    /// compressors made: the output `[D]`.
+    fn shared_kv_core(&mut self, bk: &mut Bk, a: &SharedKvSpec, xn: Ref, q: Ref, comp: Option<CompRows>) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let (heads, hd) = (a.heads, a.head_dim);
+        // The one key/value head: normed, rotated, appended to the window's history.
+        let kv = self.linear(bk, xn, "attn.wkv", hd, d, false, true, "attn.kv")?;
+        let kv = self.full_norm(bk, kv, a.kv_norm, "attn.kv_norm", hd, true)?;
+        let tk = self.rope_table(&a.rope.freqs);
+        let kv = bk.f(
+            Op::Rope { heads: 1, head_dim: hd, rotary_dim: a.rope.rotary_dim, offset: a.rope.offset, style: a.rope.style, table: tk },
+            vec![kv, Ref::Pos],
+            hd,
+            "attn.kv_rope",
+        );
+        let hist = self.state(&format!("attn.kv_hist.w{}", a.window), StateKind::Hist { window: Some(a.window) }, vec![hd], 0.0)?;
+        bk.append(kv, hist);
+        let sinks = if a.sinks { Some(self.param("attn.sinks", vec![heads], true, Init::Normal(1.0))?) } else { None };
+        let ctx = match (&a.compressed, comp) {
+            (None, _) => {
+                let mut ins = vec![q, hist, hist];
+                if let Some(s) = sinks {
+                    ins.push(s);
+                }
+                let op = Op::Attention {
+                    heads,
+                    kv_heads: 1,
+                    head_dim: hd,
+                    v_head_dim: hd,
+                    scale: a.scale,
+                    softcap: None,
+                    window: Some(a.window),
+                    alibi: None,
+                    sinks: a.sinks,
+                    chunk: None,
+                    blocks: None,
+                };
+                bk.f(op, ins, heads * hd, "attn.ctx")
+            }
+            (Some(c), Some(rows)) => {
+                let sinks = sinks.ok_or_else(|| LowerError::not_lowerable("ATTN_COMPRESSED_KV_V1: the softmax over the window and the entries carries the per-head sink"))?;
+                let m = c.ratio;
+                let blocks = self.s.max_position_embeddings.unwrap_or(self.s.hidden_size).div_ceil(m).max(1);
+                if blocks > 1 << 22 {
+                    return Err(LowerError::not_lowerable(format!("ATTN_COMPRESSED_KV_V1: {blocks} entries")));
+                }
+                let pfx = if c.overlap { "attn.csa" } else { "attn.hca" };
+                let store = self.state(&format!("{pfx}.entries"), StateKind::Fixed, vec![blocks, hd], 0.0)?;
+                bk.push(Op::BlockWrite { ratio: m, blocks }, vec![rows.ent, store, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(store)]);
+                let mut ins = vec![q, hist, store, sinks, Ref::Pos];
+                let mut select = false;
+                if let (Some(ix), Some((ient, iq, iw))) = (&c.indexer, rows.index) {
+                    let di = ix.head_dim;
+                    let keys = self.state("attn.idx.keys", StateKind::Fixed, vec![blocks, di], 0.0)?;
+                    let ids = Ref::Node(
+                        bk.push(
+                            Op::EntrySelect { heads: ix.heads, dim: di, ratio: m, blocks, top: ix.topk },
+                            vec![iq, iw, ient, keys, Ref::Pos],
+                            vec![vec![ix.topk]],
+                            vec![HlType::Idx],
+                            None,
+                            vec![],
+                        ),
+                        0,
+                    );
+                    bk.push(Op::BlockWrite { ratio: m, blocks }, vec![ient, keys, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(keys)]);
+                    ins.push(ids);
+                    select = true;
+                }
+                bk.f(Op::EntryAttention { heads, head_dim: hd, ratio: m, blocks, scale: a.scale, select }, ins, heads * hd, "attn.ctx")
+            }
+            (Some(_), None) => return Err(LowerError::eval("internal: a compressed layer's attention block without the rows of its compressors")),
+        };
+        // K = V carries the rotation: the output's rope slice is rotated back by the query's position.
+        let tb = self.rope_table(&a.rope_back.freqs);
+        let o = bk.f(
+            Op::Rope { heads, head_dim: hd, rotary_dim: a.rope_back.rotary_dim, offset: a.rope_back.offset, style: a.rope_back.style, table: tb },
+            vec![ctx, Ref::Pos],
+            heads * hd,
+            "attn.ctx_back",
+        );
+        // The block-diagonal low-rank projection: group `g` of the heads' lanes to `o_rank`, then one projection to the hidden width.
+        let g = a.o_groups;
+        if g == 0 || (heads * hd) % g != 0 {
+            return Err(LowerError::not_lowerable(format!("ATTN_OUT_GROUPED_LOWRANK_V1: {g} groups over {} lanes", heads * hd)));
+        }
+        let per = heads * hd / g;
+        let mut parts = Vec::with_capacity(g);
+        for gi in 0..g {
+            let sl = bk.st(Op::Slice { start: gi * per, len: per }, vec![o], per);
+            let y = self.linear(bk, sl, &format!("attn.wo_a{gi}"), a.o_rank, per, false, true, &format!("attn.o_a{gi}"))?;
+            parts.push((y, a.o_rank));
+        }
+        let (cat, width) = self.concat_tree(bk, parts);
+        self.linear(bk, cat, "attn.wo_b", d, width, false, true, "attn.out")
+    }
+
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
         let d = self.s.hidden_size;
+        if ls.pre_branch.is_some() && !matches!(ls.residual, Residual::Sequential { .. }) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1 is modelled under the sequential pre-norm residual only"));
+        }
+        if matches!(ls.ffn, Ffn::MlpShortcut(_)) && !matches!(ls.residual, Residual::Sequential { .. }) {
+            return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1 is lowered under a sequential pre-norm residual only"));
+        }
         let mut bk = Bk { nodes: vec![] };
         let x = Ref::Carry(0);
         let mut h = match &ls.residual {
@@ -553,9 +1279,20 @@ impl Builder<'_> {
                     }
                     x
                 } else {
-                    let n1 = match pre_mixer {
-                        Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
+                    // `LAYER_PRE_BRANCH_V1`: the mixer reads `norm(h + branch)`; the residual add below keeps `h`.
+                    let xin = match &ls.pre_branch {
+                        Some(pb) => {
+                            if pre_mixer.is_none() {
+                                return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the mixer's input norm is where the branch joins"));
+                            }
+                            let t = self.pre_branch(&mut bk, pb, x)?;
+                            bk.f(Op::Add, vec![x, t], d, "pb.sum")
+                        }
                         None => x,
+                    };
+                    let n1 = match pre_mixer {
+                        Some(n) => self.full_norm(&mut bk, xin, *n, "norm.mix", d, true)?,
+                        None => xin,
                     };
                     let mut m = self.mixer(&mut bk, &ls.mixer, n1)?;
                     if let Some(n) = post_mixer {
@@ -563,6 +1300,11 @@ impl Builder<'_> {
                     }
                     if *multiplier != 1.0 {
                         m = bk.f(Op::Scale { c: *multiplier }, vec![m], d, "mix.scaled");
+                    }
+                    // `ATTN_CROSS_V1`: the attention branch enters through `tanh(attn_gate)`.
+                    if matches!(&ls.mixer, Mixer::CrossAttention(c) if c.gated) {
+                        let g = self.param("xattn.attn_gate", vec![1], true, Init::Uniform(0.3, 0.9))?;
+                        m = bk.f(Op::ScaleParam, vec![m, g], d, "xattn.attn_gated");
                     }
                     bk.f(Op::Add, vec![x, m], d, "resid.mix")
                 };
@@ -577,6 +1319,10 @@ impl Builder<'_> {
                     }
                     if *multiplier != 1.0 {
                         f = bk.f(Op::Scale { c: *multiplier }, vec![f], d, "ffn.scaled");
+                    }
+                    if matches!(&ls.mixer, Mixer::CrossAttention(c) if c.gated) {
+                        let g = self.param("xattn.mlp_gate", vec![1], true, Init::Uniform(0.3, 0.9))?;
+                        f = bk.f(Op::ScaleParam, vec![f, g], d, "xattn.mlp_gated");
                     }
                     h = bk.f(Op::Add, vec![h, f], d, "resid.ffn");
                 }
@@ -640,6 +1386,8 @@ impl Builder<'_> {
                 }
                 h
             }
+            Residual::AltUp { .. } => return Err(LowerError::eval("internal: an AltUp layer is built by `altup_blocks`")),
+            Residual::Mhc { .. } => return Err(LowerError::eval("internal: an mHC layer is built by `mhc_blocks`")),
             // The FFN half: the mixer half ([`Builder::layer_blocks`]) carries in the streams.
             Residual::HyperConnection { .. } => {
                 if ls.ffn == Ffn::None {
@@ -662,6 +1410,60 @@ impl Builder<'_> {
         Ok(self.blocks.len() - 1)
     }
 
+    /// **`LAYER_PRE_BRANCH_V1`** (Zamba2's shared transformer): `t = out(mlp(mid_norm(attn(in_norm(concat[h, e0])))))`, no residual inside.
+    /// The weights are the group's (global params `pb{group}.*`, `ATTN_SHARED_BLOCK_V1`); the adapters (`LINEAR_LOWRANK_ADAPTER_V1`), the KV
+    /// history and the `out` projection are this layer's.
+    fn pre_branch(&mut self, bk: &mut Bk, pb: &PreBranch, h: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let Some(e0) = self.e0 else {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1 reads the embedding carry (EMBED_CARRY_V1), and the model has none"));
+        };
+        if pb.attn.in_dim != Some(2 * d) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the attention reads [hidden | embedding], in_dim = 2 * hidden"));
+        }
+        if pb.attn.kv_share.is_some() || pb.attn.sparse.is_some() || pb.attn.output_gate || pb.attn.gate.is_some() {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain attention (no KV sharing, sparse blocks or output gate)"));
+        }
+        if !pb.mlp.gated || pb.mlp.inner_norm.is_some() || pb.mlp.act == Act::Xielu || !matches!(pb.mlp.glu, Glu::Standard) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain gated MLP"));
+        }
+        let mut attn = pb.attn.clone();
+        attn.param_prefix = Some(pb.attn_prefix());
+        let mut mlp = pb.mlp.clone();
+        mlp.name = Some(pb.mlp_name());
+        let (apfx, mpfx) = (pb.attn_prefix(), pb.mlp_name());
+        let base = pb.adapter_base();
+        self.sharing = true;
+        self.lowrank.clear();
+        if let Some(lr) = pb.lowrank {
+            if lr.rank == 0 {
+                return Err(LowerError::bad("LINEAR_LOWRANK_ADAPTER_V1: a rank of zero"));
+            }
+            if lr.attn {
+                for r in ["q", "k", "v"] {
+                    self.lowrank.insert(format!("{apfx}.{r}"), (lr.rank, format!("{base}.attn.{r}")));
+                }
+            }
+            for r in ["gate", "up"] {
+                self.lowrank.insert(format!("{mpfx}.{r}"), (lr.rank, format!("{base}.mlp.{r}")));
+            }
+        }
+        let built = (|| -> Result<Ref> {
+            // `h` and `e0` side by side, the hidden state first. `pb.h` is a site of its own so the row has a scale to be coded at.
+            let hs = bk.f(Op::Scale { c: 1.0 }, vec![h], d, "pb.h");
+            let u = bk.f(Op::Concat, vec![hs, Ref::Carry(e0 as u8)], 2 * d, "pb.concat");
+            let un = self.norm(bk, u, pb.in_norm, &pb.in_norm_name(), 2 * d, 1, vec![2 * d], true, "pb.in_norm")?;
+            let a = self.attention(bk, &attn, un)?;
+            let m = self.norm(bk, a, pb.mid_norm, &pb.mid_norm_name(), d, 1, vec![d], true, "pb.mid_norm")?;
+            self.mlp(bk, &mlp, m, &mpfx)
+        })();
+        self.sharing = false;
+        self.lowrank.clear();
+        let f = built?;
+        // The layer's own projection of the branch (`Zamba2HybridLayer.linear`).
+        self.linear(bk, f, "pb.out", d, d, false, true, "pb.out")
+    }
+
     fn mixer(&mut self, bk: &mut Bk, m: &Mixer, x: Ref) -> Result<Ref> {
         match m {
             Mixer::Attention(a) => self.attention(bk, a, x),
@@ -674,6 +1476,8 @@ impl Builder<'_> {
             Mixer::ShortConv(c) => self.short_conv(bk, c, x),
             Mixer::None => Err(LowerError::eval("internal: a mixer was asked of a layer with none")),
             Mixer::Parallel(branches) => self.parallel(bk, branches, x),
+            Mixer::CrossAttention(c) => self.cross_attention(bk, c, x),
+            Mixer::SharedKv(_) => Err(LowerError::eval("internal: a shared-KV attention is built by its layer's blocks (`mhc_blocks`)")),
         }
     }
 
@@ -719,6 +1523,24 @@ impl Builder<'_> {
             Ffn::Moe(m) => self.moe(bk, m, x),
             Ffn::RwkvChannel(c) => self.rwkv_channel(bk, c, x),
             Ffn::MlpMoe(_) => Err(LowerError::eval("internal: an MLP+MoE block outside a sandwich layer")),
+            Ffn::MlpShortcut(sc) => {
+                let d = self.s.hidden_size;
+                let side = self
+                    .carries
+                    .iter()
+                    .position(|c| c.name == "side")
+                    .ok_or_else(|| LowerError::eval("internal: a shortcut layer without the side carry"))?;
+                let f = self.mlp(bk, &sc.mlp, x, sc.mlp.name.as_deref().unwrap_or("mlp"))?;
+                match &sc.side {
+                    // The MoE reads the same normed vector as the dense MLP; its output is carried, not added.
+                    ShortcutSide::Produce(m) => {
+                        let s = self.moe(bk, m, x)?;
+                        self.carry_out.insert(side, s);
+                        Ok(f)
+                    }
+                    ShortcutSide::Consume => Ok(bk.f(Op::Add, vec![f, Ref::Carry(side as u8)], d, "ffn.side")),
+                }
+            }
         }
     }
 
@@ -943,11 +1765,25 @@ impl Builder<'_> {
 
     fn attention(&mut self, bk: &mut Bk, a: &AttnSpec, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
+        // `ATTN_SHARED_BLOCK_V1`: the projections read a wider input (`[hidden | embedding]`) and `o` returns to the hidden width.
+        let din = a.in_dim.unwrap_or(d);
         let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
         let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
         let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
         let n = |s: &str| format!("{pf}.{s}");
-        let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
+        // `ATTN_DIFFERENTIAL_V1`: the values are double wide in the history, the context is combined before anything reads it.
+        if a.differential.is_some() {
+            if h % 2 != 0 || kv % 2 != 0 || kv == 0 || vd != hd || a.sinks || a.sparse.is_some() || a.kv_share.is_some() || a.output_gate {
+                return Err(LowerError::not_lowerable(format!(
+                    "ATTN_DIFFERENTIAL_V1 needs an even number of heads and of kv heads and values as wide as keys ({h} heads, {kv} kv heads, {hd}/{vd}), and has no sinks, sparse blocks, KV sharing or fused output gate"
+                )));
+            }
+        }
+        if let Some(moa) = &a.moa {
+            return self.moa_attention(bk, a, moa, x);
+        }
+        let vw = if a.differential.is_some() { 2 * vd } else { vd };
+        let mut q = self.linear(bk, x, &n("q"), qn, din, a.q_bias, true, &n("q"))?;
         // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
         if let Some(KvShare::Consumer { slot }) = a.kv_share {
             if a.output_gate || a.gate.is_some() || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
@@ -1001,7 +1837,7 @@ impl Builder<'_> {
             }
             return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
         }
-        let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
+        let mut k = self.linear(bk, x, &n("k"), kn, din, a.k_bias, true, &n("k"))?;
         // Gemma-4's `attention_k_eq_v`: the values are the raw key projection.
         let mut v = if a.v_from_k {
             if vd != hd {
@@ -1009,9 +1845,9 @@ impl Builder<'_> {
             }
             k
         } else {
-            self.linear(bk, x, &n("v"), vn, d, a.v_bias, true, &n("v"))?
+            self.linear(bk, x, &n("v"), vn, din, a.v_bias, true, &n("v"))?
         };
-        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, d, false, true, &n("gate"))?) } else { None };
+        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, din, false, true, &n("gate"))?) } else { None };
         // `ATTN_VALUE_SCALE_V1`: a constant on the values (it joins the value narrowing's multiplier in the lowering).
         if a.v_scale != 1.0 {
             v = bk.f(Op::Scale { c: a.v_scale }, vec![v], vn, &n("v_scaled"));
@@ -1023,7 +1859,7 @@ impl Builder<'_> {
             }
             Some(g) => {
                 let width = if g.per_head { h } else { h * vd };
-                let gl = self.linear(bk, x, &n("gate"), width, d, false, true, &n("gate"))?;
+                let gl = self.linear(bk, x, &n("gate"), width, din, false, true, &n("gate"))?;
                 let ga = bk.f(Op::Act(plain_act(g.act, "an attention output gate")?), vec![gl], width, &n("gate_act"));
                 Some(if g.per_head { bk.f(Op::GroupRepeat { groups: h, size: vd }, vec![ga], h * vd, &n("gate_rep")) } else { ga })
             }
@@ -1074,6 +1910,37 @@ impl Builder<'_> {
             q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, &n("q_temp"));
         }
         let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+        // `ATTN_DIFFERENTIAL_V1`: kv head `j` reads the value `[V_{j mod m} | V_{j mod m + m}]`, `m = Hkv/2` (HF's two
+        // `repeat(1, 2, ..)` of the value halves, then `repeat_kv`): head `i` and head `i + H/2` land on the same pair.
+        let vn = if a.differential.is_some() {
+            let m = kv / 2;
+            let piece = |bk: &mut Bk, from: usize| (bk.st(Op::Slice { start: from * hd, len: hd }, vec![v], hd), hd);
+            let mut parts: Vec<(Ref, usize)> = Vec::with_capacity(4 * m);
+            for _ in 0..2 {
+                for j in 0..m {
+                    parts.push(piece(bk, j));
+                    parts.push(piece(bk, m + j));
+                }
+            }
+            // A node takes at most 8 inputs (NF-14): a tree of concatenations.
+            while parts.len() > 1 {
+                parts = parts
+                    .chunks(8)
+                    .map(|c| {
+                        if c.len() == 1 {
+                            c[0]
+                        } else {
+                            let w: usize = c.iter().map(|p| p.1).sum();
+                            (bk.st(Op::Concat, c.iter().map(|p| p.0).collect(), w), w)
+                        }
+                    })
+                    .collect();
+            }
+            v = parts[0].0;
+            kv * vw
+        } else {
+            vn
+        };
         let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
         let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
         bk.append(k, ks);
@@ -1105,7 +1972,7 @@ impl Builder<'_> {
             heads: h,
             kv_heads: kv,
             head_dim: hd,
-            v_head_dim: vd,
+            v_head_dim: vw,
             scale: a.scale,
             softcap: a.softcap,
             window: a.window,
@@ -1114,7 +1981,21 @@ impl Builder<'_> {
             chunk: a.chunk,
             blocks,
         };
-        let mut o = bk.f(op, ins, h * vd, &n("ctx"));
+        let mut o = bk.f(op, ins, h * vw, &n("ctx"));
+        // `ATTN_DIFFERENTIAL_V1`: `(1 − λ_init)·RMS_{2d}(o_first_half_of_heads − λ·o_second_half)`, the subtraction on the
+        // attention's own codes (one narrowing of each half, then the exact difference).
+        if let Some(df) = &a.differential {
+            let hw = (h / 2) * vw;
+            let first = bk.st(Op::Slice { start: 0, len: hw }, vec![o], hw);
+            let second = bk.st(Op::Slice { start: hw, len: hw }, vec![o], hw);
+            let lam = self.param(&n("diff.lambda"), vec![1], true, Init::Uniform(0.2, 0.9))?;
+            let scaled = bk.f(Op::ScaleParam, vec![second, lam], hw, &n("diff.lambda_ctx"));
+            let diff = bk.f(Op::Sub, vec![first, scaled], hw, &n("diff.sub"));
+            let nspec = NormSpec { kind: NormKind::Rms, eps: df.norm_eps, gain: Gain::None, bias: false };
+            let normed = self.norm(bk, diff, nspec, &n("diff.norm"), hw, h / 2, vec![vw], true, &n("diff.norm"))?;
+            let sc = self.param(&n("diff.scale"), vec![1], true, Init::Uniform(0.2, 0.9))?;
+            o = bk.f(Op::ScaleParam, vec![normed, sc], hw, &n("diff.out"));
+        }
         if let Some(sg) = sep_gate {
             o = bk.f(Op::Mul, vec![o, sg], h * vd, &n("gated"));
         }
@@ -1127,6 +2008,132 @@ impl Builder<'_> {
             o = self.full_norm(bk, o, on, &n("sub_norm"), h * vd, true)?;
         }
         self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
+    }
+
+    /// **`ATTN_CROSS_V1`** (Mllama's `cross_attn`): `q = RMS_head(q_proj x)`; the attention over the declared states; `o_proj`. The
+    /// rows' keys and values are not computed here (the float reference computes them from the states; the integer program reads
+    /// stage 0's stack).
+    fn cross_attention(&mut self, bk: &mut Bk, c: &CrossAttnSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let rows = self.s.cross_states.ok_or_else(|| LowerError::eval("internal: a cross-attention layer without states"))?.rows;
+        let (h, kv, hd) = (c.heads, c.kv_heads, c.head_dim);
+        if h == 0 || kv == 0 || h % kv != 0 || hd == 0 || rows == 0 {
+            return Err(LowerError::not_lowerable(format!("ATTN_CROSS_V1: {h} heads over {kv} kv heads of {hd}, {rows} rows")));
+        }
+        let slots: Vec<usize> =
+            self.s.layers.iter().enumerate().filter(|(_, l)| matches!(l.mixer, Mixer::CrossAttention(_))).map(|(i, _)| i).collect();
+        let q = self.linear(bk, x, "xattn.q", h * hd, d, false, true, "xattn.q")?;
+        let qk = QkNorm { norm: c.q_norm, scope: QkNormScope::PerHeadShared };
+        let q = self.qk_norm(bk, q, &qk, "xattn.q_norm", h, hd)?;
+        let wk = self.param("xattn.k.w", vec![kv * hd, d], true, Init::Normal(W_STD))?;
+        let wv = self.param("xattn.v.w", vec![kv * hd, d], true, Init::Normal(W_STD))?;
+        let mut ins = vec![q, wk, wv];
+        if c.k_norm.gain != Gain::None {
+            ins.push(self.param("xattn.k_norm.gain", vec![hd], true, Init::Uniform(0.6, 1.4))?);
+        }
+        let ctx = bk.f(
+            Op::CrossAttention { heads: h, kv_heads: kv, head_dim: hd, scale: 1.0 / (hd as f64).sqrt(), rows, k_norm: c.k_norm, slots },
+            ins,
+            h * hd,
+            "xattn.ctx",
+        );
+        self.linear(bk, ctx, "xattn.o", d, h * hd, false, true, "xattn.out")
+    }
+
+    /// **`MIXER_MOA_V1`** (JetMoE): the router picks `k` experts; slot `j`'s query is `W_in[e_j]·x`; keys and values are one shared
+    /// projection; the output is `Σ_j g_j W_out[e_j]·ctx_j + bias`. Heads are laid out `(kv head, slot)` so that the attention's
+    /// `head / k` reads kv head `h` (HF tiles K and V `k` times: head `(j, h)` reads kv head `h`).
+    fn moa_attention(&mut self, bk: &mut Bk, a: &AttnSpec, moa: &MoaSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let (kvh, hd, k, e, h) = (a.kv_heads, a.head_dim, moa.top_k, moa.experts, a.heads);
+        let inner = kvh * hd;
+        let plain = a.qk_norm.is_none()
+            && a.v_norm.is_none()
+            && a.clip_qkv.is_none()
+            && a.gate.is_none()
+            && !a.output_gate
+            && !a.sinks
+            && a.sparse.is_none()
+            && a.kv_share.is_none()
+            && a.differential.is_none()
+            && a.q_temperature.is_none()
+            && a.chunk.is_none()
+            && !a.v_from_k
+            && a.o_norm.is_none()
+            && a.v_scale == 1.0
+            && !(a.q_bias || a.k_bias || a.v_bias || a.o_bias);
+        if h != kvh * k || a.v_head_dim != hd || k == 0 || k > e || !plain {
+            return Err(LowerError::not_lowerable(format!(
+                "MIXER_MOA_V1 needs heads = kv heads × top-k ({h} vs {kvh}×{k}), values as wide as keys, top-k within the experts, and no norms, gates, biases, clipping, sinks, sparse or shared keys"
+            )));
+        }
+        let r = &moa.router;
+        if r.scoring != Scoring::TopKThenSoftmax || r.selection_bias || r.groups.is_some() || r.per_expert_scale || r.normalize || r.scale != 1.0 {
+            return Err(LowerError::not_lowerable("MIXER_MOA_V1 routes by the top-k of the logits then a softmax (no bias, groups, scale or renormalisation)"));
+        }
+        let logits = self.linear(bk, x, "moa.router", e, d, r.linear_bias, true, "moa.router")?;
+        let route = bk.push(
+            Op::Route { router: r.clone(), experts: e, top_k: k, zero: 0 },
+            vec![logits],
+            vec![vec![k], vec![k]],
+            vec![HlType::Idx, HlType::F32],
+            Some("moa.route"),
+            vec![],
+        );
+        let (ids, gates) = (Ref::Node(route, 0), Ref::Node(route, 1));
+        let w_in = self.param("moa.experts.input", vec![e, inner, d], true, Init::Normal(W_STD))?;
+        let q = bk.f(Op::ExpertLinear { top_k: k, per_slot: false, wide: false }, vec![x, ids, w_in], k * inner, "moa.q");
+        let mut q = bk.st(Op::Transpose01 { n0: k, n1: kvh, n2: hd }, vec![q], k * inner);
+        let kv = self.linear(bk, x, "attn.kv", 2 * inner, d, false, true, "attn.kv")?;
+        let mut kk = bk.st(Op::Slice { start: 0, len: inner }, vec![kv], inner);
+        let vv = bk.st(Op::Slice { start: inner, len: inner }, vec![kv], inner);
+        let mut alibi = None;
+        match &a.position {
+            Position::Rope(rp) => {
+                let t = self.rope_table(&rp.freqs);
+                q = bk.f(
+                    Op::Rope { heads: h, head_dim: hd, rotary_dim: rp.rotary_dim, offset: rp.offset, style: rp.style, table: t },
+                    vec![q, Ref::Pos],
+                    h * hd,
+                    "attn.q_rope",
+                );
+                kk = bk.f(
+                    Op::Rope { heads: kvh, head_dim: hd, rotary_dim: rp.rotary_dim, offset: rp.offset, style: rp.style, table: t },
+                    vec![kk, Ref::Pos],
+                    inner,
+                    "attn.k_rope",
+                );
+            }
+            Position::Alibi(al) => alibi = Some(al.clone()),
+            Position::None => {}
+        }
+        let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+        let ks = self.state(&format!("attn.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![inner], 0.0)?;
+        let vs = self.state(&format!("attn.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![inner], 0.0)?;
+        bk.append(kk, ks);
+        bk.append(vv, vs);
+        let op = Op::Attention {
+            heads: h,
+            kv_heads: kvh,
+            head_dim: hd,
+            v_head_dim: hd,
+            scale: a.scale,
+            softcap: a.softcap,
+            window: a.window,
+            alibi,
+            sinks: false,
+            chunk: None,
+            blocks: None,
+        };
+        let o = bk.f(op, vec![q, ks, vs], h * hd, "attn.ctx");
+        let o = bk.st(Op::Transpose01 { n0: kvh, n1: k, n2: hd }, vec![o], h * hd);
+        let w_out = self.param("moa.experts.output", vec![e, d, inner], true, Init::Normal(W_STD))?;
+        let y = bk.f(Op::ExpertLinear { top_k: k, per_slot: true, wide: true }, vec![o, ids, w_out], k * d, "moa.out_rows");
+        let mut ins = vec![y, gates];
+        if moa.out_bias {
+            ins.push(self.param("moa.bias", vec![d], true, Init::Uniform(-0.1, 0.1))?);
+        }
+        Ok(bk.f(Op::WeightedSum { top_k: k, out_bias: moa.out_bias }, ins, d, "attn.out"))
     }
 
     fn qk_norm(&mut self, bk: &mut Bk, x: Ref, qk: &QkNorm, name: &str, heads: usize, hd: usize) -> Result<Ref> {
@@ -1504,11 +2511,25 @@ impl Builder<'_> {
         let i = m.intermediate;
         let u = self.linear(bk, x, &format!("{pfx}.up"), i, d, m.up_bias, true, &format!("{pfx}.up"))?;
         let mut hdn = if m.gated {
-            let g = self.linear(bk, x, &format!("{pfx}.gate"), i, d, m.up_bias, true, &format!("{pfx}.gate"))?;
+            let mut g = self.linear(bk, x, &format!("{pfx}.gate"), i, d, m.up_bias, true, &format!("{pfx}.gate"))?;
+            // `FFN_ACTIVATION_SPARSITY_V1`: only what lies above `mean + z·std` of the gate row survives the activation.
+            if m.sparsity.is_some() {
+                if !matches!(m.glu, Glu::Standard) {
+                    return Err(LowerError::not_lowerable("FFN_ACTIVATION_SPARSITY_V1 under a clamped SwiGLU"));
+                }
+                g = bk.f(Op::GaussianTopK { layers: vec![] }, vec![g], i, &format!("{pfx}.sparse"));
+            }
             match m.glu {
                 Glu::Standard => {
                     let a = self.activation(bk, m.act, g, i, &format!("{pfx}.act"))?;
                     bk.f(Op::Mul, vec![a, u], i, &format!("{pfx}.hidden"))
+                }
+                // `MLP_GLU_LIMITED_V1`: `act(min(gate, L)) · clamp(up, −L, L)`.
+                Glu::LimitedGlu { limit } => {
+                    let gc = bk.f(Op::Clamp { lo: -1.0e30, hi: limit }, vec![g], i, &format!("{pfx}.gate_limited"));
+                    let uc = bk.f(Op::Clamp { lo: -limit, hi: limit }, vec![u], i, &format!("{pfx}.up_limited"));
+                    let a = self.activation(bk, m.act, gc, i, &format!("{pfx}.act"))?;
+                    bk.f(Op::Mul, vec![a, uc], i, &format!("{pfx}.hidden"))
                 }
                 Glu::ClampedSwiGlu { alpha, limit } => {
                     if m.act == Act::Xielu {
@@ -1548,9 +2569,9 @@ impl Builder<'_> {
         // A spec flag the lowering would not apply is a refusal, never a silent no-op (FR-26): a model whose router
         // carries one of these would otherwise compute a different function with no error anywhere.
         let r = &m.router;
-        if r.selection_bias && !matches!(r.scoring, Scoring::Sigmoid | Scoring::Softmax) {
+        if r.selection_bias && !matches!(r.scoring, Scoring::Sigmoid | Scoring::Softmax | Scoring::SqrtSoftplus) {
             return Err(LowerError::not_lowerable(format!(
-                "router selection bias with {:?} scoring: the bias joins the selection scores of the sigmoid and softmax routers only, so this lowering would drop it",
+                "router selection bias with {:?} scoring: the bias joins the selection scores of the sigmoid, softmax and √softplus routers only, so this lowering would drop it",
                 r.scoring
             )));
         }
@@ -1560,19 +2581,37 @@ impl Builder<'_> {
                 r.jitter_eps, r.scoring
             )));
         }
-        let logits = self.linear(bk, rx, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
+        // `MLP_MOE_ZERO_EXPERT_V1`: the router (and its bias) run over the real experts plus the identity ones; the tensors of the
+        // experts keep `e` rows.
+        let z = m.zero_experts;
+        if z > 0 && (m.router.per_expert_scale || m.input_scaled || m.latent.is_some() || !matches!(m.glu, Glu::Standard) || m.router.groups.is_some()) {
+            return Err(LowerError::not_lowerable(
+                "MLP_MOE_ZERO_EXPERT_V1 with a per-expert scale, input-scaled or latent experts, a clamped GLU or group-limited routing is not modelled",
+            ));
+        }
+        let ne = e + z;
+        let logits = self.linear(bk, rx, "moe.router", ne, d, m.router.linear_bias, true, "moe.router")?;
         let mut rins = vec![logits];
         if m.router.selection_bias {
-            rins.push(self.param("moe.sel_bias", vec![e], true, Init::Uniform(-0.05, 0.05))?);
+            rins.push(self.param("moe.sel_bias", vec![ne], true, Init::Uniform(-0.05, 0.05))?);
+        }
+        // `MLP_MOE_ROUTER_HASH_V1`: the frozen token table whose row is the token's experts (read by the token id).
+        if m.router.scoring == Scoring::SqrtSoftplusHash {
+            rins.push(self.param("moe.tid2eid", vec![self.s.vocab_size, m.top_k], true, Init::Zeros)?);
         }
         if m.router.per_expert_scale {
             rins.push(self.param("moe.expert_scale", vec![e], true, Init::Uniform(0.5, 1.5))?);
         }
+        let (outs, types) = if z > 0 {
+            (vec![vec![m.top_k], vec![m.top_k], vec![1]], vec![HlType::Idx, HlType::F32, HlType::F32])
+        } else {
+            (vec![vec![m.top_k], vec![m.top_k]], vec![HlType::Idx, HlType::F32])
+        };
         let route = bk.push(
-            Op::Route { router: m.router.clone(), experts: e, top_k: m.top_k },
+            Op::Route { router: m.router.clone(), experts: ne, top_k: m.top_k, zero: z },
             rins,
-            vec![vec![m.top_k], vec![m.top_k]],
-            vec![HlType::Idx, HlType::F32],
+            outs,
+            types,
             Some("moe.route"),
             vec![],
         );
@@ -1591,8 +2630,14 @@ impl Builder<'_> {
             ins.push(self.param("moe.experts.up_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
             ins.push(self.param("moe.experts.down_b", vec![e, dl], true, Init::Uniform(-0.1, 0.1))?);
         }
+        if z > 0 {
+            ins.push(Ref::Node(route, 2));
+        }
+        if m.out_bias {
+            ins.push(self.param("moe.bias", vec![d], true, Init::Uniform(-0.1, 0.1))?);
+        }
         let mut y = bk.f(
-            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated },
+            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated, identity: z > 0, out_bias: m.out_bias },
             ins,
             dl,
             "moe.routed",
@@ -1605,11 +2650,12 @@ impl Builder<'_> {
                 intermediate: sh.intermediate,
                 act: m.act,
                 gated: m.gated,
-                glu: Glu::Standard,
+                glu: if matches!(m.glu, Glu::LimitedGlu { .. }) { m.glu } else { Glu::Standard },
                 up_bias: false,
                 down_bias: false,
                 inner_norm: None,
                 name: None,
+                sparsity: None,
             };
             let mut s = self.mlp(bk, &spec, x, "moe.shared")?;
             if sh.sigmoid_gate {
@@ -1645,7 +2691,13 @@ fn mixer_name(m: &Mixer) -> String {
         Mixer::ShortConv(_) => "shortconv".into(),
         Mixer::RwkvTime(r) => format!("rwkv{}", r.version),
         Mixer::None => String::new(),
+        Mixer::CrossAttention(_) => "xattn".into(),
         Mixer::Parallel(bs) => bs.iter().map(|b| mixer_name(&b.mixer)).collect::<Vec<_>>().join("|"),
+        Mixer::SharedKv(a) => match &a.compressed {
+            None => "skv".into(),
+            Some(c) if c.overlap => "skv.csa".into(),
+            Some(_) => "skv.hca".into(),
+        },
     }
 }
 
@@ -1657,6 +2709,7 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::Moe(_) => "+moe".into(),
         Ffn::RwkvChannel(_) => "+cmix".into(),
         Ffn::MlpMoe(_) => "+mlp|moe".into(),
+        Ffn::MlpShortcut(_) => "+mlp|shortcut".into(),
     };
     // A layer with no mixer is its FFN alone: `mlp`, `moe`.
     if mix.is_empty() { ffn.trim_start_matches('+').to_string() } else { format!("{mix}{ffn}") }

@@ -748,6 +748,82 @@ Evidence: tiny HF Kimi-Linear (4 layers: three delta, one NoPE latent; dense and
 to transformers, integer top-1 0.986 / KL 6·10^-4, court three-way and typed backend equal (corpus entry `kimi_linear`: Level B, every stage); the
 27-layer release shape binds every tensor (config written from the class's defaults; its layer lists are as remembered, so that test is of the mechanism).
 
+### 9.15 Zamba2 (`ATTN_SHARED_BLOCK_V1`, `EMBED_CARRY_V1`, `LAYER_PRE_BRANCH_V1`, `LINEAR_LOWRANK_ADAPTER_V1`, `TENSOR_NAME_ALTERNATIVES_V1`; FR-13)
+
+One data adapter (`zamba2`) over four spec features and one weights feature, all lowered to the existing ops: **no primitive, no court kernel, no consensus
+change**, every earlier golden row byte-identical. FR-13 says the shared block "is necessary but not sufficient"; this is the whole set.
+
+*The layer* (`LayerSpec.pre_branch`, `PreBranch`). A hybrid layer feeds `u = RMSNorm_2D(concat[h, e0])` (`e0` the raw embedding) through a transformer —
+attention `q, k, v: 2D -> heads * (2D / heads)`, scale `(head_dim / 2)^-1/2`, an optional rotary embedding (`use_mem_rope`), then `pre_ff_layernorm`, a gated MLP
+(`gate_up_proj` `[gate | up]` rows, the activation on the gate) — with NO residual inside, a per-layer `D x D` linear `t`, and adds only `t` to the MAMBA input of
+that layer: `h <- h + mamba(input_layernorm(h + t))`. The builder (`Builder::pre_branch`) places the branch before the mixer's norm; the residual add keeps `h`.
+
+*The carry* (`ModelSpec.embed_carry`). `e0` is one more `i16` carry, filled by the pre block, passed through every layer block by an identity clamp, read by
+the branches. The carry has a scale, fixed by the one block that fills it, as a KV slot's has (`carry_out`: the zero rows of a KV slot stay unscaled, the
+embedding's row is coded at its own site). In the branch `concat` is `h` coded at a site of its own (`pb.h`) with `e0` re-expressed in that scale: the RMS norm
+is over the joint vector, so the relative scale of the two halves is the function's.
+
+*The sharing* (`PreBranch.group`). The branch's weights and norm gains are GLOBAL params `pb{group}.*` (one set of integer tensors in the artifact: Zamba2-7B's two
+shared blocks are not thirteen copies), each occurrence with its own activation scales, KV history and adapters. `num_mem_blocks` blocks alternate over the
+hybrid layers (ordinal `i` uses block `i mod num_mem_blocks`) and are stored under the first hybrid layers' `shared_transformer` modules
+(`PreBranch.weights_layer`, the `{B}` of a role's tensor name). **Each hybrid layer is a block kind of its own** (its adapters are its own tensors, named by ordinal,
+`pb{group}.d{ordinal}.*`): the program has one block per hybrid depth, not per shared block — a program-size cost, not a function or an artifact-size one (the
+shared weights are in the artifact once). A second binding form, a per-layer placeholder resolved by the loader, would let the depths share a block; it is not built.
+
+*The adapters* (`PreBranch.lowrank`, `LINEAR_LOWRANK_ADAPTER_V1`). `y = W x + B (A x)`, `A: [r, in]`, `B: [out, r]`, the tensors of the checkpoint's
+`gate_up_proj_adapter_list[ordinal]` (always) and `linear_{q,k,v}_adapter_list[ordinal]` (`use_shared_attention_adapter`): the unmerged LoRA path an external
+adapter takes (`LoraOp`, scale 1), over HL params of the layer's own. The fused gate/up adapter is `A` once and `B` split by rows between the gate and the
+up projection. (With fewer key/value heads than heads, transformers' own adapter widths do not fit its `k_proj`: 5.17 does not run that configuration.)
+
+*The tying quirk.* transformers 5.17 ties the shared blocks ONLY when `tie_word_embeddings` is set (`get_expanded_tied_weights_keys` returns nothing otherwise): an
+untied Zamba2 has an independent block in every hybrid layer, each stored in its own module, and the adapter reads it that way (group = ordinal, `weights_layer` =
+the layer itself). Released Zamba2 configs are tied.
+
+*Names* (`TENSOR_NAME_ALTERNATIVES_V1`). A hybrid layer's Mamba sits under `mamba_decoder` (`layers.N.mamba_decoder.mamba`, `layers.N.mamba_decoder.input_layernorm`), a plain
+layer's under `layers.N.mamba`: a role's name may list alternatives, `a|b`, and the weights loader takes the first the checkpoint has (`Resolver::resolve`: every binding —
+float reference, conversion, streaming, the unused-tensor report — sees it). The Mamba-2 parameters are the same HL params in every layer.
+
+*The Mamba-2 mixer.* `conv_bias` is hard-coded true in 5.17 (`use_conv_bias` is dead), the gated norm's epsilon `1e-5`, its group count `mamba_ngroups`; and the dt clamp of
+FR-27(d) applies as for Nemotron-H: `dt_min = 0`, the fixtures' `dt_bias` keeping the step size above `time_step_min`.
+
+Evidence. Tiny HF Zamba2 with six layers, three of them hybrid over TWO shared blocks (ordinals 0, 1, 2 use blocks 0, 1, 0), per-depth adapters on the MLP and on q, k, v, the
+rotary embedding and two Mamba-2 groups: float `1.2·10^-5` absolute on logits of scale 4.9 (`2.4·10^-6` relative) against transformers; integer top-1 0.875, KL 0.026
+(the W8 noise of ten matmuls a hybrid layer through six layers on random weights; the tolerance of a tiny fixture is 0.03); reference, ref2 and exec equal on
+every commit. The corpus entry `zamba2` (3 layers, one hybrid): Level B, every stage (float `1.5·10^-6`, top-1 0.972, KL 0.0013, court equal on 1,296 commit points).
+The class-default configuration (54 layers, nine hybrid, one shared block) binds every tensor.
+
+### 9.16 ChatGLM3 and a way to pin a remote-code reference (`REFERENCE_REMOTE_CODE_V1`; FR-24)
+
+ChatGLM3's forward is the repository's `modeling_chatglm.py`, not a transformers class: no data can express a model whose semantics are not pinned to a library
+version, and the chain has no way to run remote code. **Policy, as built**: the lowering follows the repository's source; the architecture's verdict is
+`LOWERABLE_UNVERIFIED` (the program's own verdict stands, the reference column is empty, `check-architecture` says which module and, when the adapter pins one, which file);
+what a registrant can add is a PIN and a fixture.
+
+*The adapter* (`chatglm3`, built in; its refusal deleted). Follows the file AS RECALLED — there is no copy offline. Per layer `input_layernorm` (RMSNorm, LayerNorm when `rmsnorm` is false),
+multi-query attention with a fused `query_key_value` (rows `[q | k | v]`, `multi_query_group_num` key/value groups; per-head `[q_h | k_h | v_h]` without
+`multi_query_attention`) with a bias under `add_qkv_bias` or `add_bias_linear`, a rotary embedding over the FIRST HALF of each head's channels on ADJACENT pairs (`rotary_dim // 2`
+frequencies of base `10000 * rope_ratio`: the existing partial interleaved rotary, factor 0.5), `dense`, `post_attention_layernorm`, a SwiGLU MLP (`dense_h_to_4h` rows `[gate | up]`,
+silu on the gate), a final norm (`post_layer_norm`) and `transformer.output_layer`; the scale is `1/sqrt(kv_channels)` (`apply_query_key_layer_scaling` moves a layer-number factor
+that cancels). No new feature of the model is needed: **ChatGLM3 is Llama-shaped data**; the whole gap was the reference. Refused by name: `apply_residual_connection_post_layernorm`, P-tuning
+prefixes, `quantization_bit`. One numeric difference is left open: the release stores its rotary table in half precision (the checkpoint's dtype); this program's table is exact.
+
+*The pin* (`Reference::RemoteCode { module, pin }`). An adapter may declare `"remote_code_pin": {"<module>": "<sha256 of the modelling file>"}` (lowercase, 64 hex characters, refused
+otherwise): the file its lowering follows. `tools/remote_reference.py CODE_DIR CONFIG.json OUT_DIR` is the registrant's side, offline and in one process: it loads the repository's
+`*.py` through `AutoConfig` / `AutoModelForCausalLM` with `trust_remote_code=True` from the LOCAL directory only, builds a tiny model with the repository's `auto_map` (a model that is not
+tiny is refused on the meta device first), randomises it, rounds it to bfloat16, saves it, reloads it, runs fixed tokens, and writes `config.json`, `model.safetensors`,
+`reference.json` (the corpus layout) and `pin.json` (`sha256` of every file). `--check` verifies a fixture's pin against a code directory. **The pin is declared, not attested**: it says which
+file the registrant's fixture came from, not that the file is the repository's; the verdict stays `LOWERABLE_UNVERIFIED` pinned or not, and `check-architecture` prints
+`remote code (`module`, pinned by its adapter to sha256 ...)` or `(no file pinned)`. The built-in adapter cannot pin (no file to hash); a registrant's own adapter does.
+
+*The corpus entry* (`chatglm3`, tiny: 3 layers, 4 heads, 2 groups of 8). Built by that script from `tools/corpus/remote/chatglm3/` — a RECONSTRUCTION of the repository's `configuration_chatglm.py`
+and `modeling_chatglm.py` written from the documented forward (module and tensor names as the checkpoint's; PyTorch >= 2 path), NOT the repository's files. The harness runs every stage
+that can run — read, lower, admit, bind (every tensor read), float reference against the logits the file gave, integer against float, reference/ref2/exec identity, court — and marks the reference
+stage `reference_unverified` (report: `float_vs_hf.reference_kind`); the entry's level reads **`B (reference unverified)`**. It is Level B in the sense that matters (a registrant who runs the
+flow above on the real file gets the same stages against the real reference) and NOT in the sense that ChatGLM3 as shipped has been confirmed: only a run against the repository's file does that.
+
+Evidence. Tiny model (reconstruction): float `< 1·10^-4` of the logit scale against the file's logits, integer top-1 and KL as the other tiny fixtures, reference, ref2 and exec equal; the
+published-style 6B configuration (28 layers, 32 heads over 2 groups of 128, 13,696 FFN, 65,024 vocabulary) binds every tensor and is admitted.
+
 ## 10. The gates that keep it honest
 
 | gate | what it holds |

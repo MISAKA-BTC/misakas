@@ -1,4 +1,4 @@
-//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 94 tiny-fixture
+//! **Freeze criterion 4 on the HF-lowered programs**: for every one of the 99 tiny-fixture
 //! architectures (and the 35 pre-quantised GPTQ/AWQ/FP8/compressed-tensors/GGUF fixtures), the lowered program with its
 //! calibrated integer params is run on
 //!
@@ -49,7 +49,7 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
     let mut names: Vec<String> =
         std::fs::read_dir(&root).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
     names.sort();
-    assert_eq!(names.len(), 94);
+    assert_eq!(names.len(), 99);
     let mut failed = Vec::new();
     let mut total = 0;
     for n in &names {

@@ -177,7 +177,7 @@ pub fn parse_legacy(v: &Value) -> Result<ArchSpec> {
                     "{arch}: trust_remote_code module `{module}` is not modelled — its forward may differ from any transformers class"
                 )));
             }
-            Reference::RemoteCode { module }
+            Reference::RemoteCode { module, pin: None }
         }
         None => {
             if REMOTE_ONLY.contains(&arch.as_str()) {
@@ -532,6 +532,8 @@ impl P<'_> {
             final_norm: s.final_norm,
             head: s.head,
             hyper: None,
+            altup: None,
+            mhc: None,
             output: OutputSpec::Logits,
             adapter: None,
             hf: HfStorage {
@@ -549,6 +551,8 @@ impl P<'_> {
             },
             notes: std::mem::take(&mut self.notes),
             prefix_lm: false,
+            cross_states: None,
+            embed_carry: false,
         }
     }
 }
@@ -606,11 +610,11 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
+    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None }
+    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.
@@ -671,6 +675,9 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         sparse: None,
         gate: None,
         v_scale: 1.0,
+        in_dim: None,
+        differential: None,
+        moa: None,
     }
 }
 

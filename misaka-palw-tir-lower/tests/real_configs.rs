@@ -493,7 +493,7 @@ fn refusals_name_their_reason() {
     refused("rwkv7-fla-1.5b", "flash-linear-attention");
     refused("t5-small", "encoder–decoder");
     refused("bert-base-uncased", "no adapter");
-    refused("gemma-3n-e4b", "AltUp");
+    refused("gemma-3n-e4b", "multimodal Gemma-3n");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
@@ -591,4 +591,88 @@ fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
     // The features a registrant sees named.
     let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
     assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
+}
+
+/// **Zamba2** (`ATTN_SHARED_BLOCK_V1` and its companions, a data adapter) at the class's own defaults (the shape `Zamba2Config()` documents as the
+/// 2.7B one): 54 layers, nine of them hybrid by the default pattern, one shared block, an adapter rank of 128 on the shared MLP. Written from the class's
+/// defaults, so the test is of the structure (which layers are hybrid, what is shared, that every param binds), not of any release's numbers.
+#[test]
+fn zamba2_at_the_class_defaults_has_nine_hybrid_layers_over_one_shared_block_and_binds_every_tensor() {
+    let (s, p) = ok("zamba2-class-defaults");
+    assert_eq!(s.layers.len(), 54);
+    let hybrid: Vec<usize> = (0..54).filter(|l| s.layers[*l].pre_branch.is_some()).collect();
+    assert_eq!(hybrid, [6, 12, 18, 24, 30, 36, 42, 47, 51]);
+    assert!(hybrid.iter().all(|l| s.layers[*l].pre_branch.as_ref().is_some_and(|b| b.group == 0 && b.weights_layer == 6)));
+    let Mixer::Mamba2(m) = &s.layers[0].mixer else { panic!() };
+    assert_eq!((m.heads, m.head_dim, m.state, m.conv_kernel, m.groups), (8, 640, 64, 4, 1));
+    assert!(m.conv_bias && m.dt_min == 0.0 && m.norm_eps == 1e-5);
+    let pb = s.layers[6].pre_branch.as_ref().unwrap();
+    assert_eq!((pb.attn.heads, pb.attn.head_dim, pb.attn.in_dim), (32, 160, Some(5120)));
+    assert_eq!(pb.mlp.intermediate, 10240);
+    assert_eq!(pb.lowrank.map(|l| (l.rank, l.attn)), Some((128, false)));
+    assert!(s.head.tied);
+    assert_eq!(s.hf.names["pb.attn.q"], "model.layers.{B}.shared_transformer.self_attn.q_proj");
+    // One shared set of weights for nine layers; nine adapters of their own.
+    assert!(p.params.iter().filter(|d| d.name == "pb0.attn.q.w").count() == 1);
+    assert_eq!(p.params.iter().filter(|d| d.name.ends_with(".mlp.gate.lora_a")).count(), 9);
+}
+
+/// **ChatGLM3** (`REFERENCE_REMOTE_CODE_V1`, a data adapter over remote code): THUDM/chatglm3-6b's published-style configuration — 28 layers, multi-query attention with two key/value
+/// groups over 32 heads of 128, a fused `query_key_value` with a bias, a rotary embedding over the first half of each head on adjacent pairs, a SwiGLU MLP of 13,696, an untied head over
+/// 65,024 tokens. Written from the repository's config as remembered, and the adapter follows a modelling file this crate has no copy of: the architecture is LOWERABLE_UNVERIFIED.
+#[test]
+fn chatglm3_6b_is_a_partial_interleaved_multi_query_decoder_and_binds_every_tensor() {
+    let (s, p) = ok("chatglm3-6b");
+    assert_eq!(s.layers.len(), 28);
+    let a = attn(&s, 0);
+    assert_eq!((a.heads, a.kv_heads, a.head_dim), (32, 2, 128));
+    assert_eq!((rope(a).rotary_dim, rope(a).style), (64, crate_rope::RopeStyle::Interleaved));
+    assert_eq!(rope(a).freqs.theta, 10000.0);
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.intermediate == 13696));
+    assert_eq!(s.vocab_size, 65024);
+    assert!(!s.head.tied);
+    assert_eq!(kinds(&p), 1);
+    assert!(matches!(s.reference, Reference::RemoteCode { ref module, pin: None } if module == "modeling_chatglm.ChatGLMForConditionalGeneration"));
+    // ChatGLM3-32k's `rope_ratio` scales the base.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/chatglm3-6b.json")).unwrap();
+    let long = parse_config_str(&cfg.replace("\"rmsnorm\": true", "\"rmsnorm\": true, \"rope_ratio\": 50")).unwrap();
+    assert_eq!(rope(attn(&long, 0)).freqs.theta, 500000.0);
+}
+
+/// **Gemma-3n's text decoder** (FR-12): four AltUp streams, LAuReL, per-layer inputs, the first ten layers sparse, the last fifteen
+/// sharing keys and values — and no tensor name left unmapped.
+#[test]
+fn gemma_3n_e4b_text_is_altup_with_laurel_and_sparse_layers() {
+    let (s, p) = ok("gemma-3n-e4b-text");
+    assert_eq!(s.num_layers(), 35);
+    assert_eq!(s.altup.map(|a| (a.streams, a.correct_scale)), Some((4, true)));
+    let sparse = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity == Some(0.95))).count();
+    assert_eq!(sparse, 10);
+    assert!(s.layers.iter().all(|l| matches!(&l.residual, Residual::AltUp { laurel: Some(l), .. } if l.rank == 64)));
+    let shared = s.layers.iter().filter(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.kv_share, Some(KvShare::Consumer { .. })))).count();
+    assert_eq!(shared, 15);
+    assert_eq!(p.carries[0].shape, vec![5 * 2048], "four streams and the layer's intermediate");
+}
+
+/// **DeepSeek-V4's text decoder** (FR-10): four mHC streams with 20 Sinkhorn iterations, shared-KV attention (one 512-lane head under 64 query
+/// heads), the first layers hash-routed, compressed entries by layer type (HCA windows of 128; CSA windows of 4 with the indexer over 512
+/// entries) — every tensor name mapped, and a program of at most 16 blocks.
+#[test]
+fn deepseek_v4_flash_is_mhc_over_shared_kv_attention_with_csa_and_hca_layers() {
+    let (s, p) = ok("deepseek-v4-flash");
+    assert_eq!(s.num_layers(), 43);
+    assert_eq!(s.mhc.map(|m| (m.streams, m.iters)), Some((4, 20)));
+    let skv = |l: usize| match &s.layers[l].mixer {
+        Mixer::SharedKv(a) => a,
+        m => panic!("layer {l} is {m:?}"),
+    };
+    assert_eq!((skv(0).heads, skv(0).head_dim, skv(0).o_groups), (64, 512, 8));
+    let c0 = skv(0).compressed.as_ref().expect("a compressed layer");
+    assert_eq!((c0.ratio, c0.overlap, c0.indexer.is_none()), (128, false, true), "the first layers are HCA");
+    let csa: Vec<usize> = (0..43).filter(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.overlap)).collect();
+    assert!(!csa.is_empty() && csa.iter().all(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.ratio == 4 && c.indexer.as_ref().is_some_and(|i| i.topk == 512))));
+    let hash = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Moe(m) if m.router.scoring == Scoring::SqrtSoftplusHash)).count();
+    assert_eq!(hash, 3);
+    assert!(s.layers.iter().all(|l| matches!(&l.ffn, Ffn::Moe(m) if matches!(m.glu, Glu::LimitedGlu { limit } if limit == 10.0))));
+    assert!(p.blocks.len() <= 16, "{} blocks", p.blocks.len());
 }

@@ -311,6 +311,12 @@
     "params": 172,
     "program": "ed398716605a8a3175a6db7d4299bd92411b5a9235fd41b6d97de41a97560347e9190579be0336e22902156e09f5b7c6a1267131c604296aa3c55e1f48e260db"
   },
+  "hf/diffllama": {
+    "artifact": "b058ae0a2f0459c81b2ed1b7da298414637b4c3a8ebce23267f1ae64ec4d8dacc38eb74251e4f1f97a58176be62ca77d506c1892042b9c82baff33d20b96171e",
+    "nodes": 369,
+    "params": 81,
+    "program": "ab87b832a840104f3ed93c4e1edb9a7879ae493a0b8c0018723599a63a59b1fd2f1e44ac9a11e3b67b54c93d5b8329e2e24451e4ebf452236e87b804574fc76d"
+  },
   "hf/exaone4": {
     "artifact": "11fabecb20c4facb13c4d0da019c574d24b4e4673ce17c61b77310fe658d7333f439b9853cc5a489d365c0e10d3d64c90344b8e76a35ae860a5977283b32d3a8",
     "nodes": 607,
@@ -479,6 +485,12 @@
     "params": 142,
     "program": "add6798af9edd6ed4b1f8fc55745d8d63552e6eb3aa803439b6792d1134628727565096667bf514f5800280f2b7dba503eb614ab5a006b0bd4eda2040083aaba"
   },
+  "hf/jetmoe": {
+    "artifact": "5faa878e404dba62055b46909781e5599ca9d60107c285327954f5077f305beb74f0a3d0b7dc6d32ee59b3ea6c2fe1062908295f8d354dca54a87b67bf96592c",
+    "nodes": 334,
+    "params": 55,
+    "program": "92ed43f2d94c63d2bb2d2d2496ed52f3a6a925aab8b1aa653922dae1a09e1e44dc8072aea67c59359a7c7868db37da98a6e572146c0fb2c9c8d766ed93d3cade"
+  },
   "hf/kimi_linear": {
     "artifact": "b72633bb36a2dc05b0daa5799600c5acf88f6121e53392e169ead35da6f3b9b72b1d7136764f3f434ca5888acb167449d90c33ee56a5185bc6e055083e822832",
     "nodes": 1390,
@@ -521,6 +533,12 @@
     "params": 71,
     "program": "80eb404d6305888945a3a633f83463eac60c8321422d8e07fee621e89f1320aba086196ae1177e0d92a56675f5c54721a19e6150f04dddc57520cab752b0676d"
   },
+  "hf/longcat_flash": {
+    "artifact": "aa5ef6f478b77031cd2a57c931aa4d1a0f890f49cf9db2a29fb8d874fa6d89e3de3c4bc428ea869b8c043d7983b82f40aee12e0220993f7fcc6c109262b1774f",
+    "nodes": 873,
+    "params": 176,
+    "program": "2c8dc392775e4e9507c34af69a1c347aeac17b52b510e82d03eb95fd6db9e2f114e01a200b0eaa27aebb095eac8d91ff796f6304302ccb6deb0e0013e26e20e6"
+  },
   "hf/mamba": {
     "artifact": "2cca858523aea8dbecf43e1f4c76279b322636cee7a13b6601de2b1dadb7198b8b88622e28c1a773f22104e7481ab0c16272aa29f3e636a63b9220a8a68a0903",
     "nodes": 236,
@@ -562,6 +580,12 @@
     "nodes": 344,
     "params": 67,
     "program": "f0f7e17ba578f75444dd07243bf175ff5d99d76a93562ba57f3564c89c6a04589fc84c3f2adb4c16c2cdf56d0c0693105aa31f32c34ea968deeda0a8750d8ff9"
+  },
+  "hf/mllama": {
+    "artifact": "0336d014ec59789b0e9b2bb65ec5af9f470a1af4b9ae14f21eb7639158f905bda3e64e55c3245d716f83f056080b29600f86051256f92545a5de402d738fe7f8",
+    "nodes": 317,
+    "params": 71,
+    "program": "67277b84b166ad885e1dd8a772c04d79663e40f41caf050dcff752b0e9aab1a19f17d1b9ecfb93114e793048ab3d3ea00775b6bb191978a12aa2a2bea4b31ca7"
   },
   "hf/mpt": {
     "artifact": "b900155c5a64705d64c49085786ce2f1f1d54ca9a240652af3c60e9061032e9beae956f434eb0c92ce14f226a376b5f0e173298752c5328576e24fbe78812ef8",
@@ -827,6 +851,12 @@
     "params": 65,
     "program": "bdb0b1d1dfe4e0187908e4f67b3b0c916b071668fce95fdd8e5157f023d11480c6b1e3e0c03ddbfe2810352ca0e8936a3eb9e55d94eb4603662848e6d063b8e7"
   },
+  "hf/zamba2": {
+    "artifact": "1504bbb10fb8ed891d4997f049380bf9669471d8c3b380b013f37d773f8886006b0d1e5d861f9ecefb7e4376a2a410ba7aced28f350136090913d09816ad4dff",
+    "nodes": 1760,
+    "params": 366,
+    "program": "73d8ec61262efb7bef6a9121acd3917fec2ccebee420a00bd441c732da0657fab03bd412174f3e613a98f2dbc78d8c5f649d927fe4babf9d0f029421dd882167"
+  },
   "real/apertus-8b-2509.json": {
     "nodes": 341,
     "params": 66,
@@ -855,6 +885,11 @@
     "params": 116,
     "program": "cffb6e44318d88596c912976d47fe8fe1e2be31f9a1e046a1fc8f14de9de3f831267ce4b5f114da8b872859b417ea5dc57c2a8f0c2b69411ecd5e0b95a03b60f"
   },
+  "real/chatglm3-6b.json": {
+    "nodes": 341,
+    "params": 74,
+    "program": "e68b590686af903ed3884f25e6fdfb0db5abd59748b344197e3cab022522bb4c9ef56a8ff1735b475bdb4d6c5732a73ea39cf5aa6e0f10e1761dc455f30a1697"
+  },
   "real/deepseek-v2-lite.json": {
     "nodes": 778,
     "params": 159,
@@ -874,6 +909,11 @@
     "nodes": 1305,
     "params": 226,
     "program": "b27d112a4c479afafe03607ed6eb0cdf4cbf5d5a4fcdbce0e9f23b81cf793ba8d143de613114c67d1921c651955461701e0d34cdc2b904a1f724198502187b3c"
+  },
+  "real/deepseek-v4-flash.json": {
+    "nodes": 2895,
+    "params": 375,
+    "program": "3678b89d5c97ed07781d059001780977af9e39324e1786ac509e1d194bd04101321623b97188f3f2a2cc5a4cd0c5114da8f6b80a8e127c4a5b3b0e94299e26fb"
   },
   "real/exaone-3.5-2.4b-instruct.json": {
     "nodes": 308,
@@ -924,6 +964,11 @@
     "nodes": 790,
     "params": 150,
     "program": "0a9d6b2ae7be19b7536c3cdc5b7cd3b2b08ab969223059187d668dbdb41991c0b61ec714551c39ff6059397d6b0829e74cbf41f3a30cd69b555511638e4958c1"
+  },
+  "real/gemma-3n-e4b-text.json": {
+    "nodes": 5052,
+    "params": 1023,
+    "program": "e0cb49e1c4dcc290ec25d153b52d1ed4280d5cf8bb232aa01ddd7daf7e24c76928a60fda085380df2c759a9e1814c5cede509b1538760d45f7b947ca30516351"
   },
   "real/gemma-3n-e4b.json": {
     "refused": true
@@ -1176,5 +1221,10 @@
   },
   "real/t5-small.json": {
     "refused": true
+  },
+  "real/zamba2-class-defaults.json": {
+    "nodes": 4153,
+    "params": 916,
+    "program": "ef3be0e04abd83a377620147bd92a6649a9583a0686a0d8a373fc29f08b1b02d4c1ff5ce277830d39f56876943ca7fcc80be07b35b0f478ce4453270d0f990af"
   }
 }

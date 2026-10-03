@@ -1382,33 +1382,24 @@ natural-log units × 2^24 in an `i32`, whatever the model.**
 
 ## 23. The corpus measured on the integrated tree (lane R2, 2026-10-03)
 
-`tir/generic` (the feature lowerers, the data adapters, fixtures 93) and `tir/corpus` (the 100-architecture harness, `corpus-v2.md`) are
-merged on `rfc2/rest`, and the harness's data-route probe (vision towers, convolutional networks, encoder–decoders, diffusers components)
-is part of it. **Existing features only** — nothing was added to a lowerer for the measurement.
+`tir/generic`, `tir/corpus` (the 100-architecture harness, `corpus-v2.md`) and the lane's own feature work are merged on `rfc2/rest`.
 
 | Level | Entries | Share |
 | --- | ---: | ---: |
 | A — the standard keys and names | 8 | 8 % |
-| B — a data adapter (built in, or a file the corpus carries) | 75 | 75 % |
-| **A + B** | **83** | **83 %** (usage-weighted 84.7 %; text-generation 50 of 57) |
-| C — a capability is missing | 17 | 17 % |
+| B — a data adapter (built in, or a file the corpus carries) | 84 | 84 % |
+| **A + B** | **92** | **92 %** |
+| C — a capability is missing | 8 | 8 % |
 
-**The target was 90 % and is not reached with existing features**; the corpus itself says why. The 17 Level-C entries each name what they lack:
-the text models need features (`diffllama`: differential attention; `gemma3n_text`: AltUp/LAuReL/activation sparsity, FR-12; `jetmoe`:
-mixture-of-attention heads; `longcat_flash`: zero-computation experts with a shortcut branch; `deepseek_v4`: hyper-connections with compressed
-sparse attention and hash routing; `zamba2`: one shared attention block at several depths; `kimi_linear`: channel-wise gated delta rule),
-the multimodal ones capabilities (`mllama`: cross-attention to vision states, FR-21; the diffusers denoisers `unet2d_condition`, `unet_sdxl`,
-`dit`, `flux`: FR-22; the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec`: FR-23) and `chatglm3` a remote-code reference (FR-24).
-Seven more entries would be needed for 90 %; the cheapest are the seven text features, each a general lowerer and not a per-model path.
+What moved from C to B on this line, each by a general feature and a built-in adapter, with every later stage passing (admission, float reference
+against `transformers`, integer against float, reference ↔ ref2 ↔ exec bit identity, court property): `kimi_linear` (FR-16), `gemma3n_text` (FR-12),
+`deepseek_v4` (FR-10), `diffllama` (FR-04), `jetmoe` (FR-06), `longcat_flash` (FR-08), and `mllama` as its **text stage** (FR-21; vision-state
+cross-attention is not lowered: the cross layers are dropped as `transformers` drops them without images, and image rows are refused by name).
+`zamba2` (FR-13) and `chatglm3` (FR-24: Level B with its reference *unverified* — the remote-code source is pinned by hash, the verdict is `LOWERABLE_UNVERIFIED`; the corpus's copy of the modeling file is reconstructed, not the vendor's) joined them. The 8 left at Level C: the image-generation denoisers `unet2d_condition`, `unet_sdxl`,
+`dit`, `flux` (FR-22) and the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec` (FR-23).
 
-**The weights-bearing stages are unchanged** from `corpus-v2.md`: of the entries that read, every one with weights passes admission, the float
-reference against `transformers`, the integer program against the float reference, reference ↔ ref2 ↔ exec bit identity and the court property.
-
-**A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each of the 100
-entries is preflighted at the `shape` depth on testnet-12, from its committed light spec written back as header-only safetensors, at a declared
-context of 128 positions, and its convert/register/mine statuses and blocker codes are pinned. The pins are the claim a user would be shown; a
-change to a feature, an adapter, a check or a code moves one by name.
-
-On the preflight's terms 67 of the 100 reach `convert: ok`, against 83 that read at Level A or B: the 16 that differ are chiefly the kinds the
-preflight does not yet carry (encoder–decoders, vision towers, diffusers components and audio are refused `ARCH_REFUSED` — R1 judges text decoders
-and encoders), plus entries whose committed light spec has no tensor list (`internlm2`, `minicpm`). The pins record exactly that.
+**A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each entry is
+preflighted at the `shape` depth on testnet-12 from its committed light spec written back as header-only safetensors, at a declared context of 128
+positions. **87 of 100 reach `convert: ok`**: encoder–decoders, vision towers and convolutional networks now lower to their RFC-0003 programs and are
+admitted rather than refused; the blocked ones are the Level-C entries and the diffusers components whose light spec carries no weights (the route needs
+a checkpoint to lower from).

@@ -841,7 +841,7 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
         output: crate::hl::HlOutput::Logits,
         vocab: s.vocab,
         hidden: s.d,
-        carries: vec![CarryDecl { name: "rows".into(), shape: vec![rows, s.d] }],
+        carries: vec![CarryDecl { name: "rows".into(), shape: vec![rows, s.d], resid: false }],
         params,
         states: vec![],
         rope_tables: vec![],
@@ -1363,7 +1363,7 @@ fn decoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, enc: &Encode
 
 // ───────────────────────────── the lowering ─────────────────────────────
 
-fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
+pub(super) fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
     Cx {
         hl,
         fills: Vec::new(),
@@ -1388,7 +1388,7 @@ fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
     }
 }
 
-fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
+pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
     let blk = &hl.blocks[hbk];
     let n = blk.nodes.len();
     let prefixes: Vec<String> = match blk.role {
@@ -1725,7 +1725,7 @@ pub fn lower_encoder(hl: &HlProgram, s: &EncDecSpec, lmax: u32) -> Result<Lowere
     finish(pb, cx, hl, block_map, out_node, "encoder")
 }
 
-fn finish(pb: ProgramBuilder, cx: Cx<'_>, hl: &HlProgram, block_map: Vec<u8>, out_node: Option<u16>, what: &str) -> Result<Lowered> {
+pub(super) fn finish(pb: ProgramBuilder, cx: Cx<'_>, hl: &HlProgram, block_map: Vec<u8>, out_node: Option<u16>, what: &str) -> Result<Lowered> {
     let out_node = out_node.ok_or_else(|| LowerError::eval("internal: no output node"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], out_node);

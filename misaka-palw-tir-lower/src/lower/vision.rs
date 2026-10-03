@@ -603,7 +603,7 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         output: crate::hl::HlOutput::Embedding { normalized: false },
         vocab: 1,
         hidden: s.d,
-        carries: vec![CarryDecl { name: "rows".into(), shape: vec![s.rows(), s.d] }],
+        carries: vec![CarryDecl { name: "rows".into(), shape: vec![s.rows(), s.d], resid: false }],
         params,
         states: vec![],
         rope_tables: vec![],

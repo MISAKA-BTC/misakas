@@ -32,6 +32,8 @@ fn moe(experts: usize, top_k: usize, inter: usize, act: Act, r: RouterSpec) -> M
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     }
 }
 
@@ -69,7 +71,7 @@ pub(crate) fn mixtral(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Moe(m.clone()),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -149,7 +151,7 @@ pub(crate) fn qwen_moe(p: &mut P, v3: bool) -> Result<ArchSpec> {
             }
             let sparse = !mlp_only.contains(&i) && e > 0 && step > 0 && (i + 1) % step == 0;
             let ffn = if sparse { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter, act, false)) };
-            LayerSpec { mixer: Mixer::Attention(at), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer: Mixer::Attention(at), ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -206,7 +208,7 @@ pub(crate) fn olmoe(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Moe(m.clone()),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -264,7 +266,7 @@ pub(crate) fn granite_moe(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Moe(m.clone()),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -442,7 +444,7 @@ pub(crate) fn deepseek(p: &mut P, v: u8) -> Result<ArchSpec> {
     let layers = (0..n)
         .map(|i| {
             let ffn = if i >= first_dense { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter, act, false)) };
-            LayerSpec { mixer: Mixer::Mla(mla.clone()), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer: Mixer::Mla(mla.clone()), ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -549,7 +551,7 @@ pub(crate) fn glm4_moe(p: &mut P) -> Result<ArchSpec> {
     let layers = (0..n)
         .map(|i| {
             let ffn = if i >= first_dense { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter, act, false)) };
-            LayerSpec { mixer: Mixer::Attention(at.clone()), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer: Mixer::Attention(at.clone()), ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -685,7 +687,7 @@ pub(crate) fn phimoe(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Moe(m.clone()),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });
@@ -809,7 +811,7 @@ pub(crate) fn llama4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
                 at.window = Some(c);
             }
             let ffn = if moe_layers.contains(&i) { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter_mlp, act, false)) };
-            LayerSpec { mixer: Mixer::Attention(at), ffn, residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer: Mixer::Attention(at), ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let emb = format!("{model}embed_tokens");
@@ -900,6 +902,8 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     };
     p.layouts.experts = MlpLayout::FusedInterleaved;
     let layers = (0..n)
@@ -907,7 +911,7 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
             let mut at = attn(h, kv, hd, Position::Rope(rope.clone()), (bias, bias));
             at.sinks = true;
             at.window = window_for(&types[i], sw);
-            LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Moe(m.clone()), residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer: Mixer::Attention(at), ffn: Ffn::Moe(m.clone()), residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let mut nm = llama_names("model.", if tied { "model.embed_tokens" } else { "lm_head" });

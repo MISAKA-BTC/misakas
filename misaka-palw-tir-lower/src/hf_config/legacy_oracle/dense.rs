@@ -275,7 +275,7 @@ fn finish_llama(p: &mut P, f: Flavor, a: FinishArgs) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at),
             ffn: Ffn::Mlp(gated_mlp(a.inter, a.act, a.mlp_bias)),
             residual,
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         });
     }
     let mut nm = llama_names(a.model, a.lm_head);
@@ -337,7 +337,7 @@ pub(crate) fn internlm2(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -393,7 +393,7 @@ pub(crate) fn exaone(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -466,7 +466,7 @@ pub(crate) fn exaone4(p: &mut P) -> Result<ArchSpec> {
                     post_ffn: Some(norm),
                     multiplier: 1.0,
                 },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -520,7 +520,7 @@ pub(crate) fn nemotron(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(attn(h, kv, hd, Position::Rope(rope.clone()), (ab, ab))),
             ffn: Ffn::Mlp(plain_mlp(inter, act, mb)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -574,7 +574,7 @@ pub(crate) fn stablelm(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -625,7 +625,7 @@ pub(crate) fn starcoder2(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(inter, act, bias)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -673,7 +673,7 @@ pub(crate) fn olmo(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -724,7 +724,7 @@ pub(crate) fn olmo2(p: &mut P) -> Result<ArchSpec> {
                 post_ffn: Some(norm),
                 multiplier: 1.0,
             },
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -811,7 +811,7 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
                 residual: Residual::Parallel { norm, ffn_norm: None },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -873,7 +873,7 @@ pub(crate) fn gemma(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(attn(h, kv, hd, Position::Rope(rope.clone()), (bias, bias))),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = llama_names("model.", "lm_head");
@@ -944,7 +944,7 @@ pub(crate) fn gemma2(p: &mut P) -> Result<ArchSpec> {
                     post_ffn: Some(norm),
                     multiplier: 1.0,
                 },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -1156,6 +1156,8 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
             input_scaled: false,
             gated: true,
             latent: None,
+            zero_experts: 0,
+            out_bias: false,
         })
     } else {
         p.cfg.inert(&["num_experts", "top_k_experts", "moe_intermediate_size"]);
@@ -1224,7 +1226,7 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
             ple: ple.clone(),
             layer_scalar: true,
         };
-        layers.push(LayerSpec { mixer: Mixer::Attention(at), ffn, residual, post_scale: 1.0 });
+        layers.push(LayerSpec { mixer: Mixer::Attention(at), ffn, residual, pre_branch: None, post_scale: 1.0 });
     }
     let emb = format!("{model}embed_tokens");
     let mut nm = gemma_sandwich_names(model, if tied { &emb } else { lm_head });
@@ -1324,7 +1326,7 @@ pub(crate) fn gemma3_text(p: &mut P, model: &str, lm_head: &str, aliases: Vec<(S
                     post_ffn: Some(norm),
                     multiplier: 1.0,
                 },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -1378,7 +1380,7 @@ pub(crate) fn phi3(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(mlp.clone()),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -1449,7 +1451,7 @@ pub(crate) fn glm(p: &mut P, v4: bool) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -1521,7 +1523,7 @@ pub(crate) fn olmo3(p: &mut P) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(gated_mlp(inter, act, false)),
                 residual: Residual::Sequential { pre_mixer: None, post_mixer: Some(norm), pre_ffn: None, post_ffn: Some(norm), multiplier: 1.0 },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();

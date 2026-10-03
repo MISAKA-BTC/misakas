@@ -1,0 +1,248 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "jetmoe",
+ "doc": "JetMoE (JetMoeForCausalLM): mixture of attention AND of MLP experts (MIXER_MOA_V1). One router per block (top-k of the logits, softmax over the k); the attention's slot j supplies the query projection W_in[e_j] and the output projection W_out[e_j] (head_dim = kv_channels, heads = num_key_value_heads x num_experts_per_tok), keys and values are one shared kv_proj tiled over the slots, the output sums the slots weighted by their gates and adds a [D] bias; the MLP is a Granite-MoE-style block (fused input_linear gate-first, output_linear) with its own [D] bias after the sum. The two layer norms use eps 1e-6 whatever rms_norm_eps says; only the final norm reads it. attention_dropout > 0 is refused.",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "JetMoeForCausalLM"
+  ],
+  "model_types": [
+   "jetmoe"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "vocab_size": 32000,
+   "hidden_size": 2048,
+   "intermediate_size": 5632,
+   "num_hidden_layers": 12,
+   "num_attention_heads": 32,
+   "num_key_value_heads": 16,
+   "kv_channels": 128,
+   "num_local_experts": 8,
+   "num_experts_per_tok": 2,
+   "max_position_embeddings": 4096,
+   "rms_norm_eps": 1e-06,
+   "tie_word_embeddings": true,
+   "activation_function": "silu"
+  },
+  "inert": [
+   "aux_loss_coef",
+   "output_router_logits",
+   "initializer_range"
+  ]
+ },
+ "vars": [
+  {
+   "name": "no_dropout",
+   "value": {
+    "$let": [
+     "_",
+     {
+      "$forbid": [
+       "attention_dropout",
+       "JetMoE refuses attention_dropout > 0 here"
+      ]
+     },
+     false
+    ]
+   }
+  },
+  {
+   "name": "hd",
+   "value": {
+    "$cfg": "kv_channels"
+   }
+  },
+  {
+   "name": "e",
+   "value": {
+    "$cfg": "num_local_experts"
+   }
+  },
+  {
+   "name": "k",
+   "value": {
+    "$cfg": "num_experts_per_tok"
+   }
+  },
+  {
+   "name": "dims_ok",
+   "value": {
+    "$bad": [
+     {
+      "$and": [
+       {
+        "$gt": [
+         {
+          "$var": "k"
+         },
+         0
+        ]
+       },
+       {
+        "$le": [
+         {
+          "$var": "k"
+         },
+         {
+          "$var": "e"
+         }
+        ]
+       },
+       {
+        "$gt": [
+         {
+          "$var": "kv"
+         },
+         0
+        ]
+       },
+       {
+        "$eq": [
+         {
+          "$var": "heads"
+         },
+         {
+          "$mul": [
+           {
+            "$var": "kv"
+           },
+           {
+            "$var": "k"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     },
+     "JetMoE: num_attention_heads must be num_key_value_heads * num_experts_per_tok"
+    ]
+   }
+  },
+  {
+   "name": "act",
+   "value": {
+    "$act": {
+     "$cfg": "activation_function"
+    }
+   }
+  },
+  {
+   "name": "norm",
+   "value": {
+    "kind": "Rms",
+    "eps": 1e-06,
+    "gain": "W",
+    "bias": false
+   }
+  },
+  {
+   "name": "final_norm",
+   "value": {
+    "kind": "Rms",
+    "eps": {
+     "$var": "eps"
+    },
+    "gain": "W",
+    "bias": false
+   }
+  },
+  {
+   "name": "router",
+   "value": {
+    "scoring": "TopKThenSoftmax",
+    "linear_bias": false,
+    "selection_bias": false,
+    "groups": null,
+    "normalize": false,
+    "norm_eps": 0.0,
+    "scale": 1.0,
+    "jitter_eps": 0.0,
+    "per_expert_scale": false
+   }
+  },
+  {
+   "name": "attn_extra",
+   "value": {
+    "moa": {
+     "experts": {
+      "$var": "e"
+     },
+     "top_k": {
+      "$var": "k"
+     },
+     "router": {
+      "$var": "router"
+     },
+     "out_bias": true
+    }
+   }
+  },
+  {
+   "name": "l_ffn",
+   "layer": true,
+   "value": {
+    "Moe": {
+     "experts": {
+      "$var": "e"
+     },
+     "top_k": {
+      "$var": "k"
+     },
+     "intermediate": {
+      "$var": "inter"
+     },
+     "act": {
+      "$var": "act"
+     },
+     "router": {
+      "$var": "router"
+     },
+     "shared": null,
+     "out_bias": true
+    }
+   }
+  },
+  {
+   "name": "experts_layout",
+   "value": "FusedGateFirst"
+  },
+  {
+   "name": "names",
+   "value": {
+    "$merge": [
+     {
+      "$var": "names_base"
+     },
+     {
+      "moa.router": "{p}layers.{L}.self_attention.experts.router.layer",
+      "moa.input": "{p}layers.{L}.self_attention.experts.input_linear.weight",
+      "moa.output": "{p}layers.{L}.self_attention.experts.output_linear.weight",
+      "moa.bias": "{p}layers.{L}.self_attention.experts.bias",
+      "attn.kv": "{p}layers.{L}.self_attention.kv_proj",
+      "moe.router": "{p}layers.{L}.mlp.router.layer",
+      "moe.gate_up.stacked": "{p}layers.{L}.mlp.input_linear.weight",
+      "moe.down.stacked": "{p}layers.{L}.mlp.output_linear.weight",
+      "moe.bias": "{p}layers.{L}.mlp.bias"
+     }
+    ]
+   }
+  },
+  {
+   "name": "families",
+   "value": [
+    "C3",
+    "C8"
+   ]
+  },
+  {
+   "name": "model_type",
+   "value": "jetmoe"
+  }
+ ]
+}
