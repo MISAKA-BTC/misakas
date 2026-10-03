@@ -1752,7 +1752,8 @@ mod tests {
         let step2 = config_of(&parsed(&["--palw-drill-capacity-step2-at=30"]));
         // The release keeps ρ = 100 at its own H + 95: moving ρ = 25 alone leaves that step where the release armed it.
         let rho100 = kaspa_consensus_core::config::params::PALW_T12_INT11_RHO100_DAA.expect("the release's ρ = 100");
-        assert_eq!(ramp(&step2), vec![(14, 10), (30, 25), (rho100, 100)]);
+        // int-12: …and so does it leave ρ = 250 (H + 190) and ρ = 1000 (H + 285).
+        assert_eq!(ramp(&step2), vec![(14, 10), (30, 25), (rho100, 100), (5490, 250), (5585, 1000)]);
         assert_eq!(step2.palw_drill_fence_moves.len() + 1, both.palw_drill_fence_moves.len(), "each flag moves its one step");
         // F-N moves alone, later than the list's 14 (the stage-4 gate timed apart); never below the rooms it needs.
         let room = config_of(&parsed(&["--palw-drill-capacity-network-room-at=50"]));
