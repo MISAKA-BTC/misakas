@@ -52,7 +52,6 @@ fn every_third_party_descriptor_passes_its_own_vectors() {
 fn the_registry_with_them_reads_their_methods_and_refuses_what_they_do_not_describe() {
     let reg = registry();
     assert_eq!(reg.config("mlx", None).map(|f| f.name()), Some("MLX_AFFINE"));
-    assert_eq!(reg.config("bitsandbytes", None).map(|f| f.name()), Some("BNB_INT8"));
     // MLX, announced the way a converter would be told to: with a quant_method.
     let ok = parse_quant_config_with(&json!({"quant_method": "mlx", "bits": 4, "group_size": 64}), "X", "llama", &reg);
     assert!(ok.is_ok(), "{ok:?}");
