@@ -674,3 +674,160 @@ fn the_drills_boundary_lie_is_found_upstream_and_passes_downstream() {
     eprintln!("{lied_classes} classes lied at a boundary and were found upstream");
     assert!(lied_classes >= 2 && honest_classes >= 2);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The out-of-process device (cellproc): a fake helper over a socket pair
+// ---------------------------------------------------------------------------------------------
+
+mod helper {
+    use super::*;
+    use misaka_palw_tir_exec::node::DeviceKernelBackendV1;
+    use misaka_palw_tir_exec::{NodeValue, StepSink, TirCellStepperV1, TirDeviceV1, TirParams, TirPlan};
+    use misaka_palw_tir_exec::{CpuDeviceV1, TirProcessDeviceV1, serve_cell_requests_v1};
+    use std::ops::Range;
+    use std::os::unix::net::UnixStream;
+    use std::sync::Arc;
+
+    /// A fake helper: the cell server loop over `device`, on a thread, behind a socket pair.
+    pub fn fake_helper(device: impl TirDeviceV1 + 'static, mirror: bool) -> TirProcessDeviceV1 {
+        let (a, b) = UnixStream::pair().unwrap();
+        std::thread::spawn(move || {
+            let (mut r, mut w) = (b.try_clone().unwrap(), b);
+            let _ = serve_cell_requests_v1(&mut r, &mut w, &device);
+        });
+        TirProcessDeviceV1::connect(Box::new(a.try_clone().unwrap()), Box::new(a), mirror).expect("the helper says hello")
+    }
+
+    /// A device that LIES: the CPU executor with the first committed value of every step moved by one.
+    pub struct LyingDevice;
+    struct Lying<'a>(Box<dyn TirCellStepperV1 + 'a>);
+    struct Bent<'s>(&'s mut dyn StepSink, bool);
+    impl StepSink for Bent<'_> {
+        fn node(&mut self, v: &NodeValue<'_>) {
+            if v.commit && !self.1 && !v.data.to_i128s().is_empty() {
+                self.1 = true;
+                let mut lanes = v.data.to_i128s();
+                lanes[0] ^= 1;
+                let buf = misaka_palw_tir_exec::Buf::from_i128s(v.dtype, &lanes);
+                self.0.node(&NodeValue { data: buf.slice(), ..*v });
+            } else {
+                self.0.node(v);
+            }
+        }
+    }
+    impl TirCellStepperV1 for Lying<'_> {
+        fn step_cell(&mut self, t: u32, occ: Range<usize>, c: &[Vec<i128>], s: &mut dyn StepSink) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>> {
+            self.0.step_cell(t, occ, c, &mut Bent(s, false))
+        }
+        fn logits_lanes(&self) -> Vec<i32> {
+            self.0.logits_lanes()
+        }
+        fn fixed_lanes(&self, a: u16, b: Option<u16>, c: usize, d: usize, o: &mut Vec<u8>) -> Result<(), String> {
+            self.0.fixed_lanes(a, b, c, d, o)
+        }
+        fn hist_tile_lanes(&self, a: u16, b: Option<u16>, c: usize, d: usize, e: usize, o: &mut Vec<u8>) -> Result<(), String> {
+            self.0.hist_tile_lanes(a, b, c, d, e, o)
+        }
+    }
+    impl TirDeviceV1 for LyingDevice {
+        fn name(&self) -> String {
+            "liar".into()
+        }
+        fn capacity_bytes(&self) -> Option<u64> {
+            None
+        }
+        fn cell_stepper<'a>(
+            &'a self,
+            plan: &'a TirPlan,
+            params: &'a TirParams<'a>,
+            occ: Range<usize>,
+        ) -> Result<Box<dyn TirCellStepperV1 + 'a>, String> {
+            Ok(Box::new(Lying(CpuDeviceV1.cell_stepper(plan, params, occ)?)))
+        }
+    }
+
+    pub fn backend(device: TirProcessDeviceV1) -> DeviceKernelBackendV1 {
+        DeviceKernelBackendV1(Arc::new(device))
+    }
+}
+
+#[test]
+fn a_helper_process_device_answers_every_cell_as_the_cpu_does_and_a_lying_helper_is_caught_by_the_mirror() {
+    use misaka_palw_tir_exec::node::verify_cell_v1;
+    let (mut cells, mut refused_late, mut caught) = (0usize, 0usize, 0usize);
+    for (name, program, params) in programs() {
+        let plan = TirPlan::compile(&program).unwrap();
+        let s = setup(&name, &program, &params, 7, 2, 2, 5, 4);
+        let honest = helper::backend(helper::fake_helper(misaka_palw_tir_exec::CpuDeviceV1, true));
+        let mut honest = honest;
+        let liar = helper::fake_helper(helper::LyingDevice, true);
+        let mut liar = helper::backend(liar);
+        let job_positions = 5 + 4 - 1;
+        for occ in shards(s.n_occ, 2) {
+            let cell = TirCellV1 { shard: 0, occ: occ.clone(), positions: 0..job_positions };
+            let inputs = TirCaptureInputsV1::new(&s.leaves, &s.ctx, &s.class_id, &s.root, u64::MAX).unwrap();
+            let sp = shard_params(&plan, &params, &program, &occ);
+            let req = TirCellRequestV1 { space: &s.space, plan: &plan, params: &sp, class_id: s.class_id, ctx: &s.ctx, cell: &cell, tokens: &s.tokens, inputs: &inputs, fused: false };
+            let cpu = verify_cell_v1(&req);
+            // The helper, mirrored: the CPU's verdict byte for byte.
+            match honest.verify_cell(&req) {
+                Ok(v) => assert_eq!(v, cpu, "{name} {occ:?}: the helper's verdict"),
+                Err(_) => refused_late += 1,
+            }
+            // A lying helper never gets a verdict through: the mirror refuses, the node runs the CPU.
+            match liar.verify_cell(&req) {
+                Err(_) => caught += 1,
+                Ok(v) => assert_eq!(v, cpu, "{name} {occ:?}: a lying helper's verdict equals the CPU's only if it lied about nothing the cell committed"),
+            }
+            cells += 1;
+        }
+    }
+    eprintln!("{cells} cells; {refused_late} refused by an honest helper; {caught} lies caught by the mirror");
+    assert!(cells >= 20 && caught >= 10);
+}
+
+#[test]
+fn the_cell_wire_round_trips_and_refuses_hostile_frames() {
+    use misaka_palw_tir_exec::cellproc::{CellParamBlobV1, CellRequestV1, CellResponseV1, CellValueV1};
+    let reqs = vec![
+        CellRequestV1::Hello { version: 1 },
+        CellRequestV1::Open { program: vec![1, 2, 3], occ: (1, 3), params: vec![CellParamBlobV1 { param: 2, layer: Some(1), bytes: vec![9; 7] }] },
+        CellRequestV1::Step { token: 5, occ: (1, 3), carry_in: vec![vec![1, -2, i128::MAX], vec![]] },
+        CellRequestV1::Fixed { state: 1, layer: None, first: 0, n: 4 },
+        CellRequestV1::Hist { state: 0, layer: Some(0), h_tile: 4, first_lane: 8, row_lanes: 2 },
+        CellRequestV1::Close,
+    ];
+    for r in reqs {
+        assert_eq!(CellRequestV1::decode(&r.encode()).unwrap(), r);
+    }
+    let resp = vec![
+        CellResponseV1::Ready { version: 1, name: "wgpu/x".into(), capacity: Some(1 << 33) },
+        CellResponseV1::Opened,
+        CellResponseV1::Stepped {
+            values: vec![CellValueV1 { slot: 3, block: 1, layer: Some(0), node: 7, dtype: 2, shape: vec![2, 4], lanes: vec![1, -1, 0, 5, 6, 7, 8, 9] }],
+            carry: vec![vec![4, 5]],
+            logits: vec![-3, 9],
+        },
+        CellResponseV1::Lanes(vec![1, 2, 3, 4]),
+        CellResponseV1::Closed,
+        CellResponseV1::Refused("no".into()),
+    ];
+    for r in resp {
+        assert_eq!(CellResponseV1::decode(&r.encode()).unwrap(), r);
+    }
+    // Hostile: a length past the frame, trailing bytes, an unknown tag, a truncated frame.
+    assert!(CellRequestV1::decode(&[1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]).is_err());
+    let mut hello = CellRequestV1::Hello { version: 1 }.encode();
+    hello.push(0);
+    assert!(CellRequestV1::decode(&hello).is_err());
+    assert!(CellRequestV1::decode(&[99]).is_err());
+    assert!(CellResponseV1::decode(&[2, 1]).is_err());
+    // A wrong version is refused by the server, by name.
+    let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+    std::thread::spawn(move || {
+        let (mut r, mut w) = (b.try_clone().unwrap(), b);
+        let _ = misaka_palw_tir_exec::serve_cell_requests_v1(&mut r, &mut w, &misaka_palw_tir_exec::CpuDeviceV1);
+    });
+    let err = misaka_palw_tir_exec::TirProcessDeviceV1::connect_version_for_test(Box::new(a.try_clone().unwrap()), Box::new(a), 2);
+    assert!(err.is_err());
+}

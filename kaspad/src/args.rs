@@ -442,6 +442,12 @@ pub struct Args {
     /// **RFC-0006: run the cells on a device backend** (`--palw-tir-shard-gpu`, default off); the CPU where this build has none.
     #[serde(skip)]
     pub palw_tir_shard_gpu: bool,
+    /// RFC-0006: the GPU helper process `--palw-tir-shard-gpu` spawns (default: `palw-tir-gpu-helper` beside this binary).
+    #[serde(skip)]
+    pub palw_tir_shard_gpu_helper: Option<String>,
+    /// RFC-0006: check every device answer against the CPU executor's (always on in shadow mode); a difference refuses the cell.
+    #[serde(skip)]
+    pub palw_tir_shard_gpu_mirror: bool,
     /// **RFC-0006: shadow mode** (`--palw-tir-shard-shadow`): the cells are verified and the verdicts logged; nothing is filed.
     #[serde(skip)]
     pub palw_tir_shard_shadow: bool,
@@ -733,6 +739,8 @@ impl Default for Args {
             palw_tir_shard_hold: Vec::new(),
             palw_tir_shard_declare: None,
             palw_tir_shard_gpu: false,
+            palw_tir_shard_gpu_helper: None,
+            palw_tir_shard_gpu_mirror: false,
             palw_tir_shard_shadow: false,
             palw_improve_artifact_dir: None,
             palw_improve_capture_dir: None,
@@ -1934,6 +1942,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-shard-gpu-helper")
+                .long("palw-tir-shard-gpu-helper")
+                .require_equals(true)
+                .help("RFC-0006: the GPU helper process --palw-tir-shard-gpu spawns (default: palw-tir-gpu-helper beside this binary)."),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-gpu-mirror")
+                .long("palw-tir-shard-gpu-mirror")
+                .action(clap::ArgAction::SetTrue)
+                .help("RFC-0006: check every GPU helper answer against the CPU executor's byte for byte (always on in shadow mode); a difference or an error refuses the cell and the CPU runs it."),
+        )
+        .arg(
             Arg::new("palw-tir-shard-shadow")
                 .long("palw-tir-shard-shadow")
                 .action(clap::ArgAction::SetTrue)
@@ -3053,6 +3073,8 @@ impl Args {
             palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),
             palw_tir_shard_declare: m.get_one::<String>("palw-tir-shard-declare").cloned(),
             palw_tir_shard_gpu: m.get_one::<bool>("palw-tir-shard-gpu").copied().unwrap_or(false),
+            palw_tir_shard_gpu_helper: m.get_one::<String>("palw-tir-shard-gpu-helper").cloned(),
+            palw_tir_shard_gpu_mirror: m.get_one::<bool>("palw-tir-shard-gpu-mirror").copied().unwrap_or(false),
             palw_tir_shard_shadow: m.get_one::<bool>("palw-tir-shard-shadow").copied().unwrap_or(false),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),

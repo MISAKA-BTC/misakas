@@ -1716,6 +1716,20 @@ Do you confirm? (y/n)";
     // RFC-0002 Phase G: the IR fused kernels, for every IR backend this node builds from here on —
     // byte-identical, off unless `--palw-tir-fused-kernels` (kept off until the D-F drills pass with it on).
     misaka_palw_sdk::lineages::tir::set_tir_fused_kernels_default_v1(args.palw_tir_fused_kernels);
+    // RFC-0006: the GPU device is a helper process (its own workspace and lock), spawned here and registered; any failure leaves the CPU.
+    if args.palw_tir_shard_gpu {
+        let helper = args.palw_tir_shard_gpu_helper.as_ref().map(std::path::PathBuf::from).unwrap_or_else(|| {
+            std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("palw-tir-gpu-helper"))).unwrap_or_else(|| "palw-tir-gpu-helper".into())
+        });
+        let mirror = args.palw_tir_shard_gpu_mirror || args.palw_tir_shard_shadow;
+        match misaka_palw_sdk::lineages::tir::TirProcessDeviceV1::spawn(&helper, &[], mirror) {
+            Ok(device) => {
+                info!("PALW-TIR shard cells: device helper {} ({})", helper.display(), misaka_palw_sdk::lineages::tir::TirDeviceV1::name(&device));
+                misaka_palw_sdk::lineages::tir::register_device_v1(std::sync::Arc::new(device));
+            }
+            Err(why) => warn!("--palw-tir-shard-gpu: no device helper ({why}): cells run on the CPU"),
+        }
+    }
     // RFC-0006 (D-S3): a drill's consistent lie at a layer-shard boundary — refused on mainnet, as every fault injector is.
     if let Some(spec) = args.palw_drill_tamper_boundary.as_deref() {
         let (position, boundary) =

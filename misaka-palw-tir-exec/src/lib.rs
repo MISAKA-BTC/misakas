@@ -41,6 +41,7 @@
 //! reference; the tests hold the two equal (golden vectors, whole programs, random programs,
 //! range-extreme inputs).
 
+pub mod cellproc;
 pub mod cellstep;
 pub mod cone;
 pub mod elem;
@@ -59,6 +60,9 @@ pub mod scalar;
 pub mod stage;
 pub mod tiers;
 
+pub use cellproc::{
+    CELL_WIRE_VERSION_V1, CpuDeviceV1, TirProcessDeviceV1, serve_cell_requests_v1,
+};
 pub use cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1, lanes_le_of_v1};
 pub use cone::eval_cone;
 pub use elem::{Buf, Elem, Slice};
