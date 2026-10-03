@@ -3065,7 +3065,7 @@ le64(take) ‖ the first take leaf hashes, stage-major)` with `take = min(index,
 ## 16. Class seating — one seating rule for every class kind (RFC-0002 Part II §II.7.5 Proposal A; fence `palw_class_seating`)
 
 **The fence.** `Params::palw_class_seating: Option<PalwClassSeatingFenceV1 { activation, independent_floor, raise }>` —
-dormant (`None`) on every preset and in no flag-day list; hashed Some-only into `consensus_params_id` and
+dormant (`None`) on every preset except testnet-12, whose release arms it at DAA 5,300 (the int-12 flag day, `PALW_T12_INT11_FENCES_V1`, with the default floor 3 and no raise); hashed Some-only into `consensus_params_id` and
 `consensus_schedule_id` (the floor and a raise with it), its activation and its raise's visited by `for_each_fence`, the whole
 option collapsed from `Some(never())` in `normalize_values_a_scheduled_fence_drags_with_it`; mirrored on the V2 bundle's state
 params (`PalwStateParamsV2::class_seating`, written only by `Params::sync_palw_class_seating`). `validate_palw_v2` refuses a

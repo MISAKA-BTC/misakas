@@ -5,7 +5,9 @@
 > position segment — from the claim's committed boundary rows and only that range's weights, and a claim of a class
 > that declared a **layer-shard plan** licenses **by parts**.
 >
-> It applies past the dormant fence `palw_tir_shard_v1`. Below the fence nothing here is read, every table is
+> **Activation on testnet-12: DAA 5,300** (the int-12 flag day, `PALW_T12_INT11_FENCES_V1`; dormant on every other preset).
+>
+> It applies past the fence `palw_tir_shard_v1`. Below the fence nothing here is read, every table is
 > empty, every object of §18.0 is dropped by name at acceptance and refused by the fold, and every root and carriage
 > is byte-identical to a build without it. An engineer who reads only this file and chapters 04b and 17 must be able to
 > build a second implementation of the plan, the draw, the receipt, the recount, the licence by parts, the lock and

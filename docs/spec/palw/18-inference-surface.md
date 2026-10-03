@@ -1,6 +1,8 @@
 # 18. The inference surface rules (RFC-0001) — normative text
 
-Status: implemented 2026-10-02..03 on `rfc1/serve`; every rule below is behind its own fence, `None` on every preset. Numbers in
+Status: implemented 2026-10-02..03 on `rfc1/serve`; every rule below is behind its own fence, `None` on every preset except testnet-12, whose release arms
+all six (`palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`, `palw_fp_tokenizer_match`,
+`palw_adapter_class_v1`) at DAA 5,300 (the int-12 flag day, `PALW_T12_INT11_FENCES_V1`, in prerequisite order). Numbers in
 brackets are the RFC-0001 section.
 
 ## 18.1 FP job versions
