@@ -50,6 +50,45 @@ impl Params {
     }
 }
 
+/// **The entry a drill arms `palw_fp_prefix_inherit` with** (`--palw-drill-fp-prefix-inherit-at`). In NO testnet-12 flag-day
+/// list: dormant on every network.
+pub const PALW_DRILL_FP_PREFIX_INHERIT_ENTRY: PalwPostLaunchFenceV1 =
+    PalwPostLaunchFenceV1 { name: "palw_fp_prefix_inherit", set: |params, at| params.palw_fp_prefix_inherit = at };
+
+/// The drill's one-entry list.
+pub const PALW_DRILL_FP_PREFIX_INHERIT_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_DRILL_FP_PREFIX_INHERIT_ENTRY];
+
+impl Params {
+    /// `palw_fp_prefix_inherit`, resolved: `Some` only on a `ConsensusV2` network that armed it.
+    pub fn palw_fp_prefix_inherit_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_fp_prefix_inherit) {
+            (PalwConsensusMode::ConsensusV2(_), Some(fence)) => Some(fence),
+            _ => None,
+        }
+    }
+
+    pub fn palw_fp_prefix_inherit_active_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_prefix_inherit_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **`palw_fp_prefix_inherit`'s own refusals**: a `ConsensusV2` rule over `palw_fp_prefix_state` in force at or below it.
+    pub fn validate_palw_fp_prefix_inherit_v1(&self) -> Result<(), PalwModeV2Error> {
+        let Some(fence) = self.palw_fp_prefix_inherit.filter(|f| *f != ForkActivation::never()) else { return Ok(()) };
+        if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+            return Err(PalwModeV2Error::Invalid("palw_fp_prefix_inherit is armed on a network that is not ConsensusV2"));
+        }
+        let ok = self
+            .palw_fp_prefix_state
+            .is_some_and(|o| o != ForkActivation::never() && o.daa_score() <= fence.daa_score());
+        if !ok {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fp_prefix_inherit needs palw_fp_prefix_state in force at or below it: version 12 is a prefix-state job",
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // FP job version 11: the prefix-state receipt
 // ---------------------------------------------------------------------------------------------
@@ -85,6 +124,12 @@ use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 
 /// **The prefix-state job's version**: 11 (7 is V4, 8 V5, 9 an evaluation job, 10 a tensor job).
 pub const PALW_FP_PREFIX_VERSION: u16 = 11;
+/// **The inherited-prefix job's version**: 12 — a prefix-state job (version 11's shape, its tail the same
+/// [`PalwFpPrefixStateV1`]) whose first `k` prefill positions' step leaves are bound to a job-independent prefix context
+/// (stage 2b, `palw_fp_prefix_inherit`; [`PalwJobContextV2::inherited_prefix_v1`]).
+pub const PALW_FP_PREFIX_INHERIT_VERSION: u16 = 12;
+/// The inherited-prefix job id's key.
+pub const PALW_FP_PREFIX_INHERIT_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-prefix-inherit/job-id/v1";
 /// The prefix-state job id's key: a domain no other job's id uses.
 pub const PALW_FP_PREFIX_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-prefix/job-id/v1";
 /// The domain of a prefix state's root ([`palw_fp_prefix_state_root_v1`]).
@@ -115,7 +160,8 @@ pub enum PalwFpPrefixErrorV1 {
 /// borsh (every V3 field, its decode rules, its prefix state) — the V3/V4/V5 ids' construction under this version's key.
 pub fn fp_job_id_prefix_v1(job: &PalwFreePromptJobV3) -> Hash64 {
     let bytes = borsh::to_vec(job).expect("a free-prompt job is borsh-serializable");
-    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_PREFIX_DOMAIN_JOB_ID).to_state();
+    let key = if job.is_prefix_inherit() { PALW_FP_PREFIX_INHERIT_DOMAIN_JOB_ID } else { PALW_FP_PREFIX_DOMAIN_JOB_ID };
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
     state.update(&(bytes.len() as u64).to_le_bytes());
     state.update(&bytes);
     let mut out = [0u8; 64];
@@ -183,7 +229,12 @@ pub fn palw_fp_prefix_stand_in_v1(payload: &PalwFpCommitmentTxPayloadV3) -> Palw
 /// **Is this FP payload a prefix-state claim's?** Its job's version word — bytes 2..4, after the payload's own version —
 /// is [`PALW_FP_PREFIX_VERSION`]. Nothing else is read.
 pub fn palw_fp_payload_is_prefix_v1(payload: &[u8]) -> bool {
-    payload.get(2..4) == Some(&PALW_FP_PREFIX_VERSION.to_le_bytes()[..])
+    payload.get(2..4) == Some(&PALW_FP_PREFIX_VERSION.to_le_bytes()[..]) || palw_fp_payload_is_prefix_inherit_v1(payload)
+}
+
+/// **Is this FP payload an inherited-prefix claim's** (version 12)?
+pub fn palw_fp_payload_is_prefix_inherit_v1(payload: &[u8]) -> bool {
+    payload.get(2..4) == Some(&PALW_FP_PREFIX_INHERIT_VERSION.to_le_bytes()[..])
 }
 
 fn prefix_refused(e: PalwFpPrefixErrorV1) -> PalwFpV3Error {
@@ -228,8 +279,10 @@ pub fn validate_palw_fp_commitment_tx_under_v8(
     improvement_door: bool,
     gen_door: bool,
     prefix_door: bool,
+    inherit_door: bool,
 ) -> Result<(), PalwFpV3Error> {
-    if prefix_door && palw_fp_payload_is_prefix_v1(payload) {
+    // A version-12 payload needs the inherited-prefix door as well (stage 2b); shut, it falls through and is refused by name.
+    if prefix_door && palw_fp_payload_is_prefix_v1(payload) && (inherit_door || !palw_fp_payload_is_prefix_inherit_v1(payload)) {
         return validate_palw_fp_prefix_commitment_tx_v1(payload, panel_da_admissible, prompt_ids_form, work_leaves_cap, decode_rules);
     }
     crate::palw_gen_claim_v1::validate_palw_fp_commitment_tx_under_v7(
@@ -250,6 +303,8 @@ pub enum PalwFpPrefixHeightRefusalV1 {
     BelowPrefixState,
     /// Below `Params::palw_fp_decode_rules`, whose V4 rules the job carries.
     BelowDecodeRules,
+    /// A version-12 claim below `Params::palw_fp_prefix_inherit`.
+    BelowInherit,
 }
 
 impl PalwFpPrefixHeightRefusalV1 {
@@ -258,6 +313,7 @@ impl PalwFpPrefixHeightRefusalV1 {
         match self {
             Self::BelowPrefixState => "a prefix-state claim (FP job version 11) below Params::palw_fp_prefix_state",
             Self::BelowDecodeRules => "a prefix-state claim below Params::palw_fp_decode_rules, whose V4 rules its job carries",
+            Self::BelowInherit => "an inherited-prefix claim (FP job version 12) below Params::palw_fp_prefix_inherit",
         }
     }
 }
@@ -268,6 +324,7 @@ pub fn palw_fp_prefix_refusal_at_v1(
     payload: &[u8],
     prefix_active: bool,
     decode_rules_active: bool,
+    inherit_active: bool,
 ) -> Option<PalwFpPrefixHeightRefusalV1> {
     if !palw_fp_payload_is_prefix_v1(payload) {
         return None;
@@ -278,6 +335,9 @@ pub fn palw_fp_prefix_refusal_at_v1(
     if !decode_rules_active {
         return Some(PalwFpPrefixHeightRefusalV1::BelowDecodeRules);
     }
+    if palw_fp_payload_is_prefix_inherit_v1(payload) && !inherit_active {
+        return Some(PalwFpPrefixHeightRefusalV1::BelowInherit);
+    }
     None
 }
 
@@ -287,12 +347,16 @@ pub fn palw_fp_prefix_refusal_at_v1(
 pub fn palw_fp_prefix_walk_view_v1(
     payload: &PalwFpCommitmentTxPayloadV3,
     prefix_armed: bool,
+    inherit_armed: bool,
 ) -> Result<(PalwFpCommitmentTxPayloadV3, PalwFpPrefixStateV1), &'static str> {
     if !payload.commitment.job.is_prefix_state() {
         return Ok((payload.clone(), payload.consumed_prefix_state_v1()));
     }
     if !prefix_armed {
         return Err("a prefix-state claim (FP job version 11) below palw_fp_prefix_state");
+    }
+    if payload.commitment.job.is_prefix_inherit() && !inherit_armed {
+        return Err("an inherited-prefix claim (FP job version 12) below palw_fp_prefix_inherit");
     }
     match palw_fp_prefix_shape_v1(&payload.commitment.job) {
         Ok(state) => Ok((palw_fp_prefix_stand_in_v1(payload), state)),
@@ -408,6 +472,7 @@ mod tests {
                 derived_work: PalwFpDerivedWorkCapV1::Declared,
                 logits_q24: true,
                 prefix_state_armed: armed,
+                prefix_inherit_armed: false,
                 constraint_armed: false,
                 constraint_v2_armed: false,
                 tokenizer,
@@ -549,6 +614,7 @@ mod tests {
                 false,
                 false,
                 prefix_door,
+                true,
             )
         };
         assert!(matches!(door(false), Err(PalwFpV3Error::UnsupportedVersion { got: 11, .. })), "shut: refused like a build without it");
@@ -565,6 +631,7 @@ mod tests {
             false,
             false,
             true,
+            true,
         );
         assert!(matches!(refused, Err(PalwFpV3Error::PrefixStateClaim(ref why)) if why.contains("genesis")), "{refused:?}");
         // Every other payload goes to the door under it unchanged.
@@ -579,16 +646,17 @@ mod tests {
                     PalwFpDecodeRulesV1::Scheduled,
                     false,
                     false,
-                    prefix_door
+                    prefix_door,
+                    true
                 ),
                 Ok(())
             );
         }
         // The header-context half.
-        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, false, true), Some(PalwFpPrefixHeightRefusalV1::BelowPrefixState));
-        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, true, false), Some(PalwFpPrefixHeightRefusalV1::BelowDecodeRules));
-        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, true, true), None);
-        assert_eq!(palw_fp_prefix_refusal_at_v1(&v4, false, false), None, "a V4 payload is not this door's");
+        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, false, true, true), Some(PalwFpPrefixHeightRefusalV1::BelowPrefixState));
+        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, true, false, true), Some(PalwFpPrefixHeightRefusalV1::BelowDecodeRules));
+        assert_eq!(palw_fp_prefix_refusal_at_v1(&bytes, true, true, true), None);
+        assert_eq!(palw_fp_prefix_refusal_at_v1(&v4, false, false, false), None, "a V4 payload is not this door's");
     }
 
     #[test]

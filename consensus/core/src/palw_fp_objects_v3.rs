@@ -208,6 +208,7 @@ where
             derived_work: PalwFpDerivedWorkCapV1::Declared,
             logits_q24: true,
             prefix_state_armed: false,
+            prefix_inherit_armed: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -243,6 +244,9 @@ pub struct PalwFpClassCapsV1<'a> {
     /// **RFC-0001 §2.6 stage 2: whether `Params::palw_fp_prefix_state` is in force at the accepting block** — a
     /// prefix-state claim (FP job version 11) is skipped by name where it is not.
     pub prefix_state_armed: bool,
+    /// **RFC-0001 §2.6 stage 2b: whether `Params::palw_fp_prefix_inherit` is in force at the accepting block** — an
+    /// inherited-prefix claim (FP job version 12) is skipped by name where it is not.
+    pub prefix_inherit_armed: bool,
     /// **ADR-0096 Decision 8: whether `Params::palw_fp_decode_constraint` is in force at the accepting block** — a
     /// constrained claim (FP job version 6) is skipped by name where it is not.
     pub constraint_armed: bool,
@@ -330,7 +334,7 @@ where
         // **RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) is judged on its V4 stand-in** — every rule
         // below runs on the same payload at version 7 with no tail — and carries its state to the fold; every other payload
         // is its own view and names no state.
-        let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(&payload, caps.prefix_state_armed) {
+        let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(&payload, caps.prefix_state_armed, caps.prefix_inherit_armed) {
             Ok(v) => v,
             Err(why) => {
                 out.skipped.push((id, why));
@@ -695,6 +699,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
             prefix_state_armed: false,
+            prefix_inherit_armed: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -764,6 +769,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24,
             prefix_state_armed: false,
+            prefix_inherit_armed: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -886,6 +892,7 @@ mod tests {
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
                         logits_q24: true,
                         prefix_state_armed: false,
+                        prefix_inherit_armed: false,
             constraint_armed: false,
             constraint_v2_armed: false,
                         tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -1388,7 +1395,7 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, prefix_inherit_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
                 },
                 false,
                 true,

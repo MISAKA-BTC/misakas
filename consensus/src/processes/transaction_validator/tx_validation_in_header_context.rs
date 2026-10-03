@@ -117,6 +117,7 @@ impl TransactionValidator {
             &tx.payload,
             fence.is_active(ctx_daa_score),
             matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+            self.palw_fp_prefix_inherit_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
         ) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
             None => Ok(()),

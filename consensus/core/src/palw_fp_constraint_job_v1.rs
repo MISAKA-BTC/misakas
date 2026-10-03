@@ -603,6 +603,7 @@ pub fn validate_palw_fp_commitment_tx_under_v9(
     improvement_door: bool,
     gen_door: bool,
     prefix_door: bool,
+    inherit_door: bool,
     constraint_door: bool,
 ) -> Result<(), PalwFpV3Error> {
     if constraint_door && palw_fp_payload_is_constraint_v1(payload) {
@@ -617,6 +618,7 @@ pub fn validate_palw_fp_commitment_tx_under_v9(
         improvement_door,
         gen_door,
         prefix_door,
+        inherit_door,
     )
 }
 
@@ -880,7 +882,7 @@ mod tests {
         let bytes = ab_or_ba().to_bytes();
         let wire = borsh::to_vec(&payload(bytes.clone())).unwrap();
         let door = |constraint_door: bool, rules: PalwFpDecodeRulesV1| {
-            validate_palw_fp_commitment_tx_under_v9(&wire, false, PalwPromptIdsFormV1::Flat, 1 << 26, rules, false, false, false, constraint_door)
+            validate_palw_fp_commitment_tx_under_v9(&wire, false, PalwPromptIdsFormV1::Flat, 1 << 26, rules, false, false, false, false, constraint_door)
         };
         assert!(door(true, PalwFpDecodeRulesV1::Dormant).is_ok(), "the door is open where the ruleset carries the fence");
         assert!(door(true, PalwFpDecodeRulesV1::Active).is_ok(), "a constrained job is a V3 job whatever the decode rules say");
@@ -912,6 +914,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
                     prefix_state_armed: false,
+                    prefix_inherit_armed: false,
                     constraint_armed: armed,
                     constraint_v2_armed: v2,
                     tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,

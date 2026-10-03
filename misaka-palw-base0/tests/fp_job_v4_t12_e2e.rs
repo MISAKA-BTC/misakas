@@ -161,7 +161,7 @@ fn walk_with(
     rules: PalwFpDecodeRulesV1,
     prefix_state_armed: bool,
 ) -> Vec<PalwConsensusObjectV2> {
-    walk_all(p, s, payload, rules, prefix_state_armed, false, false)
+    walk_all(p, s, payload, rules, prefix_state_armed, false, false, false)
 }
 
 fn walk_all(
@@ -170,6 +170,7 @@ fn walk_all(
     payload: &PalwFpCommitmentTxPayloadV3,
     rules: PalwFpDecodeRulesV1,
     prefix_state_armed: bool,
+    prefix_inherit_armed: bool,
     constraint_armed: bool,
     constraint_v2_armed: bool,
 ) -> Vec<PalwConsensusObjectV2> {
@@ -199,6 +200,7 @@ fn walk_all(
             },
             logits_q24: s.class_commits_q24_logits_v1(class_id),
             prefix_state_armed,
+            prefix_inherit_armed,
             constraint_armed,
             constraint_v2_armed,
             tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -601,8 +603,8 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
 
     // ---- carry: not below the fence, not unarmed, and the second form only past its own ------------
     let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
-    assert!(walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE - 1), false, false, false).is_empty(), "no constrained claim below the fence");
-    let objects = walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE + 1), false, true, false);
+    assert!(walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE - 1), false, false, false, false).is_empty(), "no constrained claim below the fence");
+    let objects = walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE + 1), false, false, true, false);
     assert_eq!(objects.len(), 1, "armed, the constrained claim opens (a first-form constraint needs no second fence)");
     // A second-form constraint (a union with a `$ref`) is carried only where `palw_fp_constraint_v2` is.
     let second = {
@@ -626,8 +628,8 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         pl.commitment.job = j;
         pl
     };
-    assert!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE - 1), false, true, false).is_empty(), "the second form below its fence");
-    assert_eq!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE), false, true, true).len(), 1, "and from it");
+    assert!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE - 1), false, false, true, false).is_empty(), "the second form below its fence");
+    assert_eq!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE), false, false, true, true).len(), 1, "and from it");
 
     // ---- price and fold -----------------------------------------------------------------------
     let s2 = fold_at(&p, &s, &ctx(3, 112, 3, 0), &objects).expect("the real fold opens the constrained claim");

@@ -1845,6 +1845,7 @@ mod tests {
                     derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
             prefix_state_armed: false,
+            prefix_inherit_armed: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
