@@ -37,6 +37,8 @@ from!(item: &kaspa_rpc_core::RpcBlockVerboseData, protowire::RpcBlockVerboseData
         merge_set_blues_hashes: item.merge_set_blues_hashes.iter().map(|x| x.to_string()).collect(),
         merge_set_reds_hashes: item.merge_set_reds_hashes.iter().map(|x| x.to_string()).collect(),
         is_chain_block: item.is_chain_block,
+        // ADR-0165: JSON/serde only; the gRPC proto is unchanged.
+        block_kind: String::new(),
     }
 });
 
