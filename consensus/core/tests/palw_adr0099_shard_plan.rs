@@ -420,7 +420,7 @@ fn a_measured_model_is_recomputed_field_by_field_and_a_tampered_one_is_named() {
     let fingerprint = format!("{}", params.consensus_params_id());
     let court_for = |profile: &PalwShapeProfileV3| {
         let shape = palw_admission_shape_at_v1(&params, bundle, profile, u64::MAX - 1).expect("an admission shape");
-        (shape.court, params.palw_prompt_ids_form_at(u64::MAX - 1))
+        (shape.court, params.palw_prompt_ids_form_at(u64::MAX - 1), shape.held)
     };
     let inputs = PalwMeasureInputsV1 {
         ruleset: "testnet-11 (RC)",

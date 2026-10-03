@@ -189,7 +189,7 @@ fn main() {
     let court_for = |profile: &PalwShapeProfileV3| {
         let shape =
             palw_admission_shape_at_v1(&ruleset.params, ruleset.bundle(), profile, EVER).expect("the RC has an admission shape");
-        (shape.court, ruleset.params.palw_prompt_ids_form_at(EVER))
+        (shape.court, ruleset.params.palw_prompt_ids_form_at(EVER), shape.held)
     };
     let seat_budgets: Vec<u64> = args.seat_gibs.iter().map(|g| g * (1u64 << 30)).collect();
 

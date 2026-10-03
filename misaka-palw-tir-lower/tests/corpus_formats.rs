@@ -59,12 +59,11 @@ fn the_registry_with_them_reads_their_methods_and_refuses_what_they_do_not_descr
     // an MLX mode this descriptor does not describe
     let e = parse_quant_config_with(&json!({"quant_method": "mlx", "bits": 4, "group_size": 32, "mode": "mxfp4"}), "X", "llama", &reg).expect_err("mxfp4 mode");
     assert!(e.to_string().contains("affine"), "{e}");
-    // bitsandbytes 8-bit is read; 4-bit is refused by name
+    // bitsandbytes 8-bit is read (the built-in descriptor: it was promoted from this directory); so is 4-bit nf4
     let int8 = json!({"quant_method": "bitsandbytes", "load_in_8bit": true, "load_in_4bit": false, "llm_int8_threshold": 6.0, "llm_int8_has_fp16_weight": false});
     assert!(parse_quant_config_with(&int8, "X", "llama", &reg).is_ok());
     let nf4 = json!({"quant_method": "bitsandbytes", "load_in_8bit": false, "load_in_4bit": true, "bnb_4bit_quant_type": "nf4", "bnb_4bit_use_double_quant": true});
-    let e = parse_quant_config_with(&nf4, "X", "llama", &reg).expect_err("nf4");
-    assert!(e.to_string().contains("4-bit") || e.to_string().contains("8-bit"), "{e}");
+    assert!(parse_quant_config_with(&nf4, "X", "llama", &reg).is_ok(), "nf4 is a built-in descriptor now");
 }
 
 #[test]

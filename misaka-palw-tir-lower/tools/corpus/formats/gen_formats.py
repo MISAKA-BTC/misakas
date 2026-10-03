@@ -150,7 +150,7 @@ bnb = {
     "tests": [bnb_case(3, 32), bnb_case(2, 64)],
 }
 
-for name, d in (("mlx_affine", mlx), ("bnb_int8", bnb)):
+for name, d in (("mlx_affine", mlx),):  # bnb_int8 was promoted to the built-in pack
     with open(os.path.join(HERE, name + ".json"), "w") as f:
         json.dump(d, f, indent=1, sort_keys=True)
         f.write("\n")
