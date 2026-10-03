@@ -347,6 +347,28 @@ fn the_unit_row_kernels_are_the_reference_on_random_and_extreme_operands_and_the
     }
 }
 
+/// **The gated delta rule's step and the unit-row kernels on the Metal GPU** (RFC-0002 §7 F-6; `--features misaka-palw-tir-exec/metal`, macOS):
+/// the same gate, the same programs, with the backend on and its size floor at zero — the GPU's integers are the reference's. Skipped where
+/// the build or the machine has no backend.
+#[test]
+fn the_gpu_backend_is_the_reference_on_the_gdn_step_and_the_wide_patterns() {
+    use misaka_palw_tir_exec::fused::metal::{metal_counts, set_metal_backend, set_metal_min_elems};
+    if set_metal_backend(true).is_err() {
+        eprintln!("no Metal backend: skipped");
+        return;
+    }
+    set_metal_min_elems(0);
+    let before = metal_counts();
+    gate("gdn_step_q36", &gdn_program(4, 8, 16, 2), 2, 6);
+    gate("gdn_step_q36", &gdn_program(2, 4, 4, 1), 1, 6);
+    gate("rms_norm_wide_q36", &rowop_program_kind(2, DType::I16, 3, 8, 2), 2, 6);
+    gate("rms_norm_wide_q36", &rowop_program_kind(3, DType::I32, 2, 16, 1), 1, 6);
+    let after = metal_counts();
+    set_metal_backend(false).expect("off");
+    assert!(after.0 > before.0, "the GPU answered nothing: {before:?} -> {after:?}");
+    eprintln!("GPU answered {} calls, handed back {}", after.0 - before.0, after.1 - before.1);
+}
+
 // ---- every HF tiny-fixture program -------------------------------------------------------------
 
 /// The lowered program of fixture `name` with its calibrated params, as `three_way.rs` prepares it.

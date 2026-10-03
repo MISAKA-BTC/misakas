@@ -198,8 +198,10 @@ impl FusedKernelV1 for RmsNormWideQ36 {
         let es = values(&io.holes[2]).first().copied().unwrap_or(0).clamp(0, shift_max);
         let eps = ez << es;
         let n = *io.out_shape.last().unwrap_or(&1);
-        let mut out = vec![0i128; x.len()];
-        run_rows(&x, n, &mut out, |x, o| {
+        let mut out = super::metal::rms_wide_rows(&x, n, eps).unwrap_or_default();
+        if out.is_empty() {
+            out = vec![0i128; x.len()];
+            run_rows(&x, n, &mut out, |x, o| {
             let sum: i128 = x.iter().map(|v| v * v).sum();
             let mean = (sum * arith::ONE).div_euclid(n as i128) + eps;
             if mean <= 0 {
@@ -214,7 +216,8 @@ impl FusedKernelV1 for RmsNormWideQ36 {
                 let y = if h >= 0 { prod >> h.clamp(0, 126) } else { prod << (-h).clamp(0, 12) };
                 *o = y.clamp(i32::MIN as i128, i32::MAX as i128);
             }
-        });
+            });
+        }
         store(&mut out, io.out, io.out_store, io.fault, i32::MAX as i128);
         Ok(())
     }

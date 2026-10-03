@@ -145,3 +145,86 @@ fn the_metal_unit_row_kernels_are_the_reference() {
     assert!(after.0 > 0, "the GPU answered nothing");
     eprintln!("GPU answered {} calls, handed back {}", after.0, after.1);
 }
+
+// ---- the gated delta rule's step and the wide RMS on the GPU ----
+
+#[test]
+fn the_metal_wide_rms_and_gdn_step_are_the_reference() {
+    if !metal_available() {
+        eprintln!("no Metal device: skipped");
+        return;
+    }
+    set_metal_min_elems(0);
+    let eps = [0i128, 1, 1 << 20, 1 << 40, i64::MAX as i128, -5];
+    let cases: Vec<(u8, i128)> = (0..3u8).flat_map(|m| eps.iter().map(move |e| (m, *e))).collect();
+    let _ = cases;
+    // The wide RMS: ε is `eps_zero · 2^eps_shift`; the gate's own parameters are drawn by `ez` and `es`.
+    for kind in [2u8, 3] {
+        for dtype in [DType::I16, DType::I32] {
+            let p = wide_program(kind, dtype, 3, 8);
+            for seed in 0..8u64 {
+                let mut rng = ChaCha20Rng::seed_from_u64(0xE6A + seed);
+                let map = wide_params(&p, &mut rng, (seed % 3) as u8);
+                let tokens: Vec<u32> = (0..VOCAB).collect();
+                let ran = four(&p, &map, &tokens, "rms_norm_wide_q36", false).unwrap_or_else(|e| panic!("wide {kind} {dtype:?} seed {seed}: {e}"));
+                if ran > 0 {
+                    let caught = four(&p, &map, &tokens, "rms_norm_wide_q36", true).expect_err("the broken variant must not pass");
+                    assert!(caught.contains("GPU"), "{caught}");
+                }
+            }
+        }
+    }
+    let (answered, _) = metal_counts();
+    assert!(answered > 0, "the GPU answered nothing");
+}
+
+fn wide_program(kind: u8, dtype: DType, rows: u32, n: u32) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param(if dtype == DType::I32 { "x32.table" } else { "x.table" }, dtype, &[VOCAB, rows * n], false);
+    let ez = pb.param("ez", DType::I64, &[1], false);
+    let es = pb.param("es", DType::I32, &[1], false);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let v = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let v = b.cast(v, DType::I32);
+        b.finish(&[v])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(DType::I32, &[rows * n])]);
+        let x = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.reshape_fixed(x, &[rows, n]);
+        let y = if kind == 2 { b.rms_norm_wide_q36(x, ez, es) } else { b.rms_norm_wide_q36_exact(x, ez, es) };
+        let y = b.reshape_fixed(y, &[rows * n]);
+        let y = b.commit(y);
+        b.finish(&[y])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[rows * n])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[rows * n]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer], post, 0)
+}
+
+fn wide_params(p: &TirProgramV1, rng: &mut ChaCha20Rng, mode: u8) -> MapParams {
+    let mut m = MapParams { tensors: Default::default() };
+    for (j, d) in p.params.iter().enumerate() {
+        let n: usize = d.shape.iter().map(|x| *x as usize).product();
+        let data: Vec<i128> = (0..n)
+            .map(|_| match (d.name.as_str(), mode) {
+                ("ez", 0) => rng.gen_range(0i128..=1 << 20),
+                ("es", 0) => rng.gen_range(0i128..=30),
+                ("ez", 1) => rng.gen_range(0i128..=1 << 30),
+                ("es", 1) => rng.gen_range(0i128..=96),
+                ("ez", _) => i64::MAX as i128,
+                ("es", _) => 62,
+                (name, _) if name.starts_with("x32") => rng.gen_range(-(1i128 << 26)..=1 << 26),
+                _ => rng.gen_range(d.dtype.min_value()..=d.dtype.max_value()),
+            })
+            .collect();
+        let shape = d.shape.iter().map(|x| *x as usize).collect();
+        m.tensors.insert((j as u16, None), Tensor::new(d.dtype, shape, data).expect("in range"));
+    }
+    m
+}
