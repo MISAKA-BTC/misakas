@@ -831,3 +831,57 @@ fn the_cell_wire_round_trips_and_refuses_hostile_frames() {
     let err = misaka_palw_tir_exec::TirProcessDeviceV1::connect_version_for_test(Box::new(a.try_clone().unwrap()), Box::new(a), 2);
     assert!(err.is_err());
 }
+
+/// **A capture from answered runs** (D-S4): the leaves a seat was answered, in chunks and out of order, make the capture the producer
+/// held — leaves, logits rows and generated ids — and a false leaf, a gap or another class's binding is refused by name.
+#[test]
+fn a_capture_is_reassembled_from_answered_runs_and_refuses_a_false_leaf_or_a_gap() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use misaka_palw_tir::interval::analyze_ranges;
+    use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, TirCaptureV1};
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!("tir-exec-runs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut done = 0;
+    for (k, (name, program, params)) in programs().into_iter().enumerate() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() {
+            continue;
+        }
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor).unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
+        let honest = backend.execute(&job, &prompt).unwrap();
+        let cap = TirCaptureV1::decode(&honest.material).unwrap();
+        let mut binding = cap.binding.clone();
+        binding.class.program = Vec::new(); // as an answer carries it
+        let prompt32: Vec<u32> = prompt.iter().map(|x| *x as u32).collect();
+        // Chunks of 17 leaves, last first.
+        let mut runs: Vec<(u64, Vec<_>)> = cap.leaves.chunks(17).enumerate().map(|(i, c)| ((i * 17) as u64, c.to_vec())).collect();
+        runs.reverse();
+        let rebuilt = backend.capture_from_runs_v1(binding.clone(), prompt32.clone(), &runs).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(rebuilt.leaves, cap.leaves, "{name}");
+        assert_eq!(rebuilt.logits_rows, cap.logits_rows, "{name}: the rows read back from the logits leaves");
+        assert_eq!(rebuilt.generated, cap.generated, "{name}: the greedy ids");
+        assert_eq!(rebuilt.binding.step_merkle_root, cap.binding.step_merkle_root);
+        // A false leaf: refused (the root does not hold).
+        let mut bad = runs.clone();
+        bad[0].1[0].values_le[0] ^= 1;
+        assert!(backend.capture_from_runs_v1(binding.clone(), prompt32.clone(), &bad).unwrap_err().contains("step root"), "{name}");
+        // A gap.
+        let mut gap = runs.clone();
+        gap.remove(1);
+        assert!(backend.capture_from_runs_v1(binding.clone(), prompt32.clone(), &gap).unwrap_err().contains("gap"), "{name}");
+        done += 1;
+    }
+    assert!(done >= 5);
+}

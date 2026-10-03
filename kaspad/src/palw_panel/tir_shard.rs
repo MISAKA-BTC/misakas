@@ -36,8 +36,8 @@ use kaspa_consensus_core::palw_tir_shard_v1::{
 };
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{
-    KernelBackendV1, TirBackendV1, TirCellVerdictV1, cell_runs_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
-    tir_shard_cells_v1, tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
+    KernelBackendV1, TirBackendV1, TirCellVerdictV1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
+    tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
 };
 
 use super::tir_court::{
@@ -192,6 +192,23 @@ pub(crate) struct PalwTirShardOwnFiledV1 {
     pub schedule: crate::palw_receipt_pool::OwnRebroadcastV1,
 }
 
+/// **One claim's pursuit of its leaves through the chain's `TirStepRun` units**: the job's leaf range cut in runs of at most
+/// [`PALW_TIR_STEP_RUN_MAX_LEAVES_V1`], each demanded on chain (one session at a time) and answered by the executor; once every run
+/// is answered the leaves make the capture ([`TirBackendV1::capture_from_runs_v1`]) and the seat verifies its cells over it.
+#[derive(Clone, Debug)]
+pub(crate) struct PalwTirRunPursuitV1 {
+    prompt: Vec<u32>,
+    chunks: Vec<(u64, u32)>,
+    answered: Vec<
+        Option<(
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
+            Vec<kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1>,
+        )>,
+    >,
+    demanded: Vec<bool>,
+    read_at: Option<u64>,
+}
+
 /// An accusation a cell found, built off the tick and waiting for the court's carrier path.
 #[derive(Clone, Debug)]
 pub(crate) struct PalwTirShardFindingV1 {
@@ -222,8 +239,12 @@ pub(crate) struct PalwTirShardBooksV1 {
     pub findings: Vec<PalwTirShardFindingV1>,
     /// `TirStepRun` demands (`DefaultAccusedTirStep`) waiting for the court's carrier path, with their messages and due DAAs.
     pub demands: Vec<(Hash64, PalwConsensusObjectV2, u64)>,
-    /// Claims this seat has demanded the runs of (once).
+    /// Claims whose run pursuit is over or was refused (once each).
     demanded: HashSet<Hash64>,
+    /// The pursuit of each claim's leaves through `TirStepRun` demands (RFC-0006 §3, D-S4).
+    run_pursuits: HashMap<Hash64, PalwTirRunPursuitV1>,
+    /// Captures reassembled from answered runs: this seat's material for a claim whose executor served none.
+    synthesised: HashMap<Hash64, Vec<u8>>,
     /// Classes the mirror was tried for (once each).
     mirror_tried: HashSet<Hash64>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
@@ -480,27 +501,23 @@ impl super::PalwPanelService {
                         })
                     })
                 })
-                .cloned();
+                .cloned()
+                .or_else(|| books.synthesised.get(&duty.claim_id).cloned());
             let first = *books.first_wanted.entry(duty.claim_id).or_insert(current_daa);
             let shadow_now = self.config.tir_shard_shadow;
             let Some(material) = material else {
                 // Ask the network (signed), and abstain honestly once half the window has passed with nothing served.
                 self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
                 let window = duty.receipt_deadline.saturating_sub(duty.bound_daa);
-                // **Past a quarter of the window, with `--palw-tir-shard-demand-runs`: demand the runs the cell reads on chain** (RFC-0006
-                // §3, D-S4) — one `TirStepRun` unit, the first run of the seat's first cell; the executor answers inside the
-                // disclosure window or its claim defaults. Once a claim.
+                // **Past a quarter of the window, with `--palw-tir-shard-demand-runs`: pursue the job's leaves through the chain's `TirStepRun`
+                // units** (RFC-0006 §3, D-S4): one run demanded at a time, the executor answers each inside the disclosure window or its
+                // claim defaults, and once every run is answered the leaves make the capture this seat verifies its cells over.
                 if self.config.tir_shard_demand_runs
                     && !shadow_now
                     && !books.demanded.contains(&duty.claim_id)
                     && current_daa >= duty.bound_daa.saturating_add(window / 4)
                 {
-                    books.demanded.insert(duty.claim_id);
-                    if let Some((message, object, due)) =
-                        self.tir_shard_run_demand_v1(session, bond_key, network_domain, current_daa, duty, &tir).await
-                    {
-                        books.demands.push((message, object, due));
-                    }
+                    self.tir_shard_run_pursuit_v1(session, bond_key, network_domain, current_daa, duty, &tir, books).await;
                 }
                 if current_daa >= duty.bound_daa.saturating_add(window / 2) {
                     let verdict = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: first.max(duty.bound_daa) };
@@ -651,9 +668,13 @@ impl super::PalwPanelService {
         let _ = session;
     }
 
-    /// **The demand of the first run a cell reads** (`DefaultAccusedTirStep`, unit `TirStepRun`), built over the job the claim's block
-    /// asked for (the cell's runs are a function of the class, the plan and the job — no capture is needed to list them).
-    async fn tir_shard_run_demand_v1(
+    /// **One tick of a claim's pursuit of its leaves through `TirStepRun` units** (RFC-0006 §3, D-S4). On the first tick the job's leaf
+    /// range is cut in runs (refused by name past the seat's session allowance: a class that large is the descent's, option C); each
+    /// tick the chain's answers are read (throttled) and any run answered is kept, binding and leaves; when every run is in, the
+    /// capture they make ([`TirBackendV1::capture_from_runs_v1`]: the step root recomputed over the leaves) becomes this seat's material
+    /// for the claim; otherwise the next run not yet demanded is demanded (one in flight at a time).
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_run_pursuit_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         bond_key: PalwBondKeyV2,
@@ -661,42 +682,108 @@ impl super::PalwPanelService {
         current_daa: u64,
         duty: &PalwSeatDutyV2,
         tir: &std::sync::Arc<TirBackendV1>,
-    ) -> Option<(Hash64, PalwConsensusObjectV2, u64)> {
+        books: &mut PalwTirShardBooksV1,
+    ) {
         use kaspa_consensus_core::palw_da_rcore_v1::{
-            PalwDaUnitV1, palw_tir_step_accusation_message_v1, palw_tir_step_accusation_object_v1,
+            PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1, PalwDaAnswerV1, PalwDaUnitV1, palw_tir_step_accusation_message_v1,
+            palw_tir_step_accusation_object_v1,
         };
         use kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
-        let place = duty.tir_shard?;
-        let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root).ok()?;
-        let (ctx, _) = self.attempt_job_for_claim(
-            session,
-            backend.as_ref(),
-            network_domain,
-            duty.accepted_block,
-            duty.class_id,
-            &duty.executor_bond,
-        )?;
-        let positions = tir.space().job_shape(&ctx).ok()?.positions;
-        let cells = tir_shard_cells_v1(tir, positions, place.shard, place.s_l, place.s_p, place.segments).ok()?;
-        let cell = cells.first()?;
-        let runs = cell_runs_v1(tir.space(), &ctx, cell).ok()?;
-        let (first, count, _) = *runs.first()?;
-        let unit = PalwDaUnitV1::TirStepRun { first, count: count.min(PALW_TIR_STEP_RUN_MAX_LEAVES_V1) };
+        let claim = duty.claim_id;
         let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
-        let message = palw_tir_step_accusation_message_v1(network_domain, &duty.claim_id, &unit, &bond_key);
-        let object =
-            palw_tir_step_accusation_object_v1(&network_domain, duty.claim_id, unit, bond_key, ladder, |m, c| self.sign(m, c))
-                .map_err(|why| warn!("[{PALW_PANEL}] claim {}: the run demand does not build ({why})", duty.claim_id))
-                .ok()?;
+        if !books.run_pursuits.contains_key(&claim) {
+            let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
+            let Some((ctx, prompt)) = self.attempt_job_for_claim(
+                session,
+                backend.as_ref(),
+                network_domain,
+                duty.accepted_block,
+                duty.class_id,
+                &duty.executor_bond,
+            ) else {
+                return;
+            };
+            let Ok(total) = tir.space().leaf_count_capped(&ctx, ladder) else { return };
+            let run = u64::from(PALW_TIR_STEP_RUN_MAX_LEAVES_V1);
+            let chunks: Vec<(u64, u32)> = (0..total.div_ceil(run)).map(|i| (i * run, (total - i * run).min(run) as u32)).collect();
+            if chunks.len() > usize::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1) {
+                warn!(
+                    "[{PALW_PANEL}] claim {claim}: its {total} leaves are {} runs, past this seat's {PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1} sessions:                      the run pursuit is not for a class this large",
+                    chunks.len()
+                );
+                books.demanded.insert(claim);
+                return;
+            }
+            let prompt32: Vec<u32> = prompt.iter().map(|x| *x as u32).collect();
+            let n = chunks.len();
+            books.run_pursuits.insert(
+                claim,
+                PalwTirRunPursuitV1 { prompt: prompt32, chunks, answered: vec![None; n], demanded: vec![false; n], read_at: None },
+            );
+        }
+        // What the chain has answered, read on a throttle.
+        let read_due = books.run_pursuits.get(&claim).is_some_and(|p| p.read_at.is_none_or(|at| current_daa >= at.saturating_add(4)));
+        if read_due {
+            let not_before = duty.bound_daa;
+            let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 14) as usize;
+            let objects =
+                session.clone().spawn_blocking(move |c| super::tir_court::tir_da_chain_objects_v1(c, claim, not_before, span)).await;
+            let Some(p) = books.run_pursuits.get_mut(&claim) else { return };
+            p.read_at = Some(current_daa);
+            for object in objects {
+                let PalwConsensusObjectV2::MaterialDisclosedV2 { claim: c, answer: PalwDaAnswerV1::TirStepRun(d), .. } = object else {
+                    continue;
+                };
+                if c != claim
+                    || d.binding.committed_execution_root != duty.execution_root
+                    || d.binding.full_logits_trace_root != duty.trace_root
+                {
+                    continue;
+                }
+                let first = d.range.first_leaf_index;
+                if let Some(i) = p.chunks.iter().position(|(f, n)| *f == first && *n as usize == d.preimages.len()) {
+                    p.answered[i] = Some((d.binding.clone(), d.preimages.clone()));
+                }
+            }
+        }
+        let Some(p) = books.run_pursuits.get_mut(&claim) else { return };
+        if p.answered.iter().all(Option::is_some) {
+            let binding = p.answered[0].as_ref().map(|(b, _)| b.clone()).expect("a pursuit has a run");
+            let runs: Vec<(u64, Vec<_>)> =
+                p.chunks.iter().zip(&p.answered).map(|((f, _), a)| (*f, a.as_ref().expect("answered").1.clone())).collect();
+            let prompt = p.prompt.clone();
+            match tir.capture_from_runs_v1(binding, prompt, &runs) {
+                Ok(capture) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: every run answered on chain — {} leaves make the capture this seat verifies its cells over (RFC-0006, D-S4)",
+                        capture.leaves.len()
+                    );
+                    books.synthesised.insert(claim, capture.encode());
+                }
+                Err(why) => warn!("[{PALW_PANEL}] claim {claim}: the answered runs make no capture: {why}"),
+            }
+            books.run_pursuits.remove(&claim);
+            books.demanded.insert(claim);
+            return;
+        }
+        // The next run not answered or demanded; the filing loop holds each demand until this seat's session is free.
+        let Some(i) = (0..p.chunks.len()).find(|i| p.answered[*i].is_none() && !p.demanded[*i]) else { return };
+        // A demand the chain refused to take (the session of this seat still open) is re-offered by the filing loop; this marks it offered.
+        let (first, count) = p.chunks[i];
+        p.demanded[i] = true;
+        let unit = PalwDaUnitV1::TirStepRun { first, count };
+        let message = palw_tir_step_accusation_message_v1(network_domain, &claim, &unit, &bond_key);
+        let Ok(object) = palw_tir_step_accusation_object_v1(&network_domain, claim, unit, bond_key, ladder, |m, c| self.sign(m, c))
+            .map_err(|why| warn!("[{PALW_PANEL}] claim {claim}: the run demand does not build ({why})"))
+        else {
+            return;
+        };
         let earliest_final = super::palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
         let due = super::palw_seat_court_filing_due_v1(duty.receipt_deadline, earliest_final, current_daa);
         info!(
-            "[{PALW_PANEL}] claim {}: no capture reaches this seat — demanding the run [{first}, +{}) its shard {} cell reads on chain (RFC-0006)",
-            duty.claim_id,
-            count.min(PALW_TIR_STEP_RUN_MAX_LEAVES_V1),
-            place.shard
+            "[{PALW_PANEL}] claim {claim}: no capture reaches this seat — demanding the run [{first}, +{count}) on chain (RFC-0006, D-S4)"
         );
-        Some((message, object, due))
+        books.demands.push((message, object, due));
     }
 
     /// Sign and send one cell-masked receipt for `duty`: pooled as this node's own (never evictable), broadcast, and kept for the

@@ -379,6 +379,68 @@ impl TirBackendV1 {
         }
     }
 
+    /// **Reassemble a capture from answered runs** (RFC-0006, D-S4): a seat that demanded a job's leaves on chain (`TirStepRun` units
+    /// covering `[0, step_leaf_count)`) and was answered holds every preimage; this is the capture they make. `runs` are `(first leaf,
+    /// preimages)` answers, in any order, which must tile the whole leaf range with no gap or overlap; the binding (as the answers
+    /// carry it, program stripped) is verified and filled; **the step root is recomputed over the leaves and must be the binding's**
+    /// (so one false leaf in any answer is refused here, whatever the openings said); the logits rows are read back from the last
+    /// occurrence's logits tiles and the generated ids are their greedy selections. Nothing is believed that the root does not bind —
+    /// the committed trace root is the cell verifier's own check at the last shard.
+    pub fn capture_from_runs_v1(
+        &self,
+        mut binding: PalwTirStepBindingV1,
+        prompt: Vec<u32>,
+        runs: &[(u64, Vec<PalwStepTileLeafV1>)],
+    ) -> Result<TirCaptureV1, String> {
+        use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+        binding.class.program = self.class.program.clone();
+        if binding.class.class_id(&binding.artifact_root) != self.class_id || binding.artifact_root != self.artifact_root {
+            return Err("the answers' binding is of another class".into());
+        }
+        verify_tir_binding_v1(&binding, self.ladder).map_err(|e| format!("the answers' binding does not verify: {e}"))?;
+        let mut order: Vec<&(u64, Vec<PalwStepTileLeafV1>)> = runs.iter().collect();
+        order.sort_by_key(|r| r.0);
+        let mut leaves: Vec<PalwStepTileLeafV1> = Vec::with_capacity(binding.step_leaf_count as usize);
+        for (first, run) in order {
+            if *first != leaves.len() as u64 {
+                return Err(format!("the answered runs leave a gap or overlap at leaf {}", leaves.len()));
+            }
+            leaves.extend(run.iter().cloned());
+        }
+        if leaves.len() as u64 != binding.step_leaf_count {
+            return Err(format!("{} leaves answered of {}", leaves.len(), binding.step_leaf_count));
+        }
+        let ctx = binding.job_context.clone();
+        let ctx_hash = ctx.context_hash();
+        let hashes: Vec<Hash64> = leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect();
+        if step_merkle_root_capped_v1(&hashes, self.ladder).ok() != Some(binding.step_merkle_root) {
+            return Err("the answered leaves do not reach the claim's step root".into());
+        }
+        // The logits rows: at every position that selects a token, the post block's logits node's tiles, in leaf order.
+        let job = self.space.job_shape(&ctx).map_err(|e| e.to_string())?;
+        let post = (self.space.occurrences().len() - 1) as u32;
+        let mut rows: Vec<Vec<i32>> = Vec::new();
+        let mut generated: Vec<u32> = Vec::new();
+        for a in 0..job.positions {
+            if !job.runs_post(a) {
+                continue;
+            }
+            let mut row: Vec<i32> = Vec::new();
+            for leaf in self.space.leaves_of_position(&ctx, a) {
+                if matches!(leaf.kind, PalwTirLeafKindV1::Commit { occurrence, node, .. } if occurrence == post && node == self.space.program.logits) {
+                    let pre = leaves.get(leaf.index as usize).ok_or("a logits leaf past the answered range")?;
+                    row.extend(pre.values_le.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+                }
+            }
+            if row.is_empty() {
+                return Err(format!("no logits at position {a}"));
+            }
+            generated.push(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&row) as u32);
+            rows.push(row);
+        }
+        Ok(TirCaptureV1 { binding, prompt, logits_rows: rows, generated, leaves })
+    }
+
     /// A capture of THIS class, decoded.
     pub fn decode_capture(&self, material: &[u8]) -> Result<TirCaptureV1, String> {
         let capture = TirCaptureV1::decode(material)?;
