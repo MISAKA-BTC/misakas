@@ -1607,6 +1607,21 @@ Do you confirm? (y/n)";
                             }
                             false => false,
                         },
+                        // **DRILL ONLY** (`--palw-drill-anchor-duty-after-slots`): the release's wait everywhere else.
+                        anchor_duty_after_slots: match args.palw_drill_anchor_duty_after_slots {
+                            Some(slots) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                                panic!("--palw-drill-anchor-duty-after-slots={slots} is a drill and is a salted testnet-12 drill only")
+                            }
+                            Some(slots) => {
+                                warn!(
+                                    "PALW DRILL: an operator's anchor duty on this node fires after a claim has waited {slots} slots for an \
+                                     operator attempt, not the release's {}.",
+                                    crate::palw_producer::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1
+                                );
+                                slots
+                            }
+                            None => crate::palw_producer::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1,
+                        },
                         drill_tamper_leaf: match args.palw_drill_tamper_leaf {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")

@@ -112,6 +112,10 @@ pub struct PalwProducerConfig {
     /// ([`palw_drill_floor_policy_ignored_v1`]); every other hold holds. `false` everywhere but a salted drill chain; the
     /// daemon refuses the flag elsewhere.
     pub drill_floor_ignore_policy: bool,
+    /// **The wait before an operator's floor producer mines its anchor-duty binder, in DAA slots** (ADR-0165 §00.9):
+    /// [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] (30) everywhere but a salted drill chain, where
+    /// `--palw-drill-anchor-duty-after-slots` may shorten it; the daemon refuses the flag elsewhere.
+    pub anchor_duty_after_slots: u64,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -520,16 +524,23 @@ pub(crate) fn palw_floor_anchor_duty_stagger_v1(bond: &TransactionOutpoint) -> u
 /// that is or merges an OPERATOR's attempt at or past its slot; while the chain is Normal the operators' floor producers hold, and
 /// where the REAL work comes from non-operators no operator attempt exists — the claim waits for the bind window's backstop. A floor
 /// attempt the fold refuses (`FloorNotIdle`) is still an operator attempt by its header, so it anchors: the producer mines it, once,
-/// when a claim has waited [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] slots (plus its stagger) for one. True only for the floor class,
+/// when a claim has waited `after_slots` ([`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`], 30, unless a drill shortened it) slots plus its
+/// stagger for one. True only for the floor class,
 /// only where the hold is the idle-only refusal and nothing else, and only with `PalwProducerFactsV2::binder_due` (the fence in force,
 /// the bond an operator's, a claim `Provisional` past its slot). Pure, so the rule is tested without a node.
-pub(crate) fn palw_floor_anchor_duty_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1, due_slots: u64, stagger: u64) -> bool {
+pub(crate) fn palw_floor_anchor_duty_v1(
+    facts: &PalwProducerFactsV2,
+    hold: &PalwProducerHoldV1,
+    due_slots: u64,
+    after_slots: u64,
+    stagger: u64,
+) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
     facts.binder_due
         && facts.is_base_class
         && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)
         && facts.class_admission_refusal.as_deref().is_some_and(kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1)
-        && due_slots >= PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1.saturating_add(stagger)
+        && due_slots >= after_slots.saturating_add(stagger)
 }
 
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
@@ -1109,7 +1120,16 @@ impl PalwProducerService {
                 (true, Some(_)) => {}
             }
             let due_slots = binder_due_since_daa.map_or(0, |since| facts.daa_score.saturating_sub(since));
-            let floor_duty = matches!(&ready, Err(hold) if palw_floor_anchor_duty_v1(&facts, hold, due_slots, palw_floor_anchor_duty_stagger_v1(&bond)));
+            let floor_duty = matches!(
+                &ready,
+                Err(hold) if palw_floor_anchor_duty_v1(
+                    &facts,
+                    hold,
+                    due_slots,
+                    self.config.anchor_duty_after_slots,
+                    palw_floor_anchor_duty_stagger_v1(&bond)
+                )
+            );
             // **Lane bind-deadlock (`palw_anchor_at_ceiling`): anchor duty at the ceiling.** A bond
             // whose only hold is its exposure ceiling mines anyway when the block would be the anchor
             // of a claim due at it: past the fence the chain keeps that attempt as a binder (it binds
@@ -2942,22 +2962,23 @@ mod p6_tests {
             Some(PalwStateV2Error::FloorNotIdle { class: f.class_id, daa: CANDIDATE, state: PalwFloorStateV1::default() }.to_string());
         f.binder_due = true;
         assert!(f.is_base_class);
-        assert!(!duty(&f, &floor_hold, AFTER - 1, 0), "a claim that has not waited long enough");
-        assert!(duty(&f, &floor_hold, AFTER, 0), "the wait is over: one binder");
-        assert!(!duty(&f, &floor_hold, AFTER + 3, 4), "the stagger: this bond waits four slots longer");
-        assert!(duty(&f, &floor_hold, AFTER + 4, 4));
+        assert!(!duty(&f, &floor_hold, AFTER - 1, AFTER, 0), "a claim that has not waited long enough");
+        assert!(duty(&f, &floor_hold, AFTER, AFTER, 0), "the wait is over: one binder");
+        assert!(!duty(&f, &floor_hold, AFTER + 3, AFTER, 4), "the stagger: this bond waits four slots longer");
+        assert!(duty(&f, &floor_hold, AFTER + 4, AFTER, 4));
+        assert!(duty(&f, &floor_hold, 5, 5, 0) && !duty(&f, &floor_hold, 4, 5, 0), "a drill's shorter wait is the wait");
         // Nothing else gives way: no claim due, a REAL class, another hold, another registry refusal.
         let mut none_due = f.clone();
         none_due.binder_due = false;
-        assert!(!duty(&none_due, &floor_hold, 10_000, 0), "no claim is due: no duty");
+        assert!(!duty(&none_due, &floor_hold, 10_000, AFTER, 0), "no claim is due: no duty");
         let mut real_class = f.clone();
         real_class.is_base_class = false;
-        assert!(!duty(&real_class, &floor_hold, 10_000, 0), "a REAL class is never held by the idle-only policy, so it has no duty to give way");
+        assert!(!duty(&real_class, &floor_hold, 10_000, AFTER, 0), "a REAL class is never held by the idle-only policy, so it has no duty to give way");
         let mut other = f.clone();
         other.class_admission_refusal = Some("class … is Prefetching under the model registry".to_string());
-        assert!(!duty(&other, &floor_hold, 10_000, 0), "another refusal of the floor holds");
+        assert!(!duty(&other, &floor_hold, 10_000, AFTER, 0), "another refusal of the floor holds");
         assert!(
-            !duty(&f, &PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2), 10_000, 0),
+            !duty(&f, &PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2), 10_000, AFTER, 0),
             "the ceiling hold has its own duty (palw_producer_binds_at_ceiling_v1), not this one"
         );
         // The stagger spreads operators over eight slots and never beyond.
@@ -2969,6 +2990,12 @@ mod p6_tests {
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
         assert!(src.contains("(true, None) => binder_due_since_daa = Some(facts.daa_score),"), "the wait starts when binder_due turns true");
         assert!(src.contains("(false, _) => binder_due_since_daa = None,"), "and breaks when it turns false");
+        let daemon = include_str!("daemon.rs");
+        assert!(daemon.contains("anchor_duty_after_slots: match args.palw_drill_anchor_duty_after_slots {"));
+        assert!(
+            daemon.contains("Some(slots) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill =>"),
+            "the wait is the release's everywhere but a salted private drill"
+        );
         let fire = src.find("} else if floor_duty {").expect("the duty branch");
         let tail = &src[fire..fire + 1200];
         assert!(tail.contains("binder_due_since_daa = Some(facts.daa_score);"), "one binder, then the wait starts again");

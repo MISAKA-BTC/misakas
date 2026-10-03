@@ -409,6 +409,12 @@ pub struct Args {
     /// drill's *policy-ignoring floor miner*, the honest limit of the fold-level rule. Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_floor_ignore_policy: bool,
+    /// **DRILL ONLY (a salted testnet-12 chain; refused anywhere else): the wait, in DAA slots, before an operator's floor producer
+    /// mines its anchor-duty binder** (ADR-0165 §00.9) — a claim must have waited this long for an operator attempt while the
+    /// floor is held. The release's value is 30 slots (an hour); a drill chain that runs minutes shortens it to see the binder.
+    /// 1..=3600. Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_anchor_duty_after_slots: Option<u64>,
     /// **DRILL ONLY: arm the decode rules (`palw_fp_decode_rules`, ADR-0082 D10/D11) at this DAA**
     /// (`config::drill::palw_drill_decode_rules_at_v1`) — the prerequisite FP Job V5 and RFC-0004's
     /// improvement fence name: each needs it in force at or below its own height. Command line only.
@@ -720,6 +726,7 @@ impl Default for Args {
             palw_drill_useful_work_at: None,
             palw_drill_real_submit_delay_s: None,
             palw_drill_floor_ignore_policy: false,
+            palw_drill_anchor_duty_after_slots: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -1867,6 +1874,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-anchor-duty-after-slots")
+                .long("palw-drill-anchor-duty-after-slots")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64).range(1..=3_600))
+                .help(
+                    "PALW DRILL ONLY (needs --palw-drill-genesis-salt; refused otherwise): the number of DAA slots a claim must have \
+                     waited for an operator attempt, while the floor is held as the idle-only fallback (ADR-0165), before this node's \
+                     floor producer mines its ONE anchor-duty binder (1..=3600; the release's value is 30). Meaningful only for an \
+                     operator's bond.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-useful-work-at")
                 .long("palw-drill-useful-work-at")
                 .require_equals(true)
@@ -2994,6 +3013,7 @@ impl Args {
             palw_drill_useful_work_at: m.get_one::<u64>("palw-drill-useful-work-at").copied(),
             palw_drill_real_submit_delay_s: m.get_one::<u64>("palw-drill-real-submit-delay-s").copied(),
             palw_drill_floor_ignore_policy: m.get_flag("palw-drill-floor-ignore-policy"),
+            palw_drill_anchor_duty_after_slots: m.get_one::<u64>("palw-drill-anchor-duty-after-slots").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),

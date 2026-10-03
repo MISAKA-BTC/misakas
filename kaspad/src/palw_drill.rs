@@ -365,6 +365,13 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
                  --palw-drill-genesis-salt: on a real network a producer that sat on its blocks would only be losing them"
             )));
         }
+        if let Some(after) = args.palw_drill_anchor_duty_after_slots {
+            return Err(refused(format!(
+                "--palw-drill-anchor-duty-after-slots={after} moves when an operator's floor producer mines its anchor-duty binder and needs \
+                 --palw-drill-genesis-salt: on a real network the wait is the release's, and an operator that fired early would only be \
+                 burning its own blocks"
+            )));
+        }
         if args.palw_drill_floor_ignore_policy {
             return Err(refused(
                 "--palw-drill-floor-ignore-policy makes this node's floor producer ignore the idle-only policy (ADR-0165) and needs \
@@ -1124,6 +1131,34 @@ mod tests {
             let mut argv: Vec<String> = base.iter().map(|s| (*s).to_owned()).collect();
             argv.push(salt_flag.clone());
             argv.push(format!("--palw-drill-real-submit-delay-s={bad}"));
+            let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
+            assert!(Args::parse(argv).is_err(), "{bad} is out of range");
+        }
+    }
+
+    /// **`--palw-drill-anchor-duty-after-slots` is a drill node's flag and nobody else's** (ADR-0165 §00.9): refused without the salt,
+    /// by name, on public testnet-12 too; a salted drill node takes it; off by default; the range is 1..=3600.
+    #[test]
+    fn the_anchor_duty_wait_flag_is_refused_off_a_salted_chain() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
+        let why = refusal(&with(&["--palw-drill-anchor-duty-after-slots=5"]));
+        assert!(why.contains("--palw-drill-anchor-duty-after-slots=5") && why.contains("needs --palw-drill-genesis-salt"), "{why}");
+        let public = parse(&["--testnet", "--netsuffix=12", "--palw-drill-anchor-duty-after-slots=5"]);
+        assert!(refusal(&public).contains("needs --palw-drill-genesis-salt"), "public testnet-12 refuses it");
+        let salted = with(&[&salt_flag, "--palw-drill-anchor-duty-after-slots=5"]);
+        assert_eq!(salted.palw_drill_anchor_duty_after_slots, Some(5));
+        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes it");
+        assert_eq!(with(&[&salt_flag]).palw_drill_anchor_duty_after_slots, None, "off by default");
+        for bad in ["0", "3601", "-1", "x"] {
+            let mut argv: Vec<String> = base.iter().map(|s| (*s).to_owned()).collect();
+            argv.push(salt_flag.clone());
+            argv.push(format!("--palw-drill-anchor-duty-after-slots={bad}"));
             let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
             assert!(Args::parse(argv).is_err(), "{bad} is out of range");
         }
