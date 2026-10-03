@@ -177,24 +177,50 @@ class Client:
         raise classify(status, path, r)
 
     def cdn_range(self, location: str, start: int, end: int) -> bytes:
-        """Bytes [start, end) of an object the resolver redirected to. The range is explicit and bounded."""
+        """Bytes [start, end) of an object the resolver redirected to. The range is explicit and bounded, and the response is
+        **streamed**: a server that ignores `Range` (a 200) or announces more bytes than were asked is cut off before its body is
+        read, so a weight file can never be downloaded whole by accident."""
         if end <= start:
             return b""
         if end - start > MAX_HEADER_BYTES:
             raise FetchError("too_large", f"a range of {end - start} bytes is over the header cap")
         url = location if location.startswith("http") else ENDPOINT + location
         bucket = self.resolvers if url.startswith(ENDPOINT) else self.cdn
-        r = self._request(bucket, url, headers={"Range": f"bytes={start}-{end - 1}"})
-        if r.status_code == 206:
-            if len(r.content) != end - start:
-                raise FetchError("short_range", f"asked {end - start} bytes, got {len(r.content)}", 206)
-            return r.content
-        if r.status_code == 200:
-            # A server that ignores Range sent the whole object: never keep more than was asked.
-            raise FetchError("range_ignored", "the server ignored Range (would be a whole-file download)", 200)
-        if r.status_code == 416:
-            raise FetchError("range_unsatisfiable", f"bytes {start}-{end - 1}", 416)
-        raise classify(r.status_code, url, r)
+        want = end - start
+        delay = 2.0
+        for _ in range(6):
+            bucket.acquire()
+            try:
+                with self.http.stream("GET", url, headers={"Range": f"bytes={start}-{end - 1}"}) as r:
+                    bucket.observe(r.headers)
+                    if r.status_code == 206:
+                        cl = r.headers.get("content-length")
+                        if cl is not None and int(cl) > want:
+                            raise FetchError("range_oversized", f"asked {want} bytes, the server announces {cl}", 206)
+                        body = bytearray()
+                        for chunk in r.iter_bytes():
+                            body += chunk
+                            if len(body) > want:
+                                raise FetchError("range_oversized", f"asked {want} bytes, the server sent more", 206)
+                        with self._lock:
+                            self.bytes_in += len(body)
+                        if len(body) != want:
+                            raise FetchError("short_range", f"asked {want} bytes, got {len(body)}", 206)
+                        return bytes(body)
+                    if r.status_code == 200:
+                        raise FetchError("range_ignored", "the server ignored Range (a whole-file download): not read", 200)
+                    if r.status_code == 416:
+                        raise FetchError("range_unsatisfiable", f"bytes {start}-{end - 1}", 416)
+                    if r.status_code == 429 or r.status_code >= 500:
+                        retry = r.status_code
+                    else:
+                        r.read()
+                        raise classify(r.status_code, url, r)
+            except (httpx.TimeoutException, httpx.TransportError):
+                retry = "timeout"
+            time.sleep(delay)
+            delay = min(delay * 2, 120)
+        raise FetchError("timeout" if retry == "timeout" else f"http_{retry}", url)
 
 
 def classify(status: int, what: str, r: httpx.Response | None = None) -> FetchError:

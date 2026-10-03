@@ -69,24 +69,44 @@ class Remote:
         """Ask the resolver for bytes [0, first_len): a 302 gives the CDN location (and the size); a 206 is a non-LFS file served
         directly. Returns the first bytes."""
         url = f"{hfc_http.ENDPOINT}/{self.repo}/resolve/{self.rev}/{hfc_http.quote_path(self.path)}"
-        r = self.c._request(self.c.resolvers, url, headers={"Range": f"bytes=0-{first_len - 1}"})
-        self.requests += 1
-        if r.status_code in (301, 302, 307, 308) and r.headers.get("location"):
-            self.location = r.headers["location"]
-            if r.headers.get("x-linked-size"):
-                self.size = int(r.headers["x-linked-size"])
-            return self.range(0, first_len)
-        if r.status_code == 206:
-            self.location = url
-            cr = r.headers.get("content-range", "")
-            if "/" in cr and cr.rsplit("/", 1)[1].isdigit():
-                self.size = int(cr.rsplit("/", 1)[1])
-            if len(r.content) != first_len:
-                raise FetchError("short_range", f"{self.path}: asked {first_len}, got {len(r.content)}", 206)
-            return r.content
-        if r.status_code == 200:
-            raise FetchError("range_ignored", f"{self.path}: the server ignored Range", 200)
-        raise hfc_http.classify(r.status_code, self.path, r)
+        # Streamed: a resolver that answered a weight file with its whole body (a 200) is cut off unread.
+        for attempt in range(6):
+            self.c.resolvers.acquire()
+            self.requests += 1
+            try:
+                with self.c.http.stream("GET", url, headers={"Range": f"bytes=0-{first_len - 1}"}) as r:
+                    self.c.resolvers.observe(r.headers)
+                    if r.status_code in (301, 302, 307, 308) and r.headers.get("location"):
+                        self.location = r.headers["location"]
+                        if r.headers.get("x-linked-size"):
+                            self.size = int(r.headers["x-linked-size"])
+                        break
+                    if r.status_code == 206:
+                        cr = r.headers.get("content-range", "")
+                        if "/" in cr and cr.rsplit("/", 1)[1].isdigit():
+                            self.size = int(cr.rsplit("/", 1)[1])
+                        body = bytearray()
+                        for chunk in r.iter_bytes():
+                            body += chunk
+                            if len(body) > first_len:
+                                raise FetchError("range_oversized", f"{self.path}: more than {first_len} bytes", 206)
+                        if len(body) != first_len:
+                            raise FetchError("short_range", f"{self.path}: asked {first_len}, got {len(body)}", 206)
+                        self.location = url
+                        return bytes(body)
+                    if r.status_code == 200:
+                        raise FetchError("range_ignored", f"{self.path}: the server ignored Range: not read", 200)
+                    if r.status_code == 429 or r.status_code >= 500:
+                        time.sleep(min(120, 2 * 2**attempt))
+                        continue
+                    r.read()
+                    raise hfc_http.classify(r.status_code, self.path, r)
+            except (hfc_http.httpx.TimeoutException, hfc_http.httpx.TransportError):
+                time.sleep(min(120, 2 * 2**attempt))
+                continue
+        else:
+            raise FetchError("timeout", f"{self.path}: the resolver did not answer")
+        return self.range(0, first_len)
 
     def range(self, start: int, end: int) -> bytes:
         assert self.location
