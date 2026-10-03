@@ -185,7 +185,9 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     }
     never.validate_palw_v2().expect("never() is dormant");
     assert_eq!(ids(&never).1, bi, "never(): the identity");
-    assert_eq!(ids(&never).0, bp, "never() collapses: the baseline's params id (Some-only hashing)");
+    // The params id is NOT asked to collapse: a scheduled `never()` is named in it (u64::MAX), as every other t12 fence's own test
+    // has it (palw_capacity_weight_cap_is_t12_only, palw_capacity_aggregate_liability_is_t12_only) — absence is the identity's.
+    assert_ne!(ids(&never).0, ids(&shipped).0, "never(): not the armed release");
 }
 
 #[test]

@@ -1933,7 +1933,14 @@ mod tests {
     fn params() -> PalwStateParamsV2 {
         let p = crate::config::params::palw_t12_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
-        bundle.state.clone().with_improve_from_daa(Some(ACTIVE)).with_improve_ceilings(Some(PALW_DRILL_IMPROVE_CEILINGS_V1))
+        bundle
+            .state
+            .clone()
+            .with_improve_from_daa(Some(ACTIVE))
+            .with_improve_ceilings(Some(PALW_DRILL_IMPROVE_CEILINGS_V1))
+            // The fold's mechanics, not Λ: the release arms testnet-12's fast-path check (rows 19-20), which its own test asks with an
+            // explicit base (a_policys_windows_are_held_to_the_fast_honest_claim_path_at_the_daa_it_is_applied).
+            .with_improve_lifecycle_base(None)
     }
 
     /// A small policy: 8 items, n_min 4, no suites, one ExactMatch stage, a 1,000-DAA grid.

@@ -85,11 +85,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
-// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was c0023db1…, e073f6ad…)
+// re-pin 2026-10-03 @bd9d63bc4bcc: int-11: RFC-0003/0004 + L_ver + capacity rho25 armed at DAA 5,300, rho100 at 5,395 (was 071b5ab1…, 51c69f22…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "071b5ab16b49c56b931f0521405cb84729506fb7494cb1b2a27fbccb33d0932b",
+    "b2b21ff4f05827c1bb92620ce14f6ae79a51c53f04bd947b380e7a96ee7ceef5",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "51c69f2262ab02f0147f63fadc5a81422d5365175bbb5a0cf95ef70246698eb0",
+    "d590d4541beb2261b215d5ac5bcc65766adc3a67713851c030fc52df8aa2e6fe",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -104,11 +104,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
-// re-pin 2026-10-01 @d45b74bafc8e: int-10: palw_tir_fence2 alone at DAA 3,600 (the model court window stays dormant) (was d36e749f…, 965c203a…)
+// re-pin 2026-10-03 @bd9d63bc4bcc: int-11: RFC-0003/0004 + L_ver + capacity rho25 armed at DAA 5,300, rho100 at 5,395 (was 83b92f6e…, d25872a3…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "83b92f6e24db555d4816df3f0f22edf9d8b5e337d3f543b9564a032c2d5f7b98",
+    "c2ee8683ae4f4127f68299a24d34d17bb1b74115453b559a03e41beab9212177",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "d25872a33c6aad9be3461092604b0b7e4cbb8b2497ba1f86f218d9ceaddd012c",
+    "596861e42d21393d43faddb00361f586d2df312b354a5a6a11643e19be25c21a",
 );
 
 fn shipped(name: &str) -> Params {
