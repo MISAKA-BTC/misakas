@@ -207,3 +207,8 @@ These fields are wRPC (JSON) only; gRPC does not carry them.
 
 **Local test.** `node test/mock-node.mjs 8765 [--new-rpc] [--stale]` serves this directory plus a fake read-only wRPC node (no host is touched);
 open http://localhost:8765/. Screenshots of each state: ~/Downloads/MISAKA-wt-b/lanes/evidence/scan/.
+
+### 10b. 2026-10-03 (later) — one "Recent blocks" table
+Home now has ONE **Recent blocks** table (arrival order, every round block on its own row) with a Type column and filters [All] [Consensus] [Model execution] [Red], 25 rows per page over a 150-block window.
+Types: `C-BLUE · consensus` (chain/blue attempt, legacy heartbeat/floor), `E · model execution (merged)` for a round block before the lane-EX fence, `E-BLUE · model execution` once the node sends `blockKind` REAL_ROUND, `FALLBACK` (blockKind FALLBACK), `RED · not selected` (non-chain non-round blocks, or a block the node marked RED).
+Round rows show model, claim (or "claim unknown") and "Round n/N" when the node reports the ticket index. The per-claim *Recent model executions* panel stays, collapsed under the table. index.html is the live file of 10-03 with `app.js?v=scan-20261003b`.

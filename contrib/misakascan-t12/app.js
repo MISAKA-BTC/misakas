@@ -12,7 +12,7 @@ const WS_PATH_SEED = "/kaspa-seed";  // nginx → SSH tunnel → seed (mesh hub)
 const WS_PATH_HUB = "/kaspa-hub";
 const SYMBOL       = "MSK";      // Misaka devnet coin label (8 decimals)
 const DECIMALS     = 8;
-const RECENT_LIMIT = 80;   // SCAN: wide enough for both tables — round blocks (algo-10) outnumber chain blocks
+const RECENT_LIMIT = 150;   // SCAN: wide enough for both tables — round blocks (algo-10) outnumber chain blocks
 const TXSCAN_LIMIT = 400;        // how far back to scan for a tx id / block-less lookups
 
 /* ---- kaspa-pq overlay (PoS / DNS-finality) additions ---- */
@@ -956,6 +956,9 @@ async function renderModelLine(lineId) {
 const SCAN_STALE_MS = 600000;              // the node's own threshold is read from health.staleAfterMs when present
 const scanCss = document.createElement("style");
 scanCss.textContent = `
+  .scan-filters{display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap}.scan-filters button{background:var(--bg2,#14121f);color:var(--txt,#ddd);border:1px solid var(--line,#2a2740);border-radius:9px;padding:4px 12px;font:inherit;cursor:pointer}.scan-filters button.on{background:var(--acc2,#a78bfa);color:#0b0a12;font-weight:650}
+  .scan-pager{display:flex;gap:10px;align-items:center;margin:8px 0 14px;font-size:13px}.scan-pager button{background:var(--bg2,#14121f);color:var(--txt,#ddd);border:1px solid var(--line,#2a2740);border-radius:8px;padding:3px 10px;cursor:pointer}.scan-pager button:disabled{opacity:.4;cursor:default}
+  .scan-exec-d{margin:14px 0}.scan-exec-d>summary{cursor:pointer;padding:6px 0}
   .scan-bar{display:inline-block;width:92px;height:8px;border-radius:4px;background:var(--line,#2a2740);vertical-align:middle;overflow:hidden}
   .scan-bar>i{display:block;height:100%;background:var(--acc2,#a78bfa)}
   .scan-bar.done>i{background:var(--ok,#4ade80)}
@@ -1116,6 +1119,7 @@ async function scanRefreshExecutions(rows){
     const by = new Map();
     for (const bond of Array.from(bonds).slice(0, 12)) { const r = await scanClaimsOf(bond); if (r) by.set(bond, r); }
     if ($("#execWrap")) scanRenderExecutions(rows, by);
+    if ($("#recentWrap")) scanPaintBlocks();
   } finally { scanExecBusy = false; }
 }
 
@@ -1389,10 +1393,12 @@ async function renderHome(){
     </div>
     <div class="sec-row"><h2 class="sec">Execution lane</h2><a class="sec-more" href="#/lane">Lane detail →</a></div>
     <div id="laneHealth" class="note"><div class="spin">Reading the lane…</div></div>
-    <div class="sec-row"><h2 class="sec">Recent model executions <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span></h2><a class="sec-more" href="#/registry">Models →</a></div>
-    <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div>
-    <div class="sec-row"><h2 class="sec">Recent consensus blocks <span class="dim" style="font-size:13px">(execution round blocks are listed above)</span></h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
+    <div class="sec-row"><h2 class="sec">Recent blocks <span class="dim" style="font-size:13px">(every block in arrival order · each model-execution round block on its own row)</span></h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
+    <div id="blkFilters" class="scan-filters"></div>
     <div id="recentWrap" class="tblscroll"><div class="spin">Loading blocks…</div></div>
+    <div id="blkPager" class="scan-pager"></div>
+    <details id="execDetails" class="scan-exec-d"><summary><b>Recent model executions</b> <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
+      <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div></details>
     <div class="sec-row"><h2 class="sec">Latest transactions <span class="dim" style="font-size:13px">(node-direct · newest first)</span></h2><a class="sec-more" href="#/transactions">View all →</a></div>
     <div id="txWrap" class="tblscroll"><div class="spin">Loading transactions…</div></div>`;
   if (loadCache()) renderRecent();   // instant paint from the previous session; refreshed below
@@ -1638,6 +1644,74 @@ async function updateRecent(sink, liveBlue){
   renderRecent();
 }
 
+
+// ---- ONE "Recent blocks" table: every block in arrival order, round blocks individually, a Type column and filters.
+//   C-BLUE      consensus: a chain/blue attempt, a legacy heartbeat or floor block
+//   E / E-BLUE  model execution: a round block. Before the lane-EX fence it is merged beside the chain, not canonical
+//               ("E · model execution (merged)"); once the node says REAL_ROUND it is canonical ("E-BLUE").
+//   FALLBACK    the idle-time liveness block (blockKind FALLBACK)
+//   RED         not selected: a non-chain, non-round block, or a block the node marked RED
+let scanAll = [], scanFilter = "all", scanPage = 0;
+const SCAN_PAGE = 25;
+function scanTypeOf(b){
+  const kind = scanKindOf(b), lc = String(b.laneClass || "").toUpperCase();
+  if (scanIsRound(b)) {
+    if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="a round block the node judged without a permit: merged, its transactions not accepted">RED · not selected</span>` };
+    if (kind.k === "REAL_ROUND") return { cat: "exec", pill: `<span class="pill blue" title="a canonical member of the DAG (lane EX)">E-BLUE · model execution</span>` };
+    return { cat: "exec", pill: `<span class="pill chain" title="an execution round block: merged into the DAG beside the chain, not yet canonical on this network">E · model execution (merged)</span>` };
+  }
+  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="MISAKA-FALLBACK-V1: an idle-time liveness block">FALLBACK</span>` };
+  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, its transactions not accepted">RED · not selected</span>` };
+  if (b.isChain || lc === "BLUE") return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}${kind.legacy ? " · legacy " + kind.what : ""}">C-BLUE · consensus</span>` };
+  return { cat: "red", pill: `<span class="pill red" title="in the DAG but not on the selected chain (a red, or not merged yet); this is not a rejection">RED · not selected</span>` };
+}
+function scanBlockContext(b, lookup){
+  if (!scanIsRound(b)) return { model: recentModelCell(b), claim: "" };
+  const g = lookup.get(b.hash);
+  const classId = (g && (g.classId || (g.claim && g.claim.classId))) || (b.exec && b.exec.classId) || null;
+  const model = classId ? `<span class="pill blue">${esc(scanClaimClassName(classId))}</span>` : `<span class="dim">model unknown</span>`;
+  const cid = (g && g.claimId) || (b.exec && b.exec.claimId);
+  const bond = (g && g.bond) || (b.exec && b.exec.bond) || (b.round && b.round.bond) || "";
+  let claim = cid ? `<a class="hash" href="#/claim/${esc(cid)}/${esc(encodeURIComponent(bond))}">${esc(short(cid, 8))}</a>` : `<span class="dim">claim unknown</span>`;
+  const t = g && g.claim && Number(g.claim.execTickets);
+  const q = b.exec && b.exec.quantumIndex;
+  if (q != null) claim += ` <span class="dim">· Round ${num(Number(q) + 1)}${t ? "/" + num(t) : ""}</span>`;
+  return { model, claim };
+}
+function scanPaintBlocks(){
+  const w = $("#recentWrap"); if (!w) return;
+  const f = $("#blkFilters"), pg = $("#blkPager");
+  const byBond = new Map(Array.from(scanClaimCache, ([k, v]) => [k, v.rows]).filter(x => x[1]));
+  const lookup = new Map();
+  for (const g of scanGroupExecutions(scanAll, byBond)) for (const b of g.blocks) lookup.set(b.hash, g);
+  const typed = scanAll.map(b => ({ b, t: scanTypeOf(b) }));
+  const count = c => typed.filter(x => c === "all" || x.t.cat === c).length;
+  const filters = [["all", "All"], ["consensus", "Consensus"], ["exec", "Model execution"], ["red", "Red"]];
+  if (f) {
+    f.innerHTML = filters.map(([k, l]) => `<button data-f="${k}" class="${scanFilter === k ? "on" : ""}">${l} <span class="dim">${count(k)}</span></button>`).join("");
+    f.querySelectorAll("button").forEach(btn => btn.onclick = () => { scanFilter = btn.getAttribute("data-f"); scanPage = 0; shownHashes = new Set(); scanPaintBlocks(); });
+  }
+  const list = typed.filter(x => scanFilter === "all" || x.t.cat === scanFilter);
+  const pages = Math.max(1, Math.ceil(list.length / SCAN_PAGE));
+  if (scanPage >= pages) scanPage = pages - 1;
+  const rows = list.slice(scanPage * SCAN_PAGE, (scanPage + 1) * SCAN_PAGE);
+  const firstPaint = shownHashes.size === 0;
+  w.innerHTML = `<table class="tbl"><thead><tr>
+      <th>Block hash</th><th>Type</th><th>Model</th><th title="a round block's claim and round">Claim · round</th><th class="num">DAA</th><th class="num">Blue</th>
+      <th class="num">Parents</th><th class="num">Txs</th><th class="right">Age</th></tr></thead><tbody>${rows.map(({ b, t }) => { const c = scanBlockContext(b, lookup); return `
+      <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? "rowNew" : ""}"><td>${linkBlock(b.hash)}</td><td class="nowrap">${t.pill}</td>
+        <td class="nowrap">${c.model}</td><td class="nowrap">${c.claim}</td>
+        <td class="num">${num(b.daaScore)}</td><td class="num">${num(b.blueScore)}</td><td class="num">${num(b.nParents)}</td><td class="num">${num(b.nTx)}</td>
+        <td class="right dim" title="${esc(dt(b.timestamp))}">${ago(b.timestamp)}</td></tr>`; }).join("") || `<tr><td colspan="9" class="dim">no block of this type in the window</td></tr>`}</tbody></table>`;
+  shownHashes = new Set(rows.map(x => x.b.hash));
+  if (pg) {
+    pg.innerHTML = `<button id="blkPrev" ${scanPage <= 0 ? "disabled" : ""}>← newer</button><span>page ${scanPage + 1} / ${pages} · ${num(list.length)} blocks in the window</span><button id="blkNext" ${scanPage >= pages - 1 ? "disabled" : ""}>older →</button>`;
+    const pv = $("#blkPrev"), nx = $("#blkNext");
+    if (pv) pv.onclick = () => { scanPage--; shownHashes = new Set(); scanPaintBlocks(); };
+    if (nx) nx.onclick = () => { scanPage++; shownHashes = new Set(); scanPaintBlocks(); };
+  }
+}
+
 function renderRecent(){
   const w = $("#recentWrap"); if (!w) return;
   if (!recent.length){ w.innerHTML = `<div class="spin">No blocks yet…</div>`; shownHashes = new Set(); return; }
@@ -1652,31 +1726,10 @@ function renderRecent(){
     (Number(b.timestamp) - Number(a.timestamp)) ||
     (Number(b.blueScore) - Number(a.blueScore)) ||
     (Number(b.daaScore)  - Number(a.daaScore)));
-  // SCAN: the execution lane's round blocks (algo-10) go to the executions table; this one is consensus blocks.
   scanRefreshExecutions(all);
   scanPaintLaneCard(all);
-  const rows = all.filter(b => !scanIsRound(b)).slice(0, 25);
-  const classCell = b => scanKindPill(b) + " " + classCell0(b);
-  const classCell0 = b => {
-    const lc = String(b.laneClass || "");
-    if (lc === "BLUE" || b.isChain) return b.isChain ? `<span class="pill chain" title="on the selected chain">BLUE · chain</span>` : `<span class="pill blue" title="merged blue">BLUE</span>`;
-    if (lc === "RED") return `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, and its transactions are not accepted">RED · not selected</span>`;
-    return `<span class="pill red" title="in the DAG but not on the selected chain (a red or a not-yet-merged block); this is not a rejection">off chain</span>`;
-  };
-  w.innerHTML = `<table class="tbl"><thead><tr>
-      <th>Block hash</th><th title="kind (REAL / EXEC / FALLBACK) and selection (BLUE / RED)">Kind · class</th><th class="num">DAA</th><th class="num">Blue</th>
-      <th class="num">Parents</th><th class="num">Txs</th><th title="the model that mined the block, from its header">Model</th><th class="right">Age</th>
-    </tr></thead><tbody>${rows.map(b => `
-      <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? 'rowNew' : ''}"><td>${linkBlock(b.hash)}</td>
-          <td class="nowrap">${classCell(b)}</td>
-          <td class="num">${num(b.daaScore)}</td>
-          <td class="num">${num(b.blueScore)}</td>
-          <td class="num">${num(b.nParents)}</td>
-          <td class="num">${num(b.nTx)}</td>
-          <td class="nowrap">${recentModelCell(b)}</td>
-          <td class="right dim" title="${esc(dt(b.timestamp))}">${ago(b.timestamp)}</td></tr>`).join("")}
-    </tbody></table>`;
-  shownHashes = new Set(rows.map(b => b.hash));   // baseline for the next render's new-row flash
+  scanAll = all;
+  scanPaintBlocks();
 }
 
 /* ----------------------- LATEST TRANSACTIONS (home) -------------------- */

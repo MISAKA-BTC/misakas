@@ -38,7 +38,7 @@
   self-improvement, layer-sharded panels, bundled verification certificates, the inference-surface additions,
   the claim-capacity step-up, and the useful-work transition (verifier silence no longer slashes an honest
   producer; PALW-BASE-0 becomes a reserve; real-model work carries the clock). The release and its new fingerprint
-  will be announced here before DAA ~5,200; a node that has not updated is refused by upgraded peers from DAA 5,300.
+  will be announced here before DAA ~5,200; a node that has not updated is refused by upgraded peers from DAA 5,300 &mdash; if it stays connected across the fence it does not see the refusal: it stops at DAA 5,299 until it restarts, so check that your node is past 5,300 after the flag day.
   Genesis <span class="mono" title="a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23">a27f8f44fe4d91a5&hellip;</span>;
   the eight genesis bonds are outputs 0&ndash;7 of premine txid
   <span class="mono" title="5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669">5e0d5f1b&hellip;</span>.
@@ -85,6 +85,6 @@
 </footer>
 
 <script src="/sha3.min.js?v=080"></script>
-<script src="/app.js?v=scan-20261003"></script>
+<script src="/app.js?v=scan-20261003b"></script>
 </body>
 </html>
