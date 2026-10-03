@@ -44,6 +44,11 @@ TIR2_AT=${TIR2_AT:-50}
 # **RFC-0007's verification vertex** (`--palw-drill-vertex-at`: palw_verification_vertex_v1): above TIR2_AT and a height no other fence uses; fixed
 # for the chain's life (the datadir marker's vertex_at). Empty: the chain does not arm it (every other drill is unchanged).
 VERTEX_AT=${VERTEX_AT:-}
+# **RFC-0007 Parts II and IV's fences** (`--palw-drill-witness-at` / `--palw-drill-audit-mesh-at` / `--palw-drill-capped-at`): each above VERTEX_AT
+# (the mesh and the capped fence need the vertex below them; the witness needs the IR fence) and a height of its own. Empty: not armed.
+WITNESS_AT=${WITNESS_AT:-}
+AUDIT_AT=${AUDIT_AT:-}
+CAPPED_AT=${CAPPED_AT:-}
 # One class registers only once the chain is past the flag day — PAST_CLASS=small (default: the small class, new4) or
 # PAST_CLASS=ir (the A16 class, new0): `df.sh register-past` creates this marker and restarts that registrant with
 # --palw-register-class. That is the registration Stage 1 judges under fence2's sizing (the range twin); the OTHER class
@@ -145,7 +150,7 @@ class_on_chain() {
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
-    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT VERTEX_AT PAST_CLASS FENCE_AT FENCE2_AT FENCE3_AT
+    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT VERTEX_AT WITNESS_AT AUDIT_AT CAPPED_AT PAST_CLASS FENCE_AT FENCE2_AT FENCE3_AT
     NEW0_P2P=$(p2p new0); NEW0_RPC=$(borsh new0); NEW0_GRPC=$(gport new0); NEW0_LOG=$WORK_DIR/new0/kaspad.out
     OLD_P2P=$(p2p old); OLD_RPC=$(borsh old); OLD_LOG=$WORK_DIR/old/kaspad.out
     export NEW0_P2P NEW0_RPC NEW0_GRPC NEW0_LOG OLD_P2P OLD_RPC OLD_LOG
@@ -177,6 +182,9 @@ node_args() {
         "--palw-drill-tir-at=$TIR_AT")
     [ -n "$TIR2_AT" ] && a+=("--palw-drill-tir2-at=$TIR2_AT")
     [ -n "$VERTEX_AT" ] && a+=("--palw-drill-vertex-at=$VERTEX_AT")
+    [ -n "$WITNESS_AT" ] && a+=("--palw-drill-witness-at=$WITNESS_AT")
+    [ -n "$AUDIT_AT" ] && a+=("--palw-drill-audit-mesh-at=$AUDIT_AT")
+    [ -n "$CAPPED_AT" ] && a+=("--palw-drill-capped-at=$CAPPED_AT")
     if [ "$seat" != - ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"

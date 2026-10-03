@@ -16384,6 +16384,7 @@ mod t12_h1_carrier_gate;
 mod t12_held_leaf_challenge_gate;
 // RFC-0007 Part I (tags 91, 92): the verification vertex and its equivocation at the gate.
 mod t12_vertex_gate;
+mod t12_mesh_gate;
 mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.

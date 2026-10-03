@@ -282,6 +282,9 @@ fn the_drill_movers_arm_them_on_a_salted_drill_and_nowhere_else() {
     // The witness manifest and the vertex alone: the drill's prerequisites stand at genesis.
     // (The drill's IR fence is its own flag: the witness is an IR class's, so it stands first.)
     let mut witness = drill.clone();
+    palw_drill_post_launch_fences_at_v1(&mut witness, 100).expect("the first post-launch flag day");
+    palw_drill_post_launch_fences_v2_at_v1(&mut witness, 110).expect("the second");
+    palw_drill_post_launch_fences_v3_at_v1(&mut witness, 120).expect("the third");
     palw_drill_tir_fence_at_v1(&mut witness, 130).expect("the IR fence");
     let moves = palw_drill_witness_at_v1(&mut witness, 140).expect("a salted drill arms it low");
     assert_eq!((moves.len(), moves[0].name, moves[0].was, moves[0].at), (1, "palw_witness_manifest_v1", None, 140));

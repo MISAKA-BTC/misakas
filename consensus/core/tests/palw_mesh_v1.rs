@@ -255,3 +255,36 @@ fn the_weight_cap_arithmetic() {
     assert!(!palw_capped_weight_admits_v1(6, 5));
     assert!(!palw_capped_weight_admits_v1(u32::MAX, 1), "no wrap");
 }
+
+/// **The canonical serving set on the corpus**: every program of the consensus vectors reads to a profile (or to none) without panicking, the
+/// dense corpus programs serve something, and a profile is a function of the program alone.
+#[test]
+fn the_corpus_programs_read_to_witness_profiles() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v1/programs");
+    let mut with_profile = Vec::new();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).expect("the corpus") {
+        let path = entry.expect("an entry").path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let hex = v["program_borsh_hex"].as_str().expect("the program");
+        let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        let program = TirProgramV1::decode_canonical(&bytes).expect("a canonical program");
+        seen += 1;
+        for context in [1u32, 64, 4_096] {
+            let a = palw_witness_profile_v1(&program, context);
+            assert_eq!(a, palw_witness_profile_v1(&program, context), "a function of the program alone");
+            if let Some(profile) = a {
+                assert_eq!(profile.bytes, profile.elements_per_position * u64::from(context) * 8);
+                assert!(profile.chunks >= 1 && profile.chunks <= PALW_WITNESS_MAX_CHUNKS_V1);
+                if context == 64 {
+                    with_profile.push((path.file_name().unwrap().to_string_lossy().to_string(), profile));
+                }
+            }
+        }
+    }
+    assert!(seen >= 5, "the corpus is there ({seen} programs)");
+    println!("witness profiles at 64 positions: {with_profile:#?}");
+}

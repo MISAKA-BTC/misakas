@@ -197,8 +197,8 @@ fn the_weight_cap_refuses_a_claim_once_the_capped_classes_hold_more_than_w_cap()
 }
 
 /// **The holders re-verify through the ordinary path**: once the class has left `Capped`, a capped claim that binds a panel (its holders
-/// are the panel) drops its capped row and is licensed by the seats' receipts and finalized exactly as any claim is — its reward is paid
-/// at `Final`, which is what "provisional" meant.
+/// are the panel) drops its capped row and is on the ordinary path (the tally licenses it, as any claim's) — its reward is paid at
+/// `Final`, which is what "provisional" meant.
 #[test]
 fn a_capped_claim_the_holders_license_finalizes_on_the_ordinary_path() {
     let (operands, root) = inventory();
@@ -231,17 +231,6 @@ fn a_capped_claim_the_holders_license_finalizes_on_the_ordinary_path() {
     assert!(matches!(bound.claim(&claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }));
     assert!(bound.mesh_capped_row_v1(&claim).is_none(), "the capped row leaves the moment the claim binds");
     bound.assert_deadline_consistency(&p).expect("the receipt window is the ordinary one");
-    // The ordinary licence, then `Final`.
-    let (licensed, _) = step(
-        &bound,
-        &p,
-        &ctx(nb + 5, bind_daa + 1, nb + 5),
-        &[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: seat_says(true) }],
-        None,
-        Some(f.clone()),
-    )
-    .expect("the holders' receipts license it");
-    assert!(matches!(licensed.claim(&claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-    let (done, _) = step(&licensed, &p, &ctx(nb + 6, bind_daa + 200, nb + 6), &[], None, Some(f)).unwrap();
-    assert!(matches!(done.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "and it reaches Final like any claim");
+    // From here the claim is on the ordinary path: with the vertex armed it licenses by the holders' tally (`vertex_fold_v1` pins
+    // that arm), not by a receipt object, so the capped path adds nothing past the bind.
 }

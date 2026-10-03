@@ -503,9 +503,10 @@ fn the_vertex_tail_is_pinned_at_0xe4() {
     let mut with_row = s0;
     with_row.vertex.rounds.insert((1, bond_key(2)), PalwVertexRoundRowV1 { leaves_root: h64(1), accepted_daa: 1, convicted: false });
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&with_row)).unwrap();
-    // The tail: the byte, then the struct (three LE u32 map lengths follow the rounds'): rounds 1 row, tallies 0, held 0.
+    // The tail: the byte, then the struct (three LE u32 map lengths follow the rounds'): rounds 1 row, tallies 0, held 0, then the
+    // mesh's four (RFC-0007 Parts II and IV: witness, audits, traps, capped), all empty.
     let row_len = 8 + 64 + 4 + (64 + 8 + 1);
-    let at = bytes.len() - (1 + 4 + row_len + 4 + 4);
+    let at = bytes.len() - (1 + 4 + row_len + 4 + 4 + 16);
     assert_eq!(bytes[at], 0xE4);
     assert_eq!(bytes[at + 1..at + 5], 1u32.to_le_bytes());
 }
