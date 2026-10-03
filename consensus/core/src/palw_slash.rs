@@ -184,7 +184,9 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
 /// and the scheme pin. (Prompt emptiness etc. are envelope-level facts an opaque hash cannot
 /// witness.) Everything here must hold for ANY honestly-produced v2 context.
 pub(crate) fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), PalwSlashError> {
-    if ctx.version != PALW_TRACE_COMMITMENT_VERSION_V2 {
+    // Version 3 is the inherited-prefix context (RFC-0001 §2.6 stage 2b): admitted only when it names a well-formed prefix.
+    let inherited = ctx.version == crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V3_INHERITED && ctx.inherited_prefix_v1().is_some();
+    if ctx.version != PALW_TRACE_COMMITMENT_VERSION_V2 && !inherited {
         return Err(PalwSlashError::ContextShape("version is not the v2 trace commitment version"));
     }
     if ctx.network_id.is_empty() || ctx.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES {
