@@ -355,6 +355,20 @@ pub fn heartbeat_slot_hint_v1(
     if yield_hint == HeartbeatYieldHintV1::BondedSelectedParent {
         return yield_hint;
     }
+    // **ADR-0165 (`palw_real_clock_tick_v1`): the heartbeat is the clock's FALLBACK carrier.** The slot's
+    // tick belongs to an attempt-lane block if one comes, so a beat waits a grace past the slot's opening
+    // for one — whether or not a tick source already waits in the virtual (the step is any block, and an
+    // attempt producer builds one). After the grace the ordinary rules below apply: a beat is minted for
+    // a slot nothing carried, and a granted tick source still unstepped is stepped.
+    if let Some(step) = clock.filter(|step| step.attempt_ticks)
+        && let Some(next) = step.next_slot_ms()
+    {
+        let until = next.saturating_add(crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1);
+        if now_ms < until {
+            return HeartbeatYieldHintV1::SlotTaken(until);
+        }
+        return yield_hint;
+    }
     match clock.filter(|step| !step.granted).and_then(|step| step.next_slot_ms()) {
         Some(next) if next > now_ms => HeartbeatYieldHintV1::SlotTaken(next),
         _ => yield_hint,
@@ -419,7 +433,7 @@ mod tests {
     fn a_taken_slot_holds_the_miner_until_the_next_one_opens() {
         use crate::palw_clock_cursor_v1::{PalwClockCursorV1, PalwClockStepV1};
         let cursor = |next| Some(PalwClockCursorV1 { next_slot_ms: next, slots_consumed: 0 });
-        let idle = PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted: false, floor: false };
+        let idle = PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted: false, floor: false, attempt_ticks: false };
         let nothing = HeartbeatYieldHintV1::NothingToYieldTo;
         // Between two slots: taken, and the answer names when the next one opens.
         assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&idle), 9_999), HeartbeatYieldHintV1::SlotTaken(10_000));

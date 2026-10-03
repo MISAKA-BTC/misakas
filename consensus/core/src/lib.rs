@@ -489,6 +489,8 @@ pub mod palw_adapter_class_v1;
 pub mod palw_fp_constraint_job_v1;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
 pub mod palw_tir_fence2_v1;
+/// ADR-0165, the Useful Work Transition: the base floor as a reserve (`palw_floor_reserve_v1`) and the attempt lane as a clock tick source (`palw_real_clock_tick_v1`).
+pub mod palw_real_share_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).

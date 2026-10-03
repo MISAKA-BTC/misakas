@@ -115,6 +115,8 @@ impl ConsensusServices {
             params.palw_clock_cursor,
             // The 2026-09-24 heartbeat audit's H3/H5: the stamp rules the header stage reads.
             params.palw_clock_floor,
+            // ADR-0165: past this fence an attempt-lane block is a clock tick source.
+            params.palw_real_clock_tick_v1,
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),

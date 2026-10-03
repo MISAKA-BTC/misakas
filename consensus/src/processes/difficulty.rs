@@ -228,6 +228,9 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     /// **`Params::palw_clock_floor`** (the 2026-09-24 heartbeat audit's H3/H5): past it the clock's
     /// decision is reported with `floor` set, which is what the header stage's stamp rules read.
     clock_floor: Option<ForkActivation>,
+    /// **ADR-0165: `Params::palw_real_clock_tick_v1`** — past it an attempt-lane block in the mergeset is a
+    /// tick source beside the heartbeat; the cursor still grants ONE tick a slot.
+    real_clock_tick: Option<ForkActivation>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -249,6 +252,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         anchor_clock: Option<ForkActivation>,
         clock_cursor: Option<ForkActivation>,
         clock_floor: Option<ForkActivation>,
+        real_clock_tick: Option<ForkActivation>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -268,6 +272,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             anchor_clock,
             clock_cursor,
             clock_floor,
+            real_clock_tick,
         }
     }
 
@@ -411,7 +416,9 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         let mut exempt = 0u64;
         let mut priced = 0u64;
         let mut heartbeats = 0u64;
+        let mut attempts = 0u64;
         let mut newest_beat_ms: Option<u64> = None;
+        let mut newest_attempt_ms: Option<u64> = None;
         for hash in ghostdag_data.unordered_mergeset() {
             if mergeset_non_daa.contains(&hash) {
                 continue;
@@ -440,6 +447,10 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
                     // ADR-0142: the newest beat in the mergeset is the one that would consume the
                     // slot, so it is the one the cursor is measured against and advanced from.
                     newest_beat_ms = Some(newest_beat_ms.map_or(header.timestamp, |t: u64| t.max(header.timestamp)));
+                } else if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
+                    // ADR-0165: counted always, read only past `palw_real_clock_tick_v1`.
+                    attempts += 1;
+                    newest_attempt_ms = Some(newest_attempt_ms.map_or(header.timestamp, |t: u64| t.max(header.timestamp)));
                 }
             }
         }
@@ -462,7 +473,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             // Below the cursor the stand-in is unconditional, so it is a grant in every sense but
             // the cursor's: reported as one, with no cursor, so a reader never mistakes it for a
             // slot being held.
-            let clock = PalwClockStepV1 { governs: false, cursor: None, granted: stand_in, floor: false };
+            let clock = PalwClockStepV1 { governs: false, cursor: None, granted: stand_in, floor: false, attempt_ticks: false };
             return (if stand_in { exempt.saturating_sub(1) } else { exempt }, clock);
         }
         // **ADR-0142 §6a: the reference is derived, not stored.** The block that took the score to
@@ -498,7 +509,13 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
                 kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
             )
         });
-        let beat_ms = newest_beat_ms.unwrap_or(0);
+        // **ADR-0165 (B): an attempt-lane block is a tick source beside the heartbeat.** One tick a mergeset
+        // however many of either it holds: `granted` removes exactly ONE exemption below, and the slot rule
+        // (`palw_clock_slot_admits_v1`) gives a slot to the newest source's stamp. Where the fence does not
+        // govern, `attempts` is never read and this is the heartbeat-only rule, byte for byte.
+        let attempt_ticks = self.real_clock_tick.is_some_and(|fence| fence.is_active(parent_daa));
+        let stand_in = stand_in || (attempt_ticks && priced == 0 && attempts > 0);
+        let beat_ms = if attempt_ticks { newest_beat_ms.into_iter().chain(newest_attempt_ms).max() } else { newest_beat_ms }.unwrap_or(0);
         let granted = stand_in
             && parent_cursor
                 .is_none_or(|cursor| kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_slot_admits_v1(&cursor, beat_ms).is_ok());
@@ -513,7 +530,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // this block's own window — and whether it granted. That is not a carried value: it is
         // recomputed with the score on every call, and it has readers (the heartbeat adapter and
         // the miner's hint read it for the virtual; `DaaWindow::clock` is where they find it).
-        let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted, floor };
+        let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted, floor, attempt_ticks };
         (if granted { exempt.saturating_sub(1) } else { exempt }, clock)
     }
 }

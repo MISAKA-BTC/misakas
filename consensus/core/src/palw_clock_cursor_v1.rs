@@ -204,6 +204,11 @@ pub struct PalwClockStepV1 {
     /// same selected-parent score as `governs`: a heartbeat must be stamped at or past `cursor`,
     /// and so must a block that is `granted`. Never set where `governs` is not.
     pub floor: bool,
+    /// **ADR-0165 (`palw_real_clock_tick_v1`) governs this block**, read at the same selected-parent
+    /// score as `governs`: an attempt-lane block in the mergeset is a tick source beside the heartbeat
+    /// (still ONE tick per slot, however many attempts), and an attempt header is lead-capped like a
+    /// heartbeat. Never set where `governs` is not.
+    pub attempt_ticks: bool,
 }
 
 impl PalwClockStepV1 {
@@ -267,7 +272,11 @@ impl PalwClockStepV1 {
     /// Every other block keeps the network's full future-drift tolerance.
     #[inline]
     pub fn lead_capped(&self, pow_algo_id: u8) -> bool {
-        self.granted || pow_algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        self.granted
+            || pow_algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            // ADR-0165: an attempt is a tick source past `palw_real_clock_tick_v1`, and a free-standing
+            // far-future stamp on one would fill the past-median window exactly as an uncapped beat could.
+            || (self.attempt_ticks && crate::pow_layer0::is_palw_attempt_algo_id(pow_algo_id))
     }
 }
 
@@ -420,7 +429,7 @@ mod tests {
     #[test]
     fn a_beat_is_stamped_at_or_after_its_slot_only_where_the_floor_governs() {
         let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
-        let floored = PalwClockStepV1 { governs: true, cursor, granted: false, floor: true };
+        let floored = PalwClockStepV1 { governs: true, cursor, granted: false, floor: true, attempt_ticks: false };
         assert!(floored.heartbeat_stamp_admits(10_000).is_ok());
         assert!(floored.heartbeat_stamp_admits(u64::MAX).is_ok());
         let early = floored.heartbeat_stamp_admits(9_999).expect_err("one ms before the slot");
@@ -460,7 +469,7 @@ mod tests {
     #[test]
     fn a_step_is_stamped_at_or_past_the_slot_it_consumed() {
         let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
-        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true };
+        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true, attempt_ticks: false };
         assert!(step.step_stamp_admits(10_000).is_ok());
         assert_eq!(step.step_stamp_admits(9_999).expect_err("a step one ms early").next_slot_ms, 10_000);
         assert_eq!(step.floor_stamp(1), 10_000, "a template is raised to the slot");
@@ -493,7 +502,7 @@ mod tests {
         let hb = crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
         let other = hb.wrapping_add(1);
         let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
-        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true };
+        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true, attempt_ticks: false };
         let holder = PalwClockStepV1 { granted: false, ..step };
         assert!(step.lead_capped(other), "a step of any lane");
         assert!(step.lead_capped(hb), "a beat that steps");
