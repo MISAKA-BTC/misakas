@@ -504,6 +504,158 @@ impl PalwTirRowFetchV1 {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The pre-fence shadow (RFC-0006 decision 1): the cell verifier beside the ordinary whole replay, submitting nothing
+// ---------------------------------------------------------------------------------------------
+
+/// The shard plan a pre-fence shadow checks a class under when the chain has none for it: two shards, each over the whole job.
+pub(crate) const PALW_TIR_SHADOW_DEFAULT_PLAN_V1: (u16, u16) = (2, 1);
+/// Claims the shadow checks per tick (the cap on its CPU: one claim's cells, off the loop's thread).
+pub(crate) const PALW_TIR_SHADOW_CLAIMS_PER_TICK_V1: usize = 1;
+/// Claims waiting for their shadow, at most (the oldest is dropped): a node whose seat replays faster than the shadow runs
+/// samples, it does not queue without bound.
+pub(crate) const PALW_TIR_SHADOW_QUEUE_V1: usize = 16;
+/// How many ticks a queued claim waits for its capture before it is dropped.
+pub(crate) const PALW_TIR_SHADOW_PATIENCE_TICKS_V1: u32 = 600;
+
+/// What one claim's shadow found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PalwTirShadowRunV1 {
+    pub cells: u32,
+    /// Cells that verified / found the commitment false / could not be judged.
+    pub verified: u32,
+    pub faulted: u32,
+    pub inconclusive: u32,
+    /// The first cell that found a fault: `(shard, leaf)`.
+    pub named: Option<(u16, Option<u64>)>,
+    /// Per-shard wall time in microseconds, in shard order.
+    pub micros: Vec<u128>,
+    /// The whole replay's verdict this was compared with.
+    pub whole_valid: bool,
+}
+
+impl PalwTirShadowRunV1 {
+    /// **Do the cells agree with the whole replay?** A whole `Valid` agrees with every cell verifying; a whole refutation agrees
+    /// with at least one cell finding a fault (and none verifying a lie it did not read). Inconclusive cells agree with nothing.
+    pub(crate) fn agrees(&self) -> bool {
+        if self.inconclusive > 0 {
+            return false;
+        }
+        if self.whole_valid { self.faulted == 0 } else { self.faulted > 0 }
+    }
+}
+
+/// **The cell verifier run over a capture the seat already replayed whole** — pure over the backend and the capture.
+pub(crate) fn palw_tir_shard_shadow_run_v1(
+    tir: &TirBackendV1,
+    material: &[u8],
+    whole_valid: bool,
+    s_l: u16,
+    s_p: u16,
+) -> Result<PalwTirShadowRunV1, String> {
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    let capture = tir.decode_capture(material)?;
+    if !capture.is_dense() {
+        return Err("the material is a fold: it carries no committed rows".into());
+    }
+    let positions = tir.space().job_shape(&capture.binding.job_context).map_err(|e| e.to_string())?.positions;
+    let mut run = PalwTirShadowRunV1 { cells: 0, verified: 0, faulted: 0, inconclusive: 0, named: None, micros: Vec::new(), whole_valid };
+    for shard in 0..s_l {
+        let cells = tir_shard_cells_v1(tir, positions, shard, s_l, s_p, PalwSegmentMaskV2::full(s_p))?;
+        let started = std::time::Instant::now();
+        let (mut cpu, _) = tir_kernel_backend_v1(false);
+        let verdict = tir_verify_capture_cells_v1(tir, material, &cells, cpu.as_mut())?;
+        run.micros.push(started.elapsed().as_micros());
+        run.cells += cells.len() as u32;
+        match verdict {
+            TirCellVerdictV1::Verified { .. } => run.verified += cells.len() as u32,
+            TirCellVerdictV1::Faulted { leaf, .. } => {
+                run.faulted += 1;
+                run.named.get_or_insert((shard, Some(leaf)));
+            }
+            TirCellVerdictV1::TokenFault { .. } => {
+                run.faulted += 1;
+                run.named.get_or_insert((shard, None));
+            }
+            TirCellVerdictV1::Unavailable { .. } | TirCellVerdictV1::Refused(_) => run.inconclusive += 1,
+        }
+    }
+    Ok(run)
+}
+
+/// **The shadow's books**: whole-replay verdicts waiting for their cell check, and the metrics `getPalwNodeStatus.verification` shows.
+#[derive(Default)]
+pub(crate) struct PalwTirShardShadowV1 {
+    pending: VecDeque<(PalwSeatDutyV2, bool, u32)>,
+    seen: HashSet<Hash64>,
+    pub checked_claims: u64,
+    pub cells: u64,
+    pub agree: u64,
+    pub disagree: u64,
+    pub inconclusive: u64,
+    /// Sum of every shard's cell-verify time, and of each claim's slowest shard (the time a panel running the shards in parallel waits).
+    pub sum_micros: u128,
+    pub wall_micros: u128,
+    pub last_disagreement: Option<String>,
+}
+
+impl PalwTirShardShadowV1 {
+    /// A whole replay's verdict on an IR claim this seat holds the capture of. Once per claim.
+    pub(crate) fn note(&mut self, duty: &PalwSeatDutyV2, whole_valid: bool) {
+        if self.seen.contains(&duty.claim_id) {
+            return;
+        }
+        if self.seen.len() > 4 * PALW_TIR_SHADOW_QUEUE_V1 * 64 {
+            self.seen.clear();
+        }
+        self.seen.insert(duty.claim_id);
+        if self.pending.len() >= PALW_TIR_SHADOW_QUEUE_V1 {
+            self.pending.pop_front();
+        }
+        self.pending.push_back((duty.clone(), whole_valid, 0));
+    }
+
+    pub(crate) fn record(&mut self, claim: Hash64, run: &PalwTirShadowRunV1) {
+        self.checked_claims += 1;
+        self.cells += u64::from(run.cells);
+        self.inconclusive += u64::from(run.inconclusive);
+        self.sum_micros += run.micros.iter().sum::<u128>();
+        self.wall_micros += run.micros.iter().copied().max().unwrap_or(0);
+        if run.inconclusive == 0 {
+            if run.agrees() {
+                self.agree += u64::from(run.cells);
+            } else {
+                self.disagree += 1;
+                let named = run.named.map(|(s, l)| format!("shard{s}/leaf{}", l.map_or("token".to_string(), |l| l.to_string())));
+                self.last_disagreement = Some(format!(
+                    "{claim}:whole_{}:cell_{}",
+                    if run.whole_valid { "valid" } else { "refuted" },
+                    named.unwrap_or_else(|| "none".into())
+                ));
+            }
+        }
+    }
+
+    /// The `key=value` half `getPalwNodeStatus.verification` carries (no spaces inside a value).
+    pub(crate) fn status(&self) -> String {
+        let mut out = format!(
+            "shard_shadow_claims={} shard_shadow_cells={} shard_shadow_agree={} shard_shadow_disagree={} shard_shadow_inconclusive={} \
+             shard_shadow_cell_ms={} shard_shadow_wall_ms={}",
+            self.checked_claims,
+            self.cells,
+            self.agree,
+            self.disagree,
+            self.inconclusive,
+            self.sum_micros / 1000,
+            self.wall_micros / 1000
+        );
+        if let Some(last) = &self.last_disagreement {
+            out.push_str(&format!(" shard_shadow_last_disagreement={last}"));
+        }
+        out
+    }
+}
+
 /// An accusation a cell found, built off the tick and waiting for the court's carrier path.
 #[derive(Clone, Debug)]
 pub(crate) struct PalwTirShardFindingV1 {
@@ -1139,6 +1291,80 @@ impl super::PalwPanelService {
             }
             Err(_) => {}
         }
+    }
+
+    /// **The pre-fence shadow tick** (RFC-0006 decision 1; `--palw-tir-shard-shadow`, fence dormant): for the whole-replay verdicts queued
+    /// by the ordinary seat pass, run the cell verifier over the same capture (at most [`PALW_TIR_SHADOW_CLAIMS_PER_TICK_V1`] claims per
+    /// tick, off the loop's thread), compare, and publish the metrics. It reads a capture and nothing else: no receipt, no accusation,
+    /// no object leaves this function.
+    pub(super) async fn tir_shard_shadow_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        shadow: &mut PalwTirShardShadowV1,
+    ) {
+        if !self.config.tir_shard_shadow || self.consensus_config.params.palw_tir_shard_active_at(current_daa) {
+            return;
+        }
+        let plans = session.palw_tir_shard_plans_v1();
+        for _ in 0..PALW_TIR_SHADOW_CLAIMS_PER_TICK_V1 {
+            let Some((duty, whole_valid, waited)) = shadow.pending.pop_front() else { break };
+            let capture = materials
+                .get(&duty.claim_id)
+                .and_then(|pool| {
+                    pool.iter().find(|m| {
+                        TirCaptureV1::decode(m).is_ok_and(|c| {
+                            c.binding.committed_execution_root == duty.execution_root
+                                && c.binding.full_logits_trace_root == duty.trace_root
+                        })
+                    })
+                })
+                .cloned()
+                .or_else(|| self.retained_capture(&duty.claim_id).filter(|b| b.starts_with(&TirCaptureV1::MAGIC)));
+            let Some(capture) = capture else {
+                if waited < PALW_TIR_SHADOW_PATIENCE_TICKS_V1 {
+                    shadow.pending.push_back((duty, whole_valid, waited + 1));
+                }
+                continue;
+            };
+            let Some(Ok(tir)) = self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) else { continue };
+            let (s_l, s_p) = plans
+                .iter()
+                .find(|(c, _)| *c == duty.class_id)
+                .map(|(_, p)| (p.s_l, p.s_p))
+                .unwrap_or(PALW_TIR_SHADOW_DEFAULT_PLAN_V1);
+            let tir = std::sync::Arc::new(tir);
+            let claim = duty.claim_id;
+            let ran = tokio::task::spawn_blocking(move || palw_tir_shard_shadow_run_v1(&tir, &capture, whole_valid, s_l, s_p)).await;
+            match ran {
+                Ok(Ok(run)) => {
+                    shadow.record(claim, &run);
+                    if run.inconclusive == 0 && !run.agrees() {
+                        warn!(
+                            "[{PALW_PANEL}] SHARD SHADOW DISAGREES on claim {claim}: the whole replay says {}, the cells say {} (first fault {:?}) — nothing is filed; this is the number the fence waits on",
+                            if whole_valid { "valid" } else { "refuted" },
+                            if run.faulted > 0 { "false" } else { "true" },
+                            run.named
+                        );
+                    } else {
+                        info!(
+                            "[{PALW_PANEL}] shard shadow, claim {claim}: {} cell(s) over {s_l} shard(s) {} the whole replay ({}); cell time {} ms summed, {} ms for the slowest shard",
+                            run.cells,
+                            if run.inconclusive > 0 { "could not be judged against" } else { "agree with" },
+                            if whole_valid { "valid" } else { "refuted" },
+                            run.micros.iter().sum::<u128>() / 1000,
+                            run.micros.iter().copied().max().unwrap_or(0) / 1000
+                        );
+                    }
+                }
+                Ok(Err(why)) => crate::palw_backends::note_throttled_v1("tir-shard-shadow", || {
+                    format!("[{PALW_PANEL}] shard shadow, claim {claim}: not checked ({why})")
+                }),
+                Err(_) => {}
+            }
+        }
+        self.flow_context.update_palw_runtime(|r| r.verification_shard_shadow = shadow.status());
     }
 
     /// **One tick of a fetch of the shard's rows from peers** (RFC-0006 §4.2, D-S6 over the network). The replies the interval lane

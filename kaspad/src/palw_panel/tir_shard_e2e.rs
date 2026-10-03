@@ -12,6 +12,7 @@
 //! The wire and the pool are tested beside it: a V4 receipt queues and nothing else decodes as one.
 
 use super::tir_shard::{
+    PalwTirShardShadowV1, palw_tir_shard_shadow_run_v1,
     PalwTirRowFetchV1, PalwTirRunPursuitV1,
     PalwTirShardOutcomeV1, palw_tir_shard_accusation_over_v1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
     palw_tir_shard_outcome_v1,
@@ -500,4 +501,40 @@ fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_
         }
     }
     assert!(convicted >= 1, "the lie in the executor's leaves is convicted by a seat that pursued them off chain");
+}
+
+#[test]
+fn the_pre_fence_shadow_agrees_on_an_honest_capture_and_disagrees_with_a_valid_verdict_on_a_tampered_one() {
+    let ir = shard_class("shadow");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let d = duty(&ir, 0, 2, 1, PalwSegmentMaskV2::full(1), false);
+    let mut shadow = PalwTirShardShadowV1::default();
+    // An honest capture: the whole replay says valid, every cell verifies, in both cuts.
+    for (s_l, s_p) in [(2u16, 1u16), (2, 2)] {
+        let run = palw_tir_shard_shadow_run_v1(&tir, &honest.material, true, s_l, s_p).unwrap();
+        assert!(run.cells >= u32::from(s_l) && run.faulted == 0 && run.inconclusive == 0, "{run:?}");
+        assert!(run.agrees());
+        assert_eq!(run.micros.len(), usize::from(s_l));
+        shadow.record(d.claim_id, &run);
+    }
+    assert_eq!((shadow.disagree, shadow.checked_claims), (0, 2));
+    assert!(shadow.agree > 0);
+    // A tampered capture: the whole replay refutes it, and the cell that owns the lie names it — they agree that it is false;
+    // a whole `Valid` verdict over it would disagree with the cell, and the shadow says so.
+    let forged = tir.execute_with_injected_fault(&job, &prompt, 20).unwrap();
+    let refuted = palw_tir_shard_shadow_run_v1(&tir, &forged.material, false, 2, 1).unwrap();
+    assert!(refuted.faulted >= 1 && refuted.named.is_some(), "{refuted:?}");
+    assert!(refuted.agrees(), "whole refutation and the named cell agree");
+    let wrongly_valid = palw_tir_shard_shadow_run_v1(&tir, &forged.material, true, 2, 1).unwrap();
+    assert!(!wrongly_valid.agrees());
+    shadow.record(d.claim_id, &wrongly_valid);
+    assert_eq!(shadow.disagree, 1);
+    let status = shadow.status();
+    assert!(status.contains("shard_shadow_disagree=1") && status.contains("shard_shadow_last_disagreement="), "{status}");
+    assert!(!status.contains(char::is_whitespace) || status.split(' ').all(|p| p.contains('=')), "key=value pairs: {status}");
+    // The queue notes a claim once, and a duty's note is bounded.
+    shadow.note(&d, true);
+    shadow.note(&d, false);
 }

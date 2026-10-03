@@ -7532,6 +7532,7 @@ impl PalwPanelService {
         // **RFC-0006: the bookkeeping for layer-sharded claims** — their cell-masked (V4) receipts, this seat's own filings, the
         // findings of its cells and what it carried. Empty on every network that never armed the fence.
         let mut shard_books = tir_shard::PalwTirShardBooksV1::default();
+        let mut shard_shadow = tir_shard::PalwTirShardShadowV1::default();
         // Receipts off the inbox, waiting for this tick's chain read (a tick that stops early leaves
         // them for the next one). Bounded by `RECEIPT_ARRIVALS_MAX`, oldest out.
         let mut receipt_arrivals: std::collections::VecDeque<crate::palw_receipt_pool::ArrivedReceiptV1> =
@@ -9892,6 +9893,14 @@ impl PalwPanelService {
                     self.tir_shard_resend_v1(bond_key, network_domain, &shard_duties, &mut shard_books).await;
                 }
             }
+            // **RFC-0006's pre-fence shadow** (`--palw-tir-shard-shadow`, fence dormant): the cell verifier beside the whole replay.
+            // Replays that refuted a claim are queued here; the `Valid`s are queued where their receipts are filed.
+            if self.config.tir_shard_shadow {
+                for duty in duties.iter().filter(|d| replay_refuted.contains(&d.claim_id)) {
+                    shard_shadow.note(duty, false);
+                }
+                self.tir_shard_shadow_tick_v1(&session, current_daa, &materials, &mut shard_shadow).await;
+            }
 
             // --- the receipt pools: this tick's arrivals, against one read of the tip ---
             //
@@ -11743,6 +11752,9 @@ impl PalwPanelService {
                 } else {
                     None
                 };
+                if self.config.tir_shard_shadow && licensed_by_replay && valid {
+                    shard_shadow.note(duty, true);
+                }
                 self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
                 receipts_filed_at.push_back(std::time::Instant::now());
                 let key = seat_duty_panel_key_v1(duty);
