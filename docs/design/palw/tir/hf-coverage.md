@@ -1387,19 +1387,19 @@ natural-log units × 2^24 in an `i32`, whatever the model.**
 | Level | Entries | Share |
 | --- | ---: | ---: |
 | A — the standard keys and names | 8 | 8 % |
-| B — a data adapter (built in, or a file the corpus carries) | 82 | 82 % |
-| **A + B** | **90** | **90 %** |
-| C — a capability is missing | 10 | 10 % |
+| B — a data adapter (built in, or a file the corpus carries) | 84 | 84 % |
+| **A + B** | **92** | **92 %** |
+| C — a capability is missing | 8 | 8 % |
 
 What moved from C to B on this line, each by a general feature and a built-in adapter, with every later stage passing (admission, float reference
 against `transformers`, integer against float, reference ↔ ref2 ↔ exec bit identity, court property): `kimi_linear` (FR-16), `gemma3n_text` (FR-12),
 `deepseek_v4` (FR-10), `diffllama` (FR-04), `jetmoe` (FR-06), `longcat_flash` (FR-08), and `mllama` as its **text stage** (FR-21; vision-state
 cross-attention is not lowered: the cross layers are dropped as `transformers` drops them without images, and image rows are refused by name).
-The 10 left at Level C: `zamba2` (FR-13), `chatglm3` (FR-24, a remote-code reference), the image-generation denoisers `unet2d_condition`, `unet_sdxl`,
+`zamba2` (FR-13) and `chatglm3` (FR-24: Level B with its reference *unverified* — the remote-code source is pinned by hash, the verdict is `LOWERABLE_UNVERIFIED`; the corpus's copy of the modeling file is reconstructed, not the vendor's) joined them. The 8 left at Level C: the image-generation denoisers `unet2d_condition`, `unet_sdxl`,
 `dit`, `flux` (FR-22) and the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec` (FR-23).
 
 **A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each entry is
 preflighted at the `shape` depth on testnet-12 from its committed light spec written back as header-only safetensors, at a declared context of 128
-positions. **85 of 100 reach `convert: ok`**: encoder–decoders, vision towers and convolutional networks now lower to their RFC-0003 programs and are
+positions. **87 of 100 reach `convert: ok`**: encoder–decoders, vision towers and convolutional networks now lower to their RFC-0003 programs and are
 admitted rather than refused; the blocked ones are the Level-C entries and the diffusers components whose light spec carries no weights (the route needs
 a checkpoint to lower from).
