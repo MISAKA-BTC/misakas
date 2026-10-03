@@ -18,6 +18,12 @@
         the DAA progress (DAA per hour from the blocks' own stamps, the longest slot gap) and — for every RED REAL attempt — the kinds of BLUE blocks in its
         anticone (floor / heartbeat / other REAL / exec), summed before and after the fence. Exit 0 PASS, 1 FAIL, 3 INCOMPLETE.
 
+  gates --port P --fence H' [--work DIR --producers new4,new6 --state recovery.json --evd DIR]
+        the combined drill's classified outputs. RELEASE GATES (all must PASS to ship): PANEL; the REAL attempts BLUE >= 90 % in every eligible window past the
+        fence (floors suppressed); floor attempts only in idle windows; the recovery leg; the DAA advancing in every window; and the per-lane verdicts (dm1..dm6,
+        DG-1..). GOAL METRIC, printed apart under "goal (supply-bound)" and never a gate: SHARE, REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks,
+        with its PASS / FAIL label. Exit 0 / 1 / 3 for the gates only.
+
   redblue --port P --fence H' [--window 60 --from DAA --to DAA]
         the same RED/BLUE table without the verdict, over the whole chain (before the fence too), one row per window, and the anticone kinds of up to 40
         RED REAL attempts per window named by hash.
@@ -267,53 +273,164 @@ def eligible_windows(ws, work, producers):
 # --------------------------------------------------------------------------------------------------------------------
 # share
 # --------------------------------------------------------------------------------------------------------------------
-def share(a):
+def share_ctx(a):
+    """The blocks, the windows past the fence (eligible or not), and the before / after windows — one read of the chain for `share` and `gates`."""
     blocks = load_blocks(a.port)
     tip = max((b["daa"] for b in blocks), default=0)
     hi = min(a.to or tip, tip)
     idle = []
-    if a.idle_file and os.path.exists(a.idle_file):
+    if getattr(a, "idle_file", None) and os.path.exists(a.idle_file):
         idle = [tuple(map(int, ln.split())) for ln in open(a.idle_file) if ln.strip()]
     ws = windows(blocks, a.fence + a.settle, hi, a.window, a.step, idle)
-    print(HEAD)
-    for w in ws:
-        print(line(w))
-    if not ws:
-        print("INCOMPLETE: no complete window past the fence yet")
-        return 3
     producers = [x for x in (a.producers or "").split(",") if x]
     if producers:
         eligible_windows(ws, os.path.expanduser(a.work), producers)
     else:
         for w in ws:
             w["eligible"], w["why"] = True, ""
-    elig = [w for w in ws if w["eligible"]]
-    inel = [w for w in ws if not w["eligible"]]
-    # the 8k failure, before and after the fence (whole-chain windows of the same width, no overlap)
-    before = windows(blocks, 20, a.fence, a.window, a.window, idle)
-    after = windows(blocks, a.fence, hi, a.window, a.window, idle)
-    for name, grp in (("before the fence", before), ("after the fence", after)):
+    for w in ws:        # every DAA of the window carries a block (the clock never stalled)
+        have = {b["daa"] for b in blocks if w["lo"] <= b["daa"] < w["hi"]}
+        w["daa_missing"] = [d for d in range(w["lo"], w["hi"]) if d not in have]
+    return {"blocks": blocks, "hi": hi, "ws": ws, "elig": [w for w in ws if w["eligible"]], "inel": [w for w in ws if not w["eligible"]],
+            "before": windows(blocks, 20, a.fence, a.window, a.window, idle), "after": windows(blocks, a.fence, hi, a.window, a.window, idle), "fence": a.fence}
+
+
+def print_share(ctx, table=True):
+    """The window table, the RED/BLUE summary and the composition; returns nothing (the verdicts are `goal_verdict` and the gates)."""
+    if table:
+        print(HEAD)
+        for w in ctx["ws"]:
+            print(line(w))
+    for name, grp in (("before the fence", ctx["before"]), ("after the fence", ctx["after"])):
         red, real, t = sum_anticone(grp)
         print(f"RED REAL attempts {name}: {red} of {real} REAL attempts; blue blocks in their anticones (up to 40 attempts per window): floor {t['floor']}, "
               f"heartbeat {t['hb']}, other REAL {t['real']}, exec {t['exec']}")
+    elig = ctx["elig"]
     comp = {k: sum(w[k] for w in elig) for k in ("n", "REAL", "EXEC", "FALLBACK", "LEGACY_FLOOR", "LEGACY_HEARTBEAT", "other")}
     if comp["n"]:
         pc = lambda x: f"{100.0 * x / comp['n']:.1f} %"  # noqa: E731
         print(f"composition of the {len(elig)} eligible windows ({comp['n']} non-RED blocks): REAL {pc(comp['REAL'])}, EXEC {pc(comp['EXEC'])}, heartbeat {pc(comp['LEGACY_HEARTBEAT'])}, "
               f"floor {pc(comp['FALLBACK'] + comp['LEGACY_FLOOR'])}, other {pc(comp['other'])} — reported as measured: with two REAL producers the heartbeat share is a supply fact, not tuned")
-    if inel:
-        print(f"NOT ELIGIBLE ({len(inel)} windows, not counted: a producer was down or held): " + ", ".join(f"{w['lo']}-{w['hi']} [{w['why']}]" for w in inel[:12]))
-    if not any(w["n"] and not w["idle"] for w in elig):
-        print("INCOMPLETE: no eligible window with REAL load yet — a share over no real load proves nothing")
-        return 3
-    bad = [w for w in elig if w["n"] and not w["idle"] and (w["share"] < 0.9 or w["hb"] > 0.1 or w["floor"] > 0)]
+    if ctx["inel"]:
+        print(f"NOT ELIGIBLE ({len(ctx['inel'])} windows, not counted: a producer was down or held): "
+              + ", ".join(f"{w['lo']}-{w['hi']} [{w['why']}]" for w in ctx["inel"][:12]))
+
+
+def goal_verdict(ctx):
+    """GOAL METRIC (supply-bound, reported, never blocks shipping): REAL + EXEC >= 90 % and heartbeats <= 10 % of the consensus blocks, per eligible window with real load."""
+    elig = ctx["elig"]
+    if not ctx["ws"]:
+        return 3, "INCOMPLETE: no complete window past the fence yet"
+    live = [w for w in elig if w["n"] and not w["idle"]]
+    if not live:
+        return 3, "INCOMPLETE: no eligible window with REAL load yet — a share over no real load proves nothing"
+    bad = [w for w in live if w["share"] < 0.9 or w["hb"] > 0.1]
     if bad:
-        print(f"FAIL: {len(bad)} of {len(elig)} eligible windows break the share (REAL+EXEC >= 90 %, heartbeats <= 10 %, no floor outside idle windows): "
-              + ", ".join(f"{w['lo']}-{w['hi']}" for w in bad[:8]))
-        return 1
-    print(f"PASS: {len(elig)} eligible windows past the fence ({len(inel)} not eligible, reported above), min share {min(w['share'] for w in elig if w['share'] is not None)}, "
-          f"max heartbeat {max(w['hb'] for w in elig if w['hb'] is not None)}, {sum(1 for w in elig if w['idle'])} idle")
-    return 0
+        return 1, (f"FAIL: {len(bad)} of {len(live)} eligible windows with REAL load are below REAL+EXEC >= 90 % / above heartbeats <= 10 %: "
+                   + ", ".join(f"{w['lo']}-{w['hi']} (REAL+EXEC {w['share']}, heartbeat {w['hb']})" for w in bad[:8]))
+    return 0, (f"PASS: {len(live)} eligible windows with REAL load, min REAL+EXEC {min(w['share'] for w in live)}, max heartbeat {max(w['hb'] for w in live)} "
+               f"({len(ctx['inel'])} not eligible, {len(elig) - len(live)} idle)")
+
+
+def gate_blue(ctx, min_real=3):
+    """RELEASE GATE: the REAL attempts are BLUE >= 90 % in every eligible window past the fence that holds at least `min_real` of them (floors suppressed: see gate_floor)."""
+    rows = [w for w in ctx["elig"] if w["real_total"] >= min_real]
+    if not rows:
+        return 3, "INCOMPLETE: no eligible window past the fence with >= %d REAL attempts yet" % min_real
+    rate = lambda w: (w["real_total"] - w["real_red"]) / w["real_total"]  # noqa: E731
+    bad = [w for w in rows if rate(w) < 0.9]
+    tot, red = sum(w["real_total"] for w in rows), sum(w["real_red"] for w in rows)
+    txt = f"{len(rows)} windows, {tot} REAL attempts, {red} RED ({100.0 * (tot - red) / tot:.1f} % BLUE overall, worst window {min(rate(w) for w in rows):.2f})"
+    if bad:
+        return 1, "FAIL: " + txt + "; below 90 %: " + ", ".join(f"{w['lo']}-{w['hi']} ({rate(w):.2f})" for w in bad[:8])
+    return 0, "PASS: " + txt
+
+
+def gate_floor(ctx):
+    """RELEASE GATE: floor attempts only in idle windows — an eligible window that holds REAL load holds no floor attempt."""
+    live = [w for w in ctx["elig"] if w["n"] and not w["idle"]]
+    if not live:
+        return 3, "INCOMPLETE: no eligible window with REAL load yet"
+    bad = [w for w in live if w["floor"] > 0]
+    if bad:
+        return 1, "FAIL: floor attempts in busy windows: " + ", ".join(f"{w['lo']}-{w['hi']} ({w['floor']})" for w in bad[:8])
+    return 0, f"PASS: no floor attempt in any of the {len(live)} busy windows"
+
+
+def gate_daa(ctx, max_gap_s=4 * SLOT_S):
+    """RELEASE GATE: the DAA advances in every window past the fence — a block at every DAA and no stamp gap over four slots."""
+    if not ctx["ws"]:
+        return 3, "INCOMPLETE: no complete window past the fence yet"
+    bad = [w for w in ctx["ws"] if w["daa_missing"] or w["daa_per_h"] is None or (w["max_gap_s"] or 0) > max_gap_s]
+    if bad:
+        return 1, "FAIL: " + ", ".join(f"{w['lo']}-{w['hi']} (missing {w['daa_missing'][:3]}, gap {w['max_gap_s']} s)" for w in bad[:8])
+    rates = [w["daa_per_h"] for w in ctx["ws"] if w["daa_per_h"] is not None]
+    return 0, f"PASS: {len(ctx['ws'])} windows, DAA/h {min(rates)}..{max(rates)}, longest slot gap {max((w['max_gap_s'] or 0) for w in ctx['ws']):.0f} s"
+
+
+def share(a):
+    ctx = share_ctx(a)
+    print_share(ctx)
+    code, text = goal_verdict(ctx)
+    print("goal (supply-bound; reported, never blocks shipping) — SHARE, REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks:")
+    print("  " + text)
+    gb, tb = gate_blue(ctx)
+    gf, tf = gate_floor(ctx)
+    print("release gates read from the same windows: BLUE rate " + tb + " | floors " + tf)
+    return code
+
+
+def gates(a):
+    """The combined drill's classified outputs: RELEASE GATES (must PASS to ship) and the GOAL METRIC (reported, never blocks)."""
+    import contextlib, glob, io, re
+    ctx = share_ctx(a)
+    rows = []
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        pc = panel(argparse.Namespace(work=a.work, p50_max=a.p50_max, p95_max=a.p95_max, wait_max=a.wait_max))
+    plines = [x for x in buf.getvalue().splitlines() if x.strip()]
+    rows.append(("PANEL", pc, plines[-1] if plines else ""))
+    rows.append(("BLUE", *gate_blue(ctx)))
+    rows.append(("FLOOR", *gate_floor(ctx)))
+    state = os.path.expanduser(a.state)
+    if os.path.exists(state):
+        rc, rl = recovery_verdict(load_blocks(a.port), json.load(open(state)), a.k, a.margin)
+        rows.append(("RECOVERY", rc, rl[-1]))
+    else:
+        rows.append(("RECOVERY", 3, "INCOMPLETE: the recovery leg has not run yet (dc-run.sh at its DAA)"))
+    rows.append(("DAA", *gate_daa(ctx)))
+    lane = []
+    work = os.path.expanduser(a.work)
+    for f in sorted(glob.glob(os.path.join(work, "verdict", "*.verdict"))):
+        name = os.path.basename(f)[:-8]
+        if name in ("recovery",):
+            continue
+        txt = open(f).read().strip().split("\t")
+        lane.append((name, {"PASS": 0, "FAIL": 1}.get(txt[0], 3), (txt[0] + " " + (txt[1] if len(txt) > 1 else ""))[:140]))
+    evd = os.path.expanduser(a.evd)
+    for f in sorted(glob.glob(os.path.join(evd, "dg*.log"))):
+        m = re.findall(r"(DG-\w+) (PASS|FAIL)", open(f, errors="replace").read())
+        if m:
+            lane.append((m[-1][0], 0 if m[-1][1] == "PASS" else 1, m[-1][1]))
+    names = [n for n, _, _ in lane]
+    for need in ("dm1", "dm2", "dm3", "dm4", "dm5", "dm6"):
+        if need not in names:
+            lane.append((need, 3, "INCOMPLETE: no verdict file yet"))
+    label = {0: "PASS", 1: "FAIL", 3: "INCOMPLETE"}
+    print("== RELEASE GATES (all must PASS to ship) ==")
+    for n, c, t in rows:
+        print(f"  [{n:<8}] {label[c]:<10} {t}")
+    print("  per-lane verdicts:")
+    for n, c, t in lane:
+        print(f"  [{n:<8}] {label[c]:<10} {t}")
+    allc = [c for _, c, _ in rows] + [c for _, c, _ in lane]
+    overall = 1 if 1 in allc else (3 if 3 in allc else 0)
+    print(f"RELEASE GATES: {label[overall]}")
+    print_share(ctx, table=False)
+    gc, gt = goal_verdict(ctx)
+    print("== goal (supply-bound; reported, never blocks shipping) ==")
+    print(f"  SHARE REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks: {gt}")
+    return overall
 
 
 def redblue(a):
@@ -452,7 +569,7 @@ def panel(a):
     print(f"{'window':>10} {'accP50':>6} {'accP95':>6} {'bindP50':>7} {'bindP95':>7} {'n':>4} {'backlog':>10} {'slope':>7} {'oldest':>6} {'diverges':>8}")
     for name, sm, why in rows:
         print(f"{name:>10} {str(sm.get('latency_p50')):>6} {str(sm.get('latency_p95')):>6} {str(sm.get('bind_latency_p50')):>7} {str(sm.get('bind_latency_p95')):>7} "
-              f"{sm.get('bind_latency_n'):>4} {str(sm['backlog_first']) + '->' + str(sm['backlog_last']):>10} {str(sm['backlog_slope_per_daa_second_half']):>7} "
+              f"{str(sm.get('bind_latency_n')):>4} {str(sm['backlog_first']) + '->' + str(sm['backlog_last']):>10} {str(sm['backlog_slope_per_daa_second_half']):>7} "
               f"{str(sm.get('oldest_wait_max')):>6} {str(sm['diverges']):>8}  {'; '.join(why)}")
     print(f"F3 / producer-hold lines per node: {f3}")
     print(f"PanelUnavailable expiries (voided claims): {len(unavailable)}")
@@ -546,9 +663,26 @@ def main():
     q.add_argument("--p50-max", type=int, default=6)
     q.add_argument("--p95-max", type=int, default=12)
     q.add_argument("--wait-max", type=int, default=40)
+    g = sub.add_parser("gates")
+    g.add_argument("--port", type=int, required=True)
+    g.add_argument("--fence", type=int, required=True)
+    g.add_argument("--window", type=int, default=60)
+    g.add_argument("--step", type=int, default=30)
+    g.add_argument("--settle", type=int, default=20)
+    g.add_argument("--to", type=int, default=None)
+    g.add_argument("--idle-file", default=None)
+    g.add_argument("--work", default="~/.misaka-palw-improve-drill")
+    g.add_argument("--producers", default="new4,new6")
+    g.add_argument("--state", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/recovery.json")
+    g.add_argument("--evd", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill")
+    g.add_argument("--k", type=int, default=20)
+    g.add_argument("--margin", type=int, default=6)
+    g.add_argument("--p50-max", type=int, default=6)
+    g.add_argument("--p95-max", type=int, default=12)
+    g.add_argument("--wait-max", type=int, default=40)
     sub.add_parser("selftest")
     a = p.parse_args()
-    sys.exit({"share": share, "redblue": redblue, "recovery": recovery, "panel": panel, "selftest": lambda _a: selftest()}[a.cmd](a))
+    sys.exit({"share": share, "gates": gates, "redblue": redblue, "recovery": recovery, "panel": panel, "selftest": lambda _a: selftest()}[a.cmd](a))
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@ at() { while [ "$(now)" -lt "$1" ]; do sleep 20; done; }
 stamp() { echo "$(date '+%F %T') DAA $(now) $*" >> "$EVD/timeline.log"; }
 run() { local n=$1; shift; stamp "START $n"; "$@" > "$EVD/$n.log" 2>&1; stamp "END $n rc=$?"; }
 snap() { local d; d=$(now); python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel-$d.txt" 2>&1
-         python3 "$C/dcwatch.py" share --port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers new4,new6 > "$EVD/share-$d.txt" 2>&1; }
+         python3 "$C/dcwatch.py" share --port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers new4,new6 > "$EVD/share-$d.txt" 2>&1
+         python3 "$C/dcwatch.py" gates --port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers new4,new6 --evd "$EVD" --state "$EVD/recovery.json" --k "$K_SLOTS" > "$EVD/gates-$d.txt" 2>&1; }
 JSON_BASE_3=$((JSON_BASE + 3))
 
 ( run dg1 bash "$WT/audit-improve/dm.sh" gen dg1 ) & P1=$!

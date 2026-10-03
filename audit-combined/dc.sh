@@ -7,7 +7,7 @@
 #   SHARE  PALW blocks dominate             dcwatch.py share   (sliding windows past H': REAL + EXEC >= 90 % of non-RED blocks, heartbeats <= 10 %,
 #                                                              floor attempts only in idle windows; blockKind / laneClass from getBlock verboseData)
 # It is audit-improve/dm.sh (the D-M and DG drills, the capacity sampler, the post-genesis bonds, the just-in-time liars) with INT11=1 INT12=1 and the load
-# of this file: see `dc.sh plan`. Commands: plan | dry | up | run | status | verdicts | panel | share | redblue | recovery | gen <dgN> | evidence | down.
+# of this file: see `dc.sh plan`. Commands: plan | dry | up | run | status | verdicts | gates | panel | share | redblue | recovery | gen <dgN> | evidence | down.
 #   BIN_DIR=<dir with kaspad misaka palw-class> [OLD_KASPAD_BIN=<the fleet's release at the crossing>] bash audit-combined/dc.sh dry
 set -euo pipefail
 C=$(cd "$(dirname "$0")" && pwd)
@@ -43,12 +43,15 @@ cat <<EOF
   8k model  ONE REAL producer (new6) runs with --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (lane RS; 340 s = P2's live 8k p50 (p95 418 s)): its attempts take that long
             to submit, so fast floor attempts fill their anticone meanwhile, as on live t12. new4 (the other REAL producer) stays fast. A binary without the flag runs
             without it and 'dc.sh dry' says so (the 8k emulation is then missing).
-  verdicts  PANEL (dcwatch panel: PASS only if no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; latency also from accepted)
-            [acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the PANEL metric] and SHARE (dcwatch share: per-window table over ELIGIBLE windows — both REAL producers up and not held — REAL+EXEC >= 90 %, heartbeats <= 10 %, floor only idle; the
-            table adds the REAL attempts that turned RED, the kinds of BLUE blocks in their anticones before vs after H', DAA per hour and the longest slot gap per window);
-            RECOVERY (dc-run.sh at DAA $RECOVERY_AT: both REAL producers stopped for $STOP_DAA DAA (>= 2K, K = $K_SLOTS idle slots; ~$((STOP_DAA*125/60)) min at drill pace), floors must resume only after K idle
-            slots with the DAA advancing, then restarted ($POST_DAA DAA observed): floors must stop and REAL turn BLUE again; dcwatch recovery); D-M1..D-M6, DG-1..DG-7b as in the int-11 drill.
-            SHARE is reported as measured per window: REAL vs heartbeat vs floor; with two REAL producers the heartbeat share is a supply fact, reported, not tuned away.
+  classified RELEASE GATES (all must PASS to ship): PANEL (dcwatch panel: no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable
+            expiries 0; acceptance->licence includes the ~20-DAA anchor delay, so bind->licence is the metric) | REAL attempts BLUE >= 90 % in every eligible window past H'
+            (eligible = both REAL producers up and not held) | floor attempts only in idle windows | the RECOVERY leg (dc-run.sh at DAA $RECOVERY_AT: both REAL producers stopped
+            for $STOP_DAA DAA = >= 2K, K = $K_SLOTS idle slots, ~$((STOP_DAA*125/60)) min at drill pace; floors must resume only after K idle slots with the DAA advancing, then restarted
+            ($POST_DAA DAA observed): floors stop, REAL turns BLUE again) | the DAA advancing in every window (a block at every DAA, no slot gap over 4 slots) | the per-lane
+            verdicts (D-M1..D-M6, DG-1..DG-7b, and the lane pre-checks).  GOAL METRIC, printed apart under "goal (supply-bound)" and never a gate: SHARE, REAL + EXEC >= 90 % /
+            heartbeat <= 10 % of the consensus blocks, per eligible window, with its PASS / FAIL label; the table reports REAL vs heartbeat vs floor as measured (with two REAL
+            producers the heartbeat share is a supply fact, not tuned away), the REAL attempts that turned RED, the BLUE kinds in their anticones before vs after H', DAA/h and gaps.
+            Read it all with: dc.sh gates (exit 0/1/3 for the gates only); the pieces: dc.sh panel | share | redblue | recovery.
   gaps      from the int-11 drill, fixed in the kit: operator-id manifest step, registrar parse, D-M5 reconnect, pack-verify flag, embedding seed, drop regex;
             in the kit now: toy-embed is held by new4/new5/new6 only (GenClassNotReady, DG-2 then restarts the other IR holders with it) and the head's admission slot
             (the driver logs every class's slot at registration; the head registers before DAA 20 so slot 91 is reachable)
@@ -82,10 +85,11 @@ case $cmd in
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
+  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 --evd "$EVD" --state "$EVD/recovery.json" --k "$K_SLOTS" "$@" ;;
   recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
   share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 "$@" ;;
   evidence) mkdir -p "$EVD"; cp -R "$WORK_DIR"/verdict "$WORK_DIR"/capacity "$WORK_DIR"/drive.log "$WORK_DIR"/drive.out "$WORK_DIR"/milestones.tsv "$WORK_DIR"/memory.tsv "$WORK_DIR"/samples.tsv "$EVD"/ 2>/dev/null || true
-            python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel.txt" 2>&1 || true; bash "$0" share > "$EVD/share.txt" 2>&1 || true; echo "evidence in $EVD" ;;
+            python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel.txt" 2>&1 || true; bash "$0" share > "$EVD/share.txt" 2>&1 || true; bash "$0" gates > "$EVD/gates.txt" 2>&1 || true; echo "evidence in $EVD" ;;
   *) sed -n '2,16p' "$0"; exit 2 ;;
 esac
