@@ -1471,7 +1471,13 @@ mod tests {
         // Encoder-only models are not decoders.
         assert!(matches!(verdict("bert-base-uncased.json"), ArchVerdictV1::NotLowerable(_)));
         // 671B parameters at a 2^18-position history: past the provisional per-position MACs.
-        assert!(matches!(verdict("deepseek-v3-bf16.json"), ArchVerdictV1::Exceeds { .. }), "{}", verdict("deepseek-v3-bf16.json"));
+        // (DeepSeek-V3's configuration names remote code: the program's own verdict is the wrapped one.)
+        let v3 = verdict("deepseek-v3-bf16.json");
+        let inner = match &v3 {
+            ArchVerdictV1::LowerableUnverified { inner } => inner.as_ref(),
+            other => other,
+        };
+        assert!(matches!(inner, ArchVerdictV1::Exceeds { .. }), "{v3}");
     }
 
     #[test]

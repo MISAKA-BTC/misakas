@@ -5239,3 +5239,73 @@ mod route_agreement_tests {
         assert_eq!(gate_entry, genesis_entry, "one price for one row: the genesis assembly and the acceptance gate agree");
     }
 }
+
+/// Why [`palw_admission_probe_v1`] could not answer, or what the gate answered.
+#[derive(Debug)]
+pub enum PalwAdmissionProbeRefusalV1 {
+    /// `family_certified_for_weight_v2` could not price the class (a root this build does not certify).
+    Price(String),
+    /// The registration object could not be expressed against the ruleset's ladder.
+    Express(PalwClassAdmissionError),
+    /// The gate's own refusal.
+    Gate(PalwClassAdmissionError),
+}
+
+/// **The ONE pre-signing admission probe** every tool asks — the SDK's `preflight_admission` (`misaka model add|inspect|preflight`), the
+/// ADR-0108 manifest verifier (`misaka model add --manifest`, `palw extension preflight`) and anything after them: build the registration
+/// object the chain would judge (at the share the class may take, counted against the bundle's ladder) and ask
+/// [`verify_class_admission_v9`] with exactly the court, ladder, held regime and fences of `shape`
+/// ([`palw_admission_shape_at_v1`] at the height of submission). It exists because a second copy (the manifest verifier called
+/// `verify_class_admission_v6(..., false)`: no held regime) charged the ladder clock — 5,102 DAA against a 3,000-DAA window — to a class
+/// testnet-12's own gate admits under the held clock. Returns the catalog entry and whether the class is prosecutable (carries weight).
+pub fn palw_admission_probe_v1(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    artifact_root: Hash64,
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    shape: &PalwAdmissionShapeV1,
+) -> Result<(PalwClassCatalogEntryV2, bool), PalwAdmissionProbeRefusalV1> {
+    let certified = crate::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+    let prosecutable = crate::palw_e2e_adjudicability::family_certified_for_weight_v2(
+        bundle.court_e2e_root,
+        &certified,
+        chain_certified,
+        &reachable_kernels_v1(profile),
+    )
+    .map_err(|e| PalwAdmissionProbeRefusalV1::Price(e.to_string()))?
+    .is_some();
+    let probe = palw_post_genesis_registration_capped_v1(
+        profile.clone(),
+        canonical.clone(),
+        artifact_root,
+        if prosecutable { 1 } else { 0 },
+        1,
+        1,
+        0,
+        crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::default(), 0)),
+        Vec::new(),
+        bundle.court.max_step_leaf_count(),
+    )
+    .map_err(PalwAdmissionProbeRefusalV1::Express)?;
+    let entry = verify_class_admission_v9(
+        bundle,
+        profile,
+        canonical,
+        &probe,
+        &certified,
+        chain_certified,
+        shape.ladder,
+        shape.court,
+        false,
+        shape.token_lift,
+        shape.fused_dissectable,
+        shape.legal_job_bound,
+        shape.held,
+        shape.kimi_family,
+        shape.attention_geometry_bound,
+        shape.gdn_key_heads,
+    )
+    .map_err(PalwAdmissionProbeRefusalV1::Gate)?;
+    Ok((entry, prosecutable))
+}

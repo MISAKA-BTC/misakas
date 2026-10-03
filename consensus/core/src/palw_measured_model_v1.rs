@@ -23,7 +23,6 @@
 use crate::Hash64;
 use crate::palw_class_admission_v2::PalwKaryCourtV1;
 use crate::palw_mode_v2::{PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS, PalwConsensusParamsV2};
-use crate::palw_model_fit_v1::palw_model_fit_v1;
 use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v5};
 use crate::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_artifact_row_profile_v5};
@@ -362,8 +361,11 @@ pub struct PalwMeasureInputsV1<'a> {
 }
 
 /// The court a profile is judged under — the caller's reading of the fences
-/// (`palw_admission_shape_at_v1`), handed in as a function because it needs the `Params`.
-pub type PalwCourtForV1<'a> = &'a dyn Fn(&PalwShapeProfileV3) -> (Option<PalwKaryCourtV1>, PalwPromptIdsFormV1);
+/// (`palw_admission_shape_at_v1`: its court, the prompt-ids form and the HELD admission, `shape.held`), handed in as a function because
+/// it needs the `Params`. The held admission decides the regime the walls are read under (`palw_fit_regime_for_v1`): a network that arms
+/// `palw_held_context` judges a held class by the held clock, not the ladder's (`PalwHeldAdmissionV1::default()` is the shipped reading).
+pub type PalwCourtForV1<'a> =
+    &'a dyn Fn(&PalwShapeProfileV3) -> (Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, crate::palw_class_admission_v2::PalwHeldAdmissionV1);
 
 fn hex(h: Hash64) -> String {
     h.as_byte_slice().iter().map(|b| format!("{b:02x}")).collect()
@@ -387,8 +389,14 @@ pub fn palw_measure_model_v1(
         .iter()
         .map(|&n_ctx| match manifest.profile(n_ctx) {
             Ok(profile) => {
-                let (court, form) = court_for(&profile);
-                let fit = palw_model_fit_v1(&profile, inputs.bundle, court, form);
+                let (court, form, held_admission) = court_for(&profile);
+                let fit = crate::palw_model_fit_v1::palw_model_fit_v2(
+                    &profile,
+                    inputs.bundle,
+                    court,
+                    form,
+                    crate::palw_model_fit_v1::palw_fit_regime_for_v1(held_admission, &profile),
+                );
                 let plans = inputs
                     .seat_budgets
                     .iter()

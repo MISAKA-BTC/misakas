@@ -109,8 +109,8 @@ fn flux_dit_and_the_unets_are_level_c_naming_what_their_lowering_lacks() {
     for (name, want) in [
         ("flux1-dev-transformer", vec!["POS_ROPE_AXES_V1", "ATTN_QK_NORM_JOINT_V1", "GEN_BLOCK_SINGLE_STREAM_V1", "EMBED_GUIDANCE_V1"]),
         ("dit-xl-2-256", vec!["EMBED_CLASS_LABEL_V1", "GEN_BLOCK_ADALN_ZERO_V1", "GEN_OUTPUT_LEARNED_SIGMA_V1", "GEN_SAMPLER_EPS_V1"]),
-        ("sd1.5-unet", vec!["GEN_UNET_SKIP_V1", "GEN_RESNET_TIME_COND_V1", "GEN_SPATIAL_TRANSFORMER_V1", "ATTN_CROSS_V1"]),
-        ("sdxl-unet", vec!["GEN_UNET_SKIP_V1", "ATTN_CROSS_V1", "EMBED_ADDITION_TEXT_TIME_V1"]),
+        ("sd1.5-unet", vec!["GEN_UNET_SKIP_V1", "GEN_RESNET_TIME_COND_V1", "GEN_SPATIAL_TRANSFORMER_V1"]),
+        ("sdxl-unet", vec!["GEN_UNET_SKIP_V1", "EMBED_ADDITION_TEXT_TIME_V1"]),
     ] {
         let r = analyze(&config(name), None, &ReadOptions::default());
         assert_eq!(r.level, Level::C, "{name}: {}", r.render());
@@ -120,6 +120,10 @@ fn flux_dit_and_the_unets_are_level_c_naming_what_their_lowering_lacks() {
             assert!(names.contains(&w), "{name}: {w} not named in {names:?}");
         }
         for m in &r.missing {
+            // ATTN_CROSS_V1 is implemented for decoders now (mllama); a denoiser that needs it is still named for its other lacks.
+            if m.what == "ATTN_CROSS_V1" {
+                continue;
+            }
             let info = feature_info(&m.what).unwrap_or_else(|| panic!("{name}: `{}` is not in the registry", m.what));
             assert_eq!(info.lowering, Lowering::Missing, "{}", m.what);
         }

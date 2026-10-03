@@ -344,3 +344,42 @@ fn ir_classes_get_the_same_verdict_with_the_fence_armed_and_unarmed() {
     }
     assert!(judged >= 3, "at least three IR contexts were judged ({judged})");
 }
+
+/// **The measured model reads the held regime testnet-12 charges** (`palw-class measure`, `palw-shard-plan`): a Qwen3.5-9B-shaped hybrid at
+/// 8,192 positions fits the court under the network's own reading (`shape.held`: `palw_held_context` armed from genesis → the held clock,
+/// at most 2,919 of the 3,000-DAA window), where the old reading (`Shipped`, the ladder clock's 5,102) refused it — the figure a registrant
+/// was shown by mistake.
+#[test]
+fn the_measured_model_row_of_a_9b_shaped_hybrid_at_8k_fits_testnet12_under_the_held_regime() {
+    use kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1;
+    use kaspa_consensus_core::palw_measured_model_v1::{PalwMeasureInputsV1, PalwModelManifestV1, palw_measure_model_v1};
+    let params = t12_with_window(None);
+    let bundle = bundle_of(&params);
+    let fingerprint = format!("{}", params.consensus_params_id());
+    let geometry = PalwQwen36GeometryV1 { n_ctx: 8_192, ..QWEN36_35B_A3B };
+    let manifest = PalwModelManifestV1::from_hybrid("Qwen3.5-9B-shaped hybrid", &geometry, None);
+    let inputs = PalwMeasureInputsV1 {
+        ruleset: "testnet-12",
+        ruleset_fingerprint_hex: &fingerprint,
+        bundle: &bundle,
+        contexts: &[8_192],
+        seat_budgets: &[24 << 30],
+        max_shards: 64,
+        held: None,
+    };
+    let network = |profile: &PalwShapeProfileV3| {
+        let shape = palw_admission_shape_at_v1(&params, &bundle, profile, DAA).expect("an admission shape");
+        assert!(shape.held.armed, "testnet-12 arms the held fence");
+        (shape.court, params.palw_prompt_ids_form_at(DAA), shape.held)
+    };
+    let doc = palw_measure_model_v1(&manifest, inputs, &network, None, "the test");
+    let row = &doc.deterministic.rows[0];
+    assert!(row.fit_admitted, "the held regime fits the 9B-shaped hybrid at 8k: refused by {:?}", row.refusing_walls);
+    // The reading that charged the ladder clock (a network without the fence): the same profile is refused by a court wall.
+    let shipped = |profile: &PalwShapeProfileV3| {
+        let shape = palw_admission_shape_at_v1(&params, &bundle, profile, DAA).expect("an admission shape");
+        (shape.court, params.palw_prompt_ids_form_at(DAA), PalwHeldAdmissionV1::default())
+    };
+    let old = palw_measure_model_v1(&manifest, inputs, &shipped, None, "the test");
+    assert!(!old.deterministic.rows[0].fit_admitted, "the ladder clock refuses it (the 5,102 figure)");
+}

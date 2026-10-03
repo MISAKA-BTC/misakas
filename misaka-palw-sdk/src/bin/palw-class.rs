@@ -1786,6 +1786,7 @@ fn court_for_view(
 ) -> (
     Option<kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1>,
     kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1,
 ) + '_ {
     move |profile: &PalwShapeProfileV3| {
         let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
@@ -1795,7 +1796,7 @@ fn court_for_view(
             MEASURE_EVER,
         )
         .expect("a network with a V2 bundle has an admission shape");
-        (shape.court, view.params.palw_prompt_ids_form_at(MEASURE_EVER))
+        (shape.court, view.params.palw_prompt_ids_form_at(MEASURE_EVER), shape.held)
     }
 }
 

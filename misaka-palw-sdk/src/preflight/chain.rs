@@ -933,7 +933,13 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                         admission.gate_detail = Some(e.to_string());
                         // The IR fence has its own blocker above; a gate refusal that is only the fence is not repeated.
                         if !matches!(e, PalwClassAdmissionError::TirNeedsItsFence) {
-                            let b = gate_blocker(&e, &window_hint);
+                            let decided_by = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(
+                                params.palw_held_context_active_at(judge_daa),
+                                Some(judge_daa),
+                                params.palw_held_context.map(|f| f.daa_score()),
+                            );
+                            let mut b = gate_blocker(&e, &window_hint);
+                            b.evidence.push(format!("refusal {}", e.refusal_v1(&decided_by).to_json()));
                             if b.stage == Stage::Convert {
                                 // A primitive-set mismatch belongs to the convert stage.
                                 convert_extra.push(b);
