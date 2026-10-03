@@ -991,6 +991,9 @@ const scanIsRound = b => Number(b.algo) === 10;
 function scanKindOf(b){
   const nk = String(b.nodeKind || "").toUpperCase();
   const lc = String(b.laneClass || "").toUpperCase();
+  const exact = { REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
+    LEGACY_HEARTBEAT: { k: "FALLBACK", legacy: true, what: "heartbeat" }, LEGACY_FLOOR: { k: "FALLBACK", legacy: true, what: "floor attempt" } };
+  if (exact[nk]) return exact[nk];   // lane RS's exact values; the substring matches below tolerate a rename
   if (nk) {
     if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
     if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
