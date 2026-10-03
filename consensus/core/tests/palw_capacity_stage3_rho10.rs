@@ -66,6 +66,9 @@ fn fence_at(p: &Params, name: &str) -> Option<u64> {
 /// build that lists them is judged against.
 fn release() -> Params {
     let mut p = palw_t12_shipped_params();
+    // The int-11 flag day (H = 5,300: the ρ steps 25 / 100 / 250 / 1000, F-EM, F-M1, F-K, L_ver and the RFC lanes) is set back to
+    // dormant first: this suite judges the capacity package against the release below it.
+    kaspa_consensus_core::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut p, None);
     for f in PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().chain(STEPS) {
         (f.set)(&mut p, None);
     }
@@ -155,7 +158,10 @@ fn testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release() {
     // The third post-launch flag day (2026-09-27): testnet-12 as shipped IS the package armed at 1,700 over
     // the DAA-1,300 release, entry by entry, and nothing else differs.
     assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V3_DAA, Some(1_700), "the flag day's height");
-    assert_eq!(ids(&shipped), ids(&arm_rho10(release(), FLAG_DAY)), "testnet-12 as shipped arms the package at 1,700");
+    // …and the int-11 flag day (H = 5,300) over it: the ρ steps at the release's heights, nothing else.
+    let mut want = arm_rho10(release(), FLAG_DAY);
+    kaspa_consensus_core::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut want, kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA);
+    assert_eq!(ids(&shipped), ids(&want), "testnet-12 as shipped arms the package at 1,700 and the int-11 flag day at 5,300");
     for f in PALW_T12_CAPACITY_RHO10_FENCES_V1 {
         assert_eq!(fence_at(&shipped, f.name), Some(1_700), "{}: armed at 1,700", f.name);
         assert!(PALW_T12_POST_LAUNCH_FENCES_V3.iter().any(|g| g.name == f.name), "{}: on the third list", f.name);
@@ -165,8 +171,14 @@ fn testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release() {
             f.name
         );
     }
-    for f in STEPS {
-        assert_eq!(fence_at(&shipped, f.name), None, "{}: the later rho steps stay dormant", f.name);
+    // The ρ steps are the int-11 flag day's: ρ = 25 at H, ρ = 100 at H + 95, ρ = 250 at H + 190, ρ = 1000 at H + 285 (ADR-0167).
+    for (name, at) in [
+        ("palw_capacity_aggregate_liability_step_2", 5_300),
+        ("palw_capacity_aggregate_liability_step_3", 5_395),
+        ("palw_capacity_aggregate_liability_step_4", 5_490),
+        ("palw_capacity_aggregate_liability_step_5", 5_585),
+    ] {
+        assert_eq!(fence_at(&shipped, name), Some(at), "{name}: armed by the int-11 flag day");
     }
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
 }
