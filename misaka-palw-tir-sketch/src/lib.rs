@@ -26,6 +26,8 @@
 //! and its availability (RFC-0007 Part II, §II.7). The crate depends on the IR and the typed
 //! backend and on nothing of consensus.
 //!
+//! [`history`] holds the per-row history sketches of attention (`P·V` and `Q·Kᵀ`, `O(d + H)` a check, `O(d)` a row).
+//!
 //! [`analysis`] says which `MatMul` is checked how, read off the dataflow alone; [`fixture`] holds
 //! the tiny classes the tests run; [`cost`] counts what a check costs on a real program's shapes
 //! (the measurement tool, `--features measure`). [`audit`] is Part IV.1's random leaf audit: one
@@ -35,10 +37,13 @@
 pub mod analysis;
 pub mod audit;
 pub mod check;
+pub mod codec;
 pub mod cost;
 pub mod field;
 pub mod fixture;
 pub mod geom;
+pub mod history;
+pub mod mirror;
 pub mod secret;
 pub mod sketch;
 mod walk;
@@ -46,6 +51,8 @@ pub mod witness;
 
 pub use analysis::{TirActActPolicyV1, TirCheckPolicyV1, TirMatMulKindV1, TirSideV1, TirSketchAnalysisV1, TirWeightSourceV1};
 pub use check::{TirCheckFailureV1, TirCheckFaultV1, TirCheckReportV1, TirSketchCheckerV1};
+pub use history::TirHistorySketchV1;
+pub use mirror::{TirMirrorAgreementV1, TirMirrorOutcomeV1, TirMirrorTotalsV1, tir_mirror_agreement_v1, tir_mirror_check_v1};
 pub use field::{TirSketchModulusV1, tir_sketch_moduli_for_span_v1};
 pub use secret::{TirSeatSketchSecretV1, TirSketchKeysV1};
 pub use sketch::{TirSketchStatsV1, TirSketchStoreV1};

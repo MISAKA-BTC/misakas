@@ -1304,6 +1304,22 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **RFC-0007 Parts II and IV: the mesh at the tip** — table sizes, the fences, and `seat`'s open audits. Default when there is no
+    /// V2 state.
+    fn palw_v2_mesh_status_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2) -> crate::palw_mesh_v1::PalwMeshStatusV1 {
+        Default::default()
+    }
+
+    /// **RFC-0007 Part IV.1: the audits `seat` still owes** at the tip. Empty by `Default`.
+    fn palw_v2_mesh_audit_duties_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
+        Vec::new()
+    }
+
+    /// **RFC-0007 Part IV.1: a claim's `(audit_end, row_end)` window** at the tip, while its audit row stands.
+    fn palw_v2_mesh_audit_window_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<(u64, u64)> {
+        None
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,

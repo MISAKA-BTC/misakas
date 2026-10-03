@@ -41732,6 +41732,8 @@ pub(crate) mod tests {
         mod activation_pool_r2_v1;
         // RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class proves readiness over its adapter section.
         mod composite_readiness_v1;
+        // RFC-0007 Part IV.2 (spec 18): capped onboarding through the registry's span step.
+        mod capped_onboarding_v1;
 
         /// The registry's fixture params: the shared `params()` with a receipt window of four spans
         /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least
@@ -70076,6 +70078,8 @@ pub(crate) mod tests {
     mod capacity_weight_cap_v1;
     // RFC-0007 Part I (spec 18): verification vertices, licence by tally, equivocation, `Held` leaves, the path rule.
     mod vertex_fold_v1;
+    // RFC-0007 Parts II and IV (spec 18): the witness profile's reads, the audit mesh and its traps.
+    mod mesh_fold_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

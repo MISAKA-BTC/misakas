@@ -13549,6 +13549,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",
         PalwConsensusObjectV2::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
+        PalwConsensusObjectV2::TrapCommittedV1 { .. } => "TrapCommittedV1",
+        PalwConsensusObjectV2::TrapRevealedV1 { .. } => "TrapRevealedV1",
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",

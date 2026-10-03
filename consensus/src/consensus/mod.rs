@@ -2500,6 +2500,26 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip().map(|state| state.vertex_status_v1(state_params, &seat, from_round)).unwrap_or_default()
     }
 
+    fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return Default::default(),
+        };
+        self.palw_state_v2_tip().map(|state| state.mesh_status_v1(state_params, &seat)).unwrap_or_default()
+    }
+
+    fn palw_v2_mesh_audit_duties_v1(
+        &self,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_mesh_v1::PalwMeshAuditDutyV1> {
+        let daa = self.get_virtual_daa_score();
+        self.palw_state_v2_tip().map(|state| state.mesh_audit_duties_v1(&seat, daa)).unwrap_or_default()
+    }
+
+    fn palw_v2_mesh_audit_window_v1(&self, claim: kaspa_hashes::Hash64) -> Option<(u64, u64)> {
+        self.palw_state_v2_tip().and_then(|state| state.mesh_audit_window_v1(&claim))
+    }
+
     fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

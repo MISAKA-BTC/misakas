@@ -408,6 +408,24 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_vertex_status_v1(seat, from_round)
     }
 
+    /// **RFC-0007 Parts II and IV: the mesh at the tip**, and `seat`'s open audits.
+    pub fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
+        self.consensus.palw_v2_mesh_status_v1(seat)
+    }
+
+    /// **RFC-0007 Part IV.1: the audits `seat` still owes** at the tip.
+    pub fn palw_v2_mesh_audit_duties_v1(
+        &self,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_mesh_v1::PalwMeshAuditDutyV1> {
+        self.consensus.palw_v2_mesh_audit_duties_v1(seat)
+    }
+
+    /// **RFC-0007 Part IV.1: a claim's audit window** at the tip.
+    pub fn palw_v2_mesh_audit_window_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<(u64, u64)> {
+        self.consensus.palw_v2_mesh_audit_window_v1(claim)
+    }
+
     /// **A claim's own block header**, for deriving the job anchor a verifier must judge against.
     ///
     /// One header read per claim under judgement, on the panel's cadence — the same store-tip

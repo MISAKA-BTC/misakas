@@ -424,8 +424,74 @@ pub(super) fn count_audited_leaf_v1(
 // Traps
 // ---------------------------------------------------------------------------------------------
 
-/// **`TrapCommitted`**: the setter is registered and Active, drawn by the slot lottery, has no trap open, has the deposit free, and
-/// the commitment is new. The deposit is reserved on the bond.
+impl PalwChainStateV2 {
+    /// **The audits `seat` still owes at `daa_score`**: drawn on a live claim of a registered class, not yet answered, inside the
+    /// window. Read-only, for the node's duty loop.
+    pub fn mesh_audit_duties_v1(&self, seat: &PalwBondKeyV2, daa_score: u64) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
+        self.vertex
+            .mesh
+            .audits
+            .iter()
+            .filter_map(|(claim_id, row)| {
+                let assignment = row.assignment_of(seat)?;
+                if assignment.outcome.is_some() || daa_score > row.audit_end_daa {
+                    return None;
+                }
+                let claim = self.claims.get(claim_id)?;
+                let artifact_root = self.classes.get(&claim.class_id)?.artifact_root;
+                Some(crate::palw_mesh_v1::PalwMeshAuditDutyV1 {
+                    claim_id: *claim_id,
+                    class_id: claim.class_id,
+                    artifact_root,
+                    executor_bond: claim.bond,
+                    accepted_block: claim.accepted_block,
+                    trace_root: claim.trace_root,
+                    execution_root: claim.execution_root,
+                    drawn_daa: row.drawn_daa,
+                    audit_end_daa: row.audit_end_daa,
+                    ticket: assignment.ticket,
+                })
+            })
+            .collect()
+    }
+
+    /// The `(audit_end, row_end)` window of a claim's audit row, if it still stands (a trap setter reads it to time its reveal).
+    pub fn mesh_audit_window_v1(&self, claim: &Hash64) -> Option<(u64, u64)> {
+        self.vertex.mesh.audits.get(claim).map(|row| (row.audit_end_daa, row.row_end_daa))
+    }
+}
+
+impl PalwChainStateV2 {
+    /// **The stateful half of a `TrapCommitted`'s admission**, shared by the acceptance walk and the fold: the setter is registered and
+    /// Active, drawn by the slot lottery, has no trap open, has the deposit free, the commitment is new and the table has room. Pure
+    /// over the state. (The ML-DSA signature is the walk's.)
+    pub fn mesh_trap_committed_admissible_v1(&self, trap: &PalwTrapCommittedV1, daa_score: u64) -> Result<(), PalwMeshErrorV1> {
+        let setter = trap.setter_bond;
+        let record = self.bonds.get(&setter).ok_or(PalwMeshErrorV1::UnknownBond(setter))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwMeshErrorV1::BondNotActive(setter));
+        }
+        if self.vertex.mesh.traps.contains_key(&trap.commitment) {
+            return Err(PalwMeshErrorV1::TrapCommitmentKnown);
+        }
+        if self.vertex.mesh.traps.values().any(|row| row.setter == setter) {
+            return Err(PalwMeshErrorV1::TrapAlreadyOpen(setter));
+        }
+        if self.vertex.mesh.traps.len() >= PALW_TRAP_MAX_OPEN_V1 {
+            return Err(PalwMeshErrorV1::TrapTableFull);
+        }
+        if !palw_trap_slot_drawn_v1(&setter, daa_score) {
+            return Err(PalwMeshErrorV1::TrapSlotNotDrawn(setter));
+        }
+        let free = free_collateral_v1(self, &setter, record);
+        if free < PALW_TRAP_DEPOSIT_SOMPI_V1 {
+            return Err(PalwMeshErrorV1::TrapDepositUnaffordable { bond: setter, free });
+        }
+        Ok(())
+    }
+}
+
+/// **`TrapCommitted`**: admitted ([`PalwChainStateV2::mesh_trap_committed_admissible_v1`]); the deposit is reserved on the bond.
 pub(super) fn apply_trap_committed_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -434,27 +500,8 @@ pub(super) fn apply_trap_committed_v1(
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
     }
+    builder.state.mesh_trap_committed_admissible_v1(trap, ctx.daa_score).map_err(refused)?;
     let setter = trap.setter_bond;
-    let record = builder.state.bonds.get(&setter).ok_or_else(|| refused(PalwMeshErrorV1::UnknownBond(setter)))?.clone();
-    if !matches!(record.status, PalwBondStatusV2::Active) {
-        return Err(refused(PalwMeshErrorV1::BondNotActive(setter)));
-    }
-    if builder.state.vertex.mesh.traps.contains_key(&trap.commitment) {
-        return Err(refused(PalwMeshErrorV1::TrapCommitmentKnown));
-    }
-    if builder.state.vertex.mesh.traps.values().any(|row| row.setter == setter) {
-        return Err(refused(PalwMeshErrorV1::TrapAlreadyOpen(setter)));
-    }
-    if builder.state.vertex.mesh.traps.len() >= PALW_TRAP_MAX_OPEN_V1 {
-        return Err(refused(PalwMeshErrorV1::TrapTableFull));
-    }
-    if !palw_trap_slot_drawn_v1(&setter, ctx.daa_score) {
-        return Err(refused(PalwMeshErrorV1::TrapSlotNotDrawn(setter)));
-    }
-    let free = free_collateral_v1(&builder.state, &setter, &record);
-    if free < PALW_TRAP_DEPOSIT_SOMPI_V1 {
-        return Err(refused(PalwMeshErrorV1::TrapDepositUnaffordable { bond: setter, free }));
-    }
     builder.mesh_reserve(setter, PALW_TRAP_DEPOSIT_SOMPI_V1)?;
     builder.write_mesh_trap(
         trap.commitment,
@@ -466,11 +513,9 @@ pub(super) fn apply_trap_committed_v1(
 /// **The stateful half of a `TrapRevealed`'s admission**, shared by the acceptance walk and the fold: the reveal opens a commitment
 /// of this setter, over a tile count and tile the commitment bound, about the setter's own audited claim, after the audit window
 /// and inside the reveal window. Pure over the state.
-pub fn palw_trap_revealed_admissible_v1(
-    state: &PalwChainStateV2,
-    reveal: &PalwTrapRevealedV1,
-    daa_score: u64,
-) -> Result<(), PalwMeshErrorV1> {
+impl PalwChainStateV2 {
+    pub fn mesh_trap_revealed_admissible_v1(&self, reveal: &PalwTrapRevealedV1, daa_score: u64) -> Result<(), PalwMeshErrorV1> {
+        let state = self;
     if reveal.tiles == 0 || reveal.tiles > PALW_TRAP_MAX_TILES_V1 || reveal.fault_leaf >= reveal.tiles {
         return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
     }
@@ -494,6 +539,7 @@ pub fn palw_trap_revealed_admissible_v1(
     }
     Ok(())
 }
+}
 
 /// **`TrapRevealed`** (module doc): the deposit is released and the row dropped; every auditor whose ticket landed on the planted tile
 /// and who attested a match is slashed the penalty, one who attested the mismatch is paid the bounty; the trap claim is voided
@@ -507,7 +553,7 @@ pub(super) fn apply_trap_revealed_v1(
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
     }
-    palw_trap_revealed_admissible_v1(&builder.state, reveal, ctx.daa_score).map_err(refused)?;
+    builder.state.mesh_trap_revealed_admissible_v1(reveal, ctx.daa_score).map_err(refused)?;
     let commitment = reveal.commitment();
     let trap = builder.state.vertex.mesh.traps.get(&commitment).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapNotCommitted))?;
     let mut audit = builder.state.vertex.mesh.audits.get(&reveal.claim).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim)))?;

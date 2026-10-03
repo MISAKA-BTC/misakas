@@ -2388,8 +2388,7 @@ mod tests {
             window_fits_receipt: fits,
             span_stable: true,
             // ADR-0145 §7: the `Candidate` arm's only input, and this fixture starts past it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
             assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
         }
@@ -2592,8 +2591,7 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         let mut s = Registered;
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { manifest: PalwManifestVerdictV1Flag::Invalid, ..calm(0) }, &k, &G);
         assert_eq!(s, Registered, "an invalid manifest never leaves registration");
@@ -2676,8 +2674,7 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: true,
             span_stable: failed == 0,
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0));
         let none = PalwProbationMemoryV1::default();
         let step = |s, o: &PalwLifecycleObservationV1, m: &PalwProbationMemoryV1| palw_lifecycle_step_resilient_v1(s, o, &k, &G, m);
@@ -2950,8 +2947,7 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),
             Active,

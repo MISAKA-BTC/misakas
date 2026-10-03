@@ -656,6 +656,23 @@ pub struct PalwMeshStatusV1 {
     pub own_audits: Vec<(Hash64, u64, bool)>,
 }
 
+/// **An audit this seat owes** (what a node reads of the mesh to do its duty): the claim it was drawn on, the class and roots it must
+/// judge it against, the producer, the carrying block (the job's anchor derives from it), the leaf ticket it audits, and the window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwMeshAuditDutyV1 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub accepted_block: Hash64,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+    /// The DAA the audit was drawn at (a compact reference to the claim names it).
+    pub drawn_daa: u64,
+    pub audit_end_daa: u64,
+    pub ticket: u64,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Part IV.2: capped onboarding
 // ---------------------------------------------------------------------------------------------
