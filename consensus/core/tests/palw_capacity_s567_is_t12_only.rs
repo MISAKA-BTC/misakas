@@ -179,9 +179,9 @@ fn each_needs_its_prerequisites_at_or_below_it_and_its_mirror() {
     assert!(format!("{why:?}").contains("without the fence armed"), "{why:?}");
     // Off ConsensusV2 the fold that reads them is not running.
     for set in [
-        (|p: &mut Params| p.palw_capacity_emission_budget = Some(ForkActivation::new(h))) as fn(&mut Params),
-        |p| p.palw_capacity_multi_claim = Some(ForkActivation::new(h)),
-        |p| p.palw_capacity_rho_breaker = Some(ForkActivation::new(h)),
+        (|p: &mut Params| p.palw_capacity_emission_budget = Some(ForkActivation::new(1_500))) as fn(&mut Params),
+        |p| p.palw_capacity_multi_claim = Some(ForkActivation::new(1_500)),
+        |p| p.palw_capacity_rho_breaker = Some(ForkActivation::new(1_500)),
     ] {
         let mut v1 = MAINNET_PARAMS;
         set(&mut v1);

@@ -15156,7 +15156,9 @@ pub enum PalwDeltaEntryV2 {
     Reserved101,
     Reserved102,
     Reserved103,
-    /// A row of the capacity ledger was written or dropped (**104**, after the court window's 100 and the reserved 101–103; ADR-0164 — F-EM's per-DAA
+    /// Delta 104 is lane RS's `RealWork` (the lead's allocation of 2026-10-03), reserved here likewise.
+    Reserved104,
+    /// A row of the capacity ledger was written or dropped (**105**, after the court window's 100 and the reserved 101–104; ADR-0164 — F-EM's per-DAA
     /// budget, F-M1's rider marks and F-K's breaker, one entry for all three). Dormant on every network below the three fences.
     CapacityLedger {
         key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
@@ -19420,7 +19422,7 @@ impl<'a> TransitionBuilder<'a> {
         self.write_capacity_ledger_v1(K::BondBreaker(bond), Some(R::Bond(next)));
     }
 
-    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (104).
+    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (105).
     fn write_capacity_ledger_v1(
         &mut self,
         key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
@@ -38378,8 +38380,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
         // ADR-0164: the capacity ledger, verify-then-install.
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
-        PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 => {
-            return Err(PalwStateV2Error::CarriageInconsistent("a reserved delta entry (101-103) is no entry this build writes".into()));
+        PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 | PalwDeltaEntryV2::Reserved104 => {
+            return Err(PalwStateV2Error::CarriageInconsistent("a reserved delta entry (101-104) is no entry this build writes".into()));
         }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
@@ -57248,7 +57250,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
                     // ADR-0164: its round trip is the stage-5–7 suite's.
                     PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
-                    PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 => "reserved",
+                    PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 | PalwDeltaEntryV2::Reserved104 => "reserved",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -57641,7 +57643,7 @@ pub(crate) mod tests {
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
             // ADR-0164 (the capacity ledger), after the court window's.
-            (104, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
+            (105, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
