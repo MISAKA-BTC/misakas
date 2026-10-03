@@ -51,13 +51,35 @@ def main() -> int:
     ap.add_argument("--headers-rows", nargs="+", required=True)
     ap.add_argument("--shape-rows", nargs="*", default=[])
     ap.add_argument("--seed", required=True)
+    ap.add_argument("--frame-headers-rows", nargs="*", default=[], help="the untasked-GGUF supplement's headers rows")
+    ap.add_argument("--frame-shape-rows", nargs="*", default=[], help="the untasked-GGUF supplement's shape rows")
     ap.add_argument("--out")
     a = ap.parse_args()
     snap = Path(a.snapshot).expanduser()
     out = Path(a.out).expanduser() if a.out else snap / "report"
     out.mkdir(exist_ok=True)
     I = Inputs(snap, a.headers_rows, a.shape_rows, a.seed)
-    design = I.design
+    design = json.loads(json.dumps(I.design))
+    # The supplement: a stratum of its own (the untasked GGUFs of L_files), its phases judged like the main sample's.
+    FS = "frame-gguf-untasked"
+    fdp = snap / "sample" / "frame_gguf_design.json"
+    fsample = {}
+    if fdp.exists() and a.frame_headers_rows:
+        fd = json.loads(fdp.read_text())
+        design["strata"][FS] = {"N": fd["N"], "n": fd["n"], "pi": fd["n"] / fd["N"]}
+        for line in open(snap / "sample" / "frame_gguf.jsonl"):
+            x = json.loads(line)
+            fsample[x["id"]] = x
+    from report import eligible as _eligible, judged_shape as _judged_shape, load_rows as _load_rows
+    from estimate import shape_key as _shape_key
+
+    f1 = _load_rows(a.frame_headers_rows) if fsample else {}
+    f2 = _load_rows(a.frame_shape_rows) if fsample else {}
+    forder = [r for _, r in sorted((_shape_key(a.seed, repo), repo) for repo, row in f1.items() if repo in fsample and (_eligible(row) or _judged_shape(row)))]
+    fm = 0
+    while fm < len(forder) and forder[fm] in f2:
+        fm += 1
+    fprefix = set(forder[:fm])
 
     listed = files = files_w = 0
     listed_by = Counter()
@@ -106,13 +128,41 @@ def main() -> int:
                 files += 1
                 files_w += r["downloads"]
             if untasked:
-                # In the frame by its GGUF summary; its declared task is unknown, so the census's row stopped at TASK_UNKNOWN and it was
-                # not sampled: its TIR outcome is not measured (counted as not passing).
-                if src_pass:
-                    untasked_gguf += 1
-                    credit("TIR", ("lower", "NOT_SAMPLED_UNTASKED_GGUF", ""), 1)
-                else:
+                # In the frame by its GGUF summary; its declared task is unknown, so the Hub-wide census's row stopped at TASK_UNKNOWN on
+                # the listing. Measured by the supplementary sample (text generation assumed by the frame); without it, not measured
+                # (counted as not passing).
+                if not src_pass:
                     credit("UNSUPPORTED", stop_key(r), 1)
+                    continue
+                untasked_gguf += 1
+                if not fsample:
+                    credit("TIR", ("lower", "NOT_SAMPLED_UNTASKED_GGUF", ""), 1)
+                    continue
+                if r["repo"] not in fsample:
+                    continue
+                wt = design["strata"][FS]["N"] / design["strata"][FS]["n"]
+                r1 = f1.get(r["repo"])
+                in_frame_sampled += 1
+                if r1 is None:
+                    e_shape.add_unit(FS, 0.0)
+                    e_lower.add_unit(FS, 0.0)
+                    credit("TIR", ("lower", "NOT_FETCHED", ""), wt)
+                    continue
+                e_lower.add_unit(FS, 1.0 if gate(r1, "technical", "lower")["status"] == "PASS" else 0.0)
+                el = _eligible(r1) or _judged_shape(r1)
+                if not el:
+                    e_shape.add_unit(FS, 0.0)
+                    k = stop_key(r1)
+                    credit(route_of(k), k, wt)
+                    continue
+                if r["repo"] not in fprefix:
+                    e_shape.add_unit(FS, 0.0, eligible=True, judged=False)
+                    continue
+                r2 = f2[r["repo"]]
+                ys = 1.0 if r2["shape_ready"] else 0.0
+                e_shape.add_unit(FS, ys, eligible=True, judged=True)
+                k = ("admit", "SHAPE_READY", "") if ys else stop_key(r2)
+                credit(route_of(k), k, wt * len(forder) / max(1, fm))
                 continue
             if c["decided"]:
                 k = stop_key(r)
@@ -145,6 +195,8 @@ def main() -> int:
     for h, cnt in L.items():
         if M[h] == 0:
             credit("TIR", ("admit", "NOT_YET_JUDGED", ""), weight_of(design, h) * cnt)
+    if fsample and forder and fm == 0:
+        credit("TIR", ("admit", "NOT_YET_JUDGED", ""), design["strata"][FS]["N"] / design["strata"][FS]["n"] * len(forder))
 
     # Ollama.
     ol, cards = [], {}
@@ -171,7 +223,8 @@ def main() -> int:
             "hf_listed": listed,
             "hf_files": files,
             "hf_listed_by": {f"{k[0]}|{k[1]}": v for k, v in listed_by.most_common()},
-            "hf_untasked_gguf_in_files_not_sampled": untasked_gguf,
+            "hf_untasked_gguf_in_files": untasked_gguf,
+            "hf_untasked_gguf_supplement": {"n": len(fsample), "headers_rows": len(f1), "eligible": len(forder), "judged_prefix": fm},
             "ollama_units": len(ol),
             "ollama_units_in_files": len(ol_files),
             "ollama_vision_units": ol_vision,
