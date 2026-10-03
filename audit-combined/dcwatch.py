@@ -520,6 +520,182 @@ def gate_delay_active(work, node="new6", flag="--palw-drill-real-submit-delay-s"
     return 0, f"PASS: {node} runs with {args[0]}"
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# P2's anchor fix for A'' (branch anchor/window): admission within 2 audit periods, the execution lane's seeding, the panel bind wait
+# --------------------------------------------------------------------------------------------------------------------
+AUDIT_PERIOD = 100
+
+
+def milestones(work):
+    """{(asset, state): daa} from the driver's milestones.tsv ('class:<asset>:<State>\\t<daa>\\t<time>')."""
+    out = {}
+    path = os.path.join(os.path.expanduser(work), "milestones.tsv")
+    if os.path.exists(path):
+        for ln in open(path):
+            parts = ln.rstrip("\n").split("\t")
+            if len(parts) >= 2 and parts[0].startswith("class:") and parts[1].isdigit():
+                _, asset, st = parts[0].split(":", 2)
+                out.setdefault((asset, st), int(parts[1]))
+    return out
+
+
+def gate_admission(work, states, restart1, tip, period=AUDIT_PERIOD, periods=2):
+    """G-A1: with REAL flowing and floors held (the state is Normal), a newly registered class reaches Probation within `periods` audit periods of `period` DAA."""
+    ms = milestones(work)
+    by, _ = states
+    rows, bad, wait = [], [], []
+    for (asset, st), r in sorted(ms.items(), key=lambda kv: kv[1]):
+        if st != "Candidate" or r < restart1:
+            continue
+        if by.get(r, "Idle") != "Normal":
+            rows.append(f"{asset}: registered at DAA {r} in state {by.get(r, 'Idle')} (not Normal: not the condition)")
+            wait.append(asset)
+            continue
+        p = ms.get((asset, "Probation"))
+        if p is not None:
+            (rows if p - r <= periods * period else bad).append(f"{asset}: Candidate {r} -> Probation {p} ({p - r} DAA = {(p - r) / period:.2f} periods)")
+        elif tip - r > periods * period:
+            bad.append(f"{asset}: Candidate {r}, no Probation after {tip - r} DAA (> {periods} periods)")
+        else:
+            wait.append(asset)
+            rows.append(f"{asset}: Candidate {r}, Probation not yet (limit DAA {r + periods * period})")
+    if bad:
+        return 1, "FAIL: " + "; ".join(bad) + (" | ok: " + "; ".join(rows) if rows else "")
+    if not rows:
+        return 3, "INCOMPLETE: no class was registered with REAL flowing yet (REGISTER_LATE)"
+    if wait:
+        return 3, "INCOMPLETE: " + "; ".join(rows)
+    return 0, "PASS: " + "; ".join(rows)
+
+
+def exec_sample_once(port):
+    r = call(port, "getPalwRoundLane", {"executionsLimit": 0})
+    h = pick(r, "health", default=None) or {}
+    return [int(pick(r, "virtualDaa", default=0) or 0), int(pick(r, "span", default=0) or 0), int(bool(pick(r, "armed", default=False))), int(bool(pick(r, "open", default=False))),
+            len(pick(r, "permits", default=[]) or []), int(pick(r, "nextRoundPermits", default=0) or 0), int(pick(r, "finalsSpan", default=0) or 0), int(pick(r, "finals", default=0) or 0),
+            int(pick(r, "acceptedInSpan", default=0) or 0), int(pick(h, "acceptedTotal", default=0) or 0), int(pick(h, "refusedTotal", default=0) or 0), int(pick(r, "scheduleSpanDaa", default=1) or 1)]
+
+
+def exec_sampler(a):
+    """Background sampler: every --interval s one row of getPalwRoundLane (virtualDaa, span, armed, open, permits, nextRoundPermits, finalsSpan, finals, acceptedInSpan,
+    accepted_total, refused_total, scheduleSpanDaa) appended to --out (P2 can replay the exact seeding from it)."""
+    import time
+    while True:
+        try:
+            row = exec_sample_once(a.port)
+            with open(os.path.expanduser(a.out), "a") as f:
+                f.write(time.strftime("%F %T") + "\t" + "\t".join(map(str, row)) + "\n")
+        except Exception:  # noqa: BLE001 — a node mid-restart is a missing sample
+            pass
+        time.sleep(a.interval)
+    return 0
+
+
+def read_exec_samples(path):
+    rows = []
+    p = os.path.expanduser(path)
+    if os.path.exists(p):
+        for ln in open(p):
+            f = ln.rstrip("\n").split("\t")
+            if len(f) >= 13:
+                try:
+                    rows.append({"daa": int(f[1]), "span": int(f[2]), "armed": f[3] == "1", "open": f[4] == "1", "permits": int(f[5]), "next": int(f[6]), "finals_span": int(f[7]),
+                                 "finals": int(f[8]), "accepted_in_span": int(f[9]), "acc_total": int(f[10]), "ref_total": int(f[11])})
+                except ValueError:
+                    pass
+    return rows
+
+
+def gate_exec_seed(samples, fence, maturity=120, grace=64, min_snapshots=5):
+    """G-A2: the execution lane's schedule seeding, read from getPalwRoundLane per span (one span = one DAA on this ruleset): of the snapshots created after the fence
+    (a span whose recorded finals are > 0), the share whose due window [F + maturity, F + maturity + grace + 8] holds a span with a non-empty schedule (permits > 0). APPROXIMATION
+    of the fold's queue rule (one snapshot per opening, oldest first, seeded iff the previous span recorded an anchor): the raw samples are kept for an exact replay."""
+    post = [x for x in samples if x["daa"] >= fence]
+    if not post:
+        return 3, "INCOMPLETE: no round-lane sample past the fence"
+    if not any(x["armed"] for x in post):
+        return 3, "INCOMPLETE: the round lane is not armed on this chain"
+    tip = max(x["daa"] for x in post)
+    sched = {}
+    snaps = {}
+    for x in post:
+        sched[x["span"]] = max(sched.get(x["span"], 0), x["permits"])
+        if x["finals"] > 0:
+            snaps.setdefault(x["finals_span"] or x["span"], x["finals"])
+    matured = [f for f in snaps if f + maturity + grace + 8 <= tip]
+    if len(matured) < min_snapshots:
+        return 3, f"INCOMPLETE: {len(matured)} snapshots whose window has elapsed ({len(snaps)} created, {len(post)} samples) — need {min_snapshots}"
+    seeded = [f for f in matured if any(sched.get(s, 0) > 0 for s in range(f + maturity, f + maturity + grace + 9))]
+    share = len(seeded) / len(matured)
+    txt = f"{len(seeded)} of {len(matured)} matured snapshots seeded ({100 * share:.1f} %), spans with a schedule {sum(1 for v in sched.values() if v > 0)} of {len(sched)}"
+    return (0 if share >= 0.95 else 1), ("PASS: " if share >= 0.95 else "FAIL: ") + txt
+
+
+def _pct(xs, q):
+    if not xs:
+        return None
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))]
+
+
+def bind_waits(claims, blocks, fence, operator_bonds, tip, settle=20, lo=None, hi=None):
+    """{'operator': [waits], 'non-operator': [waits]} — REAL claims (accepted in a REAL block) accepted after fence + settle, accepted -> PanelBound in DAA; a claim not bound yet counts
+    as tip - accepted (a lower bound)."""
+    by_hash = {b["hash"]: b for b in blocks}
+    out = {"operator": [], "non-operator": []}
+    for c in claims.values():
+        acc = pick(c, "acceptedDaa", default=None)
+        blk = by_hash.get(str(pick(c, "acceptedBlock", default="")))
+        if acc is None or not blk or blk["kind"] != "REAL":
+            continue
+        acc = int(acc)
+        if acc < fence + settle or (lo is not None and acc < lo) or (hi is not None and acc >= hi):
+            continue
+        bd = pick(c, "boundDaa", default=None)
+        wait = (int(bd) - acc) if bd is not None else tip - acc
+        out["operator" if str(pick(c, "executorBond", default="")) in operator_bonds else "non-operator"].append(wait)
+    return out
+
+
+def operator_bonds_of(work):
+    try:
+        return {x["bond_outpoint"] for x in json.load(open(os.path.join(os.path.expanduser(work), "keyring", "manifest.json")))["seats"]}
+    except (OSError, ValueError, KeyError):
+        return set()
+
+
+def gate_bind_wait(claims, blocks, fence, work, tip, limit=20, min_n=10):
+    """G-A3: the panel bind wait (claim accepted -> PanelBound) of REAL claims, p95 <= `limit` DAA, split operator / non-operator bond."""
+    w = bind_waits(claims, blocks, fence, operator_bonds_of(work), tip)
+    parts, bad, wait = [], [], []
+    for g in ("operator", "non-operator"):
+        xs = w[g]
+        if len(xs) < min_n:
+            parts.append(f"{g}: n={len(xs)} (< {min_n})")
+            wait.append(g)
+            continue
+        p95 = _pct(xs, 0.95)
+        parts.append(f"{g}: n={len(xs)} p50 {_pct(xs, 0.5)} p95 {p95} max {max(xs)}")
+        if p95 > limit:
+            bad.append(g)
+    if bad:
+        return 1, f"FAIL (p95 > {limit} DAA: {', '.join(bad)}): " + " | ".join(parts)
+    if wait:
+        return 3, "INCOMPLETE: " + " | ".join(parts)
+    return 0, f"PASS (p95 <= {limit} DAA): " + " | ".join(parts)
+
+
+def bind_wait_report(claims, blocks, fence, work, tip, st):
+    """REPORT-ONLY: the bind wait while only NON-operator REAL flows (leg O: the operator producers stopped). The beacon-floor policy is expected to cap it near 60 slots."""
+    lo, hi = int(st["start_daa"]), int(st["end_daa"])
+    w = bind_waits(claims, blocks, fence, operator_bonds_of(work), tip, settle=0, lo=lo, hi=hi)
+    xs, ys = w["non-operator"], w["operator"]
+    if not xs:
+        return [f"only non-operator REAL (leg O, DAA {lo}..{hi}): no non-operator REAL claim accepted in the leg"]
+    return [f"only non-operator REAL (leg O, DAA {lo}..{hi}): n={len(xs)} accepted->bound p50 {_pct(xs, 0.5)} p95 {_pct(xs, 0.95)} max {max(xs)} DAA (the beacon-floor policy is expected to cap it near 60 slots); "
+            f"operator claims in the leg: {len(ys)}"]
+
+
 def user_metrics(blocks, claims, fence, tip=None):
     """The user's three metrics, past the fence: the REAL attempts' BLUE rate, the REAL share of the selected chain (chain blocks whose kind is REAL or EXEC), and the
     REAL work that reached Final (claims accepted in a REAL block, old enough to have had the time, that are Final)."""
@@ -782,6 +958,11 @@ def gates(a):
         rows.append(("COOLDOWN", 3, "INCOMPLETE: the stale-injection leg has not run yet"))
     rows.append(("DAA", *gate_daa(ctx)))
     rows.append(("STATES", *gate_states_daa(blocks, fence, states=states, **kw)))
+    tipd = max((b["daa"] for b in blocks), default=0)
+    r1d = json.load(open(r1))["restart_daa"] if os.path.exists(r1) else 10 ** 9
+    rows.append(("G-A1", *gate_admission(a.work, states, r1d, tipd)))
+    rows.append(("G-A2", *gate_exec_seed(read_exec_samples(os.path.join(os.path.expanduser(a.evd), "roundlane.tsv")), fence)))
+    rows.append(("G-A3", *gate_bind_wait(claims, blocks, fence, a.work, tipd)))
     a.json_base = int(os.environ.get("JSON_BASE", "53200"))
     for nm, c, t in fork_checks(a, blocks):
         rows.append((nm, c, t))
@@ -833,6 +1014,12 @@ def gates(a):
             print("  " + ln)
     else:
         print("  policy-ignoring floor producer: the leg has not run (or the binary has no flag to ignore the policy)")
+    lo_ = os.path.join(os.path.expanduser(a.evd), "leg-o.json")
+    if os.path.exists(lo_):
+        for ln in bind_wait_report(claims, blocks, fence, a.work, max((b["daa"] for b in blocks), default=0), json.load(open(lo_))):
+            print("  " + ln)
+    else:
+        print("  only non-operator REAL (leg O, operator producers stopped): the leg has not run (O_DAA = 0 by default: it needs ~80 DAA more)")
     gc, gt = goal_verdict(ctx)
     print("== goal (supply-bound; reported, never blocks shipping) ==")
     print(f"  SHARE REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks: {gt}")
@@ -1083,6 +1270,37 @@ def selftest():
     slow = [dict(b) for b in chainf if b["hash"] not in {f"r{d}" for d in range(94, 101)}]   # the BLUE successor comes only at DAA 101: 9 slots after the first REAL attempt
     assert gate_red2blue(slow, {"restart_daa": 90})[0] == 1
     assert gate_states_daa(chainf, 0)[0] == 0, gate_states_daa(chainf, 0)
+    # G-A1: a class registered in Normal reaches Probation inside two periods (PASS), after three (FAIL), a registration in Idle is not the condition
+    wd = tempfile.mkdtemp()
+    os.makedirs(os.path.join(wd, "keyring"))
+    open(os.path.join(wd, "milestones.tsv"), "w").write("class:a:Candidate\t100\tx\nclass:a:Probation\t180\tx\nclass:b:Candidate\t110\tx\nclass:c:Candidate\t10\tx\n")
+    normal = ({d: "Normal" for d in range(0, 400)}, [])
+    assert gate_admission(wd, normal, 90, 250)[0] == 3                       # b: Candidate 110, Probation not yet, 140 DAA in: waiting
+    assert gate_admission(wd, normal, 90, 330)[0] == 1                       # b: 220 DAA, no Probation: beyond two periods
+    open(os.path.join(wd, "milestones.tsv"), "a").write("class:b:Probation\t290\tx\n")
+    assert gate_admission(wd, normal, 90, 330)[0] == 0, gate_admission(wd, normal, 90, 330)
+    assert gate_admission(wd, ({d: "Idle" for d in range(0, 400)}, []), 90, 330)[0] == 3
+    # G-A2: snapshots created at spans 100..110 (finals > 0), schedules seeded in their windows
+    smp = [{"daa": d, "span": d, "armed": True, "open": True, "permits": 1 if 100 + 120 <= d <= 100 + 120 + 20 or 300 <= d <= 330 else 0, "next": 0, "finals_span": d, "finals": 2 if 100 <= d < 108 else 0,
+            "accepted_in_span": 0, "acc_total": 0, "ref_total": 0} for d in range(60, 520)]
+    assert gate_exec_seed(smp, 50)[0] == 0 or gate_exec_seed(smp, 50)[0] == 1
+    seeded_all = [dict(x, permits=1) for x in smp]
+    assert gate_exec_seed(seeded_all, 50)[0] == 0, gate_exec_seed(seeded_all, 50)
+    none_seeded = [dict(x, permits=0) for x in smp]
+    assert gate_exec_seed(none_seeded, 50)[0] == 1
+    assert gate_exec_seed(smp[:100], 50)[0] == 3                              # too few matured snapshots
+    # G-A3: operator and non-operator REAL claims, accepted -> bound
+    open(os.path.join(wd, "keyring", "manifest.json"), "w").write(json.dumps({"seats": [{"bond_outpoint": "op:0"}]}))
+    cb = [_blk(f"c{i}", [], 100 + i, "REAL", "BLUE") for i in range(40)]
+    cl = {}
+    for i in range(40):
+        cl[f"x{i}"] = {"acceptedBlock": f"c{i}", "acceptedDaa": 100 + i, "boundDaa": 100 + i + (5 if i % 2 == 0 else 12), "executorBond": "op:0" if i % 2 == 0 else "ext:1"}
+    assert gate_bind_wait(cl, cb, 26, wd, 200)[0] == 0, gate_bind_wait(cl, cb, 26, wd, 200)
+    for k in cl:
+        if cl[k]["executorBond"] == "ext:1":
+            cl[k]["boundDaa"] = cl[k]["acceptedDaa"] + 55                         # the non-operator wait is long
+    assert gate_bind_wait(cl, cb, 26, wd, 200)[0] == 1
+    assert gate_bind_wait({k: v for k, v in cl.items() if v["executorBond"] == "op:0"}, cb, 26, wd, 200)[0] == 3     # no non-operator REAL: incomplete
     print("selftest ok")
     return 0
 
@@ -1139,9 +1357,13 @@ def main():
     g.add_argument("--p50-max", type=int, default=6)
     g.add_argument("--p95-max", type=int, default=12)
     g.add_argument("--wait-max", type=int, default=40)
+    e = sub.add_parser("execsample")
+    e.add_argument("--port", type=int, required=True)
+    e.add_argument("--out", required=True)
+    e.add_argument("--interval", type=int, default=30)
     sub.add_parser("selftest")
     a = p.parse_args()
-    sys.exit({"share": share, "gates": gates, "redblue": redblue, "recovery": recovery, "panel": panel, "selftest": lambda _a: selftest()}[a.cmd](a))
+    sys.exit({"share": share, "gates": gates, "redblue": redblue, "recovery": recovery, "panel": panel, "execsample": exec_sampler, "selftest": lambda _a: selftest()}[a.cmd](a))
 
 
 if __name__ == "__main__":

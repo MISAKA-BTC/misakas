@@ -883,11 +883,20 @@ class Drive:
                     a = asset_of(c["class"], line_name)
                     if a not in wanted:
                         wanted.append(a)
+        late = {}
+        for tok in (E.get("REGISTER_LATE") or "").replace(",", " ").split():     # REGISTER_LATE="lose:152": an asset is registered from that DAA on (G-A1: a class registered with REAL flowing)
+            k, _, v = tok.partition(":")
+            if v.isdigit():
+                late[k] = int(v)
+        deferred = False
         for asset in wanted:
             cls = asset
             if is_composite(asset) and not os.path.exists(f"{MODEL}/{asset}.palwtirs"):
                 continue
-            if not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] != "absent":
+            if asset in late and self.daa < late[asset] and (not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] == "absent"):
+                deferred = True
+                continue
+            if not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] != "absent" or asset in (self.s.get("reg-submitted") or []):
                 continue
             out = f"{OBJ}/register-{asset}.obj"
             if is_composite(asset):
@@ -903,13 +912,16 @@ class Drive:
                 continue
             objs.append(out)
         if not objs:
-            self.s.mark("register-classes", note="every class is registered already")
+            if not deferred:
+                self.s.mark("register-classes", note="every class is registered already")
             return
         ok, text = submit(objs)
         if not ok:
             raise RuntimeError(f"cannot submit the registrations: {text.strip()[-300:]}")
-        self.s.mark("register-classes", daa=self.daa, objects=objs)
-        log(f"classes registered (seat 7) at DAA {self.daa}: {[os.path.basename(o) for o in objs]}")
+        self.s.put("reg-submitted", sorted(set((self.s.get("reg-submitted") or []) + [os.path.basename(o)[len("register-"):-len(".obj")] for o in objs])))
+        if not deferred:
+            self.s.mark("register-classes", daa=self.daa, objects=objs)
+        log(f"classes registered (seat 7) at DAA {self.daa}: {[os.path.basename(o) for o in objs]}" + (" (more deferred: REGISTER_LATE)" if deferred else ""))
         span = int(pick(self.reg, "spanDaa", "span_daa", default=0) or 0)
         if span:
             log("admission-audit slots (DAA mod period): " + ", ".join(

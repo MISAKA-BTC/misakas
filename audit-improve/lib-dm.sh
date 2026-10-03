@@ -262,7 +262,8 @@ node_args() {
     local rid=(); [ "${RIDERS:-0}" -gt 0 ] && rid=("--palw-riders=$RIDERS")
     case $role in
         floor) a+=(--palw-produce) ;;
-        outsider) ;;
+        # OUTSIDER_PRODUCE=1: the outsider (a NON-operator bond) also makes REAL attempts of class win, riders on (G-A3 splits bind waits by operator / non-operator bond)
+        outsider) if [ "${OUTSIDER_PRODUCE:-0}" = 1 ]; then a+=(--palw-produce "${rid[@]}" "--palw-producer-class=$(model_id win)"); fi ;;
         # extfloor (OUTSIDER=1): the EXTERNAL floor producer of the combined drill (post-genesis bond 15): a floor producer that does not honour the idle rule where the build has
         # a drill flag for that (EXT_FLOOR_FLAG, else the first `--palw-drill-*floor*` flag the binary lists besides the fence movers), so its blocks must be REJECTED in
         # Normal / Probe by the honest nodes' header rule. Without such a flag it is an ordinary floor producer (the gate then reports it could not test rejection).
@@ -299,6 +300,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

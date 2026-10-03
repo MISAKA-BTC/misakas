@@ -37,6 +37,8 @@ export RECOVERY_AT=${RECOVERY_AT:-$((INT11_AT+190+CAP_SETTLE_DAA+CAP_WINDOW_DAA+
 export STOP_DAA=${STOP_DAA:-$((K_SLOTS+8))}                # leg A: both REAL producers down K + 8 slots (shortened from 2K: floors must resume only after K idle slots)
 export POST_DAA=${POST_DAA:-$((K_SLOTS+8))}                # leg B2: both back; RED -> BLUE observed; ends before the rho1000 window
 export X_DAA=${X_DAA:-0}                                   # leg X (a policy-ignoring floor producer, report-only): off; X_DAA=24 with EXT_FLOOR_FLAG turns it on
+export REGISTER_LATE=${REGISTER_LATE:-"lose:$((STALE_END_DAA+12))"}   # G-A1: a class registered with REAL flowing and floors held (the state is Normal), Probation within 2 audit periods (200 DAA)
+export O_DAA=${O_DAA:-0}                                   # leg O (report-only): the operator producers stopped, only the non-operator REAL flows; O_DAA=80 turns it on (bind wait expected near 60 slots)
 export EXT_FLOOR_FLAG=${EXT_FLOOR_FLAG:---palw-drill-floor-ignore-policy}
 export GEN_DIR=${GEN_DIR:-$HOME/Downloads/MISAKA-wt-b/gen-drill-classes}
 export OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-$HOME/Downloads/MISAKA-wt-b/lifecycle-run/bin/2483c570cea4/kaspad}
@@ -77,6 +79,11 @@ cat <<EOF
             FORK-a (old and new refuse each other past the fence: the new node drops the old peer AT the crossing — the re-judgement; a restart is not what shows it) | FORK-b (a fresh node IBDs from genesis
             across the fence) | FORK-c (new2 partitioned across the fence rejoins and reorganises onto the chain)
             + per-lane verdicts: D-M5's crossing, DG-1, DG-2 here; the lane pre-checks' verdict.txt (rfc7v, rfc6s, rfc1, rfc2r) from tonight
+  anchor fix (P2, anchor/window)   G-A1: a class registered with REAL flowing and floors held (the driver registers `lose` at DAA $((STALE_END_DAA+12)), in Normal) reaches Probation within 2 audit periods (<= 200 DAA);
+            G-A2: the execution lane's schedule seeding >= 95 % of the snapshots created past the fence (getPalwRoundLane per span, sampled every 30 s into roundlane.tsv; an APPROXIMATION of the fold's queue
+            rule — the raw samples are kept for P2's exact replay); G-A3: the panel bind wait (claim accepted -> PanelBound) of REAL claims p95 <= 20 DAA, split operator bond / non-operator bond (new9, the
+            outsider, makes REAL attempts of class win from leg B1 on; it is stopped with the operator producers in leg A). Report-only leg O (O_DAA=$O_DAA, off by default): the operator producers stopped, only the
+            non-operator REAL flowing: its bind wait is expected near 60 slots (the beacon-floor policy's cap); it needs ~80 DAA beyond the ~$(( (INT11_AT+285+CAP_SETTLE_DAA+CAP_WINDOW_DAA+6)*125/3600 )) h of the rest.
   test-level, not drill   FORK-d (IBD via the pruning proof across the fence): RS's T49-style carriage test (capture in Probe/Normal -> import -> identical decisions) and the combined-fence test with the floor rule live
   report    (never a gate) the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time; leg X (off unless X_DAA > 0): one policy-IGNORING floor producer
             ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
@@ -113,10 +120,10 @@ case $cmd in
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
-  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
+  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
   recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
-  share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 "$@" ;;
+  share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6,new9 "$@" ;;
   evidence) mkdir -p "$EVD"; cp -R "$WORK_DIR"/verdict "$WORK_DIR"/capacity "$WORK_DIR"/drive.log "$WORK_DIR"/drive.out "$WORK_DIR"/milestones.tsv "$WORK_DIR"/memory.tsv "$WORK_DIR"/samples.tsv "$EVD"/ 2>/dev/null || true
             python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel.txt" 2>&1 || true; bash "$0" share > "$EVD/share.txt" 2>&1 || true; bash "$0" gates > "$EVD/gates.txt" 2>&1 || true; echo "evidence in $EVD" ;;
   *) sed -n '2,16p' "$0"; exit 2 ;;
