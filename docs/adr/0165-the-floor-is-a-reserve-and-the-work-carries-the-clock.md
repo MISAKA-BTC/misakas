@@ -23,7 +23,8 @@ joins the pre-write skip arm, so the block stands and **no claim is written**: n
 withheld and burned, as for every skipped own attempt) and no PALW weight is credited. **When the floor IS accepted
 (Idle) it is today's bonded floor attempt, unchanged** — the same bond, producer-floor, exposure, share and room checks, the
 same reservation, weight and reward. The rule adds a refusal and relaxes none; claims taken before the fence settle as before.
-A **REAL attempt** is any attempt of a registered class other than the base class.
+A **REAL attempt** is any attempt of a registered class other than the base class; and it is an event of the machine only as an attempt-lane BLOCK's
+attempt (below): a capacity rider is none.
 
 **The floor state** is one small rooted value, `PalwFloorStateV1 { mode, last_probe_end }`, with `mode` one of
 
@@ -61,6 +62,13 @@ fold makes — the registered, Active class, the bond (key, producer floor, free
 exposure ceiling and share, the network room — **and wrote its claim**. The step runs inside `apply_attempt` just before
 `write_claim`, so a merged attempt the fold later refuses is restored with its checkpoint, and an attempt the fold *skipped*
 (refused by name, before any write) never moves the machine. **The kind a header claims never moves it; the claim does.**
+**A capacity rider is no event** (the coordinator's decision of 2026-10-03, on INT's finding that ADR-0164's riders build the fold's attempt
+origin): a rider (tag 95) rides an object the accepting block carries, has no header and is in no colouring — the machine exists to shield REAL
+attempt *blocks* from the floor blocks that colour against them, so a rider shields nothing, and counting it would refuse floors (the anchors,
+the bonded fallback) for no protection and open a keep-alive that costs no block. It steps the machine neither BLUE nor RED, whatever its class and
+however its lead was coloured; its own accounting (the lead's carve split, the reservation, the weight) is unchanged, and the lead's acceptance
+already stepped the machine once. The fold carries this as an explicit source on the attempt's origin (`PalwFloorEventSourceV1`: `BlockBlue`,
+`BlockRed`, `Rider`), not as a colour. A rider of the floor class still meets the floor's gate, as any floor claim does.
 Within a block the order is the fold's: the block's own attempt first (BLUE: a chain block), then the merged works in
 consensus acceptance order, each stepping the state the one before left, all at the accepting block's DAA (Idle + [RED, BLUE]
 is Probe then Normal; Idle + [BLUE, RED] is Normal and the RED changes nothing). A merged attempt's colour is its place in the
@@ -247,7 +255,8 @@ tick-source rule, the clock-speed simulation), `real_work_reserve_v1` (the fold 
 refuse by name, an unanswered probe expires and the cooldown holds RED off but not BLUE, RED never extends and BLUE does, several
 attempts in one mergeset in the fold's order, **only a fully accepted REAL attempt moves it**, fence straddle, reorg revert/apply and
 branches, the carriage, time writes once, an all-floor network is Idle and live), `palw_useful_work_fences` (dormant on every preset,
-fingerprint and fork id, prerequisites). Pipeline, on testnet-12's own GHOSTDAG — `t12_real_share` (00.2, 00.5, 00.6: the slow
+fingerprint and fork id, prerequisites), `palw_floor_riders_are_no_events` (through the ×1000 package's riders: a rider-only flow does not keep Normal
+past `floor_idle_slots`, riders in Idle open no Probe and make no Normal, a BLUE REAL lead carrying riders steps the machine exactly once). Pipeline, on testnet-12's own GHOSTDAG — `t12_real_share` (00.2, 00.5, 00.6: the slow
 attempt under floors and under heartbeats, the busy chain, the rogue floor, the RED first attempt and its Probe, an unanswered probe
 expiring, B), **the pruned join** (`…a_pruned_join_inside_a_normal_stretch_…`, `…_inside_a_probe_…`: a second node follows the
 archival one through the pruning point, is left as a pruned join leaves it, imports the carriage against the witness child's committed

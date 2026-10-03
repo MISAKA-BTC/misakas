@@ -432,3 +432,15 @@ fn only_a_fully_accepted_real_attempt_moves_the_floor_state() {
     assert!(c.claim(&claim_of(&real(21))).is_some());
     assert_eq!(floor_of(&c), st(Normal { last_blue: 107 }, None));
 }
+
+/// **The event source of an attempt's origin is explicit** (ADR-0165 × ADR-0164): a block's attempt is an event with the colour its
+/// mergeset gives it; a capacity rider is none — neither BLUE nor RED (`palw_floor_riders_are_no_events` runs it through the fold).
+#[test]
+fn the_floor_event_source_is_a_colour_for_a_blocks_attempt_and_nothing_for_a_rider() {
+    use crate::palw_state_v2::PalwFloorEventSourceV1 as Source;
+    assert_eq!(Source::BlockBlue.blue(), Some(true));
+    assert_eq!(Source::BlockRed.blue(), Some(false));
+    assert_eq!(Source::Rider.blue(), None, "a rider is no event of the machine");
+    assert_eq!(Source::of_merged_block(false), Source::BlockBlue, "a merged block outside the mergeset's reds is BLUE");
+    assert_eq!(Source::of_merged_block(true), Source::BlockRed, "one in the reds is RED");
+}

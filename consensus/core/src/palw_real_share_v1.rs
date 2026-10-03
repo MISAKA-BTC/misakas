@@ -20,7 +20,11 @@
 //!   machine only when it is **fully accepted**: it passed every check the fold makes (the registered, Active class, the
 //!   bond, the budget, the lottery, the room, the share…) and **wrote its claim**. The kind a header claims, and an attempt
 //!   the fold skipped, never move it. A BLUE one is verified success — it needs no cooldown; the cooldown exists only to
-//!   stop a stream of RED ones from suppressing the floor.
+//!   stop a stream of RED ones from suppressing the floor. **And only an attempt-lane BLOCK's attempt is an event** (the
+//!   block's own, or a merged one, with its mergeset colour): **a capacity rider** (ADR-0164 F-M1, tag 95) rides an object,
+//!   has no header and is in no colouring, so it is no event at all — neither BLUE nor RED. The machine exists to shield REAL
+//!   attempt blocks from the floor blocks that colour against them; a rider is no block, so counting it would refuse the
+//!   floor without shielding anything and would open a keep-alive that costs no block.
 //! * **`Params::palw_real_clock_tick_v1` (B).** An attempt-lane block is a tick source beside the heartbeat. The
 //!   DAA score still advances **once per clock slot** however many attempts a slot holds.
 //!
@@ -161,8 +165,9 @@ impl std::fmt::Display for PalwFloorStateV1 {
     }
 }
 
-/// **One REAL attempt FULLY ACCEPTED by the fold** — the claim written — with the colour it had in the accepting block's
-/// mergeset. The block's own attempt is BLUE (a chain block); a merged attempt is BLUE or RED as the mergeset says.
+/// **One REAL attempt BLOCK's attempt FULLY ACCEPTED by the fold** — the claim written — with the colour it had in the accepting
+/// block's mergeset. The block's own attempt is BLUE (a chain block); a merged attempt is BLUE or RED as the mergeset says. A
+/// capacity rider is not this: it is no event (the fold never builds one for it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwRealAcceptedV1 {
     pub blue: bool,
