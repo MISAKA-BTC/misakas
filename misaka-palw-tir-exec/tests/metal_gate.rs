@@ -166,7 +166,8 @@ fn the_metal_wide_rms_and_gdn_step_are_the_reference() {
                 let mut rng = ChaCha20Rng::seed_from_u64(0xE6A + seed);
                 let map = wide_params(&p, &mut rng, (seed % 3) as u8);
                 let tokens: Vec<u32> = (0..VOCAB).collect();
-                let ran = four(&p, &map, &tokens, "rms_norm_wide_q36", false).unwrap_or_else(|e| panic!("wide {kind} {dtype:?} seed {seed}: {e}"));
+                let ran = four(&p, &map, &tokens, "rms_norm_wide_q36", false)
+                    .unwrap_or_else(|e| panic!("wide {kind} {dtype:?} seed {seed}: {e}"));
                 if ran > 0 {
                     let caught = four(&p, &map, &tokens, "rms_norm_wide_q36", true).expect_err("the broken variant must not pass");
                     assert!(caught.contains("GPU"), "{caught}");

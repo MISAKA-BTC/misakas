@@ -483,10 +483,14 @@ pub fn check_ir_program_at_v1(params: &Params, program: &TirProgramV1, tile_len:
     r
 }
 
-/// **The weight of a generic wide node beyond a fused pass** in [`generic_slowdown_v1`]: the generic backend runs a node whose working
-/// type is `i128` as its own pass over `i128` lanes (two machine words, a table gather or a division per element), where a fused kernel
-/// visits each element once in machine words. An assumed weight, not a measurement (`tir-exec-bench --fused-kernels` measures a
-/// kernel against its generic form on a given machine; this constant is only the ratio's order); the verdict calls it an estimate.
+/// **The weight of a generic wide pattern against its fused kernel** in [`generic_slowdown_v1`]: the generic backend runs a pattern's wide
+/// (`i128`-working) nodes as separate passes over `i128` lanes (a table gather or a division per element), where a fused kernel visits each
+/// element once in machine words. **Measured**, not assumed: `misaka-palw-tir-lower/tests/fused_gate.rs`
+/// `measure_the_generic_over_fused_ratio_of_the_wide_patterns` steps the three unit-row patterns (`l2_unit_q15`, `rms_unit_q24`,
+/// `rms_norm_wide_q36`) at six serving-like shapes (32x128 to 1x4096 rows) on the generic backend and with the fused kernels, every logit compared,
+/// release build, Apple M-series, median of 64 positions of an 8-layer program: the generic/fused ratios are 3.17, 3.42, 2.21, 2.95, 2.72 and
+/// 5.15 (geometric mean 3.2; each includes the program's un-fused gather and reshape nodes, so the pattern's own ratio is higher). The weight is the
+/// measured order, 3; the verdict still calls its figure an estimate (another machine, another shape).
 pub const GENERIC_WIDE_PASS_FACTOR_V1: u64 = 3;
 
 /// Below this share of a position's estimated work the generic wide passes do not change the verdict (`ADMISSIBLE` stays).

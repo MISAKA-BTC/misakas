@@ -135,7 +135,9 @@ impl FusedKernelV1 for GdnStep {
             let qv: Vec<i64> = (0..h * dk).map(|i| q.at(i)).collect();
             let heads: Vec<[i128; 12]> =
                 (0..h).map(|a| [decay[a], beta[a], rm[a], rd[a], rz[a], dm[a], dd[a], dz[a], ws[a], om[a], od[a], oz[a]]).collect();
-            if let Some((next_state, mut out)) = super::metal::gdn_step(s_now, &kv, &vv, &qv, (h, dv, dk), (s_lo as i64, s_hi as i64), &heads) {
+            if let Some((next_state, mut out)) =
+                super::metal::gdn_step(s_now, &kv, &vv, &qv, (h, dv, dk), (s_lo as i64, s_hi as i64), &heads)
+            {
                 let pending = io.state_next.first_mut().ok_or_else(|| bad("no pending state"))?;
                 *pending = match state_dtype {
                     DType::I32 => Buf::I32(next_state),
