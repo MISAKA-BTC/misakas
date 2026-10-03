@@ -448,9 +448,10 @@ pub fn run_census_source(
 }
 
 /// **The chain's judgment, shared by identical programs.** [`chain::judge`] is a function of the shape-only program, the
-/// options, and two figures of the convert stage (the artifact estimate and its leaf estimate); a census meets the same program in
-/// every fine-tune of one configuration, and one judgment runs admission v10 many times (the layout search). The key is all of those
-/// inputs, so a hit is the same computation, not an approximation.
+/// options, and two figures of the convert stage it reads (the parameters' bytes and the inventory's leaf estimate, both functions
+/// of the program); a census meets the same program in every fine-tune of one configuration, and one judgment runs admission v10
+/// many times (the layout search). The key is all of those inputs, so a hit is the same computation, not an approximation. (The
+/// tokenizer's bytes, which differ between fine-tunes that edit a chat template, are not read by the judgment and not keyed.)
 #[derive(Default)]
 pub struct JudgeCache {
     map: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::OnceLock<chain::ChainOutput>>>>,
@@ -462,7 +463,7 @@ impl JudgeCache {
     pub fn key(program: &misaka_palw_tir::TirProgramV1, analysis: &model::Analysis, opts: &Options) -> String {
         let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/v1").to_state();
         st.update(&program.encode());
-        let a = analysis.artifact.as_ref().map(|a| (a.estimate_bytes, a.inventory_leaves_estimate));
+        let a = analysis.artifact.as_ref().map(|a| (a.params_bytes, a.inventory_leaves_estimate));
         st.update(
             format!(
                 "|{a:?}|{:?}|{:?}|{:?}|{}|{}|{}|{:?}|{}|{}",
