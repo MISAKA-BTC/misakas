@@ -361,6 +361,8 @@ fn the_gpu_backend_is_the_reference_on_the_gdn_step_and_the_wide_patterns() {
     let before = metal_counts();
     gate("gdn_step_q36", &gdn_program(4, 8, 16, 2), 2, 6);
     gate("gdn_step_q36", &gdn_program(2, 4, 4, 1), 1, 6);
+    let after_gdn = metal_counts();
+    assert!(after_gdn.0 > before.0, "the GPU answered no gdn step: {before:?} -> {after_gdn:?}");
     gate("rms_norm_wide_q36", &rowop_program_kind(2, DType::I16, 3, 8, 2), 2, 6);
     gate("rms_norm_wide_q36", &rowop_program_kind(3, DType::I32, 2, 16, 1), 1, 6);
     let after = metal_counts();
