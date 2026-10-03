@@ -12,7 +12,7 @@ const WS_PATH_SEED = "/kaspa-seed";  // nginx → SSH tunnel → seed (mesh hub)
 const WS_PATH_HUB = "/kaspa-hub";
 const SYMBOL       = "MSK";      // Misaka devnet coin label (8 decimals)
 const DECIMALS     = 8;
-const RECENT_LIMIT = 25;
+const RECENT_LIMIT = 150;   // SCAN: wide enough for both tables — round blocks (algo-10) outnumber chain blocks
 const TXSCAN_LIMIT = 400;        // how far back to scan for a tx id / block-less lookups
 
 /* ---- kaspa-pq overlay (PoS / DNS-finality) additions ---- */
@@ -429,7 +429,7 @@ function fmtCompact(v){
 
 // Persist the recent-blocks window so a page reload paints instantly from the last session
 // instead of staring at "Loading blocks…" while the cold walk runs.
-const LS_KEY = "msk_recent_v2";   // v2: rows carry algo + classId
+const LS_KEY = "msk_recent_v3";   // v3: rows carry the round envelope + laneClass/exec
 function saveCache(){ try { localStorage.setItem(LS_KEY, JSON.stringify({ net: cachedNet, recentLow, lastSink, recent })); } catch {} }
 function loadCache(){
   try {
@@ -450,7 +450,10 @@ function summarize(blk){
            // What mined it, read off the header itself (the block page's own decoder): the lane,
            // and for a PALW block the execution class inside the PAV2 attempt envelope.
            algo: (h.powAlgoId === undefined || h.powAlgoId === null) ? null : Number(h.powAlgoId),
-           classId: (h.palwCommitment && h.palwCommitment.length) ? ((llmDecodeAttempt(h.palwCommitment) || {}).classId || null) : null };
+           classId: (h.palwCommitment && h.palwCommitment.length && Number(h.powAlgoId) !== 10) ? ((llmDecodeAttempt(h.palwCommitment) || {}).classId || null) : null,
+           // SCAN: a round block's envelope (round, permit, producing bond) and what the node says of it
+           round: (Number(h.powAlgoId) === 10 && h.palwCommitment && h.palwCommitment.length) ? scanDecodeRound(h.palwCommitment) : null,
+           laneClass: v.laneClass || "", exec: v.exec || null, nodeKind: v.blockKind || v.kind || "" };
 }
 // The Recent blocks MODEL cell. A heartbeat block used no model at all (ADR-0066 D1) and says so;
 // the floor class is not a model either; an unnamed class shows the chain's id rather than a guess.
@@ -787,6 +790,18 @@ async function renderRegistry() {
   armPoll(() => curSeg() === "registry", paint, 30000);
 }
 
+// The node's own per-claim execution rows (getPalwRoundLane.recentExecutions, next node release); nothing before it.
+function scanExecTableHtml(l){
+  const rows = l && Array.isArray(l.recentExecutions) ? l.recentExecutions : null;
+  if (!rows) return "";
+  const body = rows.map(r => { const t = Number(r.tickets), n = Number(r.ticketsSpent);
+    return `<tr><td><span class="pill blue">${esc(scanClaimClassName(r.classId))}</span></td>
+      <td><a class="hash" href="#/claim/${esc(r.claimId)}/${esc(encodeURIComponent(r.executorBond))}">${esc(short(r.claimId, 8))}</a></td>
+      <td class="nowrap"><span class="scan-bar ${t > 0 && n >= t ? "done" : ""}"><i style="width:${t ? Math.min(100, Math.round(100 * n / t)) : 0}%"></i></span> ${num(n)}/${num(t)}</td>
+      <td>${esc(String(r.status).replace(/_/g, " "))}</td><td>${r.finalDaa != null ? num(r.finalDaa) : "—"}</td>
+      <td class="mono" title="${esc(r.executorBond)}">${esc(short(r.executorBond, 8))}</td></tr>`; }).join("");
+  return `<h2 class="sec">Executions the node holds (${num(l.executionsTotal)})</h2><div class="tblscroll"><table class="tbl"><thead><tr><th>Model</th><th>Claim</th><th>Rounds</th><th>Status</th><th>Final DAA</th><th>Producer</th></tr></thead><tbody>${body || `<tr><td colspan="6" class="dim">none</td></tr>`}</tbody></table></div>`;
+}
 async function renderLane() {
   const __g = routeGen;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -794,7 +809,7 @@ async function renderLane() {
     <h1 class="page">Execution lane</h1><div class="loading">Loading…</div>`;
 
   const paint = async () => {
-    const l = await palwRead("getPalwRoundLane");
+    const l = await palwRead("getPalwRoundLane", { executionsLimit: 64 });
     if (curSeg() !== "lane") return;
     if (l.__unsupported) { viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Execution lane</div>
       <h1 class="page">Execution lane</h1>${palwUnsupportedNote("getPalwRoundLane")}`; return; }
@@ -827,6 +842,10 @@ async function renderLane() {
 
     viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Execution lane</div>
       <h1 class="page">Execution lane <span style="font-size:14px;color:var(--mut)">ADR-0125</span></h1>
+      <h2 class="sec">Lane health</h2>
+      <div id="laneHealthPage">${scanLaneCardHtml(l, recent)}</div>
+      ${scanExecTableHtml(l)}
+      <h2 class="sec">Lane state</h2>
       <div class="kv">${head.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>
       <h2 class="sec">This round's permits (${(l.permits || []).length})</h2>
       <p style="color:var(--mut);margin:0 0 8px">A permit is one seat in the round, drawn per
@@ -923,6 +942,347 @@ async function renderModelLine(lineId) {
       <tbody>${roots || `<tr><td style="color:var(--mut)">none in force</td></tr>`}</tbody></table></div>`;
 }
 
+/* ===================== SCAN: model executions as first-class (lane SCAN, 2026-10-03) =====================
+   The execution lane's round blocks (algo-10) are merged into the DAG as reds BY DESIGN (ADR-0125): they
+   are never on the selected chain, so a block list that only knows "chain / merged" shows 120 of them
+   as noise. This section reads them as what they are — one execution per claim — and splits the home
+   page in two: consensus blocks, and model executions.
+
+   Everything here works on today's RPC: the round block's own header (PXR1 envelope → round, permit,
+   producing bond) joined to `getPalwClaims(bond)` (tickets minted / spent, first and last round).
+   A node that ships the node-side additions (verboseData.laneClass / verboseData.exec, and
+   getPalwRoundLane.health / recentExecutions) is read FIRST: the join becomes exact and the lane card
+   gains rejection counters. A round block is "merged", never "rejected", unless the node says so. */
+const SCAN_STALE_MS = 600000;              // the node's own threshold is read from health.staleAfterMs when present
+const scanCss = document.createElement("style");
+scanCss.textContent = `
+  .scan-filters{display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap}.scan-filters button{background:var(--bg2,#14121f);color:var(--txt,#ddd);border:1px solid var(--line,#2a2740);border-radius:9px;padding:4px 12px;font:inherit;cursor:pointer}.scan-filters button.on{background:var(--acc2,#a78bfa);color:#0b0a12;font-weight:650}
+  .scan-pager{display:flex;gap:10px;align-items:center;margin:8px 0 14px;font-size:13px}.scan-pager button{background:var(--bg2,#14121f);color:var(--txt,#ddd);border:1px solid var(--line,#2a2740);border-radius:8px;padding:3px 10px;cursor:pointer}.scan-pager button:disabled{opacity:.4;cursor:default}
+  .scan-exec-d{margin:14px 0}.scan-exec-d>summary{cursor:pointer;padding:6px 0}
+  .scan-bar{display:inline-block;width:92px;height:8px;border-radius:4px;background:var(--line,#2a2740);vertical-align:middle;overflow:hidden}
+  .scan-bar>i{display:block;height:100%;background:var(--acc2,#a78bfa)}
+  .scan-bar.done>i{background:var(--ok,#4ade80)}
+  .scan-row-x{cursor:pointer}.scan-sub td{background:rgba(255,255,255,.03);font-size:12.5px}
+  .scan-chip{display:inline-block;padding:1px 7px;border-radius:9px;font-size:12px;border:1px solid var(--line,#2a2740);margin:1px 3px 1px 0}
+  .scan-stale{color:#fff;background:#b45309;border-radius:9px;padding:1px 9px;font-weight:650}
+  .scan-ok{color:var(--ok,#4ade80)} .scan-bad{color:var(--bad,#f87171)} .scan-warn{color:var(--warn,#fbbf24)}
+  .scan-tl{list-style:none;margin:8px 0;padding:0;border-left:2px solid var(--line,#2a2740)}
+  .scan-tl li{margin:0 0 12px;padding:0 0 0 14px;position:relative}
+  .scan-tl li:before{content:"";position:absolute;left:-7px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--line,#2a2740)}
+  .scan-tl li.done:before{background:var(--ok,#4ade80)} .scan-tl li.active:before{background:var(--warn,#fbbf24)} .scan-tl li.fail:before{background:var(--bad,#f87171)}
+`;
+document.head.appendChild(scanCss);
+
+// ---- the round block's own header: PXR1 + borsh { version u8, network_domain h64, round u64, permit u16, bond(tx h64, ix u32), ... }
+function scanDecodeRound(raw){
+  try {
+    const b = llmBytes(raw);
+    if (!(b[0]===0x50 && b[1]===0x58 && b[2]===0x52 && b[3]===0x31)) return null;   // "PXR1"
+    const r = new LlmRd(b.subarray(4));
+    r.u8(); r.h64();
+    const round = r.u64(), permit = r.u16(), tx = r.h64(), ix = r.u32();
+    return { round, permit, bond: tx + ":" + ix };
+  } catch { return null; }
+}
+const scanIsRound = b => Number(b.algo) === 10;
+
+// ---- block KIND (design of the 5,300 release: heartbeat and PALW-BASE-0 give way to ONE liveness block,
+//      MISAKA-FALLBACK-V1): REAL (a real-model attempt) · EXEC (an execution round block) · FALLBACK (idle-time
+//      liveness) · RED (merged, not selected). The node's own field (verboseData.blockKind / kind, lane RS) is
+//      read first; otherwise the kind is derived from the header. Before the fence a heartbeat (algo-8) or a
+//      floor attempt shows as before, labelled "legacy".
+function scanKindOf(b){
+  const nk = String(b.nodeKind || "").toUpperCase();
+  const lc = String(b.laneClass || "").toUpperCase();
+  const exact = { REAL_ROUND: { k: "REAL_ROUND", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
+    LEGACY_HEARTBEAT: { k: "FALLBACK", legacy: true, what: "heartbeat" }, LEGACY_FLOOR: { k: "FALLBACK", legacy: true, what: "floor attempt" } };
+  if (exact[nk]) return exact[nk];   // lane RS's exact values; the substring matches below tolerate a rename
+  if (nk) {
+    if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
+    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "REAL_ROUND", legacy: false };
+    if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
+    if (/EXEC/.test(nk)) return { k: "EXEC", legacy: false };
+    if (/LEGACY.*HEARTBEAT|HEARTBEAT/.test(nk)) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
+    if (/LEGACY.*FLOOR|FLOOR/.test(nk)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+  }
+  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
+  if (Number(b.algo) === 8) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
+  if (b.classId && llmIsFloor(b.classId)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+  if (b.classId) return { k: "REAL", legacy: false };
+  return { k: "", legacy: false };
+}
+function scanKindPill(b){
+  const x = scanKindOf(b);
+  if (!x.k) return "";
+  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL_ROUND: "a real-model execution round: a canonical member of the DAG (lane EX)", REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
+  const cls = (x.k === "REAL" || x.k === "REAL_ROUND") ? "blue" : x.k === "EXEC" ? "chain" : "";
+  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "REAL_ROUND" ? "BLUE · canonical round" : x.k}${x.legacy ? " · legacy" : ""}</span>`;
+}
+// ---- claims of an executor bond (cached; one call per bond per 20 s)
+const scanClaimCache = new Map();   // bond -> { ts, rows|null }
+async function scanClaimsOf(bond){
+  const c = scanClaimCache.get(bond);
+  if (c && Date.now() - c.ts < 20000) return c.rows;
+  const r = await palwRead("getPalwClaims", { bond, role: "executor", includeTerminal: true, limit: 200 });
+  const rows = (r && !r.__unsupported && !r.__error && Array.isArray(r.claims)) ? r.claims : null;
+  scanClaimCache.set(bond, { ts: Date.now(), rows });
+  return rows;
+}
+function scanClaimClassName(classId){
+  const c = classId && LLM_CLASS_BY_ID[classId];
+  if (c) return c.name;
+  if (classId && llmIsFloor(classId)) return "PALW-BASE-0 · floor";
+  return classId ? "class " + short(classId, 6) : "—";
+}
+function scanPhaseLabel(c){
+  const p = String(c.phase || "");
+  if (p === "final") return { t: "Final", k: "scan-ok" };
+  if (p === "voided") return { t: "Expired/void" + (c.voidReason ? " · " + c.voidReason : ""), k: "scan-bad" };
+  if (p === "default_disputed" || Number(c.openCourts) > 0) return { t: "Court", k: "scan-warn" };
+  return { t: (p || "—").replace(/_/g, " "), k: "scan-warn" };
+}
+
+// ---- group the window's round blocks per claim
+//   exact when the node labels the block (verboseData.exec.claimId); otherwise joined to the producing
+//   bond's claims by ticket range; a block two claims of one bond could both own is shown under the bond.
+function scanGroupExecutions(rows, claimsByBond){
+  const groups = new Map();
+  const put = (key, init, blk) => { let g = groups.get(key); if (!g) { g = Object.assign({ key, blocks: [] }, init); groups.set(key, g); } g.blocks.push(blk); };
+  for (const b of rows) {
+    if (!scanIsRound(b)) continue;
+    const ri = b.round || {};
+    const ex = b.exec;
+    if (ex && ex.claimId) { put("c:" + ex.claimId, { claimId: ex.claimId, bond: ex.bond || ri.bond, classId: ex.classId || null }, b); continue; }
+    const claims = (ri.bond && claimsByBond.get(ri.bond)) || null;
+    const cand = claims ? claims.filter(c => Number(c.execTickets) > 0 && ri.round >= Number(c.execFirstRound) && ri.round <= Number(c.execLastRound)) : [];
+    if (cand.length === 1) put("c:" + cand[0].claimId, { claimId: cand[0].claimId, bond: ri.bond, classId: cand[0].classId }, b);
+    else if (cand.length > 1) put("b:" + ri.bond, { claimId: null, bond: ri.bond, ambiguous: cand.length, classId: cand[0].classId }, b);
+    else put("b:" + (ri.bond || "?"), { claimId: null, bond: ri.bond || null, unattributed: true }, b);
+  }
+  for (const g of groups.values()) {
+    const rowsOf = g.bond && claimsByBond.get(g.bond);
+    g.claim = (g.claimId && rowsOf) ? (rowsOf.find(c => c.claimId === g.claimId) || null) : null;
+    if (!g.claim && g.claimId && scanLaneExecs.has(g.claimId)) g.claim = scanLaneExecs.get(g.claimId);
+    g.blocks.sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+  }
+  return Array.from(groups.values()).sort((a, b) => Number(b.blocks[0].timestamp) - Number(a.blocks[0].timestamp));
+}
+const scanOpen = new Set();
+function scanRoundsCell(g){
+  const c = g.claim;
+  if (c && Number(c.execTickets) > 0) {
+    const n = Number(c.execTicketsSpent), t = Number(c.execTickets), pct = Math.min(100, Math.round(100 * n / t));
+    return `<span class="scan-bar ${n >= t ? "done" : ""}"><i style="width:${pct}%"></i></span> <b>${num(n)}</b>/${num(t)}`;
+  }
+  return `<span class="dim" title="tickets of this claim are not known to this page: ${g.ambiguous ? "the producing bond holds " + g.ambiguous + " claims whose ticket ranges overlap this round" : "no claim of the producing bond covers this round"}">${num(g.blocks.length)} seen</span>`;
+}
+const scanCanonical = b => scanKindOf(b).k === "REAL_ROUND";   // past the lane-EX fence the node says so; before it, round blocks are merged beside the chain
+function scanRoundLabel(b, g){
+  const q = b.exec && b.exec.quantumIndex;
+  const t = g.claim && Number(g.claim.execTickets);
+  if (q != null) return "Round " + String(Number(q) + 1).padStart(3, "0") + (t ? "/" + String(t).padStart(3, "0") : "");
+  return "round " + num(b.round && b.round.round);
+}
+function scanRenderExecutions(rows, claimsByBond){
+  const w = $("#execWrap"); if (!w) return;
+  const groups = scanGroupExecutions(rows, claimsByBond);
+  if (!groups.length) { w.innerHTML = `<div class="note">No execution round block in this window yet. Round blocks (algo-10) are merged beside the chain, one per permitted round of a Final's tickets.</div>`; return; }
+  const body = groups.slice(0, 20).map(g => {
+    const c = g.claim, open = scanOpen.has(g.key), newest = g.blocks[0];
+    const model = scanClaimClassName(g.classId || (c && c.classId));
+    const final = c ? (String(c.phase) === "final" ? "DAA " + num(c.phaseDaa) : scanPhaseLabel(c).t) : "—";
+    const claimCell = g.claimId ? `<a class="hash" href="#/claim/${esc(g.claimId)}/${esc(encodeURIComponent(g.bond || ""))}">${esc(short(g.claimId, 8))}</a>`
+      : `<span class="dim">${g.ambiguous ? g.ambiguous + " claims (overlap)" : "claim unknown"}</span>`;
+    const anchor = c && c.acceptedBlock ? linkBlock(c.acceptedBlock) : `<span class="dim">—</span>`;
+    const sub = !open ? "" : `<tr class="scan-sub"><td colspan="8">${g.blocks.slice(0, 120).map(b =>
+        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanCanonical(b) ? " · BLUE · canonical round" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("")}
+        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanCanonical) ? "They are canonical members of the DAG (BLUE)." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
+    return `<tr class="scan-row-x" data-k="${esc(g.key)}"><td>${open ? "▾" : "▸"} <span class="pill blue">${esc(model)}</span></td>
+      <td>${claimCell}</td><td class="nowrap">${scanRoundsCell(g)}</td><td>${esc(final)}</td>
+      <td class="mono" title="${esc(g.bond || "")}">${esc(short(g.bond || "—", 8))}</td>
+      <td class="num">${num(newest.daaScore)}</td><td>${anchor}</td><td class="right dim" title="${esc(dt(newest.timestamp))}">${ago(newest.timestamp)}</td></tr>${sub}`;
+  }).join("");
+  w.innerHTML = `<table class="tbl"><thead><tr><th>Model</th><th>Claim</th><th title="round blocks accepted / permitted (the claim's execution tickets spent / minted)">Rounds</th><th>Final</th><th>Producer</th><th class="num">DAA</th><th>Anchor</th><th class="right">Age</th></tr></thead><tbody>${body}</tbody></table>`;
+  w.querySelectorAll("tr.scan-row-x").forEach(tr => tr.onclick = () => {
+    const k = tr.getAttribute("data-k"); scanOpen.has(k) ? scanOpen.delete(k) : scanOpen.add(k);
+    scanRenderExecutions(rows, claimsByBond);
+  });
+}
+let scanExecBusy = false;
+async function scanRefreshExecutions(rows){
+  scanRenderExecutions(rows, new Map(Array.from(scanClaimCache, ([k, v]) => [k, v.rows]).filter(x => x[1])));   // instant paint from cache
+  if (scanExecBusy) return;
+  scanExecBusy = true;
+  try {
+    const bonds = new Set();
+    for (const b of rows) if (scanIsRound(b)) { const bd = (b.exec && b.exec.bond) || (b.round && b.round.bond); if (bd) bonds.add(bd); }
+    const by = new Map();
+    for (const bond of Array.from(bonds).slice(0, 12)) { const r = await scanClaimsOf(bond); if (r) by.set(bond, r); }
+    if ($("#execWrap")) scanRenderExecutions(rows, by);
+    if ($("#recentWrap")) scanPaintBlocks();
+  } finally { scanExecBusy = false; }
+}
+
+// ---- the lane card (home + lane page): today's getPalwRoundLane, plus the node's health when it has it
+let scanLane = { ts: 0, v: null };
+const scanLaneExecs = new Map();
+async function scanReadLane(force){
+  if (!force && Date.now() - scanLane.ts < 15000) return scanLane.v;
+  const v = await palwRead("getPalwRoundLane", { executionsLimit: 64 });
+  scanLane = { ts: Date.now(), v };
+  scanLaneExecs.clear();   // the node's own per-claim rows (next release): tickets/status without a getPalwClaims round trip
+  if (v && Array.isArray(v.recentExecutions)) for (const r of v.recentExecutions)
+    scanLaneExecs.set(r.claimId, { claimId: r.claimId, classId: r.classId, phase: r.phase || "final", phaseDaa: r.finalDaa, execTickets: r.tickets, execTicketsSpent: r.ticketsSpent, execFirstRound: r.firstRound, execLastRound: r.lastRound, acceptedBlock: r.acceptedBlock });
+  return v;
+}
+function scanLaneCardHtml(l, rows){
+  if (!l || l.__unsupported) return `<div class="card off">Lane health needs <b>getPalwRoundLane</b>, which this node does not serve.</div>`;
+  if (l.__error) return `<div class="card off">getPalwRoundLane failed: ${esc(l.__error)}</div>`;
+  const h = l.health || null;
+  const seen = (rows || []).filter(scanIsRound).sort((a, b) => Number(b.timestamp) - Number(a.timestamp))[0];
+  const lastMs = h && h.lastAccepted ? Number(h.lastAccepted.timestampMs) : (seen ? Number(seen.timestamp) : 0);
+  const staleAfter = h ? Number(h.staleAfterMs) : SCAN_STALE_MS;
+  const stale = h ? !!h.stale : (l.open && lastMs > 0 && Date.now() - lastMs > staleAfter);
+  const noWindow = !h && !(rows && rows.length);   // this page loaded no block window (a direct visit to #/lane) and the node has no health row
+  const noneYet = !lastMs && l.open && !noWindow;
+  const state = !l.armed ? `<span class="dim">not armed on this network</span>` : !l.open ? `<span class="dim">closed</span>`
+    : noWindow ? `<span class="scan-warn">open · liveness unknown here (open Home to load a block window)</span>` : stale ? `<span class="scan-stale">STALE</span>` : noneYet ? `<span class="scan-warn">no round block seen yet</span>` : `<span class="scan-ok">live</span>`;
+  const kv = [
+    ["Lane", state],
+    ["Last accepted round block", lastMs ? `${ago(lastMs)} <span class="dim">(${esc(dt(lastMs))}${h && h.lastAccepted ? " · DAA " + num(h.lastAccepted.daaScore) : ""})</span>` : "—"],
+    ["Latest round head", h && h.latest ? `${linkBlock(h.latest.hash)} <span class="dim">round ${num(h.latest.round)} · ${esc(h.latest.verdict)}</span>` : (seen ? `${linkBlock(seen.hash)} <span class="dim">seen on this page</span>` : "—")],
+    ["Permits this round / accepted in span", `${num((l.permits || []).length)} / ${num(l.acceptedInSpan)}`],
+    ["Finals gathered (span " + num(l.finalsSpan) + ")", num(l.finals)],
+  ];
+  let ref;
+  if (h) {
+    const tops = (h.topRefusals || []).map(t => `<span class="scan-chip">${esc(String(t.reason).replace(/_/g, " "))} · ${num(t.count)}</span>`).join("");
+    ref = `<div class="kv"><div class="row"><div class="key">Refused since last accepted</div><div class="val">${num(h.refusedSinceLastAccepted)} <span class="dim">(of ${num(h.refusedTotal)} refused · ${num(h.acceptedTotal)} accepted since this node's ledger began ${ago(h.ledgerSinceMs)})</span></div></div>
+      <div class="row"><div class="key">Top refusal reasons</div><div class="val">${tops || `<span class="dim">none</span>`}</div></div></div>`;
+  } else {
+    ref = `<div class="dim" style="margin-top:6px">Refusal counters and the exact last-accepted time come from the node's next release; until then this card reads the lane's state and this page's own window${stale ? " (STALE here means no round block in the window for " + Math.round(staleAfter / 60000) + " min)" : ""}.</div>`;
+  }
+  return `<div class="kv">${kv.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>${ref}`;
+}
+async function scanPaintLaneCard(rows){
+  const el = $("#laneHealth"); if (!el) return;
+  const l = await scanReadLane(false);
+  const el2 = $("#laneHealth"); if (el2) el2.innerHTML = scanLaneCardHtml(l, rows);
+}
+
+// ---- model page: #/models/<class id | name>
+async function scanResolveClass(arg){
+  const a = decodeURIComponent(arg || "");
+  if (/^[0-9a-f]{64,}$/i.test(a)) return a.toLowerCase();
+  const hit = Object.values(LLM_CLASS_BY_ID || {}).find(c => c.name === a || (c.model && c.model === a));
+  if (hit && hit.id) return hit.id;
+  return a;
+}
+function scanKnownBonds(classId){
+  const s = new Set();
+  for (const b of (recent || [])) {
+    if (scanIsRound(b) && b.round && b.round.bond) s.add(b.round.bond);
+  }
+  for (const k of scanClaimCache.keys()) s.add(k);
+  return Array.from(s);
+}
+async function renderModelClass(arg){
+  const __g = routeGen;
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  const classId = await scanResolveClass(arg);
+  const head = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/registry">Models</a> › ${esc(scanClaimClassName(classId))}</div>`;
+  viewFor(__g).innerHTML = head + `<h1 class="page">${esc(scanClaimClassName(classId))}</h1><div class="loading">Loading…</div>`;
+  const [m, seats, reg] = await Promise.all([
+    palwRead("getPalwModel", { classId }), palwRead("getPalwPanelSeats", { classId }), palwRead("getPalwModelRegistry")]);
+  if (curSeg() !== "models") return;
+  const regRow = reg && Array.isArray(reg.classes) ? reg.classes.find(c => c.classId === classId || c.class_id === classId) : null;
+  const okm = m && !m.__unsupported && !m.__error && m.found;
+  const kv = [];
+  if (okm) {
+    kv.push(["Status", stateBadge(m.registryState || m.classStatus)], ["Model", esc(m.modelName || scanClaimClassName(classId))],
+      ["Context", num(m.nCtx)], ["Ready seats / required", `${num(m.readySeats)} / ${num(m.requiredReadySeats)}`],
+      ["Claims in flight", num(m.inflightClaims)], ["Share", (Number(m.sharePermille) / 10).toFixed(1) + " %"],
+      ["Artifact root", `<span class="hash">${esc(short(m.artifactRoot, 14))}</span>`]);
+  } else if (regRow) {
+    kv.push(["Status", stateBadge(regRow.state || regRow.lifecycle || regRow.registryState)], ["Ready seats", num(regRow.readySeatsNow)]);
+  } else kv.push(["Status", `<span class="dim">this node does not report the class (getPalwModel / registry)</span>`]);
+  kv.push(["Class id", `<span class="hash">${esc(classId)}</span>`]);
+  const seatRows = (seats && Array.isArray(seats.seats) ? seats.seats : []);
+  const seatHtml = seatRows.map(s => `<tr><td class="mono" title="${esc(s.bondOutpoint)}">${esc(short(s.bondOutpoint, 10))}</td>
+    <td>${s.ready ? `<span class="scan-ok">ready</span>` : `<span class="scan-warn">not ready</span>`}</td><td>${s.eligible ? "eligible" : "—"}</td>
+    <td class="num">${num(s.assigned)}</td><td class="dim">${esc(s.hold ? (s.hold.reason || s.hold.kind || JSON.stringify(s.hold)) : "")}</td></tr>`).join("");
+  // producers + their claims of this class
+  const bonds = Array.from(new Set(scanKnownBonds(classId).concat(seatRows.map(x => x.bondOutpoint).filter(Boolean)))).slice(0, 24);   // producers seen on the page + the class's seats (genesis bonds are both)
+  const claims = [];
+  const prod = new Map();
+  for (const bond of bonds) {
+    const rows = await scanClaimsOf(bond);
+    if (!rows) continue;
+    for (const c of rows) if (c.classId === classId) { claims.push(c); prod.set(bond, (prod.get(bond) || 0) + 1); }
+  }
+  claims.sort((a, b) => Number(b.acceptedDaa) - Number(a.acceptedDaa));
+  const claimHtml = claims.slice(0, 60).map(c => { const p = scanPhaseLabel(c); return `<tr>
+      <td><a class="hash" href="#/claim/${esc(c.claimId)}/${esc(encodeURIComponent(c.executorBond))}">${esc(short(c.claimId, 8))}</a></td>
+      <td class="${p.k}">${esc(p.t)}</td><td class="num">${num(c.acceptedDaa)}</td>
+      <td class="nowrap">${Number(c.execTickets) > 0 ? `${num(c.execTicketsSpent)}/${num(c.execTickets)}` : `<span class="dim">${esc(c.execStage || "—")}</span>`}</td>
+      <td class="mono" title="${esc(c.executorBond)}">${esc(short(c.executorBond, 8))}</td></tr>`; }).join("");
+  if (curSeg() !== "models") return;
+  viewFor(__g).innerHTML = head + `<h1 class="page">${esc(scanClaimClassName(classId))} <span class="dim" style="font-size:13px">model class</span></h1>
+    <div class="kv">${kv.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>
+    <h2 class="sec">Producers (${prod.size})</h2>
+    <div class="note">${prod.size ? Array.from(prod, ([b, n]) => `<span class="scan-chip mono" title="${esc(b)}">${esc(short(b, 8))} · ${n} claim(s)</span>`).join("") : "No producer of this class among the bonds this page has seen (those that produced a round block in its window)."}</div>
+    <h2 class="sec">Panel seats (${seatRows.length})</h2>
+    <div class="tblscroll"><table class="tbl"><thead><tr><th>Seat bond</th><th>Readiness</th><th>Eligible</th><th class="num">Assigned</th><th>Hold</th></tr></thead>
+      <tbody>${seatHtml || `<tr><td colspan="5" class="dim">${seats && seats.__unsupported ? "getPalwPanelSeats is not served by this node" : "no seat for this class"}</td></tr>`}</tbody></table></div>
+    <h2 class="sec">Claims (${claims.length}) <span class="dim" style="font-size:13px">Final / Court / Expired · rounds spent/permitted</span></h2>
+    <div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>State</th><th class="num">Accepted DAA</th><th>Rounds</th><th>Producer</th></tr></thead>
+      <tbody>${claimHtml || `<tr><td colspan="5" class="dim">no claim of this class among the known producers</td></tr>`}</tbody></table></div>`;
+}
+
+// ---- claim page: #/claim/<claim id>[/<executor bond>]
+async function renderClaim(arg){
+  const __g = routeGen;
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  const [idRaw, bondRaw] = String(arg || "").split("/");
+  const id = decodeURIComponent(idRaw || "").toLowerCase();
+  let bond = bondRaw ? decodeURIComponent(bondRaw) : "";
+  const head = `<div class="crumbs"><a href="#/">Home</a> › Claim</div>`;
+  viewFor(__g).innerHTML = head + `<h1 class="page">Claim <span class="mono" style="font-size:15px">${esc(short(id, 12))}</span></h1><div class="loading">Loading…</div>`;
+  if (!/^[0-9a-f]{16,}$/.test(id)) return showErrFor(__g, "A claim id is hex.");
+  let claim = null;
+  const tryBond = async b => { const rows = await scanClaimsOf(b); const c = rows && rows.find(x => x.claimId === id); if (c) { claim = c; bond = b; } };
+  if (bond) await tryBond(bond);
+  if (!claim) for (const b of scanKnownBonds()) { await tryBond(b); if (claim) break; }
+  const asg = await palwRead("getPalwPanelAssignments", { claimId: id, seatId: "" });
+  if (curSeg() !== "claim") return;
+  const a = asg && Array.isArray(asg.assignments) ? asg.assignments[0] : null;
+  if (!claim && !a) return showErrFor(__g, "This node holds no record of that claim among the bonds this page knows (open it from a model or execution row), and it has no panel assignment for it.");
+  const c = claim || {};
+  const roundBlocks = (recent || []).filter(b => scanIsRound(b) && ((b.exec && b.exec.claimId === id) ||
+      (!b.exec && b.round && b.round.bond === bond && c.execTickets > 0 && b.round.round >= Number(c.execFirstRound) && b.round.round <= Number(c.execLastRound))));
+  const st = (done, active, fail) => fail ? "fail" : done ? "done" : active ? "active" : "";
+  const phase = String(c.phase || ""), isFinal = phase === "final", isVoid = phase === "voided";
+  const steps = [];
+  steps.push({ k: st(!!c.acceptedDaa), n: "Attempt", d: c.acceptedDaa ? `accepted at DAA ${num(c.acceptedDaa)} in ${c.acceptedBlock ? linkBlock(c.acceptedBlock) : "—"}${c.reboundDaa ? ` · re-anchored at ${num(c.reboundDaa)}` : ""}` : "not seen" });
+  steps.push({ k: st(c.boundDaa != null, phase === "provisional", false), n: "Panel bind", d: c.boundDaa != null ? `bound at DAA ${num(c.boundDaa)} · ${num((c.seats || []).length)} seat(s)` : "waiting for the panel draw" + (c.deadlineDaa && phase === "provisional" ? ` (by DAA ${num(c.deadlineDaa)})` : "") });
+  const rc = a ? `${num(a.validReceiptSeats)} Valid receipt seat(s) of ${num(a.selectedPanelSeats)} · ${esc(a.licensedState || "")}${a.fullSeat ? " · full seat " + esc(short(a.fullSeat, 8)) : ""}` : "assignment not reported by this node";
+  steps.push({ k: st(["receipt_licensed", "final"].includes(phase), phase === "panel_bound", isVoid && c.boundDaa != null && !isFinal), n: "Receipts", d: rc + (phase === "panel_bound" && c.deadlineDaa ? ` · receipt window ends DAA ${num(c.deadlineDaa)}` : "") });
+  steps.push({ k: st(isFinal, ["receipt_licensed", "default_disputed"].includes(phase), isVoid), n: "Final / Court", d: isFinal ? `Final at DAA ${num(c.phaseDaa)}` : isVoid ? `voided at DAA ${num(c.phaseDaa)} · ${esc(c.voidReason || "")}` : phase === "default_disputed" || Number(c.openCourts) > 0 ? `court open (${num(c.openCourts)}) · deadline DAA ${num(c.deadlineDaa)}` : phase === "receipt_licensed" ? `licensed; Final floor at DAA ${num(c.deadlineDaa)}` : "—" });
+  const stg = String(c.execStage || "");
+  steps.push({ k: st(stg === "scheduled", stg === "credited" || stg === "maturing", false), n: "Maturity", d: stg ? `execution lane: ${esc(stg)} (span ${num(c.execSpan)}, credit ${num(c.execCredit)})${c.vestingStage ? " · reward " + esc(c.vestingStage) : ""}` : isFinal ? "earned no execution credit, or the state no longer keeps it" : "—" });
+  const t = Number(c.execTickets) || 0, n = Number(c.execTicketsSpent) || 0;
+  steps.push({ k: st(t > 0 && n >= t, t > 0 && n < t, isVoid && t > 0), n: "Execution rounds", d: t > 0 ? `<span class="scan-bar ${n >= t ? "done" : ""}"><i style="width:${Math.round(100 * n / t)}%"></i></span> <b>${num(n)}</b> accepted of ${num(t)} permitted · rounds ${num(c.execFirstRound)}–${num(c.execLastRound)}` : "no tickets minted" });
+  const kv = [["Claim id", `<span class="hash">${esc(id)}</span>`], ["Model", `<a href="#/models/${esc(c.classId || "")}">${esc(scanClaimClassName(c.classId))}</a>`],
+    ["Producer bond", `<span class="mono">${esc(bond || "—")}</span>`], ["Source", c.isFreePrompt ? "free-prompt" : "attempt"]];
+  viewFor(__g).innerHTML = head + `<h1 class="page">Claim <span class="mono" style="font-size:15px">${esc(short(id, 12))}</span></h1>
+    <div class="kv">${kv.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>
+    <h2 class="sec">Timeline</h2>
+    <ol class="scan-tl">${steps.map(s => `<li class="${s.k}"><b>${s.n}</b> <span class="dim">·</span> ${s.d}</li>`).join("")}</ol>
+    <h2 class="sec">Round blocks seen (${roundBlocks.length}) <span class="dim" style="font-size:13px">on this page's recent window</span></h2>
+    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
+}
+/* ===================== end SCAN ===================== */
+
 function route(){
   routeGen++;
   blockAddedFns = [];   // a re-render of the same hash gets no hashchange, so the listener reset lives here too
@@ -946,6 +1306,9 @@ function route(){
   if (path === "registry" || path === "classes") return renderRegistry();
   if (path === "lane" || path === "rounds")     return renderLane();
   if (path === "line" || path === "model")      return renderModelLine(decodeURIComponent(arg));
+  if (path === "models" && arg)                 return renderModelClass(arg);
+  if (path === "models")                        return renderRegistry();
+  if (path === "claim" && arg)                  return renderClaim(arg);
   return renderHome();
 }
 window.addEventListener("hashchange", () => {
@@ -1028,8 +1391,14 @@ async function renderHome(){
       <a class="card" href="#/lane"><b>Execution lane</b><span>permits · domains · finals</span></a>
       <a class="card" href="#/llm"><b>LLM jobs</b><span>submissions · verification</span></a>
     </div>
-    <div class="sec-row"><h2 class="sec">Recent blocks</h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
+    <div class="sec-row"><h2 class="sec">Execution lane</h2><a class="sec-more" href="#/lane">Lane detail →</a></div>
+    <div id="laneHealth" class="note"><div class="spin">Reading the lane…</div></div>
+    <div class="sec-row"><h2 class="sec">Recent blocks <span class="dim" style="font-size:13px">(every block in arrival order · each model-execution round block on its own row)</span></h2><a class="sec-more" href="#/llm">LLM jobs view →</a></div>
+    <div id="blkFilters" class="scan-filters"></div>
     <div id="recentWrap" class="tblscroll"><div class="spin">Loading blocks…</div></div>
+    <div id="blkPager" class="scan-pager"></div>
+    <details id="execDetails" class="scan-exec-d"><summary><b>Recent model executions</b> <span class="dim" style="font-size:13px">(one row per claim · click a row for its rounds)</span> <a class="sec-more" href="#/registry" style="float:right">Models →</a></summary>
+      <div id="execWrap" class="tblscroll"><div class="spin">Reading executions…</div></div></details>
     <div class="sec-row"><h2 class="sec">Latest transactions <span class="dim" style="font-size:13px">(node-direct · newest first)</span></h2><a class="sec-more" href="#/transactions">View all →</a></div>
     <div id="txWrap" class="tblscroll"><div class="spin">Loading transactions…</div></div>`;
   if (loadCache()) renderRecent();   // instant paint from the previous session; refreshed below
@@ -1275,6 +1644,74 @@ async function updateRecent(sink, liveBlue){
   renderRecent();
 }
 
+
+// ---- ONE "Recent blocks" table: every block in arrival order, round blocks individually, a Type column and filters.
+//   C-BLUE      consensus: a chain/blue attempt, a legacy heartbeat or floor block
+//   E / E-BLUE  model execution: a round block. Before the lane-EX fence it is merged beside the chain, not canonical
+//               ("E · model execution (merged)"); once the node says REAL_ROUND it is canonical ("E-BLUE").
+//   FALLBACK    the idle-time liveness block (blockKind FALLBACK)
+//   RED         not selected: a non-chain, non-round block, or a block the node marked RED
+let scanAll = [], scanFilter = "all", scanPage = 0;
+const SCAN_PAGE = 25;
+function scanTypeOf(b){
+  const kind = scanKindOf(b), lc = String(b.laneClass || "").toUpperCase();
+  if (scanIsRound(b)) {
+    if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="a round block the node judged without a permit: merged, its transactions not accepted">RED · not selected</span>` };
+    if (kind.k === "REAL_ROUND") return { cat: "exec", pill: `<span class="pill blue" title="a canonical member of the DAG (lane EX)">E-BLUE · model execution</span>` };
+    return { cat: "exec", pill: `<span class="pill chain" title="an execution round block: merged into the DAG beside the chain, not yet canonical on this network">E · model execution (merged)</span>` };
+  }
+  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="MISAKA-FALLBACK-V1: an idle-time liveness block">FALLBACK</span>` };
+  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, its transactions not accepted">RED · not selected</span>` };
+  if (b.isChain || lc === "BLUE") return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}${kind.legacy ? " · legacy " + kind.what : ""}">C-BLUE · consensus</span>` };
+  return { cat: "red", pill: `<span class="pill red" title="in the DAG but not on the selected chain (a red, or not merged yet); this is not a rejection">RED · not selected</span>` };
+}
+function scanBlockContext(b, lookup){
+  if (!scanIsRound(b)) return { model: recentModelCell(b), claim: "" };
+  const g = lookup.get(b.hash);
+  const classId = (g && (g.classId || (g.claim && g.claim.classId))) || (b.exec && b.exec.classId) || null;
+  const model = classId ? `<span class="pill blue">${esc(scanClaimClassName(classId))}</span>` : `<span class="dim">model unknown</span>`;
+  const cid = (g && g.claimId) || (b.exec && b.exec.claimId);
+  const bond = (g && g.bond) || (b.exec && b.exec.bond) || (b.round && b.round.bond) || "";
+  let claim = cid ? `<a class="hash" href="#/claim/${esc(cid)}/${esc(encodeURIComponent(bond))}">${esc(short(cid, 8))}</a>` : `<span class="dim">claim unknown</span>`;
+  const t = g && g.claim && Number(g.claim.execTickets);
+  const q = b.exec && b.exec.quantumIndex;
+  if (q != null) claim += ` <span class="dim">· Round ${num(Number(q) + 1)}${t ? "/" + num(t) : ""}</span>`;
+  return { model, claim };
+}
+function scanPaintBlocks(){
+  const w = $("#recentWrap"); if (!w) return;
+  const f = $("#blkFilters"), pg = $("#blkPager");
+  const byBond = new Map(Array.from(scanClaimCache, ([k, v]) => [k, v.rows]).filter(x => x[1]));
+  const lookup = new Map();
+  for (const g of scanGroupExecutions(scanAll, byBond)) for (const b of g.blocks) lookup.set(b.hash, g);
+  const typed = scanAll.map(b => ({ b, t: scanTypeOf(b) }));
+  const count = c => typed.filter(x => c === "all" || x.t.cat === c).length;
+  const filters = [["all", "All"], ["consensus", "Consensus"], ["exec", "Model execution"], ["red", "Red"]];
+  if (f) {
+    f.innerHTML = filters.map(([k, l]) => `<button data-f="${k}" class="${scanFilter === k ? "on" : ""}">${l} <span class="dim">${count(k)}</span></button>`).join("");
+    f.querySelectorAll("button").forEach(btn => btn.onclick = () => { scanFilter = btn.getAttribute("data-f"); scanPage = 0; shownHashes = new Set(); scanPaintBlocks(); });
+  }
+  const list = typed.filter(x => scanFilter === "all" || x.t.cat === scanFilter);
+  const pages = Math.max(1, Math.ceil(list.length / SCAN_PAGE));
+  if (scanPage >= pages) scanPage = pages - 1;
+  const rows = list.slice(scanPage * SCAN_PAGE, (scanPage + 1) * SCAN_PAGE);
+  const firstPaint = shownHashes.size === 0;
+  w.innerHTML = `<table class="tbl"><thead><tr>
+      <th>Block hash</th><th>Type</th><th>Model</th><th title="a round block's claim and round">Claim · round</th><th class="num">DAA</th><th class="num">Blue</th>
+      <th class="num">Parents</th><th class="num">Txs</th><th class="right">Age</th></tr></thead><tbody>${rows.map(({ b, t }) => { const c = scanBlockContext(b, lookup); return `
+      <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? "rowNew" : ""}"><td>${linkBlock(b.hash)}</td><td class="nowrap">${t.pill}</td>
+        <td class="nowrap">${c.model}</td><td class="nowrap">${c.claim}</td>
+        <td class="num">${num(b.daaScore)}</td><td class="num">${num(b.blueScore)}</td><td class="num">${num(b.nParents)}</td><td class="num">${num(b.nTx)}</td>
+        <td class="right dim" title="${esc(dt(b.timestamp))}">${ago(b.timestamp)}</td></tr>`; }).join("") || `<tr><td colspan="9" class="dim">no block of this type in the window</td></tr>`}</tbody></table>`;
+  shownHashes = new Set(rows.map(x => x.b.hash));
+  if (pg) {
+    pg.innerHTML = `<button id="blkPrev" ${scanPage <= 0 ? "disabled" : ""}>← newer</button><span>page ${scanPage + 1} / ${pages} · ${num(list.length)} blocks in the window</span><button id="blkNext" ${scanPage >= pages - 1 ? "disabled" : ""}>older →</button>`;
+    const pv = $("#blkPrev"), nx = $("#blkNext");
+    if (pv) pv.onclick = () => { scanPage--; shownHashes = new Set(); scanPaintBlocks(); };
+    if (nx) nx.onclick = () => { scanPage++; shownHashes = new Set(); scanPaintBlocks(); };
+  }
+}
+
 function renderRecent(){
   const w = $("#recentWrap"); if (!w) return;
   if (!recent.length){ w.innerHTML = `<div class="spin">No blocks yet…</div>`; shownHashes = new Set(); return; }
@@ -1285,23 +1722,14 @@ function renderRecent(){
   // adjacent pairs had the UPPER row older than the row beneath it, by up to 1h50m. A table whose
   // Age column walks backwards is what a reader calls broken. So sort a COPY for display only —
   // the stored order, and every control path that reads it, is untouched.
-  const rows = recent.slice().sort((a,b) =>
+  const all = recent.slice().sort((a,b) =>
     (Number(b.timestamp) - Number(a.timestamp)) ||
     (Number(b.blueScore) - Number(a.blueScore)) ||
     (Number(b.daaScore)  - Number(a.daaScore)));
-  w.innerHTML = `<table class="tbl"><thead><tr>
-      <th>Block hash</th><th class="num">DAA</th><th class="num">Blue</th>
-      <th class="num">Parents</th><th class="num">Txs</th><th title="the model that mined the block, from its header">Model</th><th class="right">Age</th>
-    </tr></thead><tbody>${rows.map(b => `
-      <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? 'rowNew' : ''}"><td>${linkBlock(b.hash)}</td>
-          <td class="num">${num(b.daaScore)}</td>
-          <td class="num">${num(b.blueScore)}</td>
-          <td class="num">${num(b.nParents)}</td>
-          <td class="num">${num(b.nTx)}</td>
-          <td class="nowrap">${recentModelCell(b)}</td>
-          <td class="right dim" title="${esc(dt(b.timestamp))}">${ago(b.timestamp)}</td></tr>`).join("")}
-    </tbody></table>`;
-  shownHashes = new Set(rows.map(b => b.hash));   // baseline for the next render's new-row flash
+  scanRefreshExecutions(all);
+  scanPaintLaneCard(all);
+  scanAll = all;
+  scanPaintBlocks();
 }
 
 /* ----------------------- LATEST TRANSACTIONS (home) -------------------- */
@@ -4287,6 +4715,8 @@ const MTP_CATS = [
   ["c5", "C5 · LLM work",                "LLM mining, seat verification, model registration — weighted heaviest"],
 ];
 // Ledger values are milli-points (1 point = 1000 milli-points).
+// carried_over (t11) merge: the service now answers cumulative (this chain) + carried_over (retired testnet-11 ledgers).
+function mtpSum(cum, car){ const o = {}; for (const k of ["c1","c2","c3","c4","c5","c6","total"]) o[k] = Number((cum||{})[k]||0) + Number((car||{})[k]||0); return o; }
 function mtpPts(m){ return (m==null) ? "—" : (Number(m)/1000).toLocaleString("en-US",{maximumFractionDigits:3}); }
 // Like apiGet, but it throws: a 404 ("no such id") must not look like an outage.
 async function mtpGet(path){
@@ -4440,27 +4870,29 @@ async function renderMtp(id){
     if (board) board.innerHTML = `<div class="err">Points service unreachable — ${esc(boardRes.reason.message)}</div>`;
   } else {
     const b = boardRes.value, entries = b.entries || [];
-    const issued = entries.reduce((s,e)=> s + Number((e.cumulative&&e.cumulative.total)||0), 0);
+    const issued = entries.reduce((s,e)=> s + Number(e.combined_total != null ? e.combined_total : ((e.cumulative&&e.cumulative.total)||0)), 0);
+    const co = b.carried_over || null;
     if (cards) cards.innerHTML = [
       ["Scored network", esc(b.network || "—"), "from the signed ledgers"],
       ["Participants",   num(b.participants),   "ids with at least one scored epoch"],
       ["Epochs counted", num(b.epochs_counted), "latest issue of each"],
       ["Latest epoch",   b.latest_epoch != null ? num(b.latest_epoch) : "—", "most recent published ledger"],
-      ["Points issued",  mtpPts(issued),        "C1–C5 across all ids"],
-    ].map(c=>`<div class="card"><div class="k">${c[0]}</div><div class="v sm">${c[1]}</div><div class="sub">${c[2]}</div></div>`).join("");
+      ["Points issued",  mtpPts(issued),        "C1–C5 across all ids" + (co ? " (incl. carried over)" : "")],
+    ].concat(co ? [["Carried over", esc(co.network), num(co.epochs_counted) + " epochs · " + num(co.participants) + " ids from the retired chain"]] : []).map(c=>`<div class="card"><div class="k">${c[0]}</div><div class="v sm">${c[1]}</div><div class="sub">${c[2]}</div></div>`).join("");
     if (board) board.innerHTML = !entries.length
       ? `<div class="note">No epoch has been published yet — the board fills in as soon as the first signed ledger lands.</div>`
       : `<table class="tbl"><thead><tr><th class="num">#</th><th>Ledger id</th>
            <th class="num">C1</th><th class="num">C2</th><th class="num">C3</th><th class="num">C4</th><th class="num">C5</th>
-           <th class="num">Total</th></tr></thead><tbody>${
-          entries.map(e => { const c = e.cumulative || {};
+           <th class="num">This chain</th><th class="num">Carried over</th><th class="num">Total</th></tr></thead><tbody>${
+          entries.map(e => { const c = mtpSum(e.cumulative, e.carried_over);
             return `<tr><td class="num">${num(e.rank)}</td><td>${mtpLinkId(e.id)}</td>
               <td class="num">${mtpPts(c.c1)}</td><td class="num">${mtpPts(c.c2)}</td>
               <td class="num">${mtpPts(c.c3)}</td><td class="num">${mtpPts(c.c4)}</td><td class="num">${mtpPts(c.c5)}</td>
-              <td class="num coin">${mtpPts(c.total)}</td></tr>`; }).join("")
+              <td class="num">${mtpPts((e.cumulative||{}).total)}</td><td class="num">${mtpPts((e.carried_over||{}).total)}</td>
+              <td class="num coin">${mtpPts(e.combined_total != null ? e.combined_total : c.total)}</td></tr>`; }).join("")
         }</tbody></table>
         <div class="note">The board sums all five categories — C5 (LLM work) included, and weighted heaviest since rules v6.
-          Ranking is by total, ties broken by id, and a reissued epoch replaces its earlier issue instead of adding to it.</div>`;
+          Ranking is by total (this chain + points carried over from the retired testnet-11 ledgers), ties broken by id, and a reissued epoch replaces its earlier issue instead of adding to it.</div>`;
   }
   const ver = document.getElementById("mtpVerify");
   if (ver) ver.innerHTML = mtpVerifySection(
@@ -4486,11 +4918,17 @@ async function renderMtpId(id){
   try { op = await mtpGet(`${MTP_BASE}/operator`); } catch {}
   if (curSeg() !== "mtp" && curSeg() !== "points") return;   // navigated away while loading
 
-  const c = v.cumulative || {}, epochs = v.epochs || [];
-  const cards = [["Total points", mtpPts(c.total), "C1–C5 cumulative"]]
+  const cb = v.carried_over || null;
+  const c = mtpSum(v.cumulative, cb && cb.cumulative);
+  const own = (v.epochs || []).map(e => Object.assign({}, e, {__own: true}));
+  const carried = cb ? (cb.epochs || []).map(e => Object.assign({}, e, {__carried: true})) : [];
+  const epochs = own.concat(carried);
+  const grand = v.combined_total != null ? v.combined_total : c.total;
+  const cards = [["Total points", mtpPts(grand), "C1–C5 cumulative" + (cb ? " · this chain + carried over" : "")]]
+    .concat(cb ? [["Carried over", mtpPts((cb.cumulative||{}).total), esc(cb.network) + " ledgers, epochs " + (cb.epochs||[]).map(e=>e.epoch).sort((a,b)=>a-b).join(", ")]] : [])
     .concat(MTP_CATS.map(([k,name,]) => [name, mtpPts(c[k]), k === "c5" ? "provisional — settles no tokens" : "cumulative"]));
   viewFor(__g).innerHTML = `${crumbs}
-    <h1 class="page">${esc(v.id)} <span class="dim" style="font-size:14px">· ${num(epochs.length)} scored epoch${epochs.length===1?"":"s"}${
+    <h1 class="page">${esc(v.id)} <span class="dim" style="font-size:14px">· ${num(own.length)} scored epoch${own.length===1?"":"s"}${carried.length?` + ${num(carried.length)} carried over`:""}${
       v.latest_epoch!=null?` · latest epoch ${num(v.latest_epoch)}`:""}</span></h1>
     <div class="cards">${cards.map(c2=>`<div class="card"><div class="k">${esc(c2[0])}</div><div class="v sm">${c2[1]}</div><div class="sub">${esc(c2[2])}</div></div>`).join("")}</div>
     <h2 class="sec">Per-epoch breakdown</h2>
@@ -4499,19 +4937,20 @@ async function renderMtpId(id){
     <table class="tbl"><thead><tr><th class="num">Epoch</th><th>Network</th>
       <th class="num">C1</th><th class="num">C2</th><th class="num">C3</th><th class="num">C4</th><th class="num">C5</th>
       <th class="num">Total</th><th>Signed ledger</th></tr></thead><tbody>${
-      epochs.slice().sort((a,b)=>b.epoch-a.epoch).map(e => {
+      epochs.slice().sort((a,b)=> (a.__carried?1:0)-(b.__carried?1:0) || b.epoch-a.epoch).map(e => {
         const tot = Number(e.c1||0)+Number(e.c2||0)+Number(e.c3||0)+Number(e.c4||0)+Number(e.c5||0);
         return `<tr><td class="num">${num(e.epoch)}${e.superseded?` <span class="pill blue" title="an earlier issue of this epoch was superseded">issue ${num(e.issue)}</span>`:""}</td>
           <td>${esc(e.network||"—")}</td>
           <td class="num">${mtpPts(e.c1)}</td><td class="num">${mtpPts(e.c2)}</td><td class="num">${mtpPts(e.c3)}</td>
           <td class="num">${mtpPts(e.c4)}</td><td class="num">${mtpPts(e.c5)}</td>
           <td class="num coin">${mtpPts(tot)}</td>
-          <td><a href="${MTP_BASE}/epoch/${encodeURIComponent(e.epoch)}" target="_blank" rel="noopener">${esc(e.file||("epoch-"+e.epoch))}</a>
+          <td>${e.__carried ? `${esc(e.file||("epoch-"+e.epoch))} <span class="pill blue">carried over</span><div class="dim" style="font-size:11px">retired ${esc(e.network||"")} ledger (signed by the same operator key)</div>`
+              : `<a href="${MTP_BASE}/epoch/${encodeURIComponent(e.epoch)}" target="_blank" rel="noopener">${esc(e.file||("epoch-"+e.epoch))}</a>
               <div class="dim" style="font-size:11px"><a href="${MTP_BASE}/epoch/${encodeURIComponent(e.epoch)}/facts" target="_blank" rel="noopener">facts</a> ·
-                  <a href="${MTP_BASE}/epoch/${encodeURIComponent(e.epoch)}/all" target="_blank" rel="noopener">all issues</a></div></td></tr>
+                  <a href="${MTP_BASE}/epoch/${encodeURIComponent(e.epoch)}/all" target="_blank" rel="noopener">all issues</a></div>`}</td></tr>
         <tr><td colspan="9" style="padding-top:0">
           <div class="dim" style="font-size:11.5px">rules ${esc(short(e.rules_hash,16))} · inputs ${esc(short(e.inputs_hash,16))}</div>
-          ${mtpEvidence(e.evidence)}</td></tr>`;
+          ${e.__carried ? `<div class="dim" style="font-size:11px">${num(e.evidence_count||0)} evidence link${(e.evidence_count||0)===1?"":"s"} in the signed ledger</div>` : mtpEvidence(e.evidence)}</td></tr>`;
       }).join("")}</tbody></table></div>`}
     <h2 class="sec">Verify it yourself</h2>
     ${mtpVerifySection(op, v.latest_epoch)}`;

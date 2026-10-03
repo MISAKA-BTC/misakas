@@ -3047,7 +3047,9 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         verification: item.verification.clone(),
     }
 });
-try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);
+try_from!(_item: &protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest, {
+    Self { executions_limit: 0 }
+});
 try_from!(item: &protowire::RpcPalwRoundLaneStage, kaspa_rpc_core::RpcPalwRoundLaneStage, {
     Self {
         activation_daa: item.activation_daa,
@@ -3093,6 +3095,8 @@ try_from!(item: &protowire::GetPalwRoundLaneResponseMessage, RpcResult<kaspa_rpc
         finals: item.finals,
         next_round_permits: u16::try_from(item.next_round_permits)
             .map_err(|_| RpcError::General(format!("next_round_permits {} is not a width", item.next_round_permits)))?,
+        // Lane SCAN: not carried over gRPC (wRPC only).
+        ..Default::default()
     }
 });
 try_from!(item: &protowire::GetPalwSettlementRequestMessage, kaspa_rpc_core::GetPalwSettlementRequest, {

@@ -265,6 +265,20 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Lane SCAN: the executions the sink's state holds, newest first, and how many it holds
+    /// (`getPalwRoundLane`'s `recentExecutions`). `None` where the node keeps no V2 state.
+    fn palw_recent_executions_v1(&self, limit: usize) -> Option<(Vec<crate::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        let _ = limit;
+        None
+    }
+
+    /// Lane SCAN: a block's lane class (`BLUE`/`EXEC`/`RED`) and, for a round block, its envelope and
+    /// the node's verdict — `getBlock`'s verbose `laneClass`. `None` for an unknown block.
+    fn palw_block_lane_v1(&self, hash: crate::BlockHash) -> Option<crate::palw_exec_view_v1::PalwBlockLaneV1> {
+        let _ = hash;
+        None
+    }
+
     /// ADR-0127 Decision 3: whether the transactions the selected chain accepted at `daa_score` are
     /// settled, and their settlement depth in `Final` anchors, from the sink's PALW V2 state —
     /// `getPalwSettlement`'s read. `None` where the node keeps no V2 state or cannot date its frontier.

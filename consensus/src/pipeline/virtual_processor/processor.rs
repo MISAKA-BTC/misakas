@@ -2268,6 +2268,10 @@ impl VirtualStateProcessor {
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts =
                         palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
+                    // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
+                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
+                        self.palw_record_round_verdicts(verdicts);
+                    }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
@@ -13568,53 +13572,92 @@ impl VirtualStateProcessor {
         let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
         ordered.sort();
         for block in ordered {
-            let permitted = (|| -> Option<PalwExecPermitUseV1> {
-                let header = self.headers_store.get_header(block).ok()?;
-                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).ok()?;
-                let anchor = self.ghostdag_store.get_selected_parent(block).ok()?;
-                let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, span_daa);
+            use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundLineageV1, PalwRoundRefusalV1 as Refusal};
+            let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1), Refusal> {
+                let header = self.headers_store.get_header(block).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                let anchor = self.ghostdag_store.get_selected_parent(block).map_err(|_| Refusal::SpanOutsideWindow)?;
+                let span = palw_execution_span_v1(
+                    self.headers_store.get_daa_score(anchor).map_err(|_| Refusal::SpanOutsideWindow)?,
+                    span_daa,
+                );
                 if span > span_now || span + 1 < span_now {
-                    return None;
+                    return Err(Refusal::SpanOutsideWindow);
                 }
                 // §7.3: a permit proven signed twice is granted to no block.
                 if state.round_equivocated(span, envelope.round, envelope.permit_index) {
-                    return None;
+                    return Err(Refusal::PermitEquivocated);
                 }
-                let schedule = state.round_schedule(span)?;
+                let schedule = state.round_schedule(span).ok_or(Refusal::NoSchedule)?;
                 // §7.2: the width of the anchor's span — the width the schedule was drawn at.
-                palw_execution_permit_of_v2(
+                let permit = palw_execution_permit_of_v2(
                     schedule,
                     envelope.round,
                     lane.width_of_span_len(span, span_daa),
                     envelope.permit_index,
                     &envelope.bond,
                     tickets_only,
-                )?;
-                let bond = state.bond(&envelope.bond)?;
+                )
+                .ok_or(Refusal::PermitNotGranted)?;
+                let bond = state.bond(&envelope.bond).ok_or(Refusal::BondNotActiveOrKeyMismatch)?;
                 if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
                     || bond.pubkey != envelope.pubkey
                 {
-                    return None;
+                    return Err(Refusal::BondNotActiveOrKeyMismatch);
                 }
-                let transactions = self.block_transactions_store.get(block).ok()?;
-                let coinbase = self.coinbase_manager.deserialize_coinbase_payload(&transactions.first()?.payload).ok()?;
+                let transactions = self.block_transactions_store.get(block).map_err(|_| Refusal::PayoutMismatch)?;
+                let coinbase = self
+                    .coinbase_manager
+                    .deserialize_coinbase_payload(&transactions.first().ok_or(Refusal::PayoutMismatch)?.payload)
+                    .map_err(|_| Refusal::PayoutMismatch)?;
                 if coinbase.miner_data.script_public_key
                     != kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes())
                 {
-                    return None;
+                    return Err(Refusal::PayoutMismatch);
                 }
                 if state.round_permit_used(span, envelope.round, envelope.permit_index) {
-                    return None;
+                    return Err(Refusal::PermitAlreadyUsed);
                 }
-                Some(PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index })
+                let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
+                Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
             })();
-            if let Some(used) = permitted {
-                verdicts.permitted.insert(block);
-                verdicts.uses.push(used);
+            match judged {
+                Ok((used, lineage)) => {
+                    verdicts.permitted.insert(block);
+                    verdicts.uses.push(used);
+                    verdicts.judged.push((block, Ok(lineage)));
+                }
+                Err(refusal) => verdicts.judged.push((block, Err(refusal))),
             }
         }
         verdicts.uses.sort();
         Some(verdicts)
+    }
+
+    /// **Lane SCAN: write each round block's verdict into the node's telemetry ledger.** Node-local
+    /// and read by no consensus path: the ledger answers `getBlock`'s lane class and
+    /// `getPalwRoundLane`'s health.
+    fn palw_record_round_verdicts(&self, verdicts: &super::utxo_validation::PalwRoundVerdictsV1) {
+        use kaspa_consensus_core::palw_exec_view_v1::{
+            PalwRoundBlockRecordV1, PalwRoundOutcomeV1, palw_round_lane_telemetry_v1,
+        };
+        let ledger = palw_round_lane_telemetry_v1();
+        for (block, verdict) in &verdicts.judged {
+            let Ok(header) = self.headers_store.get_header(*block) else { continue };
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment).ok();
+            ledger.record(PalwRoundBlockRecordV1 {
+                hash: *block,
+                daa_score: header.daa_score,
+                timestamp_ms: header.timestamp,
+                round: envelope.as_ref().map(|e| e.round).unwrap_or(0),
+                permit_index: envelope.as_ref().map(|e| e.permit_index).unwrap_or(0),
+                bond: envelope.as_ref().map(|e| e.bond),
+                outcome: match verdict {
+                    Ok(lineage) => PalwRoundOutcomeV1::Exec(*lineage),
+                    Err(refusal) => PalwRoundOutcomeV1::Refused(*refusal),
+                },
+            });
+        }
     }
 
     /// **The bind's Valid-lock question, for the draw** (the 2026-09-23 route-matrix audit's #3):
@@ -18670,6 +18713,18 @@ impl VirtualStateProcessor {
             finals: finals.len() as u64,
             tickets_only,
         })
+    }
+
+    /// **Lane SCAN: the executions the sink's PALW state holds** — see
+    /// [`kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1`]. Read at the sink, like
+    /// every `palw_*` node read.
+    pub fn palw_recent_executions_v1(
+        &self,
+        limit: usize,
+    ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        let sink = self.virtual_stores.read().state.get().unwrap().ghostdag_data.selected_parent;
+        let (_at, state) = self.palw_v2_state_at(sink)?;
+        Some(kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1(&state, limit))
     }
 
     /// **ADR-0125: re-shape a standard template into a round block.**

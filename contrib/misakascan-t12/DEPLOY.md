@@ -179,3 +179,36 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
   prefill-only の 1 token（`palw_prefill_draw` 0）、floor の最小 share 20‰、panel 5 / quorum 3、DNS は 6 validator・
   120,000,000 MSK・bridge の anchor 距離 14 blue、finality depth 600 / merge depth 30。
 - 未対応のまま: MTP の台帳・collector（運用者判断）、`/pool/`、peer census の remedy 文言、faucet backend の資金。
+
+## 10. 2026-10-03 — model executions as first-class (lane SCAN)
+
+**What changed (app.js, index.html `?v=scan-20261003`; style.css unchanged — the new bits inject their own CSS).**
+Built on the live files of 10-03 (snapshot commits eaaf35c6b, 1eaacc626), so the MTP "carried over" feature and the live banner are kept.
+
+- Home: *Recent blocks* is split. **Recent consensus blocks** lists algo-≠10 blocks with a class cell (BLUE · chain / BLUE / RED · not selected / "off chain");
+  a block that is merged but not on the selected chain is shown as *not selected*, never as rejected. **Recent model executions** has one row per claim
+  (model, claim, rounds spent/permitted with a bar, Final DAA, producing bond, DAA, anchor block, age); clicking a row lists its round blocks.
+  An **Execution lane** card (live / STALE, last round block, latest head, permits, finals) sits above both.
+- Pages: `#/models/<class id | name>` (status, producers, panel seats, claims with Final / Court / Expired and rounds), `#/claim/<claim id>[/<bond>]`
+  (timeline Attempt → Panel bind → Receipts → Final/Court → Maturity → Execution rounds), and the Lane page gains the health card.
+- The recent window grows from 25 to 80 blocks so both tables fill; the cache key is `msk_recent_v3`.
+
+**RPC it needs.** Nothing new: it runs on today's nodes with `getPalwRoundLane`, `getPalwClaims`, `getPalwModel`, `getPalwPanelSeats`,
+`getPalwPanelAssignments`, `getPalwModelRegistry` (every one is read through `palwRead`, which falls back with a note when a node lacks the op).
+How the join works today: a round block's header carries the PXR1 envelope (round, permit, producing bond). The page reads `getPalwClaims(bond, executor)`
+and assigns the block to the claim whose ticket range `[execFirstRound, execLastRound]` holds its round; two claims of one bond with overlapping ranges are shown
+under the bond ("2 claims (overlap)"). Lane STALE today = no round block in this page's window for 10 min while the lane is open (the card says so).
+
+**Lights up with the next node release** (branch scan/exec-views, node-only, fingerprint unchanged): `getBlock.verboseData.laneClass` (BLUE/EXEC/RED/ROUND) and
+`.exec {round, permitIndex, bond, claimId, classId, quantumIndex, verdict, refusal}` (exact claim join and "Round 001/120" labels);
+`getPalwRoundLane.health` (last accepted, latest head, STALE, refused-since-last-accepted, top refusal reasons) and `.recentExecutions` (request field `executionsLimit`).
+The explorer reads them first when present and shows rejection counters then; before that the card says they need the release.
+These fields are wRPC (JSON) only; gRPC does not carry them.
+
+**Local test.** `node test/mock-node.mjs 8765 [--new-rpc] [--stale]` serves this directory plus a fake read-only wRPC node (no host is touched);
+open http://localhost:8765/. Screenshots of each state: ~/Downloads/MISAKA-wt-b/lanes/evidence/scan/.
+
+### 10b. 2026-10-03 (later) — one "Recent blocks" table
+Home now has ONE **Recent blocks** table (arrival order, every round block on its own row) with a Type column and filters [All] [Consensus] [Model execution] [Red], 25 rows per page over a 150-block window.
+Types: `C-BLUE · consensus` (chain/blue attempt, legacy heartbeat/floor), `E · model execution (merged)` for a round block before the lane-EX fence, `E-BLUE · model execution` once the node sends `blockKind` REAL_ROUND, `FALLBACK` (blockKind FALLBACK), `RED · not selected` (non-chain non-round blocks, or a block the node marked RED).
+Round rows show model, claim (or "claim unknown") and "Round n/N" when the node reports the ticket index. The per-claim *Recent model executions* panel stays, collapsed under the table. index.html is the live file of 10-03 with `app.js?v=scan-20261003b`.

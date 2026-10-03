@@ -108,5 +108,8 @@ try_from!(item: &protowire::RpcBlockVerboseData, kaspa_rpc_core::RpcBlockVerbose
         is_chain_block: item.is_chain_block,
         // ADR-0165: JSON/serde only; the gRPC proto is unchanged.
         block_kind: String::new(),
+        // Lane SCAN: not carried over gRPC (wRPC only).
+        lane_class: String::new(),
+        exec: None,
     }
 });

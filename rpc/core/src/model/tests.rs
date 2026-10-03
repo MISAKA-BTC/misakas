@@ -227,6 +227,18 @@ mod mockery {
                 is_chain_block: mock(),
                 // Not on the borsh wire (ADR-0165): the round trip returns it empty.
                 block_kind: String::new(),
+                lane_class: "EXEC".to_string(),
+                exec: Some(RpcPalwExecBlock {
+                    round: 7,
+                    permit_index: 0,
+                    bond: "ab:0".to_string(),
+                    verdict: "granted".to_string(),
+                    refusal: None,
+                    claim_id: Some("cd".to_string()),
+                    class_id: Some("ef".to_string()),
+                    quantum_index: Some(3),
+                    quantum_id: Some("12".to_string()),
+                }),
             }
         }
     }

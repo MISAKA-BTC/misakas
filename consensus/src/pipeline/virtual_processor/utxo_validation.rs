@@ -208,6 +208,12 @@ pub(super) struct PalwRoundVerdictsV1 {
     pub permitted: BlockHashSet,
     /// The permits they use, sorted — what the fold records.
     pub uses: Vec<kaspa_consensus_core::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    /// Each round block's verdict as the telemetry ledger records it (lane SCAN): the lineage of the
+    /// permit it holds, or the named reason it does not. Read by nobody in consensus.
+    pub judged: Vec<(
+        BlockHash,
+        Result<kaspa_consensus_core::palw_exec_view_v1::PalwRoundLineageV1, kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1>,
+    )>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {

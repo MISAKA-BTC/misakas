@@ -1935,7 +1935,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_palw_round_lane_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        _request: GetPalwRoundLaneRequest,
+        request: GetPalwRoundLaneRequest,
     ) -> RpcResult<GetPalwRoundLaneResponse> {
         let Some(lane) = self.config.params.palw_execution_lane_fence() else {
             return Ok(GetPalwRoundLaneResponse::default());
@@ -1964,6 +1964,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             round,
             ..Default::default()
         };
+        // Lane SCAN (node-only): health from this node's own ledger, and the executions its sink state
+        // holds. Filled before the lane's own status so a lane that is not open still reports them.
+        response.health = Some(crate::palw_lane_view::round_lane_health_v1(kaspa_core::time::unix_now()));
+        if request.executions_limit > 0 {
+            let limit = (request.executions_limit as usize).min(crate::palw_lane_view::MAX_EXECUTIONS_V1);
+            if let Some((rows, total)) = session.async_palw_recent_executions_v1(limit).await {
+                response.recent_executions = rows.iter().map(crate::palw_lane_view::execution_row_v1).collect();
+                response.executions_total = total as u64;
+            }
+        }
         let Some(status) = session.async_palw_round_lane_status_v1(round).await else {
             return Ok(response);
         };
