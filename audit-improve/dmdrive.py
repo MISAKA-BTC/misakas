@@ -530,6 +530,10 @@ if E.get("INT12") == "1":     # the combined drill of the DAA-5,300 candidate: r
     _NAMES = [n for n in (E.get("CAP_RHOS") or "rho25,rho100,rho250,rho1000").replace(",", " ").split() if n in _OFF]    # CAP_RHOS: the steps measured (the combined drill skips rho25: no REAL load yet)
     CAP_STEPS = tuple((n, "int11") for n in _NAMES)
     CAP_WINDOWS = {n: (_H + _OFF[n] + _S, _H + _OFF[n] + _S + _W) for n in _NAMES}
+    for _tok in (E.get("CAP_AT") or "").replace(",", " ").split():      # CAP_AT="rho100:170 rho250:224": a window's start DAA, inside its rho regime (the legs of the floor checks sit between windows)
+        _n, _, _at = _tok.partition(":")
+        if _n in CAP_WINDOWS and _at.isdigit():
+            CAP_WINDOWS[_n] = (int(_at), int(_at) + _W)
 else:
     CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
         "rho25": (int(E.get("CAP2_AT", "560")) + _S, int(E.get("CAP2_AT", "560")) + _S + _W),

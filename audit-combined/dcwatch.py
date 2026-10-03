@@ -348,11 +348,58 @@ def hold_lines(work, nodes=("new0",), pattern=None):
     return out
 
 
-def gate_floor_policy(blocks, fence, claims, holds, **kw):
+def node_floor_transitions(work, nodes=("new0", "new1", "new2", "new3")):
+    """The nodes' own `[palw-floor-state]` transition lines (lane RS): {node: [(daa, from, to)]}. Tolerant of the wording: a line with the tag, two state names joined by an
+    arrow (-> / → / =>) or `to`, and a DAA after `daa` / `DAA` / `slot` / `at`."""
+    import re
+    pat = re.compile(r"\[palw-floor-state\][^\n]*?\b(Idle|Probe|Normal)\b\s*(?:->|→|=>|\bto\b)\s*\b(Idle|Probe|Normal)\b[^\n]*?(?:daa|slot|\bat\b)[ =:]*(\d+)", re.I)
+    out = {}
+    for n in nodes:
+        lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
+        if not os.path.exists(lg):
+            continue
+        rows = []
+        for ln in open(lg, errors="replace"):
+            m = pat.search(ln)
+            if m:
+                rows.append((int(m.group(3)), m.group(1).title(), m.group(2).title()))
+        if rows:
+            out[n] = sorted(set(rows))
+    return out
+
+
+def states_from_transitions(rows, lo, hi, lag=1):
+    """{daa: state} from (daa, from, to) rows: a transition logged at DAA t is in force for the blocks of DAA t + lag on (lag 1: it was caused by the block at t)."""
+    by, state, i = {}, "Idle", 0
+    rows = sorted(rows)
+    for d in range(lo, hi + 1):
+        while i < len(rows) and rows[i][0] + lag <= d:
+            state = rows[i][2]
+            i += 1
+        by[d] = state
+    return by
+
+
+def floor_states_best(blocks, fence, work=None, lag=None, **kw):
+    """(states, probes, source, note): the node's own `[palw-floor-state]` transitions where it logs them (the node decides, my model only cross-checks), else the model."""
+    model, mprobes = floor_states(blocks, fence, **kw)
+    tr = node_floor_transitions(work) if work else {}
+    if not tr or not model:
+        return model, mprobes, "model", "no [palw-floor-state] lines in the nodes' logs: the states are RECONSTRUCTED by the model"
+    lag = int(os.environ.get("FLOOR_STATE_LAG", "1")) if lag is None else lag
+    node = max(tr, key=lambda n: len(tr[n]))
+    by = states_from_transitions(tr[node], min(model), max(model), lag)
+    diff = [d for d in model if model[d] != by.get(d)]
+    probes = sorted({d for d, _, to in tr[node] if to == "Probe"})
+    note = f"states from {node}'s [palw-floor-state] log ({len(tr[node])} transitions); the model differs at {len(diff)} of {len(model)} DAA" + (f" (first: {diff[:5]})" if diff else "")
+    return by, probes, f"node:{node}", note
+
+
+def gate_floor_policy(blocks, fence, claims, holds, states=None, **kw):
     """RELEASE GATE: floors outside Idle EARN NOTHING (the fold refuses them: no claim row names such a floor block as its accepted block) and the compliant
     producers log holds. A floor that stands in the DAG outside Idle is not a failure by itself (a compliant producer can lose a race at a state change);
     an EARNED one is."""
-    by, probes = floor_states(blocks, fence, **kw)
+    by, probes = states if states else floor_states(blocks, fence, **kw)
     if not any(b["kind"] == "REAL" and b["daa"] >= fence for b in blocks):
         return 3, "INCOMPLETE: no REAL attempt past the fence yet (the states never left Idle)"
     fl = floor_blocks(blocks, fence)
@@ -375,10 +422,10 @@ def gate_floor_policy(blocks, fence, claims, holds, **kw):
     return 0, "PASS: " + txt
 
 
-def gate_states_daa(blocks, fence, max_gap_s=4 * SLOT_S, **kw):
+def gate_states_daa(blocks, fence, max_gap_s=4 * SLOT_S, states=None, **kw):
     """RELEASE GATE: the DAA advances through every state — Idle, Probe and Normal each visited, and in every run of one state a block at every DAA and no stamp gap
     over four slots."""
-    by, _ = floor_states(blocks, fence, **kw)
+    by, _ = states if states else floor_states(blocks, fence, **kw)
     if not by:
         return 3, "INCOMPLETE: no blocks"
     first = {}
@@ -417,34 +464,49 @@ def gate_red2blue(blocks, st, probe=PROBE_SLOTS):
     return 0, f"PASS: first REAL attempt after the restart at DAA {r1} ({colour}), BLUE at DAA {blue[0]} ({blue[0] - r1} slots, inside the probe of {probe})"
 
 
-def gate_stale(blocks, fence, st, **kw):
-    """RELEASE GATE (RED-only cannot keep floors invalid): in the stale leg every REAL attempt lands RED; floors become valid again after `probe_slots`, and
-    probes start no more often than every `cooldown`. st = {start_daa, end_daa}."""
-    cool, probe = kw.get("cool", COOL_SLOTS), kw.get("probe", PROBE_SLOTS)
+def _stale_ctx(blocks, fence, st, states=None, **kw):
     s0, s1 = int(st["start_daa"]), int(st["end_daa"])
     reals = [b for b in blocks if b["kind"] == "REAL" and s0 <= b["daa"] < s1]
+    by, probes = states if states else floor_states(blocks, fence, **kw)
+    inside = [p for p in probes if s0 <= p < s1]
+    fl = sorted(b["daa"] for b in floor_blocks(blocks, fence) if s0 <= b["daa"] < s1)
+    return s0, s1, reals, inside, fl
+
+
+def gate_stale(blocks, fence, st, states=None, **kw):
+    """RELEASE GATE (RED-only cannot keep floors refused), FIRST CYCLE: in the stale leg every REAL attempt lands RED; a probe opens, and floors are valid again after
+    `probe_slots`. st = {start_daa, end_daa}. (The cooldown between probes is gate_cool.)"""
+    probe = kw.get("probe", PROBE_SLOTS)
+    s0, s1, reals, inside, fl = _stale_ctx(blocks, fence, st, states, **kw)
     if not reals:
         return 3, "INCOMPLETE: no REAL attempt in the stale leg"
     blue = [b for b in reals if b["lane"] in ("BLUE", "EXEC")]
     if len(blue) > 0.1 * len(reals):
         return 3, f"INCOMPLETE: the injection is not stale enough — {len(blue)} of {len(reals)} REAL attempts in the leg are BLUE"
-    by, probes = floor_states(blocks, fence, **kw)
-    inside = [p for p in probes if s0 <= p < s1]
-    if len(inside) < 2:
-        return 3, f"INCOMPLETE: {len(inside)} probe(s) in the stale leg (need 2 to see the cooldown)"
-    gaps = [b - a for a, b in zip(inside, inside[1:])]
-    fl = sorted(b["daa"] for b in floor_blocks(blocks, fence) if s0 <= b["daa"] < s1)
+    if not inside:
+        return 3, "INCOMPLETE: no probe in the stale leg yet"
+    p = inside[0]
+    nxt = inside[1] if len(inside) > 1 else s1
     bad = []
-    if min(gaps) < cool:
-        bad.append(f"probes {inside} are closer than the cooldown {cool}")
-    for p, nxt in zip(inside, inside[1:] + [s1]):
-        if not any(p + probe <= d < nxt for d in fl):
-            bad.append(f"no floor stood after the probe at DAA {p} ended (DAA {p + probe}..{nxt - 1})")
-        if any(p < d < p + probe for d in fl):
-            bad.append(f"a floor stood inside the probe at DAA {p}")
+    if any(p < d < p + probe for d in fl):
+        bad.append(f"a floor stood inside the probe at DAA {p}")
+    if not any(p + probe <= d < nxt for d in fl):
+        bad.append(f"no floor stood after the probe at DAA {p} ended (DAA {p + probe}..{nxt - 1})")
     if bad:
-        return 1, "FAIL: " + "; ".join(bad[:5])
-    return 0, f"PASS: {len(reals)} stale REAL attempts (all RED), probes at DAA {inside}, spacing {gaps} >= {cool}, floors valid again after each {probe}-slot probe"
+        return 1, "FAIL: " + "; ".join(bad)
+    return 0, f"PASS: {len(reals)} stale REAL attempts (all RED), the first probe at DAA {p}, floors valid again at DAA {next(d for d in fl if d >= p + probe)} (probe {probe} slots)"
+
+
+def gate_cool(blocks, fence, st, states=None, **kw):
+    """RELEASE GATE: probes come no more often than every `cooldown` — two probes in the stale leg, spaced >= cooldown, and a floor between them."""
+    cool, probe = kw.get("cool", COOL_SLOTS), kw.get("probe", PROBE_SLOTS)
+    s0, s1, reals, inside, fl = _stale_ctx(blocks, fence, st, states, **kw)
+    if len(inside) < 2:
+        return 3, f"INCOMPLETE: {len(inside)} probe(s) in the stale leg so far (need 2 to see the cooldown)"
+    gaps = [b - a for a, b in zip(inside, inside[1:])]
+    if min(gaps) < cool:
+        return 1, f"FAIL: probes {inside} are closer than the cooldown {cool}"
+    return 0, f"PASS: probes at DAA {inside}, spacing {gaps} >= {cool}"
 
 
 def gate_delay_active(work, node="new6", flag="--palw-drill-real-submit-delay-s"):
@@ -569,7 +631,6 @@ def fork_checks(a, blocks):
                         f"{'PASS' if ok else ('INCOMPLETE' if not crossed else 'FAIL')}: {p['node']} was isolated from DAA {p.get('start_daa')} to {p.get('isolated_tip_daa')} (fence {a.fence}), rejoined at {p['rejoin_daa']}; now DAA {d2} vs {d1}"))
         except Exception as e:  # noqa: BLE001
             out.append(("FORK-c", 3, f"INCOMPLETE: {type(e).__name__}"))
-    out.append(("FORK-d", 3, "NOT RUN: IBD via the pruning proof needs a pruning point past genesis (pruning depth is thousands of blocks; this drill makes ~2,000)"))
     return out
 
 
@@ -694,23 +755,33 @@ def gates(a):
     kw = {"idle": a.idle_slots, "probe": a.probe_slots, "cool": a.cooldown}
     claims = gather_claims(a.port, a.work)
     holds = hold_lines(a.work, ("new0",))
+    by, probes, src, note = floor_states_best(blocks, fence, a.work, **kw)
+    states = (by, probes)
     rows.append(("BLUE", *gate_blue(ctx)))
     rows.append(("DELAY", *gate_delay_active(a.work)))
-    rows.append(("FLOOR", *gate_floor_policy(blocks, fence, claims, holds, **kw)))
+    rows.append(("FLOOR", *gate_floor_policy(blocks, fence, claims, holds, states=states, **kw)))
+    r1 = os.path.expanduser(a.restart1)
+    rows.append(("RED>BLUE1", *(gate_red2blue(blocks, json.load(open(r1)), a.probe_slots) if os.path.exists(r1)
+                                else (3, "INCOMPLETE: leg B1 (both REAL producers back after the stale leg) has not run yet"))))
     state = os.path.expanduser(a.state)
     if os.path.exists(state):
         st = json.load(open(state))
         rc, rl = recovery_verdict(blocks, st, a.k, a.margin)
         rows.append(("RECOVERY", rc, rl[-1]))
-        rows.append(("RED>BLUE", *gate_red2blue(blocks, st, a.probe_slots)))
+        rows.append(("RED>BLUE2", *gate_red2blue(blocks, st, a.probe_slots)))
     else:
-        rows.append(("RECOVERY", 3, "INCOMPLETE: the recovery leg has not run yet (dc-run.sh at its DAA)"))
-        rows.append(("RED>BLUE", 3, "INCOMPLETE: needs the recovery leg"))
+        rows.append(("RECOVERY", 3, "INCOMPLETE: the recovery leg (A) has not run yet"))
+        rows.append(("RED>BLUE2", 3, "INCOMPLETE: needs the recovery leg"))
     stale = os.path.expanduser(a.stale)
-    rows.append(("STALE", *(gate_stale(blocks, fence, json.load(open(stale)), **kw) if os.path.exists(stale)
-                           else (3, "INCOMPLETE: the stale-injection leg has not run yet"))))
+    if os.path.exists(stale):
+        sst = json.load(open(stale))
+        rows.append(("STALE", *gate_stale(blocks, fence, sst, states=states, **kw)))
+        rows.append(("COOLDOWN", *gate_cool(blocks, fence, sst, states=states, **kw)))
+    else:
+        rows.append(("STALE", 3, "INCOMPLETE: the stale-injection leg has not run yet"))
+        rows.append(("COOLDOWN", 3, "INCOMPLETE: the stale-injection leg has not run yet"))
     rows.append(("DAA", *gate_daa(ctx)))
-    rows.append(("STATES", *gate_states_daa(blocks, fence, **kw)))
+    rows.append(("STATES", *gate_states_daa(blocks, fence, states=states, **kw)))
     a.json_base = int(os.environ.get("JSON_BASE", "53200"))
     for nm, c, t in fork_checks(a, blocks):
         rows.append((nm, c, t))
@@ -744,6 +815,9 @@ def gates(a):
     print("  per-lane verdicts (crossings in this chain; the lane pre-checks' verdict.txt):")
     for n, c, t in lane:
         print(f"  [{n:<8}] {label[c]:<10} {t}")
+    print("  covered at test level, not by this drill: FORK-d IBD via the pruning proof across the fence (RS's T49-style carriage test: capture in Probe/Normal -> import -> identical decisions;")
+    print("  and the combined-fence test with the floor rule live) — pruning depth is thousands of blocks, this drill makes ~350")
+    print(f"  floor states: {note}")
     print("  informational, not gates (D-M epochs need ~1,000 DAA, longer than this drill):")
     for n, c, t in info:
         print(f"  [{n:<8}] {label[c]:<10} {t}")
@@ -994,6 +1068,17 @@ def selftest():
     assert gate_floor_policy(stand, 0, {"c1": {"acceptedBlock": "f100"}}, holds_ok)[0] == 1     # one earned a claim: FAIL
     assert gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})[0] == 0, gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})
     assert gate_stale(build(no_floor=range(57, 71)), 0, {"start_daa": 45, "end_daa": 92})[0] == 1     # floors never came back after the first probe
+    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 92})[0] == 0
+    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 92}, states=({}, [50, 60]))[0] == 1          # two probes ten slots apart: closer than the cooldown
+    assert gate_cool(chainf, 0, {"start_daa": 45, "end_daa": 60})[0] == 3                                   # one probe so far
+    import tempfile
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "new0"))
+    open(os.path.join(d, "new0", "kaspad.out"), "w").write("x\n[palw-floor-state] Idle -> Probe at DAA 50 (RED REAL)\n[palw-floor-state] transition Probe → Idle daa=56\n[palw-floor-state] Idle => Normal slot 95\n")
+    tr = node_floor_transitions(d)
+    assert tr["new0"] == [(50, "Idle", "Probe"), (56, "Probe", "Idle"), (95, "Idle", "Normal")], tr
+    stn = states_from_transitions(tr["new0"], 40, 100, lag=1)
+    assert stn[50] == "Idle" and stn[51] == "Probe" and stn[57] == "Idle" and stn[96] == "Normal", stn
     assert gate_red2blue(chainf, {"restart_daa": 90})[0] == 0, gate_red2blue(chainf, {"restart_daa": 90})
     slow = [dict(b) for b in chainf if b["hash"] not in {f"r{d}" for d in range(94, 101)}]   # the BLUE successor comes only at DAA 101: 9 slots after the first REAL attempt
     assert gate_red2blue(slow, {"restart_daa": 90})[0] == 1
@@ -1049,6 +1134,7 @@ def main():
     g.add_argument("--idle-slots", type=int, default=IDLE_SLOTS)
     g.add_argument("--probe-slots", type=int, default=PROBE_SLOTS)
     g.add_argument("--cooldown", type=int, default=COOL_SLOTS)
+    g.add_argument("--restart1", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/restart1.json")
     g.add_argument("--stale", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/stale.json")
     g.add_argument("--p50-max", type=int, default=6)
     g.add_argument("--p95-max", type=int, default=12)

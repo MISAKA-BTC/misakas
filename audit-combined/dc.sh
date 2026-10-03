@@ -20,6 +20,9 @@ export INT11=1 INT12=1
 export INT11_AT=${INT11_AT:-26}
 export TIR_AT=${TIR_AT:-18}                       # the head registers at ~19: its admission slot (91) is >= 71 DAA later; at TIR 20 it missed the slot by one DAA and waited a period
 export CAP_RHOS=${CAP_RHOS:-"rho100 rho250 rho1000"} CAP_WINDOW_DAA=${CAP_WINDOW_DAA:-32} CAP_SETTLE_DAA=${CAP_SETTLE_DAA:-8} DM_NO_LIARS=${DM_NO_LIARS:-1}
+# the PANEL windows, each inside its rho regime (rho100 from H'+95, rho250 from H'+190, rho1000 from H'+285), placed so that the floor-policy legs run BETWEEN them:
+# stale-only first (from the first REAL attempt), then both producers (RED -> BLUE after the idle stretch), the rho100 window, the rho250 window, leg A, rho1000.
+export CAP_AT=${CAP_AT:-"rho100:170 rho250:$((INT11_AT+190+CAP_SETTLE_DAA)) rho1000:$((INT11_AT+285+CAP_SETTLE_DAA))"}
 export OUTSIDER=${OUTSIDER:-1} RIDERS=${RIDERS:-4}
 export GEN_PARTIAL_CLASS=${GEN_PARTIAL_CLASS-toy-embed} GEN_PARTIAL_HOLDERS=${GEN_PARTIAL_HOLDERS-"new4 new5 new6"}   # DG-2: toy-embed on three nodes only
 export WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-combined-drill}
@@ -27,11 +30,14 @@ export P2P_BASE=${P2P_BASE:-51200} BORSH_BASE=${BORSH_BASE:-52200} JSON_BASE=${J
 export REAL_SUBMIT_DELAY_S=${REAL_SUBMIT_DELAY_S-340}   # lane RS's --palw-drill-real-submit-delay-s on ONE REAL producer (new6): the 8k model's inference time (P2 live: p50 342 s, p95 418 s; floors 3 per slot)
 export K_SLOTS=${K_SLOTS:-20} PROBE_SLOTS=${PROBE_SLOTS:-6} COOLDOWN=${COOLDOWN:-20}   # the redesigned floor rule: floor_idle_slots 20, probe_slots 6, probe_cooldown 20 (RED never extends)
 export XB_ORDER=${XB_ORDER:-"14 15"}                       # the outsider's bond (14), then the external floor producer's (15); no DG liars, no D-M3 liars in this drill
-LAST_WINDOW_END=$((INT11_AT + 285 + CAP_SETTLE_DAA + CAP_WINDOW_DAA))
-export RECOVERY_AT=${RECOVERY_AT:-$((LAST_WINDOW_END + 2))}   # the legs start right after the last rho window
-export STOP_DAA=${STOP_DAA:-$((2*K_SLOTS+2))}              # leg A: both REAL producers down >= 2K slots; floors must resume only after K idle slots
-export STALE_DAA=${STALE_DAA:-$((COOLDOWN+PROBE_SLOTS+20))} STALE_DELAY_S=${STALE_DELAY_S:-1500}   # leg S: only new6, every REAL attempt held 1,500 s (~12 slots) so it lands RED; >= 2 probes
-export POST_DAA=${POST_DAA:-$((K_SLOTS+8))} X_DAA=${X_DAA:-24}                # leg B: both back at the normal delay; RED -> BLUE recovery observed
+export STALE_END_DAA=${STALE_END_DAA:-140}                 # leg S (first): only new6 makes REAL attempts, each held STALE_DELAY_S so it lands RED; new4 is a seat only; ends here (>= 2 probes)
+export STALE_DELAY_S=${STALE_DELAY_S:-1500}                # ~12 slots: a stale attempt always lands RED
+export RESTART1_DAA=${RESTART1_DAA:-$STALE_END_DAA}        # leg B1: both REAL producers on the normal delay (the state is Idle: RED -> BLUE, then Normal)
+export RECOVERY_AT=${RECOVERY_AT:-$((INT11_AT+190+CAP_SETTLE_DAA+CAP_WINDOW_DAA+2))}   # leg A: after the rho250 window
+export STOP_DAA=${STOP_DAA:-$((K_SLOTS+8))}                # leg A: both REAL producers down K + 8 slots (shortened from 2K: floors must resume only after K idle slots)
+export POST_DAA=${POST_DAA:-$((K_SLOTS+8))}                # leg B2: both back; RED -> BLUE observed; ends before the rho1000 window
+export X_DAA=${X_DAA:-0}                                   # leg X (a policy-ignoring floor producer, report-only): off; X_DAA=24 with EXT_FLOOR_FLAG turns it on
+export EXT_FLOOR_FLAG=${EXT_FLOOR_FLAG:---palw-drill-floor-ignore-policy}
 export GEN_DIR=${GEN_DIR:-$HOME/Downloads/MISAKA-wt-b/gen-drill-classes}
 export OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-$HOME/Downloads/MISAKA-wt-b/lifecycle-run/bin/2483c570cea4/kaspad}
 EVD=${EVD:-$HOME/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill}
@@ -40,37 +46,43 @@ cmd=${1:-plan}; shift || true
 
 plan() {
 local R100=$((INT11_AT+95)) R250=$((INT11_AT+190)) R1000=$((INT11_AT+285))
-local END_DAA=$((RECOVERY_AT + STOP_DAA + STALE_DAA + POST_DAA + X_DAA + 6))
+local END_DAA=$((INT11_AT + 285 + CAP_SETTLE_DAA + CAP_WINDOW_DAA + 6))
 cat <<EOF
-== combined drill plan (H' = $INT11_AT; IR fence $TIR_AT; ~125 s per DAA = ~29 DAA/h measured)
+== combined drill plan (H' = $INT11_AT; IR fence $TIR_AT; ~125 s per DAA = ~29 DAA/h measured; ends at ~DAA $END_DAA = ~$((END_DAA*125/3600)).$(( (END_DAA*125%3600)*10/3600 )) h after the chain starts)
   chain     salted testnet-12, flag days 6/10/14, IR $TIR_AT, IR-2 24, then --palw-drill-int11-at=$INT11_AT (every fence of the candidate at H'; rho 100 / 250 / 1000 at $R100 / $R250 / $R1000)
-  nodes     new0 floor + heartbeat clock | new1..new3 seats | new4 head producer (REAL, class H, fast) | new5 evaluator | new6 evaluator + REAL producer of class win (the 8k emulation) |
-            new9 OUTSIDER seat (post-genesis bond 14) | extfloor EXTERNAL floor producer (bond 15; a floor producer that ignores the idle rule where the build has a drill flag for it) |
-            the old relay for D-M5's crossing (stopped when it is done) | registrar JIT (<= 9 processes)
-  load      REAL-model producers new4 + new6 with --palw-riders=$RIDERS; new6 holds every attempt --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (P2's live 8k p50 342 s, p95 418 s; floors 3 per slot) so
-            fast floors fill its anticone while it infers, as on live t12 (the flag is added only if the binary lists it; 'dc.sh dry' says); D-M's epochs run as background load
-  windows   PANEL is measured at rho100 [$((R100+CAP_SETTLE_DAA)), $((R100+CAP_SETTLE_DAA+CAP_WINDOW_DAA))), rho250 [$((R250+CAP_SETTLE_DAA)), $((R250+CAP_SETTLE_DAA+CAP_WINDOW_DAA))), rho1000 [$((R1000+CAP_SETTLE_DAA)), $((R1000+CAP_SETTLE_DAA+CAP_WINDOW_DAA))) (rho25: no REAL load yet; measured by the int-11 drill)
-  legs      from DAA $RECOVERY_AT: A both REAL producers down $STOP_DAA slots (>= 2K, K = floor_idle_slots $K_SLOTS) | S only new6, back with every REAL attempt held ${STALE_DELAY_S}s (stale, always RED) for $STALE_DAA slots |
-            B both back at the normal delay, $POST_DAA slots observed | X report-only: a policy-ignoring floor producer, $X_DAA slots; the drill ends at ~DAA $END_DAA (~$((END_DAA*125/3600)).$(( (END_DAA*125%3600)*10/3600 )) h after the chain starts: it must be up by ~15:00 to finish by 08:00)
-  the floor rule (5,300 as RS has it): floors are NOT rejected at the header. The fold refuses a floor unless the per-branch state is Idle (no claim, no reward, no weight) and honest floor producers hold by policy.
-            States Idle / Probe / Normal: floor_idle_slots $K_SLOTS, probe_slots $PROBE_SLOTS, probe_cooldown $COOLDOWN; RED never extends. dcwatch carries ONE model of it (floor_states: Normal after a BLUE REAL, Idle after
-            $K_SLOTS quiet slots, a REAL attempt in Idle opens a $PROBE_SLOTS-slot probe if the last began >= $COOLDOWN ago): the gates read the DAG and the claim rows against it, so check the model against the frozen text.
+  nodes     new0 floor + heartbeat clock | new1..new3 seats | new4 head (seat; REAL producer, class H, fast, from leg B1) | new5 evaluator | new6 evaluator + REAL producer of class win (the 8k emulation) |
+            new9 OUTSIDER seat (post-genesis bond 14) | extfloor (bond 15; leg X only) | the old relay int-10.3 for FORK-a / D-M5 (stopped when done) | joiner (FORK-b) | registrar JIT (<= 9 processes)
+  load      REAL producers new4 + new6 with --palw-riders=$RIDERS; new6 holds every attempt --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (P2's live 8k p50 342 s, p95 418 s; floors 3 per slot) so fast
+            floors fill its anticone while it infers, as on live t12 (added only if the binary lists the flag; 'dc.sh dry' says); D-M's epochs run as background load
+  ORDER     (fence-crossing gates first, so they can be published early)
+            1  DAA $((INT11_AT-6))..$((INT11_AT+12))  the crossing: D-M5 (the old relay dropped AT the crossing = FORK-a), DG-1, DG-2, FORK-c (new2 partitioned across the fence, rejoins)
+            2  DAA $((INT11_AT+12))     FORK-b: a fresh node IBDs from genesis across the fence
+            3  from the first REAL attempt (~DAA 90) to DAA $STALE_END_DAA   leg S: ONLY new6 produces, every attempt held ${STALE_DELAY_S}s (RED-only): STALE (first cycle: a probe, floors valid again after $PROBE_SLOTS)
+               and COOLDOWN (>= 2 probes spaced >= $COOLDOWN); the chain starts Idle, so FLOOR and STATES (Idle, Probe) fill in here
+            4  DAA $STALE_END_DAA   leg B1: new4 (fast) and new6 (normal delay) on: the state is Idle, so the first REAL attempt may be RED and a BLUE one follows inside the probe: RED>BLUE1; then Normal
+            5  rho100 window [$(echo "$CAP_AT" | tr ' ' '\n' | sed -n 's/^rho100://p'), +$CAP_WINDOW_DAA)   rho250 window [$((R250+CAP_SETTLE_DAA)), +$CAP_WINDOW_DAA)   (PANEL, BLUE, SHARE)
+            6  DAA $RECOVERY_AT   leg A: both REAL producers down $STOP_DAA slots (K = floor_idle_slots $K_SLOTS: floors must resume only after K idle slots, the DAA advances), then back: RECOVERY, RED>BLUE2
+            7  rho1000 window [$((R1000+CAP_SETTLE_DAA)), +$CAP_WINDOW_DAA)
+            (gates 1-4 are final by ~DAA $((STALE_END_DAA+30)) = ~$(( (STALE_END_DAA+30)*125/3600 )) h; the PANEL / BLUE windows by DAA $((R250+CAP_SETTLE_DAA+CAP_WINDOW_DAA)))
+  the floor rule (5,300 as RS has it): floors are NOT rejected at the header; the fold refuses a floor unless the per-branch state is Idle (no claim, reward or weight) and honest floor producers hold by
+            policy. Idle / Probe / Normal: floor_idle_slots $K_SLOTS, probe_slots $PROBE_SLOTS, probe_cooldown $COOLDOWN; Idle + BLUE REAL -> Normal directly; a RED REAL in Idle -> Probe iff the cooldown has passed;
+            RED never extends. The nodes' [palw-floor-state] logs are the source where they exist (FLOOR_STATE_LAG sets when a logged transition takes effect); dcwatch's model (floor_states) reconstructs it
+            otherwise and cross-checks the logs.
   RELEASE GATES (all must PASS to ship; 'dc.sh gates', exit 0 / 1 / 3):
-            1 PANEL (no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the metric)
-            2 BLUE (REAL attempts BLUE >= 90 % in every eligible window past H' — both REAL producers up and not held — under the 340 s delay, all producers on the release policy) and DELAY (the injection is on new6's argv)
-            3 FLOOR (floors outside Idle earn nothing: no claim row names such a floor block; the compliant producers' logs hold lines — HOLD_PATTERN sets the wording) | RED>BLUE (leg B: after the idle stretch the first
-              REAL attempt may be RED, a BLUE one follows inside the probe) | STALE (leg S: RED-only REAL attempts cannot keep floors refused beyond probe_slots per cooldown; >= 2 probes spaced >= cooldown)
-            4 RECOVERY (leg A: floors resume only after K idle slots) | DAA and STATES (a block at every DAA, no slot gap over 4 slots, through every state and through the stop / restart)
-            5 FORK-a old and new refuse each other past the fence: the new node drops the old peer AT the crossing (the int-10.7 re-judgement; a restart is not what shows it) | FORK-b a fresh node IBDs from genesis across
-              the fence | FORK-c new2 is partitioned across the fence and rejoins: it reorganises onto the chain | FORK-d IBD via the pruning proof: NOT REACHABLE here (pruning depth is thousands of blocks)
+            PANEL (no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the metric)
+            BLUE (REAL attempts BLUE >= 90 % in every eligible window past H' — both REAL producers up and not held — under the 340 s delay, all producers on the release policy) and DELAY (injection on new6's argv)
+            FLOOR (floors outside Idle earn nothing: no claim row names such a floor block; the compliant producers log holds — HOLD_PATTERN) | RED>BLUE1 and RED>BLUE2 (after an idle stretch the first REAL attempt may
+            be RED, a BLUE one follows inside the probe) | STALE and COOLDOWN (RED-only REAL cannot keep floors refused beyond probe_slots; probes no more often than every cooldown) | RECOVERY (leg A)
+            DAA and STATES (a block at every DAA, no slot gap over 4 slots, through every state and through the stops / restarts)
+            FORK-a (old and new refuse each other past the fence: the new node drops the old peer AT the crossing — the re-judgement; a restart is not what shows it) | FORK-b (a fresh node IBDs from genesis
+            across the fence) | FORK-c (new2 partitioned across the fence rejoins and reorganises onto the chain)
             + per-lane verdicts: D-M5's crossing, DG-1, DG-2 here; the lane pre-checks' verdict.txt (rfc7v, rfc6s, rfc1, rfc2r) from tonight
-  report    (never a gate) leg X: ONE policy-IGNORING floor producer (the extfloor node on bond 15, a drill flag RS may add: EXT_FLOOR_FLAG) for $X_DAA slots — how many REAL attempts it turns RED against the slots before;
-            the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time (slots after the restart to the first REAL / BLUE REAL attempt and
-            to the last floor standing; slots after the stop to the first floor)
+  test-level, not drill   FORK-d (IBD via the pruning proof across the fence): RS's T49-style carriage test (capture in Probe/Normal -> import -> identical decisions) and the combined-fence test with the floor rule live
+  report    (never a gate) the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time; leg X (off unless X_DAA > 0): one policy-IGNORING floor producer
+            ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
   goal      (supply-bound, reported, never a gate) SHARE: REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks per eligible window, PASS / FAIL as measured; REAL vs heartbeat vs floor per window
-  dropped   D-M1..D-M4, D-M6 and DG-3..DG-7b need ~1,000 DAA: informational only (no liars, no DG liars); the lane harnesses (audit-vertex dv.sh MESH=1, rfc6 shard.sh, rfc1, rfc2r) cannot share this chain
-  needs RS  (1) a drill flag that makes a floor producer ignore the policy (leg X only; EXT_FLOOR_FLAG), (2) the real-submit-delay flag, (3) the producer's hold wording (HOLD_PATTERN), (4) K = floor_idle_slots 20 in the
-            binary ('dc.sh dry' compares the source tree's constant to K_SLOTS)
+  dropped   D-M1..D-M4, D-M6 and DG-3..DG-7b need ~1,000 DAA: informational only; the lane harnesses (audit-vertex dv.sh MESH=1, rfc6 shard.sh, rfc1, rfc2r) cannot share this chain
+  needs RS  the delay flag, the hold wording (HOLD_PATTERN), the [palw-floor-state] wording (parsed tolerantly), K = floor_idle_slots 20 in the binary ('dc.sh dry' compares the source tree's constant to K_SLOTS)
 EOF
 }
 
@@ -96,11 +108,12 @@ extra_checks() {
 case $cmd in
   plan) plan ;;
   dry) plan; bash "$DM" dry "$@" 2>&1 | grep -vE '^  ok ' | tail -80; echo "== combined-drill checks"; extra_checks; echo "== DRY RUN done" ;;
-  up|status|verdicts|down|model|keys|plan-dm) bash "$DM" "$cmd" "$@" ;;
+  up) REAL_SUBMIT_DELAY_S=$STALE_DELAY_S HEAD_PRODUCE=0 bash "$DM" up "$@" ;;      # leg S first: new6 stale, new4 a seat only
+  status|verdicts|down|model|keys|plan-dm) bash "$DM" "$cmd" "$@" ;;
   gen) bash "$DM" gen "$@" ;;
   run) mkdir -p "$EVD"; nohup bash "$C/dc-run.sh" > "$EVD/run.out" 2>&1 & echo "dc-run.sh started (pid $!); timeline in $EVD/timeline.log" ;;
   redblue) python3 "$C/dcwatch.py" redblue --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
-  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
+  gates) python3 "$C/dcwatch.py" gates --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json" --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN" "$@" ;;
   recovery) python3 "$C/dcwatch.py" recovery --port "$((JSON_BASE+3))" --state "${1:-$EVD/recovery.json}" --k "$K_SLOTS" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
   share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 "$@" ;;

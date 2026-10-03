@@ -269,7 +269,10 @@ node_args() {
         extfloor) a+=(--palw-produce)
                   local ef=${EXT_FLOOR_FLAG:-$(bin_help "$bin" | grep -oE -- '--palw-drill-[a-z0-9-]*floor[a-z0-9-]*' | grep -vE -- '-at$|reserve' | head -1)}
                   [ -n "$ef" ] && grep -q -- "$ef" <<<"$(bin_help "$bin")" && a+=("$ef") ;;
-        head) a+=(--palw-produce "${rid[@]}" "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
+        # HEAD_PRODUCE=0: new4 is a SEAT only (it still registers the class, and holds every artifact): the combined drill's first leg lets only the delayed producer
+        # (new6) make REAL attempts, all of them stale; new4 produces from leg B on.
+        head) if [ "${HEAD_PRODUCE:-1}" = 0 ]; then a+=("--palw-register-class=$HEAD_MODEL_ID")
+              else a+=(--palw-produce "${rid[@]}" "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)"); fi ;;
         eval|liar) a+=(--palw-improve-evaluate) ;;
         # evalw produces the FULL-WEIGHT winner's claims: the usage of line R once `win` heads it (D-M4's second epoch). W1's composite winner
         # has no second epoch any more, so nothing produces winc.
@@ -296,6 +299,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }
