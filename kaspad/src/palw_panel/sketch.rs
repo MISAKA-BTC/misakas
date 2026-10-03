@@ -97,6 +97,30 @@ impl ParamSource for ArtifactParamsV1<'_> {
     }
 }
 
+/// What a seat holds of the class's weights while it checks: the params the checker reads directly, and **not** the weights a sketch stands for
+/// (those arrive, a block at a time, through the refetch).
+struct SeatHeldParamsV1<'a> {
+    inner: ArtifactParamsV1<'a>,
+    held: std::collections::BTreeSet<u16>,
+}
+
+impl ParamSource for SeatHeldParamsV1<'_> {
+    fn param(&self, index: u16, layer: Option<u16>) -> Option<Tensor> {
+        self.held.contains(&index).then(|| self.inner.param(index, layer)).flatten()
+    }
+}
+
+/// **A served witness the checker refused at a weight product** — what the refetch concludes on.
+pub(crate) struct RefusedServedV1 {
+    pub claim: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub failure: misaka_palw_tir_sketch::TirCheckFailureV1,
+    pub witness: TirWitnessV1,
+    pub job: TirSketchJobV1,
+    pub epoch: u64,
+}
+
 /// One class's sketches in one epoch.
 struct StoreV1 {
     analysis: TirSketchAnalysisV1,
@@ -110,13 +134,21 @@ pub(crate) struct PalwSketchServiceV1 {
     policy: TirCheckPolicyV1,
     stores: Mutex<HashMap<(Hash64, u64), Arc<StoreV1>>>,
     totals: Mutex<TirMirrorTotalsV1>,
+    /// Served witnesses refused at a weight product, waiting for the panel's tick to open a refetch (bounded).
+    refused: Mutex<Vec<RefusedServedV1>>,
 }
 
 impl PalwSketchServiceV1 {
     /// Open the service in `state_dir` (the secret is loaded or drawn there).
     pub(crate) fn open(state_dir: &Path, policy: TirCheckPolicyV1) -> Result<Self, String> {
         let secret = palw_sketch_secret_load_v1(state_dir)?;
-        Ok(Self { secret, policy, stores: Mutex::new(HashMap::new()), totals: Mutex::new(TirMirrorTotalsV1::default()) })
+        Ok(Self {
+            secret,
+            policy,
+            stores: Mutex::new(HashMap::new()),
+            totals: Mutex::new(TirMirrorTotalsV1::default()),
+            refused: Mutex::new(Vec::new()),
+        })
     }
 
     /// A service with a given secret and policy, for tests.
@@ -127,6 +159,7 @@ impl PalwSketchServiceV1 {
             policy,
             stores: Mutex::new(HashMap::new()),
             totals: Mutex::new(TirMirrorTotalsV1::default()),
+            refused: Mutex::new(Vec::new()),
         }
     }
 
@@ -166,6 +199,32 @@ impl PalwSketchServiceV1 {
         stores.retain(|(class, at), _| *class != class_id || *at >= epoch);
         stores.insert(key, built.clone());
         Ok(built)
+    }
+
+    /// The refused served witnesses since the last call.
+    pub(crate) fn take_refused_served_v1(&self) -> Vec<RefusedServedV1> {
+        std::mem::take(&mut *self.refused.lock().expect("the refused list is never poisoned"))
+    }
+
+    /// **The escalation of a refused served witness** (§II.8): the checker over what this seat holds — the weights a sketch stands for are not among
+    /// them — with `transport` supplying the failing blocks. Blocking (a pass over the witness and a recompute of the blocks).
+    pub(crate) fn escalate_v1(
+        &self,
+        entry: &PalwTirClassEntryV1,
+        refused: &RefusedServedV1,
+        failure: &misaka_palw_tir_sketch::TirCheckFailureV1,
+        transport: &dyn misaka_palw_tir_sketch::TirBlockTransportV1,
+        _daa: u64,
+    ) -> Result<misaka_palw_tir_sketch::TirEscalationV1, String> {
+        let held = self.store_v1(entry, refused.epoch)?;
+        let plan = entry.artifact.plan();
+        let params = SeatHeldParamsV1 {
+            inner: ArtifactParamsV1 { artifact: &entry.artifact, program: &plan.program },
+            held: held.analysis.held_params(&plan.program, 64, &self.policy),
+        };
+        let checker = misaka_palw_tir_sketch::TirSketchCheckerV1::new(plan, &held.analysis, &held.store, &held.keys, &params, self.policy)
+            .map_err(|e| format!("the checker does not build: {e}"))?;
+        Ok(checker.escalate(&refused.job, &Self::job_id_v1(&refused.claim, refused.epoch), &refused.witness, failure, transport))
     }
 
     fn job_id_v1(claim: &Hash64, epoch: u64) -> [u8; 32] {
@@ -246,6 +305,24 @@ impl PalwSketchServiceV1 {
             self.totals.lock().expect("the totals are never poisoned").errors += 1;
             format!("the sketch check does not run: {e}")
         })?;
+        // §II.8: a served witness refused at a weight product waits for the panel's tick to refetch the failing blocks.
+        if served
+            && !outcome.accepted
+            && let Some(failure) = outcome.failure.as_ref().filter(|f| !f.blocks.is_empty())
+        {
+            let mut refused = self.refused.lock().expect("the refused list is never poisoned");
+            if refused.len() < 64 {
+                refused.push(RefusedServedV1 {
+                    claim,
+                    class_id: entry.class_id(),
+                    artifact_root: entry.artifact_root,
+                    failure: failure.clone(),
+                    witness: witness.clone(),
+                    job: job.clone(),
+                    epoch,
+                });
+            }
+        }
         let agreement = tir_mirror_agreement_v1(served, replay_reproduces, outcome.accepted);
         self.totals.lock().expect("the totals are never poisoned").note(agreement, outcome.served_bytes);
         if agreement.is_alarm() {

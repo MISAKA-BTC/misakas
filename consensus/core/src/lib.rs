@@ -325,6 +325,7 @@ pub mod palw_layer_sample_v3;
 /// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
 /// held DA demand for a leaf's evidence is admitted under.
 pub mod palw_leaf_evidence_v1;
+pub mod palw_weight_block_v1;
 /// MISAKA PALW execution-commitment legs v1 (ADR-0027 consequences): the activation and
 /// checkpoint commitments. Land-stage, consensus-inert.
 pub mod palw_legs;

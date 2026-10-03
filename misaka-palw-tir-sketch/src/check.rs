@@ -31,13 +31,14 @@
 
 use std::collections::BTreeMap;
 
-use misaka_palw_tir::{Interpreter, ParamSource, Prim, Tensor};
+use misaka_palw_tir::{Interpreter, ParamSource, Prim, Ref, Tensor};
 use misaka_palw_tir_exec::TirPlan;
 use misaka_palw_tir_exec::plan::BlockPlan;
 
 use crate::analysis::{TirCheckPolicyV1, TirMatMulKindV1, TirSideV1, TirSketchAnalysisV1, TirWeightSourceV1};
 use crate::field::{TirSketchModulusV1, tir_sketch_moduli_for_span_v1};
 use crate::geom::TirCheckGeomV1;
+use crate::refetch::{TirBlockTransportV1, TirEscNoteV1};
 use crate::secret::TirSketchKeysV1;
 use crate::sketch::TirSketchStoreV1;
 use crate::walk::{OccCtxV1, RunStateV1, decode_select, eval_node, ref_value};
@@ -62,6 +63,8 @@ pub enum TirCheckFaultV1 {
     CommitRoot,
     /// A selected token is not the `argmax` of its logits.
     Token { selected: u32, claimed: u32 },
+    /// **Escalation only** (§II.8): the cone recomputed from the node's honest value reached a committed row equal to the claim's.
+    ConeAgrees,
 }
 
 /// Where a check failed.
@@ -114,6 +117,17 @@ pub struct TirSketchCheckerV1<'a> {
 
 type Fail = Box<TirCheckFailureV1>;
 
+/// **An escalation in progress** (§II.8): position `pos`'s node `(occ, node)` failed; `blocks` are the blocks that failed its own check.
+pub(crate) struct EscalationV1<'e> {
+    pub pos: u32,
+    pub occ: u16,
+    pub node: u16,
+    pub blocks: Vec<u32>,
+    pub transport: &'e dyn TirBlockTransportV1,
+    pub params: &'e crate::refetch::TirFetchingParamsV1<'e>,
+    pub note: std::cell::RefCell<Option<crate::refetch::TirEscNoteV1>>,
+}
+
 impl<'a> TirSketchCheckerV1<'a> {
     /// `params` is what the seat holds: [`TirSketchAnalysisV1::held_params`] is enough.
     pub fn new(
@@ -152,6 +166,16 @@ impl<'a> TirSketchCheckerV1<'a> {
         job_id: &[u8; 32],
         witness: &TirWitnessV1,
     ) -> Result<TirCheckReportV1, Box<TirCheckFailureV1>> {
+        self.check_impl(job, job_id, witness, None)
+    }
+
+    fn check_impl(
+        &self,
+        job: &TirSketchJobV1,
+        job_id: &[u8; 32],
+        witness: &TirWitnessV1,
+        esc: Option<&EscalationV1<'_>>,
+    ) -> Result<TirCheckReportV1, Box<TirCheckFailureV1>> {
         let p = &self.plan.program;
         let fail = |pos: u32, occurrence: u16, node: Option<u16>, fault: TirCheckFaultV1| -> Fail {
             Box::new(TirCheckFailureV1 { pos, occurrence, node, fault, blocks: Vec::new() })
@@ -184,6 +208,8 @@ impl<'a> TirSketchCheckerV1<'a> {
             let mut commits: Vec<TirCommitRowV1> = Vec::new();
             let (mut writes, mut appends) = (Vec::new(), Vec::new());
             let mut carry: Vec<Tensor> = Vec::new();
+            let esc_here = esc.filter(|e| e.pos == pos);
+            let mut carry_tainted: Vec<bool> = Vec::new();
             for (occ, &(block, layer)) in self.plan.occurrences.iter().enumerate() {
                 let o = occ as u16;
                 if occ == post_occ && pos + 1 < prompt_len {
@@ -220,7 +246,47 @@ impl<'a> TirSketchCheckerV1<'a> {
                     is_served[ni] = true;
                 }
                 let ctx = OccCtxV1 { pos, token, block, layer, carry: &carry };
+                // §II.8: the nodes downstream of the failed one are recomputed exactly, whatever the producer served for them.
+                let mut tainted = vec![false; b.nodes.len()];
                 for ni in 0..b.nodes.len() {
+                    if let Some(e) = esc_here {
+                        let here = o == e.occ && ni == e.node as usize;
+                        tainted[ni] = here
+                            || b.nodes[ni].inputs.iter().any(|r| match *r {
+                                Ref::Node(j) => tainted[j as usize],
+                                Ref::CarryIn(k) => carry_tainted.get(k as usize).copied().unwrap_or(false),
+                                _ => false,
+                            });
+                    }
+                }
+                for ni in 0..b.nodes.len() {
+                    if let Some(e) = esc_here
+                        && tainted[ni]
+                    {
+                        let here = o == e.occ && ni == e.node as usize;
+                        let v = if here {
+                            self.escalate_node_v1(&ctx, o, ni, h, &run, &values, e)?
+                        } else {
+                            eval_node(&self.interp, e.params, &ctx, &run, &values, ni).map_err(|err| {
+                                let why = match e.params.refused.borrow().as_ref() {
+                                    Some((j, _)) => format!("a weight of param {j} was not served"),
+                                    None => err.to_string(),
+                                };
+                                fail(pos, o, Some(ni as u16), TirCheckFaultV1::Recompute(why))
+                            })?
+                        };
+                        values[ni] = Some(v);
+                        is_served[ni] = false;
+                        if b.nodes[ni].commit {
+                            let slot = self.plan.slot_bases[occ] + ni as u32;
+                            let mine = values[ni].as_ref().expect("just set");
+                            return Err(match step.commits.iter().find(|c| c.slot == slot) {
+                                Some(theirs) if theirs.value == *mine => fail(pos, o, Some(ni as u16), TirCheckFaultV1::ConeAgrees),
+                                _ => fail(pos, o, Some(ni as u16), TirCheckFaultV1::CommitMismatch { slot }),
+                            });
+                        }
+                        continue;
+                    }
                     if is_served[ni] {
                         self.check_matmul(&ctx, o, ni, h, job_id, &run, &values, &mut report)?;
                         continue;
@@ -268,6 +334,7 @@ impl<'a> TirSketchCheckerV1<'a> {
                         return Err(fail(pos, o, Some(p.logits), TirCheckFaultV1::Token { selected, claimed }));
                     }
                 } else {
+                    carry_tainted = b.carry_out.iter().map(|c| tainted[*c as usize]).collect();
                     carry = b.carry_out.iter().map(|c| values[*c as usize].clone().expect("a carry-out is a root")).collect();
                 }
             }
@@ -284,6 +351,9 @@ impl<'a> TirSketchCheckerV1<'a> {
             if commits.len() != step.commits.len() {
                 return Err(fail(pos, 0, None, TirCheckFaultV1::WitnessShape("a different number of committed rows".into())));
             }
+            if esc_here.is_some() {
+                return Err(fail(pos, 0, None, TirCheckFaultV1::ConeAgrees));
+            }
             run.apply(p, writes, appends);
             derived.push(TirWitnessStepV1 { pos, values: Vec::new(), commits });
         }
@@ -292,6 +362,140 @@ impl<'a> TirSketchCheckerV1<'a> {
             return Err(fail(positions.saturating_sub(1), 0, None, TirCheckFaultV1::CommitRoot));
         }
         Ok(report)
+    }
+
+    /// **Escalate a failed check** (§II.8): fetch the failing blocks of the failed node through `transport`, recompute them exactly, recompute the
+    /// cone to the first committed row and compare. See [`TirEscalationV1`].
+    pub fn escalate(
+        &self,
+        job: &TirSketchJobV1,
+        job_id: &[u8; 32],
+        witness: &TirWitnessV1,
+        failure: &TirCheckFailureV1,
+        transport: &dyn TirBlockTransportV1,
+    ) -> crate::refetch::TirEscalationV1 {
+        use crate::refetch::{TirClearedV1, TirEscalationV1};
+        let Some(node) = failure.node else { return TirEscalationV1::Inconclusive("the failure names no node".into()) };
+        if !matches!(failure.fault, TirCheckFaultV1::Freivalds { .. }) {
+            return TirEscalationV1::Inconclusive(format!("a {:?} is not a failed product check", failure.fault));
+        }
+        let fetching = crate::refetch::TirFetchingParamsV1 {
+            held: self.params,
+            program: &self.plan.program,
+            transport,
+            refused: Default::default(),
+        };
+        let esc = EscalationV1 {
+            pos: failure.pos,
+            occ: failure.occurrence,
+            node,
+            blocks: failure.blocks.clone(),
+            transport,
+            params: &fetching,
+            note: Default::default(),
+        };
+        let result = self.check_impl(job, job_id, witness, Some(&esc));
+        let note = esc.note.borrow_mut().take();
+        let refused = *fetching.refused.borrow();
+        match (note, result) {
+            (Some(TirEscNoteV1::Unavailable { occurrence, node, block }), _) => {
+                TirEscalationV1::Unavailable { occurrence, node, block, param: None }
+            }
+            (Some(TirEscNoteV1::NotBlockAddressable(why)), _) => TirEscalationV1::NotBlockAddressable(why),
+            (Some(TirEscNoteV1::BlocksAgree), _) => TirEscalationV1::Cleared(TirClearedV1::BlocksAgree),
+            (Some(TirEscNoteV1::Malformed(why)), _) => TirEscalationV1::Inconclusive(why),
+            (None, Err(f)) => match f.fault {
+                TirCheckFaultV1::CommitMismatch { slot } => {
+                    TirEscalationV1::Accuse { pos: f.pos, occurrence: f.occurrence, node, slot }
+                }
+                TirCheckFaultV1::ConeAgrees => TirEscalationV1::Cleared(TirClearedV1::ConeAgrees),
+                _ if refused.is_some() => TirEscalationV1::Unavailable {
+                    occurrence: f.occurrence,
+                    node: f.node.unwrap_or(node),
+                    block: None,
+                    param: refused.map(|(j, _)| j),
+                },
+                other => TirEscalationV1::Inconclusive(format!("{other:?}")),
+            },
+            (None, Ok(_)) => TirEscalationV1::Inconclusive("the check passed in escalation mode".into()),
+        }
+    }
+
+    /// The honest value of the failed node: a weight product by fetching its failing blocks and recomputing them exactly, an
+    /// activation product exactly from its operands.
+    #[allow(clippy::too_many_arguments)]
+    fn escalate_node_v1(
+        &self,
+        ctx: &OccCtxV1<'_>,
+        occ: u16,
+        ni: usize,
+        h: usize,
+        run: &RunStateV1,
+        values: &[Option<Tensor>],
+        esc: &EscalationV1<'_>,
+    ) -> Result<Tensor, Fail> {
+        let p = &self.plan.program;
+        let node = &p.blocks[ctx.block as usize].nodes[ni];
+        let np = &self.occ_plans[occ as usize].nodes[ni];
+        let note = |n: TirEscNoteV1| {
+            *esc.note.borrow_mut() = Some(n);
+            Box::new(TirCheckFailureV1 {
+                pos: ctx.pos,
+                occurrence: occ,
+                node: Some(ni as u16),
+                fault: TirCheckFaultV1::Recompute("escalation".into()),
+                blocks: Vec::new(),
+            })
+        };
+        let site = self.analysis.site(ctx.block, ni as u16).expect("a served node is a MatMul site");
+        let out = values[ni].as_ref().expect("served");
+        let (side, source) = match site.kind {
+            TirMatMulKindV1::Weight { side, source } => (side, source),
+            TirMatMulKindV1::ActAct => {
+                // Both operands are the seat's own: the exact value needs no fetch.
+                return eval_node(&self.interp, esc.params, ctx, run, values, ni)
+                    .map_err(|e| note(TirEscNoteV1::Malformed(e.to_string())));
+            }
+            TirMatMulKindV1::Exact => unreachable!("an exact MatMul is never served"),
+        };
+        let TirWeightSourceV1::Static(Ref::Param(j)) = source else {
+            return Err(note(TirEscNoteV1::NotBlockAddressable("the weight is routed or derived, not a plain param".into())));
+        };
+        let g = TirCheckGeomV1::new(side, &np.in_types[0], &np.in_types[1], h, 0);
+        if !g.plain_weight() {
+            return Err(note(TirEscNoteV1::NotBlockAddressable("the weight has batch axes of its own".into())));
+        }
+        let sk = self.store.get(occ, ni as u16).ok_or_else(|| note(TirEscNoteV1::Malformed("no sketch for this site".into())))?;
+        let decl = &p.params[j as usize];
+        let layer = if decl.per_layer { ctx.layer } else { None };
+        let x_ref = if side == TirSideV1::Right { node.inputs[0] } else { node.inputs[1] };
+        let x = ref_value(&self.interp, self.params, ctx, run, values, x_ref).map_err(|e| note(TirEscNoteV1::Malformed(e.to_string())))?;
+        let width = decl.dtype.width();
+        let free = g.free();
+        let mut honest = out.clone();
+        let mut blocks: Vec<u32> = esc.blocks.clone();
+        if blocks.is_empty() {
+            blocks = (0..sk.blocks as u32).collect();
+        }
+        for b in blocks {
+            let unavailable = || note(TirEscNoteV1::Unavailable { occurrence: occ, node: ni as u16, block: Some(b) });
+            let Some(ranges) = g.block_byte_ranges(sk.blocks, b as usize, width) else {
+                return Err(note(TirEscNoteV1::Malformed(format!("block {b} is outside the weight"))));
+            };
+            let pieces = esc.transport.fetch_ranges(j, layer, &ranges).map_err(|_| unavailable())?;
+            let view = crate::refetch::TirPieceViewV1::new(decl.dtype, pieces).map_err(|e| note(TirEscNoteV1::Malformed(e)))?;
+            let (k, n) = (g.k, g.n);
+            let weight = |f: usize, t: usize| match side {
+                TirSideV1::Left => view.elem(f * k + t),
+                TirSideV1::Right => view.elem(t * n + f),
+            };
+            let _ = free;
+            g.recompute_block(&x.data, &weight, sk.blocks, b as usize, &mut honest.data).ok_or_else(unavailable)?;
+        }
+        if honest.data == out.data {
+            return Err(note(TirEscNoteV1::BlocksAgree));
+        }
+        Ok(honest)
     }
 
     /// The algebraic check of served node `ni` (module note).

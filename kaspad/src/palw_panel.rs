@@ -102,6 +102,10 @@ mod mesh;
 /// `--palw-sketch-check`, off by default).
 mod sketch;
 
+/// RFC-0007 Part II §II.8: the failed-block refetch — serving a weight block's inventory openings, accepting one against the artifact root, and the pursuit
+/// that asks for the blocks a failed check named, runs the escalation and concludes (node policy; dormant without `--palw-sketch-check`).
+mod refetch;
+
 /// RFC-0007 Part II, the producer's half: a claim's witness image, kept as the producer's obligation and served by chunk.
 pub(crate) use sketch::palw_witness_image_v1 as sketch_witness_image_v1;
 pub(crate) use sketch::palw_witness_retain_v1 as sketch_witness_retain_v1;
@@ -3822,6 +3826,9 @@ pub struct PalwPanelService {
     vertex_equivocations_sent: std::sync::Mutex<HashMap<(u64, PalwBondKeyV2), u64>>,
     /// RFC-0007 Part II: the sketch checker's service (its secret, its stores, the mirror's totals); `None` unless `--palw-sketch-check`.
     sketch: Option<std::sync::Arc<sketch::PalwSketchServiceV1>>,
+    /// **RFC-0007 §II.8: the failed-block refetches in flight**, by claim ([`refetch::WeightRefetchV1`] with the held class entry and the refused
+    /// witness it concludes on). Bounded by [`refetch::REFETCH_PURSUITS_CAP_V1`].
+    weight_refetch: std::sync::Mutex<HashMap<Hash64, (refetch::WeightRefetchV1, misaka_palw_sdk::lineage::PalwTirClassEntryV1, std::sync::Arc<sketch::RefusedServedV1>)>>,
     /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
     /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
     /// so without this a seat rebuilt the whole proof per tick. Measured on the item 6 acceptance
@@ -4218,6 +4225,7 @@ impl PalwPanelService {
             carrier_replacement: std::sync::Mutex::new(None),
             vertex_equivocations_sent: std::sync::Mutex::new(HashMap::new()),
             sketch,
+            weight_refetch: std::sync::Mutex::new(HashMap::new()),
             readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
             executor_conformance: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -8466,6 +8474,11 @@ impl PalwPanelService {
                         },
                     ));
                 }
+            }
+
+            // **RFC-0007 §II.8: the failed-block refetches** (only a node run with `--palw-sketch-check` ever holds one).
+            if self.sketch.is_some() {
+                self.weight_refetch_tick_v1(&interval_openings, network_domain, current_daa).await;
             }
 
             // **RFC-0007 Part IV.1: the audit duty** — a seat the chain drew to audit a claim, and that holds the claim's class, replays it and
@@ -14510,6 +14523,28 @@ impl PalwPanelService {
 
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
+        // **RFC-0007 §II.8: a weight-block request (bit 28)** — any node holding the class answers with the inventory openings of the block's bytes,
+        // on the lane's own authentication. The class is named by the root tag the signature binds; the seat verifies the answer against the root.
+        if let (Some((site, block)), Some(tag)) =
+            (kaspa_consensus_core::palw_weight_block_v1::palw_weight_block_request_decode_v1(interval_index), leaf_index)
+        {
+            let entry = self.backends().tir_entry_by_root_tag_v1(tag)?;
+            let started = std::time::Instant::now();
+            return match refetch::palw_weight_block_serve_v1(&entry, site, block) {
+                Some(bytes) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: served block {block} of weight site {site} ({} bytes, {:.0?}) — RFC-0007 §II.8",
+                        bytes.len(),
+                        started.elapsed()
+                    );
+                    Some(bytes)
+                }
+                None => {
+                    info!("[{PALW_PANEL}] claim {claim}: block {block} of weight site {site} does not open here");
+                    None
+                }
+            };
+        }
         // **ADR-0111 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
         // named the leaf; this node answers with the one-move court's object for it — the builder
         // the on-chain disclosure uses too, so the two paths carry one set of bytes.
@@ -16129,6 +16164,94 @@ impl PalwPanelService {
             p.demanded = true;
         }
         Some((message, object, false))
+    }
+
+    /// **RFC-0007 §II.8, the seat's ask for failed blocks**: one signed request per block on the interval lane, registered with the gossip center
+    /// first so the answer is admitted. The signature is the lane's leaf-request signature over `(claim, index, root tag)`.
+    async fn request_weight_blocks_v1(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        artifact_root: Hash64,
+        requests: &[(u32, misaka_palw_tir_sketch::refetch::TirBlockAddressV1)],
+        requested_daa: u64,
+    ) -> usize {
+        let Some(kp) = self.keypair.as_ref() else { return 0 };
+        let tag = kaspa_consensus_core::palw_weight_block_v1::palw_weight_block_root_tag_v1(&artifact_root);
+        let mut asked = 0usize;
+        for (index, _) in requests {
+            let Some(signature) =
+                crate::palw_fp_seat::palw_fp_sign_leaf_request_v1(&kp.signing_key, network_domain, claim, *index, tag, requested_daa)
+            else {
+                continue;
+            };
+            self.flow_context.palw_gossip().note_interval_pull_request(claim, *index);
+            self.flow_context
+                .request_palw_interval_opening(claim, *index, kp.verification_key.as_ref().to_vec(), signature, requested_daa, Some(tag))
+                .await;
+            asked += 1;
+        }
+        asked
+    }
+
+    /// **RFC-0007 §II.8, one tick of the refetches**: pursuits are opened from the refused served witnesses the sketch service holds, stepped with
+    /// the interval pool, and concluded — an accusation is recorded as a fault at its named leaf (the existing IR court takes it up), a cleared
+    /// check and a withheld block are logged by name.
+    async fn weight_refetch_tick_v1(&self, openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>, network_domain: Hash64, daa: u64) {
+        let Some(sketch) = self.sketch.clone() else { return };
+        for refused in sketch.take_refused_served_v1() {
+            let Some(entry) = self.backends().tir_entry_v1(refused.class_id, refused.artifact_root) else { continue };
+            let mut open = self.weight_refetch.lock().unwrap();
+            if open.len() >= refetch::REFETCH_PURSUITS_CAP_V1 && !open.contains_key(&refused.claim) {
+                continue;
+            }
+            let pursuit = refetch::WeightRefetchV1::new(refused.claim, refused.artifact_root, refused.failure.clone());
+            open.entry(refused.claim).or_insert((pursuit, entry, std::sync::Arc::new(refused)));
+        }
+        let claims: Vec<Hash64> = self.weight_refetch.lock().unwrap().keys().copied().collect();
+        for claim in claims {
+            let Some((mut pursuit, entry, refused)) = self.weight_refetch.lock().unwrap().remove(&claim) else { continue };
+            let root = pursuit.artifact_root;
+            let (sketch_for_step, refused_for_step, entry_for_step, pool) = (sketch.clone(), refused.clone(), entry.clone(), openings.clone());
+            let stepped = tokio::task::spawn_blocking(move || {
+                let step = pursuit.step(&entry_for_step, &pool, daa, &|transport, failure| {
+                    match sketch_for_step.escalate_v1(&entry_for_step, &refused_for_step, failure, transport, daa) {
+                        Ok(outcome) => outcome,
+                        Err(why) => misaka_palw_tir_sketch::TirEscalationV1::Inconclusive(why),
+                    }
+                });
+                (pursuit, step)
+            })
+            .await;
+            let Ok((pursuit, step)) = stepped else { continue };
+            match step {
+                refetch::RefetchStepV1::Ask(requests) => {
+                    let asked = self.request_weight_blocks_v1(network_domain, claim, root, &requests, daa).await;
+                    info!("[{PALW_PANEL}] claim {claim}: asked for {asked} weight block(s) of the failed check (RFC-0007 §II.8)");
+                    self.weight_refetch.lock().unwrap().insert(claim, (pursuit, entry, refused));
+                }
+                refetch::RefetchStepV1::Waiting => {
+                    self.weight_refetch.lock().unwrap().insert(claim, (pursuit, entry, refused));
+                }
+                refetch::RefetchStepV1::Done(outcome) => match outcome {
+                    misaka_palw_tir_sketch::TirEscalationV1::Accuse { pos, node, slot, .. } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {claim}: the failed check is confirmed — position {pos}, node {node}: the first committed row the \
+                             seat derives differently is leaf {slot}; recorded as this seat's fault for the IR court (RFC-0007 §II.8)"
+                        );
+                        self.note_seat_fault_v1(claim, u64::from(slot), 1);
+                    }
+                    misaka_palw_tir_sketch::TirEscalationV1::Cleared(why) => {
+                        info!("[{PALW_PANEL}] claim {claim}: the failed check is cleared by the refetch ({why:?}); nothing accused (RFC-0007 §II.8)")
+                    }
+                    misaka_palw_tir_sketch::TirEscalationV1::Unavailable { occurrence, node, block, param } => warn!(
+                        "[{PALW_PANEL}] claim {claim}: UNAVAILABLE — weight block {block:?} (param {param:?}) of node {node} in occurrence {occurrence} \
+                         was not served; no Valid is filed (RFC-0007 §II.8)"
+                    ),
+                    other => info!("[{PALW_PANEL}] claim {claim}: the failed check could not be refetched: {other:?}"),
+                },
+            }
+        }
     }
 
     /// **ADR-0111 Decision 2, the seat's ask**: one signed leaf-evidence request on the interval

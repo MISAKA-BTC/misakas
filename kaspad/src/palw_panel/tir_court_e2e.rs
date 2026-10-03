@@ -90,11 +90,11 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 
 /// The tiny IR class, as a node holds it.
-struct Ir {
+pub(super) struct Ir {
     dir: PathBuf,
-    registry: PalwBackendRegistry,
-    class_id: Hash64,
-    root: Hash64,
+    pub(super) registry: PalwBackendRegistry,
+    pub(super) class_id: Hash64,
+    pub(super) root: Hash64,
 }
 
 impl Drop for Ir {
@@ -117,7 +117,7 @@ impl Ir {
 /// logits scheme, a layout of 8-lane commit tiles (the logits node at the tiled scheme's 4,096
 /// lanes), two-position checkpoints and four-row history tiles, written as a `PALWTIR1` container
 /// and loaded through the SDK's door (`PalwClassSdk::load_artifact`, dispatched by the magic).
-fn ir_class(tag: &str, tiled: bool) -> Ir {
+pub(super) fn ir_class(tag: &str, tiled: bool) -> Ir {
     ir_class_with(tag, tiled, court(), FORM)
 }
 
