@@ -8,7 +8,7 @@
 | Affects | spec/palw 03 (registry), 04/04a (execution, arithmetic), 05 (canonical work), 08 (verification), 09 (court), 14 (node), 16 (fences) · all networks (dormant until armed) · `consensus/core` (admission, court), `misaka-palw-base0` (engines), `misaka-palw-sdk`, `misaka-palw-extension` |
 | Branch | `rfc/0002-tensor-ir` (text only; no prototype yet) |
 | Related | ADR-0135 (a model is data; Decision 7 the VM boundary), ADR-0038 A4 (100 % catalog coverage), ADR-0040 (BASE-0; Decision E order-free accumulation), ADR-0047 (A16), ADR-0049 (adjudication contract), ADR-0052 (QWEN36 ops), ADR-0057 (backends below the semantic boundary), ADR-0069 (e2e adjudicability), ADR-0082/0093 (fused attention and dissection), ADR-0102 (fenced kernels), ADR-0103/0116 (held context, history bound), ADR-0145 (canonical work) |
-| Part II | Model onboarding (header-only preflight, the streaming loader, runtime packs, the quant registry, feature scope, staged enablement) — appended 2026-10-01, lane F; §II.7.5 records decided consensus rules, not yet built |
+| Part II | Model onboarding (header-only preflight, the streaming loader, runtime packs, the quant registry, feature scope, staged enablement) — appended 2026-10-01, lane F; §II.7.5 records decided consensus rules, not yet built. §§II.10–II.12 add Hub-wide evidence, future-family extension and the local-LLM 90/10 target (2026-10-03), all open acceptance work |
 
 ## 概要(日本語)
 
@@ -496,7 +496,7 @@ without network state.
 | `ADMISSIBLE_GENERIC` | registrable as data; some patterns run on generic kernels (estimated slowdown printed) |
 | `LOWERABLE_UNVERIFIED` | lowered from an architecture whose float reference is remote code the tool cannot run offline; the verdict above it holds, the fidelity column is empty |
 | `EXCEEDS(limit, value, cap)` | a size, range, cost or court ceiling fails |
-| `NEEDS_PRIMITIVE(name)` | the graph needs an operation outside v1 — a protocol upgrade (ADR-0135 D7) |
+| `NEEDS_PRIMITIVE(name)` | the graph needs an operation outside TIR v1: a general TIR prim-set revision for the TIR path, or the metered RFC-0005 GVM fallback when armed and within its bounds (§II.12) |
 | `NOT_LOWERABLE(reason)` | no lowerer template for this family; the model may still be expressible by hand |
 
 A legacy mode reports the same verdicts against today's `PalwShapeProfileV3` catalog, so the tool is
@@ -623,7 +623,7 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
 | Cranelift as the IR | An SSA code-generation IR without tensor semantics; a candidate for CPU code generation of generic kernels in Phase G, outside the identity |
 | TOSA's integer profile as the semantic base | The closest existing integer specification and useful prior art, but its rescale rounding is not the frozen rules the live kernels use (ADR-0040 C1/C2), and it has no state, position scan, commit points or court cost |
 | Structured control inside a step (`BoundedMap`, `BoundedReduce` with a user body) | Heads, experts and channels are tensor axes, so batching needs no control flow; a user-body reduction is order-dependent unless proved associative and exact, which breaks §3.2. `BoundedScan`/`BoundedMap` enter only if the corpus needs them (Phase A) |
-| Bounded extension programs for what the IR cannot express | A second execution model for the court to adjudicate; revisit only if `NEEDS_PRIMITIVE` proves frequent after v1 |
+| Bounded extension programs for what the IR cannot express | A second court execution model is expensive; RFC-0005 GVM is the measured residual-model fallback (§II.12), while the TIR path keeps its frozen primitive semantics |
 | A float IR with tolerances | ADR-0053: tolerance turns fraud proofs into votes on noise |
 | Every primitive committed | Multiplies step leaves several-fold against the 2^22 cap; cones give the same adjudicability at today's commitment cost |
 
@@ -705,7 +705,7 @@ not yet built. Everything else in Part II is tooling, data formats and node-side
 ## Part II in one page
 
 Part I makes a model *expressible as data*. It does not make *getting a model there* a standard path, and today each
-model is refused for a different reason, late: after hundreds of GB were downloaded and converted. Part II specifies six
+model is refused for a different reason, late: after hundreds of GB were downloaded and converted. Part II specifies eight
 things, one per requirement of §II.0.1.
 
 1. **A header-only preflight (§II.2).** Reading only the Hugging Face config files plus the safetensors headers, or the
@@ -733,6 +733,13 @@ things, one per requirement of §II.0.1.
    stratified, real-checkpoint cohort measure every gate separately. The largest measured failure categories determine the
    next generic frontend, format, modality, admission or verification work; a declaration of broad coverage needs the
    end-to-end evidence, including panel capacity.
+7. **Future-model permissionlessness (§II.11).** A new family whose computation fits the armed TIR primitive set and
+   canonical job profiles can supply its own compiler or declarative frontend pack and register canonical program and
+   artifact bytes without a `main` release or model-name allowlist. RFC-0005 GVM supplies a measured, metered fallback
+   for computation TIR cannot admit, subject to its real-size gas, court and seat bounds.
+8. **The local-LLM 90/10 objective (§II.12).** Aim for at least 90 % of a pinned, publicly runnable local-LLM cohort
+   to reach registration, independent seats and `Final` through RFC-0002 TIR. Route the measured remaining eligible
+   models through RFC-0005 GVM, and count only those that also reach `Final`; publish every uncovered cause.
 
 ## 概要(Part II、日本語)
 
@@ -750,12 +757,19 @@ things, one per requirement of §II.0.1.
 - **HF 全体への到達(§II.10)。** 上の 90 % は代表 architecture の下ろしやすさであり、HF のモデル登録率ではない。公開モデルの
   repo と revision を固定して、取得可能性、変換、実サイズの admission、独立 seat、claim の `Final` を別々に測る。失敗を
   format・feature・modality・court・座席/処理能力に分類し、件数の大きい汎用的な欠落から閉じる。実走なしに「大半が登録・Final」と言わない。
+- **将来のモデル(§II.11)。** 既存 TIR primitive と canonical job で意味を記述できる新型モデルは、第三者の frontend pack または
+  直接生成した TIR を使って、`main` のモデル別更新なしに登録できる経路を必須とする。TIR にない演算も RFC-0005 GVM の
+  整数命令で計算できる場合があるが、実サイズの gas・court・seat 上限を超えるものは対応済みと数えない。
+- **ローカル LLM の 90/10 目標(§II.12)。** 公開・取得可能なローカル推論用 LLM の固定 cohort で、RFC-0002 の TIR 経路だけで
+  ≥ 90 % の登録・独立 seat・`Final` を目標にする。残りは RFC-0005 GVM の実走で閉じる方針とし、VM でも失敗した理由を公開する。
 
 ## II.0 Requirements, acceptance and the three examples
 
 ### II.0.1 The requirements
 
-The user's, in the user's order. R1–R5 are the onboarding path; R6 adds the 2026-10-03 Hub-majority outcome.
+The user's, in the user's order. R1–R5 are the onboarding path; R6 adds the 2026-10-03 Hub-majority outcome;
+R7 makes future-family onboarding independent of a `main` release where the armed semantics suffice;
+R8 sets the distinct local-LLM 90/10 outcome.
 The acceptance criteria are §II.0.2.
 
 - **R1. A header-only preflight.** Read only the Hugging Face config files plus the safetensors headers, or the GGUF
@@ -776,6 +790,12 @@ The acceptance criteria are §II.0.2.
 - **R6. Most Hub models can complete that path, measured as repositories rather than architecture examples.** The
   system must name each blocking gate, close the largest generic gaps without a model-specific consensus path, and prove
   that a representative set of real checkpoints can register, be independently seated and reach `Final` (§II.10).
+- **R7. Permissionless extension within an armed semantic envelope.** An unknown model family that can be expressed
+  with the armed TIR primitives and job profiles must be registerable through a third-party frontend or direct canonical
+  TIR submission, with no model-name allowlist, built-in feature-registry entry or `main` code change (§II.11).
+- **R8. Local-LLM 90/10 routing.** RFC-0002 is the primary end-to-end path for at least 90 % of a dated, reproducible
+  cohort of publicly runnable local LLM checkpoints. The measured residual has an RFC-0005 GVM fallback with separate
+  real-size admission, seating, court and `Final` evidence; unsupported residuals remain visible (§II.12).
 
 ### II.0.2 Acceptance
 
@@ -788,6 +808,11 @@ The acceptance criteria are §II.0.2.
 - **A5.** Failures are visible per stage, in the CLI and in the registry.
 - **A6.** A pinned, auditable Hub census and real-checkpoint cohort meet the quantitative end-to-end claim rule of
   §II.10.5. The architecture-corpus percentage alone cannot satisfy A6.
+- **A7.** An independently authored, previously unknown family and weight layout pass the no-`main`-change
+  registration-to-`Final` exercise in §II.11.4; unsupported semantics refuse by name and never execute as an unknown op.
+- **A8.** The local-LLM cohort meets §II.12's ≥ 90 % TIR end-to-end threshold and the remaining
+  source-eligible cohort demonstrates GVM `Final` without a known uncovered family. A residual blocker
+  keeps A8 open and must be published; a proposed 90/10 split is not a result.
 
 ### II.0.3 The three examples
 
@@ -807,8 +832,12 @@ The acceptance criteria are §II.0.2.
 | R4 feature scope | §II.6 | implemented (`d7c0d776a`); shown by the report, the pack and `misaka model inspect` |
 | R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are decided (2026-10-01) and not yet built |
 | R6 Hub-majority outcome | §II.10 | new acceptance program, **not an implementation claim**; requires a live Hub census, real checkpoints and an adequately seated end-to-end drill |
+| R7 future-family extension | §II.11 | proposed direct-TIR and third-party frontend contract; existing data adapters and quant descriptors cover only their current languages, so this is **not yet a proven end-to-end capability** |
+| R8 local-LLM 90/10 | §II.12 and RFC-0005 §II.10.1 | target and fallback routing, **not a measured current coverage claim**; GVM's real-size gas and panel capacity need evidence |
 | A1–A5 | §II.8 | A2 is met by the pack; A1, A3, A4, A5 complete with the preflight (task 7), `blocking` and the decision on §II.7.5 |
 | A6 | §II.10.5 | open until the measured `register` and `Final` gates pass; neither the 92 % A/B corpus reading nor the earlier Hub estimates close it |
+| A7 | §II.11.4 | open until third-party direct-TIR and frontend-pack paths pass with unchanged node/consensus binaries and independent seats |
+| A8 | §II.12 | open until the dated local-LLM cohort and its TIR/GVM end-to-end funnel are published |
 
 ## II.1 Principles
 
@@ -1695,6 +1724,8 @@ registration made any other way is valid.
 | **A4** mining starts only after ready seats of distinct operators with possession proofs | today: ready bonds with possession proofs (the lifecycle, §II.7.2); after Proposal A and C1: for every class kind, seven distinct ready operators, three of them independent of the registrant and the executor | partly met today; Proposal A (approved) closes the rest |
 | **A5** failures are visible per stage in the CLI and the registry | the preflight's stage table (convert, register, mine); the registry's `blocking` and its CLI display (§II.7.4), one test per lifecycle state | with `blocking` (this lane) and the preflight (task 7) |
 | **A6** a majority of Hub model repos can register and reach `Final` | the pinned Hub census, real-checkpoint cohort and end-to-end gate evidence meet every threshold in §II.10.5 | open; architecture-corpus percentages and earlier Hub estimates do not close it |
+| **A7** a new family within armed semantics needs no `main` update | third-party direct TIR and a declarative frontend pack each complete §II.11.4 with the same node/consensus binaries; a novel primitive is refused | open; current adapter and quant-descriptor support do not prove this full route |
+| **A8** local LLMs follow the 90/10 route | §II.12's pinned cohort shows ≥ 90 % TIR `Final` capability and source-eligible residual families reach `Final` through RFC-0005 GVM at real size, with no known uncovered family | open; no measured local-LLM denominator or GVM fallback drill yet |
 
 ### II.8.2 Corpus completion
 
@@ -1893,3 +1924,154 @@ the following. The first target is literal majority; the engineering target is a
 If any condition fails, publish the measured narrower claim (for example, *decoder-only float checkpoints lower*)
 and the blocker distribution. This keeps the goal visible without declaring Hub-majority registration or `Final`
 from the 90–92 % architecture corpus or the earlier unmeasured Hub estimates.
+
+## II.11 Future families without a `main` release (R7/A7)
+
+*Added 2026-10-03. This is the target contract for permissionless onboarding, not a claim that the current frontend,
+registry or seats already pass it. “No `main` update” means no consensus/node binary upgrade and no privileged
+model-family approval. Registrants and seats may install third-party **off-chain** tooling and fetch class artifacts;
+the class must still satisfy the armed admission, seating, execution and court rules.*
+
+### II.11.1 Decide by the missing semantic, not by the model's name
+
+| What a future model needs | Route | `main`/protocol change? |
+| --- | --- | --- |
+| New config keys, tensor names, layer schedule or a **static** combination of already armed TIR primitives | A third-party frontend pack (§II.11.2), or direct canonical TIR (§II.11.3) | No, if its graph and real-size class pass admission |
+| New storage or quantisation layout expressible by `quant-format.v1`, or a custom offline importer that emits the canonical artifact | A descriptor with independent decode vectors (§II.5), or an independently reproducible converter | No; unknown layouts remain refused until described and checked |
+| A new task made solely from already armed canonical job/input/output kinds and pipeline stages | A class-declared RFC-0003 pipeline and complete task scope | No; a new **consensus** job or output meaning needs a versioned RFC-0003 extension |
+| A tensor operation not byte-identically expressible by the armed primitive set within court and cost ceilings | Try RFC-0005 GVM's metered integer guest over `TENSOR_READ`/`TENSOR_FROM_MEM`, calling TIR for supported bulk work; otherwise a **general** `prim_set` revision with new evaluator, admission, court vectors and fence (§1.2, §9) | No new `main` release for a bounded GVM guest once GVM is armed; yes for a new TIR primitive or a new GVM semantic |
+| Bounded data-dependent control | First try TIR's finite AOT/`Select` expansion; use RFC-0005 BVM only when its measured gate opens and the expansion breaks an admission ceiling, or GVM after it is armed | VM kinds need their own fences; BVM adds control efficiency, GVM can also run metered integer guest work |
+| Runtime-dependent agent/tool workflow or arbitrary program logic | RFC-0005 GVM, if armed, with its own gas bounds and court | Yes for that execution kind; it is not required for ordinary model registration |
+
+Thus a frozen finite TIR can support **new combinations indefinitely**, but cannot promise every future computation.
+Giving arbitrary new arithmetic an on-chain meaning without an upgrade requires a pre-armed universal instruction
+semantics and a way to meter and adjudicate every use: RFC-0005 GVM's PALW-RV64 guest is that **slow-path** substrate.
+Its BVM layer remains control-only (§I.0.5 GB2); the GVM can read tensor lanes, compute integer results and commit
+them from memory (§II.10 of RFC-0005). This is a route for `NEEDS_PRIMITIVE`, not a promise that a heavy operation
+fits the present gas, memory, DA, receipt or court bounds. An HF importer and a new canonical job/input/output profile
+are still separate problems. The historical RFC-0005 decoder survey found no **bounded-control** gap; that result
+does not measure the new local-LLM GVM residual (§II.12).
+
+### II.11.2 An open, content-addressed frontend-pack interface
+
+The built-in `FeatureId` registry and `model-adapter.v1` are conveniences for the reference lowerer, **not** an
+allowlist for consensus. The present adapter maps keys onto features that the installed lowerer already knows;
+therefore that adapter alone cannot express every future feature without a tool update. Add a versioned,
+user-supplied `tir-frontend-pack` format for the common no-release path. Its declarative language can construct a
+bounded static TIR subgraph from existing primitives, dimensions, layer schedules and declared `Fixed`/`Hist` state;
+map config keys and tensor roles; include quant descriptors; and declare the full task scope and source revisions.
+It may compose named template fragments but has no runtime branch, IO, clock, remote fetch, native code or operation
+definition. The compiler expands it under explicit size/fuel limits, type-checks every tensor and refuses an
+unconsumed math-affecting config key, tensor, component or custom-code behavior. Its output is ordinary canonical
+TIR plus the artifact and runtime pack, not a new class kind. A pack may be published anywhere and identified by
+its content hash; no default repository, signer or maintainer approval is needed for admission. The reference CLI
+may offer a curated index for discovery, but index membership cannot decide validity.
+
+The runtime pack pins the frontend-pack hash, compiler/tool version, config and source SHAs, quant descriptors,
+generated `ModelSpec`/TIR digest, artifact root, complete/partial task scope, conformance vectors and HF-reference
+fidelity evidence (§II.4). A seat verifies **the submitted TIR and artifact** with the armed generic evaluator and
+class conformance rules; it never has to execute a registrant's Python, `trust_remote_code` or frontend pack to
+decide a claim. A third-party pack's own test vectors do not grant authority: malformed output fails the common
+verifier, and a false HF-equivalence claim is distinguished from the on-chain integer-program verdict.
+
+### II.11.3 Direct-TIR escape hatch and exact boundary of permissionlessness
+
+Any independent compiler may submit canonical `TirProgramV1` bytes (or an armed RFC-0003 pipeline), a compatible
+artifact and the ordinary class registration. The registry must judge them by `prim_set_id`, program version,
+canonical encoding, type/range/cost/court admission, artifact commitment and class lifecycle only. It must not
+require a recognised `model_type`, built-in `FeatureId`, official pack, HF repository, preferred compiler or
+model-family signature. This path is essential when the declarative frontend language is too narrow but the
+**resulting TIR is already expressible**. It also keeps an extension-language revision outside consensus.
+
+Direct TIR proves the submitted integer program can be adjudicated; it does **not** prove that it faithfully
+imports the named HF checkpoint. Without independently reproducible source conversion and fidelity evidence,
+show `SOURCE_EQUIVALENCE_UNVERIFIED` in onboarding reports and do not count the repo as an A6 full-task success.
+Likewise, a TIR or GVM execution path alone does not solve a missing canonical input, output or job profile;
+the full advertised task stays blocked under §II.10.1 until that profile is armed. A class that exceeds static
+ceilings remains `EXCEEDS`, however popular its model family is. New semantics must use a new `prim_set_id` or
+program/job version and fence; previously registered classes retain their exact old meaning and court.
+
+### II.11.4 Acceptance before calling this permissionless
+
+With **unchanged** consensus/node binaries, unchanged armed `prim_set_id` and no model-name allowlist:
+
+1. An independent party names a previously unknown, static feature combination, publishes a frontend pack and
+   a real checkpoint, then completes header preflight, streamed conversion, reproducible pack verification,
+   registration, independent seat possession/conformance, a claim and on-chain `Final`. Another party rebuilds
+   the same roots without the first party's executable code.
+2. Another independent party emits the same canonical TIR bytes directly with a different compiler. Admission and
+   court give the same verdict. A third party adds a quant descriptor and its independent vectors without a
+   node release; bad vectors and ambiguous tensor bindings are refused.
+3. Mutation cases cover an unknown op, hidden config key, missing tensor/component, false shape, unbounded
+   expansion, unsupported job kind, bad artifact root and a deliberately wrong fused backend. Each fails at the
+   named gate; an untrusted pack cannot bypass admission, seating or court. The old registered class still runs
+   byte-identically after a newer frontend-pack version is published.
+
+Record node/consensus binary digests, frontend/compiler and pack digests, class and artifact roots, seat operators,
+claim id, `Final` reference and every refusal. Passing a small direct-TIR fixture establishes the protocol
+interface; a **real checkpoint, full task and independent seats** establish the onboarding claim. Feed these
+results into A6's Hub cohort, so the no-release extension mechanism demonstrably improves the real `Final` funnel.
+
+Implement in this order: arm and exercise generic TIR admission/execution/court and the needed RFC-0003 job profiles;
+prove direct third-party TIR registration; add the bounded declarative frontend-pack interpreter and open discovery;
+run A7 and the Hub-wide A6 cohort. Measure the local-LLM TIR residual (§II.12) before sizing or claiming RFC-0005
+GVM fallback. The public extension interface, Hub-wide majority and local-LLM 90/10 target are distinct milestones;
+none may be inferred from another.
+
+## II.12 Local-LLM 90/10 program: TIR first, GVM for the measured residual (R8/A8)
+
+*Added 2026-10-03 at the user's direction. This is the intended architecture and acceptance target, not a present
+90 % measurement. It is narrower than A6's all-Hub-model denominator, and broader than the old decoder-only
+safetensors architecture corpus. RFC-0005 §II.10.1 defines the GVM fallback that this section requires.*
+
+### II.12.1 Define “90 % of local LLMs” before counting
+
+Publish a dated, reproducible frame `L_listed` of publicly discoverable models offered for **local text generation**,
+including local chat/reasoning/coding checkpoints, MoE and hybrid models, safetensors and GGUF-only releases,
+pre-quantised weights and adapter-plus-base chains. The initial discovery frame is the Hugging Face Hub's pinned
+text-generation and GGUF listings plus the local-model registry entries in Ollama's library; add other public
+registries with a named snapshot and method, and disclose missing catalogues. HF's [Hub API](https://huggingface.co/docs/huggingface_hub/package_reference/hf_api)
+supports model listing and revision metadata; its [GGUF catalogue](https://huggingface.co/docs/hub/gguf) is a
+separate format signal. [Ollama's library](https://ollama.com/library) is an additional local-distribution source.
+No finite catalogue is literally every model “in the world”; the claim must name the surveyed sources and date.
+
+The counted unit is one pinned model checkpoint or complete base-plus-adapter chain, with its intended local task;
+exact mirrors of the same weights collapse by digest, while changed weights remain distinct. Multiple quant files
+of one checkpoint are a **format-coverage** stratum, not extra votes in the headline. `L_files` is the subset whose
+complete weights and task metadata are publicly readable; inaccessible gated entries, missing files and unresolved
+bases stay in `L_listed` with named blockers. Unknown use rights remain in `L_files` and fail the `source` gate as
+`RIGHTS_UNCONFIRMED`; they are never silently removed from the denominator. Report both denominators, feature-family
+and size strata, and repo-weighted and demand-weighted views. A vision-chat model counts for its advertised full
+input task only when the needed RFC-0003 profile exists; a decoder-only extraction is separately labelled.
+
+### II.12.2 Two actual routes, one end-to-end success definition
+
+For every `L_files` member, run §II.10.3's source → lower → pack → admit → seat → claim/`Final` funnel at its real
+size. Give each checkpoint one primary route, `TIR`, `GVM_FALLBACK`, or `UNSUPPORTED`; retain the first TIR blocker
+even when the GVM path succeeds. A `TIR` pass requires a registered RFC-0002 class, independent seats and an actual
+`Final` under the armed binary. A `GVM_FALLBACK` pass requires the same outcomes under RFC-0005 GVM, including
+gas/memory/TIR-budget and worst-case court-window admission, independent seat execution within its receipt window,
+and the complete canonical job. A guessed VM execution, a tiny fixture, or a `Final` for a partial task is not a pass.
+
+The target is **at least 90 % TIR passes over `L_files`**, with a one-sided 95 % lower confidence bound at or above
+90 % when a probability sample is used. Report the exact numerator, denominator, weights, sample design and date.
+The remaining eligible checkpoints are the RFC-0005 fallback queue: try GVM and publish `GVM_FINAL`, `GVM_GAS`,
+`GVM_MEMORY`, `GVM_COURT`, `GVM_SEAT`, `NEEDS_JOB_PROFILE`, `SOURCE` or another named result. “The other 10 % is
+covered by VM” may be said only for the residual actually demonstrated to reach `Final`; an untested or resource-
+limited residual stays uncovered. Report the combined TIR-or-GVM end-to-end rate and the still-uncovered fraction.
+
+### II.12.3 Engineering order and the upgrade rule
+
+Close frequent format, importer, quantisation, static-feature, real-size admission and seat-throughput failures in
+RFC-0002 first; moving them to a VM would spend more gas and seat time without adding useful semantics. For the
+residual, compile supported bulk layers to TIR `TIR_CALL`s and only the unsupported integer operation or dynamic
+control to the GVM guest (§II.10 of RFC-0005). A missing source importer stays off chain and a missing canonical
+job remains an RFC-0003 task. If a heavy residual operation exceeds GVM bounds, the model is **not** covered:
+measure whether a general TIR primitive, an explicitly versioned higher-throughput VM compute facility, or a
+bounded ceiling increase with court and panel evidence is the appropriate upgrade. A frontend pack, a generous
+gas declaration and a claim of universality cannot silently change a consensus operation or bypass a resource cap.
+
+A8 closes only with a published `L_listed`/`L_files` manifest, the 90 % TIR result, and a GVM residual table with
+real-checkpoint `Final` references, sustained panel evidence and no known source-eligible family still uncovered.
+Residual source/rights blockers remain visible and prevent an unrestricted combined-coverage claim. Until then, “RFC-0002 covers nine of ten and
+RFC-0005 covers the last one” is the implementation **goal**, never an achieved coverage statement.
