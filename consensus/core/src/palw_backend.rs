@@ -895,11 +895,15 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this backend serves no answer-only path".to_string())
     }
 
-    /// **ADR-0096 Decision 8: this class's token-to-bytes table** (the served material a constrained job's mask is read
-    /// through, [`crate::palw_fp_constraint_job_v1::PalwTokenTableV1`]), if this host holds one. A host that holds none files
-    /// `Incapable` for a constrained claim and cannot produce one. The default holds none.
-    fn token_table_v1(&self) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
-        None
+    /// **ADR-0096 Decision 8: the token-to-bytes table a constrained job's mask is read through**, if this host holds the one the
+    /// job names ([`crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1`]: the process's tables, registered from
+    /// `--palw-token-table` files and looked up by the root the CLAIM committed to). A host that holds none files
+    /// `Unverifiable` for a constrained claim and cannot produce one.
+    fn token_table_for_job_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
+        crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
     }
 
     /// **RFC-0001 §2.6 stage 2: the prefix STATE of a prompt's first `prefix_ids.len()` ids** — the object a
@@ -1054,7 +1058,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> PalwFpIntervalVerdictV1 {
         // ADR-0096 Decision 8: a constrained claim is replayed through its mask, which needs this class's token table; a
         // host without it (or with another class's) cannot judge the claim — `Unverifiable`, an abstention, not a fault.
-        let mask = match crate::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, self.token_table_v1()) {
+        let mask = match crate::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, self.token_table_for_job_v1(job)) {
             Ok(mask) => mask,
             Err(_) => return PalwFpIntervalVerdictV1::Unverifiable,
         };

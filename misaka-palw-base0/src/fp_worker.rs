@@ -444,6 +444,20 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             .clone()
     }
 
+    /// **One id's piece of the answer** — its bytes, except that a constrained job's end-of-generation id is the answer's end and
+    /// not part of it (`render_answer_v2`, ADR-0096 Decision 6): the streamed pieces and the result's `rendered` are the same bytes.
+    fn piece_v1(&self, job: &PalwFreePromptJobV3, id: u32) -> Vec<u8> {
+        if job.is_constraint() && self.manifest.eog_token_ids.contains(&id) {
+            return Vec::new();
+        }
+        self.tokenizer.token_bytes(id).unwrap_or_default()
+    }
+
+    /// The answer's bytes under the job's rendering rule: `render_answer_v1` for every job, `render_answer_v2` for a constrained one.
+    fn render_v1(&self, job: &PalwFreePromptJobV3, ids: &[u32]) -> Vec<u8> {
+        if job.is_constraint() { render_answer_v2(&self.tokenizer, ids, &self.manifest.eog_token_ids) } else { render_answer_v1(&self.tokenizer, ids) }
+    }
+
     /// **The mask a constrained job runs under on this worker**, or why it cannot (`Ok(None)` for every other job): the
     /// scope [`kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`] opens around the run.
     fn constraint_mask_v1(
@@ -1001,7 +1015,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     retain_v1(rt, trace_out, binding, &run, &context)?;
 
-    let rendered = render_answer_v1(&rt.tokenizer, &run.output_token_ids);
+    let rendered = rt.render_v1(&job, &run.output_token_ids);
 
     eprintln!(
         "[{}] v3 executed: prefill={prefill} decode={}/{} in {execute_ms}ms ({} leaves); exec root={}…",
@@ -1058,7 +1072,7 @@ pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
     let answer = {
         let mut sink = |id: u32| {
             streamed.push(id);
-            on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
+            on_token(id, &rt.piece_v1(&job, id));
         };
         let mask = rt.constraint_mask_v1(&job)?;
         kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
@@ -1082,7 +1096,7 @@ pub fn run_answer_only_v1<B: PalwExecutionBackendV1>(
     Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
         request_hash,
         prompt_token_ids: prompt_ids,
-        rendered: render_answer_v1(&rt.tokenizer, &answer.output_token_ids),
+        rendered: rt.render_v1(&job, &answer.output_token_ids),
         output_token_ids: answer.output_token_ids,
         cached_prefix_tokens: answer.cached_prefix_tokens,
         ended_on_stop_id: answer.ended_on_stop_id,
@@ -1127,7 +1141,7 @@ pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
     }
     let answers = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
         rt.backend.answer_batch_free_prompt_v1(&jobs, &rt.manifest.eog_token_ids, &mut |i, id| {
-            on_token(i, id, &rt.tokenizer.token_bytes(id).unwrap_or_default())
+            on_token(i, id, &rt.piece_v1(&prepared[i].0, id))
         })
     })
     .map_err(|e| format!("execution refused: {e}"))?;
@@ -1142,7 +1156,7 @@ pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1 {
                 request_hash: *request_hash,
                 prompt_token_ids: ids,
-                rendered: render_answer_v1(&rt.tokenizer, &answer.output_token_ids),
+                rendered: rt.render_v1(&job, &answer.output_token_ids),
                 output_token_ids: answer.output_token_ids,
                 cached_prefix_tokens: answer.cached_prefix_tokens,
                 ended_on_stop_id: answer.ended_on_stop_id,
@@ -1224,6 +1238,14 @@ pub fn render_answer_v1(tokenizer: &QwenTokenizer, ids: &[u32]) -> Vec<u8> {
     ids.iter().filter_map(|id| tokenizer.token_bytes(*id)).flatten().collect()
 }
 
+/// **`render_answer_v2` (ADR-0096 Decision 6): the answer cut at the first committed end-of-generation id** — the ids up to and
+/// excluding the first id in `eog_token_ids`, rendered as `render_answer_v1` renders them. The ids after it stay executed,
+/// committed and priced, but are not the answer. Applies to a constrained job (version 6); every other job keeps `render_answer_v1`.
+pub fn render_answer_v2(tokenizer: &QwenTokenizer, ids: &[u32], eog_token_ids: &[u32]) -> Vec<u8> {
+    let end = ids.iter().position(|id| eog_token_ids.contains(id)).unwrap_or(ids.len());
+    render_answer_v1(tokenizer, &ids[..end])
+}
+
 /// The run itself, reporting each id as it is selected with THAT id's bytes.
 ///
 /// The frame contract's own sentence — "`rendered` is this id's rendering alone" — and the reason
@@ -1246,7 +1268,7 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
             // An id past the tokenizer's table (a class's padded vocab) renders to nothing, and
             // the id is still reported: the gateway counts tokens and a silent one would
             // desynchronise it from the ids it will be asked to check the stream against.
-            on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
+            on_token(id, &rt.piece_v1(job, id));
         };
         let mask = rt.constraint_mask_v1(job)?;
         kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
@@ -1665,6 +1687,56 @@ mod tests {
             "an unknown network runs Legacy"
         );
         assert!(runtime(backend(None, fixture_net), fixture_net).is_ok());
+    }
+
+    /// **ADR-0096 Decision 6: `render_answer_v2` cuts the answer at the first end-of-generation id** — the streamed pieces of a
+    /// constrained job and its `rendered` field are the same bytes (the end-of-generation piece is empty), every other job keeps
+    /// `render_answer_v1` byte for byte, and the class table digests are unchanged by it.
+    #[test]
+    fn render_answer_v2_cuts_at_the_first_end_of_generation_id_and_only_for_a_constrained_job() {
+        let rt = fixture_runtime_v1();
+        let eog = rt.manifest().eog_token_ids.clone();
+        let stop = eog[0];
+        let text: Vec<u32> = (0..3).filter(|id| rt.tokenizer().token_bytes(*id).is_some_and(|b| !b.is_empty())).collect();
+        assert!(!text.is_empty(), "the fixture tokenizer renders some low id");
+        let mut ids = text.clone();
+        ids.push(stop);
+        ids.extend_from_slice(&text);
+        let v1 = render_answer_v1(rt.tokenizer(), &ids);
+        let v2 = render_answer_v2(rt.tokenizer(), &ids, &eog);
+        assert_eq!(v2, render_answer_v1(rt.tokenizer(), &text), "the ids up to the first end-of-generation id");
+        assert!(v1.len() > v2.len(), "v1 keeps the end-of-generation piece and everything after it");
+        assert_eq!(render_answer_v2(rt.tokenizer(), &text, &eog), render_answer_v1(rt.tokenizer(), &text), "no end-of-generation id, no cut");
+        // The runtime's per-job rule and pieces.
+        let mut job = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(1),
+            class_id: Hash64::from_u64_word(2),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(3), 0),
+            executor_pubkey: vec![4],
+            operator_id: Hash64::from_u64_word(5),
+            anchor_block: Hash64::from_u64_word(6),
+            anchor_daa: 1,
+            job_nonce: [7; 32],
+            tokenizer_id: Hash64::from_u64_word(8),
+            prompt_token_ids_hash: Hash64::from_u64_word(9),
+            prompt_tokens: 1,
+            decode_token_limit: 4,
+            max_context_tokens: 16,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            tail: None,
+        };
+        assert_eq!(rt.render_v1(&job, &ids), v1, "a plain job: render_answer_v1");
+        assert_eq!(rt.piece_v1(&job, stop), rt.tokenizer().token_bytes(stop).unwrap_or_default());
+        job.version = kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+        assert_eq!(rt.render_v1(&job, &ids), v2, "a constrained job: render_answer_v2");
+        assert!(rt.piece_v1(&job, stop).is_empty(), "its end-of-generation piece is empty, so stream and result agree");
+        let streamed: Vec<u8> = ids.iter().take_while(|id| **id != stop).flat_map(|id| rt.piece_v1(&job, *id)).collect();
+        assert_eq!(streamed, v2);
     }
 
     /// **The fixture class, built the way `e2e_drill::a16_fixture_v1` builds it**: a two-layer

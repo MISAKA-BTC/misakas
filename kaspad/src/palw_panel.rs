@@ -2455,7 +2455,7 @@ fn fp_verify_capture_under_job_v1(
 ) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
     let committed = misaka_palw_base0::fp_interval::base0_fp_capture_committed_ids_v1(capture).unwrap_or_default();
     // ADR-0096 Decision 8: a constrained claim is judged through its mask; a host without the class's table abstains.
-    let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, backend.token_table_v1()) {
+    let mask = match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, backend.token_table_for_job_v1(job)) {
         Ok(mask) => mask,
         Err(_) => return kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Unverifiable,
     };

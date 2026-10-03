@@ -239,6 +239,11 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **Token tables for constrained claims** (ADR-0096 Decision 8; repeatable): files a class's worker wrote with
+    /// `--emit-token-table`. A seat can judge a decode-constrained claim only through the table the claim names (by Merkle root),
+    /// and abstains (`Unverifiable`) for one whose table it does not hold. Each file is decoded, bounded and its root derived on
+    /// load; nothing in it is trusted to name itself.
+    pub palw_token_table: Vec<String>,
     /// **The byte bound on artifacts this node holds resident** (0 = unbounded).
     ///
     /// ADR-0067 makes the class registry permissionless, which multiplies MODELS — and a node that
@@ -687,6 +692,7 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_token_table: Vec::new(),
             palw_class_cache_bytes: 0,
             palw_class_resident_bytes: None,
             palw_attempt_retention_minutes: 60,
@@ -2205,6 +2211,19 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-token-table")
+                .long("palw-token-table")
+                .env("KASPAD_PALW_TOKEN_TABLE")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW: path to a class's token table file (repeatable; a worker writes one with --emit-token-table). A seat \
+                     judges a decode-constrained claim (ADR-0096) through the table the claim names by Merkle root, and abstains \
+                     for one whose table it does not hold.",
+                ),
+        )
+        .arg(
             Arg::new("palw-class-artifact")
                 .long("palw-class-artifact")
                 .env("KASPAD_PALW_CLASS_ARTIFACT")
@@ -2964,6 +2983,10 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_token_table: m
+                .get_many::<String>("palw-token-table")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_token_table),
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_attempt_retention_minutes: m

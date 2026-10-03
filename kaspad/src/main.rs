@@ -76,6 +76,22 @@ pub fn main() {
         }
     }
 
+    // ADR-0096 Decision 8: the token tables this node was started with, loaded (and refused by name) before anything runs.
+    if !args.palw_token_table.is_empty() {
+        let paths: Vec<std::path::PathBuf> = args.palw_token_table.iter().map(std::path::PathBuf::from).collect();
+        match kaspad_lib::palw_backends::load_token_tables_v1(&paths) {
+            Ok(loaded) => {
+                for (path, root, ids) in loaded {
+                    println!("MISAKA PALW: token table {} ({ids} ids), root {root}", path.display());
+                }
+            }
+            Err(why) => {
+                eprintln!("FATAL: {why}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let fd_total_budget = fd_budget::limit() - args.rpc_max_clients as i32 - args.inbound_limit as i32 - args.outbound_target as i32;
     let (core, _) = create_core(args, fd_total_budget);
 

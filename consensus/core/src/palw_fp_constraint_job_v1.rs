@@ -95,7 +95,7 @@ pub fn fp_job_id_constraint_v1(job: &PalwFreePromptJobV3) -> Hash64 {
 /// **A class's token-to-bytes table** (ADR-0096 Decision 8's served material): the byte rendering of every id (`None` for
 /// an id the table cannot render, which is never admitted) and the class's end-of-generation ids (the rule commits the
 /// LOWEST of them when no lane is admitted; they render no bytes of their own).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTokenTableV1 {
     pub entries: Vec<Option<Vec<u8>>>,
     pub eog_token_ids: Vec<u32>,
@@ -184,6 +184,82 @@ impl PalwTokenTableV1 {
         out.copy_from_slice(state.finalize().as_bytes());
         Hash64::from_bytes(out)
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Distribution: a table file, and the process's held tables
+// ---------------------------------------------------------------------------------------------
+
+/// The magic of a token-table file: `PALWTTB1`, then the table's borsh.
+pub const PALW_TOKEN_TABLE_FILE_MAGIC_V1: &[u8; 8] = b"PALWTTB1";
+/// The most ids a table file may hold (a class's vocabulary is below 2^20; the court's tree is below 2^25).
+pub const PALW_TOKEN_TABLE_MAX_VOCAB_V1: usize = 1 << 22;
+/// The most bytes a table file may be (a 152k-entry table is a few MiB).
+pub const PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1: usize = 256 << 20;
+
+/// **A table's file bytes** — what a worker emits (`--emit-token-table`) and a seat loads (`--palw-token-table`).
+pub fn palw_token_table_file_encode_v1(table: &PalwTokenTableV1) -> Vec<u8> {
+    let mut out = PALW_TOKEN_TABLE_FILE_MAGIC_V1.to_vec();
+    out.extend(borsh::to_vec(table).expect("a table is borsh-serializable"));
+    out
+}
+
+/// **A table from its file bytes**, refused by name when it is hostile (bad magic, trailing bytes, past the caps, no
+/// end-of-generation id, an end-of-generation id outside the vocabulary). The loader derives the root itself
+/// ([`PalwTokenTableV1::root`]); nothing in the file is trusted to name it.
+pub fn palw_token_table_file_decode_v1(bytes: &[u8]) -> Result<PalwTokenTableV1, String> {
+    if bytes.len() > PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 {
+        return Err(format!("a token table file is at most {PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1} bytes"));
+    }
+    let body = bytes.strip_prefix(&PALW_TOKEN_TABLE_FILE_MAGIC_V1[..]).ok_or("not a token table file (bad magic)")?;
+    let table: PalwTokenTableV1 = borsh::from_slice(body).map_err(|e| format!("the token table does not decode: {e}"))?;
+    if table.entries.is_empty() || table.entries.len() > PALW_TOKEN_TABLE_MAX_VOCAB_V1 {
+        return Err(format!("a token table holds 1..={PALW_TOKEN_TABLE_MAX_VOCAB_V1} ids, this one {}", table.entries.len()));
+    }
+    if table.eog_token_ids.is_empty() || table.eog_token_ids.iter().any(|id| *id as usize >= table.entries.len()) {
+        return Err("a token table names at least one end-of-generation id, each inside its vocabulary".to_string());
+    }
+    Ok(table)
+}
+
+/// **The tables this process holds, by root** — what a seat's replay of a constrained claim looks its table up in. Registered at
+/// start-up from `--palw-token-table` files; a claim names its table's root, so a table is found by what the CLAIM committed to,
+/// and a seat that holds none of the claim's abstains (`Unverifiable`).
+#[derive(Default)]
+pub struct PalwTokenTableSetV1 {
+    by_root: std::sync::RwLock<std::collections::BTreeMap<Hash64, Arc<PalwTokenTableV1>>>,
+}
+
+impl PalwTokenTableSetV1 {
+    pub fn register(&self, table: PalwTokenTableV1) -> Hash64 {
+        let root = table.root();
+        self.by_root.write().unwrap_or_else(|e| e.into_inner()).insert(root, Arc::new(table));
+        root
+    }
+
+    pub fn for_root(&self, root: &Hash64) -> Option<Arc<PalwTokenTableV1>> {
+        self.by_root.read().unwrap_or_else(|e| e.into_inner()).get(root).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_root.read().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+static PALW_TOKEN_TABLES_V1: std::sync::OnceLock<PalwTokenTableSetV1> = std::sync::OnceLock::new();
+
+/// The process-wide table set.
+pub fn palw_token_tables_v1() -> &'static PalwTokenTableSetV1 {
+    PALW_TOKEN_TABLES_V1.get_or_init(PalwTokenTableSetV1::default)
+}
+
+/// **The table a constrained job names, if this process holds it** (`None` for any other job).
+pub fn palw_token_table_for_job_v1(job: &PalwFreePromptJobV3) -> Option<Arc<PalwTokenTableV1>> {
+    palw_token_tables_v1().for_root(&palw_fp_constraint_table_root_v1(job)?)
 }
 
 /// Key of a token-table leaf.

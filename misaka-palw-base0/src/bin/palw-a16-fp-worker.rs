@@ -292,6 +292,16 @@ fn main() {
                 .into())
         }))
     };
+    // ADR-0096 Decision 8: write this class's token table (the id → bytes rendering a constrained job's mask is read through) as
+    // the file a seat loads with `--palw-token-table`, print its Merkle root (what a constrained claim's tail names) and exit.
+    if let Some(path) = flag("--emit-token-table") {
+        let rt = load();
+        let table = rt.token_table_v1();
+        let bytes = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table);
+        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot write {path}: {e}")));
+        println!("token table: {} ids, {} end-of-generation, {} bytes, root {}", table.vocab(), table.eog_token_ids.len(), bytes.len(), table.root());
+        return;
+    }
     match flag("--mode").as_deref() {
         Some(PALW_FP_WORKER_MODE_MANIFEST_V3) => {
             let rt = load();
