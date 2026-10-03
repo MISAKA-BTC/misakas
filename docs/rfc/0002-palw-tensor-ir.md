@@ -705,7 +705,7 @@ not yet built. Everything else in Part II is tooling, data formats and node-side
 ## Part II in one page
 
 Part I makes a model *expressible as data*. It does not make *getting a model there* a standard path, and today each
-model is refused for a different reason, late: after hundreds of GB were downloaded and converted. Part II specifies five
+model is refused for a different reason, late: after hundreds of GB were downloaded and converted. Part II specifies six
 things, one per requirement of §II.0.1.
 
 1. **A header-only preflight (§II.2).** Reading only the Hugging Face config files plus the safetensors headers, or the
@@ -728,6 +728,11 @@ things, one per requirement of §II.0.1.
    already separates them; §II.7 states what it does and does not guarantee against the requirement, gives the registry a
    structured `blocking` field (stage, code, what is missing, how much), and records the consensus rules, decided but not yet built,
    that close what it lacks.
+6. **Hub-wide end-to-end coverage (§II.10).** The 50–100 architecture corpus measures the lowerer, not how many Hugging Face
+   repositories can register, obtain independent seats, produce a valid claim and reach `Final`. A pinned Hub census and a
+   stratified, real-checkpoint cohort measure every gate separately. The largest measured failure categories determine the
+   next generic frontend, format, modality, admission or verification work; a declaration of broad coverage needs the
+   end-to-end evidence, including panel capacity.
 
 ## 概要(Part II、日本語)
 
@@ -742,12 +747,16 @@ things, one per requirement of §II.0.1.
 - **段階的な有効化(§II.7)。** 登録は存在、mining は別の段階。現行 lifecycle の穴(ready seat は bond 数・probation の claim は報酬が出る・実行系の認証 gate が無い・seat のメモリ不足は無言)を洗い出し、
   node 側だけで直せる部分(registry の構造化 `blocking`)は実装し、consensus に触れる部分は dormant fence(`palw_class_seating`、全 class 種別に 1 つの着席規則)として 2026-10-01 に決定済み(未実装)。
 - **完成基準(§II.8)。** 50〜100 の代表 architecture、既存 feature で ≥ 90 % 表現可能、到達可能な TIR op への court coverage 100 %。
+- **HF 全体への到達(§II.10)。** 上の 90 % は代表 architecture の下ろしやすさであり、HF のモデル登録率ではない。公開モデルの
+  repo と revision を固定して、取得可能性、変換、実サイズの admission、独立 seat、claim の `Final` を別々に測る。失敗を
+  format・feature・modality・court・座席/処理能力に分類し、件数の大きい汎用的な欠落から閉じる。実走なしに「大半が登録・Final」と言わない。
 
 ## II.0 Requirements, acceptance and the three examples
 
 ### II.0.1 The requirements
 
-The user's, in the user's order. R1–R5 are what Part II implements; the acceptance criteria are §II.0.2.
+The user's, in the user's order. R1–R5 are the onboarding path; R6 adds the 2026-10-03 Hub-majority outcome.
+The acceptance criteria are §II.0.2.
 
 - **R1. A header-only preflight.** Read only the Hugging Face config files plus the safetensors headers, or the GGUF
   header (metadata KV and tensor infos, never the data section). Report: supported architecture and features; per-tensor
@@ -764,6 +773,9 @@ The user's, in the user's order. R1–R5 are what Part II implements; the accept
 - **R5. Registration separated from mining enablement.** Mining claims and rewards stay off until the class is
   adjudicable, the executor is certified (conformance), and enough ready seats from distinct operators have possession
   proofs. A failure says which stage (convert / register / mine) lacked what, in both the CLI and the chain registry.
+- **R6. Most Hub models can complete that path, measured as repositories rather than architecture examples.** The
+  system must name each blocking gate, close the largest generic gaps without a model-specific consensus path, and prove
+  that a representative set of real checkpoints can register, be independently seated and reach `Final` (§II.10).
 
 ### II.0.2 Acceptance
 
@@ -774,6 +786,8 @@ The user's, in the user's order. R1–R5 are what Part II implements; the accept
 - **A3.** The testnet-12 preflight (shape depth and above) shows the court window and the canonical-job conditions.
 - **A4.** Mining starts only after the ready seats of distinct operators and their possession proofs.
 - **A5.** Failures are visible per stage, in the CLI and in the registry.
+- **A6.** A pinned, auditable Hub census and real-checkpoint cohort meet the quantitative end-to-end claim rule of
+  §II.10.5. The architecture-corpus percentage alone cannot satisfy A6.
 
 ### II.0.3 The three examples
 
@@ -792,7 +806,9 @@ The user's, in the user's order. R1–R5 are what Part II implements; the accept
 | R3 quant registry | §II.5 | implemented: 29 ggml types (`957d8e26d`), GPTQ, AWQ, FP8 block, three compressed-tensors formats (`1db3c430f`), MXFP4 from safetensors (`096e88de5`), bitsandbytes nf4/fp4/int8 (`f74d1a333`); known-undescribed list (`17febcd9d`) |
 | R4 feature scope | §II.6 | implemented (`d7c0d776a`); shown by the report, the pack and `misaka model inspect` |
 | R5 staged enablement | §II.7 | analysed here; the registry's `blocking` field and its CLI display are node-only and specified in §II.7.4; the consensus rules of §II.7.5 are decided (2026-10-01) and not yet built |
+| R6 Hub-majority outcome | §II.10 | new acceptance program, **not an implementation claim**; requires a live Hub census, real checkpoints and an adequately seated end-to-end drill |
 | A1–A5 | §II.8 | A2 is met by the pack; A1, A3, A4, A5 complete with the preflight (task 7), `blocking` and the decision on §II.7.5 |
+| A6 | §II.10.5 | open until the measured `register` and `Final` gates pass; neither the 92 % A/B corpus reading nor the earlier Hub estimates close it |
 
 ## II.1 Principles
 
@@ -1678,6 +1694,7 @@ registration made any other way is valid.
 | **A3** the testnet-12 preflight shows the court window and the canonical-job conditions | a Qwen3.5-9B-shaped configuration: the window needed and the limit, and the canonical job against the network's bounds, at a height | with the preflight (task 7) and the court-window plug point (§II.2.6) |
 | **A4** mining starts only after ready seats of distinct operators with possession proofs | today: ready bonds with possession proofs (the lifecycle, §II.7.2); after Proposal A and C1: for every class kind, seven distinct ready operators, three of them independent of the registrant and the executor | partly met today; Proposal A (approved) closes the rest |
 | **A5** failures are visible per stage in the CLI and the registry | the preflight's stage table (convert, register, mine); the registry's `blocking` and its CLI display (§II.7.4), one test per lifecycle state | with `blocking` (this lane) and the preflight (task 7) |
+| **A6** a majority of Hub model repos can register and reach `Final` | the pinned Hub census, real-checkpoint cohort and end-to-end gate evidence meet every threshold in §II.10.5 | open; architecture-corpus percentages and earlier Hub estimates do not close it |
 
 ### II.8.2 Corpus completion
 
@@ -1738,3 +1755,141 @@ Part I's freeze criterion (§1.2), for the corpus-and-coverage lane. The corpus 
    regenerate the vectors from the program on the reference evaluator, which is Proposal B.
 3. **The court window** (§II.2.6): whether the class-specific window of int-10 replaces the global rule everywhere the preflight
    reads it, and what the preflight reports for a class registered under the old rule.
+
+## II.10 Hugging Face majority: from a lowerable architecture to a class that can reach `Final`
+
+*Added 2026-10-03 for R6/A6. This is an acceptance and implementation plan for Part II. It does not arm a fence, relax
+`tir_admit_v1` or the court, or assert that the present build already meets the target. RFC-0003 supplies non-text job and
+output profiles; RFC-0006 and RFC-0007 supply the smaller per-seat verification and cheaper receipt carriage needed to
+serve large classes. RFC-0008 changes block work, not the model-onboarding denominator.*
+
+### II.10.1 The gap and the unit of measurement
+
+The 92 % A/B reading of the 100-architecture corpus (§Implementation status, `hf-coverage.md` §23) means that those
+fixtures' feature combinations read. It is **not** the share of Hub repositories whose real weights convert, whose
+full advertised task is supported, whose real-size program passes admission, or whose claims can be licensed and
+finalised. `hf-coverage.md` §19.2's approximate registrable counts are estimates over incomplete modality and format
+coverage, not a live census or a `Final` measurement. An unsupported image, audio, encoder, adapter or quantised repo
+cannot disappear from the denominator just because the decoder corpus passes.
+
+The census unit is one public **model repository at one pinned commit SHA** (`repo_id@revision`) in a dated Hub snapshot.
+One repo counts once in the headline, even if it publishes many formats. Its selected artifact path, every base-model
+reference and their SHAs, task, intended inputs/outputs and weight digest are recorded. A derived LoRA or other adapter
+counts only if its base resolves at a pinned revision and the complete composite can be checked. Also report unique
+artifact roots and unique feature sets separately, so a popular architecture copied into thousands of repos cannot
+hide missing families. Later revisions enter the next snapshot, never rewrite the old result.
+
+Use three visible denominators, and publish the exclusions rather than silently shrinking them:
+
+| Denominator | Meaning |
+| --- | --- |
+| `D_all` | Every public Hub model repo enumerated at the snapshot, including gated listings and repos with no usable weights. Private repos are not enumerable and are stated outside the claim. |
+| `D_files` | The subset with publicly readable, complete weight files or a fully resolvable base-plus-adapter chain. An unknown architecture, format or modality stays **in** this denominator. |
+| `D_rights` | Repos from `D_files` for which the registrant has established permission for the proposed download, redistribution/serving and on-chain use. A card's license field is evidence to review, not an automatic permission decision; unknown terms remain `RIGHTS_UNCONFIRMED`. |
+
+Publish both repo-weighted and download-weighted rates, but the repo-weighted `D_all` rate is the headline. Downloads
+are a secondary demand signal, never a substitute for breadth. Report each task (`pipeline_tag`), library, model-size
+band, format, age and feature family, including an `unknown` stratum. A repo that advertises a multimodal or generative
+task does not count as covered because its text decoder alone lowers: the **whole declared task** must have a canonical
+job, inputs, output, court path and artifact. A smaller text-only class may be listed as a separately scoped class,
+without crediting the original repo's full task.
+
+### II.10.2 A repeatable Hub census and real-checkpoint cohort
+
+At a recorded UTC instant, enumerate model repos through the version-pinned Hub API. Save the response, repo id,
+commit SHA, `pipeline_tag`, `library_name`, card license/gating fields, downloads, `siblings` and the recursive file
+inventory with sizes and content identifiers. Resolve the repository and every referenced component at those SHAs.
+Fetch only configs, model/pipeline indices, tokenizer metadata and safetensors or GGUF **headers** for the census's
+first pass. File access failure, missing weights, an ambiguous base reference and unsupported files are results, not
+repos dropped from the table. Respect Hub pagination and rate limits; the census is reproducible from its saved
+manifest without asking the Hub to retain the same mutable `main` branch.
+
+The Hub exposes `list_models`, revision-pinned `model_info` and `list_repo_tree`; model cards carry task and license
+metadata. `snapshot_download` can fetch only named files at a revision. Standard Diffusers pipelines have a
+`model_index.json`, and modular pipelines may have `modular_model_index.json`; treating every repository as a
+`transformers` text `config.json` is therefore a measurable coverage loss. See the primary API descriptions:
+[Hub API](https://huggingface.co/docs/huggingface_hub/package_reference/hf_api),
+[model cards](https://huggingface.co/docs/hub/model-cards),
+[revision-pinned downloads](https://huggingface.co/docs/huggingface_hub/en/guides/download), and
+[Diffusers loading](https://huggingface.co/docs/diffusers/main/using-diffusers/loading).
+
+Run the header-only preflight for **every** `D_all` entry that exposes readable metadata. For deeper gates, draw a
+published, reproducible stratified sample of real checkpoints from each material task × format × size × feature
+stratum, with a random tail sample as well as the most downloaded repos. Pin the sample seed, inclusion probability,
+all repo SHAs and reasons for nonresponse. A finite corpus of 100 architecture fixtures remains a regression suite;
+it is not this probability sample. Publish estimates with confidence intervals and raw counts, and show the failure
+list so the numerator cannot improve by reclassifying a hard repo as `unknown` or `inaccessible`.
+
+### II.10.3 The gates whose failures must be counted
+
+The preflight, pack and chain observations use one machine-readable row per repo and one stable `blocking` code per
+failed gate. A downstream gate is `NOT_RUN_AFTER_<gate>` when an earlier one failed, never `PASS` by inference.
+
+| Gate | PASS evidence | Examples of named blockers |
+| --- | --- | --- |
+| `source` | Pinned files, components, task and access/rights decision; complete artifact or resolvable adapter base | `GATED_ACCESS`, `MISSING_WEIGHTS`, `BASE_UNPINNED`, `RIGHTS_UNCONFIRMED` |
+| `lower` | Full task lowers to a versioned `ModelSpec`/TIR program and every semantic key and weight is consumed | `FEATURE_C`, `CUSTOM_CODE_UNMODELLED`, `MODALITY_PROFILE_MISSING`, `PARTIAL_TASK_ONLY` |
+| `pack` | Real checkpoint converts by a bounded-memory stream; format decode matches an independent implementation; reference and integer outputs meet the pinned fidelity rule; rebuilt roots agree | `QUANT_DESCRIPTOR_MISSING`, `QUANT_LIBRARY_UNVERIFIED`, `FIDELITY_FAIL`, `ARTIFACT_MISMATCH` |
+| `admit` | The real-size graph, cost, court cone/window, DA close, capacity and artifact pass the actual `tir_admit_v1` and registry path at a named ruleset/height | `COURT_BUDGET`, `CLOSE_TOO_LARGE`, `CONTEXT_BOUND`, `CLASS_SEATING` |
+| `seat` | Required distinct, independent operators prove possession and each seat's executor conformance for **this** class root; required shard/witness data are available | `READY_SEATS_SHORT`, `INDEPENDENCE_SHORT`, `SEAT_MEMORY`, `WITNESS_UNAVAILABLE` |
+| `claim` / `Final` | A real job makes a valid PALW claim, obtains counted independent receipts, survives the court window and reaches `Final` with its expected reward/weight; the claim and all lifecycle objects remain in the accepted fold | `PANEL_BACKLOG`, `RECEIPT_TIMEOUT`, `OBJECT_DROPPED`, `COURT_FAULT` |
+
+`registration-ready` means `source` through `admit` passed offline against the named ruleset; `registered` requires
+the class's transaction to be accepted on the chain. `seat-ready` and `Final-proven` are later, different facts.
+A produced block, a `PanelBound` object, a `Capped` class, or a successful tiny fixture is not a `Final` verdict.
+Report stage counts as a funnel for `D_all`, `D_files`, `D_rights` and every stratum, with the exact stage at which a
+repo stopped. Never use an unverified pack, an unavailable independent seat or an optimistic receipt as a pass.
+
+### II.10.4 Close the largest measured blockers without weakening verification
+
+1. **Generic frontend and full-task profiles.** Rank `FEATURE_C` and `MODALITY_PROFILE_MISSING` by lost repos and
+   downloads. Add a feature to the data adapter/generic lowerer once for all matching architectures (II.1 P1–P4),
+   and require a full real-checkpoint fixture plus the one-move court battery. Route image, embedding, vision input,
+   audio and video through RFC-0003's canonical jobs, stage edges and outputs. Keep a missing profile blocked; no
+   text-decoder-only success can silently stand for a vision or audio model.
+2. **Formats and custom code.** Add common safetensors, GGUF and other measured weight layouts through the descriptor
+   registry (§II.5), checking real upstream quantiser output, not only synthetic bytes (§II.9 L4–L5). A repo's Python
+   `trust_remote_code` or custom Diffusers pipeline never runs in a consensus node or seat. An offline, revision-pinned,
+   isolated reference run may help author a declarative adapter and fixtures; independent implementations must then
+   reproduce the canonical program, weights and output. Unknown behaviour remains a named refusal. Hub custom code
+   is executable code, as [Diffusers documents](https://huggingface.co/docs/diffusers/using-diffusers/custom_pipeline_overview).
+3. **Real-size admission.** Triage actual `COURT_BUDGET`, close, context and fidelity failures before changing a
+   ceiling. For example, `hf-coverage.md` §19.1c records Qwen3.5's real-size `C_j` refusal and proposes bounding
+   elementwise work in the same generic cost proof. Measure the new bound and court vectors; never waive a court
+   ceiling, a range proof or an unknown quantisation to improve a coverage percentage.
+4. **Seats and verification supply.** Proposal A's class seating and Proposal B's seat conformance (§II.7.5) remain
+   binding. RFC-0006 can make a large class feasible per seat by verifying committed layer/position cells with only
+   that shard's weights; RFC-0007 can lower verifier work where its algebraic checker is sound and batch verdict
+   carriage. Their dormant fences need independent crossing drills before their gains count. A capped class under
+   RFC-0007 is measured separately: it does not pass `Final` until full holder coverage and re-verification. At the
+   target claim rate, measure receipt supply, `PanelBound` age, queue growth, licences, `Final` rate and dropped
+   lifecycle objects. Increase qualified seat supply or bound intake when the queue grows; do not turn missing
+   receipts into `Valid` or reduce independence/quorum to meet a target.
+5. **Iterate from the census.** For each release, publish the top blocker buckets with counts, one generic change per
+   bucket, its before/after cohort, and regressions in other strata. Re-run the census on new pinned snapshots.
+   An improvement in A/B architecture coverage that does not move `registration-ready`, `seat-ready` and `Final`
+   remains a frontend improvement, not completion of R6.
+
+### II.10.5 Exit criteria and the permitted coverage claim
+
+The phrase **"most Hugging Face models can be brought to PALW"** is permitted only when a dated report shows all of
+the following. The first target is literal majority; the engineering target is at least 80 % of `D_files` at
+`registration-ready`, without treating `D_files` as the headline denominator.
+
+1. The estimated repo-weighted `registration-ready / D_all` share has a **one-sided 95 % lower confidence bound above
+   50 %**, with exclusions and nonresponses included as failures in `D_all`. Give the exact point estimate, bound,
+   denominator and snapshot. Report all material task/format/size strata even if some remain below 50 %; never
+   advertise an unrestricted modality claim from a text-only result.
+2. From the same stratified real-checkpoint cohort, the estimated `Final`-capable share of `D_all` also has a lower
+   bound above 50 %. Each sampled success needs a confirmed registration, independent seat evidence, a PALW claim
+   and its on-chain `Final` under the shipping binary and the target ruleset. A sample without enough seats is a
+   measured `seat` failure, not a waived trial. The report includes enough independent operators to exercise the
+   seating rule; a four-node fence-crossing drill cannot close this item.
+3. The panel runs at the intended sustained issuance rate for at least two receipt windows without an increasing
+   `PanelBound` queue, an unaccounted dropped lifecycle object or a stalled `Final` rate. Every failure is retained
+   in the cohort's gate table. Corpus coverage (§II.8.2), `Capped` entry, block production and isolated unit tests
+   are supporting evidence, never replacements for this run.
+
+If any condition fails, publish the measured narrower claim (for example, *decoder-only float checkpoints lower*)
+and the blocker distribution. This keeps the goal visible without declaring Hub-majority registration or `Final`
+from the 90–92 % architecture corpus or the earlier unmeasured Hub estimates.
