@@ -32,6 +32,8 @@ fn moe(experts: usize, top_k: usize, inter: usize, act: Act, r: RouterSpec) -> M
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     }
 }
 
@@ -900,6 +902,8 @@ pub(crate) fn gpt_oss(p: &mut P) -> Result<ArchSpec> {
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     };
     p.layouts.experts = MlpLayout::FusedInterleaved;
     let layers = (0..n)

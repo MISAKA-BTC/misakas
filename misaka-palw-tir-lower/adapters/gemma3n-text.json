@@ -1,0 +1,96 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma3n-text",
+  "doc": "Gemma-3n's text decoder (the language model of E2B/E4B): K = altup_num_inputs residual streams updated by AltUp (a per-position K×K prediction from a tanh router, a correction by the innovation, magnitude-matched stream creation and merge), a LAuReL low-rank branch joined with the attention as (a + laurel)/√2, Gemma's four plain-gain RMSNorms around the mixer and the FFN, per-layer inputs (PLE) added to streams 1..K-1, sliding/full attention with their own rope bases, per-head QK-norm with gains and a weightless V-norm at scale 1, KV sharing by the last num_kv_shared_layers layers (the last earlier layer of their own type), a per-layer FFN width, and the Gaussian top-k activation sparsity of the gate (activation_sparsity_pattern, a per-layer fraction). altup_coef_clip clips the coefficients only in training, so it is inert; altup_active_idx must be 0.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "Gemma3nForCausalLM"
+    ],
+    "model_types": [
+      "gemma3n_text"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 262400,
+      "hidden_size": 2048,
+      "intermediate_size": 16384,
+      "num_hidden_layers": 35,
+      "num_attention_heads": 8,
+      "num_key_value_heads": 2,
+      "head_dim": 256,
+      "max_position_embeddings": 32768,
+      "hidden_activation": "gelu_pytorch_tanh",
+      "tie_word_embeddings": true,
+      "sliding_window": 512,
+      "num_kv_shared_layers": 15,
+      "hidden_size_per_layer_input": 256,
+      "vocab_size_per_layer_input": 262144,
+      "altup_active_idx": 0,
+      "altup_num_inputs": 4,
+      "altup_correct_scale": true,
+      "laurel_rank": 64,
+      "final_logit_softcapping": 30.0,
+      "rope_local_base_freq": 10000.0
+    },
+    "inert": [
+      "altup_coef_clip"
+    ]
+  },
+  "spec": {
+    "altup": {
+      "$var": "altup"
+    }
+  },
+  "vars": [
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_activation"}}},
+    {"name": "sw", "value": {"$cfg": "sliding_window"}},
+    {"name": "altup_idx", "value": {"$check": [{"$eq": [{"$cfg": "altup_active_idx"}, 0]}, "altup_active_idx is not 0 (only the first stream is active)"]}},
+    {"name": "kv_shared", "value": {"$cfg": "num_kv_shared_layers"}},
+    {"name": "shared_ok", "value": {"$bad": [{"$le": [{"$var": "kv_shared"}, {"$var": "n"}]}, {"$cat": [{"$var": "kv_shared"}, " KV-sharing layers of ", {"$var": "n"}]}]}},
+    {"name": "first_shared", "value": {"$sub": [{"$var": "n"}, {"$var": "kv_shared"}]}},
+    {"name": "some_compute_ok", "value": {"$check": [{"$or": [{"$eq": [{"$var": "kv_shared"}, 0]}, {"$gt": [{"$var": "first_shared"}, 0]}]}, "every layer shares keys and values, and no layer computes them"]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["sliding_attention", "full_attention"], "each": {"$if": [{"$eq": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, 5]}, 0]}, "full_attention", "sliding_attention"]}}}},
+    {"name": "share_s", "value": {"$gt": [{"$sum": {"$map": [{"$range": {"$var": "n"}}, "j", {"$if": [{"$and": [{"$ge": [{"$var": "j"}, {"$var": "first_shared"}]}, {"$eq": [{"$index": [{"$var": "types"}, {"$var": "j"}]}, "sliding_attention"]}]}, 1, 0]}]}}, 0]}},
+    {"name": "share_f", "value": {"$gt": [{"$sum": {"$map": [{"$range": {"$var": "n"}}, "j", {"$if": [{"$and": [{"$ge": [{"$var": "j"}, {"$var": "first_shared"}]}, {"$eq": [{"$index": [{"$var": "types"}, {"$var": "j"}]}, "full_attention"]}]}, 1, 0]}]}}, 0]}},
+    {"name": "src_s", "value": {"$if": [{"$eq": [{"$var": "first_shared"}, 0]}, -1, {"$max": {"$map": [{"$range": {"$var": "first_shared"}}, "j", {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "j"}]}, "sliding_attention"]}, {"$var": "j"}, -1]}]}}]}},
+    {"name": "src_f", "value": {"$if": [{"$eq": [{"$var": "first_shared"}, 0]}, -1, {"$max": {"$map": [{"$range": {"$var": "first_shared"}}, "j", {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "j"}]}, "full_attention"]}, {"$var": "j"}, -1]}]}}]}},
+    {"name": "src_ok", "value": {"$check": [{"$and": [{"$or": [{"$not": {"$var": "share_s"}}, {"$ge": [{"$var": "src_s"}, 0]}]}, {"$or": [{"$not": {"$var": "share_f"}}, {"$ge": [{"$var": "src_f"}, 0]}]}]}, "a KV-sharing layer, and no earlier layer of its type computes keys and values"]}},
+    {"name": "source_s", "value": {"$if": [{"$var": "share_s"}, {"$var": "src_s"}, null]}},
+    {"name": "source_f", "value": {"$if": [{"$var": "share_f"}, {"$var": "src_f"}, null]}},
+    {"name": "sources_raw", "value": {"$flatten": [{"$if": [{"$ne": [{"$var": "source_s"}, null]}, [{"$var": "source_s"}], []]}, {"$if": [{"$ne": [{"$var": "source_f"}, null]}, [{"$var": "source_f"}], []]}]}},
+    {"name": "sources", "value": {"$if": [{"$and": [{"$eq": [{"$len": {"$var": "sources_raw"}}, 2]}, {"$gt": [{"$index": [{"$var": "sources_raw"}, 0]}, {"$index": [{"$var": "sources_raw"}, 1]}]}]}, [{"$index": [{"$var": "sources_raw"}, 1]}, {"$index": [{"$var": "sources_raw"}, 0]}], {"$var": "sources_raw"}]}},
+    {"name": "slot_by_layer", "value": {"$map": [{"$range": {"$var": "n"}}, "j", {"$if": [{"$eq": [{"$len": {"$var": "sources"}}, 0]}, null, {"$if": [{"$eq": [{"$index": [{"$var": "sources"}, 0]}, {"$var": "j"}]}, 0, {"$if": [{"$and": [{"$gt": [{"$len": {"$var": "sources"}}, 1]}, {"$eq": [{"$index": [{"$var": "sources"}, 1]}, {"$var": "j"}]}]}, 1, null]}]}]}]}},
+    {"name": "d_pl", "value": {"$cfg": "hidden_size_per_layer_input"}},
+    {"name": "vocab_pl", "value": {"$cfg": "vocab_size_per_layer_input"}},
+    {"name": "final_cap", "value": {"$cfg?": "final_logit_softcapping"}},
+    {"name": "weightless", "value": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "None", "bias": false}},
+    {"name": "rope", "value": null},
+    {"name": "altup", "value": {"streams": {"$cfg": "altup_num_inputs"}, "floor": 1e-05, "correct_scale": {"$cfg": "altup_correct_scale"}}},
+    {"name": "ple", "value": {"$if": [{"$gt": [{"$var": "d_pl"}, 0]}, {"dim": {"$var": "d_pl"}, "vocab": {"$var": "vocab_pl"}, "table_scale": {"$sqrt": {"$var": "d_pl"}}, "proj_scale": {"$div": [1.0, {"$sqrt": {"$var": "hidden"}}]}, "norm": {"$var": "norm"}, "combine_scale": 0.7071067811865476, "act": {"$var": "act"}, "post_norm": {"$var": "norm"}}, null]}},
+    {"name": "emb_scale", "value": {"$sqrt": {"$var": "hidden"}}},
+    {"name": "head", "value": {"tied": {"$var": "tied"}, "logit_scale": {"$var": "logit_scale"}, "pre_scale": {"$var": "pre_scale"}, "softcap": {"$var": "final_cap"}}},
+    {"name": "inter_cfg", "value": {"$cfg": "intermediate_size"}},
+    {"name": "sparsity_cfg", "value": {"$cfg?": "activation_sparsity_pattern"}},
+    {"name": "laurel_rank", "value": {"$cfg": "laurel_rank"}},
+    {"name": "full", "value": {"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "full_attention"]}, "layer": true},
+    {"name": "shares", "value": {"$ge": [{"$var": "i"}, {"$var": "first_shared"}]}, "layer": true},
+    {"name": "hd_i", "value": {"$var": "hd"}, "layer": true},
+    {"name": "src_i", "value": {"$if": [{"$var": "full"}, {"$var": "source_f"}, {"$var": "source_s"}]}, "layer": true},
+    {"name": "keyed", "value": {"$has": "rope_parameters"}},
+    {"name": "local_theta", "value": {"$cfg": "rope_local_base_freq"}},
+    {"name": "rope_i", "value": {"$if": [{"$var": "keyed"}, {"$rope": {"dim": {"$var": "hd"}, "style": "Half", "theta": {"$if": [{"$var": "full"}, 1000000.0, 10000.0]}, "layer_type": {"$index": [{"$var": "types"}, {"$var": "i"}]}, "max_pos": {"$var": "max_pos"}}}, {"$if": [{"$var": "full"}, {"$rope": {"dim": {"$var": "hd"}, "style": "Half", "theta": 1000000.0, "max_pos": {"$var": "max_pos"}}}, {"$rope_plain": {"dim": {"$var": "hd"}, "theta": {"$var": "local_theta"}}}]}]}, "layer": true},
+    {"name": "l_mixer", "value": {"Attention": {"heads": {"$var": "heads"}, "kv_heads": {"$var": "kv"}, "head_dim": {"$var": "hd"}, "v_head_dim": {"$var": "hd"}, "q_bias": {"$var": "abias"}, "k_bias": {"$var": "abias"}, "v_bias": {"$var": "abias"}, "o_bias": {"$var": "abias"}, "qk_norm": {"norm": {"$var": "norm"}, "scope": "PerHeadShared"}, "v_norm": {"$if": [{"$var": "shares"}, null, {"norm": {"$var": "weightless"}, "scope": "PerHeadShared"}]}, "position": {"Rope": {"$var": "rope_i"}}, "scale": 1.0, "window": {"$if": [{"$var": "full"}, null, {"$var": "sw"}]}, "v_from_k": false, "param_prefix": null, "kv_share": {"$if": [{"$var": "shares"}, {"Consumer": {"slot": {"$index": [{"$var": "slot_by_layer"}, {"$var": "src_i"}]}}}, {"$if": [{"$ne": [{"$index": [{"$var": "slot_by_layer"}, {"$var": "i"}]}, null]}, {"Source": {"slot": {"$index": [{"$var": "slot_by_layer"}, {"$var": "i"}]}}}, null]}]}}}, "layer": true},
+    {"name": "inter_i", "value": {"$if": [{"$is_list": {"$var": "inter_cfg"}}, {"$index": [{"$var": "inter_cfg"}, {"$var": "i"}]}, {"$var": "inter_cfg"}]}, "layer": true},
+    {"name": "inter_0", "value": {"$if": [{"$is_list": {"$var": "inter_cfg"}}, {"$index": [{"$var": "inter_cfg"}, 0]}, {"$var": "inter_cfg"}]}},
+    {"name": "sparsity_i", "value": {"$let": ["s", {"$if": [{"$ne": [{"$var": "sparsity_cfg"}, null]}, {"$if": [{"$is_list": {"$var": "sparsity_cfg"}}, {"$index": [{"$var": "sparsity_cfg"}, {"$var": "i"}]}, {"$var": "sparsity_cfg"}]}, {"$if": [{"$gt": [{"$var": "n"}, 10]}, {"$if": [{"$lt": [{"$var": "i"}, 10]}, 0.95, 0.0]}, 0.0]}]}, {"$if": [{"$gt": [{"$var": "s"}, 0.0]}, {"$var": "s"}, null]}]}, "layer": true},
+    {"name": "l_ffn", "value": {"Mlp": {"intermediate": {"$var": "inter_i"}, "act": {"$var": "act"}, "gated": true, "up_bias": false, "down_bias": false, "name": {"$if": [{"$eq": [{"$var": "inter_i"}, {"$var": "inter_0"}]}, null, {"$cat": ["mlp", {"$var": "inter_i"}]}]}, "sparsity": {"$var": "sparsity_i"}}}, "layer": true},
+    {"name": "l_residual", "value": {"AltUp": {"pre_mixer": {"$var": "norm"}, "post_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "post_ffn": {"$var": "norm"}, "router_norm": {"$var": "norm"}, "laurel": {"rank": {"$var": "laurel_rank"}, "post_norm": {"$var": "norm"}}, "ple": {"$var": "ple"}}}, "layer": true},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"norm.post_mix": "{p}layers.{L}.post_attention_layernorm", "norm.ffn": "{p}layers.{L}.pre_feedforward_layernorm", "norm.post_ffn": "{p}layers.{L}.post_feedforward_layernorm", "altup.proj": "{p}altup_projections.{I}", "altup.unembed": "{p}altup_unembed_projections.{I}", "altup.router_norm": "{p}layers.{L}.altup.router_norm", "altup.router": "{p}layers.{L}.altup.modality_router", "altup.pred_coefs": "{p}layers.{L}.altup.prediction_coefs", "altup.correction_coefs": "{p}layers.{L}.altup.correction_coefs", "altup.correct_scale": "{p}layers.{L}.altup.correct_output_scale", "laurel.left": "{p}layers.{L}.laurel.linear_left", "laurel.right": "{p}layers.{L}.laurel.linear_right", "laurel.norm": "{p}layers.{L}.laurel.post_laurel_norm", "ple.proj": "{p}per_layer_model_projection", "ple.table": "{p}embed_tokens_per_layer", "ple.norm": "{p}per_layer_projection_norm", "ple.gate": "{p}layers.{L}.per_layer_input_gate", "ple.out": "{p}layers.{L}.per_layer_projection", "ple.post_norm": "{p}layers.{L}.post_per_layer_input_norm"}]}},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "gemma3n_text"}
+  ]
+}

@@ -189,9 +189,28 @@ fn mixer(m: &Mixer) -> String {
         Mixer::RwkvTime(r) => format!("RWKV-{} time mix, attention dim {}", r.version, r.attn_dim),
         Mixer::ShortConv(c) => format!("gated short convolution, kernel {}", c.kernel),
         Mixer::None => "none (the layer is its FFN)".into(),
+        Mixer::CrossAttention(c) => format!("cross-attention to vision states, {}q/{}kv × {} (skipped without states)", c.heads, c.kv_heads, c.head_dim),
         Mixer::Parallel(bs) => {
             format!("parallel: {}", bs.iter().map(|b| format!("[{}]×{}→×{}", mixer(&b.mixer), b.in_scale, b.out_scale)).collect::<Vec<_>>().join(" + "))
         }
+        Mixer::SharedKv(a) => format!(
+            "shared-KV attention {} heads × {} (K = V), q rank {}, o {} groups × {}, window {}{}",
+            a.heads,
+            a.head_dim,
+            a.q_rank,
+            a.o_groups,
+            a.o_rank,
+            a.window,
+            match &a.compressed {
+                None => String::new(),
+                Some(c) => format!(
+                    ", compressed ×{}{}{}",
+                    c.ratio,
+                    if c.overlap { " (overlapped)" } else { "" },
+                    c.indexer.as_ref().map(|i| format!(", indexer top-{} of {}×{}", i.topk, i.heads, i.head_dim)).unwrap_or_default()
+                ),
+            }
+        ),
     }
 }
 
@@ -232,10 +251,17 @@ fn ffn(f: &Ffn) -> String {
             if let Some(l) = m.latent {
                 let _ = write!(s, ", latent {l}");
             }
+            if m.zero_experts > 0 {
+                let _ = write!(s, ", {} identity (zero-computation) experts", m.zero_experts);
+            }
             s
         }
         Ffn::RwkvChannel(c) => format!("RWKV-{} channel mix {}", c.version, c.intermediate),
         Ffn::MlpMoe(mm) => format!("{} beside {}", ffn(&Ffn::Mlp(mm.mlp.clone())), ffn(&Ffn::Moe(mm.moe.clone()))),
+        Ffn::MlpShortcut(sc) => match &sc.side {
+            ShortcutSide::Produce(m) => format!("{}, its MoE carried to the next layer: {}", ffn(&Ffn::Mlp(sc.mlp.clone())), ffn(&Ffn::Moe(m.clone()))),
+            ShortcutSide::Consume => format!("{} plus the previous layer's carried MoE", ffn(&Ffn::Mlp(sc.mlp.clone()))),
+        },
     }
 }
 
@@ -259,6 +285,13 @@ fn residual(r: &Residual) -> String {
             norm(pre_mixer),
             ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default(),
             if *layer_scalar { ", × layer scalar" } else { "" }
+        ),
+        Residual::Mhc { pre_mixer, .. } => format!("manifold-constrained hyper-connections ({})", norm(pre_mixer)),
+        Residual::AltUp { pre_mixer, laurel, ple, .. } => format!(
+            "AltUp ({}){}{}",
+            norm(pre_mixer),
+            laurel.as_ref().map(|l| format!(", LAuReL rank {}", l.rank)).unwrap_or_default(),
+            ple.as_ref().map(|p| format!(", per-layer input {}", p.dim)).unwrap_or_default()
         ),
         Residual::HyperConnection { ple } => format!(
             "hyper-connections{}",

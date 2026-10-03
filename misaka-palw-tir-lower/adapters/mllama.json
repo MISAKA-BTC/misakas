@@ -1,0 +1,234 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "mllama",
+ "doc": "Llama-3.2-Vision (MllamaForConditionalGeneration) as its TEXT stage: the Llama decoder layers, with the cross-attention layers (text_config.cross_attention_layers; q/k head norms, no rotation, tanh-gated attention and MLP branches) kept in the spec and SKIPPED in the program, as `MllamaTextModel.forward` skips them when no vision states are bound (VLM_CROSS_LAYERS_SKIPPED_V1; ATTN_CROSS_V1, the layers with states, is described but not lowered, and image rows bound to this spec are refused by name). The cross layers' tensors, the vision tower and the projector are dormant. The embedding table holds vocab_size + 8 rows (the image and special tokens) while the head has vocab_size: the table is read as its first vocab_size rows, so a text job names no token past the vocabulary.",
+ "extends": [
+  "decoder-core",
+  "mixin-vlm"
+ ],
+ "match": {
+  "architectures": [
+   "MllamaForConditionalGeneration"
+  ],
+  "model_types": [
+   "mllama"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "vocab_size": 128256,
+   "hidden_size": 4096,
+   "intermediate_size": 14336,
+   "num_hidden_layers": 40,
+   "num_attention_heads": 32,
+   "num_key_value_heads": 8,
+   "max_position_embeddings": 131072,
+   "rms_norm_eps": 1e-05,
+   "cross_attention_layers": [
+    3,
+    8,
+    13,
+    18,
+    23,
+    28,
+    33,
+    38
+   ]
+  },
+  "inert": [
+   "dropout"
+  ]
+ },
+ "vars": [
+  {
+   "name": "no_dropout",
+   "value": {
+    "$let": [
+     "_",
+     {
+      "$forbid": [
+       "dropout",
+       "Mllama text dropout > 0"
+      ]
+     },
+     false
+    ]
+   }
+  },
+  {
+   "name": "cross_layers",
+   "value": {
+    "$cfg": "cross_attention_layers"
+   }
+  },
+  {
+   "name": "cross_ok",
+   "value": {
+    "$bad": [
+     {
+      "$and": [
+       {
+        "$gt": [
+         {
+          "$len": {
+           "$var": "cross_layers"
+          }
+         },
+         0
+        ]
+       }
+      ]
+     },
+     "cross_attention_layers is empty"
+    ]
+   }
+  },
+  {
+   "name": "is_cross",
+   "layer": true,
+   "value": {
+    "$contains": [
+     {
+      "$var": "cross_layers"
+     },
+     {
+      "$var": "i"
+     }
+    ]
+   }
+  },
+  {
+   "name": "l_mixer",
+   "layer": true,
+   "value": {
+    "$if": [
+     {
+      "$var": "is_cross"
+     },
+     {
+      "CrossAttention": {
+       "heads": {
+        "$var": "heads"
+       },
+       "kv_heads": {
+        "$var": "kv"
+       },
+       "head_dim": {
+        "$var": "hd"
+       },
+       "q_norm": {
+        "$var": "norm"
+       },
+       "k_norm": {
+        "$var": "norm"
+       },
+       "gated": true
+      }
+     },
+     {
+      "Attention": {
+       "$merge": [
+        {
+         "heads": {
+          "$var": "heads"
+         },
+         "kv_heads": {
+          "$var": "kv"
+         },
+         "head_dim": {
+          "$var": "hd"
+         },
+         "v_head_dim": {
+          "$var": "hd"
+         },
+         "q_bias": {
+          "$var": "qkv_bias"
+         },
+         "k_bias": {
+          "$var": "qkv_bias"
+         },
+         "v_bias": {
+          "$var": "qkv_bias"
+         },
+         "o_bias": {
+          "$var": "o_bias"
+         },
+         "qk_norm": {
+          "$var": "qk_norm"
+         },
+         "position": {
+          "$var": "l_position"
+         },
+         "scale": {
+          "$var": "attn_scale"
+         },
+         "window": {
+          "$var": "l_window"
+         },
+         "q_temperature": {
+          "$var": "q_temperature"
+         }
+        },
+        {
+         "$var": "attn_extra"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "ignored_prefixes",
+   "value": {
+    "$concat": [
+     {
+      "$list": [
+       "vision_model.",
+       "multi_modal_projector.",
+       "vision_tower."
+      ]
+     },
+     {
+      "$map": [
+       {
+        "$var": "cross_layers"
+       },
+       "c",
+       {
+        "$cat": [
+         "language_model.model.layers.",
+         {
+          "$var": "c"
+         },
+         "."
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "mllama"
+  }
+ ],
+ "spec": {
+  "hf": {
+   "weights": {
+    "embed.table": [
+     "{p}embed_tokens.weight",
+     {
+      "rows": [
+       0,
+       {
+        "$var": "vocab"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

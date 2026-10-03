@@ -10,7 +10,7 @@
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
 use crate::spec::*;
-use crate::weights::{Binding, MapFn, Pick, Src};
+use crate::weights::{Binding, CombineFn, MapFn, Pick, Src};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Stands for a role the adapter does not name while the defaults of the overridden params are derived
@@ -46,6 +46,7 @@ fn missing_role(s: &Src) -> Option<String> {
         | Src::Map { src, .. }
         | Src::Reshape { src, .. }
         | Src::PadRows { src, .. } => missing_role(src),
+        Src::Combine { srcs, .. } => srcs.iter().find_map(missing_role),
     }
 }
 
@@ -210,6 +211,21 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         m.lin("hc.final.down", "hc.final.down", false)?;
         m.lin("hc.final.up", "hc.final.up", false)?;
     }
+    // Manifold-constrained hyper-connections: the head's collapse (bare tensors).
+    if spec.mhc.is_some() {
+        m.put("mhc.head.fn.w", Src::t(m.role("mhc.head.fn")?))?;
+        m.put("mhc.head.base", Src::t(m.role("mhc.head.base")?))?;
+        m.put("mhc.head.scale", Src::t(m.role("mhc.head.scale")?))?;
+    }
+    // AltUp: the projections that make the other streams from the embedding and bring them back (`{I}` is the projection's index, 0-based).
+    if let Some(au) = &spec.altup {
+        for i in 1..au.streams {
+            for (name, role) in [("altup.proj", "altup.proj"), ("altup.unembed", "altup.unembed")] {
+                let t = m.role(role)?.replace("{I}", &(i - 1).to_string());
+                m.put(format!("{name}{i}.w"), Src::t(format!("{t}.weight")))?;
+            }
+        }
+    }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
@@ -243,7 +259,8 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     let rescale = spec.layers.iter().position(|l| l.post_scale != 1.0).map(|i| i + 1);
     let mut seen: Vec<&LayerSpec> = Vec::new();
     for ls in &spec.layers {
-        if seen.contains(&ls) {
+        // A cross-attention layer is skipped in the text-only stage: its tensors are dormant.
+        if seen.contains(&ls) || matches!(ls.mixer, Mixer::CrossAttention(_)) {
             continue;
         }
         seen.push(ls);
@@ -276,6 +293,17 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
 }
 
+/// Gemma-3n/4's per-layer input: the layer's slices of the two tensors packed over the layers, the norms and the branch's projections.
+fn bind_ple(m: &mut M, p: &PleSpec) -> Result<()> {
+    m.put("ple.proj.w", Src::t(suffixed(&m.role("ple.proj")?, ".weight")).take(0, Pick::PerLayer { len: p.dim }))?;
+    m.put("ple.table", Src::t(suffixed(&m.role("ple.table")?, ".weight")).take(1, Pick::PerLayer { len: p.dim }))?;
+    m.norm("ple.norm", "ple.norm", &p.norm)?;
+    m.lin("ple.gate", "ple.gate", false)?;
+    m.lin("ple.out", "ple.out", false)?;
+    m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+    Ok(())
+}
+
 fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> Result<()> {
     match &ls.residual {
         Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, .. } => {
@@ -304,16 +332,42 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
                 m.norm(name, name, n)?;
             }
             if let Some(p) = ple {
-                // The layer's slices of the two tensors packed over the layers.
-                m.put("ple.proj.w", Src::t(suffixed(&m.role("ple.proj")?, ".weight")).take(0, Pick::PerLayer { len: p.dim }))?;
-                m.put("ple.table", Src::t(suffixed(&m.role("ple.table")?, ".weight")).take(1, Pick::PerLayer { len: p.dim }))?;
-                m.norm("ple.norm", "ple.norm", &p.norm)?;
-                m.lin("ple.gate", "ple.gate", false)?;
-                m.lin("ple.out", "ple.out", false)?;
-                m.norm("ple.post_norm", "ple.post_norm", &p.post_norm)?;
+                bind_ple(m, p)?;
             }
             if *layer_scalar {
                 m.put("layer.scalar", Src::t(m.role("layer.scalar")?))?;
+            }
+        }
+        Residual::Mhc { pre_mixer, pre_ffn } => {
+            for tag in ["attn", "ffn"] {
+                // The mixing parameters are bare tensors (`hc_attn_fn`, `hc_attn_base`, `hc_attn_scale`).
+                m.put(format!("mhc.{tag}.fn.w"), Src::t(m.role(&format!("mhc.{tag}.fn"))?))?;
+                m.put(format!("mhc.{tag}.base"), Src::t(m.role(&format!("mhc.{tag}.base"))?))?;
+                m.put(format!("mhc.{tag}.scale"), Src::t(m.role(&format!("mhc.{tag}.scale"))?))?;
+            }
+            m.norm("norm.mix", "norm.mix", pre_mixer)?;
+            m.norm("norm.ffn", "norm.ffn", pre_ffn)?;
+        }
+        Residual::AltUp { pre_mixer, post_mixer, pre_ffn, post_ffn, router_norm, laurel, ple } => {
+            for (n, name) in
+                [(pre_mixer, "norm.mix"), (post_mixer, "norm.post_mix"), (pre_ffn, "norm.ffn"), (post_ffn, "norm.post_ffn")]
+            {
+                m.norm(name, name, n)?;
+            }
+            m.norm("altup.router_norm", "altup.router_norm", router_norm)?;
+            for name in ["altup.router", "altup.pred_coefs", "altup.correction_coefs"] {
+                m.lin(name, name, false)?;
+            }
+            if spec.altup.as_ref().is_some_and(|a| a.correct_scale) && ple.is_some() {
+                m.put("altup.correct_scale", Src::t(m.role("altup.correct_scale")?))?;
+            }
+            if let Some(l) = laurel {
+                m.lin("laurel.left", "laurel.left", false)?;
+                m.lin("laurel.right", "laurel.right", false)?;
+                m.norm("laurel.norm", "laurel.norm", &l.post_norm)?;
+            }
+            if let Some(p) = ple {
+                bind_ple(m, p)?;
             }
         }
         Residual::HyperConnection { ple } => {
@@ -339,6 +393,13 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         Ffn::Mlp(mm) => mlp(m, mm, "mlp", m.st.mlp)?,
         Ffn::Moe(mm) => moe(m, mm)?,
         Ffn::RwkvChannel(c) => rwkv_channel(m, c, rescale, spec.hidden_size)?,
+        // `FFN_SHORTCUT_MOE_V1`: the dense MLP's params, and the MoE's in the layer that produces it.
+        Ffn::MlpShortcut(sc) => {
+            mlp(m, &sc.mlp, "mlp", m.st.mlp)?;
+            if let ShortcutSide::Produce(mo) = &sc.side {
+                moe(m, mo)?;
+            }
+        }
         Ffn::MlpMoe(mm) => {
             mlp(m, &mm.mlp, "mlp", m.st.mlp)?;
             moe(m, &mm.moe)?;
@@ -410,16 +471,71 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
         Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
         Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
         Mixer::None => {}
+        Mixer::CrossAttention(_) => return Err(LowerError::eval("internal: a cross-attention layer is bound only when it is not skipped")),
         Mixer::Parallel(bs) => {
             for b in bs {
                 bind_mixer(m, spec, &b.mixer, rescale)?;
             }
         }
+        Mixer::SharedKv(a) => shared_kv(m, a)?,
     }
     Ok(())
 }
 
+/// DeepSeek-V4's attention: the low-rank query, the one key/value head, the sinks, the grouped output projection (the `o_a` weight is one
+/// tensor of `groups·rank` rows: group `g` is its rows `[g·rank, (g+1)·rank)`) and the compressors.
+fn shared_kv(m: &mut M, a: &SharedKvSpec) -> Result<()> {
+    m.lin("attn.wq_a", "attn.wq_a", false)?;
+    m.norm("attn.q_a_norm", "attn.q_a_norm", &a.q_a_norm)?;
+    m.lin("attn.wq_b", "attn.wq_b", false)?;
+    m.norm("attn.q_b_norm", "attn.q_b_norm", &a.q_b_norm)?;
+    m.lin("attn.wkv", "attn.wkv", false)?;
+    m.norm("attn.kv_norm", "attn.kv_norm", &a.kv_norm)?;
+    if a.sinks {
+        m.put("attn.sinks", Src::t(m.role("attn.sinks")?))?;
+    }
+    let full = Src::t(format!("{}.weight", m.role("attn.wo_a")?));
+    for g in 0..a.o_groups {
+        m.put(format!("attn.wo_a{g}.w"), full.clone().rows(Pick::Range { start: g * a.o_rank, len: a.o_rank }))?;
+    }
+    m.lin("attn.wo_b", "attn.wo_b", false)?;
+    if let Some(c) = &a.compressed {
+        for pfx in [if c.overlap { "attn.csa" } else { "attn.hca" }] {
+            m.lin(&format!("{pfx}.wkv"), &format!("{pfx}.wkv"), false)?;
+            m.lin(&format!("{pfx}.wgate"), &format!("{pfx}.wgate"), false)?;
+            m.put(format!("{pfx}.ape"), Src::t(m.role(&format!("{pfx}.ape"))?))?;
+            m.norm(&format!("{pfx}.norm"), &format!("{pfx}.norm"), &c.norm)?;
+        }
+        if let Some(ix) = &c.indexer {
+            let pfx = "attn.idx.comp";
+            m.lin(&format!("{pfx}.wkv"), &format!("{pfx}.wkv"), false)?;
+            m.lin(&format!("{pfx}.wgate"), &format!("{pfx}.wgate"), false)?;
+            m.put(format!("{pfx}.ape"), Src::t(m.role(&format!("{pfx}.ape"))?))?;
+            m.norm(&format!("{pfx}.norm"), &format!("{pfx}.norm"), &ix.norm)?;
+            m.lin("attn.idx.wq_b", "attn.idx.wq_b", false)?;
+            m.lin("attn.idx.weights_proj", "attn.idx.weights_proj", false)?;
+        }
+    }
+    Ok(())
+}
+
+/// **`MIXER_MOA_V1`**: the router, the stacked query and output experts, the shared key/value projection and the output bias.
+fn moa(m: &mut M, a: &AttnSpec, moa: &MoaSpec) -> Result<()> {
+    m.lin("moa.router", "moa.router", moa.router.linear_bias)?;
+    m.put("moa.experts.input", Src::t(m.role("moa.input")?))?;
+    m.put("moa.experts.output", Src::t(m.role("moa.output")?))?;
+    m.lin("attn.kv", "attn.kv", false)?;
+    if moa.out_bias {
+        m.put("moa.bias", Src::t(m.role("moa.bias")?))?;
+    }
+    let _ = a;
+    Ok(())
+}
+
 fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
+    if let Some(mo) = &a.moa {
+        return moa(m, a, mo);
+    }
     let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
     let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
     // The HL names (`AttnSpec::param_prefix`); the checkpoint roles stay `attn.*`.
@@ -502,6 +618,13 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
                 }
             }
         }
+    }
+    // `ATTN_DIFFERENTIAL_V1`: λ from the four vectors, and `1 − λ_init`, both `[1]` constants of the layer.
+    if let Some(df) = &a.differential {
+        let q = |r: &str| -> Result<Src> { Ok(Src::t(m.role(r)?)) };
+        let ins = vec![q("attn.lambda_q1")?, q("attn.lambda_k1")?, q("attn.lambda_q2")?, q("attn.lambda_k2")?];
+        m.put(n("diff.lambda"), Src::Combine { srcs: ins, f: CombineFn::DiffLambda(df.lambda_init) })?;
+        m.put(n("diff.scale"), Src::Combine { srcs: vec![], f: CombineFn::OneMinusLambdaInit(df.lambda_init) })?;
     }
     m.lin(&n("o"), "attn.o", a.o_bias)?;
     // `SUBLAYER_NORMS_V1`: BitNet's `attn_sub_norm`.
@@ -839,8 +962,14 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;
     }
+    if s.router.scoring == Scoring::SqrtSoftplusHash {
+        m.put("moe.tid2eid", Src::t(m.role("moe.tid2eid")?))?;
+    }
     if s.router.per_expert_scale {
         m.put("moe.expert_scale", Src::t(m.role("moe.expert_scale")?))?;
+    }
+    if s.out_bias {
+        m.put("moe.bias", Src::t(m.role("moe.bias")?))?;
     }
     match m.st.experts {
         MlpLayout::Separate => {
@@ -892,11 +1021,12 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
             intermediate: sh.intermediate,
             act: s.act,
             gated: s.gated,
-            glu: Glu::Standard,
+            glu: if matches!(s.glu, Glu::LimitedGlu { .. }) { s.glu } else { Glu::Standard },
             up_bias: false,
             down_bias: false,
             inner_norm: None,
             name: None,
+            sparsity: None,
         };
         mlp(m, &spec, "moe.shared", MlpLayout::Separate)?;
         if sh.sigmoid_gate {

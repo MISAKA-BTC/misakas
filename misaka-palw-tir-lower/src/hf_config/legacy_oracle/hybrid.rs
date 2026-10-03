@@ -156,6 +156,8 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     };
     let layers = (0..q.n)
         .map(|i| {
@@ -237,6 +239,8 @@ pub(crate) fn qwen3_5_text(
             input_scaled: false,
             gated: true,
             latent: None,
+            zero_experts: 0,
+            out_bias: false,
         })
     } else {
         Ffn::Mlp(gated_mlp(p.cfg.usize_or("intermediate_size", 12288)?, q.act, false))
@@ -334,6 +338,8 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
         input_scaled: false,
         gated: true,
         latent: None,
+        zero_experts: 0,
+        out_bias: false,
     };
     let layers = (0..n)
         .map(|i| {

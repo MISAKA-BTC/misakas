@@ -21,6 +21,7 @@
 
 pub mod features;
 pub mod report;
+pub mod route;
 pub mod scope;
 
 pub use crate::spec::ModelSpec;

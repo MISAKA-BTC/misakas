@@ -238,6 +238,24 @@ pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
         "F16" => raw.chunks_exact(sz).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
         "F32" => raw.chunks_exact(sz).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
         "F64" => raw.chunks_exact(sz).map(|c| f64::from_le_bytes(c.try_into().unwrap_or([0; 8])) as f32).collect(),
+        // An integer table (DeepSeek-V4's frozen `tid2eid`): read as the exact float of each value; one past 2^24 would not be exact.
+        "I64" | "I32" | "I16" | "I8" | "U8" => {
+            let mut out = Vec::with_capacity(raw.len() / sz);
+            for c in raw.chunks_exact(sz) {
+                let v: i64 = match dtype {
+                    "I64" => i64::from_le_bytes(c.try_into().unwrap_or([0; 8])),
+                    "I32" => i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64,
+                    "I16" => i16::from_le_bytes([c[0], c[1]]) as i64,
+                    "I8" => c[0] as i8 as i64,
+                    _ => c[0] as i64,
+                };
+                if v.unsigned_abs() > 1 << 24 {
+                    return Err(LowerError::weights(format!("a {dtype} value {v} is not exactly a float32")));
+                }
+                out.push(v as f32);
+            }
+            out
+        }
         other => return Err(LowerError::weights(format!("dtype {other}"))),
     })
 }
@@ -245,8 +263,10 @@ pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
 fn dtype_size(d: &str) -> Option<usize> {
     Some(match d {
         "BF16" | "F16" => 2,
-        "F32" => 4,
-        "F64" => 8,
+        "F32" | "I32" => 4,
+        "F64" | "I64" => 8,
+        "I16" => 2,
+        "I8" | "U8" => 1,
         _ => return None,
     })
 }
@@ -570,6 +590,58 @@ pub enum MapFn {
     },
 }
 
+/// `λ_init(layer) = base − amp·e^{−rate·layer}` (DiffLlama's `lambda_init_fn`: 0.8 − 0.6·e^{−0.3·layer}), the layer 0-based.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct LambdaInit {
+    pub base: f64,
+    pub amp: f64,
+    pub rate: f64,
+}
+
+impl LambdaInit {
+    pub fn at(&self, layer: usize) -> f64 {
+        self.base - self.amp * crate::detmath::exp(-self.rate * layer as f64)
+    }
+}
+
+/// A param computed from SEVERAL checkpoint tensors (and the layer index), at conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum CombineFn {
+    /// `ATTN_DIFFERENTIAL_V1`: `[q1, k1, q2, k2]` (each `[d]`) → `[exp(Σ q1⊙k1) − exp(Σ q2⊙k2) + λ_init(layer)]`.
+    DiffLambda(LambdaInit),
+    /// `ATTN_DIFFERENTIAL_V1`: no input → `[1 − λ_init(layer)]`.
+    OneMinusLambdaInit(LambdaInit),
+}
+
+impl CombineFn {
+    pub fn arity(&self) -> usize {
+        match self {
+            CombineFn::DiffLambda(_) => 4,
+            CombineFn::OneMinusLambdaInit(_) => 0,
+        }
+    }
+    /// The value from the inputs' tensors (the exact sums in `f64`, as torch's `dtype=float32` sums are to within an ulp).
+    pub fn eval(&self, ins: &[Tensor], layer: Option<usize>) -> Result<Tensor> {
+        if ins.len() != self.arity() {
+            return Err(LowerError::weights(format!("{self:?} takes {} tensors, got {}", self.arity(), ins.len())));
+        }
+        let l = layer.ok_or_else(|| LowerError::weights("a layer-dependent constant outside a layer"))?;
+        let v = match self {
+            CombineFn::DiffLambda(init) => {
+                let dot = |a: &Tensor, b: &Tensor| -> Result<f64> {
+                    if a.data.len() != b.data.len() {
+                        return Err(LowerError::weights(format!("λ vectors of {} and {} values", a.data.len(), b.data.len())));
+                    }
+                    Ok(a.data.iter().zip(&b.data).map(|(x, y)| *x as f64 * *y as f64).sum())
+                };
+                crate::detmath::exp(dot(&ins[0], &ins[1])?) - crate::detmath::exp(dot(&ins[2], &ins[3])?) + init.at(l)
+            }
+            CombineFn::OneMinusLambdaInit(init) => 1.0 - init.at(l),
+        };
+        Ok(Tensor::new(vec![1], vec![v as f32]))
+    }
+}
+
 /// How to build one HL param from checkpoint tensors (a frontend's weight mapping produces
 /// these; `crate::hf_weights` for Hugging Face). Templates may contain `{L}` (layer),
 /// `{E}` (expert) and `{H}` (head), bound by the param's layer and by [`Src::Stack`].
@@ -592,6 +664,11 @@ pub enum Src {
     Map {
         src: Box<Src>,
         f: MapFn,
+    },
+    /// A `[1]` value computed from several tensors ([`CombineFn`]).
+    Combine {
+        srcs: Vec<Src>,
+        f: CombineFn,
     },
     Reshape {
         src: Box<Src>,
@@ -619,6 +696,7 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers(),
             Src::Tensor(_) => false,
+            Src::Combine { srcs, .. } => srcs.iter().any(Src::is_quant),
             Src::Take { src, .. }
             | Src::Transpose(src)
             | Src::Stack { src, .. }
@@ -634,6 +712,7 @@ impl Src {
         match self {
             Src::Quant { fmt, .. } => fmt.is_integers().then_some(fmt),
             Src::Tensor(_) => None,
+            Src::Combine { srcs, .. } => srcs.iter().find_map(Src::quant_format),
             Src::Take { src, .. }
             | Src::Transpose(src)
             | Src::Stack { src, .. }
@@ -741,8 +820,37 @@ pub fn is_module_buffer(name: &str) -> bool {
         .any(|b| name == *b || name.ends_with(&format!(".{b}")))
 }
 
+/// `{L/n}` and `{L%n}` — the quotient and the remainder of the layer by `n` (a model whose HF layer holds `n` HL layers:
+/// LongCat-Flash's `layers.{L/2}.self_attn.{L%2}`) — replaced by their values; every other variable is left to [`expand`].
+fn expand_layer_arithmetic(s: &str, layer: Option<usize>) -> Result<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("{L") {
+        let tail = &rest[i + 2..];
+        let (op, after) = match tail.chars().next() {
+            Some(c @ ('/' | '%')) => (c, &tail[1..]),
+            _ => {
+                out.push_str(&rest[..i + 2]);
+                rest = tail;
+                continue;
+            }
+        };
+        let end = after.find('}').ok_or_else(|| LowerError::eval(format!("`{s}`: a `{{L{op}n` without its `}}`")))?;
+        let n: usize = after[..end].parse().map_err(|_| LowerError::eval(format!("`{s}`: `{{L{op}{}}}` takes a positive integer", &after[..end])))?;
+        if n == 0 {
+            return Err(LowerError::eval(format!("`{s}`: `{{L{op}0}}` divides by zero")));
+        }
+        let l = layer.ok_or_else(|| LowerError::eval(format!("`{s}` needs a layer")))?;
+        out.push_str(&rest[..i]);
+        out.push_str(&(if op == '/' { l / n } else { l % n }).to_string());
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 fn expand(template: &str, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<String> {
-    let mut s = template.to_string();
+    let mut s = expand_layer_arithmetic(template, layer)?;
     if s.contains("{L}") {
         let l = layer.ok_or_else(|| LowerError::eval(format!("`{template}` needs a layer")))?;
         s = s.replace("{L}", &l.to_string());
@@ -850,6 +958,12 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
             Ok(s)
         }
         Src::Map { src, .. } => src_shape(src, r, layer, vars),
+        Src::Combine { srcs, .. } => {
+            for s in srcs {
+                src_shape(s, r, layer, vars)?;
+            }
+            Ok(vec![1])
+        }
         Src::Reshape { src, shape } => {
             let s = src_shape(src, r, layer, vars)?;
             if s.iter().product::<usize>() != shape.iter().product::<usize>() {
@@ -1051,6 +1165,10 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             stream::apply_map(&mut t, f, layer)?;
             Ok(t)
         }
+        Src::Combine { srcs, f } => {
+            let ins = srcs.iter().map(|s| eval_src(s, r, layer, vars)).collect::<Result<Vec<_>>>()?;
+            f.eval(&ins, layer)
+        }
         Src::Reshape { src, shape } => {
             let t = eval_src(src, r, layer, vars)?;
             if t.numel() != shape.iter().product::<usize>() {
@@ -1178,6 +1296,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
             Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
                 leaves(src, out)
             }
+            Src::Combine { srcs, .. } => srcs.iter().for_each(|s| leaves(s, out)),
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
                 leaves(src, &mut inner);

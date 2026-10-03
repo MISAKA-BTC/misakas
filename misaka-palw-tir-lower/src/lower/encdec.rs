@@ -841,7 +841,7 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
         output: crate::hl::HlOutput::Logits,
         vocab: s.vocab,
         hidden: s.d,
-        carries: vec![CarryDecl { name: "rows".into(), shape: vec![rows, s.d] }],
+        carries: vec![CarryDecl { name: "rows".into(), shape: vec![rows, s.d], resid: false }],
         params,
         states: vec![],
         rope_tables: vec![],
