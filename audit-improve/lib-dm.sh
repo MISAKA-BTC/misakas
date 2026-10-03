@@ -120,6 +120,13 @@ new8 8 9 liar 0 1 jit
 reg 9 - reg 0 0 jit
 old 10 - old 0 0"
 
+# OUTSIDER=1 (the combined drill of the DAA-5,300 candidate): one more seat, an OUTSIDER — a post-genesis bond (bond 10, registered by the driver from DAA
+# XB_FROM_DAA) on its own node new9, started by the driver once its bond is registered and never stopped: the panels then seat an operator that is not
+# a genesis one. Ten processes would be too many for this Mac, so the driver also stops the old relay as soon as D-M5's crossing is done.
+if [ "${OUTSIDER:-0}" = 1 ]; then NODES="$NODES
+new9 11 10 outsider 0 1 jit"; fi
+# RIDERS=N: --palw-riders=N on every producing node (ADR-0164 F-M1: N further jobs of the producer's own bond per lead attempt).
+
 # NO_OLD=1: no old relay (D-M5 is then not run). The just-in-time nodes (liars, registrar) never run in the steady state: seven nodes + the relay.
 [ "${NO_OLD:-0}" = 1 ] && NODES=$(echo "$NODES" | grep -v '^old ')
 
@@ -243,15 +250,22 @@ node_args() {
         a+=("--palw-improve-artifact-dir=$MODEL_DIR/drop")
         # Lane D's RFC-0003 Plan B classes (toy-image, toy-embed, wide-embed; `gen_drill_classes --ignored` writes them to $GEN_DIR): every IR holder loads all of
         # them from the start, the wide class included, as it loads the head before the head is registered (a class the chain does not list yet is not an error).
-        local g; for g in "$GEN_DIR"/*.class.palwtir2; do [ -s "$g" ] && a+=("--palw-class-artifact=$g"); done
+        # GEN_PARTIAL_CLASS=<name>: that gen class is held only by GEN_PARTIAL_HOLDERS (fewer than five: the readiness gate, DG-2's GenClassNotReady); dg2 starts the
+        # others with the class once it has seen the refusal.
+        local g; for g in "$GEN_DIR"/*.class.palwtir2; do
+            if [ -n "${GEN_PARTIAL_CLASS:-}" ] && [ "$(basename "$g")" = "$GEN_PARTIAL_CLASS.class.palwtir2" ] && ! grep -qw "$n" <<<"${GEN_PARTIAL_HOLDERS:-}"; then continue; fi
+            [ -s "$g" ] && a+=("--palw-class-artifact=$g")
+        done
     fi
+    local rid=(); [ "${RIDERS:-0}" -gt 0 ] && rid=("--palw-riders=$RIDERS")
     case $role in
         floor) a+=(--palw-produce) ;;
-        head) a+=(--palw-produce "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
+        outsider) ;;
+        head) a+=(--palw-produce "${rid[@]}" "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
         eval|liar) a+=(--palw-improve-evaluate) ;;
         # evalw produces the FULL-WEIGHT winner's claims: the usage of line R once `win` heads it (D-M4's second epoch). W1's composite winner
         # has no second epoch any more, so nothing produces winc.
-        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id win)") ;;
+        evalw) a+=(--palw-improve-evaluate --palw-produce "${rid[@]}" "--palw-producer-class=$(model_id win)") ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     local m; for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
@@ -268,6 +282,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

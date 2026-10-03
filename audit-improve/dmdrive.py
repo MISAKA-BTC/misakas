@@ -523,11 +523,17 @@ LIARS = PLAN.get("liars", {})
 LIAR_START_DAA = int(LIARS.get("start_daa", 440))
 LIAR_DEADLINE_DAA = int(LIARS.get("deadline_daa", 300))                   # past start + this a liar that never lied or was never convicted is stopped, and the verdict says so
 CAP = PLAN.get("capacity", {})
-CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
-    "rho25": (int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
-    "rho100": (int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
-}
-CAP_STEPS = (("rho25", "capacity_step2"), ("rho100", "capacity_step3"))
+_W, _S = int(CAP.get("window_daa", 80)), int(CAP.get("settle_daa", 10))
+if E.get("INT12") == "1":     # the combined drill of the DAA-5,300 candidate: rho 25 / 100 / 250 / 1000 at H' / +95 / +190 / +285 (the release's offsets)
+    _H = int(E.get("CAP2_AT", "560"))
+    CAP_STEPS = (("rho25", "int11"), ("rho100", "int11"), ("rho250", "int11"), ("rho1000", "int11"))
+    CAP_WINDOWS = {n: (_H + k * 95 + _S, _H + k * 95 + _S + _W) for k, (n, _) in enumerate(CAP_STEPS)}
+else:
+    CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
+        "rho25": (int(E.get("CAP2_AT", "560")) + _S, int(E.get("CAP2_AT", "560")) + _S + _W),
+        "rho100": (int(E.get("CAP3_AT", "655")) + _S, int(E.get("CAP3_AT", "655")) + _S + _W),
+    }
+    CAP_STEPS = (("rho25", "capacity_step2"), ("rho100", "capacity_step3"))
 LIVE_PHASES = ("provisional", "panel_bound", "receipt_licensed", "default_disputed")   # a claim not yet Final and not void
 UNLICENSED_PHASES = ("provisional", "panel_bound", "default_disputed")                  # accepted and waiting for its licence: the backlog
 
@@ -590,6 +596,7 @@ def capacity_summary(series, claims, lo, hi):
     acc = [c for c in claims.values() if c.get("acc") is not None and lo <= c["acc"] < hi]
     lic = [c for c in claims.values() if c.get("lic") is not None and lo <= c["lic"] < hi]
     lat = [c["lic"] - c["acc"] for c in claims.values() if c.get("acc") is not None and c.get("lic") is not None and lo <= c["acc"] < hi]
+    lat_b = [c["lic"] - c["bound"] for c in claims.values() if c.get("bound") is not None and c.get("lic") is not None and lo <= c["bound"] < hi]
     rows = [r for r in series if lo <= r["daa"] < hi]
     q = max(len(rows) // 4, 1)
     first_half = [(r["daa"], r["backlog"]) for r in rows[len(rows) // 2:]]
@@ -602,6 +609,8 @@ def capacity_summary(series, claims, lo, hi):
     return {"lo": lo, "hi": hi, "samples": len(rows), "accepted": len(acc), "accepted_per_daa": round(len(acc) / span, 3),
             "licensed": len(lic), "licensed_per_daa": round(len(lic) / span, 3),
             "latency_p50": percentile(lat, 0.5), "latency_p95": percentile(lat, 0.95), "latency_n": len(lat),
+            "bind_latency_p50": percentile(lat_b, 0.5), "bind_latency_p95": percentile(lat_b, 0.95), "bind_latency_n": len(lat_b),
+            "oldest_wait_max": max((r.get("oldest_wait", 0) for r in rows), default=None),
             "backlog_first": rows[0]["backlog"] if rows else None, "backlog_last": rows[-1]["backlog"] if rows else None,
             "backlog_max": max((r["backlog"] for r in rows), default=None), "backlog_slope_per_daa_second_half": None if sl is None else round(sl, 4),
             "backlog_q2_mean": None if q2 is None else round(q2, 2), "backlog_q4_mean": None if q4 is None else round(q4, 2),
@@ -626,7 +635,7 @@ def verdict_cap(sd):
             checks.append((None, f"{name}: window {CAP_WINDOWS[name][0]}..{CAP_WINDOWS[name][1]} not measured yet"))
             continue
         txt = (f"{name}: accepted {sm['accepted_per_daa']}/DAA, licensed {sm['licensed_per_daa']}/DAA, licence latency p50 {sm['latency_p50']} p95 {sm['latency_p95']} DAA "
-               f"(n={sm['latency_n']}), backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
+               f"(n={sm['latency_n']}), bind->licence p50 {sm.get('bind_latency_p50')} p95 {sm.get('bind_latency_p95')} (n={sm.get('bind_latency_n')}), oldest wait max {sm.get('oldest_wait_max')}, backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
                f"seat occupancy max {sm['occupancy_max']} mean {sm['occupancy_mean']}, exposure reserved/ceiling max {sm['exposure_reserved_ratio_max']}")
         checks.append((None if sm["diverges"] is None else (not sm["diverges"]), txt))
     return v_all(checks)
@@ -659,7 +668,7 @@ class Drive:
         self.ids = {n: model_id(n) for n in ASSETS}
         self.milestones()
         for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
-                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit,
+                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit, self.step_outsider,
                      self.step_capacity):
             key = step.__name__
             if self.s.d["failed"].get(key):
@@ -1436,6 +1445,27 @@ class Drive:
             self.s.mark(kp, daa=self.daa, why=reason)
             log(f"D-M3: the liar node {node} stopped at DAA {self.daa}: {reason}")
 
+    def step_outsider(self):
+        """The combined drill's OUTSIDER seat (OUTSIDER=1): a node on a post-genesis bond, started once the bond is registered and never stopped. Also stops
+        the old relay once D-M5's crossing is done (ten processes are too many for this Mac)."""
+        for node, v in NODES.items():
+            if v["role"] != "outsider":
+                continue
+            if "m5-cross" in self.s.d["done"] and "old" in NODES and node_alive("old") and not self.s.done("old-stopped"):
+                self.nodes_sh("stop", "old")
+                self.s.mark("old-stopped", daa=self.daa)
+                log(f"the old relay stopped at DAA {self.daa} (D-M5's crossing is done)")
+            if self.s.done(f"outsider-start:{node}") or extra_bond(v["seat"]) is None:
+                continue
+            rc, out = self.nodes_sh("start", node, timeout=300)
+            if rc != 0:
+                if "not starting" in out:
+                    log(f"{node}: the outsider is not started yet ({out.strip().splitlines()[-1][:100]})")
+                    continue
+                raise RuntimeError(f"cannot start {node}: {out.strip()[-200:]}")
+            self.s.mark(f"outsider-start:{node}", daa=self.daa)
+            log(f"the outsider seat {node} (post-genesis bond {v['seat']}) started at DAA {self.daa}")
+
     # ----- the capacity line: ρ=25 and ρ=100 windows measured on the same chain ---------------------------------------------
     def step_capacity(self):
         lo_all = min(w[0] for w in CAP_WINDOWS.values())
@@ -1451,13 +1481,20 @@ class Drive:
         series = list(self.s.get("cap-series") or [])
         sampling = any(lo - 3 <= self.daa < hi + 1 for lo, hi in CAP_WINDOWS.values())
         if sampling:
-            backlog, occ, rsv = 0, [], None
+            backlog, occ, rsv, oldest = 0, [], None, 0
             for node, seat in seat_bonds():
                 bond = bond_of(seat)
                 for c in claims_of(bond):
                     cid = str(pick(c, "claimId", default=""))
                     ph = str(pick(c, "phase", default=""))
                     rec = claims.setdefault(cid, {"acc": int(pick(c, "acceptedDaa", default=0) or 0), "lic": None, "fin": None})
+                    bd = pick(c, "boundDaa", default=None)
+                    if bd is not None and rec.get("bound") is None:
+                        rec["bound"] = int(bd)
+                    if ph in UNLICENSED_PHASES and rec.get("bound") is not None:
+                        oldest = max(oldest, self.daa - rec["bound"])
+                    if "void" in ph and not rec.get("void"):
+                        rec["void"] = str(pick(c, "voidReason", "void", default=ph) or ph)
                     if ph == "receipt_licensed" and rec["lic"] is None:
                         rec["lic"] = int(pick(c, "phaseDaa", default=self.daa) or self.daa)
                     elif ph == "final" and rec["fin"] is None:
@@ -1471,7 +1508,7 @@ class Drive:
                     f = rpc("getPalwProducerFacts", {"classId": self.ids["head"], "bondTransactionId": t, "bondIndex": int(i), "withBond": True})
                     res, ceil = int(pick(f, "bondReservedExposure", default=0) or 0), int(pick(f, "bondExposureCeiling", default=0) or 0)
                     rsv = round(res / ceil, 4) if ceil else None
-            row = {"daa": self.daa, "backlog": backlog, "occ_max": max(occ, default=0), "occ_mean": round(sum(occ) / max(len(occ), 1), 2), "reserved_ratio": rsv}
+            row = {"daa": self.daa, "backlog": backlog, "oldest_wait": oldest, "occ_max": max(occ, default=0), "occ_mean": round(sum(occ) / max(len(occ), 1), 2), "reserved_ratio": rsv}
             series.append(row)
             self.s.put("cap-claims", claims)
             self.s.put("cap-series", series)
