@@ -411,6 +411,9 @@ pub struct Args {
     /// Command line only.
     #[serde(skip)]
     pub palw_drill_fp_prefix_at: Option<u64>,
+    /// **DRILL ONLY: arm the inherited-prefix leaves (palw_fp_prefix_inherit, FP job version 12) at this DAA** (`config::drill::palw_drill_fp_prefix_inherit_at_v1`).
+    #[allow(missing_docs)]
+    pub palw_drill_fp_prefix_inherit_at: Option<u64>,
     /// **DRILL ONLY: arm the tokenizer-match rule (palw_fp_tokenizer_match) at this DAA** (`config::drill::palw_drill_fp_tokenizer_at_v1`).
     /// Command line only.
     #[serde(skip)]
@@ -724,6 +727,7 @@ impl Default for Args {
             palw_drill_fp_v5_at: None,
             palw_drill_fp_constraint_at: None,
             palw_drill_fp_prefix_at: None,
+            palw_drill_fp_prefix_inherit_at: None,
             palw_drill_fp_tokenizer_at: None,
             palw_drill_fp_constraint2_at: None,
             palw_drill_adapter_at: None,
@@ -1890,6 +1894,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-fp-prefix-inherit-at")
+                .long("palw-drill-fp-prefix-inherit-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm the inherited-prefix leaves (palw_fp_prefix_inherit, FP job version 12) at this DAA on the drill chain. Nothing else moves. Refused \
+                     without the salt, at 0, at a height another fence uses, and unless palw_fp_prefix_state is in force at or below it.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-fp-constraint-at")
                 .long("palw-drill-fp-constraint-at")
                 .require_equals(true)
@@ -3031,6 +3045,7 @@ impl Args {
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_fp_constraint_at: m.get_one::<u64>("palw-drill-fp-constraint-at").copied(),
             palw_drill_fp_prefix_at: m.get_one::<u64>("palw-drill-fp-prefix-at").copied(),
+            palw_drill_fp_prefix_inherit_at: m.get_one::<u64>("palw-drill-fp-prefix-inherit-at").copied(),
             palw_drill_fp_tokenizer_at: m.get_one::<u64>("palw-drill-fp-tokenizer-at").copied(),
             palw_drill_fp_constraint2_at: m.get_one::<u64>("palw-drill-fp-constraint2-at").copied(),
             palw_drill_adapter_at: m.get_one::<u64>("palw-drill-adapter-at").copied(),

@@ -710,6 +710,12 @@ pub fn palw_drill_fp_prefix_at_v1(params: &mut crate::config::params::Params, at
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_PREFIX_V1)
 }
 
+/// **A drill arms the inherited-prefix leaves (palw_fp_prefix_inherit, FP job version 12) at a low height** (RFC-0001 stage 2b; `--palw-drill-fp-prefix-inherit-at`):
+/// ARMS `palw_fp_prefix_inherit` at `at` and moves nothing else. Refused unless palw_fp_prefix_state is in force at or below it.
+pub fn palw_drill_fp_prefix_inherit_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_PREFIX_INHERIT_V1)
+}
+
 /// **A drill arms the tokenizer-match rule (palw_fp_tokenizer_match) at a low height** (RFC-0001; `--palw-drill-fp-tokenizer-at`) — the same machinery for the one-entry drill
 /// list [`crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1`]: ARMS `palw_fp_tokenizer_match` at `at` and moves nothing else.
 /// `validate_palw_v2` refuses the result unless palw_tir_v1 and palw_fp_decode_rules are in force at or below it.
@@ -786,6 +792,8 @@ const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1, flag: "--palw-drill-improve-at" };
 /// The prefix-state receipt (palw_fp_prefix_state) alone (`--palw-drill-fp-prefix-at`): a drill-only list.
+const PALW_DRILL_FLAG_DAY_FP_PREFIX_INHERIT_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_INHERIT_FENCES_V1, flag: "--palw-drill-fp-prefix-inherit-at" };
 const PALW_DRILL_FLAG_DAY_FP_PREFIX_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_FENCES_V1, flag: "--palw-drill-fp-prefix-at" };
 /// The tokenizer-match rule (palw_fp_tokenizer_match) alone (`--palw-drill-fp-tokenizer-at`): a drill-only list.

@@ -28,6 +28,11 @@ fn fences() -> Vec<(&'static str, Entry, Vec<&'static str>)> {
             vec!["palw_fp_derived_work", "palw_fp_decode_rules"],
         ),
         (
+            "palw_fp_prefix_inherit",
+            kaspa_consensus_core::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_INHERIT_ENTRY,
+            vec!["palw_fp_prefix_state"],
+        ),
+        (
             "palw_fp_tokenizer_match",
             kaspa_consensus_core::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_ENTRY,
             vec!["palw_tir_v1", "palw_fp_decode_rules"],
@@ -49,6 +54,7 @@ fn get(p: &Params, name: &str) -> Option<ForkActivation> {
     match name {
         "palw_fp_decode_constraint" => p.palw_fp_decode_constraint,
         "palw_fp_prefix_state" => p.palw_fp_prefix_state,
+        "palw_fp_prefix_inherit" => p.palw_fp_prefix_inherit,
         "palw_fp_tokenizer_match" => p.palw_fp_tokenizer_match,
         "palw_fp_constraint_v2" => p.palw_fp_constraint_v2,
         "palw_adapter_class_v1" => p.palw_adapter_class_v1,
@@ -60,6 +66,7 @@ fn validate_one(p: &Params, name: &str) -> Result<(), String> {
     match name {
         "palw_fp_decode_constraint" => p.validate_palw_v2().map(|_| ()),
         "palw_fp_prefix_state" => p.validate_palw_fp_prefix_state_v1(),
+        "palw_fp_prefix_inherit" => p.validate_palw_fp_prefix_inherit_v1(),
         "palw_fp_tokenizer_match" => p.validate_palw_fp_tokenizer_match_v1(),
         "palw_fp_constraint_v2" => p.validate_palw_fp_constraint_v2_v1(),
         "palw_adapter_class_v1" => p.validate_palw_adapter_class_v1_v1(),
@@ -134,6 +141,10 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
             armed.palw_fp_decode_constraint = Some(ForkActivation::new(at - 1));
             armed.sync_palw_fp_decode_constraint_v1();
         }
+        if fence == "palw_fp_prefix_inherit" {
+            // Version 12 is a prefix-state job: the fence it rides is armed (with its own prerequisites) below it.
+            armed.palw_fp_prefix_state = Some(ForkActivation::new(at - 1));
+        }
         armed.validate_palw_v2().unwrap_or_else(|e| panic!("{fence} over testnet-12's prerequisites: {e}"));
         // Below a prerequisite, by name.
         for prereq in &prereqs {
@@ -146,6 +157,7 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
                         f.activation = ForkActivation::new(at + 1);
                     }
                 }
+                "palw_fp_prefix_state" => early.palw_fp_prefix_state = Some(ForkActivation::new(at + 1)),
                 "palw_fp_decode_constraint" => {
                     early.palw_fp_decode_constraint = Some(ForkActivation::new(at + 1));
                     early.sync_palw_fp_decode_constraint_v1();

@@ -87,6 +87,8 @@ pub struct PalwDrillExtraFencesV1 {
     pub fp_v5_at: Option<u64>,
     pub fp_constraint_at: Option<u64>,
     pub fp_prefix_at: Option<u64>,
+    #[allow(missing_docs)]
+    pub fp_prefix_inherit_at: Option<u64>,
     pub fp_tokenizer_at: Option<u64>,
     pub fp_constraint2_at: Option<u64>,
     pub adapter_at: Option<u64>,
@@ -114,6 +116,7 @@ impl PalwDrillExtraFencesV1 {
             fp_v5_at: args.palw_drill_fp_v5_at,
             fp_constraint_at: args.palw_drill_fp_constraint_at,
             fp_prefix_at: args.palw_drill_fp_prefix_at,
+            fp_prefix_inherit_at: args.palw_drill_fp_prefix_inherit_at,
             fp_tokenizer_at: args.palw_drill_fp_tokenizer_at,
             fp_constraint2_at: args.palw_drill_fp_constraint2_at,
             adapter_at: args.palw_drill_adapter_at,
@@ -133,6 +136,7 @@ impl PalwDrillExtraFencesV1 {
             || self.fp_v5_at.is_some()
             || self.fp_constraint_at.is_some()
             || self.fp_prefix_at.is_some()
+            || self.fp_prefix_inherit_at.is_some()
             || self.fp_tokenizer_at.is_some()
             || self.fp_constraint2_at.is_some()
             || self.adapter_at.is_some()
@@ -177,6 +181,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
             ("--palw-drill-fp-constraint-at", self.fp_constraint_at, "the decode constraint (palw_fp_decode_constraint, FP job version 6)"),
             ("--palw-drill-fp-prefix-at", self.fp_prefix_at, "the prefix-state receipt (palw_fp_prefix_state)"),
+            ("--palw-drill-fp-prefix-inherit-at", self.fp_prefix_inherit_at, "the inherited-prefix leaves (palw_fp_prefix_inherit)"),
             ("--palw-drill-fp-tokenizer-at", self.fp_tokenizer_at, "the tokenizer-match rule (palw_fp_tokenizer_match)"),
             ("--palw-drill-fp-constraint2-at", self.fp_constraint2_at, "the second constraint subset (palw_fp_constraint_v2)"),
             ("--palw-drill-adapter-at", self.adapter_at, "the adapter class listing (palw_adapter_class_v1)"),
@@ -207,6 +212,7 @@ impl PalwDrillExtraFencesV1 {
                 ("--palw-drill-fp-v5-at", self.fp_v5_at),
                 ("--palw-drill-fp-constraint-at", self.fp_constraint_at),
                 ("--palw-drill-fp-prefix-at", self.fp_prefix_at),
+                ("--palw-drill-fp-prefix-inherit-at", self.fp_prefix_inherit_at),
                 ("--palw-drill-fp-tokenizer-at", self.fp_tokenizer_at),
                 ("--palw-drill-fp-constraint2-at", self.fp_constraint2_at),
                 ("--palw-drill-adapter-at", self.adapter_at),
@@ -273,6 +279,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.fp_prefix_at {
             moves.extend(d::palw_drill_fp_prefix_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-at: {e}"))?);
         }
+        if let Some(at) = self.fp_prefix_inherit_at {
+            moves.extend(d::palw_drill_fp_prefix_inherit_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-inherit-at: {e}"))?);
+        }
         if let Some(at) = self.fp_tokenizer_at {
             moves.extend(d::palw_drill_fp_tokenizer_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-tokenizer-at: {e}"))?);
         }
@@ -333,14 +342,15 @@ impl PalwDrillExtraFencesV1 {
     /// The marker's `rfc1_at=` line — RFC-0001's four fences (`none` when none stands, else
     /// `fp_prefix:… fp_tokenizer:… fp_constraint2:… adapter:…`), its own line so every earlier line keeps its text.
     fn rfc1_marker_text(&self) -> String {
-        if self.fp_constraint_at.is_none() && self.fp_prefix_at.is_none() && self.fp_tokenizer_at.is_none() && self.fp_constraint2_at.is_none() && self.adapter_at.is_none() {
+        if self.fp_constraint_at.is_none() && self.fp_prefix_at.is_none() && self.fp_prefix_inherit_at.is_none() && self.fp_tokenizer_at.is_none() && self.fp_constraint2_at.is_none() && self.adapter_at.is_none() {
             return palw_drill_marker_fence_text_v1(None);
         }
         let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
         format!(
-            "fp_constraint:{},fp_prefix:{},fp_tokenizer:{},fp_constraint2:{},adapter:{}",
+            "fp_constraint:{},fp_prefix:{},fp_prefix_inherit:{},fp_tokenizer:{},fp_constraint2:{},adapter:{}",
             at(self.fp_constraint_at),
             at(self.fp_prefix_at),
+            at(self.fp_prefix_inherit_at),
             at(self.fp_tokenizer_at),
             at(self.fp_constraint2_at),
             at(self.adapter_at)
