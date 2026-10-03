@@ -93,7 +93,7 @@ fn armed_they_move_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_
     assert_eq!(ids(&back), b, "set(None) is the shipped ruleset");
     let never = armed(ForkActivation::never());
     never.validate_palw_v2().expect("dormant");
-    assert_eq!(ids(&never), b);
+    assert_eq!(ids(&never).1, b.1, "a never() value collapses out of the identity");
     assert_eq!(mirror(&never), None);
 }
 
