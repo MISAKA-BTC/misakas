@@ -470,3 +470,59 @@ fn bench_the_tiny_hybrids_generic_and_fused() {
         eprintln!("{line}");
     }
 }
+
+/// **The measurement behind `ADMISSIBLE_GENERIC`'s coefficient** (`misaka-palw-sdk` `GENERIC_WIDE_PASS_FACTOR_V1`): the unit-row programs at
+/// serving-like shapes, stepped on the generic backend and with the fused kernels on, every logit compared, the median time per position
+/// printed with the ratio. A measurement, not a check: `cargo test --release -p misaka-palw-tir-lower --test fused_gate measure_ -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_the_generic_over_fused_ratio_of_the_wide_patterns() {
+    use std::time::Instant;
+    let cases: [(&str, u8, DType, u32, u32); 6] = [
+        ("l2_unit_q15 32x128", 0, DType::I16, 32, 128),
+        ("l2_unit_q15 8x2048", 0, DType::I16, 8, 2048),
+        ("rms_unit_q24 1x4096", 1, DType::I16, 1, 4096),
+        ("rms_unit_q24 16x512", 1, DType::I16, 16, 512),
+        ("rms_norm_wide_q36 1x4096", 2, DType::I16, 1, 4096),
+        ("rms_norm_wide_q36 8x1024", 2, DType::I16, 8, 1024),
+    ];
+    for (label, kind, dtype, rows, n) in cases {
+        let p = rowop_program_kind(kind, dtype, rows, n, 8);
+        let mut rng = ChaCha20Rng::seed_from_u64(77);
+        let mut raw_rng = ChaCha20Rng::seed_from_u64(78);
+        let mut raw = draw(&mut raw_rng, 0.0);
+        let dtypes: std::collections::BTreeMap<String, DType> = p.params.iter().map(|d| (d.name.clone(), d.dtype)).collect();
+        let params = params_for(&p, 8, &mut |name, i| {
+            let v = raw(name, i);
+            if v == i128::MIN { value(&mut rng, dtypes[name], 0.0) } else { v }
+        });
+        let plan = TirPlan::compile(&p).expect("plan");
+        let owned: Vec<((u16, Option<u16>), Vec<u8>)> =
+            plan.param_instances.iter().map(|&(j, l)| ((j, l), params.param(j, l).expect("bound").to_le_bytes())).collect();
+        let mut xparams = TirParams::new(&plan);
+        for ((j, layer), b) in &owned {
+            let data = ParamData::from_le_bytes(p.params[*j as usize].dtype, b).expect("whole elements");
+            xparams.insert(&plan, *j, *layer, data).expect("a param");
+        }
+        let seq: Vec<u32> = (0..64).map(|i| (i * 5 + 1) % VOCAB).collect();
+        let mut med = [0f64; 2];
+        let mut logits: Vec<Vec<Vec<i128>>> = Vec::new();
+        for (k, fused) in [false, true].into_iter().enumerate() {
+            let mut exec = TirExecutor::new(&plan, &xparams).expect("an executor");
+            exec.set_fused(fused);
+            let mut times = Vec::new();
+            let mut out = Vec::new();
+            for tok in &seq {
+                let s = Instant::now();
+                exec.step(*tok, &mut misaka_palw_tir_exec::NoSink).expect("a step");
+                times.push(s.elapsed().as_secs_f64());
+                out.push(exec.logits().1.to_i128s());
+            }
+            times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            med[k] = times[times.len() / 2];
+            logits.push(out);
+        }
+        assert_eq!(logits[0], logits[1], "{label}: the fused logits differ");
+        eprintln!("{label:>28}: generic {:>9.1} us  fused {:>9.1} us  ratio {:.2}x", med[0] * 1e6, med[1] * 1e6, med[0] / med[1]);
+    }
+}
