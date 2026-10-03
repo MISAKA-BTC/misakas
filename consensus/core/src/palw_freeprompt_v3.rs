@@ -366,7 +366,7 @@ pub enum PalwFpJobTailV1 {
     Prefix(PalwFpPrefixStateV1),
     /// **A constrained job (version 6, ADR-0096 Decision 7, RFC-0001 §2.5)**: the constraint's canonical bytes
     /// ([`crate::palw_fp_constraint_job_v1`]) — a V3 job (no decode rules) whose committed token is the admitted argmax.
-    Constraint(Vec<u8>),
+    Constraint(crate::palw_fp_constraint_job_v1::PalwFpConstraintTailV1),
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -407,7 +407,7 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
             Some(PalwFpJobTailV1::V5(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             Some(PalwFpJobTailV1::Eval(job)) => borsh::BorshSerialize::serialize(job.as_ref(), writer)?,
             Some(PalwFpJobTailV1::Prefix(state)) => borsh::BorshSerialize::serialize(state, writer)?,
-            Some(PalwFpJobTailV1::Constraint(bytes)) => borsh::BorshSerialize::serialize(bytes, writer)?,
+            Some(PalwFpJobTailV1::Constraint(tail)) => borsh::BorshSerialize::serialize(tail, writer)?,
             None => {}
         }
         Ok(())
@@ -2442,7 +2442,7 @@ impl PalwFpWorkerResultV3 {
         };
         // ADR-0096: a constrained job's constraint is the request's, verbatim.
         let constraint_is_the_requests = match (&self.job.tail, &request.constraint) {
-            (Some(PalwFpJobTailV1::Constraint(job)), Some(asked)) => job == asked && self.job.is_constraint(),
+            (Some(PalwFpJobTailV1::Constraint(job)), Some(asked)) => &job.constraint == asked && self.job.is_constraint(),
             (None, None) => !self.job.is_constraint(),
             _ => false,
         };

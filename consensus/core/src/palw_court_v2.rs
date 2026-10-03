@@ -542,6 +542,16 @@ pub enum PalwCourtVerdictProofV2 {
     /// next free number. Its discriminant is explicit, so no declaration order moves it. Dormant behind
     /// `palw_gen_v1` (a tag no network has ever carried).
     GenOutputTile { close: Box<crate::palw_gen_close_v1::PalwGenOutputCloseV1> } = 16,
+    /// **ADR-0096 Decision 7 (tag 17, lane U; a lane asks the core lane before taking a tag — 17 is the next free one):
+    /// a constrained claim's decode close** — the committed token at `position` is not what the claim's own decode
+    /// constraint admits ([`crate::palw_step_refute::check_constrained_decode_token_v1`]). The claim's job rides the
+    /// accusation (its id is pinned by the binding's context, so the constraint and the table root are the claim's) and every
+    /// rendering the rule reads is opened against the job's table root. Dormant behind `palw_fp_decode_constraint`: below it
+    /// the acceptance layer drops a close that carries one by name and the fold refuses it as the second lock.
+    DecodeTokenConstrained {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        accusation: Box<crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1>,
+    } = 17,
 }
 
 impl PalwCourtVerdictProofV2 {
@@ -564,6 +574,12 @@ impl PalwCourtVerdictProofV2 {
     /// acceptance layer drops it by name and the fold reads an assembled one as undecodable bytes.
     pub fn is_gen_v1(&self) -> bool {
         matches!(self, Self::GenCone { .. } | Self::GenDecodeToken { .. } | Self::GenDissection { .. } | Self::GenOutputTile { .. })
+    }
+
+    /// **Is this a constrained decode close** (ADR-0096 Decision 7)? A move only past `palw_fp_decode_constraint`; below it the
+    /// acceptance layer drops it by name and the fold refuses it.
+    pub fn is_constrained_decode_v1(&self) -> bool {
+        matches!(self, Self::DecodeTokenConstrained { .. })
     }
 
     /// **Is this an evaluation close** (RFC-0004 A6)? A move only past `palw_improvement_v1`; below it the acceptance
@@ -1174,6 +1190,7 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> Option<&crate::palw_step_leg::
         }
         PalwCourtVerdictProofV2::DecodeToken { binding, .. } => Some(binding),
         PalwCourtVerdictProofV2::DecodeTokenTiled { binding, .. } => Some(binding),
+        PalwCourtVerdictProofV2::DecodeTokenConstrained { binding, .. } => Some(binding),
         PalwCourtVerdictProofV2::AttnDissection { binding, .. } => Some(binding),
         PalwCourtVerdictProofV2::TirCone { .. }
         | PalwCourtVerdictProofV2::TirLogits { .. }
@@ -1421,6 +1438,16 @@ pub fn adjudicate_court_close_v3(
             }
             palw_decode_close_door_v1(binding, narrowed, coord.node_slot, decode_close_convicts_only)?;
         }
+        // **ADR-0096 Decision 7's constrained arm: the same door, the same one position.**
+        PalwCourtVerdictProofV2::DecodeTokenConstrained { binding, accusation } => {
+            let pin = &accusation.pin;
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, narrowed)
+                .ok_or(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed })?;
+            if coord.call_index != pin.position {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed });
+            }
+            palw_decode_close_door_v1(binding, narrowed, coord.node_slot, decode_close_convicts_only)?;
+        }
         // **RFC-0002 Phase F: the IR arms, through the same door.** A cone close and a logits close
         // open a step leaf, which must be the one the ladder narrowed to; a decode-token close names a
         // position, which must be the call the narrowed leaf belongs to — and, past the court door,
@@ -1579,6 +1606,7 @@ pub fn adjudicate_court_close_v3(
     match proof {
         PalwCourtVerdictProofV2::DecodeToken { .. }
         | PalwCourtVerdictProofV2::DecodeTokenTiled { .. }
+        | PalwCourtVerdictProofV2::DecodeTokenConstrained { .. }
         | PalwCourtVerdictProofV2::TirDecodeToken { .. }
         | PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. } => palw_decode_close_verdict_v1(verdict, decode_close_convicts_only),
         _ => Ok(verdict),
@@ -1786,6 +1814,13 @@ pub fn adjudicate_close_proof_v2(
             // because `palw_refutation_leaf_cap_v2` IS `PALW_STEP_LEG_MAX_LEAVES` while
             // `Params::palw_court_ladder` is dormant, and it is the correct rule past the fence.
             map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(binding, pin, step_ladder))
+        }
+        PalwCourtVerdictProofV2::DecodeTokenConstrained { binding, accusation } => {
+            // The same two pins; the carried job is then pinned to the binding's context by the check itself, so the
+            // constraint and the table root are the claim's own.
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
+            check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+            map_refutation_outcome(crate::palw_step_refute::check_constrained_decode_token_v1(binding, accusation, step_ladder))
         }
         // The one arm that cannot be graded from the claim alone — see `adjudicate_court_close_v2`,
         // which returns before reaching here. Refused rather than silently acquitted, because an
@@ -2562,7 +2597,9 @@ pub fn check_close_cost_v2(
         // RFC-0004 A6: an evaluation close likewise (the class, the job and the context referenced by the claim).
         | PalwCourtVerdictProofV2::EvalCone { .. }
         | PalwCourtVerdictProofV2::EvalDecodeToken { .. }
-        | PalwCourtVerdictProofV2::EvalDissection { .. } => {
+        | PalwCourtVerdictProofV2::EvalDissection { .. }
+        // ADR-0096: a constrained decode close likewise (the job with its constraint, the opened renderings).
+        | PalwCourtVerdictProofV2::DecodeTokenConstrained { .. } => {
             let bytes = borsh::to_vec(proof).map(|b| b.len() as u64).unwrap_or(u64::MAX);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });

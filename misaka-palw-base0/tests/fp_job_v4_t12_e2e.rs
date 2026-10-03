@@ -552,7 +552,10 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         sampling_seed: PALW_DECODE_SEED_GREEDY,
         temperature_q: PALW_DECODE_TEMPERATURE_GREEDY,
         decode: None,
-        tail: Some(PalwFpJobTailV1::Constraint(bytes.clone())),
+        tail: Some(PalwFpJobTailV1::Constraint(kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 {
+            constraint: bytes.clone(),
+            table_root: table.root(),
+        })),
     };
     assert!(job.is_constraint() && !job.decodes_under_v4_rules());
     let mask = PalwConstraintMaskV1::for_job(&job, table.clone()).expect("the host's table is the job's");
@@ -615,7 +618,10 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
     };
     let second_payload = {
         let mut j = job.clone();
-        j.tail = Some(PalwFpJobTailV1::Constraint(second));
+        j.tail = Some(PalwFpJobTailV1::Constraint(kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 {
+            constraint: second,
+            table_root: table.root(),
+        }));
         let mut pl = payload.clone();
         pl.commitment.job = j;
         pl

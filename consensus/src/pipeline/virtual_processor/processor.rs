@@ -7379,6 +7379,14 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **ADR-0096 Decision 7: below `palw_fp_decode_constraint` a constrained decode close is dropped by name**, first
+            // and charged nothing, for the generative objects' reason above.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_constrained_decode_v1(&object)
+                && !self.palw_fp_decode_constraint_at(point.daa_score)
+            {
+                info!("Block {block}: a constrained decode close was dropped by name below palw_fp_decode_constraint, and the block stands (ADR-0096)");
+                continue;
+            }
             // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is dropped by name**, first and
             // charged nothing, for the generative objects' reason above.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score) {
@@ -9488,6 +9496,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score))
+                            })
+                            // ADR-0096 Decision 7: likewise a constrained decode proof below `palw_fp_decode_constraint`.
+                            .filter(|object| {
+                                !matches!(object, Obj::CourtClosed { proof, .. }
+                                    if proof.is_constrained_decode_v1() && !self.palw_fp_decode_constraint_at(point.daa_score))
                             });
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
@@ -9817,6 +9830,12 @@ impl VirtualStateProcessor {
                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score) {
                         return Err(format!(
                             "court {session_id}: a generative close is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
+                        ));
+                    }
+                    // ADR-0096 Decision 7: a constrained decode close likewise below `palw_fp_decode_constraint`.
+                    if proof.is_constrained_decode_v1() && !self.palw_fp_decode_constraint_at(point.daa_score) {
+                        return Err(format!(
+                            "court {session_id}: a constrained decode close is refused: palw_fp_decode_constraint is not in force at this block (ADR-0096)"
                         ));
                     }
                     // RFC-0004 A6: an evaluation close likewise below `palw_improvement_v1`.
@@ -13794,6 +13813,10 @@ impl VirtualStateProcessor {
 
     /// **RFC-0003 decision 22's held leaf challenge, read off the bundle's mirror**
     /// (`held_close_chunks_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_held_close_chunks_v1`).
+    fn palw_fp_decode_constraint_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.fp_decode_constraint_active_at(daa_score))
+    }
+
     fn palw_adapter_class_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.adapter_class_active_at(daa_score))
     }

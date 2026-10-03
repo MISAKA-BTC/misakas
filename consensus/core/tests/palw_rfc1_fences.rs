@@ -132,6 +132,7 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
         if fence == "palw_fp_constraint_v2" {
             // The second form rides the first fence, which this build can now arm.
             armed.palw_fp_decode_constraint = Some(ForkActivation::new(at - 1));
+            armed.sync_palw_fp_decode_constraint_v1();
         }
         armed.validate_palw_v2().unwrap_or_else(|e| panic!("{fence} over testnet-12's prerequisites: {e}"));
         // Below a prerequisite, by name.
@@ -145,7 +146,10 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
                         f.activation = ForkActivation::new(at + 1);
                     }
                 }
-                "palw_fp_decode_constraint" => early.palw_fp_decode_constraint = Some(ForkActivation::new(at + 1)),
+                "palw_fp_decode_constraint" => {
+                    early.palw_fp_decode_constraint = Some(ForkActivation::new(at + 1));
+                    early.sync_palw_fp_decode_constraint_v1();
+                }
                 "palw_improvement_v1" => {
                     if let Some(f) = early.palw_improvement_v1.as_mut() {
                         f.activation = ForkActivation::new(at + 1);

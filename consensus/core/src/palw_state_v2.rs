@@ -1623,6 +1623,10 @@ pub struct PalwStateParamsV2 {
     /// `None` on every shipped preset.
     #[borsh(skip)]
     adapter_class_from_daa: Option<u64>,
+    /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint`'s height**, mirrored by
+    /// `Params::sync_palw_fp_decode_constraint_v1` (the fold's constrained decode close reads it). `None` on every preset.
+    #[borsh(skip)]
+    fp_decode_constraint_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1840,6 +1844,7 @@ impl PalwStateParamsV2 {
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
             adapter_class_from_daa: None,
+            fp_decode_constraint_from_daa: None,
         })
     }
 
@@ -2160,6 +2165,22 @@ impl PalwStateParamsV2 {
     /// **Is the held leaf challenge in force at `daa_score`?** `false` on every shipped preset.
     pub fn held_close_chunks_active_at(&self, daa_score: u64) -> bool {
         self.held_close_chunks_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0096 Decision 8: the decode constraint's mirror** — written by `Params::sync_palw_fp_decode_constraint_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_fp_decode_constraint_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.fp_decode_constraint_from_daa = from_daa;
+        self
+    }
+
+    pub fn fp_decode_constraint_from_daa(&self) -> Option<u64> {
+        self.fp_decode_constraint_from_daa
+    }
+
+    /// **Is the decode constraint in force at `daa_score`?** `false` on every shipped preset.
+    pub fn fp_decode_constraint_active_at(&self, daa_score: u64) -> bool {
+        self.fp_decode_constraint_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **RFC-0001 §2.10: the adapter class listing's mirror** — written by `Params::sync_palw_adapter_class_v1` and
@@ -7865,6 +7886,15 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
         | PalwConsensusObjectV2::GenTensorCommitted { .. }
         | PalwConsensusObjectV2::GenShardCourtAccused { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
+        _ => false,
+    }
+}
+
+/// **Is this object a constrained decode close** (ADR-0096 Decision 7, court proof tag 17)? Below `palw_fp_decode_constraint` the
+/// acceptance walk drops it by name before any slot, rent or budget is charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_constrained_decode_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_constrained_decode_v1(),
         _ => false,
     }
 }
@@ -32086,6 +32116,12 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **ADR-0096 Decision 7, likewise**: below `palw_fp_decode_constraint` a constrained decode close is refused by name.
+    if palw_object_is_constrained_decode_v1(object) && !builder.params.fp_decode_constraint_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::AdapterClassRefused(
+            "a constrained decode close before palw_fp_decode_constraint is in force (ADR-0096)".into(),
+        ));
+    }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.
     if palw_object_is_eval_v1(object) && !builder.params.improve_active_at(ctx.daa_score) {
@@ -34303,6 +34339,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_eval_v1() && !builder.params.improve_active_at(ctx.daa_score))
+                })
+                // ADR-0096 Decision 7: likewise a constrained decode proof below `palw_fp_decode_constraint`.
+                .filter(|object| {
+                    !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
+                        if proof.is_constrained_decode_v1() && !builder.params.fp_decode_constraint_active_at(ctx.daa_score))
                 });
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);

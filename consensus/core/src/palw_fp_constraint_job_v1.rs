@@ -32,7 +32,27 @@ use std::sync::Arc;
 /// **The entry a drill arms `palw_fp_decode_constraint` with** (`--palw-drill-fp-constraint-at`,
 /// [`crate::config::drill`]). In NO testnet-12 flag-day list: dormant on every network.
 pub const PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY: crate::config::params::PalwPostLaunchFenceV1 =
-    crate::config::params::PalwPostLaunchFenceV1 { name: "palw_fp_decode_constraint", set: |params, at| params.palw_fp_decode_constraint = at };
+    crate::config::params::PalwPostLaunchFenceV1 {
+        name: "palw_fp_decode_constraint",
+        set: |params, at| {
+            params.palw_fp_decode_constraint = at;
+            params.sync_palw_fp_decode_constraint_v1();
+        },
+    };
+
+impl crate::config::params::Params {
+    /// **The fence's mirror** on the V2 bundle's state params (`fp_decode_constraint_from_daa`), which the fold reads.
+    /// `None` where the fence is not armed (or is `never()`).
+    pub fn sync_palw_fp_decode_constraint_v1(&mut self) {
+        let from_daa = self
+            .palw_fp_decode_constraint
+            .filter(|f| *f != crate::config::params::ForkActivation::never())
+            .map(|f| f.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_fp_decode_constraint_from_daa(from_daa);
+        }
+    }
+}
 
 /// The drill's one-entry list.
 pub const PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] = &[PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY];
@@ -44,6 +64,17 @@ pub const PALW_FP_CONSTRAINT_VERSION: u16 = 6;
 pub const PALW_FP_CONSTRAINT_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-constraint/job-id/v1";
 /// The key of a class token table's digest.
 pub const PALW_TOKEN_TABLE_DOMAIN_V1: &[u8] = b"misaka-palw/token-table/v1";
+
+/// **A constrained job's tail**: the decode constraint's canonical bytes and the root of the class token table the job's
+/// mask is read through ([`PalwTokenTableV1::root`]). The root is the job's own statement of which table it was produced
+/// under — a seat that holds the class's real table refuses a job naming another (`Unverifiable`), and the court opens the
+/// renderings it needs against THIS root, so a producer cannot put a rendering in front of the court that its own claim did not
+/// commit to.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpConstraintTailV1 {
+    pub constraint: Vec<u8>,
+    pub table_root: Hash64,
+}
 
 /// **`fp_job_id_constraint_v1`**: the whole borsh of the job (every V3 field, then the constraint's bytes) under this
 /// version's key — the V3/V4 ids' construction.
@@ -91,6 +122,40 @@ impl PalwTokenTableV1 {
         self.eog_token_ids.iter().copied().min()
     }
 
+    /// The table's Merkle leaves: one per id (a presence byte, the id, the rendering), then one for the sorted
+    /// end-of-generation ids — index `vocab`.
+    pub fn leaf_hashes(&self) -> Vec<Hash64> {
+        let mut leaves: Vec<Hash64> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(id, entry)| table_leaf_hash_v1(id as u32, entry.as_deref()))
+            .collect();
+        leaves.push(table_eog_leaf_hash_v1(&self.eog_token_ids));
+        leaves
+    }
+
+    /// **The table's root** — the Merkle root of [`Self::leaf_hashes`] (the step tree's fold, so one fold spells every tree
+    /// the court opens). What a constrained job's tail names and a seat and the court hold the table to.
+    pub fn root(&self) -> Hash64 {
+        crate::palw_step_leg::step_merkle_root_v1(&self.leaf_hashes()).expect("a token table has between 1 and 2^25 - 1 ids")
+    }
+
+    /// The opening of one id's rendering against [`Self::root`].
+    pub fn opening_of(&self, id: u32) -> Option<PalwTokenTableOpeningV1> {
+        let entry = self.entries.get(id as usize)?;
+        let opening = crate::palw_step_leg::step_opening_v1(&self.leaf_hashes(), u64::from(id)).ok()?;
+        Some(PalwTokenTableOpeningV1 { id, rendering: entry.clone(), opening })
+    }
+
+    /// The opening of the end-of-generation list against [`Self::root`].
+    pub fn eog_opening(&self) -> Option<PalwTokenTableEogOpeningV1> {
+        let opening = crate::palw_step_leg::step_opening_v1(&self.leaf_hashes(), self.entries.len() as u64).ok()?;
+        let mut ids = self.eog_token_ids.clone();
+        ids.sort_unstable();
+        Some(PalwTokenTableEogOpeningV1 { ids, opening })
+    }
+
     /// **The table's digest** — what a job's `tokenizer_id` names for a class that serves constrained decoding: keyed
     /// BLAKE2b-512 over the vocabulary size, every entry (a presence byte, then length and bytes) and the sorted
     /// end-of-generation ids.
@@ -121,6 +186,102 @@ impl PalwTokenTableV1 {
     }
 }
 
+/// Key of a token-table leaf.
+pub const PALW_TOKEN_TABLE_DOMAIN_LEAF_V1: &[u8] = b"misaka-palw/token-table/leaf/v1";
+/// Key of the end-of-generation leaf.
+pub const PALW_TOKEN_TABLE_DOMAIN_EOG_V1: &[u8] = b"misaka-palw/token-table/eog/v1";
+
+/// One id's leaf: `H(key, id ‖ presence ‖ le32(len) ‖ bytes)`.
+pub fn table_leaf_hash_v1(id: u32, rendering: Option<&[u8]>) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_TOKEN_TABLE_DOMAIN_LEAF_V1).to_state();
+    state.update(&id.to_le_bytes());
+    match rendering {
+        None => {
+            state.update(&[0]);
+        }
+        Some(bytes) => {
+            state.update(&[1]);
+            state.update(&(bytes.len() as u32).to_le_bytes());
+            state.update(bytes);
+        }
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The end-of-generation leaf: `H(key, le32(count) ‖ sorted ids)`.
+pub fn table_eog_leaf_hash_v1(eog_token_ids: &[u32]) -> Hash64 {
+    let mut ids = eog_token_ids.to_vec();
+    ids.sort_unstable();
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_TOKEN_TABLE_DOMAIN_EOG_V1).to_state();
+    state.update(&(ids.len() as u32).to_le_bytes());
+    for id in ids {
+        state.update(&id.to_le_bytes());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **One id's rendering, opened against a table root** — what the court is handed instead of a 150,000-entry table.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTokenTableOpeningV1 {
+    pub id: u32,
+    pub rendering: Option<Vec<u8>>,
+    pub opening: crate::palw_step_leg::PalwStepOpeningV1,
+}
+
+impl PalwTokenTableOpeningV1 {
+    /// Does this opening hold id `self.id`'s rendering under `root`, in a table of `vocab` ids?
+    pub fn verifies(&self, root: &Hash64, vocab: u32) -> bool {
+        self.opening.leaf_index == u64::from(self.id)
+            && self.id < vocab
+            && self.opening.leaf_hash == table_leaf_hash_v1(self.id, self.rendering.as_deref())
+            && crate::palw_step_leg::step_opening_root_v1(u64::from(vocab) + 1, &self.opening).is_ok_and(|r| r == *root)
+    }
+}
+
+/// **The end-of-generation list, opened against a table root.**
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTokenTableEogOpeningV1 {
+    pub ids: Vec<u32>,
+    pub opening: crate::palw_step_leg::PalwStepOpeningV1,
+}
+
+impl PalwTokenTableEogOpeningV1 {
+    pub fn verifies(&self, root: &Hash64, vocab: u32) -> bool {
+        self.opening.leaf_index == u64::from(vocab)
+            && self.ids.windows(2).all(|w| w[0] < w[1])
+            && self.opening.leaf_hash == table_eog_leaf_hash_v1(&self.ids)
+            && crate::palw_step_leg::step_opening_root_v1(u64::from(vocab) + 1, &self.opening).is_ok_and(|r| r == *root)
+    }
+
+    /// The lowest end-of-generation id the opened list names.
+    pub fn lowest(&self) -> Option<u32> {
+        self.ids.first().copied()
+    }
+}
+
+/// **The court's third arm, as an accusation** (ADR-0096 Decision 7): what a challenger carries to convict a constrained
+/// claim's committed token — the tiled decode pin (the claim's own row, opened), the claim's job (whose id the binding's
+/// context pins, so the constraint bytes and the table root in its tail are the CLAIM's, never the challenger's), and the
+/// renderings the rule reads, each opened against the job's table root: every id before the challenged position, the committed
+/// token, the end-of-generation list, and — when the committed token is the lowest end-of-generation id — one lane the
+/// constraint admits (the witness that the stop rule's "nothing is admitted" did not hold). Two-disclosure cases (the committed
+/// token IS admitted and a better admitted lane exists) add the beating lane's rendering.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwConstrainedDecodeAccusationV1 {
+    pub pin: crate::palw_step_refute::PalwTiledDecodePinV1,
+    pub job: PalwFreePromptJobV3,
+    /// Renderings opened against the job's table root: ids before the position, the committed id, the beating lane when the
+    /// pin carries tiles, and the witness lane.
+    pub renderings: Vec<PalwTokenTableOpeningV1>,
+    pub eog: PalwTokenTableEogOpeningV1,
+    /// A lane admitted from the state at the position (an id in `renderings`), named when it is needed.
+    pub witness: Option<u32>,
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mask
 // ---------------------------------------------------------------------------------------------
@@ -146,6 +307,9 @@ impl PalwConstraintMaskV1 {
         let Some(bytes) = palw_fp_constraint_tail_v1(job) else {
             return Err("the job is not a constrained job (version 6 with its constraint)".to_string());
         };
+        if palw_fp_constraint_table_root_v1(job) != Some(table.root()) {
+            return Err("this host's token table is not the table the job names (its root differs)".to_string());
+        }
         if table.tokenizer_id != job.tokenizer_id {
             return Err("this host's token table was derived under another tokenizer than the job's tokenizer_id".to_string());
         }
@@ -273,7 +437,7 @@ pub enum PalwFpConstraintErrorV1 {
 /// The constraint bytes a constrained job carries — `None` for any other job.
 pub fn palw_fp_constraint_tail_v1(job: &PalwFreePromptJobV3) -> Option<&Vec<u8>> {
     match (&job.tail, job.is_constraint()) {
-        (Some(PalwFpJobTailV1::Constraint(bytes)), true) => Some(bytes),
+        (Some(PalwFpJobTailV1::Constraint(tail)), true) => Some(&tail.constraint),
         _ => None,
     }
 }
@@ -282,6 +446,14 @@ pub fn palw_fp_constraint_tail_v1(job: &PalwFreePromptJobV3) -> Option<&Vec<u8>>
 /// the header-context door's).
 pub fn palw_constraint_of_bytes_v1(bytes: &[u8]) -> Result<PalwDecodeConstraintV1, crate::palw_fp_constraint_v2::PalwConstraintFormErrorV1> {
     crate::palw_fp_constraint_v2::palw_constraint_admitted_v1(bytes, true)
+}
+
+/// The table root a constrained job names — `None` for any other job.
+pub fn palw_fp_constraint_table_root_v1(job: &PalwFreePromptJobV3) -> Option<Hash64> {
+    match (&job.tail, job.is_constraint()) {
+        (Some(PalwFpJobTailV1::Constraint(tail)), true) => Some(tail.table_root),
+        _ => None,
+    }
 }
 
 /// The constraint's id, `constraint_id_v1` over its bytes — what the derivation's `grammar_id` and the entrance report.
@@ -515,7 +687,7 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
-            tail: Some(PalwFpJobTailV1::Constraint(constraint)),
+            tail: Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint, table_root: table().root() })),
         }
     }
 

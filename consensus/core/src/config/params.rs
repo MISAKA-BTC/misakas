@@ -4949,6 +4949,19 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("palw_fp_decode_constraint is armed on a network that is not ConsensusV2"));
         }
+        {
+            let mirror = match &self.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(bundle) => bundle.state.fp_decode_constraint_from_daa(),
+                _ => None,
+            };
+            let armed = self.palw_fp_decode_constraint.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+            if mirror != armed && matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_fp_decode_constraint disagrees with the V2 bundle's mirror: mirror it with \
+                     Params::sync_palw_fp_decode_constraint_v1 after the bundle is assembled",
+                ));
+            }
+        }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
         // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).
         //
@@ -21704,6 +21717,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_held_close_chunks_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
+    // ADR-0096's decode constraint, likewise.
+    params.sync_palw_fp_decode_constraint_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }

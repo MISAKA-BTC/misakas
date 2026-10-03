@@ -911,7 +911,12 @@ fn prepare_job_v1<B: PalwExecutionBackendV1>(
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
         decode,
-        tail: request.constraint.clone().map(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint),
+        // ADR-0096: the constraint is the request's; the table root is THIS worker's own table's — the gateway holds no tokenizer.
+        tail: request.constraint.clone().map(|constraint| {
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(
+                kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 { constraint, table_root: rt.token_table_v1().root() },
+            )
+        }),
     };
     Ok((job, prompt_ids))
 }
