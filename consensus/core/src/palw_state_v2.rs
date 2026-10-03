@@ -8578,10 +8578,42 @@ struct PalwAttemptOriginV1 {
     /// records it as the claim's `job_identity` where it is the anchor the execution key was
     /// derived under.
     job_anchor: Hash64,
-    /// **ADR-0165: the colour this attempt has in the accepting block's mergeset** — `true` for the block's own attempt
-    /// (a chain block is on the selected chain) and for a merged attempt that is not in `extras.merged_reds`. The floor
-    /// state machine reads it: a RED REAL attempt never extends a Probe or Normal.
-    blue: bool,
+    /// **ADR-0165: what this attempt is to the floor state machine** — see [`PalwFloorEventSourceV1`]. The machine's one
+    /// reader is `apply_attempt`; a rider ([`Self::rider`]) is [`PalwFloorEventSourceV1::Rider`] and moves nothing.
+    floor_event: PalwFloorEventSourceV1,
+}
+
+/// **ADR-0165: where an attempt's event for the floor state machine comes from** — whether it is an event at all, and its
+/// colour. The machine protects REAL attempt BLOCKS from the floor blocks that would colour against them, so only an
+/// attempt-lane block's attempt is an event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PalwFloorEventSourceV1 {
+    /// An attempt-lane block's attempt that stands BLUE in the accepting block's mergeset: the block's own (a chain block is
+    /// on the selected chain) or a merged one that is not in `extras.merged_reds`.
+    BlockBlue,
+    /// A merged attempt-lane block's attempt that stands RED in the accepting block's mergeset (it is in `extras.merged_reds`).
+    BlockRed,
+    /// **Not a block's attempt at all: a capacity RIDER** (ADR-0164 F-M1, tag 95). It rides an object the accepting block
+    /// carries, has no header and competes in no colouring — so it protects nothing and is NO event, neither BLUE nor RED:
+    /// counting it would refuse floors (the anchors, the bonded fallback) without shielding any REAL block and would open a
+    /// keep-alive that costs no block. Its own accounting (escrow, reservation, weight) is unchanged.
+    Rider,
+}
+
+impl PalwFloorEventSourceV1 {
+    /// The colour of the event, `None` where there is none: `Some(true)` BLUE, `Some(false)` RED.
+    const fn blue(self) -> Option<bool> {
+        match self {
+            Self::BlockBlue => Some(true),
+            Self::BlockRed => Some(false),
+            Self::Rider => None,
+        }
+    }
+
+    /// A merged block's attempt, by whether the accepting block's mergeset counts its block among the reds.
+    const fn of_merged_block(red: bool) -> Self {
+        if red { Self::BlockRed } else { Self::BlockBlue }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -28776,7 +28808,7 @@ pub fn apply_palw_transition_v7(
                     execution_key: own_execution_key,
                     carrying_bits,
                     job_anchor: extras.own_job_anchor,
-                    blue: true,
+                    floor_event: PalwFloorEventSourceV1::BlockBlue,
                 },
             );
             builder.room_exempt_class = None;
@@ -28901,7 +28933,7 @@ pub fn apply_palw_transition_v7(
                             // byte-identical to before. Read before the &mut borrow of `builder`.
                             let escrows_reward = builder.extras.audit_2026_09_11_deep_active;
                             // ADR-0165: its colour in THIS block's mergeset, read before the &mut borrow of `builder`.
-                            let blue = !builder.extras.merged_reds.contains(&merged.carrying_block);
+                            let floor_event = PalwFloorEventSourceV1::of_merged_block(builder.extras.merged_reds.contains(&merged.carrying_block));
                             match apply_attempt(
                                 &mut builder,
                                 ctx,
@@ -28916,7 +28948,7 @@ pub fn apply_palw_transition_v7(
                                     execution_key: merged.execution_key,
                                     carrying_bits: merged.bits,
                                     job_anchor: merged.job_anchor,
-                                    blue,
+                                    floor_event,
                                 },
                             ) {
                                 Ok(()) => None,
@@ -38945,9 +38977,10 @@ fn attach_riders_v1(
                 execution_key,
                 carrying_bits: bits,
                 job_anchor: anchor,
-                // ADR-0165 x ADR-0164 (the int-12 integration): a rider rides an object the accepting block carries — its txs are
-                // accepted, so it is not a merged RED — and is its own claim, so the floor state machine counts it as a blue REAL attempt.
-                blue: true,
+                // ADR-0165 x ADR-0164 (the int-12 integration): a rider has no block, so it is no event of the floor state machine —
+                // neither BLUE nor RED (the coordinator's decision of 2026-10-03: the machine shields REAL attempt BLOCKS from the floor
+                // blocks that colour against them, and a rider is in no colouring).
+                floor_event: PalwFloorEventSourceV1::Rider,
             },
         )
         .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
@@ -39226,11 +39259,17 @@ fn apply_attempt(
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
     builder.reserve_for_claim(&claim)?;
-    // **ADR-0165: a REAL attempt (any class but the base) FULLY ACCEPTED is one event of the floor state machine** — every
-    // check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal restores. Its
-    // colour: BLUE for the block's own attempt (a chain block), the mergeset's for a merged one.
-    if builder.params.floor_reserve_active_at(ctx.daa_score) && claim.class_id != builder.params.base_class_id() {
-        builder.note_real_accepted(ctx.daa_score, origin.blue);
+    // **ADR-0165: a REAL attempt BLOCK's attempt (any class but the base) FULLY ACCEPTED is one event of the floor state
+    // machine** — every check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal
+    // restores. Its colour: BLUE for the block's own attempt (a chain block), the mergeset's for a merged one. **A rider is no
+    // event** (no block, in no colouring: `PalwFloorEventSourceV1::Rider`), whatever its class and however its lead was
+    // coloured — the lead's own acceptance already stepped the machine, once.
+    debug_assert_eq!(origin.rider, origin.floor_event == PalwFloorEventSourceV1::Rider, "a rider is exactly the attempt that is no floor event");
+    if builder.params.floor_reserve_active_at(ctx.daa_score)
+        && claim.class_id != builder.params.base_class_id()
+        && let Some(blue) = origin.floor_event.blue()
+    {
+        builder.note_real_accepted(ctx.daa_score, blue);
     }
     builder.write_claim(claim_id, Some(claim));
     if let Some(read) = issuance {
