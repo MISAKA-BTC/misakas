@@ -149,13 +149,32 @@ The keyring export takes the same fence flags: `kaspad … --palw-drill-write-ke
 announces another ruleset's fingerprint).
 
 
-## int-12 addendum (2026-10-03): the list is now 20 entries
+## int-12 addendum (2026-10-03): the list is now 28 entries, and the ramp has two more steps
 
-The user's directive of 2026-10-03 arms every RFC but 0005 at the same height H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 20
-entries, in prerequisite order: the int-11 five, then RFC-0006 (`palw_tir_shard_v1`), RFC-0007 (vertex, witness manifest, audit mesh, capped
-onboarding), RFC-0001 (decode constraint, constraint v2, prefix state, prefix inherit, tokenizer match, adapter class), RFC-0002's rest
-(`palw_class_seating`, `palw_gdn_key_heads`), then F-N's `L_ver` and ρ = 25. `palw_tir_only_v1` is a MAINNET step and is on no list.
-`--palw-drill-int11-at` moves all of them (a per-fence flag of this file's rows still moves its own entry alone, on a ruleset that arms the
-rest). Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
-(`consensus/core/tests/palw_t12_flag_day_int11.rs`, `the_list_holds_its_prerequisites_by_name`). Object tags: 91–93 RFC-0006, 94 the adapter
-listing, 100–103 RFC-0007; delta 101 vertex rows, 102–103 shard rows; carriage tails `0xE4` (vertex), `0xE1` (shard).
+The user's directive of 2026-10-03 arms every RFC but 0005, the Useful Work Transition and capacity x1000 at the same height
+H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 28 entries, in prerequisite order:
+
+1. the int-11 five (decode rules, generative, FP Job V5, held leaf challenge, improvement);
+2. RFC-0006 — `palw_tir_shard_v1`;
+3. RFC-0007 — `palw_verification_vertex_v1`, `palw_witness_manifest_v1`, `palw_audit_mesh_v1`, `palw_capped_onboarding_v1`;
+4. RFC-0001 — `palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`,
+   `palw_fp_tokenizer_match`, `palw_adapter_class_v1`;
+5. RFC-0002's rest — `palw_class_seating`, `palw_gdn_key_heads`;
+6. lane PL (ADR-0166) — `palw_panel_unavailable_expiry`, `palw_panel_fast_switch`, `palw_seat_availability`;
+7. lane RS (ADR-0165) — `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`;
+8. F-N's `L_ver` (`palw_capacity_network_verify`), then capacity x1000's three (ADR-0164: `palw_capacity_emission_budget`,
+   `palw_capacity_multi_claim`, `palw_capacity_rho_breaker`), then rho = 25.
+
+The ramp's later steps keep their own entries: rho = 100 at H + 95 (5,395), rho = 250 at H + 190 (5,490), rho = 1000 at H + 285 (5,585).
+`palw_tir_only_v1` is a MAINNET step and is on no list; `palw_model_court_window` and `palw_model_virtual_v1` stay dormant.
+
+`--palw-drill-int11-at=H'` moves all 28 to H' and the three later steps to H' + 95 / + 190 / + 285 (a per-fence flag of this file's rows
+still moves its own entry alone, on a ruleset that arms the rest — which is why `--palw-drill-capacity-step2-at` alone leaves rho = 100, 250
+and 1000 where the release has them). Lane PL's list has its own flag, `--palw-drill-panel-liveness-at`; lane RS's pair,
+`--palw-drill-useful-work-at`. Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
+(`consensus/core/tests/palw_t12_flag_day_int11.rs`, `the_list_holds_its_prerequisites_by_name`).
+
+Object tags: 91–93 RFC-0006, 94 the adapter listing, 100–103 RFC-0007 (spec 17 §17.0). State-delta numbers: 101 vertex rows (RFC-0007),
+102–103 shard plan / claim (RFC-0006), 104 `RealWork` (ADR-0165), 105 `CapacityLedger` (ADR-0164), 106 `SeatAvailability` (ADR-0166).
+Carriage tails: `0xE4` vertex, `0xE1` shard, `0xEA` real work, `0xE6` seat availability. Interval-request kinds: bit 29 leaf evidence,
+28 shard rows, 27 shard runs, 26 weight blocks, 25 witness chunks.
