@@ -109,6 +109,29 @@ impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T:
         current
     }
 
+    /// **The reds `ghostdag_data` may not merge: those outside the merge-depth root's future that no kosherizing
+    /// blue covers** — `check_bounded_merge_depth`'s exact predicate (the header validator, the virtual's parent
+    /// selection and the round lane's template all ask THIS, so a template can never pick a parent the validator
+    /// refuses). Empty = the merge is within the bound. `merge_depth_root` is
+    /// [`Self::calc_merge_depth_root`] for the same data and pruning point.
+    pub fn merge_breaking_reds(&self, ghostdag_data: &GhostdagData, merge_depth_root: BlockHash) -> Vec<BlockHash> {
+        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
+        let mut bad_reds = Vec::new();
+        for red in ghostdag_data.mergeset_reds.iter().copied() {
+            if self.reachability_service.is_dag_ancestor_of(merge_depth_root, red) {
+                continue;
+            }
+            // Lazy load the kosherizing blocks since this case is extremely rare
+            if kosherizing_blues.is_none() {
+                kosherizing_blues = Some(self.kosherizing_blues(ghostdag_data, merge_depth_root).collect());
+            }
+            if !self.reachability_service.is_dag_ancestor_of_any(red, &mut kosherizing_blues.as_ref().unwrap().iter().copied()) {
+                bad_reds.push(red);
+            }
+        }
+        bad_reds
+    }
+
     /// Returns the set of blues which are eligible for "kosherizing" merge bound violating blocks.
     /// By prunality rules, these blocks must have `merge_depth_root` on their selected chain.  
     pub fn kosherizing_blues<'a>(

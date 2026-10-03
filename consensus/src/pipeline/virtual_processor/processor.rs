@@ -18019,26 +18019,8 @@ impl VirtualStateProcessor {
     ) -> (Vec<BlockHash>, GhostdagData) {
         let mut ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
         let merge_depth_root = self.depth_manager.calc_merge_depth_root(&ghostdag_data, current_pruning_point);
-        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
-        let mut bad_reds = Vec::new();
-
-        //
-        // Note that the code below optimizes for the usual case where there are no merge-bound-violating blocks.
-        //
-
-        // Find red blocks violating the merge bound and which are not kosherized by any blue
-        for red in ghostdag_data.mergeset_reds.iter().copied() {
-            if self.reachability_service.is_dag_ancestor_of(merge_depth_root, red) {
-                continue;
-            }
-            // Lazy load the kosherizing blocks since this case is extremely rare
-            if kosherizing_blues.is_none() {
-                kosherizing_blues = Some(self.depth_manager.kosherizing_blues(&ghostdag_data, merge_depth_root).collect());
-            }
-            if !self.reachability_service.is_dag_ancestor_of_any(red, &mut kosherizing_blues.as_ref().unwrap().iter().copied()) {
-                bad_reds.push(red);
-            }
-        }
+        // Find red blocks violating the merge bound and which are not kosherized by any blue (the validator's own predicate).
+        let bad_reds = self.depth_manager.merge_breaking_reds(&ghostdag_data, merge_depth_root);
 
         if !bad_reds.is_empty() {
             // Remove all parents which lead to merging a bad red
@@ -18778,6 +18760,17 @@ impl VirtualStateProcessor {
                 .map(|red| envelope_of(*red).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
                 .collect();
             let Some(members) = members else { continue };
+            // **A tip the validator would refuse to merge is not a parent** (the 2026-10-03 execution-lane wedge): a round
+            // tip older than the merge-depth window — one no chain block ever merged — made EVERY round template
+            // parent on it, and the header stage refused every block (`ViolatingBoundedMergeDepth`, 10,106 times on b0).
+            // The same predicate the validator runs (`BlockDepthManager::merge_breaking_reds`), over the same data.
+            if !self
+                .depth_manager
+                .merge_breaking_reds(&ghostdag, self.depth_manager.calc_merge_depth_root(&ghostdag, pruning_point))
+                .is_empty()
+            {
+                continue;
+            }
             if ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit
                 || palw_execution_mergeset_rule_v1(Some(round), &members, round_width, lane.max_per_mergeset).is_err()
             {
@@ -18803,6 +18796,14 @@ impl VirtualStateProcessor {
         let timestamp = round_start.max(past_median_time + 1);
         if timestamp >= round_start.saturating_add(PALW_EXEC_ROUND_MS) {
             return Err(RuleError::TimeTooOld(round_start, past_median_time));
+        }
+        // **A round the clock floor will refuse is not built** (the 2026-10-03 back-signing waste): the header stage's H5
+        // (`step_stamp_admits`) refuses a block stamped before the slot its window's clock cursor opens, and a ticket signed
+        // late for an old round is stamped at that round's start — 986 such round blocks were refused on b0. Asked here with the
+        // validator's own predicate, over the clock this very template's window computed, so the producer neither solves
+        // nor signs a round the chain cannot take.
+        if let Err(early) = daa_window.clock.step_stamp_admits(timestamp) {
+            return Err(RuleError::ClockStepBeforeItsSlot(Default::default(), timestamp, early.next_slot_ms));
         }
         let header_pruning_point = self.pruning_point_manager.expected_header_pruning_point(ghostdag.to_compact()).pruning_point;
         let parents_by_level = self.parents_manager.calc_block_parents(pruning_point, &parents);

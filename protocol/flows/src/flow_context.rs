@@ -392,14 +392,77 @@ mod tests {
 
         // A peer on this build is never judged again, whatever the heights — and neither is one from
         // a build with no fork-id field on a network whose gate is not armed.
-        let same = stored(&upgraded, 0, fork_id_v1(&upgraded, 10));
-        assert_eq!(same.fork_id_refusal_height, None);
+        // (met at the score it is judged at: a connection made BEFORE a crossed fence is re-made at the crossing — see
+        // `a_connection_kept_since_before_a_fence_is_dropped_when_this_node_crosses_it`)
         for daa in [0, ADR_0095, 3_158, u64::MAX] {
+            let same = stored(&upgraded, daa, fork_id_v1(&upgraded, daa));
+            assert_eq!(same.fork_id_refusal_height, None);
             assert_eq!(fork_id_rejudge_v1(&upgraded, daa, &same), None, "same build at {daa}");
         }
         let disarmed = Params::from(NetworkId::new(NetworkType::Mainnet));
         let absent = fork_id_fields_v1(&disarmed, 0, &[], u64::MAX);
         assert_eq!(absent.fork_id_refusal_height, None);
+        assert_eq!(fork_id_rejudge_v1(&disarmed, u64::MAX, &absent), None);
+    }
+
+    /// **A connection kept since before a fence is dropped when this node crosses it, whatever the handshake said** (the
+    /// int-11 drill, 2026-10-03).
+    ///
+    /// Two in-process nodes of different schedules: the armed build carries the fence at 2400, the old one does not. Met at
+    /// DAA 0 the old node announces `next = 1150` — this build's own next fence — so the snapshot AGREES and
+    /// `fork_id_refusal_height` is `None` (the gap `palw_hb_transparency_same_chain_fence` measured): before this fix the
+    /// connection was never judged again, the old node kept relaying, disqualified every block past 2400 and stalled at
+    /// 2399, and only a reconnect logged the refusal. Now the crossing re-judges it; a connection made after the crossing,
+    /// or whose announcement proves it carries the fence, is kept.
+    #[test]
+    fn a_connection_kept_since_before_a_fence_is_dropped_when_this_node_crosses_it() {
+        use kaspa_consensus_core::config::params::Params;
+        use kaspa_consensus_core::fork_id_v1::{ForkIdMismatch, fork_id_v1};
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        const FENCE: u64 = 2400;
+        let armed = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let mut old = armed.clone();
+        old.palw_model_benefits = None;
+        assert!(armed.fence_schedule_v1().contains(&FENCE) && !old.fence_schedule_v1().contains(&FENCE), "the premise: they differ in the fence");
+
+        // Met at DAA 0: both announce the same next fence, so nothing in the snapshot disputes anything.
+        let old_at_0 = fork_id_v1(&old, 0);
+        assert_eq!(old_at_0.next, fork_id_v1(&armed, 0).next, "the premise: the announcements agree below the first fence");
+        let met_at_0 = fork_id_fields_v1(&armed, 0, old_at_0.fired.as_bytes().as_slice(), old_at_0.next);
+        assert_eq!(met_at_0.fork_id_refusal_height, None, "the gap: the handshake snapshot never turns into a refusal");
+        for daa in [0, 1_149] {
+            assert_eq!(fork_id_rejudge_v1(&armed, daa, &met_at_0), None, "kept while no gate fence has been crossed, at {daa}");
+        }
+        // (Every gate fence is a crossing: a snapshot taken at 0 proves nothing about 1,150 either, so the connection is
+        // re-made there too — a reconnect costs a handshake, and each fence is crossed once.)
+        assert!(fork_id_rejudge_v1(&armed, 1_150, &met_at_0).is_some());
+        for daa in [FENCE, FENCE + 1] {
+            assert_eq!(
+                fork_id_rejudge_v1(&armed, daa, &met_at_0).map(|(mismatch, fence)| (mismatch, fence)),
+                Some((ForkIdMismatch::NotCarriedPastCrossedFence { fence: FENCE }, FENCE)),
+                "dropped once this node is at {daa}"
+            );
+        }
+        assert!(
+            matches!(fork_id_rejudge_v1(&armed, 9_000, &met_at_0), Some((ForkIdMismatch::NotCarriedPastCrossedFence { .. }, _))),
+            "and still, at any later score, until it is re-made"
+        );
+        // After the refusal the peer reconnects and is judged on a fresh announcement at the crossed height: the old node is
+        // refused outright (it lacks the fence), and a node that carries it — met past the fence — is kept for good.
+        let old_now = fork_id_v1(&old, FENCE);
+        assert!(
+            kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(&armed, FENCE, old_now.fired.as_bytes().as_slice(), old_now.next).refuses(),
+            "the old build, reconnecting, is refused at the handshake"
+        );
+        let new_now = fork_id_v1(&armed, FENCE);
+        let reconnected = fork_id_fields_v1(&armed, FENCE, new_now.fired.as_bytes().as_slice(), new_now.next);
+        assert_eq!(fork_id_rejudge_v1(&armed, FENCE + 500, &reconnected), None, "a peer that carries the fence is kept");
+        // A peer already past the fence when this node meets it below it proves the fence in its announcement: kept.
+        let ahead = fork_id_fields_v1(&armed, FENCE - 10, new_now.fired.as_bytes().as_slice(), new_now.next);
+        assert_eq!(fork_id_rejudge_v1(&armed, FENCE + 5, &ahead), None, "an announcement that proves the fence is not dropped");
+        // A network whose gate is not armed never drops anyone on a crossing.
+        let disarmed = Params::from(NetworkId::new(NetworkType::Mainnet));
+        let absent = fork_id_fields_v1(&disarmed, 0, &[], u64::MAX);
         assert_eq!(fork_id_rejudge_v1(&disarmed, u64::MAX, &absent), None);
     }
 
@@ -2379,6 +2442,7 @@ fn fork_id_fields_v1(
             peer_fired,
             peer_next,
         ),
+        fork_id_judged_at_daa: local_daa_score,
         ..Default::default()
     }
 }
@@ -2394,18 +2458,34 @@ fn fork_id_rejudge_v1(
     local_daa_score: u64,
     properties: &PeerProperties,
 ) -> Option<(kaspa_consensus_core::fork_id_v1::ForkIdMismatch, u64)> {
-    if properties.fork_id_refusal_height.is_none_or(|height| height > local_daa_score) {
-        return None;
+    // The named refusal first: a snapshot that already disagreed is refused for what it said.
+    let named = if properties.fork_id_refusal_height.is_none_or(|height| height > local_daa_score) {
+        None
+    } else {
+        match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
+            params,
+            local_daa_score,
+            &properties.fork_id_fired,
+            properties.fork_id_next,
+        ) {
+            ForkIdVerdict::DisagreePastFence { mismatch, fired_through } => Some((mismatch, fired_through)),
+            _ => None,
+        }
+    };
+    if named.is_some() {
+        return named;
     }
-    match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
+    // A connection judged below a gate fence this node has since crossed, whose announcement cannot prove it carries the
+    // fence (the int-11 drill: an old node stayed connected across the fence and stalled at H − 1, never dropped).
+    if let Some(crossed) = kaspa_consensus_core::fork_id_v1::fork_id_crossing_rejudge_v1(
         params,
         local_daa_score,
+        properties.fork_id_judged_at_daa,
         &properties.fork_id_fired,
-        properties.fork_id_next,
     ) {
-        ForkIdVerdict::DisagreePastFence { mismatch, fired_through } => Some((mismatch, fired_through)),
-        _ => None,
+        return Some((kaspa_consensus_core::fork_id_v1::ForkIdMismatch::NotCarriedPastCrossedFence { fence: crossed }, crossed));
     }
+    None
 }
 
 impl FlowContext {

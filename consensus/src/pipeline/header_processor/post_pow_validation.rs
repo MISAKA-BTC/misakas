@@ -239,19 +239,8 @@ impl HeaderProcessor {
         let ghostdag_data = ctx.ghostdag_data();
         let merge_depth_root = self.depth_manager.calc_merge_depth_root(ghostdag_data, ctx.pruning_point);
         let finality_point = self.depth_manager.calc_finality_point(ghostdag_data, ctx.pruning_point);
-        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
-
-        for red in ghostdag_data.mergeset_reds.iter().copied() {
-            if self.reachability_service.is_dag_ancestor_of(merge_depth_root, red) {
-                continue;
-            }
-            // Lazy load the kosherizing blocks since this case is extremely rare
-            if kosherizing_blues.is_none() {
-                kosherizing_blues = Some(self.depth_manager.kosherizing_blues(ghostdag_data, merge_depth_root).collect());
-            }
-            if !self.reachability_service.is_dag_ancestor_of_any(red, &mut kosherizing_blues.as_ref().unwrap().iter().copied()) {
-                return Err(RuleError::ViolatingBoundedMergeDepth);
-            }
+        if !self.depth_manager.merge_breaking_reds(ghostdag_data, merge_depth_root).is_empty() {
+            return Err(RuleError::ViolatingBoundedMergeDepth);
         }
 
         ctx.merge_depth_root = Some(merge_depth_root);
