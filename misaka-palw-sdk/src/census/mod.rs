@@ -33,6 +33,9 @@ pub struct ClassifiedV1 {
     pub plan: PlanV1,
     /// The listing decided the technical outcome (a failure the headers cannot change), so the repository need not be fetched.
     pub decided: bool,
+    /// The rights decision under each policy this build knows, so a report can show what an adopted policy would change
+    /// (`none` is the headline's).
+    pub rights_by_policy: std::collections::BTreeMap<&'static str, bool>,
 }
 
 /// The listing-depth row and the fetch plan of one repository.
@@ -40,5 +43,9 @@ pub fn classify(l: &ListingV1, ctx: &CensusContext) -> ClassifiedV1 {
     let row = evaluate(l, None, ctx);
     let plan = plan_of(&row.selected);
     let decided = row.technical.iter().any(|g| g.status == GateStatus::Fail);
-    ClassifiedV1 { row, plan, decided }
+    let rights_by_policy = [RightsPolicy::None, RightsPolicy::PermissiveCardV0]
+        .into_iter()
+        .map(|p| (p.name(), rights::rights_of(l, p).confirmed))
+        .collect();
+    ClassifiedV1 { row, plan, decided, rights_by_policy }
 }

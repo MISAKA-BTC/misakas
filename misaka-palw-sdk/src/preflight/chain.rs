@@ -205,7 +205,7 @@ pub struct ForecastIndependence {
     pub note: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ChainOutput {
     pub network: NetworkInfo,
     pub admission: Option<AdmissionInfo>,

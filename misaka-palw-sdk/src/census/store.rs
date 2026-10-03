@@ -188,6 +188,9 @@ pub struct CensusSource {
     pub scratch: Scratch,
     pub label: String,
     pub bytes_read: u64,
+    /// The frontend needs the data of a tensor the store does not hold (a GGUF whose configuration is rebuilt from a small tensor,
+    /// `rope_freqs.weight`): its name and size.
+    pub needs_tensor_data: Option<String>,
 }
 
 /// **The preflight source of a fetched repository**, or the source-gate problems that stop it (a needed file not fetched, a shard the
@@ -300,7 +303,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
             // The tokenizer check of a directory reads the file names; the census's are the inventory's.
             src.kind = InputKind::HfDirectory;
             src.label = label.clone();
-            Ok(CensusSource { source: src, scratch, label, bytes_read })
+            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data: None })
         }
         ArtifactKind::Gguf => {
             if sel.weights.len() != 1 {
@@ -323,12 +326,24 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
                     vec![problem(codes::HEADER_INVALID, path, msg)]
                 }
             })?;
+            let mut needs_tensor_data = None;
             let (model, config, config_error) = match misaka_palw_tir_lower::gguf::GgufModel::from_file(parsed.clone()) {
                 Ok(m) => {
                     let c = m.config.clone();
                     (Some(m), Some(c), None)
                 }
-                Err(e) => (None, None, Some(e.to_string())),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("header-only view holds no tensor data") {
+                        // The mapping reads a small tensor's data (a Llama-3 GGUF's rope frequency factors).
+                        let t = ["rope_freqs.weight"]
+                            .iter()
+                            .find_map(|n| parsed.tensors.get(*n).map(|t| format!("{n} ({} bytes)", t.bytes)))
+                            .unwrap_or_else(|| "a tensor of the file".to_string());
+                        needs_tensor_data = Some(t);
+                    }
+                    (None, None, Some(msg))
+                }
             };
             let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
             let src = Source {
@@ -348,7 +363,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
                 gguf_file_bytes: size,
                 bytes_read,
             };
-            Ok(CensusSource { source: src, scratch, label, bytes_read })
+            Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data })
         }
         ArtifactKind::Diffusers | ArtifactKind::Adapter | ArtifactKind::Other | ArtifactKind::None => {
             Err(vec![problem(codes::FETCH_FAILED, "(selection)", format!("{:?} has no preflight source", sel.kind))])

@@ -51,11 +51,12 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     if !args.is_empty() {
         return Err(format!("unexpected arguments {args:?}\n{USAGE}"));
     }
+    // A census declares every class at one context (the preflight's search for the widest admissible context runs admission many
+    // times per class): `--max-context N` fixes it, else the model's declared maximum capped at 8,192 with one retry at 2,048.
     let mut ctx = CensusContext::new(&snapshot, &network, height, policy, &tree);
-    // A census judges every class at one published declared context (the preflight's search for the widest admissible context runs
-    // admission many times per class); `None` keeps the preflight's search.
-    ctx.options.max_context = max_context;
-    ctx.ruleset.max_context = max_context;
+    if let Some(c) = max_context {
+        ctx = ctx.with_context_rule(super::gates::ContextRule::Fixed(c));
+    }
     // A network that cannot be judged on is an error before any line is read.
     crate::preflight::chain::PreflightNetwork::parse(&network)?;
     match sub.as_str() {
@@ -124,6 +125,8 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
             for h in handles {
                 h.join().map_err(|_| "a census worker panicked".to_string())??;
             }
+            let (hits, misses) = ctx.cache.stats();
+            eprintln!("census gates: {n} repositories; chain judgments {misses} computed, {hits} shared");
             Ok(())
         }
         other => Err(format!("census {other}: {USAGE}")),

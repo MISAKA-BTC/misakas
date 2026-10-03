@@ -427,8 +427,15 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
 
 /// **The preflight of a source already read** — the Hugging Face census (RFC-0002 §II.10, [`crate::census`]) builds its [`source::Source`]
 /// from a header store (the files' sizes are the Hub's, the shards are their headers) and judges it here, with the built-in registries.
-pub fn run_census_source(src: &source::Source, label: &str, bytes_read: u64, opts: &Options) -> Result<Report, String> {
-    run_on_source(
+/// `cache` shares the chain's judgment between sources whose shape-only programs are the same bytes ([`JudgeCache`]).
+pub fn run_census_source(
+    src: &source::Source,
+    label: &str,
+    bytes_read: u64,
+    opts: &Options,
+    cache: Option<&JudgeCache>,
+) -> Result<Report, String> {
+    run_on_source_cached(
         src,
         None,
         InputKind::Remote,
@@ -436,7 +443,65 @@ pub fn run_census_source(src: &source::Source, label: &str, bytes_read: u64, opt
         opts,
         misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
         None,
+        cache,
     )
+}
+
+/// **The chain's judgment, shared by identical programs.** [`chain::judge`] is a function of the shape-only program, the
+/// options, and two figures of the convert stage (the artifact estimate and its leaf estimate); a census meets the same program in
+/// every fine-tune of one configuration, and one judgment runs admission v10 many times (the layout search). The key is all of those
+/// inputs, so a hit is the same computation, not an approximation.
+#[derive(Default)]
+pub struct JudgeCache {
+    map: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::OnceLock<chain::ChainOutput>>>>,
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
+}
+
+impl JudgeCache {
+    pub fn key(program: &misaka_palw_tir::TirProgramV1, analysis: &model::Analysis, opts: &Options) -> String {
+        let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/v1").to_state();
+        st.update(&program.encode());
+        let a = analysis.artifact.as_ref().map(|a| (a.estimate_bytes, a.inventory_leaves_estimate));
+        st.update(
+            format!(
+                "|{a:?}|{:?}|{:?}|{:?}|{}|{}|{}|{:?}|{}|{}",
+                opts.network,
+                opts.height,
+                opts.max_context,
+                opts.tile_len,
+                opts.h_chunk,
+                opts.held,
+                opts.seat_shares.iter().map(|s| (s.name.clone(), s.bytes)).collect::<Vec<_>>(),
+                opts.residency_pin_below_bytes,
+                opts.node.is_some()
+            )
+            .as_bytes(),
+        );
+        source::hex(st.finalize().as_bytes())
+    }
+
+    fn get_or_judge(&self, key: String, f: impl FnOnce() -> chain::ChainOutput) -> chain::ChainOutput {
+        let cell = {
+            let mut m = self.map.lock().unwrap_or_else(|p| p.into_inner());
+            m.entry(key).or_default().clone()
+        };
+        let mut computed = false;
+        let out = cell
+            .get_or_init(|| {
+                computed = true;
+                f()
+            })
+            .clone();
+        let counter = if computed { &self.misses } else { &self.hits };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        out
+    }
+
+    /// (hits, misses).
+    pub fn stats(&self) -> (u64, u64) {
+        (self.hits.load(std::sync::atomic::Ordering::Relaxed), self.misses.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 fn run_on_source(
@@ -447,6 +512,20 @@ fn run_on_source(
     opts: &Options,
     reg: &misaka_palw_tir_lower::quantfmt::QuantRegistry,
     adapter_text: Option<&str>,
+) -> Result<Report, String> {
+    run_on_source_cached(src, path, kind, over, opts, reg, adapter_text, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_on_source_cached(
+    src: &source::Source,
+    path: Option<&Path>,
+    kind: InputKind,
+    over: InputInfoOverride,
+    opts: &Options,
+    reg: &misaka_palw_tir_lower::quantfmt::QuantRegistry,
+    adapter_text: Option<&str>,
+    cache: Option<&JudgeCache>,
 ) -> Result<Report, String> {
     let analysis = model::analyze(src, opts, reg, adapter_text);
 
@@ -467,7 +546,10 @@ fn run_on_source(
                 {
                     return Err(format!("--node is on {} and --network is {}: the conditions would be judged on another chain", node.network, net.id));
                 }
-                chain_out = chain::judge(&net, opts, program, &analysis, src);
+                chain_out = match cache {
+                    Some(c) => c.get_or_judge(JudgeCache::key(program, &analysis, opts), || chain::judge(&net, opts, program, &analysis, src)),
+                    None => chain::judge(&net, opts, program, &analysis, src),
+                };
                 network = Some(chain_out.network.clone());
                 reached = Depth::Shape;
             }

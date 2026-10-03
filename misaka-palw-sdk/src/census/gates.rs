@@ -106,8 +106,8 @@ pub struct PreflightSummaryV1 {
 pub struct RulesetV1 {
     pub network: String,
     pub height: Option<u64>,
-    /// The context every class is declared at (`None`: the preflight's search for the widest the gate admits).
-    pub max_context: Option<u32>,
+    /// The rule that chose each class's declared context ([`ContextRule`]).
+    pub context_rule: String,
     /// The source tree the census binary was built from (its git commit), as the runner states it.
     pub tree: String,
     pub tasks: String,
@@ -143,10 +143,71 @@ pub struct CensusRowV1 {
     /// `source` through `admit` PASS in the strict view, `pack` included: never true in a header census.
     pub registration_ready: bool,
     pub preflight: Option<PreflightSummaryV1>,
+    /// The context the class was declared at, and where it came from; the retry's, when there was one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextV1>,
+    /// The admit gate at the retry context, when the primary context failed only on context-dependent codes. Never merged into
+    /// `technical`: a class admissible only at the retry context is reported as its own stratum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admit_retry: Option<GateResultV1>,
+    /// `source` and `lower` PASS and the admit gate PASS at the retry context only.
+    pub shape_ready_at_retry: bool,
     /// The content identity of the selected weights (the inventory's LFS ids).
     pub weights_identity: Option<String>,
     pub weights_bytes: Option<u64>,
     pub ruleset: RulesetV1,
+}
+
+/// How a class's declared context is chosen. A class is a model at a context, so a census declares one per repository.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextRule {
+    /// Every class at this context.
+    Fixed(u32),
+    /// The model's declared maximum positions, capped (testnet-12's classes are 8k); when that fails only on context-dependent codes
+    /// (`CONTEXT_BOUND`, `COURT_BUDGET`, `COURT_WINDOW_EXCEEDED`, `CLOSE_TOO_LARGE`, `DA_LADDER_EXCEEDED`), one retry at `retry`, recorded
+    /// apart (the lead's rule of 2026-10-03).
+    ModelCapped { cap: u32, retry: u32 },
+}
+
+impl ContextRule {
+    pub fn describe(self) -> String {
+        match self {
+            ContextRule::Fixed(c) => format!("fixed {c}"),
+            ContextRule::ModelCapped { cap, retry } => {
+                format!("min(declared max positions, {cap}); one retry at {retry} on context-dependent refusals only")
+            }
+        }
+    }
+}
+
+/// The declared context of a row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextV1 {
+    pub primary: u32,
+    /// `config.<key>` the declared maximum came from, or `assumed` (none declared: the cap).
+    pub source: String,
+    pub declared: Option<u64>,
+    pub retry: Option<u32>,
+}
+
+/// Codes a narrower declared context can change.
+pub const CONTEXT_DEPENDENT_CODES: &[&str] =
+    &[codes::CONTEXT_BOUND, codes::COURT_BUDGET, "COURT_WINDOW_EXCEEDED", codes::CLOSE_TOO_LARGE, "DA_LADDER_EXCEEDED"];
+
+/// The model's declared maximum positions, from its configuration (the text decoder's, when nested).
+pub fn declared_positions(config: &serde_json::Value) -> Option<(u64, String)> {
+    const KEYS: &[&str] = &["max_position_embeddings", "n_positions", "max_seq_len", "seq_length", "max_sequence_length", "n_ctx"];
+    for scope in
+        [Some(config), config.get("text_config"), config.get("llm_config"), config.get("language_config")].into_iter().flatten()
+    {
+        for k in KEYS {
+            if let Some(v) = scope.get(*k).and_then(|v| v.as_u64()).filter(|v| *v > 0) {
+                let at = if std::ptr::eq(scope, config) { format!("config.{k}") } else { format!("config.<nested>.{k}") };
+                return Some((v, at));
+            }
+        }
+    }
+    None
 }
 
 /// The census's fixed inputs.
@@ -155,6 +216,9 @@ pub struct CensusContext {
     pub policy: RightsPolicy,
     pub options: preflight::Options,
     pub ruleset: RulesetV1,
+    pub context_rule: ContextRule,
+    /// The chain's judgment shared by identical programs (one process, every worker).
+    pub cache: preflight::JudgeCache,
 }
 
 impl CensusContext {
@@ -163,6 +227,7 @@ impl CensusContext {
     pub fn new(snapshot: &str, network: &str, height: Option<u64>, policy: RightsPolicy, tree: &str) -> CensusContext {
         let options =
             preflight::Options { depth: preflight::Depth::Shape, network: Some(network.to_string()), height, ..Default::default() };
+        let context_rule = ContextRule::ModelCapped { cap: 8_192, retry: 2_048 };
         CensusContext {
             snapshot: snapshot.to_string(),
             policy,
@@ -170,11 +235,56 @@ impl CensusContext {
             ruleset: RulesetV1 {
                 network: network.to_string(),
                 height,
-                max_context: None,
+                context_rule: context_rule.describe(),
                 tree: tree.to_string(),
                 tasks: super::tasks::tasks_digest(),
             },
+            context_rule,
+            cache: Default::default(),
         }
+    }
+
+    pub fn with_context_rule(mut self, rule: ContextRule) -> CensusContext {
+        self.context_rule = rule;
+        self.ruleset.context_rule = rule.describe();
+        self
+    }
+}
+
+/// The preflight at one declared context, a panic caught and named.
+fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32) -> Result<Report, Found> {
+    let mut opts = ctx.options.clone();
+    opts.max_context = Some(max_context);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        preflight::run_census_source(&cs.source, &cs.label, cs.bytes_read, &opts, Some(&ctx.cache))
+    })) {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(found("ARCH_REFUSED", None, vec![format!("the preflight could not run: {e}")])),
+        Err(p) => {
+            let why = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()));
+            Err(found("PREFLIGHT_PANIC", None, vec![format!("the preflight panicked: {}", why.unwrap_or_default())]))
+        }
+    }
+}
+
+/// The admit gate of a report (the class is not a pipeline class).
+fn admit_of(r: &Report) -> GateResultV1 {
+    let f: Vec<Found> = mapped(r, Stage::Register).into_iter().filter(|(g, _)| *g == Gate::Admit).map(|(_, x)| x).collect();
+    if !f.is_empty() {
+        return fail(Gate::Admit, f, "shape");
+    }
+    match r.verdict.register.status {
+        StageStatus::Ok => pass(
+            Gate::Admit,
+            "shape",
+            vec![format!(
+                "{} at DAA {}; declared context {}",
+                r.network.as_ref().map(|n| n.id.as_str()).unwrap_or("?"),
+                r.network.as_ref().map(|n| n.daa.to_string()).unwrap_or_else(|| "?".into()),
+                r.admission.as_ref().and_then(|a| a.layout.as_ref()).map(|l| l.max_context.to_string()).unwrap_or_else(|| "?".into())
+            )],
+        ),
+        _ => not_run(Gate::Admit, "NOT_RUN_PREFLIGHT_UNKNOWN", vec![r.verdict.register.unknown_because.clone().unwrap_or_default()]),
     }
 }
 
@@ -449,6 +559,9 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     let mut lower_extra: Vec<Found> = Vec::new();
     let mut lower_evidence: Vec<String> = Vec::new();
     let mut route_needs_weights = false;
+    let mut needs_tensor_data: Option<String> = None;
+    let mut context: Option<ContextV1> = None;
+    let mut admit_retry: Option<GateResultV1> = None;
     if let Some(fx) = fetched
         && src_found.is_empty()
     {
@@ -457,20 +570,43 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 if lower_found_listing.is_empty() || task.profile == Profile::PartialTextStage =>
             {
                 match store::source_of(l, &sel, fx) {
-                    Ok(cs) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        preflight::run_census_source(&cs.source, &cs.label, cs.bytes_read, &ctx.options)
-                    })) {
-                        Ok(Ok(r)) => report = Some(r),
-                        Ok(Err(e)) => lower_extra.push(found("ARCH_REFUSED", None, vec![format!("the preflight could not run: {e}")])),
-                        Err(p) => {
-                            let why = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()));
-                            lower_extra.push(found(
-                                "PREFLIGHT_PANIC",
-                                None,
-                                vec![format!("the preflight panicked: {}", why.unwrap_or_default())],
-                            ))
+                    Ok(cs) if cs.needs_tensor_data.is_some() => {
+                        needs_tensor_data = cs.needs_tensor_data.clone();
+                    }
+                    Ok(cs) => {
+                        let (primary, source, declared) = match ctx.context_rule {
+                            ContextRule::Fixed(c) => (c, "fixed".to_string(), None),
+                            ContextRule::ModelCapped { cap, .. } => match cs.source.config.as_ref().and_then(declared_positions) {
+                                Some((d, at)) => (d.min(u64::from(cap)) as u32, at, Some(d)),
+                                None => (cap, "assumed".to_string(), None),
+                            },
+                        };
+                        let mut cx = ContextV1 { primary, source, declared, retry: None };
+                        match run_preflight(&cs, ctx, primary) {
+                            Ok(r) => {
+                                // One retry at the narrower context when the primary failed only on what a context changes.
+                                if let ContextRule::ModelCapped { retry, .. } = ctx.context_rule
+                                    && primary > retry
+                                    && r.verdict.convert.status == StageStatus::Ok
+                                    && !task.profile.is_pipeline()
+                                {
+                                    let a = admit_of(&r);
+                                    if a.status == GateStatus::Fail
+                                        && a.codes.iter().all(|c| CONTEXT_DEPENDENT_CODES.contains(&c.as_str()))
+                                    {
+                                        cx.retry = Some(retry);
+                                        admit_retry = Some(match run_preflight(&cs, ctx, retry) {
+                                            Ok(r2) => admit_of(&r2),
+                                            Err(f) => fail(Gate::Admit, vec![f], "shape"),
+                                        });
+                                    }
+                                }
+                                report = Some(r);
+                            }
+                            Err(f) => lower_extra.push(f),
                         }
-                    },
+                        context = Some(cx);
+                    }
                     Err(ps) => {
                         for p in ps {
                             store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
@@ -559,6 +695,15 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         if route_needs_weights {
             return not_run(Gate::Lower, codes::NOT_RUN_NEEDS_WEIGHTS, lower_evidence.clone());
         }
+        if let Some(t) = &needs_tensor_data {
+            let mut r = not_run(
+                Gate::Lower,
+                codes::NOT_RUN_NEEDS_TENSOR_DATA,
+                vec![format!("the frontend reads the data of {t}; the census reads headers only (the user's network policy)")],
+            );
+            r.arg = Some(t.clone());
+            return r;
+        }
         match rep {
             Some(r) if r.verdict.convert.status == StageStatus::Ok => {
                 let mut ev = vec![format!(
@@ -588,29 +733,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         let Some(r) = rep else {
             return not_run(Gate::Admit, if fetched.is_none() { codes::NOT_RUN_NOT_SAMPLED } else { "NOT_RUN_NO_PREFLIGHT" }, vec![]);
         };
-        let f: Vec<Found> = mapped(r, Stage::Register).into_iter().filter(|(g, _)| *g == Gate::Admit).map(|(_, x)| x).collect();
-        if !f.is_empty() {
-            return fail(Gate::Admit, f, "shape");
-        }
-        match r.verdict.register.status {
-            StageStatus::Ok => pass(
-                Gate::Admit,
-                "shape",
-                vec![format!(
-                    "{} at DAA {}; declared context {}",
-                    r.network.as_ref().map(|n| n.id.as_str()).unwrap_or("?"),
-                    r.network.as_ref().map(|n| n.daa.to_string()).unwrap_or_else(|| "?".into()),
-                    r.admission
-                        .as_ref()
-                        .and_then(|a| a.layout.as_ref())
-                        .map(|l| l.max_context.to_string())
-                        .unwrap_or_else(|| "?".into())
-                )],
-            ),
-            _ => {
-                not_run(Gate::Admit, "NOT_RUN_PREFLIGHT_UNKNOWN", vec![r.verdict.register.unknown_because.clone().unwrap_or_default()])
-            }
-        }
+        admit_of(r)
     });
     ch.push(Gate::Seat, || {
         if let Some(r) = rep {
@@ -652,6 +775,10 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
 
     let is_pass = |v: &[GateResultV1], gate: Gate| v.iter().any(|x| x.gate == gate && x.status == GateStatus::Pass);
     let shape_ready = is_pass(&technical, Gate::Source) && is_pass(&technical, Gate::Lower) && is_pass(&technical, Gate::Admit);
+    let shape_ready_at_retry = is_pass(&technical, Gate::Source)
+        && is_pass(&technical, Gate::Lower)
+        && !shape_ready
+        && admit_retry.as_ref().is_some_and(|a| a.status == GateStatus::Pass);
     let registration_ready = [Gate::Source, Gate::Lower, Gate::Pack, Gate::Admit].iter().all(|g| is_pass(&gates, *g));
     let weights: Vec<String> = match (&sel.kind, fetched) {
         (ArtifactKind::Safetensors, Some(fx)) if sel.index.is_some() => {
@@ -690,6 +817,9 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         shape_ready,
         registration_ready,
         preflight: report.as_ref().map(summary),
+        context,
+        admit_retry,
+        shape_ready_at_retry,
         weights_identity,
         weights_bytes,
         ruleset: ctx.ruleset.clone(),

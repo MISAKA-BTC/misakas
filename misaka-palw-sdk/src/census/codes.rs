@@ -68,6 +68,9 @@ pub const NOT_RUN_NEEDS_CHAIN: &str = "NOT_RUN_NEEDS_CHAIN";
 pub const NOT_RUN_NOT_SAMPLED: &str = "NOT_RUN_NOT_SAMPLED";
 /// The class is a pipeline (RFC-0003) class: the census does not run the pipeline registration admission at the shape depth.
 pub const NOT_RUN_PIPELINE_ADMISSION: &str = "NOT_RUN_PIPELINE_ADMISSION";
+/// The frontend reads the data of a small tensor (a GGUF's `rope_freqs.weight`) to build the configuration; the census reads headers
+/// only (the network policy of this census), so the gate is not run rather than failed.
+pub const NOT_RUN_NEEDS_TENSOR_DATA: &str = "NOT_RUN_NEEDS_TENSOR_DATA";
 
 // ---- source ------------------------------------------------------------------------------------------------------------------------
 
