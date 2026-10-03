@@ -173,9 +173,9 @@ impl ContextRule {
     pub fn describe(self) -> String {
         match self {
             ContextRule::Fixed(c) => format!("fixed {c}"),
-            ContextRule::ModelCapped { cap, retry } => {
-                format!("min(declared max positions, {cap}); one retry at {retry} on context-dependent refusals only")
-            }
+            ContextRule::ModelCapped { cap, retry } => format!(
+                "primary min(declared max positions, {cap}); judged at {retry} first, the primary only when {retry} admits (or refuses on a code a wider context could change); a class admitted at {retry} only is its own stratum"
+            ),
         }
     }
 }
@@ -188,11 +188,42 @@ pub struct ContextV1 {
     pub source: String,
     pub declared: Option<u64>,
     pub retry: Option<u32>,
+    /// The contexts the preflight actually ran at, in order.
+    pub judged_at: Vec<u32>,
+    /// The primary context was not run: the narrower context's refusal holds there (its codes are limits that only grow with the
+    /// context, or do not depend on it). The admit gate is FAIL with the narrower context's codes, and says so.
+    pub primary_implied: bool,
 }
 
-/// Codes a narrower declared context can change.
+/// Codes a narrower declared context can change: limits that only grow with the context (close sizes, the court's costs and window,
+/// the DA ladder's leaves, the canonical job's bounds within 16..=32,783 positions).
 pub const CONTEXT_DEPENDENT_CODES: &[&str] =
     &[codes::CONTEXT_BOUND, codes::COURT_BUDGET, "COURT_WINDOW_EXCEEDED", codes::CLOSE_TOO_LARGE, "DA_LADDER_EXCEEDED"];
+
+/// Codes no declared context changes (a fence not in force, a root already registered).
+pub const CONTEXT_INDEPENDENT_CODES: &[&str] = &["FENCE_NOT_ARMED", "ARTIFACT_ROOT_KNOWN"];
+
+/// **The refusals at the narrower context that imply the primary's**, each with the argument (the lead's guard of 2026-10-03: a code
+/// whose limit could move non-monotonically with the tiling is not implied, its primary is run):
+///
+/// * `COURT_BUDGET` — the court's per-tile MACs and cone work depend on the tiles, and the layout search offers the same power-of-two
+///   tiles at every context of at least the tile; the dissection's root claim and its rounds only grow with the history.
+/// * `COURT_WINDOW_EXCEEDED` — the dissection's duration is non-decreasing in the context (more history rounds, never fewer).
+/// * `CLOSE_TOO_LARGE` — a carried close spans a tile and the history it reads; neither shrinks when the context grows.
+/// * `DA_LADDER_EXCEEDED` — the longest job's step leaves are proportional to its positions.
+/// * `FENCE_NOT_ARMED`, `ARTIFACT_ROOT_KNOWN` — do not depend on the context.
+///
+/// `CONTEXT_BOUND` (the canonical job's bounds) is **not** implied: both 2,048 and 8,192 lie inside its 16..=32,783 bounds, so a
+/// refusal at 2,048 is not explained by the context's size and the primary is judged on its own. Implied rows are checked, not
+/// assumed: a seeded subset is judged at the primary for real (`tools/hf_census/verify_implied.py`).
+pub const IMPLIED_AT_WIDER_CONTEXT: &[&str] = &[
+    codes::COURT_BUDGET,
+    "COURT_WINDOW_EXCEEDED",
+    codes::CLOSE_TOO_LARGE,
+    "DA_LADDER_EXCEEDED",
+    "FENCE_NOT_ARMED",
+    "ARTIFACT_ROOT_KNOWN",
+];
 
 /// The model's declared maximum positions, from its configuration (the text decoder's, when nested).
 pub fn declared_positions(config: &serde_json::Value) -> Option<(u64, String)> {
@@ -581,29 +612,43 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                                 None => (cap, "assumed".to_string(), None),
                             },
                         };
-                        let mut cx = ContextV1 { primary, source, declared, retry: None };
-                        match run_preflight(&cs, ctx, primary) {
-                            Ok(r) => {
-                                // One retry at the narrower context when the primary failed only on what a context changes.
-                                if let ContextRule::ModelCapped { retry, .. } = ctx.context_rule
-                                    && primary > retry
-                                    && r.verdict.convert.status == StageStatus::Ok
-                                    && !task.profile.is_pipeline()
-                                {
-                                    let a = admit_of(&r);
-                                    if a.status == GateStatus::Fail
-                                        && a.codes.iter().all(|c| CONTEXT_DEPENDENT_CODES.contains(&c.as_str()))
-                                    {
-                                        cx.retry = Some(retry);
-                                        admit_retry = Some(match run_preflight(&cs, ctx, retry) {
-                                            Ok(r2) => admit_of(&r2),
-                                            Err(f) => fail(Gate::Admit, vec![f], "shape"),
-                                        });
+                        let mut cx =
+                            ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
+                        match ctx.context_rule {
+                            // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the
+                            // narrower context on limits that only grow with the context is refused at the primary too, so the primary
+                            // is judged only for a class the narrower context admits (or refuses on a code a wider context could change).
+                            ContextRule::ModelCapped { retry, .. } if primary > retry && !task.profile.is_pipeline() => {
+                                cx.retry = Some(retry);
+                                cx.judged_at.push(retry);
+                                match run_preflight(&cs, ctx, retry) {
+                                    Ok(r2) if r2.verdict.convert.status != StageStatus::Ok => report = Some(r2),
+                                    Ok(r2) => {
+                                        let a2 = admit_of(&r2);
+                                        let implied = a2.status == GateStatus::Fail
+                                            && a2.codes.iter().all(|c| IMPLIED_AT_WIDER_CONTEXT.contains(&c.as_str()));
+                                        admit_retry = Some(a2);
+                                        if implied {
+                                            cx.primary_implied = true;
+                                            report = Some(r2);
+                                        } else {
+                                            cx.judged_at.push(primary);
+                                            match run_preflight(&cs, ctx, primary) {
+                                                Ok(r) => report = Some(r),
+                                                Err(f) => lower_extra.push(f),
+                                            }
+                                        }
                                     }
+                                    Err(f) => lower_extra.push(f),
                                 }
-                                report = Some(r);
                             }
-                            Err(f) => lower_extra.push(f),
+                            _ => {
+                                cx.judged_at.push(primary);
+                                match run_preflight(&cs, ctx, primary) {
+                                    Ok(r) => report = Some(r),
+                                    Err(f) => lower_extra.push(f),
+                                }
+                            }
                         }
                         context = Some(cx);
                     }
@@ -733,7 +778,21 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         let Some(r) = rep else {
             return not_run(Gate::Admit, if fetched.is_none() { codes::NOT_RUN_NOT_SAMPLED } else { "NOT_RUN_NO_PREFLIGHT" }, vec![]);
         };
-        admit_of(r)
+        let mut a = admit_of(r);
+        if let Some(cx) = &context
+            && cx.primary_implied
+        {
+            a.depth = Some(format!("shape@{}", cx.retry.unwrap_or(0)));
+            a.evidence.insert(
+                0,
+                format!(
+                    "refused at {} positions on limits that only grow with the context (or do not depend on it): refused at the primary {} too (not run there)",
+                    cx.retry.unwrap_or(0),
+                    cx.primary
+                ),
+            );
+        }
+        a
     });
     ch.push(Gate::Seat, || {
         if let Some(r) = rep {
@@ -778,7 +837,8 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     let shape_ready_at_retry = is_pass(&technical, Gate::Source)
         && is_pass(&technical, Gate::Lower)
         && !shape_ready
-        && admit_retry.as_ref().is_some_and(|a| a.status == GateStatus::Pass);
+        && admit_retry.as_ref().is_some_and(|a| a.status == GateStatus::Pass)
+        && context.as_ref().is_some_and(|c| c.judged_at.contains(&c.primary));
     let registration_ready = [Gate::Source, Gate::Lower, Gate::Pack, Gate::Admit].iter().all(|g| is_pass(&gates, *g));
     let weights: Vec<String> = match (&sel.kind, fetched) {
         (ArtifactKind::Safetensors, Some(fx)) if sel.index.is_some() => {
