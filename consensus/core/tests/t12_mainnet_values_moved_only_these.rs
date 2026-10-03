@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-03 @9c5339f18331: int-12: every RFC except 0005, the Useful Work Transition, capacity x1000 and the anchor window armed at 5,300 (was 557a4e64…, 8b41ebe5…)
+// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 54353a89…, f0468188…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "54353a89be714bc2fed4069cfed789aaff79dd5f5438e9652e5afce93b360f0d",
+    "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "f0468188200af951536ce2adeecdaa81fa56e95ce11126c5964a49e23aa19779",
+    "9e6afcf540c02944e18bf3a75e31cbfaf65884510c136e57ce9f692a7cd5c27b",
 );
 
 #[test]
