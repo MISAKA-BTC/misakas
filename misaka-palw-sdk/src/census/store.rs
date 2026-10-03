@@ -479,10 +479,17 @@ pub fn adapter_source_of(
         ListingV1 { id: base.repo.clone(), siblings: base.inventory.iter().map(|x| x.path.clone()).collect(), ..Default::default() };
     let base_sel = super::listing::select(&base_listing);
     if !matches!(base_sel.kind, ArtifactKind::Safetensors) {
+        // The base is pinned and readable, but not in a form this build lowers (its weights only as a pickle, a GGUF, …): a lower-gate
+        // fact about the composite, not a source failure.
         return Err(vec![problem(
-            codes::BASE_UNPINNED,
-            &format!("base:{}", base.repo),
-            format!("the base holds no transformers safetensors checkpoint ({:?})", base_sel.kind),
+            codes::FORMAT_UNSUPPORTED,
+            &format!("base:{}", base_sel.formats.join("+")),
+            format!(
+                "the base {} holds no transformers safetensors checkpoint ({:?}, {})",
+                base.repo,
+                base_sel.kind,
+                base_sel.formats.join(", ")
+            ),
         )]);
     }
     let base_fx = Fetched { dir: fx.dir.clone(), fetch: base_fetch };

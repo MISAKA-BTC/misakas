@@ -734,7 +734,11 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 }
                 Err(ps) => {
                     for p in ps {
-                        store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
+                        if p.code == codes::FORMAT_UNSUPPORTED {
+                            lower_extra.push(found(p.code, Some(p.path), vec![p.detail]));
+                        } else {
+                            store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
+                        }
                     }
                 }
             },
