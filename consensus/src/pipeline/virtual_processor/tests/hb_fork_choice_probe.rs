@@ -1054,6 +1054,22 @@ async fn absorb_on(mut d: Duel, tag: &str, slots: usize, m: usize, x_in_attempt:
     AbsorbRun { seen, released, held, duel: d, private, arrival }
 }
 
+/// **`absorb` as testnet-12 launched it, run until the attack LANDS.** Under the launched rule a tied reorg is a hash lottery
+/// (`decide_deep_reorg_v2`'s last key is the candidate hash) and the harness's block hashes differ run to run (a template's parents are
+/// drawn at random once there are siblings), so the private branch fails to flip the victim in about 1 run in 100: `release` offers it
+/// against nine incumbents (the public tip and up to eight more beats) and its best hash may rank under all of them. A test whose premise
+/// is "the double spend lands as launched" takes the first of up to eight DAGs on which it does.
+async fn absorb_launched_landing(tag: &str, slots: usize, m: usize, x_in_attempt: bool) -> AbsorbRun {
+    for dag in 1..=8 {
+        let run = absorb(tag, slots, m, x_in_attempt, true, None).await;
+        if run.double_spent() {
+            return run;
+        }
+        eprintln!("[hb-regression {tag}] DAG {dag}: the launched rule's hash lottery kept X — another DAG");
+    }
+    panic!("{tag}: the launched attack did not land on any of eight DAGs");
+}
+
 /// The rule, stated over what the attacker's node did: past the fence a public attempt is blue in a
 /// block the attacker built on its PRIVATE branch only if it was built at the fork point itself.
 fn assert_nothing_borrowed(tag: &str, seen: &[Absorb]) {
@@ -1163,7 +1179,7 @@ async fn replay_in_order(tag: &str, from: &T12Chain, to: &mut T12Chain, order: &
 /// the payments, not the probe's "sink on a released block".)
 #[tokio::test]
 async fn hb_regression_g2_a_heartbeat_branch_cannot_borrow_the_public_attempts() {
-    let launched = absorb("g2 launched", 2, 2, false, true, None).await;
+    let launched = absorb_launched_landing("g2 launched", 2, 2, false).await;
     assert!(launched.released.refused.is_empty(), "g2 launched: every released block is valid");
     assert_eq!(borrowed(&launched.seen), 2, "g2 launched: the private branch counts both public attempts — the hole");
     assert!(launched.double_spent(), "g2 launched: X reorged away and Y kept — the verifier's measurement, reproduced");
@@ -1187,7 +1203,7 @@ async fn hb_regression_g2_a_heartbeat_branch_cannot_borrow_the_public_attempts()
 /// left that branch for the heavier public chain) and X stands.
 #[tokio::test]
 async fn hb_regression_h1_an_attempt_at_the_fork_decides_nothing() {
-    let launched = absorb("h1 launched", 3, 2, true, true, None).await;
+    let launched = absorb_launched_landing("h1 launched", 3, 2, true).await;
     assert!(launched.released.refused.is_empty(), "h1 launched: every released block is valid");
     assert!(borrowed(&launched.seen) >= 1, "h1 launched: the private branch borrows an attempt of the public branch");
     assert!(launched.double_spent(), "h1 launched: X (inside a public attempt) reorged away and Y kept");
@@ -1256,7 +1272,7 @@ async fn hb_regression_the_fence_splits_an_attack_at_the_candidates_own_daa() {
 /// A fleet can install the armed build before the height with nothing to disagree about.
 #[tokio::test]
 async fn hb_regression_below_the_fence_the_armed_build_is_the_launched_build() {
-    let launched = absorb("g2 twin", 2, 2, false, true, None).await;
+    let launched = absorb_launched_landing("g2 twin", 2, 2, false).await;
     assert!(launched.double_spent(), "the attack DAG, as launched");
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let scheduled = with_same_chain(&config, Some(1_000_000));
@@ -2994,6 +3010,11 @@ mod sink_order_probe {
         unhealed: usize,
         /// Beats a diverged node mined on its own virtual that its own node did NOT adopt as the sink (a liveness question, not a split).
         not_adopted: usize,
+        /// Of the splits still open after three blocks: the honest public side goes on mining (`HB_PROBE_GROW=attempts`: a slot of
+        /// heartbeats and a floor attempt, as the live chain does; `=beats`: heartbeats only) and mirrors each block to the node on the
+        /// private branch — healed after this many slots (index = slots, 1..=12), or not within twelve.
+        grown: [usize; 13],
+        grown_never: usize,
     }
 
     impl Tally {
@@ -3013,11 +3034,20 @@ mod sink_order_probe {
                 self.unhealed,
                 self.not_adopted
             );
+            if self.unhealed > 0 {
+                eprintln!(
+                    "[sink-order {label}] of the {} splits open after three blocks, the honest side mining on ({}): healed after n slots (1..12): {:?}, never within 12: {}",
+                    self.unhealed,
+                    std::env::var("HB_PROBE_GROW").unwrap_or_else(|_| "off".into()),
+                    &self.grown[1..],
+                    self.grown_never
+                );
+            }
         }
     }
 
     /// Two nodes on the same downset in two random orders; tally their sinks; on a split, let them mine alternately and mirror.
-    async fn sample(d: &Duel, dag: &[Block], t: &mut Tally) {
+    async fn sample(d: &Duel, dag: &[Block], private: Option<&HashSet<BlockHash>>, t: &mut Tally) {
         let mut rng = rand::thread_rng();
         let set = random_downset(dag, &mut rng);
         let (o1, o2) = (random_linear_extension(&set, &mut rng), random_linear_extension(&set, &mut rng));
@@ -3037,6 +3067,7 @@ mod sink_order_probe {
         }
         let (da, db) = chain_split(&a, a.sink(), b.sink());
         t.depth[da.max(db).min(6) as usize] += 1;
+        let split_kind = (ka == kb, da.max(db), private.map(|p| (p.contains(&a.sink()), p.contains(&b.sink()))));
         let mut nonce = 1u64 << 50;
         for round in 0..3 {
             let (miner, other) = if round % 2 == 0 { (&mut a, &mut b) } else { (&mut b, &mut a) };
@@ -3052,6 +3083,28 @@ mod sink_order_probe {
             }
         }
         t.unhealed += 1;
+        eprintln!(
+            "[sink-order] open after three blocks: all-economic tie {}, deeper side {} chain steps, sinks on the private branch (a, b) = {:?}",
+            split_kind.0, split_kind.1, split_kind.2
+        );
+        // The honest public side goes on mining (only for an attack DAG, where "public" is defined).
+        let (Some(private), Ok(mode)) = (private, std::env::var("HB_PROBE_GROW")) else { return };
+        let (public, behind) = if private.contains(&a.sink()) { (&mut b, &mut a) } else { (&mut a, &mut b) };
+        for slot in 1..=12usize {
+            let mut mined: Vec<Block> = Vec::new();
+            if mode == "attempts" {
+                mined.push(public.attempt(slot % 8, 1_000, Vec::new(), &|_| true).await.0);
+            }
+            mined.extend(honest_slot(public, Vec::new()).await);
+            for block in &mined {
+                mirror(behind, block).await;
+            }
+            if public.sink() == behind.sink() {
+                t.grown[slot] += 1;
+                return;
+            }
+        }
+        t.grown_never += 1;
     }
 
     fn samples_from_env() -> usize {
@@ -3063,9 +3116,10 @@ mod sink_order_probe {
         let attack = absorb_on(make(), label, shape.0, shape.1, shape.2, true).await;
         let dag = blocks_in_topological_order(&attack.duel.victim);
         eprintln!("[sink-order {label}] attack DAG of {} blocks ({} private); double spent: {}", dag.len(), attack.private.len(), attack.double_spent());
+        let private: HashSet<BlockHash> = attack.private.iter().map(|b| b.header.hash).collect();
         let mut t = Tally::default();
         for _ in 0..samples_from_env() {
-            sample(&attack.duel, &dag, &mut t).await;
+            sample(&attack.duel, &dag, Some(&private), &mut t).await;
         }
         t.print(label);
     }
@@ -3078,7 +3132,7 @@ mod sink_order_probe {
         eprintln!("[sink-order {label}] honest-race DAG of {} blocks", dag.len());
         let mut t = Tally::default();
         for _ in 0..samples_from_env() {
-            sample(&d, &dag, &mut t).await;
+            sample(&d, &dag, None, &mut t).await;
         }
         t.print(label);
     }
