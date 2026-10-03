@@ -729,6 +729,8 @@ mod tests {
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
             "palw_tir_fence2" => params.palw_tir_fence2 = Some(at),
+            // RFC-0006: a bare height (its prerequisites are `validate_palw_v2`'s, which the probe does not run).
+            "palw_tir_shard_v1" => params.palw_tir_shard_v1 = Some(at),
             // RFC-0004, likewise: the drill's value (the fence is in no network's release).
             "palw_improvement_v1" => params.palw_improvement_v1 = Some(crate::palw_improve_v1::PalwImprovementFenceV1::drill_v1(at)),
             // RFC-0003 decision 22: a bare height.

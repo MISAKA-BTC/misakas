@@ -443,12 +443,36 @@ pub struct Args {
     /// `--palw-drill-gen-at`, `--palw-drill-fence-at`, `--palw-drill-decode-rules-at`). Command line only.
     #[serde(skip)]
     pub palw_drill_improve_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0006's layer-sharded panels (`palw_tir_shard_v1`) at this DAA**
+    /// (`config::drill::palw_drill_tir_shard_at_v1`). It needs `palw_tir_v1`, `palw_tir_fence2`, `palw_kary_court` and
+    /// the other fences `validate_palw_v2` names in force at or below it. In no release. Command line only.
+    #[serde(skip)]
+    pub palw_drill_tir_shard_at: Option<u64>,
     /// **RFC-0004 (A10): evaluate** — run the evaluation jobs of every governed line's open epoch whose
     /// subject class this node holds, and carry their claims under the producer bond (an open market: the
     /// first valid claim per job takes its fee at `Final`). Off by default; the seat's replay of an
     /// evaluation claim it is drawn onto is a duty and is never optional. Needs `--palw-producer-key`,
     /// `--palw-producer-bond` and a fee float.
     pub palw_improve_evaluate: bool,
+    /// **RFC-0006: the layer shards this node answers and proves possession of** (`--palw-tir-shard-hold=0,2`); none named means all.
+    #[serde(skip)]
+    pub palw_tir_shard_hold: Vec<u16>,
+    /// **RFC-0006: declare a class's layer-shard plan** (`--palw-tir-shard-declare=<class>:<S_L>:<S_P>`), signed by this node's
+    /// bond when it is the class's registrant. Carried once.
+    #[serde(skip)]
+    pub palw_tir_shard_declare: Option<String>,
+    /// **RFC-0006: run the cells on a device backend** (`--palw-tir-shard-gpu`, default off); the CPU where this build has none.
+    #[serde(skip)]
+    pub palw_tir_shard_gpu: bool,
+    /// RFC-0006: the GPU helper process `--palw-tir-shard-gpu` spawns (default: `palw-tir-gpu-helper` beside this binary).
+    #[serde(skip)]
+    pub palw_tir_shard_gpu_helper: Option<String>,
+    /// RFC-0006: check every device answer against the CPU executor's (always on in shadow mode); a difference refuses the cell.
+    #[serde(skip)]
+    pub palw_tir_shard_gpu_mirror: bool,
+    /// **RFC-0006: shadow mode** (`--palw-tir-shard-shadow`): the cells are verified and the verdicts logged; nothing is filed.
+    #[serde(skip)]
+    pub palw_tir_shard_shadow: bool,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact.** A seat holding a line's parent
     /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
     /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
@@ -469,6 +493,17 @@ pub struct Args {
     pub palw_tir_fused_kernels: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
+    /// DRILL ONLY (RFC-0006, D-S3): commit a CONSISTENT lie at a layer-shard boundary — `<position>:<occurrence>`: at that position the
+    /// first carry-out of the occurrence before `<occurrence>` (the first occurrence of the next shard) is changed, committed, and
+    /// every later occurrence is computed honestly from it. Replaces the single-leaf fault of `--palw-drill-tamper-leaf` (which
+    /// it implies). REFUSED on mainnet.
+    pub palw_drill_tamper_boundary: Option<String>,
+    /// RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (`DefaultAccusedTirStep`, unit
+    /// `TirStepRun`) before it abstains. Off by default.
+    pub palw_tir_shard_demand_runs: bool,
+    /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
+    /// the chain's registered root before it is used.
+    pub palw_tir_shard_mirror: Option<String>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
@@ -739,12 +774,22 @@ impl Default for Args {
             palw_drill_capped_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
+            palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
+            palw_tir_shard_hold: Vec::new(),
+            palw_tir_shard_declare: None,
+            palw_tir_shard_gpu: false,
+            palw_tir_shard_gpu_helper: None,
+            palw_tir_shard_gpu_mirror: false,
+            palw_tir_shard_shadow: false,
             palw_improve_artifact_dir: None,
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
             palw_drill_tamper_leaf: None,
+            palw_drill_tamper_boundary: None,
+            palw_tir_shard_demand_runs: false,
+            palw_tir_shard_mirror: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
@@ -1977,6 +2022,67 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-tir-shard-at")
+                .long("palw-drill-tir-shard-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0006's layer-sharded panels (palw_tir_shard_v1) at this DAA on the \
+                     drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and unless the \
+                     fences validate_palw_v2 names (palw_tir_v1, palw_tir_fence2, palw_kary_court, ...) are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-hold")
+                .long("palw-tir-shard-hold")
+                .require_equals(true)
+                .value_delimiter(',')
+                .value_parser(clap::value_parser!(u16))
+                .help(
+                    "RFC-0006: the layer shards of a sharded IR class this node answers and proves possession of (comma-separated \
+                     indices). None named: every shard of every class it holds.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-declare")
+                .long("palw-tir-shard-declare")
+                .require_equals(true)
+                .help(
+                    "RFC-0006: declare a layer-shard plan for an IR class this node's bond registered: <class-id-hex>:<S_L>:<S_P>. \
+                     Signed by the bond and carried once; refused by the chain unless the fence is armed and the shape fits the class.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-gpu")
+                .long("palw-tir-shard-gpu")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: run a sharded duty's cells on the device backend this binary registered (default off; the CPU where \
+                     there is none — the verdicts are the same).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-gpu-helper")
+                .long("palw-tir-shard-gpu-helper")
+                .require_equals(true)
+                .help("RFC-0006: the GPU helper process --palw-tir-shard-gpu spawns (default: palw-tir-gpu-helper beside this binary)."),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-gpu-mirror")
+                .long("palw-tir-shard-gpu-mirror")
+                .action(clap::ArgAction::SetTrue)
+                .help("RFC-0006: check every GPU helper answer against the CPU executor's byte for byte (always on in shadow mode); a difference or an error refuses the cell and the CPU runs it."),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-shadow")
+                .long("palw-tir-shard-shadow")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: shadow mode — verify the cells of every sharded duty and log the verdicts; sign, gossip, accuse and \
+                     carry nothing (the node-only period before the fence is armed).",
+                ),
+        )
+        .arg(
             Arg::new("palw-improve-evaluate")
                 .long("palw-improve-evaluate")
                 .action(clap::ArgAction::SetTrue)
@@ -2042,6 +2148,35 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY: produce blocks whose committed execution has one lane of this step leaf corrupted, \
                      with the commitment re-derived so the fraud is self-consistent and only a re-execution can see it. \
                      Exists so a court can be shown convicting on a live chain. REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tamper-boundary")
+                .long("palw-drill-tamper-boundary")
+                .require_equals(true)
+                .help(
+                    "PALW DRILL ONLY (RFC-0006, D-S3): <position>:<occurrence> — commit a consistent lie at the layer-shard boundary before \
+                     that occurrence at that position, computing everything after it honestly from the lie (the upstream shard's seats \
+                     find it; the downstream shard's verify). Implies --palw-drill-tamper-leaf. REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-mirror")
+                .long("palw-tir-shard-mirror")
+                .require_equals(true)
+                .help(
+                    "RFC-0006: where a seat that holds no copy of a class fetches its shard's rows (a class container on this host, read through \
+                     the holder's opening door). Only the inventory rows its cells read are taken, each proven by its Merkle path against the \
+                     root the chain registered.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-demand-runs")
+                .long("palw-tir-shard-demand-runs")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (DefaultAccusedTirStep, unit \
+                     TirStepRun) before it abstains; the executor answers inside the disclosure window or its claim defaults.",
                 ),
         )
         .arg(
@@ -3060,12 +3195,22 @@ impl Args {
             palw_vertex_full_refs: arg_match_unwrap_or::<bool>(&m, "palw-vertex-full-refs", defaults.palw_vertex_full_refs),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
+            palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
+            palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),
+            palw_tir_shard_declare: m.get_one::<String>("palw-tir-shard-declare").cloned(),
+            palw_tir_shard_gpu: m.get_one::<bool>("palw-tir-shard-gpu").copied().unwrap_or(false),
+            palw_tir_shard_gpu_helper: m.get_one::<String>("palw-tir-shard-gpu-helper").cloned(),
+            palw_tir_shard_gpu_mirror: m.get_one::<bool>("palw-tir-shard-gpu-mirror").copied().unwrap_or(false),
+            palw_tir_shard_shadow: m.get_one::<bool>("palw-tir-shard-shadow").copied().unwrap_or(false),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
+            palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
+            palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
+            palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")
@@ -3823,4 +3968,27 @@ mod ibd_checkpoint_arg_tests {
         assert!(merge_ibd_checkpoints(t12.clone(), &[format!("300:{}", hash(1))]).is_err(), "another block at a built-in score");
         assert_eq!(merge_ibd_checkpoints(t12.clone(), &[t12[2].to_string()]).unwrap(), t12, "the built-in entry itself folds");
     }
+}
+
+/// **`--palw-tir-shard-declare=<class-id-hex>:<S_L>:<S_P>`, parsed** (RFC-0006): a 128-hex class id and the plan's two counts.
+pub fn parse_palw_tir_shard_declare_v1(spec: &str) -> Result<(kaspa_hashes::Hash64, u16, u16), String> {
+    let mut it = spec.split(':');
+    let (Some(class), Some(s_l), Some(s_p), None) = (it.next(), it.next(), it.next(), it.next()) else {
+        return Err("expected <class-id-hex>:<S_L>:<S_P>".to_string());
+    };
+    let class: kaspa_hashes::Hash64 = class.parse().map_err(|_| "the class id is not 128 hex characters".to_string())?;
+    let s_l: u16 = s_l.parse().map_err(|_| "S_L is not a number".to_string())?;
+    let s_p: u16 = s_p.parse().map_err(|_| "S_P is not a number".to_string())?;
+    Ok((class, s_l, s_p))
+}
+
+/// **`--palw-drill-tamper-boundary=<position>:<occurrence>`, parsed** (RFC-0006, D-S3).
+pub fn parse_palw_drill_tamper_boundary_v1(spec: &str) -> Result<(u32, usize), String> {
+    let (position, occurrence) = spec.split_once(':').ok_or("expected <position>:<occurrence>")?;
+    let position: u32 = position.parse().map_err(|_| "the position is not a number".to_string())?;
+    let occurrence: usize = occurrence.parse().map_err(|_| "the occurrence is not a number".to_string())?;
+    if occurrence == 0 {
+        return Err("the boundary is before an occurrence of at least 1".to_string());
+    }
+    Ok((position, occurrence))
 }

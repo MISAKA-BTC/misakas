@@ -7,6 +7,8 @@
 pub mod annex;
 pub mod artifact;
 pub mod backend;
+pub mod cell;
+pub mod shardrows;
 pub mod drill;
 pub mod evidence;
 pub mod inventory;
@@ -21,9 +23,18 @@ pub use annex::{
 };
 pub use artifact::TirArtifactV1;
 pub use backend::{
+    set_tir_drill_boundary_lie_v1,
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_fused_kernels_default_v1,
     tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
 };
+pub use cell::{
+    CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1,
+    TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, register_device_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
+    tir_shard_cells_over_v1, tir_shard_cells_v1, tir_shard_geometry_over_v1, tir_shard_geometry_v1, tir_verify_capture_cells_over_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1, tokens_of_capture_v1,
+    verify_cell_stepping_v1, verify_cell_v1,
+};
+pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
+pub use shardrows::{TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1};
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,
     tir_family_drill_v1, tir_family_evidence_v1, tir_family_id_v1, tir_prim_kernel_id_v1, tir_terminal_close_sizes_v1,
@@ -39,5 +50,5 @@ pub use residency::{
     TirHeldBytesV1, TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1, TirStoreOpenV1, TirWeightStoreV1,
     tir_stream_leaves_v1, tir_weight_store_for_root_v1,
 };
-pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
+pub use run::{TirBoundaryLieV1, TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
 pub use tree::TirStepTreeV1;

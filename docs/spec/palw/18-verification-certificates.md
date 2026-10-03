@@ -67,7 +67,7 @@ Contents:
 | Signing context | `misaka-palw/verification-vertex/mldsa87/v1` |
 | Hash domains | `misaka-palw/verification-vertex-message/v1`, `-leaf/v1`, `-node/v1`, `misaka-palw/vertex-equivocation-key/v1`; `misaka-palw/mesh/trap-commitment/v1`, `.../trap-committed-message/v1`, `.../trap-revealed-message/v1`, `.../audit-draw/v1`, `.../trap-slot/v1`, `.../trace-manifest/v2`; signing contexts `misaka-palw/mesh/trap-committed/mldsa87/v1`, `.../trap-revealed/mldsa87/v1` |
 
-Object tags 100–103 are this lane's range (the lead assigned 100–109 to RFC-0007; lanes S and U hold 91–94). Delta 101 and tail `0xE4` are the lane's own; a collision there renumbers at the integration and nothing else changes.
+Object tags 100–103 are this lane's range (the lead assigned 100–109 to RFC-0007; lanes S and U hold 91–94). Delta 101 and tail `0xE4` are the lane's own (RFC-0006 took delta 102–103 and tail `0xE1` at the int-12 integration).
 
 ---
 

@@ -740,6 +740,18 @@ pub fn palw_drill_improve_fence_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_IMPROVE_V1)
 }
 
+/// **A drill arms layer-sharded panels at a low height** (RFC-0006; `--palw-drill-tir-shard-at`) — the same machinery for the
+/// one-entry drill list [`crate::palw_tir_shard_v1::PALW_DRILL_TIR_SHARD_FENCES_V1`]: ARMS `palw_tir_shard_v1` at `at` (writing the
+/// bundle's mirror) and moves nothing else. The fence is in no network's release. Every refusal of the post-launch moves applies,
+/// named for this flag, and `validate_palw_v2` refuses the result unless `palw_tir_v1`, `palw_tir_fence2`, `palw_kary_court`,
+/// `palw_improvement_v1` (RFC-0004's job family) and the other prerequisites it names are in force at or below `at`.
+pub fn palw_drill_tir_shard_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_SHARD_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -795,6 +807,10 @@ const PALW_DRILL_FLAG_DAY_CAPPED_V1: PalwDrillFlagDayV1 =
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1, flag: "--palw-drill-tir2-at" };
+
+/// Layer-sharded panels alone (`--palw-drill-tir-shard-at`, RFC-0006): a drill-only list.
+const PALW_DRILL_FLAG_DAY_TIR_SHARD_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_tir_shard_v1::PALW_DRILL_TIR_SHARD_FENCES_V1, flag: "--palw-drill-tir-shard-at" };
 
 /// The decode rules alone (`--palw-drill-decode-rules-at`, ADR-0082 D10/D11): the dormant testnet-12 list.
 const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
@@ -1739,6 +1755,63 @@ mod tests {
                 assert_eq!(before, after, "{name} did not move");
             }
         }
+    }
+
+    /// **A drill arms layer-sharded panels and nothing else moves** ([`palw_drill_tir_shard_at_v1`], `--palw-drill-tir-shard-at`):
+    /// dormant on the shipped testnet-12 and on the unarmed drill chain; refused on public testnet-12, at 0 / never, at a height
+    /// another fence uses and below the fences it names; at a free height past them `palw_tir_shard_v1` alone is ARMED, the bundle
+    /// mirror follows and the params id moves; the unarmed ruleset's id is the release's (the fence is a Some-only write).
+    #[test]
+    fn a_drill_arms_the_layer_sharded_panels_fence_and_nothing_else_moves() {
+        use crate::config::params::palw_t12_shipped_params;
+        let drill = dormant_drill(0x5E);
+        let public = palw_t12_shipped_params();
+        assert!(public.palw_tir_shard_v1.is_none() && !public.palw_tir_shard_active_at(u64::MAX - 1), "dormant on testnet-12");
+        assert!(drill.palw_tir_shard_v1.is_none() && drill.validate_palw_v2().is_ok());
+        let mut p = palw_t12_shipped_params();
+        assert!(palw_drill_tir_shard_at_v1(&mut p, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
+        for bad in [0, u64::MAX] {
+            let mut p = drill.clone();
+            assert!(palw_drill_tir_shard_at_v1(&mut p, bad).is_err(), "{bad}");
+            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
+        }
+        // Without the IR fences below it the result does not validate, naming the missing fence.
+        let mut early = drill.clone();
+        let why = palw_drill_tir_shard_at_v1(&mut early, 900).unwrap_err();
+        assert!(why.contains("does not validate") && why.contains("palw_tir_v1"), "{why}");
+        // The IR fences first (as D-S1 arms them), then the shard fence.
+        let mut base = drill.clone();
+        palw_drill_tir_fence_at_v1(&mut base, 20).expect("the IR fence low");
+        palw_drill_tir_fence2_at_v1(&mut base, 24).expect("the second IR fence low");
+        let mut moved = base.clone();
+        let moves = palw_drill_tir_shard_at_v1(&mut moved, 40).expect("past the prerequisites");
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].name, "palw_tir_shard_v1");
+        assert_eq!(moves[0].was, None, "the release arms it nowhere");
+        assert!(moves[0].to_string().contains("ARMED"), "{}", moves[0]);
+        assert!(moved.palw_tir_shard_active_at(40) && !moved.palw_tir_shard_active_at(39));
+        assert!(!base.palw_tir_shard_active_at(40));
+        assert_ne!(moved.consensus_params_id(), base.consensus_params_id());
+        assert_ne!(moved.consensus_schedule_id(), base.consensus_schedule_id());
+        moved.validate_palw_v2().expect("armed with its prerequisites");
+        // Below the second IR fence it is refused by name.
+        let mut low = base.clone();
+        assert!(palw_drill_tir_shard_at_v1(&mut low, 22).unwrap_err().contains("palw_tir_fence2"));
+        // A free height only: another fence's height is refused.
+        let used = base.palw_fences_v1().iter().find_map(|(_, f)| f.map(|f| f.daa_score()).filter(|h| *h > 24 && *h < u64::MAX)).unwrap();
+        let mut clash = base.clone();
+        assert!(palw_drill_tir_shard_at_v1(&mut clash, used).is_err(), "{used}");
+        for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
+            if *name != "palw_tir_shard_v1" {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+        // A `never()` is dormant (it collapses at ruleset assembly, `normalize_values_a_scheduled_fence_drags_with_it`).
+        let mut never = base.clone();
+        never.palw_tir_shard_v1 = Some(crate::config::params::ForkActivation::never());
+        never.sync_palw_tir_shard_v1();
+        assert!(!never.palw_tir_shard_active_at(u64::MAX - 1));
+        never.validate_palw_v2().expect("a never() is dormant");
     }
 
     #[test]

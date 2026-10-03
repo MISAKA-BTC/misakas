@@ -96,6 +96,8 @@ pub struct PalwDrillExtraFencesV1 {
     /// RFC-0007 Part IV.2's capped onboarding (`palw_capped_onboarding_v1`).
     pub capped_at: Option<u64>,
     pub improve_at: Option<u64>,
+    /// RFC-0006's layer-sharded panels (`--palw-drill-tir-shard-at`, `palw_tir_shard_v1`): armed after the fences it names.
+    pub tir_shard_at: Option<u64>,
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
     /// per-fence flags of its entries, never with them.
     pub int11_at: Option<u64>,
@@ -121,6 +123,7 @@ impl PalwDrillExtraFencesV1 {
             audit_mesh_at: args.palw_drill_audit_mesh_at,
             capped_at: args.palw_drill_capped_at,
             improve_at: args.palw_drill_improve_at,
+            tir_shard_at: args.palw_drill_tir_shard_at,
             int11_at: args.palw_drill_int11_at,
         }
     }
@@ -139,6 +142,7 @@ impl PalwDrillExtraFencesV1 {
             || self.audit_mesh_at.is_some()
             || self.capped_at.is_some()
             || self.improve_at.is_some()
+            || self.tir_shard_at.is_some()
             || self.int11_at.is_some()
     }
 
@@ -182,6 +186,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-audit-mesh-at", self.audit_mesh_at, "RFC-0007's audit mesh (palw_audit_mesh_v1)"),
             ("--palw-drill-capped-at", self.capped_at, "RFC-0007's capped onboarding (palw_capped_onboarding_v1)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
+            ("--palw-drill-tir-shard-at", self.tir_shard_at, "RFC-0006's layer-sharded panels (palw_tir_shard_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
         ]
         .into_iter()
@@ -280,6 +285,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
+        if let Some(at) = self.tir_shard_at {
+            moves.extend(d::palw_drill_tir_shard_at_v1(params, at).map_err(|e| format!("--palw-drill-tir-shard-at: {e}"))?);
+        }
         Ok(moves)
     }
 
@@ -322,6 +330,7 @@ impl PalwDrillExtraFencesV1 {
             ("witness_at=", "--palw-drill-witness-at", palw_drill_marker_fence_text_v1(self.witness_at)),
             ("audit_mesh_at=", "--palw-drill-audit-mesh-at", palw_drill_marker_fence_text_v1(self.audit_mesh_at)),
             ("capped_at=", "--palw-drill-capped-at", palw_drill_marker_fence_text_v1(self.capped_at)),
+            ("tir_shard_at=", "--palw-drill-tir-shard-at", palw_drill_marker_fence_text_v1(self.tir_shard_at)),
         ]
     }
 
@@ -947,6 +956,7 @@ pub fn palw_drill_write_keyring_v4(
         "capped_at": extra.capped_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
+        "tir_shard_at": extra.tir_shard_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),

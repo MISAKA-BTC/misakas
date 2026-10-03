@@ -596,6 +596,7 @@ mod tests {
             free_prompt: true,
             work_leaves: 4_096,
             job_identity: Hash64::default(),
+            tir_shard: None,
         }
     }
 

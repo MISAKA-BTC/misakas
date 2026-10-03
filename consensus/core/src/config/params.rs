@@ -2893,6 +2893,17 @@ pub struct Params {
     /// it, or with the bundle's mirror unsynced.
     pub palw_tir_fence2: Option<ForkActivation>,
 
+    /// **RFC-0006 — layer-sharded panels for IR classes** (`crate::palw_tir_shard_v1`): past this height a
+    /// class's registrant may declare a layer-shard plan (`TirShardPlanDeclared`), the chain draws a panel per
+    /// shard with an outsider per shard, a seat attests cells (`ReceiptV4`), the recount runs over cells, a
+    /// claim licenses by parts (`TirShardReceiptLicensed`), `TirStepRun` is a DA unit and the class room is the
+    /// binding shard's. A bare height; `None` on every preset (testnet-12 included) and in no flag-day list
+    /// (adopted 2026-10-03, armed only after a node-only shadow period). Hashed Some-only in every writer with the
+    /// `never()` collapse. Refused by [`Self::validate_palw_tir_shard_v1`] off ConsensusV2, without `palw_tir_v1`,
+    /// `palw_tir_fence2`, `palw_verification_v2`, `palw_rcore_plus` and `palw_admission_independence` in force at
+    /// or below it, or with the bundle's mirror unsynced.
+    pub palw_tir_shard_v1: Option<ForkActivation>,
+
     /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
     /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
     /// jobs, promotion and rewards (spec 17). The value carries the scoring library's and the sign
@@ -3927,6 +3938,8 @@ impl Params {
         self.validate_palw_fp_job_v5_v1()?;
         // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
         self.validate_palw_tir_fence2()?;
+        // **RFC-0006, layer-sharded panels' refusals** (`crate::palw_tir_shard_v1`).
+        self.validate_palw_tir_shard_v1()?;
         // **RFC-0004: the improvement fence's own refusals** (`crate::palw_improve_v1`).
         self.validate_palw_improvement_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
@@ -6166,6 +6179,10 @@ impl Params {
         // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
         if self.palw_tir_fence2 == Some(ForkActivation::never()) {
             self.palw_tir_fence2 = None;
+        }
+        // RFC-0006's layer-sharded panels: Some-only hashed, so the same collapse.
+        if self.palw_tir_shard_v1 == Some(ForkActivation::never()) {
+            self.palw_tir_shard_v1 = None;
         }
         // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -9447,6 +9464,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_tir_shard_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -9690,6 +9708,7 @@ impl Params {
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_tir_fence2", *palw_tir_fence2),
+            ("palw_tir_shard_v1", *palw_tir_shard_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
@@ -9950,6 +9969,11 @@ impl Params {
         // and the DA court from its height.
         if let Some(activation) = self.palw_tir_fence2 {
             h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0006's layer-sharded panels, NAMED likewise: it changes the draw, the receipts and the licence.
+        if let Some(activation) = self.palw_tir_shard_v1 {
+            h.write(b"palw_tir_shard_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // RFC-0004, NAMED likewise, with its value reported (not gated).
@@ -10488,6 +10512,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_tir_shard_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -11195,6 +11220,10 @@ impl Params {
         if let Some(activation) = palw_tir_fence2.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0006's layer-sharded panels: Some-only, a bare height.
+        if let Some(activation) = palw_tir_shard_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
         if let Some(fence) = palw_improvement_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -11646,6 +11675,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_tir_shard_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -12399,6 +12429,11 @@ impl Params {
             h.write(b"palw_tir_fence2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0006's layer-sharded panels, Some-only: a dormant network fingerprints as a build without the field.
+        if let Some(activation) = palw_tir_shard_v1 {
+            h.write(b"palw_tir_shard_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // RFC-0004, Some-only: every shipped preset leaves it `None` and fingerprints
         // byte-identically to a build without the field. Armed, the ruleset states its scoring
         // library, its sign-test table, the protocol version and its ceilings.
@@ -13077,6 +13112,7 @@ impl Params {
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_tir_fence2: self.palw_tir_fence2,
+            palw_tir_shard_v1: self.palw_tir_shard_v1,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
@@ -14143,6 +14179,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_tir_shard_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -14406,6 +14443,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_tir_shard_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -14651,6 +14689,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_tir_shard_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -21686,6 +21725,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_witness_manifest_v1();
     params.sync_palw_audit_mesh_v1();
     params.sync_palw_capped_onboarding_v1();
+    // RFC-0006's layer-sharded panels, likewise.
+    params.sync_palw_tir_shard_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21942,6 +21983,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_tir_shard_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,

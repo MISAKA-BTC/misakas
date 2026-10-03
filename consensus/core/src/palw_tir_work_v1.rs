@@ -533,6 +533,19 @@ impl PalwTirWorkShapeV1 {
     /// **The work of one execution**: positions `reused … P − 1` of the prompt, then one per further
     /// generated token (`P … P + G − 2`); `post` (the logits) runs where they are consumed, `a ≥ P − 1`.
     pub fn work_v1(&self, facts: &PalwCanonicalExecutionFactsV1) -> Result<PalwCanonicalWorkVectorV1, PalwTirWorkError> {
+        self.work_cell_v1(0..self.occurrences.len(), 0..u128::MAX, facts)
+    }
+
+    /// **RFC-0006 §6.1: the work of one CELL** — the occurrences `occ` (indices into the program's occurrences:
+    /// `0` is `pre`, `1 + l` layer `l`, the last `post`) over the absolute positions `[from, to)` of one
+    /// execution. [`Self::work_v1`] is the whole execution: every occurrence over every position, so the cells of
+    /// a partition sum to it exactly.
+    pub fn work_cell_v1(
+        &self,
+        occ: std::ops::Range<usize>,
+        positions: std::ops::Range<u128>,
+        facts: &PalwCanonicalExecutionFactsV1,
+    ) -> Result<PalwCanonicalWorkVectorV1, PalwTirWorkError> {
         if facts.generated_tokens == 0 {
             return Err(PalwCanonicalWorkError::NoGeneratedToken.into());
         }
@@ -550,13 +563,15 @@ impl PalwTirWorkShapeV1 {
         let end = prefill + facts.generated_tokens as u128 - 1;
         let post = self.occurrences.len() - 1;
         let mut v = PalwCanonicalWorkVectorV1::default();
-        for (o, block) in self.occurrences.iter().enumerate() {
+        for (o, block) in self.occurrences.iter().enumerate().filter(|(o, _)| occ.contains(o)) {
             let w = &self.blocks[*block as usize];
             let window = self.windows[*block as usize];
             // The positions this occurrence runs, split at the prompt's end.
             // `post` runs at the last prompt position whatever was reused — that is where the first
             // token comes from (the legacy derivation counts it the same way).
             let (lo, hi) = if o == post { (prefill - 1, end) } else { (reused, end) };
+            // The cell's own positions (the whole execution's are `0..u128::MAX`).
+            let (lo, hi) = (lo.max(positions.start), hi.min(positions.end));
             let sum = |a: Affine, from: u128, to: u128| -> u128 {
                 if to <= from {
                     return 0;

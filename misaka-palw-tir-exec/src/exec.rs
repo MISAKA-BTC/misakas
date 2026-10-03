@@ -481,6 +481,160 @@ impl<'a> TirExecutor<'a> {
         self.plan
     }
 
+    // ------------------------------------------------------------------------------------------
+    // RFC-0006: a CELL's executor — the occurrences of one layer shard, from committed carry-in rows
+    // ------------------------------------------------------------------------------------------
+
+    /// **An executor for the occurrences `occ` only** (RFC-0006 §1): every param instance THOSE occurrences read must be bound,
+    /// and nothing else — a shard seat holds its own layers' weights and no other's. The refined plan is the one
+    /// [`Self::new`] computes (the ranges of the instances that are bound; the dtype's range for the others, which no step of
+    /// this executor reads).
+    pub fn new_cell(plan: &'a TirPlan, params: &'a TirParams<'a>, occ: std::ops::Range<usize>) -> TirResult<Self> {
+        for (o, &(block, layer)) in plan.occurrences.iter().enumerate() {
+            if !occ.contains(&o) {
+                continue;
+            }
+            for n in &plan.program.blocks[block as usize].nodes {
+                for r in &n.inputs {
+                    if let Ref::Param(j) = r {
+                        let l = if plan.program.params[*j as usize].per_layer { layer } else { None };
+                        if !params.has(*j, l) {
+                            return Err(TirError::new(
+                                TirErrorKind::Missing,
+                                format!("param {} (layer {l:?}): the cell's occurrence {o} reads it", plan.program.params[*j as usize].name),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let nb = plan.blocks.len();
+        let occ_plans = plan.refine(&|j, l| params.range(j, l));
+        Ok(TirExecutor {
+            plan,
+            params,
+            occ_plans,
+            fused: None,
+            fused_fault: None,
+            run: RunBufs::initial(plan),
+            work: WorkBufs {
+                slots: (0..nb).map(|b| vec![Buf::default(); plan.blocks[b].nodes.len()]).collect(),
+                vals: (0..nb).map(|b| vec![Val::default(); plan.blocks[b].nodes.len()]).collect(),
+                carry: Vec::new(),
+                carry_next: Vec::new(),
+                scratch: Scratch::default(),
+                commit: Buf::default(),
+                logits: Buf::default(),
+                logits_shape: Vec::new(),
+                inputs: [0, 0],
+                profile: None,
+                node_profile: (0..nb).map(|b| vec![0; plan.blocks[b].nodes.len()]).collect(),
+            },
+        })
+    }
+
+    /// **One position of a cell**: occurrences `occ` of position [`Self::pos`], from `carry_in` (the carry-out lanes of occurrence
+    /// `occ.start − 1`, one vector per carry, as committed; empty when `occ` starts at `pre`), `token` the position's input (a public
+    /// id every shard knows: any block may read `Input(0)`). The committed values reach `sink` in slot order; on success the state advances one position and the LAST
+    /// occurrence's carry-out is returned (empty when `occ` ends at `post`: its logits are [`Self::logits`]). On failure the run
+    /// state is exactly as before.
+    pub fn step_cell(
+        &mut self,
+        token: u32,
+        occ: std::ops::Range<usize>,
+        carry_in: &[Vec<i128>],
+        sink: &mut dyn StepSink,
+    ) -> TirResult<Vec<Vec<i128>>> {
+        let n_occ = self.plan.occurrences.len();
+        if occ.start >= occ.end || occ.end > n_occ {
+            return Err(TirError::new(TirErrorKind::Operand, format!("a cell of occurrences {occ:?} of {n_occ}")));
+        }
+        let runs_post = occ.end == n_occ;
+        let to = self.begin_step(token, runs_post)?;
+        if occ.start > 0 {
+            // The first occurrence's carry-ins, typed by its block (spec 04b §3.2: a carry-in is a fixed-shape tensor).
+            let (block, _) = self.plan.occurrences[occ.start];
+            let want = &self.plan.program.blocks[block as usize].carry_in;
+            if carry_in.len() != want.len() {
+                self.work.carry.clear();
+                return Err(TirError::new(
+                    TirErrorKind::Operand,
+                    format!("{} carry-ins for an occurrence that takes {}", carry_in.len(), want.len()),
+                ));
+            }
+            let bufs = want
+                .iter()
+                .zip(carry_in)
+                .map(|(t, lanes)| {
+                    let expected: usize = t.shape.iter().map(|d| d.at(1)).product::<usize>().max(1);
+                    if lanes.len() != expected {
+                        return Err(TirError::new(
+                            TirErrorKind::Operand,
+                            format!("a carry-in of {} lanes for a type of {expected}", lanes.len()),
+                        ));
+                    }
+                    Ok(Buf::from_i128s(t.dtype, lanes))
+                })
+                .collect::<TirResult<Vec<_>>>()?;
+            self.work.carry = bufs;
+        }
+        let r = self.run_occurrences(occ.start, to.min(occ.end), sink);
+        let out = if r.is_ok() && !runs_post { self.work.carry.iter().map(|b| b.to_i128s()).collect() } else { Vec::new() };
+        self.end_step(r)?;
+        Ok(out)
+    }
+
+    /// **Put the executor at the state after position `pos − 1`, for the instances `keep` names** (a cell resuming from a segment
+    /// boundary: its layers' checkpoint and history rows, committed; every other instance stays initial and is never read).
+    /// Checked as [`Self::import_state`] checks, over the kept instances only.
+    pub fn import_cell_state(&mut self, st: &RunState, keep: &dyn Fn(u16, Option<u16>) -> bool) -> TirResult<()> {
+        let p: &TirProgramV1 = &self.plan.program;
+        if st.pos >= p.history_bound {
+            return Err(TirError::new(TirErrorKind::Position, "position ≥ history_bound"));
+        }
+        let mut run = RunBufs::initial(self.plan);
+        run.pos = st.pos;
+        run.tail_rows = self.run.tail_rows;
+        let bad = |what: &str| TirError::new(TirErrorKind::Operand, what.to_string());
+        for (k, inst) in self.plan.instances.iter().enumerate() {
+            if !keep(inst.state, inst.layer) {
+                continue;
+            }
+            let key = (inst.state, inst.layer);
+            match inst.kind {
+                StateKind::Fixed { lo, hi } => {
+                    if let Some(t) = st.fixed.get(&key) {
+                        if t.dtype != inst.dtype || t.shape != inst.shape || t.data.len() != numel(&inst.shape) {
+                            return Err(bad("a Fixed state of the wrong type"));
+                        }
+                        if t.data.iter().any(|v| *v < lo as i128 || *v > hi as i128) {
+                            return Err(bad("a Fixed state value outside [lo, hi]"));
+                        }
+                        run.fixed[k] = Buf::from_i128s(inst.dtype, &t.data);
+                    }
+                }
+                StateKind::Hist { window } => {
+                    let rows = st.hist.get(&key).map(|r| r.len()).unwrap_or(0);
+                    if rows != (st.pos as usize).min(window as usize - 1) {
+                        return Err(TirError::new(TirErrorKind::Position, "a history of the wrong length"));
+                    }
+                    let h = &mut run.hist[k];
+                    let mut all = Vec::with_capacity(rows * h.row);
+                    for r in st.hist.get(&key).into_iter().flatten() {
+                        if r.dtype != inst.dtype || r.shape != inst.shape || r.data.iter().any(|v| !inst.dtype.contains(*v)) {
+                            return Err(bad("a history row of the wrong type"));
+                        }
+                        all.extend_from_slice(&r.data);
+                    }
+                    h.data = Buf::from_i128s(inst.dtype, &all);
+                    h.rows = rows;
+                }
+            }
+        }
+        self.run = run;
+        Ok(())
+    }
+
     /// **Run the fused kernels (RFC-0002 §7)** — every region of the program a kernel of this build
     /// matched ([`crate::fused::match_program`]) whose nodes cannot fail under this executor's
     /// refined plan ([`crate::fused::enable`]) — or none. Off by default. Byte-identical either way
@@ -612,6 +766,61 @@ impl<'a> TirExecutor<'a> {
     pub fn step_opt(&mut self, token: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
         let to = self.begin_step(token, run_post)?;
         let r = self.run_occurrences(0, to, sink);
+        self.end_step(r)
+    }
+
+    /// **One position whose carry at a shard boundary is a LIE the producer commits and computes on** (RFC-0006, the drill's
+    /// consistent lie): occurrences `[0, boundary)` run honestly; the first carry-out of occurrence `boundary − 1` is changed by
+    /// `lie` — in the carry the next occurrences read AND in the committed value the sink receives — and occurrences
+    /// `[boundary, to)` run honestly FROM it. The result is the execution of a producer who lied once at the boundary and
+    /// computed everything after correctly: the upstream cell finds it, the downstream cell verifies it (RFC §2.1). A drill
+    /// fault injector, never a rule.
+    pub fn step_with_boundary_lie(
+        &mut self,
+        token: u32,
+        sink: &mut dyn StepSink,
+        run_post: bool,
+        boundary: usize,
+        lie: &dyn Fn(&mut [i128]),
+    ) -> TirResult<()> {
+        let to = self.begin_step(token, run_post)?;
+        if boundary == 0 || boundary >= to {
+            return Err(TirError::new(TirErrorKind::Operand, format!("a boundary at occurrence {boundary} of a step of {to}")));
+        }
+        let (block, _) = self.plan.occurrences[boundary - 1];
+        let Some(&node) = self.plan.program.blocks[block as usize].carry_out.first() else {
+            return Err(TirError::new(TirErrorKind::Operand, "the occurrence before the boundary has no carry-out"));
+        };
+        let slot = self.plan.slot_bases[boundary - 1] + u32::from(node);
+        struct LyingSink<'s> {
+            inner: &'s mut dyn StepSink,
+            slot: u32,
+            lie: &'s dyn Fn(&mut [i128]),
+        }
+        impl StepSink for LyingSink<'_> {
+            fn every_node(&self) -> bool {
+                self.inner.every_node()
+            }
+            fn node(&mut self, v: &NodeValue<'_>) {
+                if v.slot == self.slot {
+                    let mut lanes = v.data.to_i128s();
+                    (self.lie)(&mut lanes);
+                    let buf = Buf::from_i128s(v.dtype, &lanes);
+                    self.inner.node(&NodeValue { data: buf.slice(), ..*v });
+                } else {
+                    self.inner.node(v);
+                }
+            }
+        }
+        let r = (|| {
+            self.run_occurrences(0, boundary, &mut LyingSink { inner: &mut *sink, slot, lie })?;
+            let first = self.work.carry.first().ok_or_else(|| TirError::new(TirErrorKind::Missing, "no carry at the boundary"))?;
+            let mut lanes = first.to_i128s();
+            lie(&mut lanes);
+            let lied = Buf::from_i128s(first.dtype(), &lanes);
+            self.work.carry[0] = lied;
+            self.run_occurrences(boundary, to, sink)
+        })();
         self.end_step(r)
     }
 

@@ -2357,6 +2357,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_roots_v2_impl(claim)
     }
 
+    fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        self.virtual_processor.palw_tir_shard_plans_v1_impl()
+    }
+
     fn palw_bond_payout_payload_v2(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
@@ -2558,6 +2562,14 @@ impl ConsensusApi for Consensus {
         max_bytes: usize,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.virtual_processor.palw_v2_batch_licence_assemble_impl(&windows, &due, max_bytes)
+    }
+
+    fn palw_v2_tir_shard_part_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_tir_shard_part_assemble_impl(claim, &candidates)
     }
 
     fn palw_v2_optimistic_assemble(

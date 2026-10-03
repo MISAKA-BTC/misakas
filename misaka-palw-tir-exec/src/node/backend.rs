@@ -154,6 +154,22 @@ pub fn tir_trace_event_disclosure_of_capture_v1(
     }))
 }
 
+fn count_of(binding: &PalwTirStepBindingV1) -> u64 {
+    binding.step_leaf_count
+}
+
+/// **DRILL ONLY (RFC-0006, D-S3): the consistent boundary lie a producer commits** — process-wide, set once at start-up by
+/// `--palw-drill-tamper-boundary` and consulted by [`TirBackendV1`]'s injected-fault runs (a node that sets none never lies).
+static TIR_BOUNDARY_LIE_V1: std::sync::Mutex<Option<super::run::TirBoundaryLieV1>> = std::sync::Mutex::new(None);
+
+pub fn set_tir_drill_boundary_lie_v1(lie: Option<super::run::TirBoundaryLieV1>) {
+    *TIR_BOUNDARY_LIE_V1.lock().unwrap_or_else(|p| p.into_inner()) = lie;
+}
+
+fn tir_drill_boundary_lie_v1() -> Option<super::run::TirBoundaryLieV1> {
+    *TIR_BOUNDARY_LIE_V1.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// One IR class served from a mapped artifact.
 pub struct TirBackendV1 {
     model_id: String,
@@ -308,12 +324,15 @@ impl TirBackendV1 {
         }
         let (mut dense, mut bytes) = (true, 0usize);
         let mut leaves = Vec::new();
-        let run = self.runner().run(job, prompt, self.ladder, false, &mut |l| {
+        // The drill's consistent boundary lie replaces the single-leaf fault: the lie is committed AND computed on.
+        let boundary = fault.and_then(|_| tir_drill_boundary_lie_v1());
+        let fault = if boundary.is_some() { None } else { fault };
+        let run = self.runner().with_boundary_lie(boundary).run(job, prompt, self.ladder, false, &mut |l| {
             if !dense {
                 return;
             }
             bytes += l.preimage.values_le.len();
-            if bytes > self.dense_capture_bytes && fault.is_none() {
+            if bytes > self.dense_capture_bytes && fault.is_none() && boundary.is_none() {
                 (dense, leaves) = (false, Vec::new());
                 return;
             }
@@ -358,6 +377,68 @@ impl TirBackendV1 {
             trace_chunk_count: 1,
             material: capture.encode(),
         }
+    }
+
+    /// **Reassemble a capture from answered runs** (RFC-0006, D-S4): a seat that demanded a job's leaves on chain (`TirStepRun` units
+    /// covering `[0, step_leaf_count)`) and was answered holds every preimage; this is the capture they make. `runs` are `(first leaf,
+    /// preimages)` answers, in any order, which must tile the whole leaf range with no gap or overlap; the binding (as the answers
+    /// carry it, program stripped) is verified and filled; **the step root is recomputed over the leaves and must be the binding's**
+    /// (so one false leaf in any answer is refused here, whatever the openings said); the logits rows are read back from the last
+    /// occurrence's logits tiles and the generated ids are their greedy selections. Nothing is believed that the root does not bind —
+    /// the committed trace root is the cell verifier's own check at the last shard.
+    pub fn capture_from_runs_v1(
+        &self,
+        mut binding: PalwTirStepBindingV1,
+        prompt: Vec<u32>,
+        runs: &[(u64, Vec<PalwStepTileLeafV1>)],
+    ) -> Result<TirCaptureV1, String> {
+        use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+        binding.class.program = self.class.program.clone();
+        if binding.class.class_id(&binding.artifact_root) != self.class_id || binding.artifact_root != self.artifact_root {
+            return Err("the answers' binding is of another class".into());
+        }
+        verify_tir_binding_v1(&binding, self.ladder).map_err(|e| format!("the answers' binding does not verify: {e}"))?;
+        let mut order: Vec<&(u64, Vec<PalwStepTileLeafV1>)> = runs.iter().collect();
+        order.sort_by_key(|r| r.0);
+        let mut leaves: Vec<PalwStepTileLeafV1> = Vec::with_capacity(binding.step_leaf_count as usize);
+        for (first, run) in order {
+            if *first != leaves.len() as u64 {
+                return Err(format!("the answered runs leave a gap or overlap at leaf {}", leaves.len()));
+            }
+            leaves.extend(run.iter().cloned());
+        }
+        if leaves.len() as u64 != binding.step_leaf_count {
+            return Err(format!("{} leaves answered of {}", leaves.len(), binding.step_leaf_count));
+        }
+        let ctx = binding.job_context.clone();
+        let ctx_hash = ctx.context_hash();
+        let hashes: Vec<Hash64> = leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect();
+        if step_merkle_root_capped_v1(&hashes, self.ladder).ok() != Some(binding.step_merkle_root) {
+            return Err("the answered leaves do not reach the claim's step root".into());
+        }
+        // The logits rows: at every position that selects a token, the post block's logits node's tiles, in leaf order.
+        let job = self.space.job_shape(&ctx).map_err(|e| e.to_string())?;
+        let post = (self.space.occurrences().len() - 1) as u32;
+        let mut rows: Vec<Vec<i32>> = Vec::new();
+        let mut generated: Vec<u32> = Vec::new();
+        for a in 0..job.positions {
+            if !job.runs_post(a) {
+                continue;
+            }
+            let mut row: Vec<i32> = Vec::new();
+            for leaf in self.space.leaves_of_position(&ctx, a) {
+                if matches!(leaf.kind, PalwTirLeafKindV1::Commit { occurrence, node, .. } if occurrence == post && node == self.space.program.logits) {
+                    let pre = leaves.get(leaf.index as usize).ok_or("a logits leaf past the answered range")?;
+                    row.extend(pre.values_le.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+                }
+            }
+            if row.is_empty() {
+                return Err(format!("no logits at position {a}"));
+            }
+            generated.push(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&row) as u32);
+            rows.push(row);
+        }
+        Ok(TirCaptureV1 { binding, prompt, logits_rows: rows, generated, leaves })
     }
 
     /// A capture of THIS class, decoded.
@@ -488,7 +569,8 @@ impl TirBackendV1 {
     ) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
         use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
         use kaspa_consensus_core::palw_tir_court_v1::{
-            build_tir_row_node_disclosure_v1, build_tir_step_node_disclosure_v1, palw_tir_step_tree_width_v1,
+            build_tir_row_node_disclosure_v1, build_tir_step_node_disclosure_v1, build_tir_step_run_disclosure_v1,
+            palw_tir_step_tree_width_v1,
         };
         let tiled = Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1();
         self.with_capture_store(material, self.prompt_ids_form, |store, binding| {
@@ -527,6 +609,14 @@ impl TirBackendV1 {
                         .map(|d| PalwDaAnswerV1::TirRowNode(Box::new(d)))
                         .map_err(|e| format!("rows-tree node ({level}, {index}): {e}"))
                 }
+                // RFC-0006's run unit: a contiguous run of leaves a cell reads, with one range opening. A run that is not
+                // wholly inside the execution is proven out of range by the binding, as a leaf past it is.
+                PalwDaUnitV1::TirStepRun { first, count } if count == 0 || first.saturating_add(u64::from(count)) > count_of(binding) => {
+                    out_of_range()
+                }
+                PalwDaUnitV1::TirStepRun { first, count } => build_tir_step_run_disclosure_v1(binding, first, count, store, self.ladder)
+                    .map(|d| PalwDaAnswerV1::TirStepRun(Box::new(d)))
+                    .map_err(|e| format!("step run [{first}, +{count}): {e}")),
                 other => Err(format!("{other:?} is not an IR step unit")),
             }
         })

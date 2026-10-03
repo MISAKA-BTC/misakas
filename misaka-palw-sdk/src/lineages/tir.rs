@@ -31,12 +31,26 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
 use misaka_palw_tir_exec::node::{TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1};
 
+/// RFC-0006: a shard-only holder's fetch (D-S6).
+pub use misaka_palw_tir_exec::node::{
+    TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1, tir_shard_cells_over_v1, tir_verify_capture_cells_over_v1,
+};
+
+/// RFC-0006: the out-of-process device (the GPU helper's client).
+pub use misaka_palw_tir_exec::TirProcessDeviceV1;
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
 pub use misaka_palw_tir_exec::node::{
     PALW_TIR_LEAF_ANNEX_MAGIC_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1,
     TirCloseSizeV1, TirDivergenceV1, TirRetainedJobV1, TirStepTreeV1, palw_tir_leaf_annex_verify_v1, set_tir_fused_kernels_default_v1,
     tir_dissect_choice_v1, tir_drill_covering_leaves_v1, tir_first_divergence_from_opening_v1, tir_fused_kernels_default_v1,
     tir_row_tile_leaves_v1, tir_rows_tree_v1, tir_terminal_close_sizes_v1, tir_trace_event_disclosure_of_capture_v1,
+};
+
+/// RFC-0006: a seat's cells over a class backend, and the device plug-in.
+pub use misaka_palw_tir_exec::node::{
+    CpuKernelBackendV1, KernelBackendV1, TirBoundaryLieV1, TirCellV1, TirCellVerdictV1, TirDeviceV1, cell_runs_v1, register_device_v1,
+    set_tir_drill_boundary_lie_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1, tir_shard_geometry_v1,
+    tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1, tokens_of_capture_v1,
 };
 
 /// The lineage's id.

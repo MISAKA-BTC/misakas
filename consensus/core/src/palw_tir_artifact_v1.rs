@@ -141,6 +141,11 @@ fn leaves_per_instance(p: &TirProgramV1, j: u16) -> u64 {
     (t / r) * r.div_ceil(PALW_TIR_ROW_PIECE_BYTES_V1)
 }
 
+/// Leaves of one instance of param `j`, in closed form (RFC-0006: a shard's inventory ranges).
+pub fn palw_tir_instance_leaves_v1(p: &TirProgramV1, j: u16) -> u64 {
+    leaves_per_instance(p, j)
+}
+
 /// The number of leaves, in closed form.
 pub fn palw_tir_inventory_leaf_count_v1(p: &TirProgramV1) -> Result<u32, PalwTirInventoryError> {
     let instances = palw_tir_param_instances_v1(p);

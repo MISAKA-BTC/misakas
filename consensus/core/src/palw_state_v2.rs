@@ -106,6 +106,8 @@ mod palw_improve_fold_v1;
 mod palw_improve_material_fold_v1;
 #[path = "palw_pipeline_da_fold_v1.rs"]
 mod palw_pipeline_da_fold_v1;
+#[path = "palw_tir_shard_fold_v1.rs"]
+mod palw_tir_shard_fold_v1;
 pub use palw_improve_fold_v1::{PALW_STATE_V2_IMPROVE_PAYOUT_KEY_PREFIX, PalwMaterialPlacementV1};
 pub use palw_improve_material_fold_v1::PALW_IMPROVE_MATERIAL_SWEEP_ROWS_PER_BLOCK_V1;
 #[path = "palw_improve_eval_fold_v1.rs"]
@@ -1633,6 +1635,10 @@ pub struct PalwStateParamsV2 {
     /// **RFC-0007 Part IV.2: `Params::palw_capped_onboarding_v1`'s height** (mirrored by `Params::sync_palw_capped_onboarding_v1`). `None` on every preset.
     #[borsh(skip)]
     capped_from_daa: Option<u64>,
+    /// **RFC-0006: `Params::palw_tir_shard_v1`'s height**, mirrored by `Params::sync_palw_tir_shard_v1` for
+    /// `tir_fence2_from_daa`'s reason (the fold's shard objects read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    tir_shard_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1853,6 +1859,7 @@ impl PalwStateParamsV2 {
             witness_manifest_from_daa: None,
             audit_mesh_from_daa: None,
             capped_from_daa: None,
+            tir_shard_from_daa: None,
         })
     }
 
@@ -2090,6 +2097,23 @@ impl PalwStateParamsV2 {
     pub fn with_tir_fence2_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.tir_fence2_from_daa = from_daa;
         self
+    }
+
+    /// **RFC-0006: the layer-sharded panels' mirror** — written by `Params::sync_palw_tir_shard_v1` and by nothing else
+    /// (and by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_shard_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_shard_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_shard_v1`'s height, if the network arms it (the mirror).
+    pub fn tir_shard_from_daa(&self) -> Option<u64> {
+        self.tir_shard_from_daa
+    }
+
+    /// **Are layer-sharded panels in force at `daa_score`?** `false` on every shipped preset.
+    pub fn tir_shard_active_at(&self, daa_score: u64) -> bool {
+        self.tir_shard_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).
@@ -7890,6 +7914,41 @@ pub enum PalwConsensusObjectV2 {
     TrapRevealedV1 {
         reveal: Box<crate::palw_mesh_v1::PalwTrapRevealedV1>,
     } = 103,
+    // ---- RFC-0006: layer-sharded panels for IR classes (adopted 2026-10-03; one dormant fence, `palw_tir_shard_v1`) ----
+    /// **RFC-0006 §1.1, decision 8: an IR class's layer-shard plan, declared once by its registrant** — `S_L` layer
+    /// shards (the fewest whose widest shard fits the network's seat budget, up to twice that) and `S_P` position
+    /// segments a shard (`1`, layers only, or `s_shard − 1`, S1 inside the shard), signed over
+    /// [`crate::palw_tir_shard_v1::palw_tir_shard_plan_message_v1`] under the registrant bond's key. Immutable like the
+    /// class's graph: a claim bound after it draws a panel per shard and licenses by parts. Dropped by name below
+    /// `palw_tir_shard_v1`. **Tag 91** (spec 17 §17.0's next free tag, taken by `rfc6/shard`, declared explicitly).
+    TirShardPlanDeclared {
+        class_id: Hash64,
+        s_l: u16,
+        s_p: u16,
+        signature: Vec<u8>,
+    } = 91,
+    /// **RFC-0006 §4.5: one shard's licensing part** — the shard's receipts (`ReceiptV4`, cell-masked) of a claim drawn
+    /// per shard. Unsigned like `ReceiptLicensed`: the seats' receipts are the authority, verified at acceptance. The claim
+    /// licenses in the block that lands its last part, with `basis_k` recounted over cells. Dropped by name below
+    /// `palw_tir_shard_v1`. **Tag 92.**
+    TirShardReceiptLicensed {
+        part: crate::palw_tir_shard_v1::PalwTirShardPartV1,
+    } = 92,
+    /// **RFC-0006 §6.2, decision 7: a seat proves it holds ONE SHARD's rows** — the possession proof of ADR-0133 §11.2,
+    /// over leaves drawn from the shard's own inventory rows
+    /// ([`crate::palw_tir_shard_v1::palw_tir_shard_readiness_leaves_v1`]), recorded under the shard's readiness class
+    /// ([`crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1`]). It is what makes a bond a candidate for the shard's
+    /// draw and counts it in the shard's `ready_eff`. Signed by the bond over
+    /// [`crate::palw_tir_shard_v1::palw_tir_shard_readiness_message_v1`]. Dropped by name below `palw_tir_shard_v1`.
+    /// **Tag 93.**
+    TirSeatReadinessProved {
+        bond: PalwBondKeyV2,
+        class_id: Hash64,
+        shard: u16,
+        span: u64,
+        proof: Box<crate::palw_artifact::PalwArtifactMultiproofV1>,
+        signature: Vec<u8>,
+    } = 93,
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -7937,6 +7996,21 @@ pub fn palw_object_is_tir_fence2_v1(object: &PalwConsensusObjectV2) -> bool {
     match object {
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => true,
         PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => answer.is_tir_fence2_v1() || unit.is_tir_fence2_v1(),
+        _ => false,
+    }
+}
+
+/// **Is this object a move only RFC-0006's layer-sharded panels make legal** (`Params::palw_tir_shard_v1`): the three new
+/// objects, `ReceiptV4`-bearing parts, and the `TirStepRun` DA unit and its answer — payloads an older build cannot decode
+/// (A-2). Below the fence the acceptance walk drops every such object by name before any slot, rent or budget is charged,
+/// and the fold refuses it as the second lock.
+pub fn palw_object_is_tir_shard_v1(object: &PalwConsensusObjectV2) -> bool {
+    match object {
+        PalwConsensusObjectV2::TirShardPlanDeclared { .. }
+        | PalwConsensusObjectV2::TirShardReceiptLicensed { .. }
+        | PalwConsensusObjectV2::TirSeatReadinessProved { .. } => true,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { unit, answer, .. } => answer.is_tir_shard_v1() || unit.is_tir_shard_v1(),
+        PalwConsensusObjectV2::DefaultAccusedTirStep { accusation } => accusation.unit.is_tir_shard_v1(),
         _ => false,
     }
 }
@@ -9857,6 +9931,13 @@ pub enum PalwStateV2Error {
     ShardCourtNeedsDissection { claim: Hash64, leaf: u64 },
     #[error("the accusation does not adjudicate: {0}")]
     ShardCourt(String),
+    // RFC-0006 — layer-sharded panels' refusals, by name.
+    #[error("layer-sharded panels are not armed on this network (Params::palw_tir_shard_v1)")]
+    TirShardDormant,
+    #[error("a layer-shard object is refused: {0}")]
+    TirShardRefused(String),
+    #[error("claim {claim}: shard {shard}'s receipts are not yet a licence: {why}")]
+    TirShardPartShort { claim: Hash64, shard: u32, why: &'static str },
     // ADR-0100 Decision 4 — per-shard licensing's refusals, by name.
     #[error("per-shard licensing is not armed on this network (Params::palw_shard_licensing)")]
     ShardLicensingDormant,
@@ -10453,6 +10534,14 @@ pub struct PalwChainStateV2 {
     /// One Some-only root block and one carriage tail (`0xE4`) once any row exists, which nothing below
     /// `Params::palw_verification_vertex_v1` can write.
     vertex: crate::palw_vertex_v1::PalwVertexStateV1,
+    /// **RFC-0006: each IR class's layer-shard plan**, declared once by its registrant (`TirShardPlanDeclared`), with the
+    /// cell shares derived at the declaration. Enters the root and the carriage (tail `0xE1`) only when non-empty —
+    /// nothing can be written below `Params::palw_tir_shard_v1` — so a dormant network roots exactly as before.
+    tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
+    /// **RFC-0006: what the chain keeps of a claim drawn per shard** (progress, cell counts, counted signers, the drawn
+    /// seats' shares), written when its panel binds and dropped when the claim leaves the chain's live phases. The same
+    /// tail, `0xE1`.
+    tir_shard_claims: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -10951,6 +11040,8 @@ impl PalwChainStateV2 {
             class_step_ladders: BTreeMap::new(),
             class_court_windows: BTreeMap::new(),
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
+            tir_shard_plans: BTreeMap::new(),
+            tir_shard_claims: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -12138,6 +12229,21 @@ impl PalwChainStateV2 {
         self.class_step_ladders.contains_key(class_id)
     }
 
+    /// **RFC-0006: an IR class's layer-shard plan**, if its registrant declared one.
+    pub fn tir_shard_plan(&self, class_id: &Hash64) -> Option<&crate::palw_tir_shard_v1::PalwTirShardPlanV1> {
+        self.tir_shard_plans.get(class_id)
+    }
+
+    /// **RFC-0006: what the chain keeps of a claim drawn per shard**, while the claim is live.
+    pub fn tir_shard_claim(&self, claim_id: &Hash64) -> Option<&crate::palw_tir_shard_v1::PalwTirShardClaimV1> {
+        self.tir_shard_claims.get(claim_id)
+    }
+
+    /// Every IR class with a layer-shard plan.
+    pub fn tir_shard_plans_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        self.tir_shard_plans.iter()
+    }
+
     /// **The finite court window a class committed when it registered past `palw_model_court_window`**,
     /// `None` for every other class — every class registered below the fence, and every class past it that
     /// the rule does not reach (a graph class with no fused attention site, an IR class with no dissected
@@ -13225,6 +13331,13 @@ impl PalwChainStateV2 {
         }
         if !self.class_court_windows.is_empty() {
             state.update(collection_root(b"class_court_windows", &self.class_court_windows).as_byte_slice());
+        }
+        // **RFC-0006.** Its own block, for ADR-0095's reason: empty until a plan is declared, and nothing can be declared
+        // below `Params::palw_tir_shard_v1`, so a network that never armed it roots as before.
+        if !self.tir_shard_plans.is_empty() || !self.tir_shard_claims.is_empty() {
+            state.update(b"tir_shard/v1");
+            state.update(collection_root(b"tir_shard_plans", &self.tir_shard_plans).as_byte_slice());
+            state.update(collection_root(b"tir_shard_claims", &self.tir_shard_claims).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
@@ -15265,6 +15378,19 @@ pub enum PalwDeltaEntryV2 {
     /// §18.7): `table` names it ([`PALW_VERTEX_TABLE_ROUNDS_V1`] …), and the key and rows ride as their borsh bytes. One entry
     /// for the three tables, so a table added later takes a table id and not a delta discriminant.
     VertexRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> },
+    /// **102: an IR class's layer-shard plan** (`tir_shard_plans`, RFC-0006). Dormant: `palw_tir_shard_v1` is armed on no
+    /// network, so no stored delta carries this variant.
+    TirShardPlan {
+        key: Hash64,
+        old: Option<crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
+        new: Option<crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
+    },
+    /// **103: a claim's per-shard record** (`tir_shard_claims`, RFC-0006).
+    TirShardClaim {
+        key: Hash64,
+        old: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
+        new: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -16569,6 +16695,40 @@ impl PalwFoldReadV1<'_> {
             return None;
         }
         let row = self.state.model_lifecycles.get(class_id)?;
+        // **RFC-0006 §6.2, decision 7: an IR class with a layer-shard plan has the BINDING SHARD's room.** A class's verification
+        // supply is the ready seats of each shard, not of the whole model: `min over shards of ⌊ ready_eff(c, i) × per_seat ×
+        // window / (2 × eccu × w_i / w) ⌋`, a shard's ready seats being the bonds whose possession proof of that shard's rows is
+        // fresh. The measured-speed constant is unchanged (decision 9).
+        if self.params.tir_shard_active_at(now_daa)
+            && !palw_rcore_class_is_c7_v1(self.params, self.state, class_id)
+            && let Some(plan) = self.state.tir_shard_plans.get(class_id)
+        {
+            let pricing = crate::palw_verify_capacity_v1::palw_replay_pricing_v1(self.params.capacity_room_active_at(now_daa), &fold.globals);
+            let ready: Vec<u128> = (0..plan.s_l)
+                .map(|shard| {
+                    let ready_class = crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(class_id, plan.s_l, shard);
+                    u128::from(self.model_registry_ready_seats(&ready_class, now_daa, fold))
+                })
+                .collect();
+            let permille: Vec<u32> = (0..usize::from(plan.s_l))
+                .map(|shard| {
+                    plan.cell_permille
+                        .iter()
+                        .skip(shard * usize::from(plan.s_p))
+                        .take(usize::from(plan.s_p))
+                        .map(|p| u32::from(*p))
+                        .sum()
+                })
+                .collect();
+            let window = (row.profile.verification_window_spans as u64).max(1);
+            return Some(crate::palw_tir_shard_v1::palw_tir_shard_room_v1(
+                &ready,
+                &permille,
+                pricing.per_seat_per_span,
+                window,
+                row.work.economic_ccu_per_claim,
+            ));
+        }
         Some(if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
             row.profile.max_inflight_claims as u64
         } else {
@@ -18592,6 +18752,14 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.panel_duties.contains_key(&key) && new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
             self.write_panel_duties(key, None);
         }
+        // RFC-0006: a claim's per-shard record lives while the claim does — through `PanelBound` and `ReceiptLicensed`,
+        // where the lock, the recount and the pay read it — and goes with it: terminal, retired, or redrawn to
+        // `Provisional` (its next panel writes a fresh one).
+        if self.state.tir_shard_claims.contains_key(&key)
+            && new.as_ref().is_none_or(|claim| claim.phase.is_terminal() || matches!(claim.phase, PalwClaimPhaseV2::Provisional))
+        {
+            self.write_tir_shard_claim(key, None);
+        }
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
@@ -18958,6 +19126,28 @@ impl<'a> TransitionBuilder<'a> {
     /// **RFC-0007 Part IV.2: the one writer of the capped claim rows** (by claim).
     pub(crate) fn write_mesh_capped(&mut self, key: Hash64, new: Option<crate::palw_mesh_v1::PalwCappedClaimRowV1>) {
         self.write_vertex_row(PALW_MESH_TABLE_CAPPED_V1, key, new, |s| &mut s.vertex.mesh.capped);
+    }
+
+    /// **RFC-0006: the one writer of `tir_shard_plans`**, journaled `TirShardPlan`.
+    fn write_tir_shard_plan(&mut self, key: Hash64, new: Option<crate::palw_tir_shard_v1::PalwTirShardPlanV1>) {
+        let old = match &new {
+            Some(row) => self.state.tir_shard_plans.insert(key, row.clone()),
+            None => self.state.tir_shard_plans.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::TirShardPlan { key, old, new });
+        }
+    }
+
+    /// **RFC-0006: the one writer of `tir_shard_claims`**, journaled `TirShardClaim`.
+    fn write_tir_shard_claim(&mut self, key: Hash64, new: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>) {
+        let old = match &new {
+            Some(row) => self.state.tir_shard_claims.insert(key, row.clone()),
+            None => self.state.tir_shard_claims.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::TirShardClaim { key, old, new });
+        }
     }
 
     fn write_held_leaf_demands(&mut self, key: Hash64, new: Option<BTreeMap<PalwBondKeyV2, u64>>) {
@@ -24741,6 +24931,10 @@ impl<'a> TransitionBuilder<'a> {
         ctx: &PalwBlockContextV2,
     ) -> Result<(), PalwStateV2Error> {
         let refused = |why: String| PalwStateV2Error::SupplementaryReceiptsRefused { claim: claim_id, why };
+        // RFC-0006: a claim drawn per layer shard takes no whole-object supplementary set (its seats attest cells).
+        if self.claim_licenses_by_parts(&claim_id) {
+            return Err(PalwStateV2Error::LicensedByParts(claim_id));
+        }
         let duties = self
             .state
             .panel_duties
@@ -24947,6 +25141,10 @@ impl<'a> TransitionBuilder<'a> {
         let refused = |why: String| PalwStateV2Error::SupplementaryV3Refused { claim: claim_id, why };
         if !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             return Err(refused("the claim is not licensed".into()));
+        }
+        // RFC-0006: a claim drawn per layer shard takes no whole-object supplementary set (its seats attest cells).
+        if self.claim_licenses_by_parts(&claim_id) {
+            return Err(refused("the claim was drawn per layer shard and licenses by its parts".into()));
         }
         let duties = self
             .state
@@ -25964,9 +26162,11 @@ impl<'a> TransitionBuilder<'a> {
     /// wherever the fence is dormant — no plan exists there — so the whole-object doors are
     /// byte-identical on every network that has not armed it.
     fn claim_licenses_by_parts(&self, claim_id: &Hash64) -> bool {
-        self.extras.shard_licensing.is_some_and(|params| {
-            crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(&self.state, claim_id, params.seats_per_shard).is_some()
-        })
+        // RFC-0006: a claim drawn per layer shard licenses by its parts too (its record exists only past the fence).
+        palw_tir_shard_fold_v1::claim_licenses_tir_parts_v1(&self.state, claim_id)
+            || self.extras.shard_licensing.is_some_and(|params| {
+                crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(&self.state, claim_id, params.seats_per_shard).is_some()
+            })
     }
 
     fn slash_dissenting_seats(
@@ -26188,38 +26388,45 @@ impl<'a> TransitionBuilder<'a> {
                         duties.len(),
                         credited.len(),
                     );
+                    // **RFC-0006, decision 6: a claim drawn per layer shard pays its credited seats by the work they
+                    // vouched for** (`final_legs_v1`: the pool divided by the drawn seats' shares, each at least the floor,
+                    // the producer the exact rest, the reserve what no credited seat is owed). Every other claim: one
+                    // fixed share a credited seat, as it always was.
+                    let (producer_amount, seat_legs, reserve_amount): (u64, Vec<(PalwBondKeyV2, u64)>, u64) =
+                        match palw_tir_shard_fold_v1::final_legs_v1(&self.state, &id, reward, pool_permille, &credited) {
+                            Some(legs) => legs,
+                            None => (
+                                split.producer,
+                                if split.per_seat > 0 { credited.iter().map(|seat| (*seat, split.per_seat)).collect() } else { Vec::new() },
+                                split.reserve,
+                            ),
+                        };
                     if vests {
                         // V-2: the same legs, named in the row — each credited seat's payload read
                         // from its bond HERE, at Final (I-5: a moved leg never re-reads the bond).
                         let mut seats = Vec::new();
-                        if split.per_seat > 0 {
-                            for seat in &credited {
-                                let seat_payload =
-                                    self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
-                                seats.push((*seat, PalwPayoutV2 { payload: seat_payload, amount: split.per_seat }));
-                            }
+                        for (seat, amount) in &seat_legs {
+                            let seat_payload = self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
+                            seats.push((*seat, PalwPayoutV2 { payload: seat_payload, amount: *amount }));
                         }
                         vested = Some(PalwVestedRewardV1 {
-                            producer: PalwPayoutV2 { payload: payout_payload, amount: split.producer },
+                            producer: PalwPayoutV2 { payload: payout_payload, amount: producer_amount },
                             seats,
-                            reserve: split.reserve,
+                            reserve: reserve_amount,
                             buyback: slice,
                         });
                     } else {
-                        if split.producer > 0 {
-                            self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: split.producer }));
+                        if producer_amount > 0 {
+                            self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: producer_amount }));
                         }
-                        if split.per_seat > 0 {
-                            for seat in &credited {
-                                let seat_payload =
-                                    self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
-                                self.add_panel_payout(seat_payload, split.per_seat)?;
-                            }
+                        for (seat, amount) in &seat_legs {
+                            let seat_payload = self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
+                            self.add_panel_payout(seat_payload, *amount)?;
                         }
                         let reserve = self
                             .state
                             .panel_reserve_sompi
-                            .checked_add(split.reserve)
+                            .checked_add(reserve_amount)
                             .ok_or(PalwStateV2Error::Overflow("panel reserve"))?;
                         self.write_panel_reserve(reserve);
                     }
@@ -28669,6 +28876,7 @@ fn open_da_session_rcore_v1(
                     | PalwDaUnitV1::TirStepLeaf { .. }
                     | PalwDaUnitV1::TirStepNode { .. }
                     | PalwDaUnitV1::TirRowNode { .. }
+                    | PalwDaUnitV1::TirStepRun { .. }
                     | PalwDaUnitV1::PipelineStepLeaf { .. }
                     | PalwDaUnitV1::PipelineStepNode { .. } => false,
                 })
@@ -28676,7 +28884,13 @@ fn open_da_session_rcore_v1(
         }
         // The second IR fence: an IR step unit, named only — no draws (`open_da_session_tir_step_v1`
         // bounded it by the widest execution; the claim's own bound is the accused's to prove).
-        (PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. }, None) => Vec::new(),
+        (
+            PalwDaUnitV1::TirStepLeaf { .. }
+            | PalwDaUnitV1::TirStepNode { .. }
+            | PalwDaUnitV1::TirRowNode { .. }
+            | PalwDaUnitV1::TirStepRun { .. },
+            None,
+        ) => Vec::new(),
         // Pipeline-claim data availability: a pipeline step unit, named only — no draws.
         (PalwDaUnitV1::PipelineStepLeaf { .. } | PalwDaUnitV1::PipelineStepNode { .. }, None) => Vec::new(),
         _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
@@ -28942,8 +29156,38 @@ fn apply_da_answer_v1(
             }
             false
         }
+        // **RFC-0006: a run of step leaves**, by hash arithmetic against the claim's roots: every preimage hashes to its opened
+        // leaf and the range opening walks to the claim's step root (`check_tir_step_run_disclosure_v1`), then the identity
+        // rule over its binding.
+        (PalwDaUnitV1::TirStepRun { first, count }, PalwDaAnswerV1::TirStepRun(carried)) => {
+            if !builder.params.tir_shard_active_at(ctx.daa_score) {
+                return Err(malformed("an IR step-run answer before palw_tir_shard_v1 is in force"));
+            }
+            let record = builder
+                .state
+                .tir_classes
+                .get(&claim.class_id)
+                .ok_or(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" })?;
+            let disclosure = carried.with_program_v1(record).map_err(malformed)?;
+            crate::palw_tir_court_v1::check_tir_step_run_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *first,
+                *count,
+                &disclosure,
+                tir_ladder,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_tir_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding, tir_ladder) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            false
+        }
         (
-            PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. },
+            PalwDaUnitV1::TirStepLeaf { .. }
+            | PalwDaUnitV1::TirStepNode { .. }
+            | PalwDaUnitV1::TirRowNode { .. }
+            | PalwDaUnitV1::TirStepRun { .. },
             PalwDaAnswerV1::TirStepOutOfRange(carried),
         ) => {
             if !builder.params.tir_fence2_active_at(ctx.daa_score) {
@@ -32475,6 +32719,11 @@ fn apply_object(
             return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
         }
     }
+    // **RFC-0006, likewise**: below `palw_tir_shard_v1` the layer-sharded panels' objects and the `TirStepRun` unit are payloads
+    // an older build cannot decode; the acceptance walk drops them by name, and this is the second lock.
+    if palw_object_is_tir_shard_v1(object) && !builder.params.tir_shard_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::TirShardDormant);
+    }
     // **RFC-0003 decision 22, likewise**: below `palw_held_close_chunks_v1` the held leaf challenge is a payload an
     // older build cannot decode; the acceptance walk drops it by name, and this is the second lock.
     if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
@@ -33144,6 +33393,16 @@ fn apply_object(
         // **ADR-0125 §7.3: a permit signed twice burns, and its bond pays the floor.**
         PalwConsensusObjectV2::RoundPermitEquivocated { evidence } => {
             builder.record_round_equivocation(ctx, evidence)?;
+        }
+        // ---- RFC-0006: layer-sharded panels (tags 91-93), dormant under `palw_tir_shard_v1` ----
+        PalwConsensusObjectV2::TirShardPlanDeclared { class_id, s_l, s_p, signature: _ } => {
+            palw_tir_shard_fold_v1::apply_plan_declared_v1(builder, ctx, class_id, *s_l, *s_p)?;
+        }
+        PalwConsensusObjectV2::TirShardReceiptLicensed { part } => {
+            palw_tir_shard_fold_v1::apply_part_v1(builder, ctx, part)?;
+        }
+        PalwConsensusObjectV2::TirSeatReadinessProved { bond, class_id, shard, span, proof, signature: _ } => {
+            palw_tir_shard_fold_v1::apply_readiness_v1(builder, ctx, bond, class_id, *shard, *span, proof)?;
         }
         // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
         // acceptance layer's; here: the fence, a registered class with a registrant (a genesis
@@ -33949,6 +34208,9 @@ fn apply_object(
             // tells a `NoCapablePanel` retry from a redraw.
             let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
+            // RFC-0006: a panel drawn per shard writes the claim's per-shard record (the plan frozen, the outsider flag, each
+            // seat's share of the work); a flat panel writes nothing. Dormant: no plan exists below `palw_tir_shard_v1`.
+            palw_tir_shard_fold_v1::bind_record_v1(builder, ctx, claim_id, &claim, anchor, seats)?;
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
             if builder.extras.panel_economy_active {
@@ -38339,6 +38601,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
         PalwDeltaEntryV2::VertexRow { table, key, old, new } => apply_vertex_row_v1(state, *table, key, old, new, revert)?,
+        PalwDeltaEntryV2::TirShardPlan { key, old, new } => swap_write!(state.tir_shard_plans, key, old, new),
+        PalwDeltaEntryV2::TirShardClaim { key, old, new } => swap_write!(state.tir_shard_claims, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -38716,6 +38980,10 @@ pub struct PalwStateCarriageV2 {
     pub class_court_windows: BTreeMap<Hash64, u64>,
     /// RFC-0007 Part I: the vertex tables in appended tail `0xE4`, present only when any is non-empty.
     pub vertex: crate::palw_vertex_v1::PalwVertexStateV1,
+    /// RFC-0006: the layer-shard plans, in tail `0xE1` (with the claims'), present only when either is non-empty.
+    pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
+    /// RFC-0006: the per-shard claim records, in tail `0xE1`.
+    pub tir_shard_claims: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -39044,6 +39312,10 @@ const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
 /// tail another lane has taken or reserved (`0xC0`–`0xDA`, `0xE0`).
 const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 
+/// **RFC-0006's tail** (`tir_shard_plans`, then `tir_shard_claims`): `0xE1`, the next byte after the court windows'.
+/// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
+const PALW_CARRIAGE_TIR_SHARD_TAIL_V1: u8 = 0xE1;
+
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
 /// snapshot written by another `PALW_STATE_V2_VERSION` has other record layouts, so decoding it fails
@@ -39357,6 +39629,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_VERTEX_TAIL_V1.serialize(writer)?;
             self.vertex.serialize(writer)?;
         }
+        if !self.tir_shard_plans.is_empty() || !self.tir_shard_claims.is_empty() {
+            PALW_CARRIAGE_TIR_SHARD_TAIL_V1.serialize(writer)?;
+            self.tir_shard_plans.serialize(writer)?;
+            self.tir_shard_claims.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -39532,6 +39809,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_class_court_windows = false;
         let mut vertex = crate::palw_vertex_v1::PalwVertexStateV1::default();
         let mut seen_vertex = false;
+        let mut tir_shard_plans = BTreeMap::new();
+        let mut tir_shard_claims = BTreeMap::new();
+        let mut seen_tir_shard = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -39774,6 +40054,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_vertex = true;
                     vertex = crate::palw_vertex_v1::PalwVertexStateV1::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_TIR_SHARD_TAIL_V1 if !seen_tir_shard => {
+                    seen_tir_shard = true;
+                    tir_shard_plans = BTreeMap::deserialize_reader(reader)?;
+                    tir_shard_claims = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -39905,6 +40190,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_eval_jobs,
             class_court_windows,
             vertex,
+            tir_shard_plans,
+            tir_shard_claims,
         })
     }
 }
@@ -40014,6 +40301,8 @@ impl PalwStateCarriageV2 {
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             class_court_windows: state.class_court_windows.clone(),
             vertex: state.vertex.clone(),
+            tir_shard_plans: state.tir_shard_plans.clone(),
+            tir_shard_claims: state.tir_shard_claims.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -40226,6 +40515,8 @@ impl PalwStateCarriageV2 {
             improvement_eval_claims: BTreeMap::new(),
             class_court_windows: self.class_court_windows,
             vertex: self.vertex,
+            tir_shard_plans: self.tir_shard_plans,
+            tir_shard_claims: self.tir_shard_claims,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -57315,6 +57606,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ImprovementLicence { .. } => "improvement_licence",
                     PalwDeltaEntryV2::ImprovementCompositeClass { .. } => "improvement_composite_class",
                     PalwDeltaEntryV2::VertexRow { .. } => "vertex_row",
+                    // RFC-0006: their round trips are the layer-shard suite's (`tests/palw_tir_shard_fold.rs`).
+                    PalwDeltaEntryV2::TirShardPlan { .. } => "tir_shard_plan",
+                    PalwDeltaEntryV2::TirShardClaim { .. } => "tir_shard_claim",
                 });
             }
         }
@@ -57600,6 +57894,9 @@ pub(crate) mod tests {
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
             // RFC-0007 Part I, after the court window: the vertex tables' one generic entry.
             (101, PalwDeltaEntryV2::VertexRow { table: PALW_VERTEX_TABLE_ROUNDS_V1, key: Vec::new(), old: None, new: None }),
+            // RFC-0006, after the court window: a layer-shard plan and a claim's per-shard record.
+            (102, PalwDeltaEntryV2::TirShardPlan { key, old: None, new: None }),
+            (103, PalwDeltaEntryV2::TirShardClaim { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -58248,6 +58545,8 @@ pub(crate) mod tests {
             class_court_windows: _,
             // RFC-0007 Part I: one Some-only block of three, empty here.
             vertex: _,
+            tir_shard_plans: _,
+            tir_shard_claims: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 

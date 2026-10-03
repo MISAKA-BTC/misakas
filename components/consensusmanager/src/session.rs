@@ -332,6 +332,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_receipt_pool_facts_v1(claims, bonds)
     }
 
+    /// RFC-0006: the layer-shard plans at the tip.
+    pub fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        self.consensus.palw_tir_shard_plans_v1()
+    }
+
     /// A claim's committed roots and price at the tip (ADR-0111 Decision 2).
     pub fn palw_claim_roots_v2(
         &self,
@@ -462,6 +467,15 @@ impl ConsensusSessionOwned {
         candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.consensus.palw_v2_receipt_coverage_assemble(claim, candidates)
+    }
+
+    /// RFC-0006: one licensing part of a claim drawn per layer shard, as the acceptance validator takes it.
+    pub fn palw_v2_tir_shard_part_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.consensus.palw_v2_tir_shard_part_assemble(claim, candidates)
     }
 
     pub fn palw_v2_optimistic_assemble(

@@ -2572,6 +2572,9 @@ pub fn check_tir_step_out_of_range_v1(
     let past = match unit {
         PalwDaUnitV1::TirStepLeaf { index } => *index >= count,
         PalwDaUnitV1::TirStepNode { level, index } => palw_tir_step_tree_width_v1(count, *level).is_none_or(|width| *index >= width),
+        // RFC-0006: a run is past the execution when it does not end inside it (the demander clips to the leaf count it
+        // learned; the accused proves a run that cannot be answered).
+        PalwDaUnitV1::TirStepRun { first, count: run } => first.checked_add(u64::from(*run)).is_none_or(|end| end > count),
         // A rows-tree unit is past a trace that has no rows tree (the flat scheme hashes every row at
         // once), and past a tiled trace's rows (a row at or past the decode count, a node past the
         // tree).
@@ -2586,6 +2589,116 @@ pub fn check_tir_step_out_of_range_v1(
         return Err(bad("the unit is in the execution: it is answered by its disclosure"));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// RFC-0006: a run of step leaves — the unit `TirStepRun { first, count }`
+// ---------------------------------------------------------------------------------------------
+
+/// **The most leaves one `TirStepRun` names** — a cell's carry-in is a run of one carry-out row per position, and one
+/// demand then serves about `⌊100,000 / (lanes × 4)⌋` positions of a segment (RFC-0006 §3).
+pub const PALW_TIR_STEP_RUN_MAX_LEAVES_V1: u32 = 256;
+
+/// **What a `TirStepRun { first, count }` answer opens** (past `Params::palw_tir_shard_v1`): the preimages of the
+/// contiguous leaves `[first, first + count)` and their range opening under the claim's step root (the two boundary
+/// paths, `step_range_opening_root_capped_v1`'s sibling set), with the claim's binding (program EMPTY). A cell's seat
+/// demands its carry-in rows this way when the producer serves none: one unit, not one `TirStepLeaf` per position.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirStepRunDisclosureV1 {
+    pub binding: PalwTirStepBindingV1,
+    pub preimages: Vec<PalwStepTileLeafV1>,
+    pub range: crate::palw_step_leg::PalwStepRangeOpeningV1,
+}
+
+impl PalwTirStepRunDisclosureV1 {
+    /// **Empties the carried program** — what a discloser does before the answer rides.
+    pub fn strip_program_v1(&mut self) {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut self.binding);
+    }
+
+    /// The disclosure with the registered class's program put back; refused when it carried one.
+    pub fn with_program_v1(&self, record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1) -> Result<Self, &'static str> {
+        let mut filled = self.clone();
+        filled.binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&self.binding, record)?;
+        Ok(filled)
+    }
+}
+
+/// **Verify a `TirStepRun` answer against the claim — by hash arithmetic.** The binding verifies and names the claim's
+/// roots; the run is non-empty, within [`PALW_TIR_STEP_RUN_MAX_LEAVES_V1`] and inside the execution; the range opening
+/// is exactly `[first, first + count)`; every preimage hashes to its opened leaf; and the opening walks to the claim's
+/// step root. A malformed committed leaf is answered (it is what was committed) and convicted from this answer.
+pub fn check_tir_step_run_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    first: u64,
+    count: u32,
+    disclosure: &PalwTirStepRunDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let binding = &disclosure.binding;
+    let v = claims_binding(binding, claim_trace_root, claim_execution_root, max_step_leaf_count)?;
+    if count == 0 || count > PALW_TIR_STEP_RUN_MAX_LEAVES_V1 {
+        return Err(bad("a step run names between one and PALW_TIR_STEP_RUN_MAX_LEAVES_V1 leaves"));
+    }
+    if first.checked_add(u64::from(count)).is_none_or(|end| end > binding.step_leaf_count) {
+        return Err(bad("the run does not end inside this execution: it is answered by an out-of-range proof"));
+    }
+    let range = &disclosure.range;
+    if range.first_leaf_index != first || range.leaf_hashes.len() != count as usize || disclosure.preimages.len() != count as usize {
+        return Err(bad("the run's opening and preimages are not exactly the demanded leaves"));
+    }
+    for (preimage, opened) in disclosure.preimages.iter().zip(&range.leaf_hashes) {
+        if step_tile_leaf_hash_v1(&v.context_hash, &v.class_id, preimage) != *opened {
+            return Err(bad("a preimage of the run is not its opened leaf"));
+        }
+    }
+    let implied = crate::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, range, max_step_leaf_count)
+        .map_err(|_| bad("the run's range opening does not walk"))?;
+    if implied != binding.step_merkle_root {
+        return Err(bad("the run's range opening does not reach the claim's step root"));
+    }
+    Ok(())
+}
+
+/// **A `TirStepRun` answer, built from what the answering node holds** (its own capture, or the accused's through the
+/// store): the preimages of `[first, first + count)` and their range opening, checked with
+/// [`check_tir_step_run_disclosure_v1`] before it is returned, the program stripped — so a node never pays a carrier
+/// for an answer the fold refuses.
+pub fn build_tir_step_run_disclosure_v1(
+    binding: &PalwTirStepBindingV1,
+    first: u64,
+    count: u32,
+    store: &dyn PalwTirEvidenceStoreV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwTirStepRunDisclosureV1, PalwTirEvidenceErrorV1> {
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, max_step_leaf_count)
+        .map_err(|_| PalwTirEvidenceErrorV1::Store("the binding does not verify".into()))?;
+    let mut preimages = Vec::with_capacity(count as usize);
+    for index in first..first.saturating_add(u64::from(count)) {
+        preimages.push(store.step_leaf(index).ok_or_else(|| PalwTirEvidenceErrorV1::Store(format!("step leaf {index}")))?);
+    }
+    let leaf_hashes: Vec<Hash64> =
+        preimages.iter().map(|preimage| step_tile_leaf_hash_v1(&v.context_hash, &v.class_id, preimage)).collect();
+    let siblings = store
+        .step_range_siblings(first, u64::from(count))
+        .ok_or_else(|| PalwTirEvidenceErrorV1::Store(format!("the siblings of the run [{first}, +{count})")))?;
+    let mut disclosure = PalwTirStepRunDisclosureV1 {
+        binding: binding.clone(),
+        preimages,
+        range: crate::palw_step_leg::PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings },
+    };
+    check_tir_step_run_disclosure_v1(
+        binding.full_logits_trace_root,
+        binding.committed_execution_root,
+        first,
+        count,
+        &disclosure,
+        max_step_leaf_count,
+    )
+    .map_err(|e| PalwTirEvidenceErrorV1::Store(format!("the store's run [{first}, +{count}) does not answer: {e}")))?;
+    disclosure.strip_program_v1();
+    Ok(disclosure)
 }
 
 /// **A `TirStepNode` answer, built from what the answering node holds**, checked before it is

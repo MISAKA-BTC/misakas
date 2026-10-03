@@ -167,6 +167,10 @@ mod held_court;
 mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
+// RFC-0006: layer-sharded panels, the node's half.
+mod tir_shard;
+#[cfg(test)]
+mod tir_shard_e2e;
 /// RFC-0002 F7's node side: an IR class's history dissection, played.
 mod tir_dissect;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
@@ -2299,7 +2303,10 @@ pub(crate) fn palw_da_unit_answer_v1(
         // the executor answering for its own run; the rows from the capture's committed trace), a unit
         // past the execution by the binding proving so — each self-checked by the fold's check, the
         // program stripped.
-        PalwDaUnitV1::TirStepLeaf { .. } | PalwDaUnitV1::TirStepNode { .. } | PalwDaUnitV1::TirRowNode { .. } => {
+        PalwDaUnitV1::TirStepLeaf { .. }
+        | PalwDaUnitV1::TirStepNode { .. }
+        | PalwDaUnitV1::TirRowNode { .. }
+        | PalwDaUnitV1::TirStepRun { .. } => {
             if !tir_capture {
                 return Err(format!("{unit:?} is an IR claim's unit, and this material is not an IR capture"));
             }
@@ -3617,6 +3624,21 @@ pub struct PalwPanelConfig {
     /// **RFC-0004 (A10): evaluate** (`--palw-improve-evaluate`): run the evaluation jobs of every governed
     /// line's open epoch whose subject class this node holds, and carry their claims.
     pub improve_evaluate: bool,
+    /// **RFC-0006: the shards this node answers and proves** (`--palw-tir-shard-hold`); empty means every shard of every class it
+    /// holds. A host that holds one shard names it: it proves that shard's rows and answers only its duties.
+    pub tir_shard_hold: Vec<u16>,
+    /// **RFC-0006: declare a layer-shard plan** as the class's registrant (`--palw-tir-shard-declare=<class>:<S_L>:<S_P>`).
+    pub tir_shard_declare: Option<(Hash64, u16, u16)>,
+    /// **RFC-0006: run the cells on the registered device backend** (`--palw-tir-shard-gpu`, default off).
+    pub tir_shard_gpu: bool,
+    /// **RFC-0006: shadow mode** (`--palw-tir-shard-shadow`): verify the cells and log the verdicts, file nothing.
+    pub tir_shard_shadow: bool,
+    /// **RFC-0006: demand the runs a cell reads on chain** when no capture reaches the seat (`--palw-tir-shard-demand-runs`).
+    pub tir_shard_demand_runs: bool,
+    /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
+    /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
+    /// inventory root the chain registered.
+    pub tir_shard_mirror: Option<PathBuf>,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
@@ -4972,6 +4994,53 @@ impl PalwPanelService {
             }
             Err(e) => {
                 warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}");
+                false
+            }
+        }
+    }
+
+    /// **Carry one lifecycle object on `funding`**, chaining the change as every lane does (RFC-0006's parts, plan declaration and
+    /// shard possession proofs). `true` when the mempool took it; on a refusal the funding is dropped for this tick.
+    async fn carry_object_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        object: &PalwConsensusObjectV2,
+        what: &str,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+    ) -> bool {
+        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
+        match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
+            Ok(tx) => {
+                let txid = tx.id();
+                let change = tx.outputs[0].clone();
+                match self.submit_carrier_v1(session, tx).await {
+                    Ok(()) => {
+                        info!("[{PALW_PANEL}] submitted {what} ({}) in tx {txid}", object_name(object));
+                        let next = TransactionOutpoint::new(txid, 0);
+                        self.persist_fee_outpoint(next);
+                        *funding = Some((
+                            next,
+                            UtxoEntry {
+                                amount: change.value,
+                                script_public_key: change.script_public_key,
+                                block_daa_score: current_daa,
+                                is_coinbase: false,
+                            },
+                        ));
+                        *inflight += 1;
+                        true
+                    }
+                    Err(e) => {
+                        warn!("[{PALW_PANEL}] the mempool refused {what}: {e}");
+                        *funding = None;
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot build the carrier for {what}: {e}");
                 false
             }
         }
@@ -7566,6 +7635,9 @@ impl PalwPanelService {
             crate::palw_receipt_pool::PalwReceiptPoolV1::new(network_domain);
         // What the tip says about them — bound panels and registered seat keys, read once a tick.
         let mut receipt_facts = crate::palw_receipt_pool::ReceiptChainFactsV1::default();
+        // **RFC-0006: the bookkeeping for layer-sharded claims** — their cell-masked (V4) receipts, this seat's own filings, the
+        // findings of its cells and what it carried. Empty on every network that never armed the fence.
+        let mut shard_books = tir_shard::PalwTirShardBooksV1::default();
         // Receipts off the inbox, waiting for this tick's chain read (a tick that stops early leaves
         // them for the next one). Bounded by `RECEIPT_ARRIVALS_MAX`, oldest out.
         let mut receipt_arrivals: std::collections::VecDeque<crate::palw_receipt_pool::ArrivedReceiptV1> =
@@ -7834,7 +7906,11 @@ impl PalwPanelService {
                         // signature that is not an ML-DSA-87 signature's length (the audit's
                         // one-to-eight-byte junk) — no key verifies either, and neither may take a
                         // place in the queue.
-                        crate::palw_receipt_pool::receipt_arrival_push_v1(&mut receipt_arrivals, &bytes);
+                        // RFC-0006: a cell-masked receipt has its own queue and pool (borsh refuses trailing bytes, so no other
+                        // version decodes as a V4 receipt and it decodes as none of them).
+                        if !tir_shard::palw_tir_shard_arrival_push_v1(&mut shard_books.arrivals, &bytes) {
+                            crate::palw_receipt_pool::receipt_arrival_push_v1(&mut receipt_arrivals, &bytes);
+                        }
                     }
                     // ADR-0077 Decision 8. Held, not judged: the seat binds an opening to the
                     // claim's roots and replays the interval before believing anything in it.
@@ -8308,6 +8384,23 @@ impl PalwPanelService {
                     },
                 )
                 .await;
+            }
+
+            // **RFC-0006: the accusations a sharded seat's cells found**, last tick, ride the court's carrier path as the IR
+            // one-move accusations they are (`TirShardCourtAccused`).
+            if !shard_books.findings.is_empty() || !shard_books.demands.is_empty() {
+                self.tir_shard_file_findings_v1(
+                    &session,
+                    &mut shard_books,
+                    &mut tir_court::PalwTirOneMoveBooksV1 {
+                        challenged: &mut challenged,
+                        accused: &mut accused,
+                        court_pending: &mut court_pending,
+                        court_due: &mut court_due,
+                        pursuits: &mut tir_annex_pursuits,
+                        openings: &interval_openings,
+                    },
+                );
             }
 
             // **RFC-0003 (carriage node half): a tensor claim's court where no bisection is played** — the
@@ -9908,6 +10001,26 @@ impl PalwPanelService {
 
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
+            // **RFC-0006: a seat of a layer-sharded panel answers for its shard's cells, not for the claim** — its duties leave
+            // the flat loop (whose replay would run the whole class) and are answered by the cell pass below.
+            let (shard_duties, duties): (Vec<_>, Vec<_>) = duties.into_iter().partition(|d| d.tir_shard.is_some());
+            {
+                let keep: HashSet<Hash64> = shard_duties.iter().map(|d| d.claim_id).chain(shard_books.filed.keys().map(|k| k.0)).collect();
+                let admitted = shard_books.admit_arrivals(&session, network_domain, &keep);
+                let refused = admitted.iter().filter(|a| matches!(a, tir_shard::PalwTirShardAdmitV1::BadSignature)).count();
+                if refused > 0 {
+                    crate::palw_backends::note_throttled_v1("tir-shard-receipt-refusals", || {
+                        format!("[{PALW_PANEL}] {refused} cell-masked receipt(s) this tick failed their signature check")
+                    });
+                }
+                if !shard_duties.is_empty() {
+                    self.tir_shard_seat_pass_v1(&session, bond_key, network_domain, current_daa, &shard_duties, &materials, &mut shard_books)
+                        .await;
+                }
+                if !shard_books.filed.is_empty() {
+                    self.tir_shard_resend_v1(bond_key, network_domain, &shard_duties, &mut shard_books).await;
+                }
+            }
 
             // --- the receipt pools: this tick's arrivals, against one read of the tip ---
             //
@@ -12948,6 +13061,33 @@ impl PalwPanelService {
                         }
                     }
                 }
+                // **RFC-0006: what this node carries for layer-sharded panels** — the shards' licensing parts its pool of
+                // cell-masked receipts completes, the registrant's plan declaration, and each held shard's possession proof — on
+                // the Licences site's carrier budget, after every licence a flat claim could take. Nothing runs on a network
+                // that never armed the fence (no plan, no part, no V4 receipt) or in shadow mode.
+                if self.consensus_config.params.palw_tir_shard_active_at(current_daa) && !self.config.tir_shard_shadow {
+                    let mut offers: Vec<(String, PalwConsensusObjectV2, Option<Hash64>)> = shard_books
+                        .parts_to_offer(&session, current_daa)
+                        .into_iter()
+                        .map(|(claim, object)| (format!("a layer-shard licensing part of claim {claim}"), object, Some(claim)))
+                        .collect();
+                    offers.extend(
+                        self.tir_shard_objects_v1(&session, bond_key, network_domain, current_daa, &mut shard_books)
+                            .await
+                            .into_iter()
+                            .map(|(what, object)| (what, object, None)),
+                    );
+                    for (what, object, part_of) in offers {
+                        if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
+                            break;
+                        }
+                        if self.carry_object_v1(&session, &object, &what, current_daa, &mut funding, &mut inflight).await
+                            && let Some(claim) = part_of
+                        {
+                            shard_books.note_part_carried(claim, current_daa);
+                        }
+                    }
+                }
                 // **P2-6: the licences' turn passes the slot to the priority lane** when the collector
                 // had nothing to carry, in the same tick.
                 slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);
@@ -13672,6 +13812,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
+        // RFC-0006 (tags 91-93): layer-sharded panels.
+        PalwConsensusObjectV2::TirShardPlanDeclared { .. } => "TirShardPlanDeclared",
+        PalwConsensusObjectV2::TirShardReceiptLicensed { .. } => "TirShardReceiptLicensed",
+        PalwConsensusObjectV2::TirSeatReadinessProved { .. } => "TirSeatReadinessProved",
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
         PalwConsensusObjectV2::CourtGenRootClaimed { .. } => "CourtGenRootClaimed",
@@ -17548,6 +17692,7 @@ mod seat_duty_panel_key_tests {
             free_prompt: false,
             work_leaves: 0,
             job_identity: Hash64::default(),
+            tir_shard: None,
         }
     }
 
@@ -18457,6 +18602,7 @@ mod seat_r_tests {
             free_prompt: false,
             work_leaves: 0,
             job_identity: Hash64::default(),
+            tir_shard: None,
         }
     }
 
@@ -21769,7 +21915,12 @@ mod p2_6_da_accusation_policy {
             4,
             "the canonical claim, an evaluation claim (RFC-0004 A10), the class registration, the possession proofs"
         );
-        assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
+        assert_eq!(
+            gate("Licences"),
+            4,
+            "the collector's licences; the supplementary collector's entry and each offer (F4 part 2); RFC-0006's carriage of a layer-shard part, \
+             plan declaration or shard possession proof"
+        );
         let supplementary = sites.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let licences_at = sites.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
         let priority_after = sites.find("slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);").expect("the priority lane after");
