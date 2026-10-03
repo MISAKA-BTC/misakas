@@ -8578,6 +8578,10 @@ struct PalwAttemptOriginV1 {
     /// records it as the claim's `job_identity` where it is the anchor the execution key was
     /// derived under.
     job_anchor: Hash64,
+    /// **ADR-0165: the colour this attempt has in the accepting block's mergeset** — `true` for the block's own attempt
+    /// (a chain block is on the selected chain) and for a merged attempt that is not in `extras.merged_reds`. The floor
+    /// state machine reads it: a RED REAL attempt never extends a Probe or Normal.
+    blue: bool,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -10391,13 +10395,14 @@ pub enum PalwStateV2Error {
         "bond {bond:?} holds {unlicensed} unlicensed claims of class {class}, its share of the class is {share} (ADR-0152 T-2(a))"
     )]
     BondClassShareExceeded { bond: PalwBondKeyV2, class: Hash64, unlicensed: u32, share: u64 },
-    /// **ADR-0165 A″: the base floor is the bonded fallback, accepted only while the chain is idle** — a REAL attempt
-    /// (any class but the base) was accepted within the last `PALW_REAL_IDLE_K_SLOTS_V1` slots (`last_real`). Past
+    /// **ADR-0165 A″: the base floor is the bonded fallback, accepted only while the floor state is Idle** — REAL work is
+    /// flowing (a Probe is open, or the state is Normal): `state` is the floor state at `daa`, already advanced to it. Past
     /// `palw_floor_reserve_v1` a floor attempt is refused by name; checked before any write, so step 4 skips a refused
-    /// own attempt and a merged one is skipped generically: no claim, so no reward and no fork-choice weight. A floor
-    /// attempt that IS accepted (idle) keeps today's bonded weight and reward. Claims taken before the fence settle as before.
-    #[error("the base class {class} is the idle-only fallback: a REAL attempt was accepted at DAA {last_real}, inside the last K slots (ADR-0165)")]
-    FloorNotIdle { class: Hash64, last_real: u64 },
+    /// own attempt and a merged one is skipped generically: no claim, so no reward and no PALW weight (it is still a block
+    /// in the DAG and in GHOSTDAG's colouring — ADR-0165 §00.2). A floor attempt that IS accepted (Idle) keeps today's
+    /// bonded weight and reward. Claims taken before the fence settle as before.
+    #[error("the base class {class} is the idle-only fallback: at DAA {daa} the chain is {state} (ADR-0165: floors are refused until it is idle)")]
+    FloorNotIdle { class: Hash64, daa: u64, state: crate::palw_real_share_v1::PalwFloorStateV1 },
     /// **ADR-0160 F-B: a batch licence (tag 59) below `Params::palw_capacity_batch_licence`.** The
     /// acceptance layer refuses it first; the block stands and nothing folds.
     #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
@@ -10883,11 +10888,11 @@ pub struct PalwChainStateV2 {
     /// seats' shares), written when its panel binds and dropped when the claim leaves the chain's live phases. The same
     /// tail, `0xE1`.
     tir_shard_claims: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
-    /// **ADR-0165: the rolling ledger of Final real-class attempt claims and the floor reserve's mode**
-    /// (`crate::palw_real_share_v1`): bucket index -> count, plus two sentinel keys holding the mode and
-    /// the last bucket evaluated. Written only past `Params::palw_floor_reserve_v1`; enters the root and
-    /// the carriage (tail `0xEA`) only when non-empty, so a dormant network roots exactly as before.
-    real_work: BTreeMap<u64, u64>,
+    /// **ADR-0165: the floor state** (`crate::palw_real_share_v1`): Idle, Probe or Normal, moved by `palw_floor_step_v1`
+    /// from the REAL attempts this branch's fold fully accepted. `None` is the default (Idle, no probe has ended); written
+    /// only past `Params::palw_floor_reserve_v1`; enters the root and the carriage (tail `0xEA`) only when `Some`, so a
+    /// dormant network roots exactly as before. Part of the carriage, so a pruning snapshot carries it.
+    floor_state: Option<crate::palw_real_share_v1::PalwFloorStateV1>,
     /// **Lane PL part E (ADR-0166): each bond's availability row** — assignments and credited receipts over a rolling window,
     /// read only by the stake-weighted draw's weight past `Params::palw_seat_availability`. Enters the root and the carriage
     /// (tail `0xE6`) only once written, which nothing below the fence can do.
@@ -11401,7 +11406,7 @@ impl PalwChainStateV2 {
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             tir_shard_plans: BTreeMap::new(),
             tir_shard_claims: BTreeMap::new(),
-            real_work: BTreeMap::new(),
+            floor_state: None,
             seat_availability: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
@@ -12698,9 +12703,10 @@ impl PalwChainStateV2 {
         self.panels.iter().filter(|(_, panel)| panel.bound_daa == bound_daa).map(|(claim, _)| *claim).collect()
     }
 
-    /// **ADR-0165: the floor reserve's rolling ledger** (`crate::palw_real_share_v1`).
-    pub fn real_work_ledger(&self) -> &BTreeMap<u64, u64> {
-        &self.real_work
+    /// **ADR-0165: the floor state as stored** — the default (Idle, no probe ended) where nothing was ever written. Not
+    /// advanced to any DAA: ask [`crate::palw_real_share_v1::PalwFloorStateV1::admits_floor_at`] for a gate.
+    pub fn floor_state_v1(&self) -> crate::palw_real_share_v1::PalwFloorStateV1 {
+        self.floor_state.unwrap_or_default()
     }
 
     /// Lane PL part E (tests): install an availability row directly.
@@ -13778,10 +13784,11 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"tir_shard_plans", &self.tir_shard_plans).as_byte_slice());
             state.update(collection_root(b"tir_shard_claims", &self.tir_shard_claims).as_byte_slice());
         }
-        // **ADR-0165.** Its own block, for the same reason: empty until a Final real-class claim is
-        // recorded past `Params::palw_floor_reserve_v1`, which nothing below the fence can do.
-        if !self.real_work.is_empty() {
-            state.update(collection_root(b"real_work", &self.real_work).as_byte_slice());
+        // **ADR-0165.** Its own block, for the same reason: `None` until a REAL attempt is accepted past
+        // `Params::palw_floor_reserve_v1`, which nothing below the fence can do.
+        if let Some(floor) = &self.floor_state {
+            state.update(b"floor_state_v1");
+            state.update(&borsh::to_vec(floor).expect("a floor state is borsh-serializable"));
         }
         if !self.seat_availability.is_empty() {
             state.update(collection_root(b"seat_availability", &self.seat_availability).as_byte_slice());
@@ -15889,12 +15896,11 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
         new: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
     },
-    /// **104: one row of the Useful Work Transition's ledger** (`real_work`, ADR-0165). Appended at the
-    /// end of the enum; written only past `palw_floor_reserve_v1`, so no stored delta carries it below.
+    /// **104: the Useful Work Transition's floor state changed** (`floor_state`, ADR-0165): `None` is the default. Written
+    /// only past `palw_floor_reserve_v1`, so no stored delta carries it below.
     RealWork {
-        key: u64,
-        old: Option<u64>,
-        new: Option<u64>,
+        old: Option<crate::palw_real_share_v1::PalwFloorStateV1>,
+        new: Option<crate::palw_real_share_v1::PalwFloorStateV1>,
     },
     /// A row of the capacity ledger was written or dropped (**105**, after RFC-0007's 101, RFC-0006's 102–103 and ADR-0165's 104; ADR-0164 — F-EM's per-DAA
     /// budget, F-M1's rider marks and F-K's breaker, one entry for all three). Dormant on every network below the three fences.
@@ -16793,14 +16799,18 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
-        // **ADR-0165 A″: the base floor is the idle-only bonded fallback.** First, before any lifecycle or room question.
+        // **ADR-0165 A″: the base floor is the idle-only bonded fallback.** First, before any lifecycle or room question:
+        // the floor state advanced to `now_daa` must be Idle. (The fold advances it at the block's start and after every REAL
+        // attempt it accepts, so a floor attempt reads the state at its place in the fold's order.)
         if incoming == PalwGatedClaimV1::Attempt
             && self.params.floor_reserve_active_at(now_daa)
             && *class_id == self.params.base_class_id()
-            && !crate::palw_real_share_v1::palw_real_idle_at_v1(&self.state.real_work, now_daa)
         {
-            let last_real = crate::palw_real_share_v1::palw_real_last_accept_v1(&self.state.real_work).unwrap_or(0);
-            return Err(PalwStateV2Error::FloorNotIdle { class: *class_id, last_real });
+            let state = self.state.floor_state_v1();
+            if !state.admits_floor_at(now_daa) {
+                let state = crate::palw_real_share_v1::palw_floor_step_v1(state, now_daa, None);
+                return Err(PalwStateV2Error::FloorNotIdle { class: *class_id, daa: now_daa, state });
+            }
         }
         // ADR-0160 X-I5: past `palw_capacity_escrow_at_licence` no attempt of a class C7 by its window
         // but absent from C7's list — its escrow term would be priced as attributable.
@@ -19613,14 +19623,34 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    fn write_real_work(&mut self, key: u64, new: Option<u64>) {
-        let old = match new {
-            Some(v) => self.state.real_work.insert(key, v),
-            None => self.state.real_work.remove(&key),
-        };
+    /// **ADR-0165: write the floor state** (canonical: the default is `None`), one delta entry per change.
+    fn write_floor_state(&mut self, new: Option<crate::palw_real_share_v1::PalwFloorStateV1>) {
+        let old = self.state.floor_state;
         if old != new {
-            self.entries.push(PalwDeltaEntryV2::RealWork { key, old, new });
+            self.state.floor_state = new;
+            self.entries.push(PalwDeltaEntryV2::RealWork { old, new });
         }
+    }
+
+    /// **ADR-0165: the floor state's time step, at the start of a block's fold** — Normal and Probe expire here, and nowhere
+    /// else is time read. A no-op below `Params::palw_floor_reserve_v1`.
+    fn advance_floor_state(&mut self, daa: u64) {
+        if !self.params.floor_reserve_active_at(daa) {
+            return;
+        }
+        let next = crate::palw_real_share_v1::palw_floor_step_v1(self.state.floor_state_v1(), daa, None);
+        self.write_floor_state(next.canonical());
+    }
+
+    /// **ADR-0165: one REAL attempt FULLY ACCEPTED** — every check passed and its claim is about to be written — steps the
+    /// floor state at the accepting block's DAA, with the colour it had in that block's mergeset.
+    fn note_real_accepted(&mut self, daa: u64, blue: bool) {
+        let next = crate::palw_real_share_v1::palw_floor_step_v1(
+            self.state.floor_state_v1(),
+            daa,
+            Some(crate::palw_real_share_v1::PalwRealAcceptedV1 { blue }),
+        );
+        self.write_floor_state(next.canonical());
     }
 
     fn write_class_court_window(&mut self, key: Hash64, new: Option<u64>) {
@@ -28156,6 +28186,9 @@ pub fn palw_v2_pre_object_base_v1(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
+    // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
+    //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
+    builder.advance_floor_state(ctx.daa_score);
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -28529,6 +28562,9 @@ pub fn apply_palw_transition_v7(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
+    // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
+    //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
+    builder.advance_floor_state(ctx.daa_score);
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -28740,6 +28776,7 @@ pub fn apply_palw_transition_v7(
                     execution_key: own_execution_key,
                     carrying_bits,
                     job_anchor: extras.own_job_anchor,
+                    blue: true,
                 },
             );
             builder.room_exempt_class = None;
@@ -28863,6 +28900,8 @@ pub fn apply_palw_transition_v7(
                             // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
                             // byte-identical to before. Read before the &mut borrow of `builder`.
                             let escrows_reward = builder.extras.audit_2026_09_11_deep_active;
+                            // ADR-0165: its colour in THIS block's mergeset, read before the &mut borrow of `builder`.
+                            let blue = !builder.extras.merged_reds.contains(&merged.carrying_block);
                             match apply_attempt(
                                 &mut builder,
                                 ctx,
@@ -28877,6 +28916,7 @@ pub fn apply_palw_transition_v7(
                                     execution_key: merged.execution_key,
                                     carrying_bits: merged.bits,
                                     job_anchor: merged.job_anchor,
+                                    blue,
                                 },
                             ) {
                                 Ok(()) => None,
@@ -37218,6 +37258,11 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// **ADR-0165: the reds of the accepting block's mergeset** (`GhostdagData::mergeset_reds`), set by the processor. The
+    /// floor state machine reads a merged attempt's colour from it — a carrying block in the set is RED, every other
+    /// (and the block's own attempt) is BLUE. Empty by `Default`: nothing is red, so a caller that merges no work (the
+    /// rehearsals, genesis) needs no mergeset.
+    pub merged_reds: std::collections::BTreeSet<BlockHash>,
     /// ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every class's
     /// work — where the node computes the shadow; `None` folds no shadow.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
@@ -38900,6 +38945,9 @@ fn attach_riders_v1(
                 execution_key,
                 carrying_bits: bits,
                 job_anchor: anchor,
+                // ADR-0165 x ADR-0164 (the int-12 integration): a rider rides an object the accepting block carries — its txs are
+                // accepted, so it is not a merged RED — and is its own claim, so the floor state machine counts it as a blue REAL attempt.
+                blue: true,
             },
         )
         .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
@@ -39178,11 +39226,11 @@ fn apply_attempt(
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
     builder.reserve_for_claim(&claim)?;
-    // ADR-0165: a REAL attempt (any class but the base) accepted is the idle ledger's last-accept DAA.
+    // **ADR-0165: a REAL attempt (any class but the base) FULLY ACCEPTED is one event of the floor state machine** — every
+    // check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal restores. Its
+    // colour: BLUE for the block's own attempt (a chain block), the mergeset's for a merged one.
     if builder.params.floor_reserve_active_at(ctx.daa_score) && claim.class_id != builder.params.base_class_id() {
-        if let Some((key, _old, new)) = crate::palw_real_share_v1::palw_real_accept_note_v1(&builder.state.real_work, ctx.daa_score) {
-            builder.write_real_work(key, new);
-        }
+        builder.note_real_accepted(ctx.daa_score, origin.blue);
     }
     builder.write_claim(claim_id, Some(claim));
     if let Some(read) = issuance {
@@ -39593,7 +39641,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::VertexRow { table, key, old, new } => apply_vertex_row_v1(state, *table, key, old, new, revert)?,
         PalwDeltaEntryV2::TirShardPlan { key, old, new } => swap_write!(state.tir_shard_plans, key, old, new),
         PalwDeltaEntryV2::TirShardClaim { key, old, new } => swap_write!(state.tir_shard_claims, key, old, new),
-        PalwDeltaEntryV2::RealWork { key, old, new } => swap_write!(state.real_work, key, old, new),
+        PalwDeltaEntryV2::RealWork { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.floor_state != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("the floor state does not match the delta's expectation"));
+            }
+            state.floor_state = *install;
+        }
         // ADR-0164: the capacity ledger, verify-then-install.
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
@@ -39978,8 +40032,8 @@ pub struct PalwStateCarriageV2 {
     pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
     /// RFC-0006: the per-shard claim records, in tail `0xE1`.
     pub tir_shard_claims: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
-    /// ADR-0165: the Useful Work Transition's ledger, in appended tail `0xEA`, present only when non-empty.
-    pub real_work: BTreeMap<u64, u64>,
+    /// ADR-0165: the Useful Work Transition's floor state, in appended tail `0xEA`, present only when `Some`.
+    pub floor_state: Option<crate::palw_real_share_v1::PalwFloorStateV1>,
     pub seat_availability: BTreeMap<PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
@@ -40318,9 +40372,9 @@ const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 /// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
 const PALW_CARRIAGE_TIR_SHARD_TAIL_V1: u8 = 0xE1;
 
-/// **ADR-0165: the Useful Work Transition's ledger** (`real_work`). `0xEA`: past `0xE0` (the court
+/// **ADR-0165: the Useful Work Transition's floor state** (`floor_state`). `0xEA`: past `0xE0` (the court
 /// windows) and clear of every tail another lane of the DAA-5,300 release was told to take.
-const PALW_CARRIAGE_REAL_WORK_TAIL_V1: u8 = 0xEA;
+const PALW_CARRIAGE_FLOOR_STATE_TAIL_V1: u8 = 0xEA;
 /// **Lane PL part E (ADR-0166): the seat-availability table's carriage tail.** Written last, only when the table is non-empty.
 const PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1: u8 = 0xE6;
 
@@ -40646,9 +40700,9 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.tir_shard_plans.serialize(writer)?;
             self.tir_shard_claims.serialize(writer)?;
         }
-        if !self.real_work.is_empty() {
-            PALW_CARRIAGE_REAL_WORK_TAIL_V1.serialize(writer)?;
-            self.real_work.serialize(writer)?;
+        if let Some(floor) = &self.floor_state {
+            PALW_CARRIAGE_FLOOR_STATE_TAIL_V1.serialize(writer)?;
+            floor.serialize(writer)?;
         }
         if !self.seat_availability.is_empty() {
             PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1.serialize(writer)?;
@@ -40834,8 +40888,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut tir_shard_plans = BTreeMap::new();
         let mut tir_shard_claims = BTreeMap::new();
         let mut seen_tir_shard = false;
-        let mut real_work = BTreeMap::new();
-        let mut seen_real_work = false;
+        let mut floor_state = None;
+        let mut seen_floor_state = false;
         let mut seat_availability = BTreeMap::new();
         let mut seen_seat_availability = false;
         loop {
@@ -41089,9 +41143,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     tir_shard_plans = BTreeMap::deserialize_reader(reader)?;
                     tir_shard_claims = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_REAL_WORK_TAIL_V1 if !seen_real_work => {
-                    seen_real_work = true;
-                    real_work = BTreeMap::deserialize_reader(reader)?;
+                PALW_CARRIAGE_FLOOR_STATE_TAIL_V1 if !seen_floor_state => {
+                    seen_floor_state = true;
+                    floor_state = Some(crate::palw_real_share_v1::PalwFloorStateV1::deserialize_reader(reader)?);
                 }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
@@ -41231,7 +41285,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             vertex,
             tir_shard_plans,
             tir_shard_claims,
-            real_work,
+            floor_state,
             seat_availability,
         })
     }
@@ -41345,7 +41399,7 @@ impl PalwStateCarriageV2 {
             vertex: state.vertex.clone(),
             tir_shard_plans: state.tir_shard_plans.clone(),
             tir_shard_claims: state.tir_shard_claims.clone(),
-            real_work: state.real_work.clone(),
+            floor_state: state.floor_state,
             seat_availability: state.seat_availability.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
@@ -41562,7 +41616,7 @@ impl PalwStateCarriageV2 {
             vertex: self.vertex,
             tir_shard_plans: self.tir_shard_plans,
             tir_shard_claims: self.tir_shard_claims,
-            real_work: self.real_work,
+            floor_state: self.floor_state,
             seat_availability: self.seat_availability,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
@@ -58688,6 +58742,7 @@ pub(crate) mod tests {
                     // ADR-0164: its round trip is the stage-5–7 suite's.
                     PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
                     PalwDeltaEntryV2::SeatAvailability { .. } => "seat_availability",
+                    PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -58800,7 +58855,6 @@ pub(crate) mod tests {
                     // RFC-0006: their round trips are the layer-shard suite's (`tests/palw_tir_shard_fold.rs`).
                     PalwDeltaEntryV2::TirShardPlan { .. } => "tir_shard_plan",
                     PalwDeltaEntryV2::TirShardClaim { .. } => "tir_shard_claim",
-                    PalwDeltaEntryV2::RealWork { .. } => "real_work",
                 });
             }
         }
@@ -59089,7 +59143,7 @@ pub(crate) mod tests {
             // RFC-0006, after the court window: a layer-shard plan and a claim's per-shard record.
             (102, PalwDeltaEntryV2::TirShardPlan { key, old: None, new: None }),
             (103, PalwDeltaEntryV2::TirShardClaim { key, old: None, new: None }),
-            (104, PalwDeltaEntryV2::RealWork { key: 0, old: None, new: None }),
+            (104, PalwDeltaEntryV2::RealWork { old: None, new: Some(crate::palw_real_share_v1::PalwFloorStateV1::default()) }),
             // ADR-0164 (the capacity ledger), after ADR-0165's.
             (105, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
             (106, PalwDeltaEntryV2::SeatAvailability { key: PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0)), old: None, new: None }),
@@ -59745,7 +59799,7 @@ pub(crate) mod tests {
             vertex: _,
             tir_shard_plans: _,
             tir_shard_claims: _,
-            real_work: _,
+            floor_state: _,
             seat_availability: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
@@ -69395,6 +69449,7 @@ pub(crate) mod tests {
 
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
+                merged_reds: Default::default(),
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,
@@ -69650,6 +69705,7 @@ pub(crate) mod tests {
             assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
+                merged_reds: Default::default(),
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,
