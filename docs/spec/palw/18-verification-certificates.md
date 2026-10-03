@@ -60,14 +60,14 @@ Contents:
 
 | Space | Allocation |
 | --- | --- |
-| Object tags (`PalwConsensusObjectV2`, spec 17 §17.0: the next free) | **91** `VerificationVertexV1`; **92** `VertexEquivocationV1`; **93** `TrapCommittedV1`; **94** `TrapRevealedV1` (Part IV.1) |
+| Object tags (`PalwConsensusObjectV2`, spec 17 §17.0: the next free) | **100** `VerificationVertexV1`; **101** `VertexEquivocationV1`; **102** `TrapCommittedV1`; **103** `TrapRevealedV1` (Part IV.1) |
 | Delta entry (the next free after 100, `ClassCourtWindow`; spec 17 §17.0 holds 101–103 free) | **101** `PalwDeltaEntryV2::VertexRow { table, key, old, new }`; table ids 1 rounds, 2 tallies, 3 held, **4 witness profiles, 5 audit rows, 6 trap rows, 7 capped claims** (Parts II and IV ride the same entry) |
 | Carriage tail (after `0xE0`, the court windows') | **`0xE4`** the vertex tables and, in the same struct, the mesh's four |
 | Root block | `vertex/v1`, after `improvement-eval/v1`: the collection roots `vertex_rounds`, `vertex_tallies`, `vertex_held`; hashed only when any table holds a row. **`mesh/v1`** after it: `mesh_witness`, `mesh_audits`, `mesh_traps`, `mesh_capped`; hashed only when any of the four holds a row |
 | Signing context | `misaka-palw/verification-vertex/mldsa87/v1` |
 | Hash domains | `misaka-palw/verification-vertex-message/v1`, `-leaf/v1`, `-node/v1`, `misaka-palw/vertex-equivocation-key/v1`; `misaka-palw/mesh/trap-commitment/v1`, `.../trap-committed-message/v1`, `.../trap-revealed-message/v1`, `.../audit-draw/v1`, `.../trap-slot/v1`, `.../trace-manifest/v2`; signing contexts `misaka-palw/mesh/trap-committed/mldsa87/v1`, `.../trap-revealed/mldsa87/v1` |
 
-A lane that allocates delta 101, tail `0xE4` or object tags 93 and 94 first renumbers at the integration; nothing else changes (the lead assigns the final tags: lanes S and U hold 91–94 on their own branches).
+Object tags 100–103 are this lane's range (the lead assigned 100–109 to RFC-0007; lanes S and U hold 91–94). Delta 101 and tail `0xE4` are the lane's own; a collision there renumbers at the integration and nothing else changes.
 
 ---
 
@@ -498,10 +498,10 @@ first answer; `result` is 0 (match) or 1 (mismatch), anything else is refused by
 nothing. An audit leaf below the fence is refused by name by the acceptance gate and the fold.
 
 **18.16.4 Traps** (open question 7). A bonded **setter** drawn by the slot lottery (`palw_trap_slot_drawn_v1`: a uniform ticket over `(bond, ⌊DAA /
-100⌋)` against `PALW_TRAP_RATE_BP_V1` = 100 of 10,000, i.e. 1 %) carries `TrapCommittedV1 { setter_bond, commitment, signature }` (tag 93) with
+100⌋)` against `PALW_TRAP_RATE_BP_V1` = 100 of 10,000, i.e. 1 %) carries `TrapCommittedV1 { setter_bond, commitment, signature }` (tag 102) with
 `commitment = H(claim ‖ fault leaf ‖ tiles ‖ salt)`, reserving a 100 MSK deposit (one trap open per setter, at most 1,024 open). It then produces a claim of
 its own with a fault planted in committed tile `fault_leaf` of `tiles` (at most 64), and after the audit window carries `TrapRevealedV1 { setter_bond,
-claim, fault_leaf, tiles, salt, signature }` (tag 94), admissible only for **the setter's own audited claim**, after `audit_end` and no later than
+claim, fault_leaf, tiles, salt, signature }` (tag 103), admissible only for **the setter's own audited claim**, after `audit_end` and no later than
 `row_end`. The fold: releases the deposit and spends the commitment; for each drawn auditor whose ticket landed on the planted tile
 (`ticket % tiles == fault_leaf`) — **slashes `penalty` from one that attested a match, pays the bounty (5 audit pays, from the reserve) to one that
 attested the mismatch**; marks the row settled (a second reveal of the claim changes nothing); and **voids the trap claim without slashing its

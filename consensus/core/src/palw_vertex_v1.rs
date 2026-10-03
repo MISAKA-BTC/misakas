@@ -6,7 +6,7 @@
 //!
 //! A seat signs **one vertex per round**: the Merkle root of every verdict it reached that round, with the verdicts
 //! themselves carried as leaves ([`PalwVertexLeafV1`]). The chain carries a vertex once, as a consensus object
-//! (`PalwConsensusObjectV2::VerificationVertexV1`, tag 91). The fold **tallies** its `Verdict` leaves: a leaf counts
+//! (`PalwConsensusObjectV2::VerificationVertexV1`, tag 100). The fold **tallies** its `Verdict` leaves: a leaf counts
 //! toward its claim under exactly the conditions `validate_receipt_coverage_v2` applies to a receipt today
 //! ([`palw_vertex_leaf_fate_v1`]), and when a claim's counted `Valid` leaves reach the panel's quorum the fold applies
 //! the licence itself — **the licence is the tally**, and no licence object is carried. The licensing rule is not
@@ -22,7 +22,7 @@
 //! # Equivocation
 //!
 //! Two validly signed vertices of one `(seat_bond, round)` with different roots are an equivocation
-//! ([`PalwVertexEquivocationV1`], object tag 92). No court is needed: two signatures over one round are the whole proof.
+//! ([`PalwVertexEquivocationV1`], object tag 101). No court is needed: two signatures over one round are the whole proof.
 //! The fold slashes [`PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1`] ‰ of the bond, forfeits every lock the seat holds
 //! on a claim either vertex names, and ejects the bond (a forced retirement).
 //!
@@ -259,7 +259,7 @@ impl PalwVerificationVertexV1 {
     }
 }
 
-/// **Two vertices of one `(seat, round)` with different roots** (RFC-0007 §I.6; object tag 92). Headers carry the signatures;
+/// **Two vertices of one `(seat, round)` with different roots** (RFC-0007 §I.6; object tag 101). Headers carry the signatures;
 /// the leaves of either side ride too, when the filer has them, so the fold can forfeit the seat's locks on the claims they
 /// name (a side with no leaves names none).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]

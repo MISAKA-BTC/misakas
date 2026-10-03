@@ -29,8 +29,8 @@
 //! [`PALW_AUDIT_PAY_PERMILLE_V1`] ‰ of the claim's escrowed reward per attested audit out of the panel reserve.
 //!
 //! **Traps** (the verifier's dilemma): a bonded setter drawn by the slot lottery at [`PALW_TRAP_RATE_BP_V1`] carries
-//! `TrapCommitted { H(claim ‖ fault leaf ‖ tiles ‖ salt) }` (tag 93), produces a claim of its own with a fault planted in one of
-//! `tiles` committed tiles, and after the audit window carries `TrapRevealed` (tag 94). The fold checks the commitment; an
+//! `TrapCommitted { H(claim ‖ fault leaf ‖ tiles ‖ salt) }` (tag 102), produces a claim of its own with a fault planted in one of
+//! `tiles` committed tiles, and after the audit window carries `TrapRevealed` (tag 103). The fold checks the commitment; an
 //! auditor whose draw landed on the planted tile (`ticket % tiles == fault leaf`) and who attested a match is slashed the penalty, one
 //! who attested the mismatch earns the bounty, the trap claim is voided **without slashing its setter**, and a setter that never
 //! reveals forfeits its deposit.
@@ -371,7 +371,7 @@ pub fn palw_mesh_audit_draw_v1(seed: &Hash64, candidates: &[PalwAuditCandidateV1
 // Part IV.1: traps
 // ---------------------------------------------------------------------------------------------
 
-/// **`TrapCommitted`** (object tag 93): a setter commits to a planted fault before it carries the claim.
+/// **`TrapCommitted`** (object tag 102): a setter commits to a planted fault before it carries the claim.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTrapCommittedV1 {
     pub setter_bond: PalwBondKeyV2,
@@ -381,7 +381,7 @@ pub struct PalwTrapCommittedV1 {
     pub signature: Vec<u8>,
 }
 
-/// **`TrapRevealed`** (object tag 94): the claim, the planted tile and the salt that open a commitment.
+/// **`TrapRevealed`** (object tag 103): the claim, the planted tile and the salt that open a commitment.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTrapRevealedV1 {
     pub setter_bond: PalwBondKeyV2,

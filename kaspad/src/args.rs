@@ -405,7 +405,7 @@ pub struct Args {
     /// line only, like the salt.
     #[serde(skip)]
     pub palw_drill_held_chunks_at: Option<u64>,
-    /// **DRILL ONLY: arm RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 91 and 92) at this DAA**
+    /// **DRILL ONLY: arm RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 100 and 101) at this DAA**
     /// (`config::drill::palw_drill_vertex_at_v1`): a seat signs one vertex a round of its verdicts, the fold tallies them and licenses a
     /// claim at quorum, and two vertices of one round are slashed. It needs `palw_verification_v2`, `palw_rcore_plus`,
     /// `palw_unavailable_abstains`, `palw_panel_economy` and `palw_objective_offence` in force at or below it. Command line only, like
@@ -417,7 +417,7 @@ pub struct Args {
     /// verdict can name a witness chunk. It needs `palw_tir_v1` and `palw_unavailable_abstains` in force at or below it. Command line only.
     #[serde(skip)]
     pub palw_drill_witness_at: Option<u64>,
-    /// **DRILL ONLY: arm RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 93 and 94) at this DAA**
+    /// **DRILL ONLY: arm RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 102 and 103) at this DAA**
     /// (`config::drill::palw_drill_audit_mesh_at_v1`). It needs `palw_verification_vertex_v1`, `palw_tir_v1` and `palw_panel_economy` in
     /// force at or below it. Command line only.
     #[serde(skip)]
@@ -1891,7 +1891,7 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(u64))
                 .help(
                     "With --palw-drill-genesis-salt only: arm RFC-0007's verification vertex (palw_verification_vertex_v1, object \
-                     tags 91 and 92) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height \
+                     tags 100 and 101) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height \
                      another fence uses, and unless palw_verification_v2, palw_rcore_plus, palw_unavailable_abstains, \
                      palw_panel_economy and palw_objective_offence are in force at or below it.",
                 ),
@@ -1913,8 +1913,8 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(u64))
                 .help(
-                    "With --palw-drill-genesis-salt only: arm RFC-0007 Part IV.1's audit mesh (palw_audit_mesh_v1, object tags 93 and \
-                     94) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence \
+                    "With --palw-drill-genesis-salt only: arm RFC-0007 Part IV.1's audit mesh (palw_audit_mesh_v1, object tags 102 and \
+                     103) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence \
                      uses, and unless palw_verification_vertex_v1, palw_tir_v1 and palw_panel_economy are in force at or below it.",
                 ),
         )

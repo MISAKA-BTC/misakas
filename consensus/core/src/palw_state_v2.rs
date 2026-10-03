@@ -7865,41 +7865,41 @@ pub enum PalwConsensusObjectV2 {
     } = 90,
     /// **RFC-0007 Part I (spec 18): a seat's verification vertex** — one signed statement of every verdict the seat reached in
     /// one round ([`crate::palw_vertex_v1::PalwVerificationVertexV1`]). The fold tallies its `Verdict` leaves and licenses a
-    /// claim when its panel's counted `Valid` leaves reach quorum; `Held` leaves are DA attestations. **Its tag is 91, declared
+    /// claim when its panel's counted `Valid` leaves reach quorum; `Held` leaves are DA attestations. **Its tag is 100, declared
     /// explicitly** (spec 17 section 17.0: the next free tag). Below `palw_verification_vertex_v1` the acceptance walk drops it
     /// by name and the fold refuses it as the second lock.
     VerificationVertexV1 {
         vertex: Box<crate::palw_vertex_v1::PalwVerificationVertexV1>,
-    } = 91,
+    } = 100,
     /// **RFC-0007 §I.6: two vertices of one `(seat, round)` with different roots**
     /// ([`crate::palw_vertex_v1::PalwVertexEquivocationV1`]): the fold slashes the bond 100 ‰, forfeits the seat's locks on the
     /// claims the vertices name and ejects the bond. Unsigned: two signatures over one round are the proof, and anyone may carry
-    /// it. **Its tag is 92.** Dropped by name below the fence.
+    /// it. **Its tag is 101.** Dropped by name below the fence.
     VertexEquivocationV1 {
         evidence: Box<crate::palw_vertex_v1::PalwVertexEquivocationV1>,
-    } = 92,
+    } = 101,
     /// **RFC-0007 Part IV.1 (spec 18): a trap setter's commitment** ([`crate::palw_mesh_v1::PalwTrapCommittedV1`]) — `H(claim ‖
-    /// fault leaf ‖ tiles ‖ salt)`, signed by the setter bond, carried before the trap claim. **Tag 93** (the next free tag after
-    /// this lane's 91 and 92; the integration assigns the final number). Dropped by name below `palw_audit_mesh_v1`.
+    /// fault leaf ‖ tiles ‖ salt)`, signed by the setter bond, carried before the trap claim. **Tag 102** (this lane's range is
+    /// 100 to 109). Dropped by name below `palw_audit_mesh_v1`.
     TrapCommittedV1 {
         trap: Box<crate::palw_mesh_v1::PalwTrapCommittedV1>,
-    } = 93,
+    } = 102,
     /// **RFC-0007 Part IV.1: a trap's reveal** ([`crate::palw_mesh_v1::PalwTrapRevealedV1`]) — the claim, the planted tile and the
     /// salt that open a commitment, after the audit window. The fold slashes the auditors who attested a match on the planted
-    /// tile, pays those who attested the mismatch, and voids the trap claim without slashing its setter. **Tag 94.**
+    /// tile, pays those who attested the mismatch, and voids the trap claim without slashing its setter. **Tag 103.**
     TrapRevealedV1 {
         reveal: Box<crate::palw_mesh_v1::PalwTrapRevealedV1>,
-    } = 94,
+    } = 103,
 }
 
-/// **Is this object an RFC-0007 audit-mesh move** (tag 93 or 94) — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_audit_mesh_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it, and the
 /// fold refuses it as the second lock.
 pub fn palw_object_is_mesh_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::TrapCommittedV1 { .. } | PalwConsensusObjectV2::TrapRevealedV1 { .. })
 }
 
-/// **Is this object an RFC-0007 verification vertex move** (tag 91 or 92) — a variant an older build cannot decode and skips
+/// **Is this object an RFC-0007 verification vertex move** (tag 100 or 101) — a variant an older build cannot decode and skips
 /// (A-2)? Below `Params::palw_verification_vertex_v1` the acceptance walk drops it by name before any slot, rent or budget is
 /// charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_vertex_v1(object: &PalwConsensusObjectV2) -> bool {
@@ -32499,14 +32499,14 @@ fn apply_object(
         )));
     }
     match object {
-        // ---- RFC-0007 Part I: the verification vertex (tags 91, 92) ----
+        // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             palw_vertex_fold_v1::apply_vertex_v1(builder, ctx, vertex)?;
         }
         PalwConsensusObjectV2::VertexEquivocationV1 { evidence } => {
             palw_vertex_fold_v1::apply_vertex_equivocation_v1(builder, ctx, evidence)?;
         }
-        // ---- RFC-0007 Part IV.1: the audit mesh's traps (tags 93, 94) ----
+        // ---- RFC-0007 Part IV.1: the audit mesh's traps (tags 102, 103) ----
         PalwConsensusObjectV2::TrapCommittedV1 { trap } => {
             palw_mesh_fold_v1::apply_trap_committed_v1(builder, ctx, trap)?;
         }

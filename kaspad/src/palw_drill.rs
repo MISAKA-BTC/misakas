@@ -87,11 +87,11 @@ pub struct PalwDrillExtraFencesV1 {
     pub fp_v5_at: Option<u64>,
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
-    /// RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 91 and 92).
+    /// RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 100 and 101).
     pub vertex_at: Option<u64>,
     /// RFC-0007 Part II's witness manifest (`palw_witness_manifest_v1`).
     pub witness_at: Option<u64>,
-    /// RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 93 and 94).
+    /// RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 102 and 103).
     pub audit_mesh_at: Option<u64>,
     /// RFC-0007 Part IV.2's capped onboarding (`palw_capped_onboarding_v1`).
     pub capped_at: Option<u64>,
@@ -2194,7 +2194,7 @@ mod tests {
         assert_eq!(manifest["held_chunks_at"], serde_json::Value::Null);
     }
 
-    /// **RFC-0007's verification vertex is a drill flag of its own** (`--palw-drill-vertex-at`, object tags 91 and 92): refused without
+    /// **RFC-0007's verification vertex is a drill flag of its own** (`--palw-drill-vertex-at`, object tags 100 and 101): refused without
     /// the salt; with the salt it ARMS `palw_verification_vertex_v1` at its height and moves nothing else (its prerequisites are armed at
     /// the drill's genesis); the marker keeps it on a line of its own (`vertex_at=`, `none` where a marker written before it has none) and
     /// a stored chain is never reopened under another height; the keyring's manifest names it.
