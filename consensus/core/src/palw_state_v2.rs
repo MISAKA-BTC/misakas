@@ -40432,7 +40432,13 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
         if row.line_id != *line_id {
             return Err(format!("improvement line {line_id}: a row under another id"));
         }
-        if !c.improvement_policies.contains_key(line_id) || !c.improvement_usage.contains_key(line_id) || !c.improvement_pools.contains_key(line_id) {
+        // A `Dissolved` line keeps its header (its policy sequence continues) but `dissolve_if_done_v1` drops its
+        // policy, usage and pool: only a governed line must hold all three (audit 2026-10-04 A-1 — without the
+        // exemption one dissolved line made every tip snapshot, pruning capture and pruned-IBD import refuse).
+        let dissolved = row.status == crate::palw_improve_state_v1::PalwImprovementLineStatusV1::Dissolved;
+        if !dissolved
+            && (!c.improvement_policies.contains_key(line_id) || !c.improvement_usage.contains_key(line_id) || !c.improvement_pools.contains_key(line_id))
+        {
             return Err(format!("improvement line {line_id}: its policy, usage or pool is missing"));
         }
     }
@@ -75614,5 +75620,45 @@ mod improvement_skeleton_tests {
             let bytes = borsh::to_vec(delta).unwrap();
             assert_eq!(&borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta, "the journal round-trips");
         }
+    }
+}
+
+#[cfg(test)]
+mod audit_1004_a1_dissolved_line_carriage {
+    use super::*;
+    use crate::palw_improve_state_v1::{PalwImprovementLineStatusV1, PalwImprovementLineV1};
+
+    fn line(id: Hash64, status: PalwImprovementLineStatusV1) -> PalwImprovementLineV1 {
+        PalwImprovementLineV1 {
+            line_id: id,
+            class_id: Hash64::from_bytes([2; 64]),
+            policy_digest: Hash64::from_bytes([3; 64]),
+            policy_sequence: 1,
+            status,
+            governed_from_daa: 10,
+            head: Hash64::from_bytes([2; 64]),
+            head_seq: 0,
+            next_epoch: 1,
+            open_epoch: None,
+            next_due_daa: u64::MAX,
+            next_check_daa: u64::MAX,
+            barred: vec![],
+            last_promotion: None,
+            regression_epoch: None,
+            regression_check: None,
+        }
+    }
+
+    /// Audit 2026-10-04 A-1: `dissolve_if_done_v1` keeps the line header as `Dissolved` and drops its policy, usage
+    /// and pool — the carriage check must accept that, or every tip snapshot / pruning capture / pruned-IBD import
+    /// refuses from the first dissolved line on. A governed line still needs all three.
+    #[test]
+    fn a_dissolved_line_without_policy_usage_or_pool_is_consistent_and_a_governed_one_is_not() {
+        let id = Hash64::from_bytes([1; 64]);
+        let mut c = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        c.improvement_lines.insert(id, line(id, PalwImprovementLineStatusV1::Dissolved));
+        palw_improvement_carriage_consistent_v1(&c).expect("a dissolved line holds no policy, usage or pool");
+        c.improvement_lines.insert(id, line(id, PalwImprovementLineStatusV1::Governed));
+        assert!(palw_improvement_carriage_consistent_v1(&c).is_err(), "a governed line must hold all three");
     }
 }

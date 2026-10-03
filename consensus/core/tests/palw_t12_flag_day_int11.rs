@@ -284,7 +284,7 @@ fn the_ceilings_are_no_looser_than_the_ir_and_the_improvement_ones_are_the_drill
         assert!(c.max_state_bytes <= ir.max_state_bytes, "{profile:?}: state bytes no looser than the IR's");
         assert_eq!(
             (c.max_position_step_leaves, c.max_job_macs, c.max_job_transcendentals, c.max_job_step_leaves, c.max_stages, c.max_class_bytes, c.max_inflight_claims),
-            (1 << 22, 1 << 46, 1 << 40, 1 << 30, 16, 1 << 21, 16),
+            (1 << 22, 1 << 46, 1 << 40, 1 << 22, 16, 1 << 21, 16),
             "{profile:?}: the drills' values everywhere else"
         );
     }

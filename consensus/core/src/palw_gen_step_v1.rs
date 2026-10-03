@@ -22,6 +22,13 @@
 
 use std::collections::BTreeMap;
 
+/// **The most step leaves a node ever enumerates for one job** (2^22, about 400 MiB of leaves and index).
+/// [`PalwGenStepSpaceV1::new`] checks the closed-form count against it BEFORE enumerating, and no profile's
+/// `max_job_step_leaves` may exceed it (`PalwGenProfileCeilingsV1::within_format_caps`), so an admitted class's
+/// widest job always fits. Audit 2026-10-04 G-1: without the pre-check a court binding over a 2^30-leaf job made
+/// every validating node allocate ~100 GB on the same block.
+pub const PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1: u64 = 1 << 22;
+
 use crate::Hash64;
 use crate::palw_gen_class_v1::PalwGenClassV1;
 use crate::palw_tir_class_v1::PalwTirLayoutV1;
@@ -77,6 +84,10 @@ pub struct PalwGenLeafV1 {
 /// Why a step space or a leaf is refused.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwGenStepErrorV1 {
+    /// The job's closed-form leaf count is past [`PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1`]: refused before a
+    /// single leaf is built (a court's binding check runs on every node inside block acceptance).
+    #[error("the job's {count} step leaves are past the enumeration cap {cap}")]
+    TooManyLeaves { count: u128, cap: u64 },
     #[error("the class: {0}")]
     Class(String),
     #[error("stage {stage}: {msg}")]
@@ -276,6 +287,11 @@ impl PalwGenStepSpaceV1 {
     ) -> Result<Self, PalwGenStepErrorV1> {
         if layouts.len() != pipeline.stages.len() || trips.len() != pipeline.stages.len() {
             return Err(PalwGenStepErrorV1::Class("one layout and one trip count per stage".into()));
+        }
+        // Mandatory pre-enumeration check (audit G-1): count in closed form first, never build past the cap.
+        let count = Self::leaf_count_v1(pipeline, programs, layouts, trips, None, prompt_len)?;
+        if count > PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1 as u128 {
+            return Err(PalwGenStepErrorV1::TooManyLeaves { count, cap: PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1 });
         }
         let stages = pipeline
             .stages

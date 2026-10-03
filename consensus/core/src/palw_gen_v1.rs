@@ -172,7 +172,8 @@ impl PalwGenProfileCeilingsV1 {
         max_state_bytes: u64::MAX,
         max_job_macs: u64::MAX,
         max_job_transcendentals: u64::MAX,
-        max_job_step_leaves: crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        // The enumeration cap, not the ladder's 2^32: a node enumerates a court's job (audit G-1).
+        max_job_step_leaves: crate::palw_gen_step_v1::PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1,
         max_job_cone_work: (misaka_palw_tir::pipeline::MAX_STAGES as u64) << 20,
         max_stages: misaka_palw_tir::pipeline::MAX_STAGES as u8,
         max_class_bytes: (misaka_palw_tir::pipeline::MAX_STAGES * misaka_palw_tir::program::MAX_PROGRAM_BYTES
@@ -202,7 +203,7 @@ impl PalwGenProfileCeilingsV1 {
             return Err("max_position_step_leaves must be at most 2^26");
         }
         if self.max_job_step_leaves > caps.max_job_step_leaves {
-            return Err("max_job_step_leaves must be at most the ladder's 2^32");
+            return Err("max_job_step_leaves must be at most the enumeration cap 2^22");
         }
         if self.max_job_cone_work > caps.max_job_cone_work {
             return Err("max_job_cone_work must be at most 16 · 2^20");
@@ -278,7 +279,7 @@ pub const PALW_DRILL_GEN_PROFILE_CEILINGS_V1: PalwGenProfileCeilingsV1 = PalwGen
     max_state_bytes: 1 << 34,
     max_job_macs: 1 << 46,
     max_job_transcendentals: 1 << 40,
-    max_job_step_leaves: 1 << 30,
+    max_job_step_leaves: 1 << 22,
     max_job_cone_work: 1 << 22,
     max_stages: 16,
     max_class_bytes: 1 << 21,
@@ -305,7 +306,7 @@ pub const PALW_T12_GEN_PROFILE_CEILINGS_V1: PalwGenProfileCeilingsV1 = PalwGenPr
     max_state_bytes: 1 << 34,
     max_job_macs: 1 << 46,
     max_job_transcendentals: 1 << 40,
-    max_job_step_leaves: 1 << 30,
+    max_job_step_leaves: 1 << 22,
     max_job_cone_work: 1 << 16,
     max_stages: 16,
     max_class_bytes: 1 << 21,

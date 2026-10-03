@@ -641,3 +641,28 @@ fn a_text_class_prices_each_image_at_or_above_its_token_floor() {
     assert!(matches!(palw_gen_class_preflight_v1(&vision, &fence()), Err(PalwGenClassErrorV1::Offers(_))));
     assert!(palw_gen_class_preflight_v1(&vision_class(), &fence()).unwrap().image_token_floor.is_empty());
 }
+
+/// Audit 2026-10-04 G-1: the step space counts in closed form and refuses past the enumeration cap BEFORE
+/// building a leaf (a court binding check runs on every node in block acceptance). With `u32::MAX` trips the old
+/// code would have allocated hundreds of GB; this must return at once.
+#[test]
+fn the_step_space_refuses_a_job_past_the_enumeration_cap_before_enumerating() {
+    use kaspa_consensus_core::palw_gen_step_v1::{PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1, PalwGenStepErrorV1, PalwGenStepSpaceV1};
+    let c = class();
+    let (p, progs) = decoded(&c.pipeline, &c.programs);
+    let huge: Vec<u32> = p.stages.iter().map(|_| u32::MAX).collect();
+    let t = std::time::Instant::now();
+    match PalwGenStepSpaceV1::new(&p, &progs, &c.layouts, &huge, 1) {
+        Err(PalwGenStepErrorV1::TooManyLeaves { count, cap }) => {
+            assert_eq!(cap, PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1);
+            assert!(count > cap as u128);
+        }
+        other => panic!("expected TooManyLeaves, got {:?}", other.map(|s| s.leaf_count())),
+    }
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "refused without enumerating");
+    // The format cap equals the enumeration cap, so no profile can admit a job a node would refuse to enumerate.
+    assert_eq!(
+        kaspa_consensus_core::palw_gen_v1::PalwGenProfileCeilingsV1::FORMAT_CAPS_V1.max_job_step_leaves,
+        PALW_GEN_MAX_ENUMERATED_STEP_LEAVES_V1
+    );
+}
