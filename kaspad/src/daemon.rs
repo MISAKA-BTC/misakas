@@ -1590,6 +1590,23 @@ Do you confirm? (y/n)";
                             }
                             None => None,
                         },
+                        // **DRILL ONLY** (`--palw-drill-floor-ignore-policy`): refused off a salted chain by `validate_args`
+                        // and again here, on the chain this node RUNS — the floor producer then draws floor attempts the fold
+                        // refuses (ADR-0165), which on public testnet-12 would only be burning its own blocks.
+                        drill_floor_ignore_policy: match args.palw_drill_floor_ignore_policy {
+                            true if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                                panic!("--palw-drill-floor-ignore-policy is a drill and is a salted testnet-12 drill only")
+                            }
+                            true => {
+                                warn!(
+                                    "PALW DRILL: this producer ignores the floor's idle-only policy (ADR-0165): it will draw floor attempts \
+                                     while the chain's floor state is probe or normal. The fold refuses them (no claim, no reward, no PALW \
+                                     weight); they are still blocks and colour against a slow REAL attempt. That is what the drill shows."
+                                );
+                                true
+                            }
+                            false => false,
+                        },
                         drill_tamper_leaf: match args.palw_drill_tamper_leaf {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")

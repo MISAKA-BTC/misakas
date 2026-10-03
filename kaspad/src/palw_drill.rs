@@ -365,6 +365,13 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
                  --palw-drill-genesis-salt: on a real network a producer that sat on its blocks would only be losing them"
             )));
         }
+        if args.palw_drill_floor_ignore_policy {
+            return Err(refused(
+                "--palw-drill-floor-ignore-policy makes this node's floor producer ignore the idle-only policy (ADR-0165) and needs \
+                 --palw-drill-genesis-salt: on a real network a floor attempt the fold refuses earns nothing and only colours against \
+                 the REAL work that is the point of the chain",
+            ));
+        }
         return Ok(());
     };
     let network = args.network();
@@ -1120,6 +1127,33 @@ mod tests {
             let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
             assert!(Args::parse(argv).is_err(), "{bad} is out of range");
         }
+    }
+
+    /// **`--palw-drill-floor-ignore-policy` is a drill node's flag and nobody else's** (ADR-0165): refused without the salt, by
+    /// name, on public testnet-12 too; a salted drill node takes it; off by default.
+    #[test]
+    fn the_floor_ignore_policy_flag_is_refused_off_a_salted_chain() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
+        let why = refusal(&with(&["--palw-drill-floor-ignore-policy"]));
+        assert!(why.contains("--palw-drill-floor-ignore-policy") && why.contains("needs --palw-drill-genesis-salt"), "{why}");
+        let public = parse(&["--testnet", "--netsuffix=12", "--palw-drill-floor-ignore-policy"]);
+        assert!(refusal(&public).contains("needs --palw-drill-genesis-salt"), "public testnet-12 refuses it");
+        let salted = with(&[&salt_flag, "--palw-drill-floor-ignore-policy"]);
+        assert!(salted.palw_drill_floor_ignore_policy);
+        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes it");
+        assert!(!with(&[&salt_flag]).palw_drill_floor_ignore_policy, "off by default");
+        // It takes no value: `=true` is not a spelling of it.
+        let mut argv: Vec<String> = base.iter().map(|s| (*s).to_owned()).collect();
+        argv.push(salt_flag.clone());
+        argv.push("--palw-drill-floor-ignore-policy=true".to_owned());
+        let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
+        assert!(Args::parse(argv).is_err(), "a switch, not an option");
     }
 
     /// **The flag's own rules**: testnet-12 only, a well-formed salt, no discovery, an explicit peer

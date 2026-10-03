@@ -106,6 +106,12 @@ pub struct PalwProducerConfig {
     /// plus this long** (`palw_drill_real_submit_wait_v1`), emulating an 8k inference's minutes on a drill-sized
     /// class. `None` everywhere but a salted drill chain; the daemon refuses the flag elsewhere.
     pub drill_real_submit_delay: Option<std::time::Duration>,
+    /// **DRILL ONLY (`--palw-drill-floor-ignore-policy`): the floor producer ignores the idle-only policy** (ADR-0165): where
+    /// the producer would hold because the chain's floor state is Probe or Normal (the fold refuses a floor attempt then), it
+    /// draws anyway — the drill's *policy-ignoring floor miner*. Only that one refusal is ignored
+    /// ([`palw_drill_floor_policy_ignored_v1`]); every other hold holds. `false` everywhere but a salted drill chain; the
+    /// daemon refuses the flag elsewhere.
+    pub drill_floor_ignore_policy: bool,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -283,18 +289,39 @@ fn free_prompt_retention_is_owed(
 /// holding at INFO.
 const PALW_PRODUCER_STARVED_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
-/// Log a hold at its own level while it is young, and at ERROR — saying how long nothing has been
-/// produced — once it has outlived [`PALW_PRODUCER_STARVED_AFTER`] since the producer last made progress.
+/// **The level a hold is logged at** ([`log_producer_hold_v1`]): its own (`loud` or not) while it is young, and ERROR — "NOT
+/// PRODUCING" — once it has outlived [`PALW_PRODUCER_STARVED_AFTER`] since the producer last made progress. **Except the floor
+/// producer's hold under the idle-only policy (ADR-0165): it is the design working, not a fault.** While REAL work lands BLUE the
+/// floor producer holds for as long as the REAL stream lasts — hours, when it never stops — and that is neither a warning nor a
+/// starvation; it is info, always. Pure, so the rule is tested without a log.
+pub(crate) fn palw_hold_level_v1(detail: &str, loud: bool, since_progress: std::time::Duration) -> PalwHoldLevelV1 {
+    if kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1(detail) {
+        PalwHoldLevelV1::Info
+    } else if since_progress >= PALW_PRODUCER_STARVED_AFTER {
+        PalwHoldLevelV1::Error
+    } else if loud {
+        PalwHoldLevelV1::Warn
+    } else {
+        PalwHoldLevelV1::Info
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwHoldLevelV1 {
+    Info,
+    Warn,
+    Error,
+}
+
+/// Log a hold at [`palw_hold_level_v1`]'s level; at ERROR it says how long nothing has been produced.
 fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Duration) {
-    if since_progress >= PALW_PRODUCER_STARVED_AFTER {
-        error!(
+    match palw_hold_level_v1(detail, loud, since_progress) {
+        PalwHoldLevelV1::Error => error!(
             "[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}",
             since_progress.as_secs() / 60
-        );
-    } else if loud {
-        warn!("[{PALW_PRODUCER}] holding: {detail}");
-    } else {
-        info!("[{PALW_PRODUCER}] holding: {detail}");
+        ),
+        PalwHoldLevelV1::Warn => warn!("[{PALW_PRODUCER}] holding: {detail}"),
+        PalwHoldLevelV1::Info => info!("[{PALW_PRODUCER}] holding: {detail}"),
     }
 }
 
@@ -474,6 +501,35 @@ pub(crate) fn palw_producer_ready_v1(
 pub(crate) fn palw_producer_binds_at_ceiling_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2;
     facts.binder_due && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)
+}
+
+/// **ADR-0165 §00.9: how long a claim waits for an operator attempt, in DAA slots, before an operator's floor producer that holds
+/// only because of the idle-only policy mines ONE binder.** Half an hour is 15 slots, a day 720: 30 slots (an hour) is far inside the
+/// bind window's backstop (580 DAA past the slot) and far beyond the 3-slot gap at which operator REAL attempts anchor on their own
+/// (so it never fires while they do). At most one binder a node a wait, and the wait is staggered by bond
+/// ([`palw_floor_anchor_duty_stagger_v1`]) so the operators do not all fire in one slot.
+pub(crate) const PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1: u64 = 30;
+
+/// The stagger between operators' anchor duty, 0..=7 slots, from the bond's own transaction id — one operator fires first, its binder
+/// clears `binder_due` at the others before their waits end.
+pub(crate) fn palw_floor_anchor_duty_stagger_v1(bond: &TransactionOutpoint) -> u64 {
+    u64::from(bond.transaction_id.as_byte_slice()[0] % 8)
+}
+
+/// **ADR-0165 §00.9: does the floor producer's idle-only hold give way to ANCHOR DUTY?** Past lane A a claim binds only in a block
+/// that is or merges an OPERATOR's attempt at or past its slot; while the chain is Normal the operators' floor producers hold, and
+/// where the REAL work comes from non-operators no operator attempt exists — the claim waits for the bind window's backstop. A floor
+/// attempt the fold refuses (`FloorNotIdle`) is still an operator attempt by its header, so it anchors: the producer mines it, once,
+/// when a claim has waited [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] slots (plus its stagger) for one. True only for the floor class,
+/// only where the hold is the idle-only refusal and nothing else, and only with `PalwProducerFactsV2::binder_due` (the fence in force,
+/// the bond an operator's, a claim `Provisional` past its slot). Pure, so the rule is tested without a node.
+pub(crate) fn palw_floor_anchor_duty_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1, due_slots: u64, stagger: u64) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
+    facts.binder_due
+        && facts.is_base_class
+        && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2)
+        && facts.class_admission_refusal.as_deref().is_some_and(kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1)
+        && due_slots >= PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1.saturating_add(stagger)
 }
 
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
@@ -864,6 +920,9 @@ impl PalwProducerService {
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
+        let mut last_floor_ignore_at: Option<std::time::Instant> = None;
+        // ADR-0165 §00.9: the DAA at which a claim began waiting for an anchor (`binder_due` true and unbroken).
+        let mut binder_due_since_daa: Option<u64> = None;
         // When this producer last made progress — started, or produced a block. A hold measured from
         // here past `PALW_PRODUCER_STARVED_AFTER` is logged as the failure it is (`log_producer_hold_v1`).
         let mut last_progress_at = std::time::Instant::now();
@@ -939,7 +998,7 @@ impl PalwProducerService {
                     );
                 }
             }
-            let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
+            let Some(mut facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
                 let detail = format!("this network has no ConsensusV2 facts for class {} — nothing to produce", self.config.class_id);
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
@@ -953,6 +1012,25 @@ impl PalwProducerService {
                 }
                 continue;
             };
+            // **DRILL ONLY (`--palw-drill-floor-ignore-policy`): the floor miner that ignores the idle-only policy.** The
+            // refusal the facts carry is the fold's own (`FloorNotIdle`); with the flag this producer draws anyway, so the
+            // drill can show what the fold-level rule does and does not do to a floor miner that does not follow it
+            // (ADR-0165 §00.2: its attempt earns nothing, and still colours classically against a slow REAL one).
+            if palw_drill_floor_policy_ignored_v1(
+                self.config.drill_floor_ignore_policy,
+                facts.is_base_class,
+                facts.class_admission_refusal.as_deref(),
+            ) {
+                if last_floor_ignore_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300)) {
+                    warn!(
+                        "[{PALW_PRODUCER}] DRILL: ignoring the floor policy (--palw-drill-floor-ignore-policy) — drawing a floor attempt \
+                         the fold will refuse: {}",
+                        facts.class_admission_refusal.as_deref().unwrap_or_default()
+                    );
+                    last_floor_ignore_at = Some(std::time::Instant::now());
+                }
+                facts.class_admission_refusal = None;
+            }
             // **The receipt lane, first — and ahead of the attempt lane's readiness.** A certified
             // free-prompt claim whose quantum wins its draw is a receipt block waiting to be mined,
             // and it needs no nonce search — the quantum ticket is the lottery, already decided at
@@ -1022,6 +1100,16 @@ impl PalwProducerService {
             // `palw_producer_ready_v1`.
             let rcore_plus = palw_rcore_plus_reads_v1(&self.consensus_config.params, &session, facts.class_id, &bond, facts.daa_score);
             let ready = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus);
+            // **ADR-0165 §00.9: how long a claim has waited for an anchor** — the DAA at which `binder_due` last turned true and has
+            // stayed so, so the floor producer's anchor duty (below) fires only for a claim that has waited, never for one the
+            // operators' own REAL attempts are about to anchor.
+            match (facts.binder_due, binder_due_since_daa) {
+                (true, None) => binder_due_since_daa = Some(facts.daa_score),
+                (false, _) => binder_due_since_daa = None,
+                (true, Some(_)) => {}
+            }
+            let due_slots = binder_due_since_daa.map_or(0, |since| facts.daa_score.saturating_sub(since));
+            let floor_duty = matches!(&ready, Err(hold) if palw_floor_anchor_duty_v1(&facts, hold, due_slots, palw_floor_anchor_duty_stagger_v1(&bond)));
             // **Lane bind-deadlock (`palw_anchor_at_ceiling`): anchor duty at the ceiling.** A bond
             // whose only hold is its exposure ceiling mines anyway when the block would be the anchor
             // of a claim due at it: past the fence the chain keeps that attempt as a binder (it binds
@@ -1035,6 +1123,15 @@ impl PalwProducerService {
                      claims and carries no claim of its own; palw_anchor_at_ceiling)",
                     facts.daa_score
                 );
+            } else if floor_duty {
+                // **ADR-0165 §00.9: anchor duty under the idle-only hold.** One binder, then the wait starts again.
+                info!(
+                    "[{PALW_PRODUCER}] anchor duty: the floor is held as the idle-only fallback, and a claim has waited {due_slots} slots \
+                     (since DAA {}) for an operator attempt — mining ONE binder, refused by the fold (no claim, no weight) and still an \
+                     operator attempt that binds the due claims",
+                    binder_due_since_daa.unwrap_or(facts.daa_score)
+                );
+                binder_due_since_daa = Some(facts.daa_score);
             } else if let Err(hold) = ready {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
@@ -1714,6 +1811,14 @@ pub(crate) fn palw_drill_real_submit_wait_v1(
         Some(delay) if !is_base_class => delay.saturating_sub(since_template),
         _ => std::time::Duration::ZERO,
     }
+}
+
+/// **DRILL ONLY: is this the floor refusal the drill's floor miner ignores?** (`--palw-drill-floor-ignore-policy`.) True only
+/// with the flag, for the floor class, and when the class-admission refusal the facts carry is the idle-only one
+/// (`FloorNotIdle`, recognised by its words: [`kaspa_consensus_core::palw_real_share_v1::PALW_FLOOR_NOT_IDLE_MARKER_V1`]). Any
+/// other refusal of the floor class, and every refusal of a REAL class, still holds. Pure, so the rule is tested without a node.
+pub(crate) fn palw_drill_floor_policy_ignored_v1(ignore: bool, is_base_class: bool, refusal: Option<&str>) -> bool {
+    ignore && is_base_class && refusal.is_some_and(kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1)
 }
 
 /// **What an attempt's announcement carries**: the retained material, or — on a drill that serves
@@ -2754,5 +2859,150 @@ mod p6_tests {
         assert!(!binds(&f, &other), "any other hold holds, due claim or not");
         let floor = PalwProducerHoldV1::BelowProducerFloor { shortfall: 1, floor: 2 };
         assert!(!binds(&f, &floor), "a bond under the producer floor never binds (the admission refuses it too)");
+    }
+
+    /// **ADR-0165: the floor producer's hold is the fold's refusal, named** — while the chain's floor state is Probe or Normal the
+    /// facts carry `FloorNotIdle` as the class-admission refusal, the producer holds under the registry's own verdict, and the
+    /// hold line names the state and carries the words the drill greps (`PALW_FLOOR_NOT_IDLE_MARKER_V1`: "idle-only fallback");
+    /// once the state is Idle the refusal is gone and the floor producer draws. The CLI's cut at the last " [" still gives the
+    /// sentence it knows.
+    #[test]
+    fn a_floor_hold_names_the_state_and_carries_the_marker_the_drill_greps() {
+        use kaspa_consensus_core::palw_real_share_v1::{
+            PALW_FLOOR_NOT_IDLE_MARKER_V1, PalwFloorModeV1, PalwFloorStateV1, palw_floor_step_v1, palw_is_floor_not_idle_refusal_v1,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+        let p = params(1, false);
+        let st = state(AMPLE, 0, false);
+        let mut f = facts(&st, &p, 1);
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, None), Ok(()), "the fixture's floor class draws");
+        // The state the chain is in at the candidate: a probe the fold opened at DAA 100.
+        let probe = palw_floor_step_v1(
+            PalwFloorStateV1::default(),
+            100,
+            Some(kaspa_consensus_core::palw_real_share_v1::PalwRealAcceptedV1 { blue: false }),
+        );
+        assert!(matches!(probe.mode, PalwFloorModeV1::Probe { .. }));
+        let refusal = PalwStateV2Error::FloorNotIdle { class: f.class_id, daa: CANDIDATE, state: probe }.to_string();
+        f.class_admission_refusal = Some(refusal.clone());
+        let hold = palw_producer_ready_v1(&f, &KEY, None).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
+        let detail = palw_producer_hold_detail_v1(&f, &hold, false);
+        assert!(detail.contains(PALW_FLOOR_NOT_IDLE_MARKER_V1), "{detail}");
+        assert!(detail.contains("registry=\"") && detail.contains("the chain is probe") && detail.contains(&format!("DAA {CANDIDATE}")), "{detail}");
+        assert_eq!(
+            cli_sentence(&detail),
+            kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
+            "the operator CLI cuts the sentence at the last ' [': the verdict it knows"
+        );
+        assert!(palw_is_floor_not_idle_refusal_v1(&refusal));
+        // Idle again: no refusal, the producer draws.
+        f.class_admission_refusal = None;
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, None), Ok(()));
+    }
+
+    /// **The floor producer's hold under the idle-only policy is the design working, so it is info — however long it lasts** — while
+    /// every other hold keeps its level (warn when loud, error once it has outlived the starvation horizon).
+    #[test]
+    fn the_floor_hold_is_info_however_long_and_every_other_hold_keeps_its_level() {
+        use super::{PALW_PRODUCER_STARVED_AFTER as STARVED, PalwHoldLevelV1 as L, palw_hold_level_v1 as level};
+        use kaspa_consensus_core::palw_real_share_v1::PalwFloorStateV1;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+        let floor = format!(
+            "{} [class=1 epoch=0 produced=0 budget=0 registry=\"{}\"]",
+            kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
+            PalwStateV2Error::FloorNotIdle { class: h64(1), daa: 9, state: PalwFloorStateV1::default() }
+        );
+        let other = "the model registry admits no new claim of this class now [class=2 registry=\"class … is Held under the model registry\"]";
+        let hours = STARVED * 8;
+        for since in [std::time::Duration::ZERO, STARVED, hours] {
+            for loud in [false, true] {
+                assert_eq!(level(&floor, loud, since), L::Info, "the floor hold, loud={loud}, {since:?}");
+            }
+        }
+        assert_eq!(level(other, false, std::time::Duration::ZERO), L::Info);
+        assert_eq!(level(other, true, std::time::Duration::ZERO), L::Warn);
+        assert_eq!(level(other, true, STARVED), L::Error, "any other hold past the horizon is still a producer that does not work");
+    }
+
+    /// **ADR-0165 §00.9: the floor's idle-only hold gives way to anchor duty — rarely, and for nothing else.** True only for the floor
+    /// class, only where the hold IS the idle-only refusal, only with `binder_due`, and only once a claim has waited
+    /// [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] slots plus the bond's stagger; never for the ceiling hold (its own duty) or a REAL class.
+    #[test]
+    fn the_idle_only_hold_gives_way_to_anchor_duty_only_for_a_claim_that_has_waited() {
+        use super::{PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as AFTER, palw_floor_anchor_duty_stagger_v1 as stagger_of, palw_floor_anchor_duty_v1 as duty};
+        use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
+        use kaspa_consensus_core::palw_real_share_v1::PalwFloorStateV1;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+        let p = params(1, false);
+        let st = state(AMPLE, 0, false);
+        let mut f = facts(&st, &p, 1);
+        let floor_hold = PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2);
+        f.class_admission_refusal =
+            Some(PalwStateV2Error::FloorNotIdle { class: f.class_id, daa: CANDIDATE, state: PalwFloorStateV1::default() }.to_string());
+        f.binder_due = true;
+        assert!(f.is_base_class);
+        assert!(!duty(&f, &floor_hold, AFTER - 1, 0), "a claim that has not waited long enough");
+        assert!(duty(&f, &floor_hold, AFTER, 0), "the wait is over: one binder");
+        assert!(!duty(&f, &floor_hold, AFTER + 3, 4), "the stagger: this bond waits four slots longer");
+        assert!(duty(&f, &floor_hold, AFTER + 4, 4));
+        // Nothing else gives way: no claim due, a REAL class, another hold, another registry refusal.
+        let mut none_due = f.clone();
+        none_due.binder_due = false;
+        assert!(!duty(&none_due, &floor_hold, 10_000, 0), "no claim is due: no duty");
+        let mut real_class = f.clone();
+        real_class.is_base_class = false;
+        assert!(!duty(&real_class, &floor_hold, 10_000, 0), "a REAL class is never held by the idle-only policy, so it has no duty to give way");
+        let mut other = f.clone();
+        other.class_admission_refusal = Some("class … is Prefetching under the model registry".to_string());
+        assert!(!duty(&other, &floor_hold, 10_000, 0), "another refusal of the floor holds");
+        assert!(
+            !duty(&f, &PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2), 10_000, 0),
+            "the ceiling hold has its own duty (palw_producer_binds_at_ceiling_v1), not this one"
+        );
+        // The stagger spreads operators over eight slots and never beyond.
+        let staggers: std::collections::BTreeSet<u64> =
+            (0..=255u64).map(|b| stagger_of(&kaspa_consensus_core::tx::TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([b as u8; 64]), index: 0 })).collect();
+        assert_eq!(staggers, (0..8).collect(), "eight staggers, from the bond's transaction id");
+        // And the worker feeds it the unbroken wait, resets it after the duty fires, and only on the branch that mines.
+        let src = include_str!("palw_producer.rs");
+        let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
+        assert!(src.contains("(true, None) => binder_due_since_daa = Some(facts.daa_score),"), "the wait starts when binder_due turns true");
+        assert!(src.contains("(false, _) => binder_due_since_daa = None,"), "and breaks when it turns false");
+        let fire = src.find("} else if floor_duty {").expect("the duty branch");
+        let tail = &src[fire..fire + 1200];
+        assert!(tail.contains("binder_due_since_daa = Some(facts.daa_score);"), "one binder, then the wait starts again");
+        assert!(!tail[..tail.find("} else if let Err(hold) = ready {").expect("the hold branch")].contains("continue;"), "the duty branch mines");
+    }
+
+    /// **DRILL ONLY: `--palw-drill-floor-ignore-policy` ignores exactly one refusal** — the floor class's idle-only one — and
+    /// nothing else: not the flag-less floor producer's, not a REAL class's, not any other refusal of the floor.
+    #[test]
+    fn the_floor_policy_flag_ignores_the_floor_refusal_and_nothing_else() {
+        use super::palw_drill_floor_policy_ignored_v1 as ignored;
+        use kaspa_consensus_core::palw_real_share_v1::PalwFloorStateV1;
+        use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+        let floor_refusal =
+            PalwStateV2Error::FloorNotIdle { class: h64(1), daa: 7, state: PalwFloorStateV1::default() }.to_string();
+        let other = "class … is Prefetching under the model registry";
+        assert!(ignored(true, true, Some(&floor_refusal)), "the flag, the floor class, the idle-only refusal");
+        assert!(!ignored(false, true, Some(&floor_refusal)), "no flag: the producer holds");
+        assert!(!ignored(true, false, Some(&floor_refusal)), "a REAL class is never affected");
+        assert!(!ignored(true, true, Some(other)), "another refusal of the floor holds");
+        assert!(!ignored(true, true, None), "nothing to ignore");
+        // The bypass sits before the readiness verdict in the loop, clears the refusal and logs it; the daemon arms the flag on
+        // a salted private drill only.
+        let src = include_str!("palw_producer.rs");
+        let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
+        let bypass = src.find("palw_drill_floor_policy_ignored_v1(\n                self.config.drill_floor_ignore_policy,").expect("the bypass");
+        let ready = src.find("let ready = palw_producer_ready_v1(&facts,").expect("the readiness verdict");
+        assert!(bypass < ready, "the refusal is cleared before the verdict is taken");
+        assert!(src[bypass..ready].contains("facts.class_admission_refusal = None;"));
+        let daemon = include_str!("daemon.rs");
+        assert!(daemon.contains("drill_floor_ignore_policy: match args.palw_drill_floor_ignore_policy {"));
+        assert!(
+            daemon.contains("true if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill =>"),
+            "refused off a salted private drill"
+        );
     }
 }
