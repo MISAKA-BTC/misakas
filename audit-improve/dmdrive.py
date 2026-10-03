@@ -635,7 +635,7 @@ def verdict_cap(sd):
             checks.append((None, f"{name}: window {CAP_WINDOWS[name][0]}..{CAP_WINDOWS[name][1]} not measured yet"))
             continue
         txt = (f"{name}: accepted {sm['accepted_per_daa']}/DAA, licensed {sm['licensed_per_daa']}/DAA, licence latency p50 {sm['latency_p50']} p95 {sm['latency_p95']} DAA "
-               f"(n={sm['latency_n']}), bind->licence p50 {sm.get('bind_latency_p50')} p95 {sm.get('bind_latency_p95')} (n={sm.get('bind_latency_n')}), oldest wait max {sm.get('oldest_wait_max')}, backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
+               f"(n={sm['latency_n']}; accepted->licence includes the ~20-DAA anchor delay), bind->licence p50 {sm.get('bind_latency_p50')} p95 {sm.get('bind_latency_p95')} (n={sm.get('bind_latency_n')}), oldest wait max {sm.get('oldest_wait_max')}, backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
                f"seat occupancy max {sm['occupancy_max']} mean {sm['occupancy_mean']}, exposure reserved/ceiling max {sm['exposure_reserved_ratio_max']}")
         checks.append((None if sm["diverges"] is None else (not sm["diverges"]), txt))
     return v_all(checks)

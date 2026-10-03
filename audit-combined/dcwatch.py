@@ -442,6 +442,7 @@ def panel(a):
                         last = t
         f3[node] = n_hold
         rec[node] = round(n_rec / max((last - first) / 3600, 1 / 60), 1) if first and last and last > first else None
+    print("note: accepted->licence includes the ~20-DAA anchor delay (a claim is bound to a panel only after its anchor matures); bind->licence is the PANEL metric.")
     print(f"{'window':>10} {'accP50':>6} {'accP95':>6} {'bindP50':>7} {'bindP95':>7} {'n':>4} {'backlog':>10} {'slope':>7} {'oldest':>6} {'diverges':>8}")
     for name, sm, why in rows:
         print(f"{name:>10} {str(sm.get('latency_p50')):>6} {str(sm.get('latency_p95')):>6} {str(sm.get('bind_latency_p50')):>7} {str(sm.get('bind_latency_p95')):>7} "

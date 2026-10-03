@@ -42,7 +42,7 @@ cat <<EOF
             to submit, so fast floor attempts fill their anticone meanwhile, as on live t12. new4 (the other REAL producer) stays fast. A binary without the flag runs
             without it and 'dc.sh dry' says so (the 8k emulation is then missing).
   verdicts  PANEL (dcwatch panel: PASS only if no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; latency also from accepted)
-            and SHARE (dcwatch share: per-window table over ELIGIBLE windows — both REAL producers up and not held — REAL+EXEC >= 90 %, heartbeats <= 10 %, floor only idle; the
+            [acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the PANEL metric] and SHARE (dcwatch share: per-window table over ELIGIBLE windows — both REAL producers up and not held — REAL+EXEC >= 90 %, heartbeats <= 10 %, floor only idle; the
             table adds the REAL attempts that turned RED, the kinds of BLUE blocks in their anticones before vs after H', DAA per hour and the longest slot gap per window);
             RECOVERY (dc-run.sh at DAA $RECOVERY_AT: both REAL producers stopped for 18 DAA (>= 2K, K = 3 idle slots), floors must resume after K slots with the DAA advancing,
             then restarted: floors must stop and REAL turn BLUE again; dcwatch recovery); D-M1..D-M6, DG-1..DG-7b as in the int-11 drill (dm.sh verdicts)
