@@ -334,9 +334,25 @@ fn classify_gate_refusal(
         }
         PalwClassAdmissionError::ClassIsNotDerived
         | PalwClassAdmissionError::PwuPerInferenceMismatch { .. }
-        | PalwClassAdmissionError::CanonicalDeeperThanWorstCase { .. } => cx.refuse("verification.canonical_job", err.to_string()),
-        _ => cx.refuse(field, err.to_string()),
+        | PalwClassAdmissionError::CanonicalDeeperThanWorstCase { .. } => {
+            let reason = refusal_text_v1(cx, err);
+            cx.refuse("verification.canonical_job", reason)
+        }
+        _ => {
+            let reason = refusal_text_v1(cx, err);
+            cx.refuse(field, reason)
+        }
     }
+}
+
+/// **A gate refusal as every reader prints it: the sentence, the code, and the structured refusal** (code, rule, needed against
+/// limit, the regime and fence that decided it) — the same `PalwRefusalV1` the gate and the SDK's preflight carry. A refusal this
+/// verifier prints without its code is a reader that disagrees with the chain's own words.
+fn refusal_text_v1(cx: &VerifyCx<'_>, err: &PalwClassAdmissionError) -> String {
+    let (held_from, held_now) = cx.fence_active_now("palw_held_context").unwrap_or((None, false));
+    let decided_by =
+        kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(held_now, Some(cx.daa), held_from.map(|f| f.daa_score()));
+    format!("{} ({err}) [refusal {}]", err.code(), err.refusal_v1(&decided_by).to_json())
 }
 
 fn expressible(

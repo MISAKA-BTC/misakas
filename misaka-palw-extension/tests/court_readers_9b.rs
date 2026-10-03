@@ -79,9 +79,11 @@ fn the_manifest_verifier_the_sdk_and_the_gate_name_the_same_verdict_for_the_9b_h
         let sdk_err = sdk_v.expect_err("the SDK names the refusal");
         assert!(sdk_err.contains(want_wall), "daa {daa}: {sdk_err}");
         let C::Refused { reason, .. } = &report.classification else { panic!("daa {daa}: the manifest verifier says {manifest_says}") };
-        // The manifest verifier prints the rule's words (the code rides the structured form): name the same wall by them.
-        let wall_words = if past_p0a { "can never capture its recurrence" } else { "HELD_CLASS_UNANSWERABLE" };
-        assert!(reason.contains(wall_words), "daa {daa}: {reason}");
+        // Every reader carries the structured refusal's CODE (and the rest of it, in the JSON): the manifest verifier too.
+        assert!(reason.contains(want_wall), "daa {daa}: {reason}");
+        if past_p0a {
+            assert!(reason.contains("\"code\":\"GDN_MAP_ASSUMES_EQUAL_HEADS\""), "daa {daa}: the structured refusal rides the verifier's reason: {reason}");
+        }
         seen.push(gate_code);
     }
     assert!(seen[0] == seen[1] && seen[1] != seen[2], "the verdict moves only at the P0a flag day: {seen:?}");
