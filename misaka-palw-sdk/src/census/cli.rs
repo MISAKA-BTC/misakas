@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--dirs FILE]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -44,6 +44,8 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     let tree = take(&mut args, "--tree").unwrap_or_else(|| "unstated".into());
     let threads: usize = take(&mut args, "--threads").map(|t| t.parse().unwrap_or(1)).unwrap_or(1).clamp(1, 16);
     let dirs = take(&mut args, "--dirs");
+    let follow = args.iter().any(|a| a == "--follow");
+    args.retain(|a| a != "--follow");
     let max_context = match take(&mut args, "--max-context") {
         Some(c) => Some(c.parse::<u32>().map_err(|e| format!("--max-context {c}: {e}"))?),
         None => None,
@@ -100,59 +102,85 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
         }
         "gates" => {
             let file = dirs.ok_or("census gates needs --dirs FILE (one fetched repository directory per line)")?;
-            let list: Vec<PathBuf> = std::fs::read_to_string(&file)
-                .map_err(|e| format!("{file}: {e}"))?
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| PathBuf::from(l.trim()))
-                .collect();
-            let n = list.len();
-            let results: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(vec![None; n]));
-            let next = Arc::new(Mutex::new(0usize));
             let ctx = Arc::new(ctx);
-            let list = Arc::new(list);
-            let stdout = Arc::new(Mutex::new((std::io::stdout(), 0usize)));
-            let mut handles = Vec::new();
-            for _ in 0..threads {
-                let (results, next, ctx, list, stdout) = (results.clone(), next.clone(), ctx.clone(), list.clone(), stdout.clone());
-                handles.push(
-                    std::thread::Builder::new()
-                        .stack_size(64 << 20)
-                        .spawn(move || -> Result<(), String> {
-                            loop {
-                                let i = {
-                                    let mut g = next.lock().map_err(|_| "poisoned")?;
-                                    if *g >= list.len() {
-                                        return Ok(());
-                                    }
-                                    *g += 1;
-                                    *g - 1
-                                };
-                                let dir = &list[i];
-                                let line = gate_one(dir, &ctx).map_err(|e| format!("{}: {e}", dir.display()))?;
-                                results.lock().map_err(|_| "poisoned")?[i] = Some(line);
-                                // Print every finished row that is next in order.
-                                let mut s = stdout.lock().map_err(|_| "poisoned")?;
-                                let r = results.lock().map_err(|_| "poisoned")?;
-                                while s.1 < r.len() && r[s.1].is_some() {
-                                    let l = r[s.1].as_ref().expect("checked");
-                                    writeln!(s.0, "{l}").map_err(|e| e.to_string())?;
-                                    s.1 += 1;
-                                }
-                            }
-                        })
-                        .map_err(|e| e.to_string())?,
-                );
-            }
-            for h in handles {
-                h.join().map_err(|_| "a census worker panicked".to_string())??;
+            let read = |file: &str| -> Result<Vec<String>, String> {
+                Ok(std::fs::read_to_string(file)
+                    .map_err(|e| format!("{file}: {e}"))?
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect())
+            };
+            let mut done = 0usize;
+            loop {
+                let lines = read(&file)?;
+                let ended = lines.last().is_some_and(|l| l == "END");
+                let batch: Vec<PathBuf> = lines.iter().skip(done).filter(|l| l.as_str() != "END").map(PathBuf::from).collect();
+                if !batch.is_empty() {
+                    done += batch.len();
+                    gate_batch(batch, &ctx, threads)?;
+                }
+                // `--follow`: the file grows while a fetch runs; it ends with a line `END`.
+                if !follow || (ended && done + 1 >= lines.len()) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(20));
             }
             let (hits, misses) = ctx.cache.stats();
-            eprintln!("census gates: {n} repositories; chain judgments {misses} computed, {hits} shared");
+            eprintln!("census gates: {done} repositories; chain judgments {misses} computed, {hits} shared");
             Ok(())
         }
         other => Err(format!("census {other}: {USAGE}")),
     }
+}
+
+/// Judge one batch on `threads` workers, printing each row as soon as every row before it is printed (input order).
+fn gate_batch(list: Vec<PathBuf>, ctx: &Arc<CensusContext>, threads: usize) -> Result<(), String> {
+    let n = list.len();
+    let results: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(vec![None; n]));
+    let next = Arc::new(Mutex::new(0usize));
+    let list = Arc::new(list);
+    let stdout = Arc::new(Mutex::new((std::io::stdout(), 0usize)));
+    let mut handles = Vec::new();
+    for _ in 0..threads {
+        let (results, next, ctx, list, stdout) = (results.clone(), next.clone(), ctx.clone(), list.clone(), stdout.clone());
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn(move || -> Result<(), String> {
+                    loop {
+                        let i = {
+                            let mut g = next.lock().map_err(|_| "poisoned")?;
+                            if *g >= list.len() {
+                                return Ok(());
+                            }
+                            *g += 1;
+                            *g - 1
+                        };
+                        let dir = &list[i];
+                        // A repository that cannot be judged is a row that says so, never the end of the run.
+                        let line = gate_one(dir, &ctx).unwrap_or_else(|e| {
+                            serde_json::json!({"error": format!("CENSUS_ROW_FAILED: {e}"), "dir": dir.display().to_string()})
+                                .to_string()
+                        });
+                        results.lock().map_err(|_| "poisoned")?[i] = Some(line);
+                        let mut s = stdout.lock().map_err(|_| "poisoned")?;
+                        let r = results.lock().map_err(|_| "poisoned")?;
+                        while s.1 < r.len() && r[s.1].is_some() {
+                            let l = r[s.1].as_ref().expect("checked");
+                            writeln!(s.0, "{l}").map_err(|e| e.to_string())?;
+                            s.1 += 1;
+                        }
+                        s.0.flush().map_err(|e| e.to_string())?;
+                    }
+                })
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    for h in handles {
+        h.join().map_err(|_| "a census worker panicked".to_string())??;
+    }
+    Ok(())
 }
 
 fn gate_one(dir: &std::path::Path, ctx: &CensusContext) -> Result<String, String> {

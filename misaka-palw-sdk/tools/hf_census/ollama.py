@@ -95,6 +95,31 @@ def parse_tags(model: str, page: str) -> list[dict]:
     return list(out.values())
 
 
+def library_cards(page: str) -> dict:
+    """Each model's card on the library page: its capability badges (`embedding`, `vision`, `tools`, `thinking`, …), its size
+    badges, and its pull count as the page prints it."""
+    cards = {}
+    for m in re.finditer(r'href="/library/([^"/:?#]+)" class="group', page):
+        name = html.unescape(m.group(1))
+        end = page.find('href="/library/', m.end())
+        block = page[m.end() : end if end > 0 else len(page)]
+        caps = re.findall(r'text-indigo-600[^>]*>([^<]+)<', block)
+        sizes = re.findall(r'text-blue-600[^>]*>([^<]+)<', block)
+        pulls = re.search(r'<span[^>]*>([\d.,]+[KMB]?)</span>\s*<span[^>]*>&nbsp;Pulls', block)
+        cards[name] = {"capabilities": [c.strip() for c in caps], "sizes": [x.strip() for x in sizes], "pulls": pulls.group(1) if pulls else None}
+    return cards
+
+
+def pulls_number(s: str | None) -> float:
+    if not s:
+        return 0.0
+    mult = {"K": 1e3, "M": 1e6, "B": 1e9}.get(s[-1], 1.0)
+    try:
+        return float(s.rstrip("KMB").replace(",", "")) * mult
+    except ValueError:
+        return 0.0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", required=True)
