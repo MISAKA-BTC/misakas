@@ -4763,19 +4763,25 @@ impl Deserializer for GetPalwRegistrationTermsResponse {
 /// are whole seconds since genesis; the node answers for the round its clock is in.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetPalwRoundLaneRequest {}
+pub struct GetPalwRoundLaneRequest {
+    /// Lane SCAN (version 2): how many recent executions to return; 0 asks for none, and the node
+    /// caps it at 256.
+    #[serde(default)]
+    pub executions_limit: u32,
+}
 
 impl Serializer for GetPalwRoundLaneRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
+        store!(u32, &self.executions_limit, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwRoundLaneRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {})
+        let version = load!(u16, reader)?;
+        Ok(Self { executions_limit: if version >= 2 { load!(u32, reader)? } else { 0 } })
     }
 }
 
@@ -4881,6 +4887,202 @@ impl Deserializer for RpcPalwRoundLaneDomain {
     }
 }
 
+/// **Lane SCAN: one round block the lane's ledger names** (the last accepted, the newest judged).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRoundMark {
+    pub hash: String,
+    pub round: u64,
+    pub daa_score: u64,
+    pub timestamp_ms: u64,
+    pub bond: String,
+    pub claim_id: Option<String>,
+    /// `granted` or `refused`.
+    pub verdict: String,
+}
+
+impl Serializer for RpcPalwRoundMark {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.hash, writer)?;
+        store!(u64, &self.round, writer)?;
+        store!(u64, &self.daa_score, writer)?;
+        store!(u64, &self.timestamp_ms, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(Option<String>, &self.claim_id, writer)?;
+        store!(String, &self.verdict, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRoundMark {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            hash: load!(String, reader)?,
+            round: load!(u64, reader)?,
+            daa_score: load!(u64, reader)?,
+            timestamp_ms: load!(u64, reader)?,
+            bond: load!(String, reader)?,
+            claim_id: load!(Option<String>, reader)?,
+            verdict: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRefusalCount {
+    pub reason: String,
+    pub count: u64,
+}
+
+impl Serializer for RpcPalwRefusalCount {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.reason, writer)?;
+        store!(u64, &self.count, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRefusalCount {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { reason: load!(String, reader)?, count: load!(u64, reader)? })
+    }
+}
+
+/// **Lane SCAN: the round lane's health as THIS node has seen it** — from its own ledger, which a
+/// restart empties (`ledger_since_ms` says from when it counts).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRoundLaneHealth {
+    pub accepted_total: u64,
+    pub refused_total: u64,
+    /// Refusals since the last accepted round block (all of them while none was accepted).
+    pub refused_since_last_accepted: u64,
+    pub last_accepted: Option<RpcPalwRoundMark>,
+    pub latest: Option<RpcPalwRoundMark>,
+    /// Most frequent first.
+    pub top_refusals: Vec<RpcPalwRefusalCount>,
+    /// No accepted round block for `stale_after_ms` by the node's clock.
+    pub stale: bool,
+    pub stale_after_ms: u64,
+    /// The node's clock when it answered, and when its ledger started counting.
+    pub now_ms: u64,
+    pub ledger_since_ms: u64,
+}
+
+impl Serializer for RpcPalwRoundLaneHealth {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.accepted_total, writer)?;
+        store!(u64, &self.refused_total, writer)?;
+        store!(u64, &self.refused_since_last_accepted, writer)?;
+        serialize!(Option<RpcPalwRoundMark>, &self.last_accepted, writer)?;
+        serialize!(Option<RpcPalwRoundMark>, &self.latest, writer)?;
+        serialize!(Vec<RpcPalwRefusalCount>, &self.top_refusals, writer)?;
+        store!(bool, &self.stale, writer)?;
+        store!(u64, &self.stale_after_ms, writer)?;
+        store!(u64, &self.now_ms, writer)?;
+        store!(u64, &self.ledger_since_ms, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRoundLaneHealth {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            accepted_total: load!(u64, reader)?,
+            refused_total: load!(u64, reader)?,
+            refused_since_last_accepted: load!(u64, reader)?,
+            last_accepted: deserialize!(Option<RpcPalwRoundMark>, reader)?,
+            latest: deserialize!(Option<RpcPalwRoundMark>, reader)?,
+            top_refusals: deserialize!(Vec<RpcPalwRefusalCount>, reader)?,
+            stale: load!(bool, reader)?,
+            stale_after_ms: load!(u64, reader)?,
+            now_ms: load!(u64, reader)?,
+            ledger_since_ms: load!(u64, reader)?,
+        })
+    }
+}
+
+/// **Lane SCAN: one execution** — a claim whose Final earned execution-lane tickets: the rounds it is
+/// permitted (`tickets`) and has spent (`tickets_spent`), read from the sink's state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwExecutionRow {
+    pub claim_id: String,
+    /// Empty once the claim retired from the state.
+    pub class_id: String,
+    pub executor_bond: String,
+    pub domain: String,
+    /// The lane's stage: `credited`, `maturing` or `scheduled`.
+    pub stage: String,
+    /// `credited`, `maturing`, `running`, `complete`, `no_tickets` or `voided`.
+    pub status: String,
+    pub credit: u64,
+    pub span: u64,
+    pub tickets: u32,
+    pub tickets_spent: u32,
+    pub first_round: Option<u64>,
+    pub last_round: Option<u64>,
+    pub accepted_daa: Option<u64>,
+    pub accepted_block: Option<String>,
+    /// The claim's phase while the state keeps it (`final`, `voided`, ...), else empty.
+    pub phase: String,
+    pub final_daa: Option<u64>,
+}
+
+impl Serializer for RpcPalwExecutionRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.executor_bond, writer)?;
+        store!(String, &self.domain, writer)?;
+        store!(String, &self.stage, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(u64, &self.credit, writer)?;
+        store!(u64, &self.span, writer)?;
+        store!(u32, &self.tickets, writer)?;
+        store!(u32, &self.tickets_spent, writer)?;
+        store!(Option<u64>, &self.first_round, writer)?;
+        store!(Option<u64>, &self.last_round, writer)?;
+        store!(Option<u64>, &self.accepted_daa, writer)?;
+        store!(Option<String>, &self.accepted_block, writer)?;
+        store!(String, &self.phase, writer)?;
+        store!(Option<u64>, &self.final_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwExecutionRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            executor_bond: load!(String, reader)?,
+            domain: load!(String, reader)?,
+            stage: load!(String, reader)?,
+            status: load!(String, reader)?,
+            credit: load!(u64, reader)?,
+            span: load!(u64, reader)?,
+            tickets: load!(u32, reader)?,
+            tickets_spent: load!(u32, reader)?,
+            first_round: load!(Option<u64>, reader)?,
+            last_round: load!(Option<u64>, reader)?,
+            accepted_daa: load!(Option<u64>, reader)?,
+            accepted_block: load!(Option<String>, reader)?,
+            phase: load!(String, reader)?,
+            final_daa: load!(Option<u64>, reader)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwRoundLaneResponse {
@@ -4910,11 +5112,21 @@ pub struct GetPalwRoundLaneResponse {
     /// The permits the schedule grants the round after this one — the other parity — so this
     /// round's and the next's together are the blocks per second the span can actually carry.
     pub next_round_permits: u16,
+    /// **Version 3 (lane SCAN, node-only)**: the lane's health from this node's ledger, `None` on a
+    /// node without it.
+    #[serde(default)]
+    pub health: Option<RpcPalwRoundLaneHealth>,
+    /// The executions the sink's state holds, newest first (at most the request's `executions_limit`),
+    /// and how many it holds in all.
+    #[serde(default)]
+    pub recent_executions: Vec<RpcPalwExecutionRow>,
+    #[serde(default)]
+    pub executions_total: u64,
 }
 
 impl Serializer for GetPalwRoundLaneResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(bool, &self.armed, writer)?;
         store!(bool, &self.open, writer)?;
         store!(u64, &self.schedule_span_daa, writer)?;
@@ -4930,6 +5142,9 @@ impl Serializer for GetPalwRoundLaneResponse {
         store!(u64, &self.finals_span, writer)?;
         store!(u64, &self.finals, writer)?;
         store!(u16, &self.next_round_permits, writer)?;
+        serialize!(Option<RpcPalwRoundLaneHealth>, &self.health, writer)?;
+        serialize!(Vec<RpcPalwExecutionRow>, &self.recent_executions, writer)?;
+        store!(u64, &self.executions_total, writer)?;
         Ok(())
     }
 }
@@ -4937,7 +5152,7 @@ impl Serializer for GetPalwRoundLaneResponse {
 impl Deserializer for GetPalwRoundLaneResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        Ok(Self {
+        let mut response = Self {
             armed: load!(bool, reader)?,
             open: load!(bool, reader)?,
             schedule_span_daa: load!(u64, reader)?,
@@ -4953,7 +5168,14 @@ impl Deserializer for GetPalwRoundLaneResponse {
             finals_span: load!(u64, reader)?,
             finals: load!(u64, reader)?,
             next_round_permits: if version >= 2 { load!(u16, reader)? } else { 0 },
-        })
+            ..Default::default()
+        };
+        if version >= 3 {
+            response.health = deserialize!(Option<RpcPalwRoundLaneHealth>, reader)?;
+            response.recent_executions = deserialize!(Vec<RpcPalwExecutionRow>, reader)?;
+            response.executions_total = load!(u64, reader)?;
+        }
+        Ok(response)
     }
 }
 

@@ -261,6 +261,9 @@ pub mod palw_economics_ledger_v1;
 /// bond holds `m_c` in a claim's escrow slot instead of `E`, and an unconvicted void keeps the claim's
 /// commitment for `h_obl`. Consensus-inert while the fence is `None` (every shipped preset).
 pub mod palw_escrow_funding_v2;
+/// Node-only reads of the execution lane for explorers (lane SCAN): the round-block ledger and the
+/// executions the sink state holds. No consensus rule.
+pub mod palw_exec_view_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;

@@ -68,6 +68,11 @@ impl ConsensusConverter {
         let block_status = consensus.async_get_block_status(hash).await.unwrap();
         let children = consensus.async_get_block_children(hash).await.unwrap_or_default();
         let is_chain_block = consensus.async_is_chain_block(hash).await?;
+        // Lane SCAN (node-only): the block's class and, for a round block, its lineage.
+        let (lane_class, exec) = match consensus.async_palw_block_lane_v1(hash).await {
+            Some(lane) => crate::palw_lane_view::block_lane_to_rpc_v1(&lane),
+            None => (String::new(), None),
+        };
         let verbose_data = Some(RpcBlockVerboseData {
             hash,
             difficulty: self.get_difficulty_ratio(block.header.bits),
@@ -79,6 +84,8 @@ impl ConsensusConverter {
             merge_set_blues_hashes: ghostdag_data.mergeset_blues,
             merge_set_reds_hashes: ghostdag_data.mergeset_reds,
             is_chain_block,
+            lane_class,
+            exec,
         });
 
         let transactions = if include_transactions {

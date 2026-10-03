@@ -674,6 +674,22 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.palw_round_lane_status_v1(round)).await
     }
 
+    /// Lane SCAN: the executions the sink's state holds, off the async runtime.
+    pub async fn async_palw_recent_executions_v1(
+        &self,
+        limit: usize,
+    ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        self.clone().spawn_blocking(move |c| c.palw_recent_executions_v1(limit)).await
+    }
+
+    /// Lane SCAN: a block's lane class and round-block lineage, off the async runtime.
+    pub async fn async_palw_block_lane_v1(
+        &self,
+        hash: kaspa_consensus_core::BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_exec_view_v1::PalwBlockLaneV1> {
+        self.clone().spawn_blocking(move |c| c.palw_block_lane_v1(hash)).await
+    }
+
     /// ADR-0127 Decision 3: the settlement read at `daa_score`, off the async runtime.
     pub async fn async_palw_settlement_v1(
         &self,

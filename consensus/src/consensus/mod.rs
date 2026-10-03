@@ -1142,6 +1142,36 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_round_lane_status_v1(round)
     }
 
+    fn palw_recent_executions_v1(&self, limit: usize) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        self.virtual_processor.palw_recent_executions_v1(limit)
+    }
+
+    fn palw_block_lane_v1(&self, hash: BlockHash) -> Option<kaspa_consensus_core::palw_exec_view_v1::PalwBlockLaneV1> {
+        use kaspa_consensus_core::palw_exec_view_v1::{
+            PalwBlockClassV1, PalwBlockLaneV1, palw_round_block_class_v1, palw_round_lane_telemetry_v1,
+        };
+        let header = self.headers_store.get_header(hash).ok()?;
+        if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && self.config.params.palw_execution_lane_fence().is_some()
+        {
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
+                .ok()
+                .map(|e| (e.round, e.permit_index, e.bond));
+            let record = palw_round_lane_telemetry_v1().lookup(&hash);
+            return Some(PalwBlockLaneV1 { class: palw_round_block_class_v1(record.as_ref()), envelope, record });
+        }
+        let class = if self.is_chain_block(hash).unwrap_or(false) {
+            PalwBlockClassV1::Blue
+        } else {
+            match self.get_current_block_color(hash) {
+                Some(true) => PalwBlockClassV1::Blue,
+                Some(false) => PalwBlockClassV1::Red,
+                None => PalwBlockClassV1::Unmerged,
+            }
+        };
+        Some(PalwBlockLaneV1 { class, envelope: None, record: None })
+    }
+
     /// ADR-0127 Decision 3, on the node: the tip state every `palw_*` read takes, the rules it was
     /// folded under, and the DAA score of the frontier's carrying header — which the read dates the
     /// frontier by only once the frontier's claim has retired from that state.

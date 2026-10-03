@@ -1363,7 +1363,7 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwRoundLane => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let response = rpc_client.get_palw_round_lane_call(None, GetPalwRoundLaneRequest {}).await.unwrap();
+                    let response = rpc_client.get_palw_round_lane_call(None, GetPalwRoundLaneRequest::default()).await.unwrap();
                     // No shipped network arms the lane; an unarmed answer says nothing else.
                     if !response.armed {
                         assert!(!response.open && response.stages.is_empty() && response.permits.is_empty());

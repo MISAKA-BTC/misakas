@@ -721,7 +721,7 @@ pub trait RpcApi: Sync + Send + AnySync {
 
     /// ADR-0125 §7.4: the execution lane as the node's sink state holds it.
     async fn get_palw_round_lane(&self) -> RpcResult<GetPalwRoundLaneResponse> {
-        self.get_palw_round_lane_call(None, GetPalwRoundLaneRequest {}).await
+        self.get_palw_round_lane_call(None, GetPalwRoundLaneRequest::default()).await
     }
     async fn get_palw_round_lane_call(
         &self,

@@ -2235,6 +2235,10 @@ impl VirtualStateProcessor {
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts =
                         palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
+                    // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
+                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
+                        self.palw_record_round_verdicts(verdicts);
+                    }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
@@ -13055,6 +13059,32 @@ impl VirtualStateProcessor {
         Some(verdicts)
     }
 
+    /// **Lane SCAN: write each round block's verdict into the node's telemetry ledger.** Node-local
+    /// and read by no consensus path: the ledger answers `getBlock`'s lane class and
+    /// `getPalwRoundLane`'s health.
+    fn palw_record_round_verdicts(&self, verdicts: &super::utxo_validation::PalwRoundVerdictsV1) {
+        use kaspa_consensus_core::palw_exec_view_v1::{
+            PalwRoundBlockRecordV1, PalwRoundOutcomeV1, palw_round_lane_telemetry_v1,
+        };
+        let ledger = palw_round_lane_telemetry_v1();
+        for (block, verdict) in &verdicts.judged {
+            let Ok(header) = self.headers_store.get_header(*block) else { continue };
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment).ok();
+            ledger.record(PalwRoundBlockRecordV1 {
+                hash: *block,
+                daa_score: header.daa_score,
+                timestamp_ms: header.timestamp,
+                round: envelope.as_ref().map(|e| e.round).unwrap_or(0),
+                permit_index: envelope.as_ref().map(|e| e.permit_index).unwrap_or(0),
+                bond: envelope.as_ref().map(|e| e.bond),
+                outcome: match verdict {
+                    Ok(lineage) => PalwRoundOutcomeV1::Exec(*lineage),
+                    Err(refusal) => PalwRoundOutcomeV1::Refused(*refusal),
+                },
+            });
+        }
+    }
+
     /// **The bind's Valid-lock question, for the draw** (the 2026-09-23 route-matrix audit's #3):
     /// what one `Valid` signature on `claim` must lock and the clocks a bond's free collateral is
     /// read at, from the BINDING block's fold inputs (`extras`, `now_daa`) — the ones the fold's
@@ -18031,6 +18061,18 @@ impl VirtualStateProcessor {
             finals: finals.len() as u64,
             tickets_only,
         })
+    }
+
+    /// **Lane SCAN: the executions the sink's PALW state holds** — see
+    /// [`kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1`]. Read at the sink, like
+    /// every `palw_*` node read.
+    pub fn palw_recent_executions_v1(
+        &self,
+        limit: usize,
+    ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        let sink = self.virtual_stores.read().state.get().unwrap().ghostdag_data.selected_parent;
+        let (_at, state) = self.palw_v2_state_at(sink)?;
+        Some(kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1(&state, limit))
     }
 
     /// **ADR-0125: re-shape a standard template into a round block.**

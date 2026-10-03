@@ -225,6 +225,18 @@ mod mockery {
                 merge_set_blues_hashes: mock(),
                 merge_set_reds_hashes: mock(),
                 is_chain_block: mock(),
+                lane_class: "EXEC".to_string(),
+                exec: Some(RpcPalwExecBlock {
+                    round: 7,
+                    permit_index: 0,
+                    bond: "ab:0".to_string(),
+                    verdict: "granted".to_string(),
+                    refusal: None,
+                    claim_id: Some("cd".to_string()),
+                    class_id: Some("ef".to_string()),
+                    quantum_index: Some(3),
+                    quantum_id: Some("12".to_string()),
+                }),
             }
         }
     }

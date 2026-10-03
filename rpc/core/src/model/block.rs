@@ -92,11 +92,73 @@ pub struct RpcBlockVerboseData {
     pub merge_set_blues_hashes: Vec<RpcHash>,
     pub merge_set_reds_hashes: Vec<RpcHash>,
     pub is_chain_block: bool,
+    /// **Lane SCAN (node-only, no consensus rule): the block's class** — `BLUE` (chain block or merged
+    /// blue), `EXEC` (an accepted execution-lane round block, algo 10), `RED` (merged red: a round
+    /// block that did not hold its permit, or an ordinary red), `ROUND` (a round block whose verdict
+    /// the node no longer holds) or empty (not merged yet / a node without this field).
+    #[serde(default)]
+    pub lane_class: String,
+    /// A round block's lineage; `None` on every other block.
+    #[serde(default)]
+    pub exec: Option<RpcPalwExecBlock>,
+}
+
+/// **A round block as the execution lane sees it**: the round and permit it signed for, the bond that
+/// produced it and — once the node judged it — the ticket it spent and the claim behind the ticket.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwExecBlock {
+    pub round: u64,
+    pub permit_index: u16,
+    /// The producing bond, `<txid>:<index>`; empty where the envelope did not decode.
+    pub bond: String,
+    /// `granted` (the node's verdict held the permit), `refused`, or `unknown` (no verdict kept).
+    pub verdict: String,
+    /// The named reason, on a refusal.
+    pub refusal: Option<String>,
+    pub claim_id: Option<String>,
+    pub class_id: Option<String>,
+    /// The ticket's index within its Final's tickets, and the ticket id (zero-length for a lottery permit).
+    pub quantum_index: Option<u32>,
+    pub quantum_id: Option<String>,
+}
+
+impl Serializer for RpcPalwExecBlock {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.round, writer)?;
+        store!(u16, &self.permit_index, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.verdict, writer)?;
+        store!(Option<String>, &self.refusal, writer)?;
+        store!(Option<String>, &self.claim_id, writer)?;
+        store!(Option<String>, &self.class_id, writer)?;
+        store!(Option<u32>, &self.quantum_index, writer)?;
+        store!(Option<String>, &self.quantum_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwExecBlock {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            round: load!(u64, reader)?,
+            permit_index: load!(u16, reader)?,
+            bond: load!(String, reader)?,
+            verdict: load!(String, reader)?,
+            refusal: load!(Option<String>, reader)?,
+            claim_id: load!(Option<String>, reader)?,
+            class_id: load!(Option<String>, reader)?,
+            quantum_index: load!(Option<u32>, reader)?,
+            quantum_id: load!(Option<String>, reader)?,
+        })
+    }
 }
 
 impl Serializer for RpcBlockVerboseData {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u8, &1, writer)?;
+        store!(u8, &2, writer)?;
         store!(RpcHash, &self.hash, writer)?;
         store!(f64, &self.difficulty, writer)?;
         store!(RpcHash, &self.selected_parent_hash, writer)?;
@@ -109,6 +171,10 @@ impl Serializer for RpcBlockVerboseData {
         store!(Vec<RpcHash>, &self.merge_set_blues_hashes, writer)?;
         store!(Vec<RpcHash>, &self.merge_set_reds_hashes, writer)?;
         store!(bool, &self.is_chain_block, writer)?;
+        // Version 2 (lane SCAN): the lane class and a round block's lineage. Appended, so a version-1
+        // reader stops before them.
+        store!(String, &self.lane_class, writer)?;
+        serialize!(Option<RpcPalwExecBlock>, &self.exec, writer)?;
 
         Ok(())
     }
@@ -116,7 +182,7 @@ impl Serializer for RpcBlockVerboseData {
 
 impl Deserializer for RpcBlockVerboseData {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u8, reader)?;
+        let version = load!(u8, reader)?;
         let hash = load!(RpcHash, reader)?;
         let difficulty = load!(f64, reader)?;
         let selected_parent_hash = load!(RpcHash, reader)?;
@@ -128,6 +194,11 @@ impl Deserializer for RpcBlockVerboseData {
         let merge_set_blues_hashes = load!(Vec<RpcHash>, reader)?;
         let merge_set_reds_hashes = load!(Vec<RpcHash>, reader)?;
         let is_chain_block = load!(bool, reader)?;
+        let (lane_class, exec) = if version >= 2 {
+            (load!(String, reader)?, deserialize!(Option<RpcPalwExecBlock>, reader)?)
+        } else {
+            (String::new(), None)
+        };
 
         Ok(Self {
             hash,
@@ -140,6 +211,8 @@ impl Deserializer for RpcBlockVerboseData {
             merge_set_blues_hashes,
             merge_set_reds_hashes,
             is_chain_block,
+            lane_class,
+            exec,
         })
     }
 }

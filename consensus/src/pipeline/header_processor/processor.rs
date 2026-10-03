@@ -351,7 +351,13 @@ impl HeaderProcessor {
             BlockTask::Ordinary { .. } => {
                 // [ibd-perf §7-1] split-time Phase-A (parallelizable compute) vs the serial committer.
                 let hp_t0 = std::time::Instant::now();
-                let ctx = self.validate_header(header)?;
+                let ctx = match self.validate_header(header) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        self.palw_note_round_header_refusal(header, &e);
+                        return Err(e);
+                    }
+                };
                 let hp_t1 = std::time::Instant::now();
                 self.commit_header(ctx, header);
                 let hp_t2 = std::time::Instant::now();
@@ -370,6 +376,27 @@ impl HeaderProcessor {
         self.counters.dep_counts.fetch_add(header.direct_parents().len() as u64, Ordering::Relaxed);
 
         Ok(StatusHeaderOnly)
+    }
+
+    /// **Lane SCAN: count a round block the header stage refused, by name.** Node-local telemetry
+    /// (`getPalwRoundLane`'s refusal counters); an orphan (missing parents) or an already-known-invalid
+    /// block is not a new refusal and is not counted.
+    fn palw_note_round_header_refusal(&self, header: &Header, error: &RuleError) {
+        use kaspa_consensus_core::palw_exec_view_v1::{palw_round_lane_telemetry_v1, PalwRoundRefusalV1 as Refusal};
+        if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 || self.palw_execution_lane.is_none() {
+            return;
+        }
+        let reason = match error {
+            RuleError::MissingParents(_) | RuleError::KnownInvalid => return,
+            RuleError::BadRoundLaneMergeset(_) => Refusal::HeaderMergesetRule,
+            RuleError::BadRoundLaneParents(_) => Refusal::HeaderAnchorOffChain,
+            RuleError::BadPalwCarriageAdmission { reason, .. } if reason.to_ascii_lowercase().contains("signature") => {
+                Refusal::HeaderSignature
+            }
+            RuleError::BadPalwCarriageAdmission { .. } => Refusal::HeaderEnvelope,
+            _ => Refusal::HeaderOther,
+        };
+        palw_round_lane_telemetry_v1().record_header_refusal(header.hash, header.timestamp, header.daa_score, reason);
     }
 
     /// Runs full ordinary header validation
