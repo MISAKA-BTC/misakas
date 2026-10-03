@@ -639,6 +639,8 @@ fn mixer_name(m: &Mixer) -> &'static str {
         Mixer::RwkvTime(_) => "RWKV",
         Mixer::ShortConv(_) => "gated short convolution",
         Mixer::Parallel(_) => "parallel mixer branches",
+        Mixer::CrossAttention(_) => "cross-attention",
+        Mixer::SharedKv(_) => "shared-key-value attention",
         Mixer::None => "no mixer (the layer is its feed-forward)",
     }
 }
