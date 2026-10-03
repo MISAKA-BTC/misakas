@@ -66,6 +66,7 @@ pub mod qlinear;
 pub mod vision;
 mod altup;
 mod dsa;
+mod dsv4;
 pub mod fill;
 mod generic;
 pub mod stream;
@@ -400,10 +401,9 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
             tir::program::MAX_CARRY
         )));
     }
-    // The residual carry is the hidden width, or `streams` times it under hyper-connections.
-    if hl.carries.iter().any(|c| c.shape.len() != 1)
-        || !hl.carries.first().is_some_and(|c| c.shape[0] % hl.hidden.max(1) == 0 && c.shape[0] >= hl.hidden)
-    {
+    // The residual carry is the hidden width, or `streams` times it under hyper-connections — and, under the multi-stream residuals whose
+    // layers are several blocks (AltUp, mHC), a few more rows for what a layer's blocks hand to each other.
+    if hl.carries.iter().any(|c| c.shape.len() != 1) || !hl.carries.first().is_some_and(|c| c.shape[0] >= hl.hidden) {
         return Err(LowerError::eval("internal: the carries are the residual, then rows"));
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
@@ -1573,10 +1573,13 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let l = operand(lb, node.inputs[0])?;
             let l = coerce(b, cx, lb, &l, DType::I32, &q14())?;
             let sel_bias = if router.selection_bias { Some(pidx(node.inputs[1])?) } else { None };
-            let (idx, mut w) = lower_route(b, cx, lb, &l, sel_bias, router, *experts, *top_k, &site)?;
+            let hash_ix = 1 + usize::from(router.selection_bias);
+            let hash = router.scoring == crate::spec::Scoring::SqrtSoftplusHash;
+            let hash_table = if hash { Some(pidx(node.inputs[hash_ix])?) } else { None };
+            let (idx, mut w) = lower_route(b, cx, lb, &l, sel_bias, hash_table, router, *experts, *top_k, &site)?;
             // Gemma-4: each selected weight times its expert's learned scale (Q24).
             if router.per_expert_scale {
-                let pp = pidx(node.inputs[1 + usize::from(router.selection_bias)])?;
+                let pp = pidx(node.inputs[1 + usize::from(router.selection_bias) + usize::from(hash)])?;
                 let e = *experts;
                 let pes = decl(
                     b,
@@ -1991,6 +1994,51 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let w = codes(b, cx, lb, &w)?;
             one(generic::stream_outer(b, cx, lb, &o, &w, *streams, &site, &want)?)
         }
+        Op::MhcMap { streams, iters, eps } => {
+            let mx = operand(lb, node.inputs[0])?;
+            let mx = codes(b, cx, lb, &mx)?;
+            let (bp, sp) = (pidx(node.inputs[1])?, pidx(node.inputs[2])?);
+            dsv4::mhc_map(b, cx, lb, &mx, bp, sp, *streams, *iters, *eps, &site)
+        }
+        Op::MhcPre { eps } => {
+            let mx = operand(lb, node.inputs[0])?;
+            let mx = codes(b, cx, lb, &mx)?;
+            let (bp, sp) = (pidx(node.inputs[1])?, pidx(node.inputs[2])?);
+            one(dsv4::mhc_pre(b, cx, lb, &mx, bp, sp, out_len, *eps, &site)?)
+        }
+        Op::WindowWrite { ratio } => {
+            let row = operand(lb, node.inputs[0])?;
+            let row = codes(b, cx, lb, &row)?;
+            dsv4::window_write(b, cx, lb, node, &row, *ratio)?;
+            Ok(vec![None])
+        }
+        Op::WindowPool { ratio, dim, overlap } => {
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            one(dsv4::window_pool(b, cx, lb, node, *ratio, *dim, *overlap, &site, &want)?)
+        }
+        Op::EntrySelect { heads, dim, ratio, blocks, top } => {
+            let q = operand(lb, node.inputs[0])?;
+            let q = codes(b, cx, lb, &q)?;
+            let w = operand(lb, node.inputs[1])?;
+            let w = codes(b, cx, lb, &w)?;
+            let cand = operand(lb, node.inputs[2])?;
+            let cand = codes(b, cx, lb, &cand)?;
+            one(dsv4::entry_select(b, cx, lb, node, &q, &w, &cand, *heads, *dim, *ratio, *blocks, *top, &format!("entry_select.{i}"))?)
+        }
+        Op::EntryAttention { heads, head_dim, ratio, blocks, scale, select } => {
+            let q = operand(lb, node.inputs[0])?;
+            let q = codes(b, cx, lb, &q)?;
+            let (hl::Ref::State(hs), hl::Ref::State(es)) = (node.inputs[1], node.inputs[2]) else {
+                return Err(LowerError::eval("internal: entry attention without its states"));
+            };
+            let window = lb.windows.get(&hs).cloned().ok_or_else(|| LowerError::eval("internal: the window is read before its append"))?;
+            let sp = pidx(node.inputs[3])?;
+            let sinks = decl_sinks(b, cx, lb, &site, *heads, sp)?;
+            let ids = if *select { Some(operand(lb, node.inputs[5])?.r) } else { None };
+            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let inp = dsv4::EntryInputs { heads: *heads, hd: *head_dim, ratio: *ratio, blocks: *blocks, scale: *scale, window, store: es, sinks, ids };
+            one(dsv4::entry_attention(b, cx, lb, &q, &inp, &site, &want)?)
+        }
         Op::StreamMix { n_in, n_out, transpose } => {
             let x = operand(lb, node.inputs[0])?;
             let c = operand(lb, node.inputs[1])?;
@@ -2062,7 +2110,9 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let n: usize = node.outs[0].iter().product();
             let dt = if want.dt == DType::I32 { DType::I32 } else { DType::I16 };
             let r = b.iota(dt, &[Dim::Fixed(n as u32)], 0, 0, 0);
-            one(Val { r, dt, key: ScaleKey { base: Base::Fixed(1.0), factor: 1.0 }, len: n, site })
+            // Zeros wanted at a wide scale are zeros at that scale (a carry's padding needs no change of scale).
+            let key = if dt == DType::I32 && want.dt == DType::I32 { want.key.clone() } else { ScaleKey { base: Base::Fixed(1.0), factor: 1.0 } };
+            one(Val { r, dt, key, len: n, site })
         }
         other => Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name()))),
     }
@@ -2097,6 +2147,9 @@ fn lower_row_lookup(
             Ok(scales.iter().map(|sw| sw / to).collect())
         }),
     )?;
+    // A table with fewer rows than the vocabulary (Gemma-3n's per-layer table: 262,144 rows, 262,400 token ids — the ids past it are
+    // the multimodal placeholders, which transformers never looks up) holds its last row for them: the program stays total.
+    let at = if rows < hl.vocab && matches!(at, tir::Ref::Input(i) if i == INPUT_TOKEN) { b.clamp(at, 0, rows as i64 - 1, DType::Idx) } else { at };
     let row = b.gather(table, at, 0, 0);
     let mt = b.gather(m, at, 0, 0);
     let st = b.gather(s, at, 0, 0);
@@ -2147,9 +2200,6 @@ fn image_token(b: &mut BlockBuilder<'_>, cursor: tir::Ref, img: ImageRows) -> ti
     let zero = b.c(DType::I8, 0);
     b.select(is_ph, room, zero, DType::I8)
 }
-    // A table with fewer rows than the vocabulary (Gemma-3n's per-layer table: 262,144 rows, 262,400 token ids — the ids past it are
-    // the multimodal placeholders, which transformers never looks up) holds its last row for them: the program stays total.
-    let at = if rows < hl.vocab && matches!(at, tir::Ref::Input(i) if i == INPUT_TOKEN) { b.clamp(at, 0, rows as i64 - 1, DType::Idx) } else { at };
 
 /// Qwen2-VL's M-RoPE positions `(t, h, w)` at this position, from the stream position and the image
 /// cursor as this step starts (the image rows placed before this position). A layer block reads its
@@ -2704,6 +2754,15 @@ enum TableFn {
     ClampedUp {
         limit: f64,
     },
+    /// DeepSeek-V4's gate half (`MLP_GLU_LIMITED_V1`): `act(min(gate, limit))`.
+    ActLimited {
+        act: Act,
+        limit: f64,
+    },
+    /// DeepSeek-V4's up half: `clamp(up, −limit, limit)`.
+    ClampSym {
+        limit: f64,
+    },
 }
 
 impl TableFn {
@@ -2717,6 +2776,8 @@ impl TableFn {
                 g / (1.0 + crate::detmath::exp(-(g * alpha)))
             }
             TableFn::ClampedUp { limit } => x.clamp(-limit, limit) + 1.0,
+            TableFn::ActLimited { act, limit } => crate::float_ref::act(act, x.min(limit) as f32) as f64,
+            TableFn::ClampSym { limit } => x.clamp(-limit, limit),
         }
     }
 }
@@ -3435,6 +3496,7 @@ fn lower_route(
     lb: &mut Lb,
     l: &Val,
     sel_bias: Option<u32>,
+    hash_table: Option<u32>,
     r: &crate::spec::RouterSpec,
     experts: usize,
     k: usize,
@@ -3488,9 +3550,44 @@ fn lower_route(
             let choice = biased(b, cx, lb, sig)?;
             (sig, choice, i32::MIN as i64)
         }
+        // DeepSeek-V4: `√softplus` scores (Q24), the selection bias joining the choice scores only.
+        Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => {
+            let c = b.c(DType::I64, 1i128 << up);
+            let y = b.mul(l.r, c, DType::I64);
+            let y = b.clamp(y, i32::MIN as i64, i32::MAX as i64, DType::I32);
+            let sc = dsv4::sqrt_softplus_q24(b, y);
+            let choice = biased(b, cx, lb, sc)?;
+            (sc, choice, i32::MIN as i64)
+        }
     };
     // Group-limited routing is the library's `grouped_topk` (its top-two group score needs groups
     // of two or more experts; a group of one scores by its one expert, which is `Max`).
+    // `MLP_MOE_ROUTER_HASH_V1`: the experts of the token are its row of the frozen table (a param read by the token id).
+    if r.scoring == Scoring::SqrtSoftplusHash {
+        let tp = hash_table.ok_or_else(|| LowerError::eval("internal: a hash router without its table"))?;
+        let vocab = cx.hl.vocab;
+        let table = decl(
+            b,
+            cx,
+            lb,
+            &format!("{site}.tid2eid"),
+            DType::Idx,
+            &[vocab, k],
+            per_layer(lb),
+            Arc::new(move |c| {
+                let t = c.f(tp)?;
+                if let Some(bad) = t.data.iter().find(|v| **v < 0.0 || **v >= experts as f32) {
+                    return Err(LowerError::not_lowerable(format!("a hash table names expert {bad} of {experts}")));
+                }
+                Ok(IntTensor::idx(vec![vocab, k], t.data.iter().map(|v| *v as u32).collect()))
+            }),
+        )?;
+        let row = b.gather(table, tir::Ref::Input(INPUT_TOKEN), 0, 0);
+        let row = b.clamp(row, 0, experts as i64 - 1, DType::Idx);
+        let kept = b.gather(scores, row, 0, 0);
+        let w = if r.normalize { b.renormalize_recip(kept) } else { kept };
+        return Ok((row, w));
+    }
     let idx = match &r.groups {
         None => b.topk(choice, 0, k as u32),
         Some(g) => {
@@ -3669,6 +3766,14 @@ fn lower_moe(
         let gv = Val { r: g16, dt: DType::I16, key: gk.clone(), len: k * i, site: sub("gate") };
         let (a16, u16_, uk) = match glu {
             crate::spec::Glu::Standard => (lower_table_named(b, cx, lb, &gv, TableFn::Act(act), &sub("act"))?, u16_, uk),
+            // DeepSeek-V4: `act(min(gate, L))` is one table (the float reference records its output as the site `act`); the up half
+            // is clamped at its own scale, `|clamp(u)| ≤ |u|`.
+            crate::spec::Glu::LimitedGlu { limit } => {
+                let a = lower_table_named(b, cx, lb, &gv, TableFn::ActLimited { act, limit }, &sub("act"))?;
+                let uv = Val { r: u16_, dt: DType::I16, key: uk.clone(), len: k * i, site: sub("up") };
+                let u = lower_table_keyed(b, cx, lb, &uv, TableFn::ClampSym { limit }, &sub("up1"), uk.clone())?;
+                (a, u.r, uk)
+            }
             // gpt-oss: two single-input tables — `|g·σ(αg)| ≤ |g|` keeps the gate's scale, and the
             // clamped up half lies in `[1 − l, 1 + l]`.
             crate::spec::Glu::ClampedSwiGlu { alpha, limit } => {

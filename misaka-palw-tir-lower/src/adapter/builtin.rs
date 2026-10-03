@@ -62,6 +62,7 @@ pack!(
     "dbrx",
     "deepseek-v3",
     "deepseek-v32",
+    "deepseek-v4",
     "ernie4-5-moe",
     "exaone",
     "exaone4",

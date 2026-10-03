@@ -552,3 +552,41 @@ fn hl_ops_carry_no_checkpoint_names() {
     }
     assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { .. })));
 }
+
+/// **Gemma-3n's text decoder** (FR-12): four AltUp streams, LAuReL, per-layer inputs, the first ten layers sparse, the last fifteen
+/// sharing keys and values — and no tensor name left unmapped.
+#[test]
+fn gemma_3n_e4b_text_is_altup_with_laurel_and_sparse_layers() {
+    let (s, p) = ok("gemma-3n-e4b-text");
+    assert_eq!(s.num_layers(), 35);
+    assert_eq!(s.altup.map(|a| (a.streams, a.correct_scale)), Some((4, true)));
+    let sparse = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity == Some(0.95))).count();
+    assert_eq!(sparse, 10);
+    assert!(s.layers.iter().all(|l| matches!(&l.residual, Residual::AltUp { laurel: Some(l), .. } if l.rank == 64)));
+    let shared = s.layers.iter().filter(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.kv_share, Some(KvShare::Consumer { .. })))).count();
+    assert_eq!(shared, 15);
+    assert_eq!(p.carries[0].shape, vec![5 * 2048], "four streams and the layer's intermediate");
+}
+
+/// **DeepSeek-V4's text decoder** (FR-10): four mHC streams with 20 Sinkhorn iterations, shared-KV attention (one 512-lane head under 64 query
+/// heads), the first layers hash-routed, compressed entries by layer type (HCA windows of 128; CSA windows of 4 with the indexer over 512
+/// entries) — every tensor name mapped, and a program of at most 16 blocks.
+#[test]
+fn deepseek_v4_flash_is_mhc_over_shared_kv_attention_with_csa_and_hca_layers() {
+    let (s, p) = ok("deepseek-v4-flash");
+    assert_eq!(s.num_layers(), 43);
+    assert_eq!(s.mhc.map(|m| (m.streams, m.iters)), Some((4, 20)));
+    let skv = |l: usize| match &s.layers[l].mixer {
+        Mixer::SharedKv(a) => a,
+        m => panic!("layer {l} is {m:?}"),
+    };
+    assert_eq!((skv(0).heads, skv(0).head_dim, skv(0).o_groups), (64, 512, 8));
+    let c0 = skv(0).compressed.as_ref().expect("a compressed layer");
+    assert_eq!((c0.ratio, c0.overlap, c0.indexer.is_none()), (128, false, true), "the first layers are HCA");
+    let csa: Vec<usize> = (0..43).filter(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.overlap)).collect();
+    assert!(!csa.is_empty() && csa.iter().all(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.ratio == 4 && c.indexer.as_ref().is_some_and(|i| i.topk == 512))));
+    let hash = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Moe(m) if m.router.scoring == Scoring::SqrtSoftplusHash)).count();
+    assert_eq!(hash, 3);
+    assert!(s.layers.iter().all(|l| matches!(&l.ffn, Ffn::Moe(m) if matches!(m.glu, Glu::LimitedGlu { limit } if limit == 10.0))));
+    assert!(p.blocks.len() <= 16, "{} blocks", p.blocks.len());
+}

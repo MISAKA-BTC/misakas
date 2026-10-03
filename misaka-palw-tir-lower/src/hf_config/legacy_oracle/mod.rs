@@ -533,6 +533,7 @@ impl P<'_> {
             head: s.head,
             hyper: None,
             altup: None,
+            mhc: None,
             output: OutputSpec::Logits,
             adapter: None,
             hf: HfStorage {

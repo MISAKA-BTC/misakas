@@ -110,6 +110,29 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.macs_fixed += (*n_in * *n_out) as u64 * (out / (*n_out).max(1) as u64);
                     c.elementwise += out;
                 }
+                Op::MhcMap { streams, iters, .. } => {
+                    c.elementwise += (8 * *iters * *streams * *streams + 16 * *streams * *streams) as u64;
+                    c.transcendental += (*streams * *streams + 2 * *streams) as u64;
+                }
+                Op::MhcPre { .. } => {
+                    c.elementwise += 4 * out.max(1);
+                    c.transcendental += out.max(1);
+                }
+                Op::WindowWrite { .. } => c.elementwise += out.max(1),
+                Op::WindowPool { ratio, dim, overlap } => {
+                    let rows = (*ratio * if *overlap { 2 } else { 1 } * *dim) as u64;
+                    c.elementwise += 4 * rows;
+                    c.transcendental += rows;
+                }
+                Op::EntryAttention { heads, head_dim, blocks, .. } => {
+                    c.macs_fixed += (2 * *heads * *head_dim * *blocks) as u64;
+                    c.macs_per_hist_row += (2 * *heads * *head_dim) as u64;
+                    c.transcendental += (*heads * *blocks) as u64;
+                }
+                Op::EntrySelect { heads, dim, blocks, .. } => {
+                    c.macs_fixed += (*heads * *dim * *blocks) as u64;
+                    c.elementwise += *blocks as u64;
+                }
                 Op::RmsMatch { .. } | Op::GaussianTopK { .. } => {
                     c.elementwise += 3 * out;
                     c.transcendental += 1;
