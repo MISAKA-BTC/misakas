@@ -549,6 +549,7 @@ impl P<'_> {
             },
             notes: std::mem::take(&mut self.notes),
             prefix_lm: false,
+            embed_carry: false,
         }
     }
 }
@@ -671,6 +672,7 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         sparse: None,
         gate: None,
         v_scale: 1.0,
+        in_dim: None,
     }
 }
 

@@ -692,7 +692,14 @@ impl<'a> Resolver<'a> {
         Resolver { src, aliases: aliases.to_vec(), touched: RefCell::new(BTreeSet::new()), ignored_prefixes: vec![], names }
     }
 
+    /// The checkpoint's tensor for `name`. **`TENSOR_NAME_ALTERNATIVES_V1`**: a name may list alternatives, `a|b|c` — complete names,
+    /// the first the checkpoint has is the one (a family whose checkpoints spell a tensor two ways: Zamba2's Mamba layer under
+    /// `layers.N.mamba` or, in a hybrid layer, `layers.N.mamba_decoder.mamba`; Kimi-Linear's dense MLP under `mlp` as the hub has it
+    /// or `block_sparse_moe` as `transformers` 5.17 saves it). A name with no alternative is as before.
     pub fn resolve(&self, name: &str) -> Option<String> {
+        if name.contains('|') {
+            return name.split('|').find_map(|alt| self.resolve(alt));
+        }
         if self.names.contains(name) {
             return Some(name.to_string());
         }

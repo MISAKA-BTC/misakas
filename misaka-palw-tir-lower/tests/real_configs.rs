@@ -592,3 +592,27 @@ fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
     let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
     assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
 }
+
+/// **Zamba2** (`ATTN_SHARED_BLOCK_V1` and its companions, a data adapter) at the class's own defaults (the shape `Zamba2Config()` documents as the
+/// 2.7B one): 54 layers, nine of them hybrid by the default pattern, one shared block, an adapter rank of 128 on the shared MLP. Written from the class's
+/// defaults, so the test is of the structure (which layers are hybrid, what is shared, that every param binds), not of any release's numbers.
+#[test]
+fn zamba2_at_the_class_defaults_has_nine_hybrid_layers_over_one_shared_block_and_binds_every_tensor() {
+    let (s, p) = ok("zamba2-class-defaults");
+    assert_eq!(s.layers.len(), 54);
+    let hybrid: Vec<usize> = (0..54).filter(|l| s.layers[*l].pre_branch.is_some()).collect();
+    assert_eq!(hybrid, [6, 12, 18, 24, 30, 36, 42, 47, 51]);
+    assert!(hybrid.iter().all(|l| s.layers[*l].pre_branch.as_ref().is_some_and(|b| b.group == 0 && b.weights_layer == 6)));
+    let Mixer::Mamba2(m) = &s.layers[0].mixer else { panic!() };
+    assert_eq!((m.heads, m.head_dim, m.state, m.conv_kernel, m.groups), (8, 640, 64, 4, 1));
+    assert!(m.conv_bias && m.dt_min == 0.0 && m.norm_eps == 1e-5);
+    let pb = s.layers[6].pre_branch.as_ref().unwrap();
+    assert_eq!((pb.attn.heads, pb.attn.head_dim, pb.attn.in_dim), (32, 160, Some(5120)));
+    assert_eq!(pb.mlp.intermediate, 10240);
+    assert_eq!(pb.lowrank.map(|l| (l.rank, l.attn)), Some((128, false)));
+    assert!(s.head.tied);
+    assert_eq!(s.hf.names["pb.attn.q"], "model.layers.{B}.shared_transformer.self_attn.q_proj");
+    // One shared set of weights for nine layers; nine adapters of their own.
+    assert!(p.params.iter().filter(|d| d.name == "pb0.attn.q.w").count() == 1);
+    assert_eq!(p.params.iter().filter(|d| d.name.ends_with(".mlp.gate.lora_a")).count(), 9);
+}

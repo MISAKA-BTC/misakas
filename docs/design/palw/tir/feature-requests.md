@@ -37,7 +37,8 @@ code, not yet run. Semantics are cited as `models/<arch>/modeling_<arch>.py:<Cla
 | FR-31 attention value scale | **landed** (`ATTN_VALUE_SCALE_V1`) | `mimo_v2_flash` Level B (and the `_unscaled` variant) |
 | FR-35 rotation by -theta | **landed** (`ROPE_REVERSED_V1`) | `nanochat` Level B |
 | FR-16 Kimi delta attention, NoPE latent attention | **landed** (`Mixer::Kda`, `MlaSpec.rope: None`; no primitive) | `kimi_linear` Level B, every stage incl. court; `generic-frontend-v1.md` §9.14 |
-| FR-03, 04, 05, 06, 08..15, 17, 19..24, 27, 28, 32..34 | open | see each |
+| FR-13 shared attention block (Zamba2) | **landed** (`PreBranch`, `ModelSpec.embed_carry`, `AttnSpec.in_dim`, global shared params, `TENSOR_NAME_ALTERNATIVES_V1`; no primitive) | `zamba2` Level B, every stage incl. court; `generic-frontend-v1.md` §9.15 |
+| FR-03, 04, 05, 06, 08..12, 14, 15, 17, 19..24, 27, 28, 32..34 | open | see each |
 
 ## Findings for lane G (from the re-measure on `239179132`)
 

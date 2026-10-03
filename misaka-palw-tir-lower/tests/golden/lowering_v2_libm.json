@@ -827,6 +827,12 @@
     "params": 65,
     "program": "bdb0b1d1dfe4e0187908e4f67b3b0c916b071668fce95fdd8e5157f023d11480c6b1e3e0c03ddbfe2810352ca0e8936a3eb9e55d94eb4603662848e6d063b8e7"
   },
+  "hf/zamba2": {
+    "artifact": "1504bbb10fb8ed891d4997f049380bf9669471d8c3b380b013f37d773f8886006b0d1e5d861f9ecefb7e4376a2a410ba7aced28f350136090913d09816ad4dff",
+    "nodes": 1760,
+    "params": 366,
+    "program": "73d8ec61262efb7bef6a9121acd3917fec2ccebee420a00bd441c732da0657fab03bd412174f3e613a98f2dbc78d8c5f649d927fe4babf9d0f029421dd882167"
+  },
   "real/apertus-8b-2509.json": {
     "nodes": 341,
     "params": 66,
@@ -1176,5 +1182,10 @@
   },
   "real/t5-small.json": {
     "refused": true
+  },
+  "real/zamba2-class-defaults.json": {
+    "nodes": 4153,
+    "params": 916,
+    "program": "ef3be0e04abd83a377620147bd92a6649a9583a0686a0d8a373fc29f08b1b02d4c1ff5ce277830d39f56876943ca7fcc80be07b35b0f478ce4453270d0f990af"
   }
 }

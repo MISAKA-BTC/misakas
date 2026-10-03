@@ -116,7 +116,7 @@ fn qwen_hybrid_layer(q: &QwenHybrid, i: usize, ffn: Ffn) -> LayerSpec {
     } else {
         Mixer::GatedDeltaNet(q.gdn.clone())
     };
-    LayerSpec { mixer, ffn, residual: pre_norm(norm), post_scale: 1.0 }
+    LayerSpec { mixer, ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
 }
 
 /// Qwen3-Next: 3 GDN layers : 1 gated-attention layer, MoE with a sigmoid-gated shared expert.
@@ -345,7 +345,7 @@ pub(crate) fn jamba(p: &mut P) -> Result<ArchSpec> {
                 Mixer::Mamba(mamba.clone())
             };
             let ffn = if i % ep == eo { Ffn::Moe(m.clone()) } else { Ffn::Mlp(gated_mlp(inter, act, false)) };
-            LayerSpec { mixer, ffn, residual: pre_norm(norm), post_scale: 1.0 }
+            LayerSpec { mixer, ffn, residual: pre_norm(norm), pre_branch: None, post_scale: 1.0 }
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -493,7 +493,7 @@ pub(crate) fn mamba(p: &mut P, falcon: bool) -> Result<ArchSpec> {
             mixer: Mixer::Mamba(spec.clone()),
             ffn: Ffn::None,
             residual: Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: None, post_ffn: None, multiplier: 1.0 },
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = BTreeMap::new();
@@ -592,7 +592,7 @@ pub(crate) fn mamba2(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Mamba2(spec.clone()),
             ffn: Ffn::None,
             residual: Residual::Sequential { pre_mixer: Some(norm), post_mixer: None, pre_ffn: None, post_ffn: None, multiplier: 1.0 },
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let mut nm = BTreeMap::new();
@@ -642,7 +642,7 @@ pub(crate) fn rwkv4(p: &mut P) -> Result<ArchSpec> {
             }),
             ffn: Ffn::RwkvChannel(RwkvChannelSpec { version: 4, intermediate: inter }),
             residual: pre_norm(norm),
-            post_scale: if rescale > 0 && (i + 1) % rescale == 0 { 0.5 } else { 1.0 },
+            pre_branch: None, post_scale: if rescale > 0 && (i + 1) % rescale == 0 { 0.5 } else { 1.0 },
         })
         .collect();
     let l = "rwkv.blocks.{L}.";

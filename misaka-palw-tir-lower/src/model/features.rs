@@ -181,6 +181,11 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MIXER_GDN_V1", Mixer, "gated delta rule (any key:value head ratio)", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "S ← S·exp(g); S += k (β(v − Sᵀk))ᵀ per value head, the key heads mapped to the value heads by grouping."),
     feature!("MIXER_KDA_V1", Mixer, "Kimi delta attention: the gated delta rule with a channel-wise (per key channel) forget gate, a low-rank output gate and a sigmoid-gated per-head norm", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "gdn_step_q36 with the decay broadcast [heads, 1, d_k] instead of [heads, 1, 1] (the only change); the decay chain exp(-exp(A_log[h])·softplus(f_b(f_a x) + dt_bias)) runs on nheads·d_k channels (two IntExp and two IntLn each); q, k, v have a depthwise causal convolution each. No primitive."),
     feature!("MIXER_MLA_NOPE_V1", Mixer, "latent attention with no rotation at all: the rope slice of q and the shared key are raw projections", Implemented, [], NoReq, ["fidelity_tiny::kimi_linear", "hf_fixtures::kimi_linear"], "Kimi-Linear's MLA layers: MIXER_MLA_V1 with its two Rope nodes left out (MlaSpec.rope = None); no primitive."),
+    feature!("ATTN_SHARED_BLOCK_V1", Attention, "one attention + MLP block whose weights are shared by several layers: one set of integer tensors in the artifact, each occurrence with its own activation scales, KV history and low-rank adapters", Implemented, [], NoReq, ["fidelity_tiny::zamba2", "hf_fixtures::zamba2"], "Zamba2's shared transformer: global params (pb{group}.*) read by the pre-branch of every layer of the group; no primitive."),
+    feature!("EMBED_CARRY_V1", Embedding, "the embedding block's output carried through every layer (read by the layers that need the original embedding)", Implemented, [], NoReq, ["fidelity_tiny::zamba2", "hf_fixtures::zamba2"], "One more i16 carry, filled by the pre block; a layer that does not read it passes it through (an identity clamp). No primitive."),
+    feature!("LAYER_PRE_BRANCH_V1", Residual, "an attention + MLP branch over [hidden | embedding] whose output is added to the mixer's input", Implemented, ["Concat"], NoReq, ["fidelity_tiny::zamba2", "hf_fixtures::zamba2"], "Zamba2's hybrid layer: h + mixer(norm(h + branch(norm(concat[h, e0])))); the branch has no residual of its own."),
+    feature!("LINEAR_LOWRANK_ADAPTER_V1", Attention, "a per-layer low-rank adapter of the base model on a projection: y = W x + B (A x)", Implemented, [], NoReq, ["fidelity_tiny::zamba2", "hf_fixtures::zamba2"], "The unmerged LoRA path (an external adapter takes it too) with scale 1, the A and B tensors the occurrence's own; Zamba2's shared MLP and (optionally) q/k/v."),
+    feature!("TENSOR_NAME_ALTERNATIVES_V1", Storage, "a checkpoint tensor named by alternatives, `a|b`: the first the checkpoint has", Implemented, [], NoReq, ["fidelity_tiny::zamba2", "fidelity_tiny::kimi_linear"], "Resolved when the weights are read (`Resolver::resolve`), so every binding (float reference, conversion, streaming) sees it; no effect on the program."),
     feature!("MIXER_MAMBA_V1", Mixer, "Mamba-1 selective scan", Implemented, ["StateWrite", "IntLn", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba", "fidelity_tiny::falcon_mamba"], "Per-channel, per-state decay."),
     feature!("MIXER_MAMBA2_V1", Mixer, "Mamba-2 state-space duality step", Implemented, ["StateWrite", "IntLn", "Broadcast", "Compare", "Select", "Concat", "Slice", "Transpose"], NoReq, ["fidelity_tiny::mamba2"], "Scalar decay per head, grouped B/C."),
     feature!("MIXER_RWKV4_V1", Mixer, "RWKV-4 time mix", Implemented, ["StateWrite", "Compare", "Select"], NoReq, ["fidelity_tiny::rwkv"], "WKV with the (num, den, max) stabilised state."),
@@ -289,7 +294,6 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MOE_LATENT_PROJ_V1", Ffn, "the routed experts run in a latent space: a projection before them and one after, the router and the shared expert on the layer's input", Implemented, [], NoReq, ["fidelity_tiny::nemotron_h_latent", "hf_fixtures::nemotron_h_latent"], "Nemotron-H's moe_latent_size (fc1_latent_proj, fc2_latent_proj): two linears around the MoE experts; the experts' width is the latent width."),
     feature!("MAMBA2_GATE_NORM_VARIANTS_V1", Mixer, "the Mamba-2 gate and RMS norm in either order, or the gate alone", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "norm(y*silu(z)) (Mamba-2, Nemotron-H), norm(y)*silu(z) (Falcon-H1 with mamba_norm_before_gate) or y*silu(z) with no norm (Falcon-H1 without mamba_rms_norm): the existing gated RMS norm with its order flag, or an activation and a Mul."),
     feature!("MAMBA2_MUP_V1", Mixer, "a multiplier on each of the five chunks [z | x | B | C | dt] of the Mamba-2 projection, before the convolution", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1's mup_vector (ssm_multipliers). The depthwise convolution is channel-wise, so x, B and C run as three linears and three convolutions of their own, each on its scaled chunk: the same function, with `Op::Scale` (a scale-key change) for the multipliers."),
-    feature!("ATTN_SHARED_BLOCK_V1", Attention, "one attention block's weights reused at several depths", Missing, [], NoReq, [], "Zamba2."),
     // ───────────────────────────── storage ─────────────────────────────
     feature!("QUANT_GPTQ_V1", Storage, "GPTQ-quantised projections, lowered from the stored integers", Implemented, [], NoReq, ["quantized::gptq_b4_g128_act_asym"], "Grouped integer matmul with the checkpoint's scales."),
     feature!("QUANT_AWQ_V1", Storage, "AWQ-quantised projections", Implemented, [], NoReq, ["quantized::awq_g128"], "Same, activation-aware scales."),
@@ -534,6 +538,12 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
         norm_features(&mut u, &h.norm, None);
         u.add("NORM_GROUPED_V1", None, format!("{} streams", h.streams));
     }
+    if s.embed_carry {
+        u.add("EMBED_CARRY_V1", None, "");
+    }
+    if s.hf.names.values().any(|n| n.contains('|')) {
+        u.add("TENSOR_NAME_ALTERNATIVES_V1", None, "");
+    }
     // layers
     for (l, ls) in s.layers.iter().enumerate() {
         let lay = Some(l);
@@ -602,6 +612,18 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 u.add("MLP_GLU_CLAMPED_V1", lay, "");
             }
         };
+        // `LAYER_PRE_BRANCH_V1`: the branch's own attention, norms and MLP, and what it shares and adapts.
+        if let Some(pb) = &ls.pre_branch {
+            u.add("LAYER_PRE_BRANCH_V1", lay, format!("group {}, over [hidden | embedding]", pb.group));
+            u.add("ATTN_SHARED_BLOCK_V1", lay, format!("group {}", pb.group));
+            mixer_features(&mut u, lay, l, &Mixer::Attention(pb.attn.clone()));
+            mlp(&mut u, &pb.mlp);
+            norm_features(&mut u, &pb.in_norm, lay);
+            norm_features(&mut u, &pb.mid_norm, lay);
+            if let Some(lr) = pb.lowrank {
+                u.add("LINEAR_LOWRANK_ADAPTER_V1", lay, format!("rank {}", lr.rank));
+            }
+        }
         match &ls.ffn {
             Ffn::None => {}
             Ffn::Mlp(m) => mlp(&mut u, m),

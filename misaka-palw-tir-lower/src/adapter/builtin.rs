@@ -52,6 +52,7 @@ pack!(
     "apertus",
     "lfm2",
     "kimi-linear",
+    "zamba2",
     "nemotron-h",
     "falcon-h1",
     "bert",

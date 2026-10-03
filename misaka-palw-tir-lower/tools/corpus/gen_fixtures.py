@@ -285,6 +285,22 @@ def build_causal(e, outdir, probe):
             out = model(input_ids=ids).logits
         return {"model": type(model).__name__, "logits": list(out.shape)}
     randomise(model, hidden_of(cfg), seed)
+    if e["options"].get("embed_mul"):
+        # A tied head over randn rows puts the logits at +-20 and the integer program's W8 noise, compounded through a deep stack, at a KL a tiny
+        # fixture's tolerance does not take; a smaller table keeps the same function at a logit scale of a few units.
+        with torch.no_grad():
+            emb = model.get_input_embeddings().weight
+            emb.mul_(e["options"]["embed_mul"])
+            emb.copy_(emb.to(torch.bfloat16).to(torch.float32))
+    if e["options"].get("dt_bias"):
+        # Mamba-2's step-size bias: a bias that keeps softplus(dt) well above the prefill clamp `time_step_min` (the program is per position
+        # and follows the recurrent decode, which does not clamp; see FR-27(d)). Same option as tools/gen_hf_fixtures.py.
+        lo, hi = e["options"]["dt_bias"]
+        gen = torch.Generator().manual_seed(seed + 5)
+        with torch.no_grad():
+            for pname, p in model.named_parameters():
+                if pname.endswith("dt_bias"):
+                    p.copy_((torch.rand(p.shape, generator=gen) * (hi - lo) + lo).to(torch.bfloat16).to(torch.float32))
     d, fresh = save_and_reload(e, model, cfg, outdir)
     with torch.no_grad():
         full = fresh(input_ids=ids).logits[0].tolist()

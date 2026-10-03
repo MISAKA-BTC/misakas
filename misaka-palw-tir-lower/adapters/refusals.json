@@ -9,7 +9,6 @@
     {"architectures": ["ChatGLMModel", "ChatGLMForConditionalGeneration"], "missing": ["REFERENCE_REMOTE_CODE_V1"], "why": "ChatGLM remote code is not modelled"},
     {"architectures": ["CodeGenForCausalLM"], "missing": ["WEIGHTS_QKV_MP_PARTITIONED_V1"], "why": "CodeGen's mp_num-partitioned qkv layout is not modelled"},
     {"architectures": ["MiniCPM3ForCausalLM"], "missing": ["REFERENCE_REMOTE_CODE_V1", "SCALE_MUP_V1"], "why": "MiniCPM3 (MLA + muP remote code) is not modelled yet"},
-    {"architectures": ["Zamba2ForCausalLM"], "missing": ["ATTN_SHARED_BLOCK_V1"], "why": "Zamba2 shared-attention hybrid is not modelled yet"},
     {"architectures": ["Rwkv5ForCausalLM", "Rwkv6ForCausalLM"], "missing": ["MIXER_RWKV56_V1", "REFERENCE_REMOTE_CODE_V1"], "why": "RWKV-5/6 exist only as remote code (modeling_rwkv5/6.py), not in transformers; their group-norm eps, rescale and LoRA widths cannot be checked offline — the WKV-5/6 recurrence is in the TIR library, the config is not lowered yet"},
     {"architectures": ["RWKV7ForCausalLM"], "missing": ["MIXER_RWKV7_V1", "REFERENCE_REMOTE_CODE_V1"], "why": "RWKV-7 is implemented by flash-linear-attention, not transformers; its config keys and tensor names cannot be checked offline — the WKV-7 recurrence is in the TIR library, the config is not lowered yet"}
   ]

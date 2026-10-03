@@ -23,6 +23,12 @@ struct M<'a> {
     /// The HL params an adapter binds by an expression (`spec.hf.weights`, `WEIGHTS_EXPR_V1`): their default
     /// binding is not derived, so the roles it would read need not be named.
     overrides: BTreeSet<String>,
+    /// A role namespace (`ATTN_SHARED_BLOCK_V1`: the shared branch's roles are `pb.attn.q`, `pb.mlp.gate_up`, … while its binder reuses the
+    /// attention and MLP binders, which ask for `attn.q`, `mlp.gate_up`): a role is looked up under `{scope}.{role}` first, then as itself.
+    scope: Option<String>,
+    /// Placeholders a layer's roles may carry, filled from the layer's spec: `{B}` the layer that stores a shared branch's weights, `{O}`
+    /// this layer's ordinal among the layers with a pre-branch (`LAYER_PRE_BRANCH_V1`).
+    subs: Vec<(&'static str, String)>,
 }
 
 /// The role a marker in `s` stands for, if any.
@@ -43,10 +49,17 @@ fn missing_role(s: &Src) -> Option<String> {
     }
 }
 
+/// `name` + `suffix`, the suffix on EVERY alternative of a name that lists some (`TENSOR_NAME_ALTERNATIVES_V1`: `a|b` + `.weight`
+/// is `a.weight|b.weight`).
+fn suffixed(name: &str, suffix: &str) -> String {
+    name.split('|').map(|a| format!("{a}{suffix}")).collect::<Vec<_>>().join("|")
+}
+
 impl M<'_> {
     fn role(&self, role: &str) -> Result<String> {
-        match self.st.name(role) {
-            Some(n) => Ok(n.to_string()),
+        let scoped = self.scope.as_ref().and_then(|s| self.st.name(&format!("{s}.{role}")));
+        match scoped.or_else(|| self.st.name(role)) {
+            Some(n) => Ok(self.subs.iter().fold(n.to_string(), |t, (k, v)| t.replace(k, v))),
             // With expressions in play a role may be absent on purpose: every param that would read it is
             // overridden. `put` turns the marker back into the error for any other.
             None if !self.overrides.is_empty() => Ok(format!("{MISSING}{role}\u{2}")),
@@ -76,7 +89,7 @@ impl M<'_> {
         if let Some(fmt) = self.quantised(role)? {
             return Ok(Src::Quant { module: self.role(role)?, fmt });
         }
-        let t = Src::t(format!("{}.weight", self.role(role)?));
+        let t = Src::t(suffixed(&self.role(role)?, ".weight"));
         Ok(if self.st.conv1d_weights { t.transpose() } else { t })
     }
     /// The format a linear role is stored in, when the checkpoint is pre-quantised and the role is
@@ -134,7 +147,7 @@ impl M<'_> {
         Ok(a.then(|| q.fmt.clone()))
     }
     fn b(&self, role: &str) -> Result<Src> {
-        Ok(Src::t(format!("{}.bias", self.role(role)?)))
+        Ok(Src::t(suffixed(&self.role(role)?, ".bias")))
     }
     /// A plain linear: HL `name.w`/`name.b` ← HF `role.weight`/`role.bias`.
     fn lin(&mut self, name: &str, role: &str, bias: bool) -> Result<()> {
@@ -150,11 +163,11 @@ impl M<'_> {
     fn norm(&mut self, name: &str, role: &str, spec: &NormSpec) -> Result<()> {
         if spec.gain != Gain::None {
             let r = self.role(role)?;
-            self.put(format!("{name}.gain"), Src::t(format!("{r}.weight")))?;
+            self.put(format!("{name}.gain"), Src::t(suffixed(&r, ".weight")))?;
         }
         if spec.bias {
             let r = self.role(role)?;
-            self.put(format!("{name}.bias"), Src::t(format!("{r}.bias")))?;
+            self.put(format!("{name}.bias"), Src::t(suffixed(&r, ".bias")))?;
         }
         Ok(())
     }
@@ -164,29 +177,29 @@ impl M<'_> {
 pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     // The adapter's expressions (`WEIGHTS_EXPR_V1`) replace the default binding of the params they name.
     let overrides = crate::weights::expr::parse_all(&spec.hf.weights, &prog.params)?;
-    let mut m = M { st: &spec.hf, out: BTreeMap::new(), overrides: overrides.keys().cloned().collect() };
+    let mut m = M { st: &spec.hf, out: BTreeMap::new(), overrides: overrides.keys().cloned().collect(), scope: None, subs: vec![] };
     // Embedding, positions, head.
-    m.put("embed.table", Src::t(format!("{}.weight", m.role("embed")?)))?;
+    m.put("embed.table", Src::t(suffixed(&m.role("embed")?, ".weight")))?;
     if spec.embedding.proj_in {
         m.lin("embed.proj_in", "proj_in", spec.embedding.proj_in_bias)?;
     }
     if spec.embedding.positions.is_some() {
-        m.put("embed.pos_table", Src::t(format!("{}.weight", m.role("pos_embed")?)))?;
+        m.put("embed.pos_table", Src::t(suffixed(&m.role("pos_embed")?, ".weight")))?;
     }
     if let Some(n) = &spec.embedding.norm {
         m.norm("embed.norm", "embed_norm", n)?;
     }
     if spec.embedding.type_rows.is_some() {
-        m.put("embed.type_table", Src::t(format!("{}.weight", m.role("type_embed")?)))?;
+        m.put("embed.type_table", Src::t(suffixed(&m.role("type_embed")?, ".weight")))?;
     }
     if let Some(dis) = &spec.embedding.disentangled {
-        m.put("rel.table", Src::t(format!("{}.weight", m.role("rel_embed")?)))?;
+        m.put("rel.table", Src::t(suffixed(&m.role("rel_embed")?, ".weight")))?;
         if let Some(n) = &dis.norm {
             m.norm("rel.norm", "rel_norm", n)?;
         }
     }
     if spec.embedding.rel_bias.is_some() {
-        m.put("attn.rel_bias", Src::t(format!("{}.weight", m.role("rel_bias")?)))?;
+        m.put("attn.rel_bias", Src::t(suffixed(&m.role("rel_bias")?, ".weight")))?;
     }
     if let Some(n) = &spec.final_norm {
         m.norm("final_norm", "final_norm", n)?;
@@ -202,7 +215,7 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         let w = m.w("embed_proj")?;
         m.put("embed.proj.w", w)?;
         if bias {
-            m.put("embed.proj.b", Src::t(format!("{}.bias", m.role("embed_proj")?)))?;
+            m.put("embed.proj.b", Src::t(suffixed(&m.role("embed_proj")?, ".bias")))?;
         }
     }
     if logits && let Some(t) = &spec.head.transform {
@@ -216,14 +229,14 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     if logits && !spec.head.tied {
         let w = match m.quantised("lm_head")? {
             Some(fmt) => Src::Quant { module: m.role("lm_head")?, fmt },
-            None => Src::t(format!("{}.weight", m.role("lm_head")?)),
+            None => Src::t(suffixed(&m.role("lm_head")?, ".weight")),
         };
         m.put("head.w", w)?;
     }
     if logits && spec.head.bias {
         let b = match spec.hf.name("lm_head_bias") {
             Some(n) => Src::t(n),
-            None => Src::t(format!("{}.bias", m.role("lm_head")?)),
+            None => Src::t(suffixed(&m.role("lm_head")?, ".bias")),
         };
         m.put("head.b", b)?;
     }
@@ -292,8 +305,8 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             }
             if let Some(p) = ple {
                 // The layer's slices of the two tensors packed over the layers.
-                m.put("ple.proj.w", Src::t(format!("{}.weight", m.role("ple.proj")?)).take(0, Pick::PerLayer { len: p.dim }))?;
-                m.put("ple.table", Src::t(format!("{}.weight", m.role("ple.table")?)).take(1, Pick::PerLayer { len: p.dim }))?;
+                m.put("ple.proj.w", Src::t(suffixed(&m.role("ple.proj")?, ".weight")).take(0, Pick::PerLayer { len: p.dim }))?;
+                m.put("ple.table", Src::t(suffixed(&m.role("ple.table")?, ".weight")).take(1, Pick::PerLayer { len: p.dim }))?;
                 m.norm("ple.norm", "ple.norm", &p.norm)?;
                 m.lin("ple.gate", "ple.gate", false)?;
                 m.lin("ple.out", "ple.out", false)?;
@@ -317,6 +330,9 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             }
         }
     }
+    if let Some(pb) = &ls.pre_branch {
+        pre_branch(m, pb)?;
+    }
     bind_mixer(m, spec, &ls.mixer, rescale)?;
     match &ls.ffn {
         Ffn::None => {}
@@ -336,6 +352,50 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         }
     }
     Ok(())
+}
+
+/// **`LAYER_PRE_BRANCH_V1`**: the shared branch's weights (the attention, its two norms and the MLP: the group's, read from the layer that
+/// stores them, `{B}`), this layer's low-rank adapters (index `{O}` of the checkpoint's adapter lists) and its own `out` projection.
+fn pre_branch(m: &mut M, pb: &PreBranch) -> Result<()> {
+    m.scope = Some("pb".into());
+    m.subs = vec![("{B}", pb.weights_layer.to_string()), ("{O}", pb.ordinal.to_string())];
+    let r = (|| -> Result<()> {
+        m.norm(&pb.in_norm_name(), "in_norm", &pb.in_norm)?;
+        let mut attn = pb.attn.clone();
+        attn.param_prefix = Some(pb.attn_prefix());
+        attention(m, &attn)?;
+        m.norm(&pb.mid_norm_name(), "mid_norm", &pb.mid_norm)?;
+        let mut mlp_spec = pb.mlp.clone();
+        mlp_spec.name = Some(pb.mlp_name());
+        if m.st.mlp != MlpLayout::FusedGateFirst {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the shared MLP's gate and up projections are one tensor, `[gate | up]` rows"));
+        }
+        mlp(m, &mlp_spec, "mlp", m.st.mlp)?;
+        if let Some(lr) = pb.lowrank {
+            let base = pb.adapter_base();
+            let i = pb.mlp.intermediate;
+            if lr.attn {
+                for part in ["q", "k", "v"] {
+                    let a = Src::t(suffixed(&m.role(&format!("attn.{part}_adapter.a"))?, ".weight"));
+                    let b = Src::t(suffixed(&m.role(&format!("attn.{part}_adapter.b"))?, ".weight"));
+                    m.put(format!("{base}.attn.{part}.lora_a"), a)?;
+                    m.put(format!("{base}.attn.{part}.lora_b"), b)?;
+                }
+            }
+            // The fused gate/up adapter: one `A`, and `B`'s first half of rows goes to the gate, the second to the up projection.
+            let a = Src::t(suffixed(&m.role("mlp.gate_up_adapter.a")?, ".weight"));
+            let b = Src::t(suffixed(&m.role("mlp.gate_up_adapter.b")?, ".weight"));
+            m.put(format!("{base}.mlp.gate.lora_a"), a.clone())?;
+            m.put(format!("{base}.mlp.up.lora_a"), a)?;
+            m.put(format!("{base}.mlp.gate.lora_b"), b.clone().rows(Pick::Range { start: 0, len: i }))?;
+            m.put(format!("{base}.mlp.up.lora_b"), b.rows(Pick::Range { start: i, len: i }))?;
+        }
+        Ok(())
+    })();
+    m.scope = None;
+    m.subs.clear();
+    r?;
+    m.lin("pb.out", "pb.out", false)
 }
 
 /// The params of one mixer (a [`Mixer::Parallel`]'s branches each in turn; [`Mixer::None`] has none).
@@ -508,7 +568,7 @@ fn ple_ngram(m: &mut M, spec: &ArchSpec, p: &NgramPleSpec) -> Result<()> {
         .max()
         .unwrap_or(0);
     let shards = m.st.table_shards.max(1);
-    let table = Src::t(format!("{}.weight", m.role("ple.table")?)).stack('S', shards).pad_rows(rows_max);
+    let table = Src::t(suffixed(&m.role("ple.table")?, ".weight")).stack('S', shards).pad_rows(rows_max);
     m.put("ple.ngram.table", table)
 }
 
@@ -544,9 +604,9 @@ fn mla(m: &mut M, a: &MlaSpec) -> Result<()> {
 
 fn conv(m: &mut M, name: &str, ch: usize, k: usize, bias: bool) -> Result<()> {
     let r = m.role(name)?;
-    m.put(format!("{name}.w"), Src::t(format!("{r}.weight")).reshape(vec![ch, k]))?;
+    m.put(format!("{name}.w"), Src::t(suffixed(&r, ".weight")).reshape(vec![ch, k]))?;
     if bias {
-        m.put(format!("{name}.b"), Src::t(format!("{r}.bias")))?;
+        m.put(format!("{name}.b"), Src::t(suffixed(&r, ".bias")))?;
     }
     Ok(())
 }
@@ -581,7 +641,7 @@ fn gdn(m: &mut M, g: &GdnSpec) -> Result<()> {
     conv(m, "gdn.conv", 2 * nk * dk + nv * dv, g.conv_kernel, false)?;
     m.put("gdn.dt_bias", Src::t(m.role("gdn.dt_bias")?))?;
     m.put("gdn.A", Src::t(m.role("gdn.A_log")?).map(MapFn::NegExp))?;
-    m.put("gdn.norm.gain", Src::t(format!("{}.weight", m.role("gdn.norm")?)))?;
+    m.put("gdn.norm.gain", Src::t(suffixed(&m.role("gdn.norm")?, ".weight")))?;
     m.lin("gdn.out", "gdn.out", false)
 }
 
@@ -601,7 +661,7 @@ fn kda(m: &mut M, k: &KdaSpec) -> Result<()> {
         "kda.A",
         Src::t(m.role("kda.A_log")?).reshape(vec![k.heads]).map(MapFn::NegExp).take(0, Pick::Repeat { each: k.head_dim, groups: k.heads }),
     )?;
-    m.put("kda.norm.gain", Src::t(format!("{}.weight", m.role("kda.norm")?)))
+    m.put("kda.norm.gain", Src::t(suffixed(&m.role("kda.norm")?, ".weight")))
 }
 
 fn mamba(m: &mut M, s: &MambaSpec) -> Result<()> {
@@ -660,9 +720,9 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
         let r = m.role("mamba2.conv")?;
         for (name, start, ch) in [("x", 0, inner), ("b", inner, gn), ("c", inner + gn, gn)] {
             let pick = Pick::Range { start, len: ch };
-            m.put(format!("mamba2.conv.{name}.w"), Src::t(format!("{r}.weight")).rows(pick.clone()).reshape(vec![ch, s.conv_kernel]))?;
+            m.put(format!("mamba2.conv.{name}.w"), Src::t(suffixed(&r, ".weight")).rows(pick.clone()).reshape(vec![ch, s.conv_kernel]))?;
             if s.conv_bias {
-                m.put(format!("mamba2.conv.{name}.b"), Src::t(format!("{r}.bias")).rows(pick))?;
+                m.put(format!("mamba2.conv.{name}.b"), Src::t(suffixed(&r, ".bias")).rows(pick))?;
             }
         }
     } else {
@@ -672,7 +732,7 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
     m.put("mamba2.A", Src::t(m.role("mamba2.A_log")?).map(MapFn::NegExp))?;
     m.put("mamba2.D", Src::t(m.role("mamba2.D")?))?;
     if s.norm_mode != Mamba2Norm::Ungated {
-        m.put("mamba2.norm.gain", Src::t(format!("{}.weight", m.role("mamba2.norm")?)))?;
+        m.put("mamba2.norm.gain", Src::t(suffixed(&m.role("mamba2.norm")?, ".weight")))?;
     }
     m.lin("mamba2.out", "mamba2.out", s.proj_bias)
 }
@@ -792,7 +852,7 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
                 // Pre-quantised experts keep their integers, one stored module per expert.
                 let src = match m.quantised(role)? {
                     Some(fmt) => Src::Quant { module: r, fmt }.stack('E', e),
-                    None => Src::t(format!("{r}.weight")).stack('E', e),
+                    None => Src::t(suffixed(&r, ".weight")).stack('E', e),
                 };
                 m.put(name, src)?;
             }

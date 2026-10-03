@@ -24,6 +24,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
         blocks: vec![],
         carries: carries.clone(),
         carry_out: BTreeMap::new(),
+        e0: if spec.embed_carry { Some(carries.len() - 1) } else { None },
+        sharing: false,
+        lowrank: BTreeMap::new(),
     };
     let pre = b.pre_block()?;
     let mut kinds: Vec<(LayerSpec, Vec<u16>)> = Vec::new();
@@ -104,6 +107,13 @@ struct Builder<'a> {
     carries: Vec<CarryDecl>,
     /// What the block under construction writes to a carry past the residual.
     carry_out: BTreeMap<usize, Ref>,
+    /// The carry that holds the embedding block's output (`EMBED_CARRY_V1`).
+    e0: Option<usize>,
+    /// Building a shared branch (`ATTN_SHARED_BLOCK_V1`): the weights and norm gains declared meanwhile are global (one tensor for every
+    /// layer of the group); the adapters, states and every activation stay the occurrence's.
+    sharing: bool,
+    /// Linears that carry a low-rank adapter (`LINEAR_LOWRANK_ADAPTER_V1`): role → (rank, base name of the adapter's params).
+    lowrank: BTreeMap<String, (usize, String)>,
 }
 
 /// A layer spec as the block builder sees it: the hash constants of a PLE layer (its index among
@@ -163,6 +173,13 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         }
         out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k] });
         out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v] });
+    }
+    // `EMBED_CARRY_V1`: the embedding block's output, past every layer.
+    if spec.embed_carry {
+        if spec.hyper.is_some() {
+            return Err(LowerError::not_lowerable("EMBED_CARRY_V1 beside hyper-connection streams"));
+        }
+        out.push(CarryDecl { name: "e0".into(), shape: vec![spec.hidden_size] });
     }
     Ok(out)
 }
@@ -259,10 +276,21 @@ impl Builder<'_> {
         per_layer: bool,
         site: &str,
     ) -> Result<Ref> {
-        let w = self.param(&format!("{name}.w"), vec![out, inp], per_layer, Init::Normal(W_STD))?;
+        let weight_per_layer = per_layer && !self.sharing;
+        let w = self.param(&format!("{name}.w"), vec![out, inp], weight_per_layer, Init::Normal(W_STD))?;
         let mut ins = vec![x, w];
         if bias {
-            ins.push(self.param(&format!("{name}.b"), vec![out], per_layer, Init::Uniform(-0.1, 0.1))?);
+            ins.push(self.param(&format!("{name}.b"), vec![out], weight_per_layer, Init::Uniform(-0.1, 0.1))?);
+        }
+        // `LINEAR_LOWRANK_ADAPTER_V1`: a low-rank adapter of the BASE model — `A [r, in]`, `B [out, r]`, the occurrence's own tensors,
+        // `y = W x + B (A x)` — the unmerged path an external LoRA takes, with scale 1.
+        if let Some((rank, base)) = self.lowrank.get(name).cloned() {
+            if self.s.adapter.as_ref().and_then(|a| a.role(name)).is_some() {
+                return Err(LowerError::not_lowerable("a LoRA adapter over a projection that already carries a low-rank adapter"));
+            }
+            ins.push(self.param(&format!("{base}.lora_a"), vec![rank, inp], true, Init::Normal(W_STD))?);
+            ins.push(self.param(&format!("{base}.lora_b"), vec![out, rank], true, Init::Normal(W_STD))?);
+            return Ok(bk.f(Op::Linear { bias, lora: Some(LoraOp { rank, num: 1, den: 1 }) }, ins, out, site));
         }
         // A LoRA adapter on this role (a layer's projection): `A [r, in]`, `B [out, r]`.
         let lora = match self.s.adapter.as_ref().and_then(|a| a.role(name)) {
@@ -294,10 +322,10 @@ impl Builder<'_> {
         let mut ins = vec![x];
         if spec.gain != Gain::None {
             let init = if spec.gain == Gain::OnePlusW { Init::Uniform(-0.3, 0.3) } else { Init::Uniform(0.6, 1.4) };
-            ins.push(self.param(&format!("{name}.gain"), gain_shape.clone(), per_layer, init)?);
+            ins.push(self.param(&format!("{name}.gain"), gain_shape.clone(), per_layer && !self.sharing, init)?);
         }
         if spec.bias {
-            ins.push(self.param(&format!("{name}.bias"), gain_shape, per_layer, Init::Uniform(-0.1, 0.1))?);
+            ins.push(self.param(&format!("{name}.bias"), gain_shape, per_layer && !self.sharing, Init::Uniform(-0.1, 0.1))?);
         }
         Ok(bk.f(Op::Norm { spec, groups }, ins, n, site))
     }
@@ -359,9 +387,18 @@ impl Builder<'_> {
             }
         }
         let mut outputs = vec![x];
-        for c in self.carries.clone().iter().skip(1) {
+        for (ci, c) in self.carries.clone().iter().enumerate().skip(1) {
             let n: usize = c.shape.iter().product();
-            outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+            if Some(ci) == self.e0 {
+                // `EMBED_CARRY_V1`: the embedding block's output itself (the width is the hidden one; a model with a projected
+                // table has the projection behind it).
+                if n != self.s.hidden_size {
+                    return Err(LowerError::not_lowerable("EMBED_CARRY_V1: the embedding block's output is not the hidden width"));
+                }
+                outputs.push(x);
+            } else {
+                outputs.push(bk.f(Op::Zeros, vec![], n, &format!("carry.{}", c.name)));
+            }
         }
         self.blocks.push(Block { name: "pre".into(), role: BlockRole::Pre, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
@@ -542,6 +579,9 @@ impl Builder<'_> {
 
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
         let d = self.s.hidden_size;
+        if ls.pre_branch.is_some() && !matches!(ls.residual, Residual::Sequential { .. }) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1 is modelled under the sequential pre-norm residual only"));
+        }
         let mut bk = Bk { nodes: vec![] };
         let x = Ref::Carry(0);
         let mut h = match &ls.residual {
@@ -553,9 +593,20 @@ impl Builder<'_> {
                     }
                     x
                 } else {
-                    let n1 = match pre_mixer {
-                        Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
+                    // `LAYER_PRE_BRANCH_V1`: the mixer reads `norm(h + branch)`; the residual add below keeps `h`.
+                    let xin = match &ls.pre_branch {
+                        Some(pb) => {
+                            if pre_mixer.is_none() {
+                                return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the mixer's input norm is where the branch joins"));
+                            }
+                            let t = self.pre_branch(&mut bk, pb, x)?;
+                            bk.f(Op::Add, vec![x, t], d, "pb.sum")
+                        }
                         None => x,
+                    };
+                    let n1 = match pre_mixer {
+                        Some(n) => self.full_norm(&mut bk, xin, *n, "norm.mix", d, true)?,
+                        None => xin,
                     };
                     let mut m = self.mixer(&mut bk, &ls.mixer, n1)?;
                     if let Some(n) = post_mixer {
@@ -660,6 +711,60 @@ impl Builder<'_> {
         let outputs = self.layer_outputs(h);
         self.blocks.push(Block { name, role: BlockRole::Layer, nodes: bk.nodes, outputs });
         Ok(self.blocks.len() - 1)
+    }
+
+    /// **`LAYER_PRE_BRANCH_V1`** (Zamba2's shared transformer): `t = out(mlp(mid_norm(attn(in_norm(concat[h, e0])))))`, no residual inside.
+    /// The weights are the group's (global params `pb{group}.*`, `ATTN_SHARED_BLOCK_V1`); the adapters (`LINEAR_LOWRANK_ADAPTER_V1`), the KV
+    /// history and the `out` projection are this layer's.
+    fn pre_branch(&mut self, bk: &mut Bk, pb: &PreBranch, h: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let Some(e0) = self.e0 else {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1 reads the embedding carry (EMBED_CARRY_V1), and the model has none"));
+        };
+        if pb.attn.in_dim != Some(2 * d) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the attention reads [hidden | embedding], in_dim = 2 * hidden"));
+        }
+        if pb.attn.kv_share.is_some() || pb.attn.sparse.is_some() || pb.attn.output_gate || pb.attn.gate.is_some() {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain attention (no KV sharing, sparse blocks or output gate)"));
+        }
+        if !pb.mlp.gated || pb.mlp.inner_norm.is_some() || pb.mlp.act == Act::Xielu || !matches!(pb.mlp.glu, Glu::Standard) {
+            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain gated MLP"));
+        }
+        let mut attn = pb.attn.clone();
+        attn.param_prefix = Some(pb.attn_prefix());
+        let mut mlp = pb.mlp.clone();
+        mlp.name = Some(pb.mlp_name());
+        let (apfx, mpfx) = (pb.attn_prefix(), pb.mlp_name());
+        let base = pb.adapter_base();
+        self.sharing = true;
+        self.lowrank.clear();
+        if let Some(lr) = pb.lowrank {
+            if lr.rank == 0 {
+                return Err(LowerError::bad("LINEAR_LOWRANK_ADAPTER_V1: a rank of zero"));
+            }
+            if lr.attn {
+                for r in ["q", "k", "v"] {
+                    self.lowrank.insert(format!("{apfx}.{r}"), (lr.rank, format!("{base}.attn.{r}")));
+                }
+            }
+            for r in ["gate", "up"] {
+                self.lowrank.insert(format!("{mpfx}.{r}"), (lr.rank, format!("{base}.mlp.{r}")));
+            }
+        }
+        let built = (|| -> Result<Ref> {
+            // `h` and `e0` side by side, the hidden state first. `pb.h` is a site of its own so the row has a scale to be coded at.
+            let hs = bk.f(Op::Scale { c: 1.0 }, vec![h], d, "pb.h");
+            let u = bk.f(Op::Concat, vec![hs, Ref::Carry(e0 as u8)], 2 * d, "pb.concat");
+            let un = self.norm(bk, u, pb.in_norm, &pb.in_norm_name(), 2 * d, 1, vec![2 * d], true, "pb.in_norm")?;
+            let a = self.attention(bk, &attn, un)?;
+            let m = self.norm(bk, a, pb.mid_norm, &pb.mid_norm_name(), d, 1, vec![d], true, "pb.mid_norm")?;
+            self.mlp(bk, &mlp, m, &mpfx)
+        })();
+        self.sharing = false;
+        self.lowrank.clear();
+        let f = built?;
+        // The layer's own projection of the branch (`Zamba2HybridLayer.linear`).
+        self.linear(bk, f, "pb.out", d, d, false, true, "pb.out")
     }
 
     fn mixer(&mut self, bk: &mut Bk, m: &Mixer, x: Ref) -> Result<Ref> {
@@ -943,11 +1048,13 @@ impl Builder<'_> {
 
     fn attention(&mut self, bk: &mut Bk, a: &AttnSpec, x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
+        // `ATTN_SHARED_BLOCK_V1`: the projections read a wider input (`[hidden | embedding]`) and `o` returns to the hidden width.
+        let din = a.in_dim.unwrap_or(d);
         let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
         let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
         let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
         let n = |s: &str| format!("{pf}.{s}");
-        let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
+        let mut q = self.linear(bk, x, &n("q"), qn, din, a.q_bias, true, &n("q"))?;
         // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
         if let Some(KvShare::Consumer { slot }) = a.kv_share {
             if a.output_gate || a.gate.is_some() || a.clip_qkv.is_some() || a.sinks || a.v_from_k {
@@ -1001,7 +1108,7 @@ impl Builder<'_> {
             }
             return self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"));
         }
-        let mut k = self.linear(bk, x, &n("k"), kn, d, a.k_bias, true, &n("k"))?;
+        let mut k = self.linear(bk, x, &n("k"), kn, din, a.k_bias, true, &n("k"))?;
         // Gemma-4's `attention_k_eq_v`: the values are the raw key projection.
         let mut v = if a.v_from_k {
             if vd != hd {
@@ -1009,9 +1116,9 @@ impl Builder<'_> {
             }
             k
         } else {
-            self.linear(bk, x, &n("v"), vn, d, a.v_bias, true, &n("v"))?
+            self.linear(bk, x, &n("v"), vn, din, a.v_bias, true, &n("v"))?
         };
-        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, d, false, true, &n("gate"))?) } else { None };
+        let gate = if a.output_gate { Some(self.linear(bk, x, &n("gate"), qn, din, false, true, &n("gate"))?) } else { None };
         // `ATTN_VALUE_SCALE_V1`: a constant on the values (it joins the value narrowing's multiplier in the lowering).
         if a.v_scale != 1.0 {
             v = bk.f(Op::Scale { c: a.v_scale }, vec![v], vn, &n("v_scaled"));
@@ -1023,7 +1130,7 @@ impl Builder<'_> {
             }
             Some(g) => {
                 let width = if g.per_head { h } else { h * vd };
-                let gl = self.linear(bk, x, &n("gate"), width, d, false, true, &n("gate"))?;
+                let gl = self.linear(bk, x, &n("gate"), width, din, false, true, &n("gate"))?;
                 let ga = bk.f(Op::Act(plain_act(g.act, "an attention output gate")?), vec![gl], width, &n("gate_act"));
                 Some(if g.per_head { bk.f(Op::GroupRepeat { groups: h, size: vd }, vec![ga], h * vd, &n("gate_rep")) } else { ga })
             }

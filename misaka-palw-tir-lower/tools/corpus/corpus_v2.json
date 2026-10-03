@@ -1584,7 +1584,13 @@
    "examples": [
     "Zyphra/Zamba2-7B-Instruct"
    ],
-   "options": {},
+   "options": {
+    "dt_bias": [
+     0.5,
+     1.5
+    ],
+    "embed_mul": 0.25
+   },
    "real_config": null,
    "tiny": true,
    "note": ""

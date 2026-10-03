@@ -281,7 +281,7 @@ add("granitemoehybrid", "text/hybrid", "decoder", "GraniteMoeHybridForCausalLM",
 add("zamba2", "text/hybrid", "decoder", "Zamba2ForCausalLM", "zamba2", "causal",
     dict(num_hidden_layers=3, layers_block_type=["linear_attention", "hybrid", "linear_attention"], hybrid_layer_ids=[1],
          mamba_d_state=4, n_mamba_heads=4, mamba_headdim=16, attention_hidden_size=64, attention_head_dim=16,
-         num_key_value_heads=4, num_query_groups=4, kv_channels=16, use_mamba_kernels=False, adapter_rank=4), usage="l", why="Mamba-2 backbone with ONE shared attention block reused at several depths", examples=["Zyphra/Zamba2-7B-Instruct"])
+         num_key_value_heads=4, num_query_groups=4, kv_channels=16, use_mamba_kernels=False, adapter_rank=4), options={"dt_bias": [0.5, 1.5], "embed_mul": 0.25}, usage="l", why="Mamba-2 backbone with ONE shared attention block reused at several depths", examples=["Zyphra/Zamba2-7B-Instruct"])
 add("nemotron_h", "text/hybrid", "decoder", "NemotronHForCausalLM", "nemotron_h", "causal",
     dict(layers_block_type=["linear_attention", "moe", "full_attention", "mlp"], num_hidden_layers=4, mamba_num_heads=8,
          mamba_head_dim=8, ssm_state_size=4, n_groups=2, n_routed_experts=4, moe_intermediate_size=16,
