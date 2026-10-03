@@ -77,7 +77,8 @@ fn a_node_gives_the_default_height_and_the_independence_the_network_has() {
     assert_eq!((node.network.as_str(), node.tip_daa, node.classes, node.base_operators), ("testnet-12", 7_150, 1, Some(20)));
     let independence = r.forecast.as_ref().and_then(|f| f.independence.as_ref()).expect("the forecast reads the seating floor");
     assert_eq!((independence.independent_floor, independence.base_operators, independence.licensable_share_at_floor_permille), (3, Some(20), Some(150)));
-    assert!(!independence.fence_in_force, "testnet-12 ships palw_class_seating dormant");
+    // int-12: testnet-12 arms `palw_class_seating` at the 5,300 flag day (the list), and this node's tip (7,150) is past it.
+    assert!(independence.fence_in_force, "testnet-12 arms palw_class_seating at 5,300 and the node's tip is past it");
     assert!(r.render().contains("independence:"), "{}", r.render());
     // The node's own height wins over the default, a given one over the node's.
     let given = run(&dir, &Options { node: Some(facts(7_150)), height: Some(9_000), ..opts(Depth::Shape) }).expect("preflight");

@@ -164,8 +164,13 @@ fn every_reader_of_the_court_agrees_for_a_9b_shaped_hybrid_on_testnet12() {
             }
             // The class of the report (Huihui-Qwen3.5-9B, n_ctx 16): refused on testnet-12, but by the held-class rule (30 recurrent layers
             // answer no windowed builder, ADR-0152 §4-ter C5), never by a 5,102-DAA window.
+            // int-12: from the 5,300 flag day `palw_gdn_key_heads` is armed (P0a), and the gate itself refuses this class's version-2 profile on the
+            // v5 map (16 key heads over 32 value heads) — every reader above names that one code (a Qwen3.5 profile must be rebuilt with explicit key
+            // heads to register past 5,300).
             if n_ctx == 16 {
-                assert_eq!(node.reject_code, "HELD_CLASS_UNANSWERABLE", "daa {daa}");
+                let flag_day = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-12 flag day");
+                let want = if daa >= flag_day { "GDN_MAP_ASSUMES_EQUAL_HEADS" } else { "HELD_CLASS_UNANSWERABLE" };
+                assert_eq!(node.reject_code, want, "daa {daa}");
             }
         }
     }

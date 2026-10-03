@@ -119,13 +119,28 @@ const CONSENSUS_PATH: &[&str] = &[
     // fingerprints and refuse each other at the handshake. That is the divergence Decision A
     // exists to make impossible, reached through a value rather than through a block.
     "src/e2e_drill.rs",
+    // The generative workers (RFC-0003 §II.2.1, §I.3): a text pipeline job and an image / embedding job — they execute a caller's job
+    // through the scanned engines and return the roots a commitment is assembled from, the seat and court halves beside them. Same
+    // argument as `fp_worker.rs` above; neither holds a float today.
+    "src/gen_worker.rs",
+    "src/gen_tensor_worker.rs",
+    // RFC-0001 §2.6 / §2.7 (node only): the KV prefix cache and the in-process decode scheduler sit between a request and the engine;
+    // what they hand the engine decides the K/V state a commitment's rows are computed from, so they are scanned, not exempt.
+    "src/prefix_cache.rs",
+    "src/decode_scheduler.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
 /// outputs a third party will implement against. A float here would not make a block invalid — it
 /// would corrupt the artifact everyone else conforms to, which is worse, because nothing on the
 /// execution path would ever notice.
-const STATES_THE_ARITHMETIC: &[&str] = &["src/kat.rs", "src/bin/base0-kat.rs"];
+const STATES_THE_ARITHMETIC: &[&str] = &[
+    "src/kat.rs",
+    "src/bin/base0-kat.rs",
+    // RFC-0002 Phase F: the A16 engine STATED as a PALW-TIR program (and its artifact's conversion): the program a class's `artifact_root`
+    // commits to is what a third party conforms to, so a float here would corrupt the statement everyone else implements.
+    "src/tir_a16.rs",
+];
 
 /// Off the execution path, each with the reason it is off it. Present so that the union of this
 /// list and [`CONSENSUS_PATH`] can be compared against what is actually on disk.
@@ -138,6 +153,10 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/qwen36_calibrate.rs", "offline PTQ: it turns measured ranges into (multiplier, shift) triples"),
     ("src/qwen36_reference.rs", "the hybrid graph in f32: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
+    ("src/bin/palw-a16-to-tir.rs", "offline artifact converter: it re-spells the A16 artifact's integer slabs and triples as a TIR artifact; the program it emits is `tir_a16.rs`, which is scanned"),
+    // RFC-0001 §2.9: the sidecar's generation defaults are the file's own JSON numbers (temperature, top_p, …); no commitment reads
+    // them — a job carries the fixed-point decode rules (`palw_fp_decode_rules`), which are on the path.
+    ("src/sidecar.rs", "the artifact sidecar reader: sampling defaults as the JSON spells them; the committed decode rules are fixed-point"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     // ADR-0097's generator: it prints every wall a class meets, from consensus-core's own

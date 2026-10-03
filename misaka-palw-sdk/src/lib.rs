@@ -553,7 +553,11 @@ mod tests {
         }
         let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
         assert_eq!(t12.palw_canonical_work_daa(), Some(0), "testnet-12 bounds registrations by the legal job from genesis");
+        // The preflight hands the whole shape to the ONE shared probe (`palw_admission_probe_v1`, the gate's, the SDK's and the manifest
+        // verifier's), which forwards the shape's reading of F4 — so the guard follows the forwarding to where it now happens.
         let source = include_str!("sdk.rs");
-        assert!(source.contains("shape.legal_job_bound,"), "and the preflight forwards the shape's reading");
+        assert!(source.contains("palw_admission_probe_v1(bundle, &entry.profile, &canonical, artifact_root, chain_certified, shape)"));
+        let probe = include_str!("../../consensus/core/src/palw_class_admission_v2.rs");
+        assert!(probe.contains("shape.legal_job_bound,"), "and the shared probe forwards the shape's reading");
     }
 }
