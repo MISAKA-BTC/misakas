@@ -837,6 +837,13 @@ class Drive:
         line = self.log_after("new0", 0, pat)
         d_old = daa_of("old") if node_alive("old") else None
         info = {"lack": lack, "refusal": line, "old_daa": d_old, "new_daa": self.daa}
+        if line is None and node_alive("old") and not self.s.get("m5-old-restarted"):
+            # A peer connected before the fence is never handshaken again: the old relay keeps relaying, rejects every block past the fence (disqualified: PALW state
+            # root) and stalls at the fence's DAA, and the fork-id refusal is only logged when it RECONNECTS. A restart is what an operator's old node does.
+            self.s.put("m5-old-restarted", self.daa)
+            run(["bash", f"{HERE}/nodes.sh", "stop", "old"], timeout=200)
+            run(["bash", f"{HERE}/nodes.sh", "start", "old"], timeout=200)
+            return
         if line is None:
             n = self.s.tried("m5-cross")
             if n >= 10:
