@@ -2594,29 +2594,6 @@ impl VirtualStateProcessor {
                                                 );
                                             }
                                         }
-                                        // **ADR-0165: the floor reserve's mode changed** — say which, once per switch, with the
-                                        // window's count, so the kit and an operator read the Useful Work Transition off the log
-                                        // (`PALW floor reserve:`). Empty below `palw_floor_reserve_v1`.
-                                        for entry in &delta.entries {
-                                            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::RealWork {
-                                                key: kaspa_consensus_core::palw_real_share_v1::PALW_REAL_WORK_MODE_KEY_V1,
-                                                new,
-                                                ..
-                                            } = entry
-                                            {
-                                                let bucket = kaspa_consensus_core::palw_real_share_v1::palw_real_work_bucket_v1(point.daa_score);
-                                                info!(
-                                                    "PALW floor reserve: {} at DAA {} ({} Final real-class claims in the {}-DAA window; dormant at {}, active below {})",
-                                                    if new.is_some() { "DORMANT (real work is flowing; the base floor earns nothing)" } else { "ACTIVE (real work stalled; the base floor is the reserve)" },
-                                                    point.daa_score,
-                                                    kaspa_consensus_core::palw_real_share_v1::palw_real_work_count_v1(next.real_work_ledger(), bucket),
-                                                    kaspa_consensus_core::palw_real_share_v1::PALW_REAL_WORK_WINDOW_BUCKETS_V1
-                                                        * kaspa_consensus_core::palw_real_share_v1::PALW_REAL_WORK_BUCKET_DAA_V1,
-                                                    kaspa_consensus_core::palw_real_share_v1::PALW_REAL_WORK_DORMANT_AT_V1,
-                                                    kaspa_consensus_core::palw_real_share_v1::PALW_REAL_WORK_ACTIVE_BELOW_V1,
-                                                );
-                                            }
-                                        }
                                         *state = next;
                                         // Launch blockers §8: say it out loud. A voided claim's
                                         // escrow is burned by don't-mint (Decision 10), and a

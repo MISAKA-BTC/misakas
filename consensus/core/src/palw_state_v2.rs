@@ -9881,13 +9881,12 @@ pub enum PalwStateV2Error {
         "bond {bond:?} holds {unlicensed} unlicensed claims of class {class}, its share of the class is {share} (ADR-0152 T-2(a))"
     )]
     BondClassShareExceeded { bond: PalwBondKeyV2, class: Hash64, unlicensed: u32, share: u64 },
-    /// **ADR-0165: the base floor is a reserve and real-model work is being finalised** — `finals` Final
-    /// real-class claims in the rolling window (dormant at `PALW_REAL_WORK_DORMANT_AT_V1`, active again
-    /// below `PALW_REAL_WORK_ACTIVE_BELOW_V1`). Checked before any write, so step 4 skips a refused own
-    /// attempt and a merged one is skipped generically: no claim is written, so the attempt earns no
-    /// reward and no fork-choice weight. The producer's pre-check asks the same question first.
-    #[error("the base class {class} is a reserve while real-model work is being finalised ({finals} Final real claims in the window; ADR-0165)")]
-    FloorDormant { class: Hash64, finals: u64 },
+    /// **ADR-0165: the base floor is retired** — past `palw_floor_reserve_v1` no new `PALW-BASE-0` claim is accepted.
+    /// Checked before any write, so step 4 skips a refused own attempt and a merged one is skipped generically: no
+    /// claim is written, so the attempt earns no reward and no fork-choice weight. Claims written earlier settle
+    /// normally. The producer's pre-check asks the same question first.
+    #[error("the base class {class} takes no new claim past palw_floor_reserve_v1: the floor is retired (ADR-0165)")]
+    FloorRetired { class: Hash64 },
     /// **ADR-0160 F-B: a batch licence (tag 59) below `Params::palw_capacity_batch_licence`.** The
     /// acceptance layer refuses it first; the block stands and nothing folds.
     #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
@@ -15922,18 +15921,12 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
-        // **ADR-0165: the base floor is a reserve.** First, before any lifecycle or room question: a
-        // dormant reserve takes no attempt whatever room it has.
+        // **ADR-0165: the base floor is retired.** First, before any lifecycle or room question.
         if incoming == PalwGatedClaimV1::Attempt
             && self.params.floor_reserve_active_at(now_daa)
             && *class_id == self.params.base_class_id()
-            && crate::palw_real_share_v1::palw_real_work_dormant_at_v1(&self.state.real_work, now_daa)
         {
-            let bucket = crate::palw_real_share_v1::palw_real_work_bucket_v1(now_daa);
-            return Err(PalwStateV2Error::FloorDormant {
-                class: *class_id,
-                finals: crate::palw_real_share_v1::palw_real_work_count_v1(&self.state.real_work, bucket),
-            });
+            return Err(PalwStateV2Error::FloorRetired { class: *class_id });
         }
         // ADR-0160 X-I5: past `palw_capacity_escrow_at_licence` no attempt of a class C7 by its window
         // but absent from C7's list — its escrow term would be priced as attributable.
@@ -25792,14 +25785,6 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
         self.note_final_work(&id, claim, final_daa);
-        // ADR-0165: a Final real-class attempt claim is one unit of the reserve's rolling ledger.
-        if matches!(claim.source, PalwClaimSourceV2::Attempt)
-            && self.params.floor_reserve_active_at(final_daa)
-            && claim.class_id != self.params.base_class_id()
-        {
-            let (key, _old, new) = crate::palw_real_share_v1::palw_real_work_note_final_v1(&self.state.real_work, final_daa);
-            self.write_real_work(key, new);
-        }
         // RFC-0004 (spec 17 §17.4.5): a Final claim of a governed line's head counts toward its trigger.
         self.note_improvement_usage_at_final_v1(claim, final_daa);
         // RFC-0004 A6 (MIP-17): an evaluation claim's Final records its score and pays its fee.
@@ -26960,14 +26945,6 @@ pub fn palw_v2_pre_object_base_v1(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
-    // 1e. ADR-0165: the floor reserve's mode, re-evaluated at the first block of each bucket — before the
-    //     sweeps, so the Finals this block records land in the bucket it is in and never in the window
-    //     it was just judged by, and before any attempt, so own and merged attempts read one mode.
-    if params.floor_reserve_active_at(ctx.daa_score) {
-        for (key, _old, new) in crate::palw_real_share_v1::palw_real_work_roll_v1(&builder.state.real_work, ctx.daa_score) {
-            builder.write_real_work(key, new);
-        }
-    }
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -27338,14 +27315,6 @@ pub fn apply_palw_transition_v7(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
-    // 1e. ADR-0165: the floor reserve's mode, re-evaluated at the first block of each bucket — before the
-    //     sweeps, so the Finals this block records land in the bucket it is in and never in the window
-    //     it was just judged by, and before any attempt, so own and merged attempts read one mode.
-    if params.floor_reserve_active_at(ctx.daa_score) {
-        for (key, _old, new) in crate::palw_real_share_v1::palw_real_work_roll_v1(&builder.state.real_work, ctx.daa_score) {
-            builder.write_real_work(key, new);
-        }
-    }
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -27581,8 +27550,8 @@ pub fn apply_palw_transition_v7(
                     | PalwStateV2Error::ProducerBelowFloor { .. }
                     | PalwStateV2Error::BondClassShareExceeded { .. }
                     | PalwStateV2Error::ProducerFrozen { .. }
-                    // ADR-0165: the reserve's gate is checked first in the class gate, before any write.
-                    | PalwStateV2Error::FloorDormant { .. }
+                    // ADR-0165: the retired floor's gate is checked first in the class gate, before any write.
+                    | PalwStateV2Error::FloorRetired { .. }
                     // ADR-0160 F-R (J-6): the floor room, for the share's reason — this block's own
                     // objects move the seats' capital under the producer — and checked, like it,
                     // before `apply_attempt`'s first write. Unreachable below the fence.
@@ -37608,6 +37577,12 @@ fn apply_attempt(
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
     builder.reserve_for_claim(&claim)?;
+    // ADR-0165: a REAL attempt (any class but the base) accepted is the idle ledger's last-accept DAA.
+    if builder.params.floor_reserve_active_at(ctx.daa_score) && claim.class_id != builder.params.base_class_id() {
+        if let Some((key, _old, new)) = crate::palw_real_share_v1::palw_real_accept_note_v1(&builder.state.real_work, ctx.daa_score) {
+            builder.write_real_work(key, new);
+        }
+    }
     builder.write_claim(claim_id, Some(claim));
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
