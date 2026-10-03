@@ -310,6 +310,7 @@ CAPQS = "consensus/core/tests/palw_capacity_stage2_is_t12_only.rs"
 CAPN = "consensus/core/tests/palw_capacity_network_room_is_t12_only.rs"
 CAPNV = "consensus/core/tests/palw_capacity_network_verify_is_t12_only.rs"
 CAPS567 = "consensus/core/tests/palw_capacity_s567_is_t12_only.rs"
+PLIVE = "consensus/core/tests/palw_panel_liveness_is_t12_only.rs"
 RETROLIFE = "consensus/core/tests/palw_final_lock_life_retro_is_t12_only.rs"
 FLOOR2 = "consensus/core/tests/palw_floor_refusal_retry_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
@@ -588,6 +589,9 @@ def registry() -> list[Pin]:
     # ADR-0164 (rcore/cap-1000: F-EM, F-M1 and F-K, armed by the int-11 flag day): the DAA-1,300 release.
     pins += _triple("caps567.T12_RELEASE", "t12", CAPS567, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPS567}::the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # lane PL (rcore/panel-liveness: ADR-0166's three panel-liveness fences; dormant): testnet-12 as shipped.
+    pins += _triple("plive.T12_RELEASE", "t12", PLIVE, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{PLIVE}::the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

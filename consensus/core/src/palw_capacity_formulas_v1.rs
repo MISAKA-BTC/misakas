@@ -634,6 +634,9 @@ pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v
         | PalwVoidReasonV2::CourtDefault
         | PalwVoidReasonV2::CourtHeldVerdict
         | PalwVoidReasonV2::AggregateForfeit => false,
+        // Lane PL part C (ADR-0166): verifier unavailability is nobody's abandonment — the reservation returns at once, so the
+        // obligation is neither held nor charged.
+        PalwVoidReasonV2::PanelUnavailable => false,
     }
 }
 

@@ -75,7 +75,7 @@ const LIST: [&str; 28] = [
     "palw_gdn_key_heads",
     // Useful Work Transition: lane PL (ADR-0166) and lane RS (ADR-0165).
     "palw_panel_unavailable_expiry",
-    "palw_panel_standby",
+    "palw_panel_fast_switch",
     "palw_seat_availability",
     "palw_floor_reserve_v1",
     "palw_real_clock_tick_v1",

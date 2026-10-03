@@ -601,6 +601,8 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         | PalwVoidReasonV2::UnavailableQuorum
         | PalwVoidReasonV2::NotReplayBacked => PalwCapacityVoidAttributionV1::Undetected,
         PalwVoidReasonV2::AggregateForfeit => PalwCapacityVoidAttributionV1::Censored,
+        // Lane PL part C (ADR-0166): nobody is convicted of an expiry the verifiers caused or the chain cannot attribute.
+        PalwVoidReasonV2::PanelUnavailable => PalwCapacityVoidAttributionV1::Undetected,
     }
 }
 

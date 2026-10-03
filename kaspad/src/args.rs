@@ -481,8 +481,8 @@ pub struct Args {
     #[serde(skip)]
     pub palw_drill_class_seating_at: Option<u64>,
     /// **DRILL ONLY: arm lane PL's panel-liveness list at this DAA** (`config::drill::palw_drill_panel_liveness_at_v1`;
-    /// ADR-0166): `palw_panel_unavailable_expiry` (an expiry of a silent panel is not producer fraud), `palw_panel_standby`
-    /// (two standby seats and a fast switch) and `palw_seat_availability` (positive liveness in panel assignment) together.
+    /// ADR-0166): `palw_panel_unavailable_expiry` (an expiry of a silent panel is not producer fraud), `palw_panel_fast_switch`
+    /// (a fast switch to a fresh panel) and `palw_seat_availability` (positive liveness in panel assignment) together.
     /// Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_panel_liveness_at: Option<u64>,
@@ -2217,7 +2217,7 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(u64))
                 .help(
                     "With --palw-drill-genesis-salt only: arm lane PL's panel-liveness list (palw_panel_unavailable_expiry, \
-                     palw_panel_standby, palw_seat_availability; ADR-0166) at this DAA on the drill chain. Nothing else moves. \
+                     palw_panel_fast_switch, palw_seat_availability; ADR-0166) at this DAA on the drill chain. Nothing else moves. \
                      Refused without the salt, at 0 and at a height another fence uses.",
                 ),
         )

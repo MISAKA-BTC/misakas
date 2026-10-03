@@ -838,7 +838,7 @@ mod tests {
             "palw_capacity_network_room" => params.palw_capacity_network_room = Some(at),
             "palw_capacity_network_verify" => params.palw_capacity_network_verify = Some(at),
             "palw_panel_unavailable_expiry" => params.palw_panel_unavailable_expiry = Some(at),
-            "palw_panel_standby" => params.palw_panel_standby = Some(at),
+            "palw_panel_fast_switch" => params.palw_panel_fast_switch = Some(at),
             "palw_seat_availability" => params.palw_seat_availability = Some(at),
             "palw_capacity_emission_budget" => params.palw_capacity_emission_budget = Some(at),
             "palw_capacity_multi_claim" => params.palw_capacity_multi_claim = Some(at),

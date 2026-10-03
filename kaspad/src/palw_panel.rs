@@ -234,6 +234,7 @@ pub(crate) fn own_claim_events_at_v1(
                     R::CourtHeldVerdict => "court_held_verdict",
                     // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
                     R::AggregateForfeit => "aggregate_forfeit",
+                    R::PanelUnavailable => "panel_unavailable",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }

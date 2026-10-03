@@ -13726,7 +13726,16 @@ impl VirtualStateProcessor {
             valid_lock: None,
             // ADR-0152 SW-1: the stake-weighted draw's terms past `palw_rcore_plus` at THIS anchor's
             // DAA (the 1,000,000 MSK cap and the 875‰ floor); `None` everywhere else.
-            stake: self.palw_rcore_plus_at(anchor_daa).then_some(kaspa_consensus_core::palw_panel_v2::PalwPanelStakeDrawV1::V1),
+            // Lane PL part E (ADR-0166): past `palw_seat_availability` at THIS anchor the class seats' race weight is scaled by the
+            // seat's availability factor, read at the anchor's DAA.
+            stake: self.palw_rcore_plus_at(anchor_daa).then(|| kaspa_consensus_core::palw_panel_v2::PalwPanelStakeDrawV1 {
+                availability_at: self
+                    .palw_state_params_v2
+                    .as_ref()
+                    .is_some_and(|state| state.seat_availability_active_at(anchor_daa))
+                    .then_some(anchor_daa),
+                ..kaspa_consensus_core::palw_panel_v2::PalwPanelStakeDrawV1::V1
+            }),
         }
     }
 
