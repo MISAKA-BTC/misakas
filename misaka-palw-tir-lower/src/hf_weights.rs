@@ -247,7 +247,7 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     let mut seen: Vec<&LayerSpec> = Vec::new();
     for ls in &spec.layers {
         // A cross-attention layer is skipped in the text-only stage: its tensors are dormant.
-        if seen.contains(&ls) || matches!(ls.mixer, Mixer::CrossAttention(_)) {
+        if seen.contains(&ls) || (matches!(ls.mixer, Mixer::CrossAttention(_)) && spec.cross_states.is_none()) {
             continue;
         }
         seen.push(ls);
@@ -277,7 +277,20 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
                 .ok_or_else(|| LowerError::eval(format!("internal: HL param `{}` has no HF source", d.name)))?,
         });
     }
-    Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: spec.hf.ignored_prefixes.clone() })
+    // The text-only stage skips the cross-attention layers: their tensors (every tensor under the layer's prefix) are dormant.
+    let mut ignored = spec.hf.ignored_prefixes.clone();
+    if spec.cross_states.is_none()
+        && let Some(t) = spec.hf.name("norm.mix")
+        && let Some(at) = t.find("{L}")
+    {
+        for (li, l) in spec.layers.iter().enumerate() {
+            if matches!(l.mixer, Mixer::CrossAttention(_)) {
+                let prefix = format!("{}{li}.", &t[..at]);
+                ignored.push(prefix);
+            }
+        }
+    }
+    Ok(Binding { srcs, aliases: spec.hf.prefix_aliases.clone(), ignored_prefixes: ignored })
 }
 
 /// Gemma-3n/4's per-layer input: the layer's slices of the two tensors packed over the layers, the norms and the branch's projections.
@@ -411,7 +424,19 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
         Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
         Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
         Mixer::None => {}
-        Mixer::CrossAttention(_) => return Err(LowerError::eval("internal: a cross-attention layer is bound only when it is not skipped")),
+        Mixer::CrossAttention(c) => {
+            m.lin("xattn.q", "xattn.q", false)?;
+            m.lin("xattn.k", "xattn.k", false)?;
+            m.lin("xattn.v", "xattn.v", false)?;
+            m.lin("xattn.o", "xattn.o", false)?;
+            m.norm("xattn.q_norm", "xattn.q_norm", &c.q_norm)?;
+            m.norm("xattn.k_norm", "xattn.k_norm", &c.k_norm)?;
+            if c.gated {
+                for g in ["attn_gate", "mlp_gate"] {
+                    m.put(format!("xattn.{g}"), Src::t(m.role(&format!("xattn.{g}"))?).map(MapFn::Tanh).reshape(vec![1]))?;
+                }
+            }
+        }
         Mixer::Parallel(bs) => {
             for b in bs {
                 bind_mixer(m, spec, &b.mixer, rescale)?;

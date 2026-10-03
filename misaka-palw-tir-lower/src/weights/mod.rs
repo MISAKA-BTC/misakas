@@ -584,6 +584,8 @@ pub enum MapFn {
     /// `−exp(x)` (`A_log` → `A`).
     NegExp,
     Scale(f64),
+    /// `tanh(x)` (Mllama's `tanh(cross_attn_attn_gate)`: a gate is a function of the weight only).
+    Tanh,
     /// `x / 2^(layer / every)` (RWKV `rescale_every`).
     RescaleByLayer {
         every: usize,

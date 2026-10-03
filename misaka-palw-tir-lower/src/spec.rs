@@ -1271,6 +1271,17 @@ pub struct ModelSpec {
     /// the image tokens would be another function (`fidelity::prepare_spec`; the prefix stage is FR-20's pipeline, not built).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prefix_lm: bool,
+    /// **`ATTN_CROSS_V1`**: the text stage reads this many rows of vision states (a declared input, RFC-0003 §II.2.1: the projected
+    /// tower rows, decoded integers) through its [`Mixer::CrossAttention`] layers. `None`: no states are bound and those layers are
+    /// skipped, as HF skips them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_states: Option<CrossStatesSpec>,
+}
+
+/// The states the cross-attention layers read: `rows` rows of `hidden_size` values (fixed per class, like a vision class's image size).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrossStatesSpec {
+    pub rows: usize,
 }
 
 impl ModelSpec {

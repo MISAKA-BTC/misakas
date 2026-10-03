@@ -1,7 +1,7 @@
 {
  "format": "misaka.palw.model-adapter.v1",
  "id": "mllama",
- "doc": "Llama-3.2-Vision (MllamaForConditionalGeneration) as its TEXT stage: the Llama decoder layers, with the cross-attention layers (text_config.cross_attention_layers; q/k head norms, no rotation, tanh-gated attention and MLP branches) kept in the spec and SKIPPED in the program, as `MllamaTextModel.forward` skips them when no vision states are bound (VLM_CROSS_LAYERS_SKIPPED_V1; ATTN_CROSS_V1, the layers with states, is described but not lowered, and image rows bound to this spec are refused by name). The cross layers' tensors, the vision tower and the projector are dormant. The embedding table holds vocab_size + 8 rows (the image and special tokens) while the head has vocab_size: the table is read as its first vocab_size rows, so a text job names no token past the vocabulary.",
+ "doc": "Llama-3.2-Vision (MllamaForConditionalGeneration) as its TEXT stage: the Llama decoder layers, with the cross-attention layers (text_config.cross_attention_layers; q/k head norms, no rotation, tanh-gated attention and MLP branches) kept in the spec and SKIPPED in the program, as `MllamaTextModel.forward` skips them when no vision states are bound (VLM_CROSS_LAYERS_SKIPPED_V1; ATTN_CROSS_V1, the layers with states, is described but not lowered, and image rows bound to this spec are refused by name). The vision tower and the projector are dormant (the tower is not computed here: with `ModelSpec::cross_states` set, the cross layers read the projected rows as a declared input, ATTN_CROSS_V1; without it their tensors are dormant too). The embedding table holds vocab_size + 8 rows (the image and special tokens) while the head has vocab_size: the table is read as its first vocab_size rows, so a text job names no token past the vocabulary.",
  "extends": [
   "decoder-core",
   "mixin-vlm"
@@ -180,31 +180,28 @@
   },
   {
    "name": "ignored_prefixes",
+   "value": [
+    "vision_model.",
+    "multi_modal_projector.",
+    "vision_tower."
+   ]
+  },
+  {
+   "name": "names",
    "value": {
-    "$concat": [
+    "$merge": [
      {
-      "$list": [
-       "vision_model.",
-       "multi_modal_projector.",
-       "vision_tower."
-      ]
+      "$var": "names_base"
      },
      {
-      "$map": [
-       {
-        "$var": "cross_layers"
-       },
-       "c",
-       {
-        "$cat": [
-         "language_model.model.layers.",
-         {
-          "$var": "c"
-         },
-         "."
-        ]
-       }
-      ]
+      "xattn.q": "{p}layers.{L}.cross_attn.q_proj",
+      "xattn.k": "{p}layers.{L}.cross_attn.k_proj",
+      "xattn.v": "{p}layers.{L}.cross_attn.v_proj",
+      "xattn.o": "{p}layers.{L}.cross_attn.o_proj",
+      "xattn.q_norm": "{p}layers.{L}.cross_attn.q_norm",
+      "xattn.k_norm": "{p}layers.{L}.cross_attn.k_norm",
+      "xattn.attn_gate": "{p}layers.{L}.cross_attn_attn_gate",
+      "xattn.mlp_gate": "{p}layers.{L}.cross_attn_mlp_gate"
      }
     ]
    }

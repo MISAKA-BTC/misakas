@@ -243,6 +243,7 @@ fn apply_step(
         "map" => {
             let f = match arg {
                 Value::String(s) if s == "neg_exp" => MapFn::NegExp,
+                Value::String(s) if s == "tanh" => MapFn::Tanh,
                 Value::Object(m) if m.len() == 1 => match m.iter().next() {
                     Some((k, v)) if k == "scale" => MapFn::Scale(
                         v.as_f64().filter(|c| c.is_finite()).ok_or_else(|| bad(param, "map.scale is a finite number"))?,
@@ -363,6 +364,7 @@ pub fn to_expr(src: &Src) -> Option<Value> {
             Src::Map { src: s, f } => {
                 steps.push(match f {
                     MapFn::NegExp => json!({"map": "neg_exp"}),
+                    MapFn::Tanh => json!({"map": "tanh"}),
                     MapFn::Scale(c) => json!({"map": {"scale": c}}),
                     MapFn::RescaleByLayer { every } => json!({"map": {"rescale_by_layer": every}}),
                 });

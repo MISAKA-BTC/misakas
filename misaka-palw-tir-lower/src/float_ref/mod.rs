@@ -360,6 +360,9 @@ pub struct Session<'a> {
     /// M-RoPE position components `(t, h, w)` by position (Qwen2-VL's `get_rope_index`); a
     /// position absent here reads its own index in all three.
     pub mrope_pos: BTreeMap<usize, [usize; 3]>,
+    /// **`ATTN_CROSS_V1`**: the rows of vision states the cross-attention layers read (`ModelSpec::cross_states`: `rows` rows of the
+    /// hidden width).
+    pub cross_states: Option<Vec<Vec<f32>>>,
     /// The hash constants of each PLE layer (`crate::ngram`), by model layer.
     ngram_tables: BTreeMap<usize, crate::ngram::NgramTables>,
 }
@@ -376,6 +379,7 @@ impl<'a> Session<'a> {
             trace: None,
             overrides: BTreeMap::new(),
             mrope_pos: BTreeMap::new(),
+            cross_states: None,
             ngram_tables: BTreeMap::new(),
         }
     }
@@ -1090,6 +1094,39 @@ impl<'a> Session<'a> {
                 let vs: Vec<Vec<f32>> = (0..6).map(|i| x(i).map(<[f32]>::to_vec)).collect::<Result<_>>()?;
                 let st = self.fixed_mut(s, lyr);
                 one(wkv7(&vs[0], &vs[1], &vs[2], &vs[3], &vs[4], &vs[5], st, *heads, *head_size))
+            }
+            Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, k_norm } => {
+                let cs = self.cross_states.as_ref().ok_or_else(|| LowerError::eval("a cross-attention layer needs `Session::cross_states`"))?;
+                if cs.len() != *rows {
+                    return Err(LowerError::eval(format!("{} rows of cross states for a program of {rows}", cs.len())));
+                }
+                let (kvn, hd) = (kv_heads * head_dim, *head_dim);
+                let (wk, wv) = (self.param(ins[1], layer)?, self.param(ins[2], layer)?);
+                let gain = if ins.len() > 3 { Some(self.param(ins[3], layer)?) } else { None };
+                let q = x(0)?.to_vec();
+                // K = RMS_head(Wk·s) per row (the norm over each head's `head_dim`), V = Wv·s.
+                let mut ks: Vec<Vec<f32>> = Vec::with_capacity(*rows);
+                let mut vs: Vec<Vec<f32>> = Vec::with_capacity(*rows);
+                for r in cs {
+                    let k = linear_raw(r, &wk.data, kvn, None);
+                    ks.push(norm(&k, k_norm.kind, k_norm.eps, k_norm.gain, gain.as_deref(), None, *kv_heads));
+                    vs.push(linear_raw(r, &wv.data, kvn, None));
+                }
+                let group = heads / kv_heads;
+                let mut out = vec![0f32; heads * hd];
+                for h in 0..*heads {
+                    let g = h / group;
+                    let qh = &q[h * hd..(h + 1) * hd];
+                    let logits: Vec<f64> = ks.iter().map(|k| qh.iter().zip(&k[g * hd..(g + 1) * hd]).map(|(a, b)| *a as f64 * *b as f64).sum::<f64>() * scale).collect();
+                    let m = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let e: Vec<f64> = logits.iter().map(|l| (l - m).exp()).collect();
+                    let z: f64 = e.iter().sum();
+                    for j in 0..hd {
+                        let acc: f64 = e.iter().zip(&vs).map(|(w, v)| w / z * v[g * hd + j] as f64).sum();
+                        out[h * hd + j] = acc as f32;
+                    }
+                }
+                one(out)
             }
             Op::ExpertLinear { top_k, per_slot, .. } => {
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();

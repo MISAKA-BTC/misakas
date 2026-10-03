@@ -514,7 +514,8 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
         }
         Mixer::None => u.add("LAYER_FFN_ONLY_V1", lay, ""),
         // Text-only: the layer is skipped, as HF skips it without states. (`ATTN_CROSS_V1` is the layer WITH states: not lowered.)
-        Mixer::CrossAttention(_) => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", lay, "no states bound: the layer is skipped, as HF does"),
+        // Reported by `detect` (it knows whether states are bound).
+        Mixer::CrossAttention(_) => {}
         Mixer::SharedKv(a) => {
             u.add("ATTN_GQA_V1", lay, format!("{}q/1kv × {} (K = V)", a.heads, a.head_dim));
             u.add("ATTN_SLIDING_V1", lay, format!("window {}", a.window));
@@ -575,6 +576,17 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     }
     if let Some(n) = &s.final_norm {
         norm_features(&mut u, n, None);
+    }
+    // Cross-attention layers: read the declared states, or skipped (as HF skips them) when none are bound.
+    if let Some(c) = s.layers.iter().find_map(|l| if let Mixer::CrossAttention(c) = &l.mixer { Some(c) } else { None }) {
+        match &s.cross_states {
+            Some(cs) => {
+                u.add("ATTN_CROSS_V1", None, format!("{} state rows", cs.rows));
+                norm_features(&mut u, &c.q_norm, None);
+                u.add("NORM_GROUPED_V1", None, "");
+            }
+            None => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", None, "no states bound: the layers are skipped, as HF does"),
+        }
     }
     if let Some(h) = &s.hyper {
         norm_features(&mut u, &h.norm, None);

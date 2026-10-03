@@ -422,6 +422,17 @@ pub enum Op {
         n1: usize,
         n2: usize,
     },
+    /// **`ATTN_CROSS_V1`** (Mllama): attention of one query over declared STATES (`rows` rows of the hidden width, the session's
+    /// `cross_states`): `K = RMS_head(Wk·s)` (the norm `k_norm`, gain `[head_dim]`), `V = Wv·s`, grouped heads, no rotation, no mask.
+    /// In: `[q, Wk [kv·hd, D], Wv [kv·hd, D], k_gain]`. The integer program does not compute `K`/`V`: stage 0 does, as one stack.
+    CrossAttention {
+        heads: usize,
+        kv_heads: usize,
+        head_dim: usize,
+        scale: f64,
+        rows: usize,
+        k_norm: NormSpec,
+    },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
     /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.
     /// In: `[x, ids, weights, gate [E,I,D], up [E,I,D], down [E,D,I], (gate_b, up_b, down_b)]`. A plain expert (`gated: false`,
@@ -508,6 +519,7 @@ impl Op {
             Op::Wkv4 => "Wkv4",
             Op::Wkv6 { .. } => "Wkv6",
             Op::Wkv7 { .. } => "Wkv7",
+            Op::CrossAttention { .. } => "CrossAttention",
             Op::ExpertLinear { .. } => "ExpertLinear",
             Op::WeightedSum { .. } => "WeightedSum",
             Op::Transpose01 { .. } => "Transpose01",

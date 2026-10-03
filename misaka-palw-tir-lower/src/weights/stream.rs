@@ -180,6 +180,7 @@ pub(super) fn apply_map(t: &mut Tensor, f: &MapFn, layer: Option<usize>) -> Resu
     match f {
         MapFn::NegExp => t.data.iter_mut().for_each(|x| *x = -(crate::detmath::exp(*x as f64) as f32)),
         MapFn::Scale(c) => t.data.iter_mut().for_each(|x| *x = (*x as f64 * c) as f32),
+        MapFn::Tanh => t.data.iter_mut().for_each(|x| *x = (*x as f64).tanh() as f32),
         MapFn::RescaleByLayer { every } => {
             let l = layer.ok_or_else(|| LowerError::eval("rescale needs a layer"))?;
             let div = 2f64.powi((l / every.max(&1)) as i32);
