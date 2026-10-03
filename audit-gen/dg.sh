@@ -82,7 +82,8 @@ t = next(c for c in json.load(open(path))["classes"] if c["name"] == name)["gen_
 t = dict(t)
 t["anchor_block"], t["anchor_daa"] = sink, int(daa)
 t["job_nonce"] = hashlib.sha256(("nonce/" + tag).encode()).hexdigest()
-t["seed"] = hashlib.sha256(("seed/" + tag).encode()).hexdigest()
+# the worker refuses a seed on a class that draws no randomness (profile 2, the embedding classes): their seed is 32 zero bytes
+t["seed"] = "0" * 64 if str(t.get("profile")) == "2" else hashlib.sha256(("seed/" + tag).encode()).hexdigest()
 json.dump(t, open(out, "w"), indent=1)
 PY
     echo "$out"
@@ -163,7 +164,7 @@ dg1() {
 dg2() {
     classes_manifest
     say "DG-2: the embedding class registered at $LATE_AT; a claim at $FPV5_AT meets GenClassNotReady"
-    at_daa "$LATE_AT"; gen_register toy-embed "$EMBED_EXEC"
+    at_daa "$LATE_AT"; dgw class --class "$(class_field toy-embed class_id)" >/dev/null 2>&1 || gen_register toy-embed "$EMBED_EXEC"   # (a re-run after the class is listed does not register twice)
     local s; s=$(seat_of "$EMBED_EXEC")
     at_daa "$FPV5_AT"
     [ "${INT11:-0}" = 1 ] && at_daa $((LATE_AT + 4))   # one height for every fence: the registration is in, five ready operators are tens of DAA away
