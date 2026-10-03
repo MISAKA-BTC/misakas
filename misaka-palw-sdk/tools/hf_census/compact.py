@@ -63,6 +63,25 @@ def peft_base(m: dict) -> str | None:
     return b if isinstance(b, str) else None
 
 
+def s_or_none(x) -> str | None:
+    """A string field as a string (the Hub's summaries are not always typed: a malformed GGUF's architecture can be `0`)."""
+    if x is None or isinstance(x, (dict, list)):
+        return None
+    return str(x)
+
+
+def i_or_none(x) -> int | None:
+    if isinstance(x, bool) or x is None:
+        return None
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float) and x.is_integer():
+        return int(x)
+    if isinstance(x, str) and x.isdigit():
+        return int(x)
+    return None
+
+
 def compact_config(c: dict | None) -> dict:
     out = {}
     for k, v in (c or {}).items():
@@ -106,10 +125,10 @@ def main() -> int:
         facts[m["id"]] = {
             "id": m["id"],
             "found": True,
-            "sha": m.get("sha"),
+            "sha": s_or_none(m.get("sha")),
             "gated": bool(m.get("gated")),
             "disabled": bool(m.get("disabled")),
-            "license": lic,
+            "license": s_or_none(lic),
         }
     # Pass 3: the records.
     seen: set[str] = set()
@@ -132,35 +151,38 @@ def main() -> int:
             lic, ln, ll = license_of(m)
             st = m.get("safetensors") or {}
             gg = m.get("gguf") or {}
+            st = st if isinstance(st, dict) else {}
+            gg = gg if isinstance(gg, dict) else {}
+            gated = m.get("gated", False)
             rec = {
                 "id": m["id"],
-                "oid": m.get("_id"),
-                "sha": m.get("sha"),
-                "created": m.get("createdAt"),
-                "modified": m.get("lastModified"),
-                "pipeline_tag": m.get("pipeline_tag"),
-                "library": m.get("library_name"),
-                "gated": m.get("gated", False),
+                "oid": s_or_none(m.get("_id")),
+                "sha": s_or_none(m.get("sha")),
+                "created": s_or_none(m.get("createdAt")),
+                "modified": s_or_none(m.get("lastModified")),
+                "pipeline_tag": s_or_none(m.get("pipeline_tag")),
+                "library": s_or_none(m.get("library_name")),
+                "gated": gated if isinstance(gated, (bool, str)) else bool(gated),
                 "disabled": bool(m.get("disabled", False)),
                 "private": bool(m.get("private", False)),
-                "downloads": int(m.get("downloads") or 0),
-                "downloads_all": int(m.get("downloadsAllTime") or 0),
-                "likes": int(m.get("likes") or 0),
-                "tags": m.get("tags") or [],
-                "license": lic,
-                "license_name": ln,
-                "license_link": ll,
-                "base_relation": rel,
+                "downloads": i_or_none(m.get("downloads")) or 0,
+                "downloads_all": i_or_none(m.get("downloadsAllTime")) or 0,
+                "likes": i_or_none(m.get("likes")) or 0,
+                "tags": [t for t in (m.get("tags") or []) if isinstance(t, str)],
+                "license": s_or_none(lic),
+                "license_name": s_or_none(ln),
+                "license_link": s_or_none(ll),
+                "base_relation": s_or_none(rel),
                 "base_ids": ids,
                 "base_resolved": [facts.get(r, {"id": r, "found": False}) for r in refs],
-                "config": compact_config(m.get("config")),
-                "tinfo": m.get("transformersInfo") or {},
-                "st_params": st.get("parameters"),
-                "st_total": st.get("total"),
-                "gguf_total": gg.get("total"),
-                "gguf_arch": gg.get("architecture"),
-                "gguf_ctx": gg.get("context_length"),
-                "siblings": [s.get("rfilename") for s in (m.get("siblings") or []) if isinstance(s, dict)],
+                "config": compact_config(m.get("config") if isinstance(m.get("config"), dict) else None),
+                "tinfo": m.get("transformersInfo") if isinstance(m.get("transformersInfo"), dict) else {},
+                "st_params": st.get("parameters") if isinstance(st, dict) and isinstance(st.get("parameters"), dict) else None,
+                "st_total": i_or_none(st.get("total")) if isinstance(st, dict) else None,
+                "gguf_total": i_or_none(gg.get("total")) if isinstance(gg, dict) else None,
+                "gguf_arch": s_or_none(gg.get("architecture")) if isinstance(gg, dict) else None,
+                "gguf_ctx": i_or_none(gg.get("context_length")) if isinstance(gg, dict) else None,
+                "siblings": [s.get("rfilename") for s in (m.get("siblings") or []) if isinstance(s, dict) and isinstance(s.get("rfilename"), str)],
             }
             g = str(rec["gated"])
             by_gated[g] = by_gated.get(g, 0) + 1

@@ -64,17 +64,39 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
             let stdin = std::io::stdin();
             let stdout = std::io::stdout();
             let mut out = std::io::BufWriter::new(stdout.lock());
+            let mut unreadable = 0u64;
             for (n, line) in stdin.lock().lines().enumerate() {
                 let line = line.map_err(|e| format!("stdin line {}: {e}", n + 1))?;
                 if line.trim().is_empty() {
                     continue;
                 }
-                let l: ListingV1 = serde_json::from_str(&line).map_err(|e| format!("stdin line {}: {e}", n + 1))?;
-                let c = classify(&l, &ctx);
-                serde_json::to_writer(&mut out, &c).map_err(|e| e.to_string())?;
+                // A record that does not read is a result (the report counts it as a failure in D_all), never a dropped repository
+                // and never the end of the run.
+                match serde_json::from_str::<ListingV1>(&line) {
+                    Ok(l) => {
+                        let c = classify(&l, &ctx);
+                        serde_json::to_writer(&mut out, &c).map_err(|e| e.to_string())?;
+                    }
+                    Err(e) => {
+                        unreadable += 1;
+                        let repo = serde_json::from_str::<serde_json::Value>(&line)
+                            .ok()
+                            .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string));
+                        eprintln!("stdin line {}: {e}", n + 1);
+                        serde_json::to_writer(
+                            &mut out,
+                            &serde_json::json!({"error": format!("LISTING_UNREADABLE: {e}"), "line": n + 1, "repo": repo}),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
                 out.write_all(b"\n").map_err(|e| e.to_string())?;
             }
-            out.flush().map_err(|e| e.to_string())
+            out.flush().map_err(|e| e.to_string())?;
+            if unreadable > 0 {
+                eprintln!("census classify: {unreadable} listing record(s) did not read (written as LISTING_UNREADABLE rows)");
+            }
+            Ok(())
         }
         "gates" => {
             let file = dirs.ok_or("census gates needs --dirs FILE (one fetched repository directory per line)")?;

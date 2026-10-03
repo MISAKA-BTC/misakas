@@ -190,8 +190,14 @@ def main() -> int:
     with gzip.open(snap / "classified.jsonl.gz", "rt") as f:
         for line in f:
             c = json.loads(line)
-            r = c["row"]
             N += 1
+            if "error" in c:
+                # A listing record that did not read: a failure at source, kept in D_all.
+                k = ("source", "LISTING_UNREADABLE")
+                decided_stop[k] += 1
+                buckets[k] += 1
+                continue
+            r = c["row"]
             w = r["downloads"]
             W += w
             g = r["strata"]["task_group"]

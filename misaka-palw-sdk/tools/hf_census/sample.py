@@ -61,7 +61,7 @@ def main() -> int:
         for i, line in enumerate(f):
             c = json.loads(line)
             n_all += 1
-            if c["decided"]:
+            if "error" in c or c["decided"]:
                 n_decided += 1
                 continue
             r = c["row"]
