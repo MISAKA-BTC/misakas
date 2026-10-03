@@ -142,6 +142,8 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
             || at.output_gate
             || at.gate.is_some()
             || at.v_scale != 1.0
+            || at.differential.is_some()
+            || at.moa.is_some()
             || at.qk_norm_after_rope
             || at.kv_share.is_some()
             || at.sparse.is_some()

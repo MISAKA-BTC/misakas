@@ -44,7 +44,7 @@ fn streamable(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<cha
             let ishape = src_shape(inner, r, layer, vars)?;
             ishape.len() >= 2 && (*axis == 0 || *axis == ishape.len() - 1) && streamable(inner, r, layer, vars)?
         }
-        Src::Transpose(_) | Src::Quant { .. } => false,
+        Src::Transpose(_) | Src::Quant { .. } | Src::Combine { .. } => false,
         Src::Stack { src: inner, var, .. } => {
             let mut v = vars.clone();
             v.insert(*var, 0);
@@ -170,7 +170,7 @@ fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, 
             data.resize(rows.len() * cols, 0.0);
             Ok(Tensor::new(vec![rows.len(), cols], data))
         }
-        Src::Transpose(_) | Src::Quant { .. } => Err(LowerError::eval("a transpose or a quantised weight is not evaluated by row ranges")),
+        Src::Transpose(_) | Src::Quant { .. } | Src::Combine { .. } => Err(LowerError::eval("a transpose or a quantised weight is not evaluated by row ranges")),
     }
 }
 

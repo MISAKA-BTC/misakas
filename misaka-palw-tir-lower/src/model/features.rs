@@ -166,6 +166,9 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ATTN_OUTPUT_GATE_V1", Attention, "sigmoid gate on the attention output", Implemented, [], NoReq, ["fidelity_tiny::qwen3_next", "fidelity_tiny::qwen3_5"], "q_proj also emits a per-head gate."),
     feature!("ATTN_OUTPUT_GATE_SEPARATE_V1", Attention, "an attention output gate from a projection of its own, per element or per head", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "AfMoE (sigmoid per element) and Laguna (softplus per head): o *= act(gate_proj(x)); a per-head gate is repeated over the head's width (HL GroupRepeat: a Broadcast). Exclusive with the fused q_proj gate."),
     feature!("ATTN_VALUE_SCALE_V1", Attention, "a constant on the values after their projection", Implemented, [], NoReq, ["attn_gate_scale::a_separate_gate_and_a_value_scale_are_features_that_lower"], "MiMo-V2-Flash attention_value_scale: the constant joins the value narrowing's multiplier; no node of its own survives."),
+    feature!("MIXER_MOA_V1", Mixer, "mixture of attention: per token the router picks experts that each own a query and an output projection; keys and values are shared", Implemented, ["Compare", "Concat", "Slice", "Transpose", "TopK"], NoReq, ["moa_jetmoe::jetmoe_matches_its_hf_fixture", "moa_jetmoe::the_court_reproduces_every_node_of_the_jetmoe_program"], "JetMoE: one router (top-k of the logits, softmax over the k); slot j's query is W_in[e_j]·x, the slots form heads (kv head, slot) so that the attention's grouped read lands on the tiled kv head HF's repeat(1, k, 1, 1) names; one shared K|V projection; the output is the exact weighted sum of W_out[e_j]·ctx_j (+ bias) in one accumulator. Two generic ops factored from the experts' lowering: ExpertLinear (a batched gather-MatMul over the selected experts) and WeightedSum; a Transpose01 between slot-major and head-major. No primitive, no court kernel."),
+    feature!("MLP_MOE_OUT_BIAS_V1", Ffn, "a [D] bias after the experts' weighted sum", Implemented, [], NoReq, ["moa_jetmoe::jetmoe_matches_its_hf_fixture"], "JetMoE's mlp.bias: the combine's additive term (round(bias / s_out) in output codes)."),
+    feature!("ATTN_DIFFERENTIAL_V1", Attention, "differential attention: one softmax per head, the second half of the heads' contexts subtracted from the first with a learned lambda", Implemented, ["Concat", "Slice"], NoReq, ["differential_attention::diffllama_matches_its_hf_fixture", "differential_attention::the_court_reproduces_every_node_of_the_differential_program"], "DiffLlama (transformers 5.17 runs the ordinary attention twice over the same q/k and the two halves of the values; per head there is one softmax map): the attention reads a double-wide value [V_g | V_{g+Hkv/2}] per kv head (Slice and Concat of the value projection, a tree of at most 8 inputs per node), the context is split along the heads, the second half scaled by lambda and subtracted from the first (a ScaleParam and a Sub on the attention's own codes), RMS-normed over each pair's 2*head_dim with no gain, and scaled by 1 - lambda_init. lambda = exp(sum lq1*lk1) - exp(sum lq2*lk2) + lambda_init(layer) is a function of the layer's weights only: a [1] constant made at conversion (Src::Combine). No primitive, no court kernel; the attention costs 1.5x a GQA's in multiply-accumulates."),
     feature!("ATTN_QK_NORM_V1", Attention, "norm on the queries and keys", Implemented, [], NoReq, ["fidelity_tiny::qwen3_moe", "fidelity_tiny::olmoe", "fidelity_tiny::cohere"], "Per-head shared, per-head separate or whole-projection scope."),
     feature!("ATTN_QK_NORM_POST_ROPE_V1", Attention, "the q/k norms act after the rotation", Implemented, [], NoReq, ["qk_norm_post_rope::the_order_of_the_norm_and_the_rotation_is_part_of_the_function"], "Hunyuan: q = rope(q); q = RMSNorm_head(q). Qwen3's order is the reverse. A rotation preserves a head's L2 norm but a per-channel gain does not commute with it, so the orders are different functions (8.9e-2 and 4.6e-2 of the logit scale on the two Hunyuan fixtures). The history keeps the normed, rotated key; no node is new, only their order."),
     feature!("ATTN_V_NORM_V1", Attention, "norm on the values", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
@@ -206,6 +209,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("MLP_MOE_EXPERT_BIAS_V1", Ffn, "biases on the expert projections", Implemented, [], NoReq, ["fidelity_tiny::gpt_oss"], "gpt-oss."),
     feature!("MLP_MOE_EXPERT_SCALE_V1", Ffn, "learned per-expert output scale", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4."),
     feature!("MLP_MOE_BESIDE_DENSE_V1", Ffn, "a MoE block beside the dense MLP", Implemented, [], NoReq, ["fidelity_tiny::gemma4"], "Gemma-4: both read the residual."),
+    feature!("MLP_MOE_ZERO_EXPERT_V1", Ffn, "zero-computation (identity) experts among the router's outputs", Implemented, ["Compare", "Select", "ReduceSum", "Concat"], NoReq, ["zero_expert_shortcut::longcat_flash_matches_its_hf_fixture", "zero_expert_shortcut::the_court_reproduces_every_node_of_the_longcat_program"], "LongCat-Flash zero_expert_num: the router, its selection bias and its top-k run over experts + zero outputs; a slot that chose an id past the real experts reads expert 0 at weight 0, the weights of those slots are summed, and the experts' ONE exact accumulator adds one more row, the input itself at the experts' output scale, with that sum as its weight. No primitive beyond Compare and Select."),
+    feature!("FFN_SHORTCUT_MOE_V1", Ffn, "a MoE whose output is carried to the next layer's FFN output (shortcut-connected MoE)", Implemented, ["Compare", "Select", "ReduceSum", "Concat"], NoReq, ["zero_expert_shortcut::longcat_flash_matches_its_hf_fixture", "zero_expert_shortcut::the_shortcut_moe_rides_a_residual_scale_carry"], "LongCat-Flash: a logical layer is two spec layers; the first runs a MoE on the same normed vector as its dense MLP and writes it to a carry of its own (the residual's scale, i32: a value that many layers write cannot have one site's scale), the second adds it to its FFN output."),
     feature!("FFN_RWKV_CHANNEL_V1", Ffn, "RWKV channel mix", Implemented, ["StateWrite"], NoReq, ["fidelity_tiny::rwkv"], "Token shift, squared ReLU, receptance gate."),
     // ───────────────────────────── residual wiring ─────────────────────────────
     feature!("RESIDUAL_PRE_NORM_V1", Residual, "pre-norm sequential residual", Implemented, [], NoReq, ["fidelity_tiny::llama"], "x += mixer(norm(x)); x += ffn(norm(x))."),
@@ -275,7 +280,8 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("RESIDUAL_ALTUP_V1", Residual, "AltUp: a predicted/corrected multi-stream residual", Missing, [], NoReq, [], "Gemma-3n. Expressible with the existing primitives once described; not in the vocabulary yet."),
     feature!("RESIDUAL_LAUREL_V1", Residual, "LAuReL: a learned low-rank residual branch", Missing, [], NoReq, [], "Gemma-3n."),
     feature!("FFN_ACTIVATION_SPARSITY_V1", Ffn, "Gaussian top-k sparsity of the gate activation", Missing, [], NoReq, [], "Gemma-3n."),
-    feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Missing, [], NoReq, [], "Mllama's decoder layers reading vision states; needs a second history input."),
+    feature!("ATTN_CROSS_V1", Attention, "cross-attention to another sequence's states", Specified, [], NoReq, [], "Mllama's decoder layers reading vision states: CrossAttnSpec describes them (q/k head norms, no rotation, tanh-gated residual branches); binding image rows to such a spec is refused by name. The text-only stage skips the layers (VLM_CROSS_LAYERS_SKIPPED_V1). The states path needs the vision stage's projected rows as a declared input (RFC-0003 §II.2.1) and a stage-0 K/V stack (FR-18's pattern)."),
+    feature!("VLM_CROSS_LAYERS_SKIPPED_V1", Attention, "a VLM text stage whose cross-attention layers are skipped (no vision states bound)", Implemented, [], NoReq, ["cross_layers_skipped::mllama_text_only_matches_its_hf_fixture", "cross_layers_skipped::binding_image_rows_to_a_cross_attention_spec_is_refused_by_name"], "Mllama: `MllamaTextModel.forward` skips every cross layer when `cross_attention_states` is None and the cache is empty, so a text-only prompt runs the Llama layers alone. The spec keeps the cross layers (and the model's layer numbering); the HL schedule omits them."),
     feature!("ATTN_PREFIX_LM_V1", Attention, "bidirectional attention over a prompt prefix", Missing, [], NoReq, [], "PaliGemma."),
     feature!("ATTN_BLOCKSPARSE_PATTERN_V1", Attention, "a fixed block-sparse pattern of visible keys", Missing, [], NoReq, [], "Phi-3-small."),
     feature!("SCALE_MUP_V1", Residual, "muP multipliers on the embedding, branches, projection chunks and logits", Implemented, [], NoReq, ["fidelity_tiny::falcon_h1", "hf_fixtures::falcon_h1"], "Falcon-H1's multipliers, each realised by the feature that already scales that place: the embedding and the logits (EMBED_SCALE_V1, the head's logit scale), a branch's input and output (an `Op::Scale` on the branch, a change of scale key and no node of the integer program), the Mamba-2 projection's five chunks (MAMBA2_MUP_V1), the MLP's gate and down (folded exactly into the gate and down weights by the adapter's weights expressions) and the attention key (folded into the score scale)."),
@@ -402,6 +408,14 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
             if a.v_scale != 1.0 {
                 u.add("ATTN_VALUE_SCALE_V1", lay, "");
             }
+            if let Some(mo) = &a.moa {
+                u.add("MIXER_MOA_V1", lay, format!("{} experts, top-{}", mo.experts, mo.top_k));
+            }
+            if let Some(df) = &a.differential {
+                u.add("ATTN_DIFFERENTIAL_V1", lay, "");
+                norm_features(u, &NormSpec { kind: NormKind::Rms, eps: df.norm_eps, gain: Gain::None, bias: false }, lay);
+                u.add("NORM_GROUPED_V1", lay, "");
+            }
             if let Some(n) = &a.o_norm {
                 u.add("SUBLAYER_NORMS_V1", lay, "the attention output");
                 norm_features(u, n, lay);
@@ -479,6 +493,8 @@ fn mixer_features(u: &mut Uses, lay: Option<usize>, l: usize, m: &Mixer) {
             u.add(if r.version == 4 { "MIXER_RWKV4_V1" } else if r.version == 7 { "MIXER_RWKV7_V1" } else { "MIXER_RWKV56_V1" }, lay, format!("RWKV-{}", r.version));
         }
         Mixer::None => u.add("LAYER_FFN_ONLY_V1", lay, ""),
+        // Text-only: the layer is skipped, as HF skips it without states. (`ATTN_CROSS_V1` is the layer WITH states: not lowered.)
+        Mixer::CrossAttention(_) => u.add("VLM_CROSS_LAYERS_SKIPPED_V1", lay, "no states bound: the layer is skipped, as HF does"),
         Mixer::Parallel(bs) => {
             u.add("MIXER_PARALLEL_BRANCH_V1", lay, format!("{} branches", bs.len()));
             for b in bs {
@@ -586,6 +602,12 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
             if let Some(l) = m.latent {
                 u.add("MOE_LATENT_PROJ_V1", lay, format!("latent {l}"));
             }
+            if m.out_bias {
+                u.add("MLP_MOE_OUT_BIAS_V1", lay, "");
+            }
+            if m.zero_experts > 0 {
+                u.add("MLP_MOE_ZERO_EXPERT_V1", lay, format!("{} identity experts", m.zero_experts));
+            }
             if m.expert_bias {
                 u.add("MLP_MOE_EXPERT_BIAS_V1", lay, "");
             }
@@ -602,6 +624,16 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
                 u.add("MLP_MOE_BESIDE_DENSE_V1", lay, "");
                 mlp(&mut u, &mm.mlp);
                 moe(&mut u, &mm.moe);
+            }
+            Ffn::MlpShortcut(sc) => {
+                u.add("FFN_SHORTCUT_MOE_V1", lay, match &sc.side {
+                    ShortcutSide::Produce(_) => "produces the side MoE",
+                    ShortcutSide::Consume => "adds the side MoE",
+                });
+                mlp(&mut u, &sc.mlp);
+                if let ShortcutSide::Produce(m) = &sc.side {
+                    moe(&mut u, m);
+                }
             }
         }
         match &ls.residual {

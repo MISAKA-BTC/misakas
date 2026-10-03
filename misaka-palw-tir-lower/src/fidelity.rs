@@ -188,6 +188,12 @@ pub fn prepare_spec(spec: ArchSpec, opts: &LowerOpts) -> Result<Prepared> {
             spec.architecture
         )));
     }
+    if opts.image_rows.is_some() && spec.layers.iter().any(|l| matches!(l.mixer, crate::spec::Mixer::CrossAttention(_))) {
+        return Err(crate::error::LowerError::not_lowerable(format!(
+            "{}: image rows over a decoder with cross-attention layers (ATTN_CROSS_V1: the layers would read the vision states, a stage this lowering does not build); this lowering is the text-only stage, which skips them as HF does",
+            spec.architecture
+        )));
+    }
     let hl = crate::hl::build_program(&spec)?;
     let binding = crate::hf_weights::bind(&spec, &hl)?;
     // A pre-quantised checkpoint's projections lower from their stored integers.

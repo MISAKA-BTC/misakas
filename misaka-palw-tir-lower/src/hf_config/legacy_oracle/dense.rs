@@ -1156,6 +1156,8 @@ pub(crate) fn gemma4_text(p: &mut P, model: &str, lm_head: &str) -> Result<ArchS
             input_scaled: false,
             gated: true,
             latent: None,
+            zero_experts: 0,
+            out_bias: false,
         })
     } else {
         p.cfg.inert(&["num_experts", "top_k_experts", "moe_intermediate_size"]);

@@ -281,6 +281,35 @@ pub struct AttnSpec {
     /// **`ATTN_VALUE_SCALE_V1`**: a constant on the values after their projection (`attention_value_scale`, MiMo-V2-Flash).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub v_scale: f64,
+    /// **`ATTN_DIFFERENTIAL_V1`**: differential attention (DiffLlama): every head pair `(i, i + H/2)` shares one value read, the second
+    /// head's context is subtracted from the first's with a learned `λ`, and the result is RMS-normed over the pair's width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub differential: Option<DiffSpec>,
+    /// **`MIXER_MOA_V1`**: mixture of attention (JetMoE): per token a router picks `top_k` of `experts` and each chosen expert
+    /// supplies its own query projection (`W_in[e]`, `[kv_heads·head_dim, D]`) and output projection (`W_out[e]`); keys and values
+    /// are shared (`attn.kv`, `[2·kv_heads·head_dim, D]`) and tiled across the slots. `heads` is `kv_heads · top_k`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moa: Option<MoaSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MoaSpec {
+    pub experts: usize,
+    pub top_k: usize,
+    pub router: RouterSpec,
+    /// A `[D]` bias added to the weighted sum of the output projections (`self_attention.experts.bias`).
+    #[serde(default)]
+    pub out_bias: bool,
+}
+
+/// **`ATTN_DIFFERENTIAL_V1`** (`modular_diffllama.py:DiffLlamaAttention`). The attention runs once over the keys and a DOUBLE-WIDE value
+/// `[V_g | V_{g + Hkv/2}]` per kv head (`Hkv` must be even), giving every head a context `[o1; o2]` of `2·head_dim`; the result is
+/// `(1 − λ_init)·RMSNorm_{2d}(o_{i,first half of the heads} − λ·o_{i + H/2,second half})`, `λ = exp(Σ λq1⊙λk1) − exp(Σ λq2⊙λk2) + λ_init`
+/// a function of the layer's weights only (a Q24 constant per layer at conversion), `λ_init = base − amp·e^{−rate·layer}`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DiffSpec {
+    pub lambda_init: crate::weights::LambdaInit,
+    pub norm_eps: f64,
 }
 
 /// A separate attention output gate: `o ·= act(gate_proj(x))`, the projection `[H·v_dim, D]` per element or `[H, D]` per head.
@@ -553,6 +582,24 @@ pub enum Mixer {
     /// **`MIXER_PARALLEL_BRANCH_V1`** (Falcon-H1): the layer's mixer is the sum of several branches reading the same normed input,
     /// each with its own input and output scale. At most one branch of each kind; no KV sharing inside.
     Parallel(Vec<Branch>),
+    /// **`ATTN_CROSS_V1`** (Mllama's `cross_attn`): a layer whose attention reads another sequence's states (a vision tower's rows),
+    /// never the token history. HF skips such a layer entirely when no states are given and the cache is empty
+    /// (`MllamaTextModel.forward`), so the text-only stage this lowering builds DROPS these layers from the schedule (their tensors are
+    /// dormant, not read); binding image rows to a spec that has them is refused by name (`fidelity::prepare_spec`).
+    CrossAttention(CrossAttnSpec),
+}
+
+/// `q = RMS_head(q_proj x)`, `k = RMS_head(k_proj states)`, `v = v_proj states`, no rotation, grouped heads, scale `head_dim^-½`;
+/// the layer's residual adds `tanh(attn_gate)·o_proj(·)` and `tanh(mlp_gate)·mlp(·)` when `gated`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrossAttnSpec {
+    pub heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub q_norm: NormSpec,
+    pub k_norm: NormSpec,
+    #[serde(default)]
+    pub gated: bool,
 }
 
 /// One branch of a [`Mixer::Parallel`]: `out_scale · mixer(in_scale · x)`.
@@ -702,6 +749,18 @@ pub struct MoeSpec {
     /// before them, `fc2_latent_proj` after — while the router and the shared expert read the layer's input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latent: Option<usize>,
+    /// **`MLP_MOE_ZERO_EXPERT_V1`** (LongCat-Flash's `zero_expert_num`): this many extra router outputs after the real experts,
+    /// each the IDENTITY — a token routed to one gets `w·x` from it. The router, its selection bias and its top-k run over
+    /// `experts + zero_experts` outputs; the expert tensors keep `experts` rows.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub zero_experts: usize,
+    /// A `[D]` bias added after the experts' weighted sum (JetMoE's `mlp.bias`, `moe.bias`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub out_bias: bool,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Gemma-4's MoE block beside its MLP: `f = mlp_post(mlp(pre_ffn(x))) + moe_post(moe(moe_pre(x)))`,
@@ -718,6 +777,23 @@ pub struct MlpMoeSpec {
     pub router_scale: f64,
 }
 
+/// **`FFN_SHORTCUT_MOE_V1`** (LongCat-Flash's shortcut-connected MoE): a logical layer is TWO layers of the spec; the first runs a
+/// MoE on the same normed vector as its dense MLP but does not add the result — it is carried to the second, whose output adds it
+/// (`h4 = h3 + mlps[1](n3) + moe(n1)`). The carried value rides at the residual scale (a carry of its own).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShortcutSpec {
+    pub mlp: MlpSpec,
+    pub side: ShortcutSide,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ShortcutSide {
+    /// The MoE of this layer's FFN input; its output goes to the side carry.
+    Produce(MoeSpec),
+    /// Adds the side carry to this layer's FFN output.
+    Consume,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Ffn {
     None,
@@ -726,6 +802,8 @@ pub enum Ffn {
     RwkvChannel(RwkvChannelSpec),
     /// Gemma-4 (only under [`Residual::Sandwich`]).
     MlpMoe(Box<MlpMoeSpec>),
+    /// LongCat-Flash: a dense MLP and a MoE carried to the next layer (only under [`Residual::Sequential`]).
+    MlpShortcut(Box<ShortcutSpec>),
 }
 
 /// Gemma-3n/4's per-layer input (PLE), for layer `l` from the token and its scaled embedding `e`:

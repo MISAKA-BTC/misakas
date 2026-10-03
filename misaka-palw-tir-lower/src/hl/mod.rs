@@ -53,6 +53,10 @@ pub struct LoraOp {
     pub den: i64,
 }
 
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum HlType {
     F32,
@@ -310,10 +314,37 @@ pub enum Op {
     // ── routing ──
     /// Expert selection. Out 0: `top_k` expert ids in index order (ties → lowest index);
     /// out 1: their weights. In: `[logits, (selection bias)]`.
+    ///
+    /// `zero > 0` (`MLP_MOE_ZERO_EXPERT_V1`): `experts` counts the real experts PLUS `zero` identity ones (the router, its bias and
+    /// the top-k run over all of them); out 0 holds ids below `experts − zero` only (a slot that chose an identity expert reads
+    /// expert 0 with weight 0), out 1 the weights with those slots zeroed, out 2 (`[1]`) the sum of the weights of the identity slots.
     Route {
         router: RouterSpec,
         experts: usize,
         top_k: usize,
+        #[serde(skip_serializing_if = "is_zero_usize")]
+        zero: usize,
+    },
+    /// **`MIXER_MOA_V1`**: one projection per selected expert, `y_j = W[e_j] · x_j`. In: `[x, ids, W [E, R, C]]`; `x` is `[C]`, read
+    /// by every slot (`per_slot: false`, the queries), or `[k·C]`, a row per slot (`per_slot`, the outputs). Out `[k·R]`, slot-major.
+    /// `wide`: the result keeps `i32` precision (it is summed by [`Op::WeightedSum`] straight away).
+    ExpertLinear {
+        top_k: usize,
+        per_slot: bool,
+        wide: bool,
+    },
+    /// `Σ_j w_j · y_j (+ bias)` over `[k·D]` rows: the experts' outputs in one exact accumulator, narrowed once. In: `[y, weights, (bias)]`.
+    WeightedSum {
+        top_k: usize,
+        /// A third input, a `[D]` param, is added to the sum.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        out_bias: bool,
+    },
+    /// A `[n0, n1, n2]` value with its first two axes swapped (`[n1, n0, n2]`): the reorder between slot-major and head-major heads.
+    Transpose01 {
+        n0: usize,
+        n1: usize,
+        n2: usize,
     },
     /// `Σ_j w_j · down_e(glu(gate_e x, up_e x))` over the selected experts — or, `input_scaled`
     /// (Llama-4), `Σ_j down_e(glu(gate_e x_j, up_e x_j))` with `x_j = w_j · x`.
@@ -327,6 +358,13 @@ pub enum Op {
         input_scaled: bool,
         #[serde(skip_serializing_if = "is_true")]
         gated: bool,
+        /// `MLP_MOE_ZERO_EXPERT_V1`: one more input after the expert params, a `[1]` weight `z` (the Route's out 2): the output
+        /// adds `z · x` (the identity experts' share).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        identity: bool,
+        /// One more input, last: a `[D]` param added after the experts' weighted sum (JetMoE's `mlp.bias`).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        out_bias: bool,
     },
 }
 
@@ -385,6 +423,9 @@ impl Op {
             Op::Wkv4 => "Wkv4",
             Op::Wkv6 { .. } => "Wkv6",
             Op::Wkv7 { .. } => "Wkv7",
+            Op::ExpertLinear { .. } => "ExpertLinear",
+            Op::WeightedSum { .. } => "WeightedSum",
+            Op::Transpose01 { .. } => "Transpose01",
             Op::Route { .. } => "Route",
             Op::MoeExperts { .. } => "MoeExperts",
         }
@@ -462,6 +503,10 @@ pub struct StateDecl {
 pub struct CarryDecl {
     pub name: String,
     pub shape: Vec<usize>,
+    /// A carry past the residual that rides at the RESIDUAL's scale (`i32`), not as `i16` codes of one layer's site
+    /// (`FFN_SHORTCUT_MOE_V1`'s side value, written by many layers): a value several layers write cannot have one site's scale.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub resid: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -722,10 +722,15 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         .carries
         .iter()
         .enumerate()
-        .map(|(c, cd)| TensorType::fixed(if c == 0 { DType::I32 } else { DType::I16 }, &u32s(&cd.shape)))
+        .map(|(c, cd)| TensorType::fixed(if c == 0 || cd.resid { DType::I32 } else { DType::I16 }, &u32s(&cd.shape)))
         .collect();
-    let carry_in: Vec<(usize, Option<ScaleKey>)> =
-        hl.carries.iter().enumerate().map(|(c, cd)| (cd.shape.iter().product(), cx.carry_keys.get(&c).cloned())).collect();
+    // A carry at the residual's scale (`CarryDecl::resid`) is known from the start: its key is the residual's.
+    let carry_in: Vec<(usize, Option<ScaleKey>)> = hl
+        .carries
+        .iter()
+        .enumerate()
+        .map(|(c, cd)| (cd.shape.iter().product(), if cd.resid { Some(ScaleKey::resid()) } else { cx.carry_keys.get(&c).cloned() }))
+        .collect();
     let prefixes: Vec<String> = match blk.role {
         BlockRole::Pre => vec!["pre.".into()],
         BlockRole::Post => vec!["post.".into()],
@@ -817,6 +822,30 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
 /// fills it carries out the row it appended to its own history, and the scale of that row in
 /// that layer's occurrence becomes the carry's ([`Base::At`]) for every layer that reads it.
 fn carry_out(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, c: usize, o: hl::Ref) -> Result<tir::Ref> {
+    // A carry at the residual's scale (`i32`): what any layer writes is brought to `S_r`, what none writes passes through.
+    if cx.hl.carries[c].resid {
+        let (lo, hi) = (i32::MIN as i64, i32::MAX as i64);
+        return match o {
+            hl::Ref::Carry(k) if k as usize == c => Ok(b.clamp(tir::Ref::CarryIn(c as u8), lo, hi, DType::I32)),
+            hl::Ref::Node(..) if lb.role == BlockRole::Pre => {
+                // The pre block's value is zeros no layer reads before one writes it.
+                let v = operand(lb, o)?;
+                let r = if v.dt == DType::I32 { v.r } else { b.cast(v.r, DType::I32) };
+                Ok(b.clamp(r, lo, hi, DType::I32))
+            }
+            hl::Ref::Node(..) => {
+                let v = operand(lb, o)?;
+                let v = coerce(b, cx, lb, &v, DType::I32, &ScaleKey::resid())?;
+                let v = ensure_node(b, &v);
+                if v.len != lb.carry_in[c].0 {
+                    return Err(LowerError::eval(format!("internal: carry {c} of {} lanes gets {}", lb.carry_in[c].0, v.len)));
+                }
+                note_resid(cx, lb, &v);
+                Ok(v.r)
+            }
+            other => Err(LowerError::eval(format!("internal: carry {c} goes out as {other:?}"))),
+        };
+    }
     match o {
         hl::Ref::Carry(k) if k as usize == c => {
             let (lo, hi) = code_bounds(DType::I16);
@@ -1203,6 +1232,12 @@ fn operand(lb: &Lb, r: hl::Ref) -> Result<Val> {
         hl::Ref::Carry(c) => {
             let (len, key) =
                 lb.carry_in.get(c as usize).cloned().ok_or_else(|| LowerError::eval(format!("internal: no carry {c}")))?;
+            // A carry at the residual's scale is `i32` like carry 0.
+            if let Some(k) = &key
+                && matches!(k.base, Base::Resid)
+            {
+                return Ok(Val { r: tir::Ref::CarryIn(c), dt: DType::I32, key: k.clone(), len, site: format!("carry{c}") });
+            }
             let key = key.ok_or_else(|| LowerError::not_lowerable(format!("carry {c} is read before the layer that fills it")))?;
             Ok(Val { r: tir::Ref::CarryIn(c), dt: DType::I16, key, len, site: format!("carry{c}") })
         }
@@ -1558,7 +1593,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             note_resid(cx, lb, &v);
             one(v)
         }
-        Op::Route { router, experts, top_k } => {
+        Op::Route { router, experts, top_k, zero } => {
             let l = operand(lb, node.inputs[0])?;
             let l = coerce(b, cx, lb, &l, DType::I32, &q14())?;
             let sel_bias = if router.selection_bias { Some(pidx(node.inputs[1])?) } else { None };
@@ -1593,12 +1628,61 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             }
             b.commit(w);
             let wkey = ScaleKey::q24().times(router.scale);
+            // `MLP_MOE_ZERO_EXPERT_V1`: the ids from `experts − zero` on are identity experts. A slot that chose one reads expert 0
+            // at weight 0 (the real experts' combine adds nothing for it), and the weights of those slots sum to `z`, which the
+            // experts' combine adds as one more row of the input itself.
+            if *zero > 0 {
+                let real = (*experts - *zero) as i128;
+                let first_zero = b.c(DType::Idx, real);
+                let is_zero = b.compare(idx, first_zero, tir::Cmp::Ge);
+                let id0 = b.c(DType::Idx, 0);
+                let idx2 = b.select(is_zero, id0, idx, DType::Idx);
+                // The select is exact; the clamp (a no-op on the values) states the range the admission's interval analysis needs.
+                let idx2 = b.clamp(idx2, 0, real as i64 - 1, DType::Idx);
+                b.commit(idx2);
+                let w0 = b.c(DType::I32, 0);
+                let w2 = b.select(is_zero, w0, w, DType::I32);
+                b.commit(w2);
+                let zs = b.select(is_zero, w, w0, DType::I32);
+                let zsum = b.reduce_sum(zs, 0, DType::I64);
+                let zsum = b.clamp(zsum, i32::MIN as i64, i32::MAX as i64, DType::I32);
+                let zr = b.reshape_fixed(zsum, &[1]);
+                b.commit(zr);
+                return Ok(vec![
+                    Some(Val { r: idx2, dt: DType::Idx, key: ScaleKey::q24(), len: *top_k, site: format!("{site}.idx") }),
+                    Some(Val { r: w2, dt: DType::I32, key: wkey.clone(), len: *top_k, site: format!("{site}.w") }),
+                    Some(Val { r: zr, dt: DType::I32, key: wkey, len: 1, site: format!("{site}.z") }),
+                ]);
+            }
             Ok(vec![
                 Some(Val { r: idx, dt: DType::Idx, key: ScaleKey::q24(), len: *top_k, site: format!("{site}.idx") }),
                 Some(Val { r: w, dt: DType::I32, key: wkey, len: *top_k, site: format!("{site}.w") }),
             ])
         }
-        Op::MoeExperts { top_k, act, glu, bias, input_scaled, gated } => {
+        Op::ExpertLinear { top_k, per_slot, wide } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let idx = operand(lb, node.inputs[1])?;
+            let w = pidx(node.inputs[2])?;
+            one(lower_expert_linear(b, cx, lb, &x, &idx, w, *per_slot, *wide, *top_k, &site)?)
+        }
+        Op::WeightedSum { top_k, out_bias } => {
+            let y = operand(lb, node.inputs[0])?;
+            let w = operand(lb, node.inputs[1])?;
+            let bp = if *out_bias { Some(pidx(node.inputs[2])?) } else { None };
+            let v = lower_weighted_sum(b, cx, lb, &y, &w, bp, *top_k, &site, &want)?;
+            note_resid(cx, lb, &v);
+            one(v)
+        }
+        Op::Transpose01 { n0, n1, n2 } => {
+            let x = operand(lb, node.inputs[0])?;
+            let x = codes(b, cx, lb, &x)?;
+            let r = b.reshape_fixed(x.r, &[*n0 as u32, *n1 as u32, *n2 as u32]);
+            let t = b.transpose(r, &[1, 0, 2]);
+            let r = b.reshape_fixed(t, &[(n0 * n1 * n2) as u32]);
+            one(Val { r, len: n0 * n1 * n2, ..x })
+        }
+        Op::MoeExperts { top_k, act, glu, bias, input_scaled, gated, identity, out_bias } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let idx = operand(lb, node.inputs[1])?;
@@ -1606,7 +1690,12 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             // Gated: gate, up, down (+ three biases); plain: up, down.
             let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
             let ps: Vec<u32> = (3..3 + n_params).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, &ps, *top_k, *act, *glu, *input_scaled, *gated, &site, &want)?;
+            let zero_w = if *identity { Some(operand(lb, node.inputs[3 + n_params])?) } else { None };
+            let out_bias_p = if *out_bias { Some(pidx(node.inputs[3 + n_params + usize::from(*identity)])?) } else { None };
+            if zero_w.is_some() && (*input_scaled || !matches!(*glu, crate::spec::Glu::Standard)) {
+                return Err(LowerError::not_lowerable("MLP_MOE_ZERO_EXPERT_V1 with experts that read their weighted input"));
+            }
+            let v = lower_moe(b, cx, lb, &x, &idx, &w, zero_w.as_ref(), out_bias_p, &ps, *top_k, *act, *glu, *input_scaled, *gated, &site, &want)?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -3497,6 +3586,8 @@ fn lower_moe(
     x: &Val,
     idx: &Val,
     w: &Val,
+    zero_w: Option<&Val>,
+    out_bias: Option<u32>,
     ps: &[u32],
     k: usize,
     act: Act,
@@ -3638,12 +3729,133 @@ fn lower_moe(
     } else {
         (w.r, w.key.clone())
     };
+    // `MLP_MOE_ZERO_EXPERT_V1`: the identity experts' share is one more row of the same accumulator — the input itself at the experts'
+    // output scale, weighted by the summed weights of the slots that chose an identity expert.
+    let (y, wr) = match zero_w {
+        Some(zw) => {
+            let xr = coerce(b, cx, lb, x, DType::I32, &ok)?;
+            let xr = b.reshape_fixed(xr.r, &[1, d as u32]);
+            let zr = if zw.key.same(&kw) { zw.r } else { return Err(LowerError::eval("internal: the identity weight is at another scale than the routed weights")) };
+            (b.concat(&[y, xr], 0), b.concat(&[wr, zr], 0))
+        }
+        None => (y, wr),
+    };
     let (ko2, kt) = (ok, want.key.clone());
     let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kw)? * c.scale(&ko2)? / c.scale(&kt)?])))?;
     let (lo, hi) = code_bounds(want.dt);
     let p2 = b.pow2_of(s);
-    let z = b.c(DType::I64, 0);
+    let z = match out_bias {
+        Some(bp) => combine_bias(b, cx, lb, bp, &want.key, d, site)?,
+        None => b.c(DType::I64, 0),
+    };
     let r = b.moe_combine_q36(y, wr, m, p2, z, lo, hi, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    Ok(Val { r, dt: want.dt, key: want.key.clone(), len: d, site: site.to_string() })
+}
+
+/// A `[D]` float param as the added term of an experts' combine: `round(bias / s_out)` in output codes (`I64`).
+fn combine_bias(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, bp: u32, out: &ScaleKey, d: usize, site: &str) -> Result<tir::Ref> {
+    let ko = out.clone();
+    decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.bias"),
+        DType::I64,
+        &[d],
+        per_layer(lb),
+        Arc::new(move |c| {
+            let bv = c.f(bp)?;
+            let so = c.scale(&ko)?;
+            Ok(IntTensor::i64(vec![bv.data.len()], bv.data.iter().map(|v| (*v as f64 / so).round() as i64).collect()))
+        }),
+    )
+}
+
+/// **`MIXER_MOA_V1`**: `y_j = W[e_j] · x_j` for the `k` selected experts, the batched `MatMul` of `lower_moe`'s projections: the
+/// expert tensor is a `[E, R, C]` param of `i8` rows gathered by the committed ids, per-(expert, row) scales gathered the same way.
+/// `x` is `[C]` read by every slot, or `[k·C]` a row per slot. The result is `[k·R]`, slot-major, at the node's own site's scale
+/// (`i16` codes, or the wide `i32` rail when the next node sums it).
+#[allow(clippy::too_many_arguments)]
+fn lower_expert_linear(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    idx: &Val,
+    p: u32,
+    per_slot: bool,
+    wide: bool,
+    k: usize,
+    site: &str,
+) -> Result<Val> {
+    let hl = cx.hl;
+    if cx.quant.contains_key(&p) {
+        return Err(LowerError::not_lowerable("MIXER_MOA_V1 over pre-quantised expert tensors"));
+    }
+    let pd = &hl.params[p as usize];
+    let (e, rows, cols) = (pd.shape[0], pd.shape[1], pd.shape[2]);
+    if x.key.split() != 0 {
+        return Err(LowerError::eval("internal: an expert projection reads a split input"));
+    }
+    let out_key = ScaleKey::site(vec![site.to_string()], wide);
+    let dt = if wide { DType::I32 } else { DType::I16 };
+    let codes = decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, RowKind::W8, p)?;
+    let (ki, ko) = (x.key.clone(), out_key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        e * rows,
+        Arc::new(move |c| {
+            let scales = c.row_scales(p, false)?;
+            let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
+            Ok(scales.iter().map(|sw| sw * si / so).collect())
+        }),
+    )?;
+    let sel = b.gather(codes, idx.r, 0, 0);
+    let input = if per_slot { b.reshape_fixed(x.r, &[k as u32, cols as u32, 1]) } else { b.reshape_fixed(x.r, &[cols as u32, 1]) };
+    let acc = b.matmul(sel, input, DType::I64);
+    let acc = b.reshape_fixed(acc, &[k as u32, rows as u32]);
+    let m = b.reshape_fixed(m, &[e as u32, rows as u32]);
+    let s = b.reshape_fixed(s, &[e as u32, rows as u32]);
+    let mk = b.gather(m, idx.r, 0, 0);
+    let sk = b.gather(s, idx.r, 0, 0);
+    let r = narrow(b, acc, mk, sk, None, dt);
+    b.commit(r);
+    Ok(Val { r, dt, key: out_key, len: k * rows, site: site.to_string() })
+}
+
+/// `Σ_j w_j · y_j (+ bias)` — the experts' combine over `[k·D]` rows in one exact accumulator, narrowed once to the wanted scale.
+#[allow(clippy::too_many_arguments)]
+fn lower_weighted_sum(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    y: &Val,
+    w: &Val,
+    bias: Option<u32>,
+    k: usize,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    if y.dt != DType::I32 || w.dt != DType::I32 || y.len % k != 0 {
+        return Err(LowerError::eval("internal: a weighted sum reads wide rows and Q24 weights"));
+    }
+    let d = y.len / k;
+    let yr = b.reshape_fixed(y.r, &[k as u32, d as u32]);
+    let (kw, ky, kt) = (w.key.clone(), y.key.clone(), want.key.clone());
+    let (m, s) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kw)? * c.scale(&ky)? / c.scale(&kt)?])))?;
+    let (lo, hi) = code_bounds(want.dt);
+    let p2 = b.pow2_of(s);
+    let z = match bias {
+        Some(bp) => combine_bias(b, cx, lb, bp, &want.key, d, site)?,
+        None => b.c(DType::I64, 0),
+    };
+    let r = b.moe_combine_q36(yr, w.r, m, p2, z, lo, hi, want.dt);
     if want.dt == DType::I16 {
         b.commit(r);
     }

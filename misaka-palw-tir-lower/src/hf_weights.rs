@@ -10,7 +10,7 @@
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
 use crate::spec::*;
-use crate::weights::{Binding, MapFn, Pick, Src};
+use crate::weights::{Binding, CombineFn, MapFn, Pick, Src};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Stands for a role the adapter does not name while the defaults of the overridden params are derived
@@ -40,6 +40,7 @@ fn missing_role(s: &Src) -> Option<String> {
         | Src::Map { src, .. }
         | Src::Reshape { src, .. }
         | Src::PadRows { src, .. } => missing_role(src),
+        Src::Combine { srcs, .. } => srcs.iter().find_map(missing_role),
     }
 }
 
@@ -229,7 +230,8 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     let rescale = spec.layers.iter().position(|l| l.post_scale != 1.0).map(|i| i + 1);
     let mut seen: Vec<&LayerSpec> = Vec::new();
     for ls in &spec.layers {
-        if seen.contains(&ls) {
+        // A cross-attention layer is skipped in the text-only stage: its tensors are dormant.
+        if seen.contains(&ls) || matches!(ls.mixer, Mixer::CrossAttention(_)) {
             continue;
         }
         seen.push(ls);
@@ -322,6 +324,13 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
         Ffn::Mlp(mm) => mlp(m, mm, "mlp", m.st.mlp)?,
         Ffn::Moe(mm) => moe(m, mm)?,
         Ffn::RwkvChannel(c) => rwkv_channel(m, c, rescale, spec.hidden_size)?,
+        // `FFN_SHORTCUT_MOE_V1`: the dense MLP's params, and the MoE's in the layer that produces it.
+        Ffn::MlpShortcut(sc) => {
+            mlp(m, &sc.mlp, "mlp", m.st.mlp)?;
+            if let ShortcutSide::Produce(mo) = &sc.side {
+                moe(m, mo)?;
+            }
+        }
         Ffn::MlpMoe(mm) => {
             mlp(m, &mm.mlp, "mlp", m.st.mlp)?;
             moe(m, &mm.moe)?;
@@ -348,6 +357,7 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
         Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
         Mixer::RwkvTime(r) => rwkv_time(m, r, rescale, spec.hidden_size)?,
         Mixer::None => {}
+        Mixer::CrossAttention(_) => return Err(LowerError::eval("internal: a cross-attention layer is bound only when it is not skipped")),
         Mixer::Parallel(bs) => {
             for b in bs {
                 bind_mixer(m, spec, &b.mixer, rescale)?;
@@ -357,7 +367,23 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
     Ok(())
 }
 
+/// **`MIXER_MOA_V1`**: the router, the stacked query and output experts, the shared key/value projection and the output bias.
+fn moa(m: &mut M, a: &AttnSpec, moa: &MoaSpec) -> Result<()> {
+    m.lin("moa.router", "moa.router", moa.router.linear_bias)?;
+    m.put("moa.experts.input", Src::t(m.role("moa.input")?))?;
+    m.put("moa.experts.output", Src::t(m.role("moa.output")?))?;
+    m.lin("attn.kv", "attn.kv", false)?;
+    if moa.out_bias {
+        m.put("moa.bias", Src::t(m.role("moa.bias")?))?;
+    }
+    let _ = a;
+    Ok(())
+}
+
 fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
+    if let Some(mo) = &a.moa {
+        return moa(m, a, mo);
+    }
     let (h, kv, hd, vd) = (a.heads, a.kv_heads, a.head_dim, a.v_head_dim);
     let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
     // The HL names (`AttnSpec::param_prefix`); the checkpoint roles stay `attn.*`.
@@ -440,6 +466,13 @@ fn attention(m: &mut M, a: &AttnSpec) -> Result<()> {
                 }
             }
         }
+    }
+    // `ATTN_DIFFERENTIAL_V1`: λ from the four vectors, and `1 − λ_init`, both `[1]` constants of the layer.
+    if let Some(df) = &a.differential {
+        let q = |r: &str| -> Result<Src> { Ok(Src::t(m.role(r)?)) };
+        let ins = vec![q("attn.lambda_q1")?, q("attn.lambda_k1")?, q("attn.lambda_q2")?, q("attn.lambda_k2")?];
+        m.put(n("diff.lambda"), Src::Combine { srcs: ins, f: CombineFn::DiffLambda(df.lambda_init) })?;
+        m.put(n("diff.scale"), Src::Combine { srcs: vec![], f: CombineFn::OneMinusLambdaInit(df.lambda_init) })?;
     }
     m.lin(&n("o"), "attn.o", a.o_bias)?;
     // `SUBLAYER_NORMS_V1`: BitNet's `attn_sub_norm`.
@@ -760,6 +793,9 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
     }
     if s.router.per_expert_scale {
         m.put("moe.expert_scale", Src::t(m.role("moe.expert_scale")?))?;
+    }
+    if s.out_bias {
+        m.put("moe.bias", Src::t(m.role("moe.bias")?))?;
     }
     match m.st.experts {
         MlpLayout::Separate => {

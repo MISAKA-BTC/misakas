@@ -526,7 +526,7 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
         output: crate::hl::HlOutput::Embedding { normalized: false },
         vocab: 1,
         hidden: p.last.c,
-        carries: vec![CarryDecl { name: "rows".into(), shape: vec![1, 1] }],
+        carries: vec![CarryDecl { name: "rows".into(), shape: vec![1, 1], resid: false }],
         params,
         states: vec![],
         rope_tables: vec![],

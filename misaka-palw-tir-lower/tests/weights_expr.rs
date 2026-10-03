@@ -290,7 +290,13 @@ fn the_enumerated_layouts_are_expressions() {
         let binding = hf_weights::bind(&spec, &prog).unwrap_or_else(|e| panic!("{name}: {e}"));
         for (d, src) in prog.params.iter().zip(&binding.srcs) {
             let Some(expr) = to_expr(src) else {
-                assert!(src.is_quant(), "{name} `{}`: only a pre-quantised source has no expression", d.name);
+                // A pre-quantised source, and a constant derived from several tensors (ATTN_DIFFERENTIAL_V1's lambda), have no
+                // one-tensor expression.
+                assert!(
+                    src.is_quant() || matches!(src, misaka_palw_tir_lower::weights::Src::Combine { .. }),
+                    "{name} `{}`: only a pre-quantised or a combined source has no expression",
+                    d.name
+                );
                 continue;
             };
             for step in expr.as_array().unwrap().iter().skip(1) {

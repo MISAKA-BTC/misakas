@@ -30,6 +30,10 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
     let mut schedule = Vec::with_capacity(spec.layers.len());
     let mut layer_of = Vec::with_capacity(spec.layers.len());
     for (li, ls) in spec.layers.iter().enumerate() {
+        // `ATTN_CROSS_V1`, text-only: a cross-attention layer reads no states and HF skips it (`layer_of` keeps the model's numbering).
+        if matches!(ls.mixer, Mixer::CrossAttention(_)) {
+            continue;
+        }
         // Layers that differ only in constants the program reads as data (a PLE layer's hash
         // constants follow from its index) run the same block.
         let ls = &block_kind(ls);
@@ -134,7 +138,7 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         )));
     }
     let streams = spec.hyper.as_ref().map_or(1, |h| h.streams);
-    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size * streams] }];
+    let mut out = vec![CarryDecl { name: "h".into(), shape: vec![spec.hidden_size * streams], resid: false }];
     // slot → the (kv heads, head width, value width) of the one layer that fills it.
     let mut slots: BTreeMap<usize, (usize, usize, usize)> = BTreeMap::new();
     for (li, ls) in spec.layers.iter().enumerate() {
@@ -161,8 +165,20 @@ fn carries_of(spec: &ArchSpec) -> Result<Vec<CarryDecl>> {
         if slot != i {
             return Err(LowerError::eval("internal: KV slots are not numbered from 0"));
         }
-        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k] });
-        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v] });
+        out.push(CarryDecl { name: format!("kv{slot}.k"), shape: vec![k], resid: false });
+        out.push(CarryDecl { name: format!("kv{slot}.v"), shape: vec![v], resid: false });
+    }
+    // `FFN_SHORTCUT_MOE_V1`: the MoE of the layer that produces it rides to the layer that consumes it, at the residual's scale.
+    let produces = |ls: &LayerSpec| matches!(&ls.ffn, Ffn::MlpShortcut(s) if matches!(s.side, ShortcutSide::Produce(_)));
+    let consumes = |ls: &LayerSpec| matches!(&ls.ffn, Ffn::MlpShortcut(s) if matches!(s.side, ShortcutSide::Consume));
+    if spec.layers.iter().any(consumes) && !spec.layers.iter().any(produces) {
+        return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1: a layer consumes a side value that no layer produces"));
+    }
+    if spec.layers.iter().any(produces) {
+        if spec.hyper.is_some() {
+            return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1 under hyper-connections is not modelled"));
+        }
+        out.push(CarryDecl { name: "side".into(), shape: vec![spec.hidden_size], resid: true });
     }
     Ok(out)
 }
@@ -542,6 +558,9 @@ impl Builder<'_> {
 
     fn layer_block(&mut self, ls: &LayerSpec, kind_index: usize) -> Result<usize> {
         let d = self.s.hidden_size;
+        if matches!(ls.ffn, Ffn::MlpShortcut(_)) && !matches!(ls.residual, Residual::Sequential { .. }) {
+            return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1 is lowered under a sequential pre-norm residual only"));
+        }
         let mut bk = Bk { nodes: vec![] };
         let x = Ref::Carry(0);
         let mut h = match &ls.residual {
@@ -673,6 +692,9 @@ impl Builder<'_> {
             Mixer::ShortConv(c) => self.short_conv(bk, c, x),
             Mixer::None => Err(LowerError::eval("internal: a mixer was asked of a layer with none")),
             Mixer::Parallel(branches) => self.parallel(bk, branches, x),
+            Mixer::CrossAttention(_) => Err(LowerError::not_lowerable(
+                "ATTN_CROSS_V1: a cross-attention layer reads vision states; only the text-only stage (the layer skipped, as HF does without states) is lowered",
+            )),
         }
     }
 
@@ -718,6 +740,24 @@ impl Builder<'_> {
             Ffn::Moe(m) => self.moe(bk, m, x),
             Ffn::RwkvChannel(c) => self.rwkv_channel(bk, c, x),
             Ffn::MlpMoe(_) => Err(LowerError::eval("internal: an MLP+MoE block outside a sandwich layer")),
+            Ffn::MlpShortcut(sc) => {
+                let d = self.s.hidden_size;
+                let side = self
+                    .carries
+                    .iter()
+                    .position(|c| c.name == "side")
+                    .ok_or_else(|| LowerError::eval("internal: a shortcut layer without the side carry"))?;
+                let f = self.mlp(bk, &sc.mlp, x, sc.mlp.name.as_deref().unwrap_or("mlp"))?;
+                match &sc.side {
+                    // The MoE reads the same normed vector as the dense MLP; its output is carried, not added.
+                    ShortcutSide::Produce(m) => {
+                        let s = self.moe(bk, m, x)?;
+                        self.carry_out.insert(side, s);
+                        Ok(f)
+                    }
+                    ShortcutSide::Consume => Ok(bk.f(Op::Add, vec![f, Ref::Carry(side as u8)], d, "ffn.side")),
+                }
+            }
         }
     }
 
@@ -946,6 +986,18 @@ impl Builder<'_> {
         let (qn, kn, vn) = (h * hd, kv * hd, kv * vd);
         let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
         let n = |s: &str| format!("{pf}.{s}");
+        // `ATTN_DIFFERENTIAL_V1`: the values are double wide in the history, the context is combined before anything reads it.
+        if a.differential.is_some() {
+            if h % 2 != 0 || kv % 2 != 0 || kv == 0 || vd != hd || a.sinks || a.sparse.is_some() || a.kv_share.is_some() || a.output_gate {
+                return Err(LowerError::not_lowerable(format!(
+                    "ATTN_DIFFERENTIAL_V1 needs an even number of heads and of kv heads and values as wide as keys ({h} heads, {kv} kv heads, {hd}/{vd}), and has no sinks, sparse blocks, KV sharing or fused output gate"
+                )));
+            }
+        }
+        if let Some(moa) = &a.moa {
+            return self.moa_attention(bk, a, moa, x);
+        }
+        let vw = if a.differential.is_some() { 2 * vd } else { vd };
         let mut q = self.linear(bk, x, &n("q"), qn, d, a.q_bias, true, &n("q"))?;
         // A KV-sharing layer: the query as ever, the keys and values an earlier layer's rows.
         if let Some(KvShare::Consumer { slot }) = a.kv_share {
@@ -1073,6 +1125,37 @@ impl Builder<'_> {
             q = bk.f(Op::PosScale { temp: t }, vec![q, Ref::Pos], qn, &n("q_temp"));
         }
         let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+        // `ATTN_DIFFERENTIAL_V1`: kv head `j` reads the value `[V_{j mod m} | V_{j mod m + m}]`, `m = Hkv/2` (HF's two
+        // `repeat(1, 2, ..)` of the value halves, then `repeat_kv`): head `i` and head `i + H/2` land on the same pair.
+        let vn = if a.differential.is_some() {
+            let m = kv / 2;
+            let piece = |bk: &mut Bk, from: usize| (bk.st(Op::Slice { start: from * hd, len: hd }, vec![v], hd), hd);
+            let mut parts: Vec<(Ref, usize)> = Vec::with_capacity(4 * m);
+            for _ in 0..2 {
+                for j in 0..m {
+                    parts.push(piece(bk, j));
+                    parts.push(piece(bk, m + j));
+                }
+            }
+            // A node takes at most 8 inputs (NF-14): a tree of concatenations.
+            while parts.len() > 1 {
+                parts = parts
+                    .chunks(8)
+                    .map(|c| {
+                        if c.len() == 1 {
+                            c[0]
+                        } else {
+                            let w: usize = c.iter().map(|p| p.1).sum();
+                            (bk.st(Op::Concat, c.iter().map(|p| p.0).collect(), w), w)
+                        }
+                    })
+                    .collect();
+            }
+            v = parts[0].0;
+            kv * vw
+        } else {
+            vn
+        };
         let ks = self.state(&format!("{pf}.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![kn], 0.0)?;
         let vs = self.state(&format!("{pf}.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![vn], 0.0)?;
         bk.append(k, ks);
@@ -1104,7 +1187,7 @@ impl Builder<'_> {
             heads: h,
             kv_heads: kv,
             head_dim: hd,
-            v_head_dim: vd,
+            v_head_dim: vw,
             scale: a.scale,
             softcap: a.softcap,
             window: a.window,
@@ -1113,7 +1196,21 @@ impl Builder<'_> {
             chunk: a.chunk,
             blocks,
         };
-        let mut o = bk.f(op, ins, h * vd, &n("ctx"));
+        let mut o = bk.f(op, ins, h * vw, &n("ctx"));
+        // `ATTN_DIFFERENTIAL_V1`: `(1 − λ_init)·RMS_{2d}(o_first_half_of_heads − λ·o_second_half)`, the subtraction on the
+        // attention's own codes (one narrowing of each half, then the exact difference).
+        if let Some(df) = &a.differential {
+            let hw = (h / 2) * vw;
+            let first = bk.st(Op::Slice { start: 0, len: hw }, vec![o], hw);
+            let second = bk.st(Op::Slice { start: hw, len: hw }, vec![o], hw);
+            let lam = self.param(&n("diff.lambda"), vec![1], true, Init::Uniform(0.2, 0.9))?;
+            let scaled = bk.f(Op::ScaleParam, vec![second, lam], hw, &n("diff.lambda_ctx"));
+            let diff = bk.f(Op::Sub, vec![first, scaled], hw, &n("diff.sub"));
+            let nspec = NormSpec { kind: NormKind::Rms, eps: df.norm_eps, gain: Gain::None, bias: false };
+            let normed = self.norm(bk, diff, nspec, &n("diff.norm"), hw, h / 2, vec![vw], true, &n("diff.norm"))?;
+            let sc = self.param(&n("diff.scale"), vec![1], true, Init::Uniform(0.2, 0.9))?;
+            o = bk.f(Op::ScaleParam, vec![normed, sc], hw, &n("diff.out"));
+        }
         if let Some(sg) = sep_gate {
             o = bk.f(Op::Mul, vec![o, sg], h * vd, &n("gated"));
         }
@@ -1126,6 +1223,102 @@ impl Builder<'_> {
             o = self.full_norm(bk, o, on, &n("sub_norm"), h * vd, true)?;
         }
         self.linear(bk, o, &n("o"), d, h * vd, a.o_bias, true, &n("out"))
+    }
+
+    /// **`MIXER_MOA_V1`** (JetMoE): the router picks `k` experts; slot `j`'s query is `W_in[e_j]·x`; keys and values are one shared
+    /// projection; the output is `Σ_j g_j W_out[e_j]·ctx_j + bias`. Heads are laid out `(kv head, slot)` so that the attention's
+    /// `head / k` reads kv head `h` (HF tiles K and V `k` times: head `(j, h)` reads kv head `h`).
+    fn moa_attention(&mut self, bk: &mut Bk, a: &AttnSpec, moa: &MoaSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let (kvh, hd, k, e, h) = (a.kv_heads, a.head_dim, moa.top_k, moa.experts, a.heads);
+        let inner = kvh * hd;
+        let plain = a.qk_norm.is_none()
+            && a.v_norm.is_none()
+            && a.clip_qkv.is_none()
+            && a.gate.is_none()
+            && !a.output_gate
+            && !a.sinks
+            && a.sparse.is_none()
+            && a.kv_share.is_none()
+            && a.differential.is_none()
+            && a.q_temperature.is_none()
+            && a.chunk.is_none()
+            && !a.v_from_k
+            && a.o_norm.is_none()
+            && a.v_scale == 1.0
+            && !(a.q_bias || a.k_bias || a.v_bias || a.o_bias);
+        if h != kvh * k || a.v_head_dim != hd || k == 0 || k > e || !plain {
+            return Err(LowerError::not_lowerable(format!(
+                "MIXER_MOA_V1 needs heads = kv heads × top-k ({h} vs {kvh}×{k}), values as wide as keys, top-k within the experts, and no norms, gates, biases, clipping, sinks, sparse or shared keys"
+            )));
+        }
+        let r = &moa.router;
+        if r.scoring != Scoring::TopKThenSoftmax || r.selection_bias || r.groups.is_some() || r.per_expert_scale || r.normalize || r.scale != 1.0 {
+            return Err(LowerError::not_lowerable("MIXER_MOA_V1 routes by the top-k of the logits then a softmax (no bias, groups, scale or renormalisation)"));
+        }
+        let logits = self.linear(bk, x, "moa.router", e, d, r.linear_bias, true, "moa.router")?;
+        let route = bk.push(
+            Op::Route { router: r.clone(), experts: e, top_k: k, zero: 0 },
+            vec![logits],
+            vec![vec![k], vec![k]],
+            vec![HlType::Idx, HlType::F32],
+            Some("moa.route"),
+            vec![],
+        );
+        let (ids, gates) = (Ref::Node(route, 0), Ref::Node(route, 1));
+        let w_in = self.param("moa.experts.input", vec![e, inner, d], true, Init::Normal(W_STD))?;
+        let q = bk.f(Op::ExpertLinear { top_k: k, per_slot: false, wide: false }, vec![x, ids, w_in], k * inner, "moa.q");
+        let mut q = bk.st(Op::Transpose01 { n0: k, n1: kvh, n2: hd }, vec![q], k * inner);
+        let kv = self.linear(bk, x, "attn.kv", 2 * inner, d, false, true, "attn.kv")?;
+        let mut kk = bk.st(Op::Slice { start: 0, len: inner }, vec![kv], inner);
+        let vv = bk.st(Op::Slice { start: inner, len: inner }, vec![kv], inner);
+        let mut alibi = None;
+        match &a.position {
+            Position::Rope(rp) => {
+                let t = self.rope_table(&rp.freqs);
+                q = bk.f(
+                    Op::Rope { heads: h, head_dim: hd, rotary_dim: rp.rotary_dim, offset: rp.offset, style: rp.style, table: t },
+                    vec![q, Ref::Pos],
+                    h * hd,
+                    "attn.q_rope",
+                );
+                kk = bk.f(
+                    Op::Rope { heads: kvh, head_dim: hd, rotary_dim: rp.rotary_dim, offset: rp.offset, style: rp.style, table: t },
+                    vec![kk, Ref::Pos],
+                    inner,
+                    "attn.k_rope",
+                );
+            }
+            Position::Alibi(al) => alibi = Some(al.clone()),
+            Position::None => {}
+        }
+        let suffix = a.window.map(|w| format!(".w{w}")).unwrap_or_default();
+        let ks = self.state(&format!("attn.k_hist{suffix}"), StateKind::Hist { window: a.window }, vec![inner], 0.0)?;
+        let vs = self.state(&format!("attn.v_hist{suffix}"), StateKind::Hist { window: a.window }, vec![inner], 0.0)?;
+        bk.append(kk, ks);
+        bk.append(vv, vs);
+        let op = Op::Attention {
+            heads: h,
+            kv_heads: kvh,
+            head_dim: hd,
+            v_head_dim: hd,
+            scale: a.scale,
+            softcap: a.softcap,
+            window: a.window,
+            alibi,
+            sinks: false,
+            chunk: None,
+            blocks: None,
+        };
+        let o = bk.f(op, vec![q, ks, vs], h * hd, "attn.ctx");
+        let o = bk.st(Op::Transpose01 { n0: kvh, n1: k, n2: hd }, vec![o], h * hd);
+        let w_out = self.param("moa.experts.output", vec![e, d, inner], true, Init::Normal(W_STD))?;
+        let y = bk.f(Op::ExpertLinear { top_k: k, per_slot: true, wide: true }, vec![o, ids, w_out], k * d, "moa.out_rows");
+        let mut ins = vec![y, gates];
+        if moa.out_bias {
+            ins.push(self.param("moa.bias", vec![d], true, Init::Uniform(-0.1, 0.1))?);
+        }
+        Ok(bk.f(Op::WeightedSum { top_k: k, out_bias: moa.out_bias }, ins, d, "attn.out"))
     }
 
     fn qk_norm(&mut self, bk: &mut Bk, x: Ref, qk: &QkNorm, name: &str, heads: usize, hd: usize) -> Result<Ref> {
@@ -1510,19 +1703,33 @@ impl Builder<'_> {
                 r.jitter_eps, r.scoring
             )));
         }
-        let logits = self.linear(bk, rx, "moe.router", e, d, m.router.linear_bias, true, "moe.router")?;
+        // `MLP_MOE_ZERO_EXPERT_V1`: the router (and its bias) run over the real experts plus the identity ones; the tensors of the
+        // experts keep `e` rows.
+        let z = m.zero_experts;
+        if z > 0 && (m.router.per_expert_scale || m.input_scaled || m.latent.is_some() || !matches!(m.glu, Glu::Standard) || m.router.groups.is_some()) {
+            return Err(LowerError::not_lowerable(
+                "MLP_MOE_ZERO_EXPERT_V1 with a per-expert scale, input-scaled or latent experts, a clamped GLU or group-limited routing is not modelled",
+            ));
+        }
+        let ne = e + z;
+        let logits = self.linear(bk, rx, "moe.router", ne, d, m.router.linear_bias, true, "moe.router")?;
         let mut rins = vec![logits];
         if m.router.selection_bias {
-            rins.push(self.param("moe.sel_bias", vec![e], true, Init::Uniform(-0.05, 0.05))?);
+            rins.push(self.param("moe.sel_bias", vec![ne], true, Init::Uniform(-0.05, 0.05))?);
         }
         if m.router.per_expert_scale {
             rins.push(self.param("moe.expert_scale", vec![e], true, Init::Uniform(0.5, 1.5))?);
         }
+        let (outs, types) = if z > 0 {
+            (vec![vec![m.top_k], vec![m.top_k], vec![1]], vec![HlType::Idx, HlType::F32, HlType::F32])
+        } else {
+            (vec![vec![m.top_k], vec![m.top_k]], vec![HlType::Idx, HlType::F32])
+        };
         let route = bk.push(
-            Op::Route { router: m.router.clone(), experts: e, top_k: m.top_k },
+            Op::Route { router: m.router.clone(), experts: ne, top_k: m.top_k, zero: z },
             rins,
-            vec![vec![m.top_k], vec![m.top_k]],
-            vec![HlType::Idx, HlType::F32],
+            outs,
+            types,
             Some("moe.route"),
             vec![],
         );
@@ -1541,8 +1748,14 @@ impl Builder<'_> {
             ins.push(self.param("moe.experts.up_b", vec![e, i], true, Init::Uniform(-0.1, 0.1))?);
             ins.push(self.param("moe.experts.down_b", vec![e, dl], true, Init::Uniform(-0.1, 0.1))?);
         }
+        if z > 0 {
+            ins.push(Ref::Node(route, 2));
+        }
+        if m.out_bias {
+            ins.push(self.param("moe.bias", vec![d], true, Init::Uniform(-0.1, 0.1))?);
+        }
         let mut y = bk.f(
-            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated },
+            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated, identity: z > 0, out_bias: m.out_bias },
             ins,
             dl,
             "moe.routed",
@@ -1594,6 +1807,7 @@ fn mixer_name(m: &Mixer) -> String {
         Mixer::ShortConv(_) => "shortconv".into(),
         Mixer::RwkvTime(r) => format!("rwkv{}", r.version),
         Mixer::None => String::new(),
+        Mixer::CrossAttention(_) => "xattn".into(),
         Mixer::Parallel(bs) => bs.iter().map(|b| mixer_name(&b.mixer)).collect::<Vec<_>>().join("|"),
     }
 }
@@ -1606,6 +1820,7 @@ fn block_name(ls: &LayerSpec) -> String {
         Ffn::Moe(_) => "+moe".into(),
         Ffn::RwkvChannel(_) => "+cmix".into(),
         Ffn::MlpMoe(_) => "+mlp|moe".into(),
+        Ffn::MlpShortcut(_) => "+mlp|shortcut".into(),
     };
     // A layer with no mixer is its FFN alone: `mlp`, `moe`.
     if mix.is_empty() { ffn.trim_start_matches('+').to_string() } else { format!("{mix}{ffn}") }

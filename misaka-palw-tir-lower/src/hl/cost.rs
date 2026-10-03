@@ -115,6 +115,14 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += *blocks as u64;
                 }
                 Op::BlockWrite { blocks, .. } => c.elementwise += *blocks as u64,
+                Op::ExpertLinear { top_k, .. } => {
+                    if let Ref::Param(w) = n.inputs[2] {
+                        let m = *top_k as u64 * numel(&p.params[w as usize].shape[1..]);
+                        c.macs_fixed += m;
+                        c.routed_expert_macs += m;
+                    }
+                }
+                Op::WeightedSum { .. } | Op::Transpose01 { .. } => c.elementwise += out.max(1),
                 Op::Route { experts, .. } => {
                     c.elementwise += 2 * *experts as u64;
                     c.transcendental += *experts as u64;

@@ -4,7 +4,6 @@
   "doc": "Architectures this build refuses on purpose, each by the FEATURES it would need and does not have (Level C). A refusal is data like everything else: when the feature exists, delete its entry and write the adapter.",
   "refuse": [
     {"architectures": ["Gemma3nForConditionalGeneration", "Gemma3nForCausalLM"], "missing": ["RESIDUAL_ALTUP_V1", "RESIDUAL_LAUREL_V1", "FFN_ACTIVATION_SPARSITY_V1"], "why": "AltUp/Laurel residual wiring and activation sparsity are not modelled yet"},
-    {"architectures": ["MllamaForConditionalGeneration"], "missing": ["ATTN_CROSS_V1"], "why": "the text decoder has cross-attention layers that read vision states"},
     {"architectures": ["Phi3SmallForCausalLM"], "missing": ["ATTN_BLOCKSPARSE_PATTERN_V1", "SCALE_MUP_V1"], "why": "blocksparse attention and muP scalings (remote code) are not modelled"},
     {"architectures": ["ChatGLMModel", "ChatGLMForConditionalGeneration"], "missing": ["REFERENCE_REMOTE_CODE_V1"], "why": "ChatGLM remote code is not modelled"},
     {"architectures": ["CodeGenForCausalLM"], "missing": ["WEIGHTS_QKV_MP_PARTITIONED_V1"], "why": "CodeGen's mp_num-partitioned qkv layout is not modelled"},

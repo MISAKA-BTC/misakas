@@ -908,7 +908,46 @@ impl<'a> Session<'a> {
                 let st = self.fixed_mut(s, lyr);
                 one(wkv7(&vs[0], &vs[1], &vs[2], &vs[3], &vs[4], &vs[5], st, *heads, *head_size))
             }
-            Op::Route { router, experts, top_k } => {
+            Op::ExpertLinear { top_k, per_slot, .. } => {
+                let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
+                let w = ins[2];
+                let shape = self.param_shape(w, layer)?;
+                let (rows, cols) = (shape[1], shape[2]);
+                let xv = x(0)?.to_vec();
+                let mut out = Vec::with_capacity(top_k * rows);
+                for (j, &e) in idx.iter().enumerate().take(*top_k) {
+                    let wt = self.param_rows(w, layer, e * rows..(e + 1) * rows)?.data;
+                    let xs = if *per_slot { &xv[j * cols..(j + 1) * cols] } else { &xv[..] };
+                    out.extend(linear_raw(xs, &wt, rows, None));
+                }
+                one(out)
+            }
+            Op::WeightedSum { top_k, out_bias } => {
+                let y = x(0)?.to_vec();
+                let w = x(1)?.to_vec();
+                let d = y.len() / top_k;
+                let mut o = vec![0f64; d];
+                if *out_bias {
+                    o.iter_mut().zip(&self.param(ins[2], layer)?.data).for_each(|(a, b)| *a += *b as f64);
+                }
+                for j in 0..*top_k {
+                    for (a, v) in o.iter_mut().zip(&y[j * d..(j + 1) * d]) {
+                        *a += w[j] as f64 * *v as f64;
+                    }
+                }
+                one(o.into_iter().map(|v| v as f32).collect())
+            }
+            Op::Transpose01 { n0, n1, n2 } => {
+                let v = x(0)?;
+                let mut o = Vec::with_capacity(v.len());
+                for b in 0..*n1 {
+                    for a in 0..*n0 {
+                        o.extend_from_slice(&v[(a * n1 + b) * n2..(a * n1 + b + 1) * n2]);
+                    }
+                }
+                one(o)
+            }
+            Op::Route { router, experts, top_k, zero } => {
                 let logits = x(0)?.to_vec();
                 let sel_bias = if router.selection_bias { Some(self.param(ins[1], layer)?.data.clone()) } else { None };
                 let (idx, mut w) = route(&logits, sel_bias.as_deref(), router, *experts, *top_k);
@@ -920,9 +959,18 @@ impl<'a> Session<'a> {
                     }
                 }
                 self.sub_site(prefix, &node.site, "logits", &logits);
+                if *zero > 0 {
+                    // The identity experts are the ids from `experts − zero` on: their slots read expert 0 at weight 0, and the sum
+                    // of their weights is what the identity adds (`z · x`).
+                    let real = experts - zero;
+                    let z: f64 = idx.iter().zip(&w).filter(|(e, _)| **e >= real).map(|(_, w)| *w as f64).sum();
+                    let ids = idx.iter().map(|i| if *i >= real { 0.0 } else { *i as f32 }).collect();
+                    let we = idx.iter().zip(&w).map(|(e, w)| if *e >= real { 0.0 } else { *w }).collect();
+                    return Ok(vec![ids, we, vec![z as f32]]);
+                }
                 Ok(vec![idx.iter().map(|i| *i as f32).collect(), w])
             }
-            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled, gated } => {
+            Op::MoeExperts { top_k, act: a, glu, bias, input_scaled, gated, identity, out_bias } => {
                 let xv = x(0)?.to_vec();
                 let idx: Vec<usize> = x(1)?.iter().map(|v| *v as usize).collect();
                 let w = x(2)?.to_vec();
@@ -979,6 +1027,24 @@ impl<'a> Session<'a> {
                     let wj = if *input_scaled { 1.0 } else { w[j] as f64 };
                     for (yy, o) in y.iter_mut().zip(&ov) {
                         *yy += wj * *o as f64;
+                    }
+                }
+                // `MLP_MOE_ZERO_EXPERT_V1`: the identity experts' share, `z · x` (the input after the expert params).
+                if *identity {
+                    let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+                    let z = x(3 + n_params)?[0] as f64;
+                    for (yy, v) in y.iter_mut().zip(&xv) {
+                        *yy += z * *v as f64;
+                    }
+                    // The lowering adds the input as one more row of the experts' output site: calibrate over it.
+                    out_all.extend_from_slice(&xv);
+                }
+                if *out_bias {
+                    let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+                    let at = 3 + n_params + usize::from(*identity);
+                    let bv = self.param(ins[at], layer)?;
+                    for (yy, b) in y.iter_mut().zip(&bv.data) {
+                        *yy += *b as f64;
                     }
                 }
                 for (sub, v) in [("gate", &gate_all), ("up", &up_all), ("act", &act_all), ("hidden", &hidden_all), ("out", &out_all)] {

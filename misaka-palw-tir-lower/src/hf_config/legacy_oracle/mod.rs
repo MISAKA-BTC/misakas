@@ -671,6 +671,8 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         sparse: None,
         gate: None,
         v_scale: 1.0,
+        differential: None,
+        moa: None,
     }
 }
 
