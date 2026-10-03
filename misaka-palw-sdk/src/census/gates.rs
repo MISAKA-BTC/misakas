@@ -300,6 +300,10 @@ fn run_preflight(cs: &store::CensusSource, ctx: &CensusContext, max_context: u32
 
 /// The admit gate of a report (the class is not a pipeline class).
 fn admit_of(r: &Report) -> GateResultV1 {
+    if r.depth.reached == preflight::Depth::Headers {
+        // A headers-depth census (the shape depth's admission deferred): not run, never inferred.
+        return not_run(Gate::Admit, codes::NOT_RUN_DEPTH_HEADERS, vec![]);
+    }
     let f: Vec<Found> = mapped(r, Stage::Register).into_iter().filter(|(g, _)| *g == Gate::Admit).map(|(_, x)| x).collect();
     if !f.is_empty() {
         return fail(Gate::Admit, f, "shape");
@@ -631,6 +635,10 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         let mut cx =
                             ContextV1 { primary, source, declared, retry: None, judged_at: Vec::new(), primary_implied: false };
                         match ctx.context_rule {
+                            _ if ctx.options.depth == preflight::Depth::Headers => match run_preflight(&cs, ctx, primary) {
+                                Ok(r) => report = Some(r),
+                                Err(f) => lower_extra.push(f),
+                            },
                             // The narrower context first (admission at 8,192 costs ~30x the CPU of 2,048): a class refused at the
                             // narrower context on limits that only grow with the context is refused at the primary too, so the primary
                             // is judged only for a class the narrower context admits (or refuses on a code a wider context could change).

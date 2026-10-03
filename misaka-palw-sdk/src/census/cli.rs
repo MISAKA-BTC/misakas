@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--dirs FILE [--follow]]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -44,6 +44,11 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     let tree = take(&mut args, "--tree").unwrap_or_else(|| "unstated".into());
     let threads: usize = take(&mut args, "--threads").map(|t| t.parse().unwrap_or(1)).unwrap_or(1).clamp(1, 16);
     let dirs = take(&mut args, "--dirs");
+    let depth = match take(&mut args, "--depth").as_deref() {
+        None | Some("shape") => crate::preflight::Depth::Shape,
+        Some("headers") => crate::preflight::Depth::Headers,
+        Some(other) => return Err(format!("--depth {other}: headers | shape")),
+    };
     let follow = args.iter().any(|a| a == "--follow");
     args.retain(|a| a != "--follow");
     let max_context = match take(&mut args, "--max-context") {
@@ -56,6 +61,7 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     // A census declares every class at one context (the preflight's search for the widest admissible context runs admission many
     // times per class): `--max-context N` fixes it, else the model's declared maximum capped at 8,192 with one retry at 2,048.
     let mut ctx = CensusContext::new(&snapshot, &network, height, policy, &tree);
+    ctx.options.depth = depth;
     if let Some(c) = max_context {
         ctx = ctx.with_context_rule(super::gates::ContextRule::Fixed(c));
     }

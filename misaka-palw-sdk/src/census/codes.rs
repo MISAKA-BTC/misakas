@@ -66,6 +66,8 @@ pub const NOT_RUN_NEEDS_WEIGHTS: &str = "NOT_RUN_NEEDS_WEIGHTS";
 pub const NOT_RUN_NEEDS_CHAIN: &str = "NOT_RUN_NEEDS_CHAIN";
 /// The repository was not in the header sample: only its listing was read, and the gate needs its headers.
 pub const NOT_RUN_NOT_SAMPLED: &str = "NOT_RUN_NOT_SAMPLED";
+/// A headers-depth pass: the shape depth's admission is deferred to a later pass (never inferred).
+pub const NOT_RUN_DEPTH_HEADERS: &str = "NOT_RUN_DEPTH_HEADERS";
 /// The class is a pipeline (RFC-0003) class: the census does not run the pipeline registration admission at the shape depth.
 pub const NOT_RUN_PIPELINE_ADMISSION: &str = "NOT_RUN_PIPELINE_ADMISSION";
 /// The frontend reads the data of a small tensor (a GGUF's `rope_freqs.weight`) to build the configuration; the census reads headers
