@@ -14,7 +14,11 @@ fn fp() -> PalwStateParamsV2 {
 /// A world with the floor (class 1) and a real class (class 2), both registered at daa 100.
 fn world(p: &PalwStateParamsV2) -> PalwChainStateV2 {
     let mut objects = register_class_and_bond();
-    objects.push(registration(h64(2), 100, None));
+    let mut real = registration(h64(2), 100, None);
+    if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut real {
+        *slash_value_per_pwu = 5; // the network's price, as the floor registers it
+    }
+    objects.push(real);
     let (s, _) = apply(&PalwChainStateV2::genesis(), p, &ctx(1, FENCE, 1), &objects, None);
     s
 }
