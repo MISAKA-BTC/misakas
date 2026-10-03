@@ -103,6 +103,19 @@ fn chunks_reassemble_only_when_whole_and_true() {
 }
 
 #[test]
+fn an_image_splits_into_exactly_the_pinned_number_of_chunks() {
+    let r = rig();
+    let image = codec::encode(&r.honest());
+    for count in [1usize, 2, 3, 7, 50, image.len() + 5] {
+        let parts = codec::split_into(&image, count);
+        assert_eq!(parts.len(), count, "exactly the pinned count");
+        assert_eq!(parts.concat(), image, "and they are the image");
+    }
+    assert!(codec::split_into(&image, 0).is_empty());
+    assert_eq!(codec::split_into(&[], 3), vec![&[][..], &[][..], &[][..]], "an empty image is `count` empty chunks");
+}
+
+#[test]
 fn the_mirror_agrees_on_an_honest_own_witness_and_refuses_a_lie() {
     let r = rig();
     let honest = r.honest();

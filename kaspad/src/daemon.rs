@@ -1878,6 +1878,7 @@ Do you confirm? (y/n)";
                         class_cache_bytes: args.palw_class_cache_bytes,
                         seat_replay_slots: args.palw_seat_replay_slots.map(|slots| slots as usize),
                         vertex_full_refs: args.palw_vertex_full_refs,
+                        sketch_check: args.palw_sketch_check,
                         vertex_equivocate_at: match args.palw_drill_vertex_equivocate_at {
                             Some(at) if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() => {
                                 warn!(

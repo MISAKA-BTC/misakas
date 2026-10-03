@@ -94,6 +94,18 @@ mod batch_licence;
 /// persisted before it leaves the node, and the landing check (node policy; dormant below `palw_verification_vertex_v1`).
 mod vertex;
 
+/// RFC-0007 Part IV.1: the audit duty (a seat that holds the class replays the claim it was drawn on and attests the result in its vertex)
+/// and the trap book (node policy; dormant below `palw_audit_mesh_v1`).
+mod mesh;
+
+/// RFC-0007 Part II: the seat-local algebraic checker's service and its mirror check beside the replay (node policy; behind
+/// `--palw-sketch-check`, off by default).
+mod sketch;
+
+/// RFC-0007 Part II, the producer's half: a claim's witness image, kept as the producer's obligation and served by chunk.
+pub(crate) use sketch::palw_witness_image_v1 as sketch_witness_image_v1;
+pub(crate) use sketch::palw_witness_retain_v1 as sketch_witness_retain_v1;
+
 /// **Take the host ledger's reservation for a replay of `role`** — the body of
 /// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
 /// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
@@ -3569,6 +3581,9 @@ pub struct PalwPanelConfig {
     pub vertex_full_refs: bool,
     /// `--palw-drill-vertex-equivocate-at` (a salted drill only): sign a second vertex for one round, once, from this DAA.
     pub vertex_equivocate_at: Option<u64>,
+    /// `--palw-sketch-check` (RFC-0007 Part II): run the algebraic checker's mirror beside every full replay of an IR class this seat holds.
+    /// Off by default; a node without it never opens the sketch state.
+    pub sketch_check: bool,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// ADR-0132: the node's per-class counters this seat reports its replays and receipts into.
@@ -3752,6 +3767,8 @@ pub struct PalwPanelService {
     carrier_replacement: std::sync::Mutex<Option<PalwCarrierReplacementV1>>,
     /// RFC-0007 §I.6: the vertex equivocations this node last carried, by `(round, seat)` → the DAA (a debounce, not a receipt).
     vertex_equivocations_sent: std::sync::Mutex<HashMap<(u64, PalwBondKeyV2), u64>>,
+    /// RFC-0007 Part II: the sketch checker's service (its secret, its stores, the mirror's totals); `None` unless `--palw-sketch-check`.
+    sketch: Option<std::sync::Arc<sketch::PalwSketchServiceV1>>,
     /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
     /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
     /// so without this a seat rebuilt the whole proof per tick. Measured on the item 6 acceptance
@@ -4110,6 +4127,18 @@ impl PalwPanelService {
             config.class_cache_bytes,
             config.class_residency,
         );
+        // RFC-0007 Part II: the sketch service opens only when asked (`--palw-sketch-check`), in the state dir beside the vertex round.
+        let sketch = if config.sketch_check {
+            match sketch::PalwSketchServiceV1::open(&config.state_dir, misaka_palw_tir_sketch::TirCheckPolicyV1::default()) {
+                Ok(service) => Some(std::sync::Arc::new(service)),
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] --palw-sketch-check: the sketch service does not open ({why}); the mirror stays off");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Self {
             config,
             consensus_manager,
@@ -4132,6 +4161,7 @@ impl PalwPanelService {
             readiness_submitted: std::sync::Mutex::new(HashMap::new()),
             carrier_replacement: std::sync::Mutex::new(None),
             vertex_equivocations_sent: std::sync::Mutex::new(HashMap::new()),
+            sketch,
             readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
             readiness_read_at: std::sync::Mutex::new(None),
@@ -7634,6 +7664,9 @@ impl PalwPanelService {
         let mut vertex_book = vertex::PalwVertexBookV1::resume(vertex::palw_vertex_state_read_v1(&vertex_state_path));
         // DRILL ONLY: whether this seat has already signed its deliberate second vertex.
         let mut vertex_equivocated = false;
+        // **RFC-0007 Part IV.1: the audit duty's book and the trap plans** (dormant below `palw_audit_mesh_v1`: nothing reads them).
+        let mut mesh_node = mesh::PalwMeshNodeV1::default();
+        let mut trap_book = mesh::PalwTrapBookV1::load(&self.config.state_dir.join("palw-traps.json"));
         // ADR-0152 SR-10 / Q-7: when this node last carried a supplementary set for a claim — a
         // debounce like `submitted`'s, re-offered after the replan interval if the carrier was lost.
         let mut supplementary_v3_submitted: HashMap<Hash64, u64> = HashMap::new();
@@ -8241,6 +8274,12 @@ impl PalwPanelService {
                         },
                     ));
                 }
+            }
+
+            // **RFC-0007 Part IV.1: the audit duty** — a seat the chain drew to audit a claim, and that holds the claim's class, replays it and
+            // attests the result in its vertex (the leaf goes into this round's vertex below). Silence where it cannot.
+            if vertex_fence.is_some() && self.consensus_config.params.palw_audit_mesh_active_at(current_daa) {
+                self.mesh_audit_pass_v1(&session, bond_key, network_domain, current_daa, &mut vertex_book, &mut mesh_node).await;
             }
 
             // **RFC-0002 Phase F (F6): an IR claim's court where no bisection is played.** The
@@ -11919,7 +11958,16 @@ impl PalwPanelService {
                         vertex_book.drill_extra(second);
                     }
                 }
-                let status_line = vertex_book.status_v1(Some(fence), status.rounds, status.tallies, status.held_claims);
+                let mut status_line = vertex_book.status_v1(Some(fence), status.rounds, status.tallies, status.held_claims);
+                // RFC-0007 Parts II and IV: the mesh at the tip, this seat's audits and trap plans, and the sketch mirror's totals.
+                status_line.push(' ');
+                status_line.push_str(&mesh_node.status_v1(&session.palw_v2_mesh_status_v1(bond_key)));
+                status_line.push(' ');
+                status_line.push_str(&trap_book.status_v1());
+                if let Some(sketch) = &self.sketch {
+                    status_line.push(' ');
+                    status_line.push_str(&sketch.status_v1());
+                }
                 self.flow_context.update_palw_runtime(|r| r.verification_vertex = status_line);
             }
 
@@ -12977,6 +13025,75 @@ impl PalwPanelService {
                         }
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's vertex of round {}: {e}", vertex.round),
                     }
+                    }
+                }
+                // **RFC-0007 Part IV.1: a trap move** — the commitment (when this bond is drawn by the slot lottery) or the reveal (once the
+                // claim's audit window has closed), each carried once from `palw-traps.json`'s plans, rehearsed on the tip first.
+                if vertex_fence.is_some()
+                    && self.consensus_config.params.palw_audit_mesh_active_at(current_daa)
+                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
+                    && !readiness_waiting
+                    && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                    && let Some(kp) = self.keypair.as_ref()
+                {
+                    trap_book.refresh();
+                    let sign_trap = |message: &[u8], context: &[u8]| Self::sign_hedged(&kp.signing_key, message, context);
+                    let audit_window = |claim: &Hash64| session.palw_v2_mesh_audit_window_v1(*claim);
+                    let next = trap_book
+                        .next_reveal(network_domain, bond_key, current_daa, &audit_window, &sign_trap)
+                        .map(|(index, reveal)| (index, true, PalwConsensusObjectV2::TrapRevealedV1 { reveal: Box::new(reveal) }))
+                        .or_else(|| {
+                            trap_book
+                                .next_commit(network_domain, bond_key, current_daa, &sign_trap)
+                                .map(|(index, trap)| (index, false, PalwConsensusObjectV2::TrapCommittedV1 { trap: Box::new(trap) }))
+                        });
+                    if let Some((index, is_reveal, object)) = next {
+                        let rehearsal = session.palw_object_rehearsal_v1(&object);
+                        if let Some(answer) = rehearsal
+                            && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+                        {
+                            trace!(
+                                "[{PALW_PANEL}] this seat's trap {} is not offered a carrier now: {answer:?}",
+                                if is_reveal { "reveal" } else { "commitment" }
+                            );
+                        } else {
+                            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                                Ok(tx) => {
+                                    let txid = tx.id();
+                                    let change = tx.outputs[0].clone();
+                                    match self.submit_carrier_v1(&session, tx).await {
+                                        Ok(()) => {
+                                            info!(
+                                                "[{PALW_PANEL}] submitted this seat's trap {} in tx {txid} (RFC-0007 Part IV.1)",
+                                                if is_reveal { "reveal" } else { "commitment" }
+                                            );
+                                            let next = TransactionOutpoint::new(txid, 0);
+                                            self.persist_fee_outpoint(next);
+                                            funding = Some((
+                                                next,
+                                                UtxoEntry {
+                                                    amount: change.value,
+                                                    script_public_key: change.script_public_key,
+                                                    block_daa_score: current_daa,
+                                                    is_coinbase: false,
+                                                },
+                                            ));
+                                            inflight += 1;
+                                            if is_reveal {
+                                                trap_book.mark_revealed(index);
+                                            } else {
+                                                trap_book.mark_committed(index);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("[{PALW_PANEL}] the mempool refused this seat's trap move: {e}");
+                                            funding = None;
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's trap move: {e}"),
+                            }
+                        }
                     }
                 }
                 let mut own: Vec<(Hash64, PalwSeatReceiptV2)> =
@@ -15823,6 +15940,22 @@ impl PalwPanelService {
                         warn!("[{PALW_PANEL}] claim {}: the replay refused: {e} — no verdict from it (SEAT-R)", duty.claim_id)
                     }
                     _ => {}
+                }
+                // **RFC-0007 Part II: the sketch checker's mirror, beside this replay** (behind `--palw-sketch-check`, off by default).
+                // Once per claim, when the replay finishes: the checker's verdict on this seat's own witness of the job is compared with
+                // the replay's, off the loop, and a disagreement is an alarm in the log and in the status line.
+                if fresh
+                    && result.is_ok()
+                    && let Some(sketch) = self.sketch.clone()
+                    && let Some(entry) = self.backends().tir_entry_v1(duty.class_id, duty.artifact_root)
+                {
+                    let reproduced = step == PalwSeatReplayStepV1::Licensed;
+                    let (claim, prompt, decode, daa) = (duty.claim_id, prompt.to_vec(), ctx.exact_decode_tokens, current_daa);
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(why) = sketch.mirror_replay_v1(&entry, claim, &prompt, decode, reproduced, daa) {
+                            warn!("[{PALW_PANEL}] claim {claim}: the sketch mirror did not run ({why})");
+                        }
+                    });
                 }
                 let backend = (step != PalwSeatReplayStepV1::Licensed).then_some(backend);
                 (step, backend)

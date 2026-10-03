@@ -165,6 +165,16 @@ pub fn chunks(image: &[u8], chunk_bytes: usize) -> Vec<&[u8]> {
     image.chunks(chunk_bytes).collect()
 }
 
+/// **Cut an image into exactly `count` chunks** (the number the chain pins an attempt's witness at): each of `⌈len / count⌉` bytes, the last
+/// shorter, the trailing ones empty when the image is short. Their concatenation is the image. `count == 0` is no chunk.
+pub fn split_into(image: &[u8], count: usize) -> Vec<&[u8]> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let each = image.len().div_ceil(count).max(1);
+    (0..count).map(|i| image.get((i * each).min(image.len())..((i + 1) * each).min(image.len())).unwrap_or(&[])).collect()
+}
+
 /// **A chunk's digest**, bound to its index: a chunk cannot be passed off as another's.
 pub fn chunk_digest(index: u32, chunk: &[u8]) -> [u8; 32] {
     let mut h = Params::new().hash_length(32).key(TIR_WITNESS_CHUNK_DOMAIN_V1).to_state();

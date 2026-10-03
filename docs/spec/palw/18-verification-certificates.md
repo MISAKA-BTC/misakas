@@ -1,4 +1,4 @@
-# PALW spec — 18. Verification certificates: vertices, licence by tally, equivocation, `Held` leaves, security parameters
+# PALW spec — 18. Verification certificates: vertices, licence by tally, equivocation, `Held` leaves, security parameters, the witness manifest, the audit mesh, capped onboarding
 
 > **Normative.** This chapter specifies RFC-0007 Parts I and III (`docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md`,
 > branch `rfc7/vertex`):
@@ -9,9 +9,16 @@
 > - the **security parameters** (`m` per interval, the escape probability of a one-point lie, the slash a sampled class needs, what a seat
 >   does when its own check fails).
 >
-> It applies past the dormant fence `palw_verification_vertex_v1`. Below the fence nothing here is read, the vertex tables are empty,
-> and every root, carriage and delta is byte-identical to a build without it. Parts II (algebraic checking) and IV (the audit mesh, capped
-> onboarding) are the RFC's and another lane's; `Audited` leaves are reserved here and refused (§18.3).
+> - the **witness manifest** (§18.15): a class's witness profile pins how many trace chunks an attempt commits, so `Unavailable` can name a
+>   witness chunk (`palw_witness_manifest_v1`);
+> - the **audit mesh** (§18.16): post-commit audit draws over all bonded seats, `Audited` leaves, audit pay, planted traps and their
+>   settlement (`palw_audit_mesh_v1`);
+> - **staged (capped) onboarding** (§18.17): the `Capped` lifecycle state, the weight cap, provisional rewards and the re-verification
+>   window (`palw_capped_onboarding_v1`).
+>
+> It applies past the dormant fence `palw_verification_vertex_v1` (Parts I and III) and past each later fence for its part. Below the fence nothing here is read, the vertex tables are empty,
+> and every root, carriage and delta is byte-identical to a build without it. Part II's checker itself
+> is seat-local node software (§18.15.3, §18.15.5): it binds no consensus object.
 >
 > Status: **implemented** under the dormant fence (consensus-core `palw_vertex_v1`, the fold's child `palw_vertex_fold_v1`; node
 > `kaspad/src/palw_panel/vertex.rs`). The lead's decisions of 2026-10-03 on RFC open questions 1–4 are applied (§18.0).
@@ -31,7 +38,14 @@ Contents:
 - §18.11 the node (informative);
 - §18.12 rules PALW-VC-1…7;
 - §18.13 carriage, measured;
-- §18.14 tests.
+- §18.14 tests;
+- §18.15 the witness manifest and the seat-local checker (Part II);
+- §18.16 the audit mesh and its traps (Part IV.1);
+- §18.17 staged onboarding (Part IV.2);
+- §18.18 the three fences and their drills;
+- §18.19 rules PALW-AV-1…4, PALW-AM-1…4;
+- §18.20 the decisions of 2026-10-03 on RFC open questions 5 to 10;
+- §18.21 tests of this part.
 
 ---
 
@@ -46,14 +60,14 @@ Contents:
 
 | Space | Allocation |
 | --- | --- |
-| Object tags (`PalwConsensusObjectV2`, spec 17 §17.0: the next free) | **91** `VerificationVertexV1`; **92** `VertexEquivocationV1` |
-| Delta entry (the next free after 100, `ClassCourtWindow`; spec 17 §17.0 holds 101–103 free) | **101** `PalwDeltaEntryV2::VertexRow { table, key, old, new }`; table ids 1 rounds, 2 tallies, 3 held |
-| Carriage tail (after `0xE0`, the court windows') | **`0xE4`** the vertex tables |
-| Root block | `vertex/v1`, after `improvement-eval/v1`: the collection roots `vertex_rounds`, `vertex_tallies`, `vertex_held`; hashed only when any table holds a row |
+| Object tags (`PalwConsensusObjectV2`, spec 17 §17.0: the next free) | **91** `VerificationVertexV1`; **92** `VertexEquivocationV1`; **93** `TrapCommittedV1`; **94** `TrapRevealedV1` (Part IV.1) |
+| Delta entry (the next free after 100, `ClassCourtWindow`; spec 17 §17.0 holds 101–103 free) | **101** `PalwDeltaEntryV2::VertexRow { table, key, old, new }`; table ids 1 rounds, 2 tallies, 3 held, **4 witness profiles, 5 audit rows, 6 trap rows, 7 capped claims** (Parts II and IV ride the same entry) |
+| Carriage tail (after `0xE0`, the court windows') | **`0xE4`** the vertex tables and, in the same struct, the mesh's four |
+| Root block | `vertex/v1`, after `improvement-eval/v1`: the collection roots `vertex_rounds`, `vertex_tallies`, `vertex_held`; hashed only when any table holds a row. **`mesh/v1`** after it: `mesh_witness`, `mesh_audits`, `mesh_traps`, `mesh_capped`; hashed only when any of the four holds a row |
 | Signing context | `misaka-palw/verification-vertex/mldsa87/v1` |
-| Hash domains | `misaka-palw/verification-vertex-message/v1`, `-leaf/v1`, `-node/v1`, `misaka-palw/vertex-equivocation-key/v1` |
+| Hash domains | `misaka-palw/verification-vertex-message/v1`, `-leaf/v1`, `-node/v1`, `misaka-palw/vertex-equivocation-key/v1`; `misaka-palw/mesh/trap-commitment/v1`, `.../trap-committed-message/v1`, `.../trap-revealed-message/v1`, `.../audit-draw/v1`, `.../trap-slot/v1`, `.../trace-manifest/v2`; signing contexts `misaka-palw/mesh/trap-committed/mldsa87/v1`, `.../trap-revealed/mldsa87/v1` |
 
-A lane that allocates delta 101 or tail `0xE4` first renumbers at the integration; nothing else changes.
+A lane that allocates delta 101, tail `0xE4` or object tags 93 and 94 first renumbers at the integration; nothing else changes (the lead assigns the final tags: lanes S and U hold 91–94 on their own branches).
 
 ---
 
@@ -73,7 +87,7 @@ PalwVerificationVertexV1 {
 PalwVertexLeafV1 (borsh discriminant = tag) =
   | Verdict { claim: PalwClaimRefV1, verdict: PalwReceiptVerdictV2 }                          // 0
   | Held    { claim: PalwClaimRefV1, object: u8, first: u32, last: u32, digest: Hash64 }      // 1
-  | Audited { claim: PalwClaimRefV1, leaf: u64, result: u8 }                                  // 2 (reserved)
+  | Audited { claim: PalwClaimRefV1, leaf: u64, result: u8 }                                  // 2 (Part IV.1, §18.16; `result` 0 match, 1 mismatch)
 
 PalwClaimRefV1 (borsh discriminant) = Full(Hash64) = 0 | Compact { bound_daa: u32, id_prefix: [u8; 16] } = 1
 ```
@@ -124,7 +138,7 @@ covered by the Some-only fence that gates every object signed under them.
 `palw_vertex_admissible_v1(state, vertex, daa)` — one function, called by the acceptance walk and by the fold:
 
 1. **Shape (PALW-VC-1).** `version` = 1; `round` = `signed_daa / round_daa`; at least one leaf and at most 1,024; leaves at most 80,000
-   bytes; strictly ascending sort keys; no `Audited` leaf (`AuditedLeafNotArmed`: the audit mesh has its own fence); a `Held` leaf names
+   bytes; strictly ascending sort keys; an `Audited` leaf's `result` is 0 or 1 (`AuditResultUnknown`), and an `Audited` leaf rides only past `palw_audit_mesh_v1` (`AuditedLeafNotArmed`, by the acceptance gate and the fold); a `Held` leaf names
    object 0 (capture), 1 (witness) or 2 (trace manifest) and a range `first ≤ last`; `leaves_root` recomputes; the signature is 4,627 bytes.
 2. **Clock.** `signed_daa ≤ daa` of the carrying block, and `daa − signed_daa ≤ PALW_VERTEX_MAX_CARRY_DAA_V1` (240): a vertex that waited
    longer is refused, so the chain need only remember a `(seat, round)` for a bounded time.
@@ -394,3 +408,197 @@ sompi — and ejected), and the multi-node drill of §18.10 (`audit-vertex/dv.sh
   reorg round trips; a dormant chain roots and carries as before; the tail is `0xE4`).
 - node `palw_panel::vertex::tests` (one vertex a round and never two across a restart, a vertex is carried until it lands and an expired one is
   said again, the leaf cap, compact references, the state file).
+
+---
+
+## 18.15 The witness manifest and the seat-local checker (Part II)
+
+**18.15.1 What the chain does, and does not.** The algebraic checker (RFC-0007 §II.3) is seat-local node software: a seat may recompute a claim,
+check it by Freivalds against its own secret sketches, or both, and the chain reads none of it. What the chain adds, behind
+`palw_witness_manifest_v1`, is the **producer's duty to serve the witness** (the output of every `MatMul` the canonical serving set names) and a
+way for a seat to say *which chunk* went unserved.
+
+**18.15.2 The witness profile** (`PalwWitnessProfileRowV1`, `mesh.witness`, keyed by class). A class registered at or past the fence records, at its
+registration, a profile read off its program by the **canonical serving set** (open question 10, settled: pinned in the class profile):
+
+- `elements_per_position` — `misaka_palw_tir::dataflow::canonical_witness_elements_per_position_v1(program, max_context)`: the elements of every
+  `MatMul` output the dataflow analysis serves under the default policy — a weight product of contraction at least 64, a `P·V` from a history of
+  1,024 — over every occurrence of the schedule (`pre` once, each layer block once per layer, `post` once), at history length `max_context`;
+- `bytes = elements_per_position × max_context × 8` (an `i64` accumulator per element), checked arithmetic, `None` on overflow;
+- `chunks = ⌈bytes / 1 MiB⌉`, at least 1, at most `PALW_WITNESS_MAX_CHUNKS_V1` = 4,096.
+
+A program that serves nothing records no profile and keeps the v1 manifest. The analysis lives in `misaka-palw-tir` (`dataflow`, moved from the
+sketch crate) so that the chain and the checker read the one set.
+
+**18.15.3 The pin.** Past the fence an attempt of a class **with** a profile commits exactly `1 + chunks` trace chunks (`trace_chunk_count`) under
+
+```text
+trace_manifest_root_v2 = keyed BLAKE2b-512("misaka-palw/mesh/trace-manifest/v2", trace_root ‖ le32(chunk_count))
+```
+
+and an attempt of a class **without** one is unchanged (count 1, the v1 root). Chunk 0 is the trace; chunks `1..` are the witness. The stateless
+half (`palw_witness_manifest_shape_ok_v1`, asked at the header stage and by the composed admission) takes a count of 1 under the v1 root or
+`2..=1 + 4,096` under the v2 root; the stateful half (`check_palw_attempt_witness_pin_v1`) demands the count the class's profile owes. **The
+manifest root is a function of the trace root and the count alone: it carries no witness root.** A witness root the chain cannot recompute would
+be a free field in the priced bytes — a free draw on both lotteries (ADR-0072 Decision 8); the chunk digests are the producer's served manifest,
+and what a seat trusts is the algebra, not them. `Unavailable { chunk_index, requested_daa }` already requires `chunk_index < trace_chunk_count`
+(PALW-FS-13), so under the fence it may name a witness chunk; its meaning is ADR-0065 Decision 4's, unchanged (it abstains: the claim redraws and
+voids at `ReceiptTimeout`, nobody is slashed for silence).
+
+**18.15.4 The window, not the pay** (open question 5, settled). A class's verification window is derived from `verification_ccu`; past the fence it
+is derived from `verification_ccu + palw_witness_ccu_v1(profile.bytes)` where a served byte costs 320 MAC-eq (a 100 Mbit/s link, 12,500 bytes a
+millisecond, against the registry's reference of 4,000,000 MAC-eq a millisecond) — `palw_class_verify_ccu_v1`, read by the class's compute
+deadline (`claim_verify_daa_v1`), the measured-row gate and the free-prompt cap. **Seat pay reads the registry row's `verification_ccu`, which no
+witness term touches.** A sketching seat's receipt earns what a replay's earns (open question 6): the verdict is the same verdict, and nothing in
+the fold reads how a seat checked.
+
+**18.15.5 The node.** Behind `--palw-sketch-check` (off by default; a node without it never opens the sketch state):
+
+- **The secret** is 32 bytes drawn from the operating system once and kept in `palw-sketch-secret` in the state dir (mode 0600), never serialised
+  elsewhere, never logged. Every sketch vector derives from it per class and epoch (7,200 DAA); a sketch is as secret as the secret.
+- **The mirror check** runs beside every full replay of an IR class the seat holds: the seat produces the claim's witness itself on the typed
+  backend (`tir_witness_capture_v1`), checks it (`tir_mirror_check_v1`: Freivalds for every served `MatMul`, exact recomputation for the rest, the
+  derived committed rows against the served ones) and compares the verdict with the replay's (`tir_mirror_agreement_v1`). A refusal of the seat's
+  own honest witness is a **false reject**, a checker's acceptance of a served witness of a claim the replay does not reproduce a **false accept**;
+  both are logged at error level and counted (`sketch_mirror_false_rejects`, `sketch_mirror_false_accepts` in the `verification` status line). No
+  seat should rely on the checker alone before the mirror has run clean over real claims.
+- **Per-row history sketches** (`TirHistorySketchV1`, open question 9, settled: built): `S_V[h] = Σ_d σ[d]·V_h[d]` once per appended row and the
+  running `R[d] = Σ_h ρ[h]·K_h[d]`, so a `P·V` check reads `d + H` numbers and a `Q·Kᵀ` check likewise, a row costs `O(d)`, and a sliding window
+  evicts exactly. Sound for a weight sketch's reason: uniform secret vectors over verified rows (`tests/history.rs` observes `1/p` at a toy prime).
+- **The producer** keeps a claim's witness as an obligation (`{claim}.witness`, `{claim}.witness.chunks`): the canonical image
+  (`codec::encode`), cut into exactly the pinned number of chunks, each with a digest bound to its index; a producer that cannot make it does not
+  publish the block. `palw_witness_chunk_v1` serves a chunk only while it matches its digest. The transport that carries a chunk to a seat is the
+  interval lane's off-chain path (RFC-0007 §II.7); this chapter pins the count and the naming, not the wire.
+- **A failed check is not a verdict** (PALW-AV-4): the seat files no `Valid` and escalates through the exact court, unchanged (§II.8).
+
+---
+
+## 18.16 The audit mesh and its traps (Part IV.1)
+
+**18.16.1 The draw.** At a claim's **acceptance** past `palw_audit_mesh_v1` (so a claim the panel never licenses is still audited — the mesh is a
+sensor, not a licence), a claim of an IR class (`tir_classes` row) with a non-zero audit pay draws [`PALW_AUDITS_PER_CLAIM_V1`] = **2** auditors
+from **all bonded seats**: every Active bond registered before the claim, other than its producer, with free collateral for the penalty
+(`collateral − reserved_exposure − registration_exposure`), weighted by stake (whole MSK, capped as the panel's stake draw caps it), one seat per
+operator. The race is the panel's (`−ln u / w`, `palw_draw_key_cmp_v1`) over tickets `H(seed ‖ bond)` under a seed bound to the claim id, its
+carrying block, its execution root and the draw's DAA. Each winner draws its **leaf ticket** (a `u64`; the auditor audits committed tile
+`ticket % tiles`, the chain does not know the tile count). **The hook cannot fail**: it runs after the claim is written, where a refusal would
+strand the write, so what it cannot do it leaves undone — an unaudited claim is a sensor that missed, never a refused block. At most
+`PALW_AUDIT_MAX_OPEN_V1` = 20,000 rows are open; a claim accepted past it is not audited.
+
+**18.16.2 The row** (`PalwAuditRowV1`, keyed by claim): the draw DAA, `audit_end = draw + 240`, `row_end = audit_end + 240`, the pay (4 ‰ of the
+claim's escrowed reward) and penalty (10 × the pay) snapshotted, and per auditor the ticket, the reservation and the outcome. **Each auditor
+reserves the penalty in `reserved_exposure`** for the row's life, so the withdrawal rule and every free-collateral reader see it; the consistency
+check re-derives the reservations from the rows. The sweep (before every block's objects, mirrored in the pre-object base) retires up to 256 rows a
+block past `row_end`, releasing their reservations.
+
+**18.16.3 Audited leaves and pay.** An `Audited { claim, leaf, result }` leaf of an accepted vertex (a `Compact` reference names the DAA the audit was
+drawn at) counts when its seat is a drawn auditor of the claim, `leaf` is the drawn ticket, `signed_daa` is in `[drawn, audit_end]`, and it is the seat's
+first answer; `result` is 0 (match) or 1 (mismatch), anything else is refused by name at shape. The audit is paid `pay` out of the **panel reserve**
+(clamped at it), queued as the seat's panel payout. **Silence is never a match** (PALW-AM-2): an unanswered assignment earns nothing and is charged
+nothing. An audit leaf below the fence is refused by name by the acceptance gate and the fold.
+
+**18.16.4 Traps** (open question 7). A bonded **setter** drawn by the slot lottery (`palw_trap_slot_drawn_v1`: a uniform ticket over `(bond, ⌊DAA /
+100⌋)` against `PALW_TRAP_RATE_BP_V1` = 100 of 10,000, i.e. 1 %) carries `TrapCommittedV1 { setter_bond, commitment, signature }` (tag 93) with
+`commitment = H(claim ‖ fault leaf ‖ tiles ‖ salt)`, reserving a 100 MSK deposit (one trap open per setter, at most 1,024 open). It then produces a claim of
+its own with a fault planted in committed tile `fault_leaf` of `tiles` (at most 64), and after the audit window carries `TrapRevealedV1 { setter_bond,
+claim, fault_leaf, tiles, salt, signature }` (tag 94), admissible only for **the setter's own audited claim**, after `audit_end` and no later than
+`row_end`. The fold: releases the deposit and spends the commitment; for each drawn auditor whose ticket landed on the planted tile
+(`ticket % tiles == fault_leaf`) — **slashes `penalty` from one that attested a match, pays the bounty (5 audit pays, from the reserve) to one that
+attested the mismatch**; marks the row settled (a second reveal of the claim changes nothing); and **voids the trap claim without slashing its
+setter** (`ReceiptTimeout`: no conviction, no probe note). A commitment never revealed within `2 × (audit + reveal)` = 960 DAA forfeits the deposit.
+
+---
+
+## 18.17 Staged onboarding (Part IV.2)
+
+**18.17.1 The state.** `PalwModelLifecycleV1::Capped { since_daa }` is **appended last** in the enum (index 7, after `Candidate`: the 2026-09-10
+failure). `admits_claims` is true; `admission_permille` is `PALW_CAPPED_ADMISSION_PERMILLE_V1` = 20; a capped class never counts toward
+`panel_drawable`.
+
+**18.17.2 Entry.** A `Prefetching` class steps to `Capped` at a span boundary when, past `palw_capped_onboarding_v1`: its ready seats do not fill a
+panel (`ready_seats < seat_count`); a **DA certificate** stands for it — `q` = 3 distinct seats' equal `Held` leaves (object 0, the capture of its
+probe job) naming the **class id**, recorded by the fold in `vertex.held` under the class while it is `Prefetching`, from any Active bond (§18.8);
+and the capped classes' shares together with its own stay within **`w_cap` = 1 % (10 ‰)** of the share table. The step takes the boundary's DAA as
+`since_daa`.
+
+**18.17.3 Capped claims.** The class's admission gate is not the panel room (it has no panel) but the **weight cap**: a claim is refused once the open
+capped claims' `immature_contribution` exceeds `w_cap` of `bounded_immature` (the cap is exceeded by at most the one claim that crossed it) or the capped
+table (20,000) is full. A claim accepted while its class is `Capped` writes a **capped row** and **owes no bind deadline** while the class is capped
+(`palw_provisional_bind_deadline_v1` returns `u64::MAX`; the NCP retry re-anchors it at every slot as for any class that cannot seat a panel). Audits
+are drawn for it as for any IR claim — the mesh is its sensor.
+
+**18.17.4 Provisional rewards and the re-verification window.** A capped claim reaches a panel only once the class's holders are seated, and its
+reward is paid, like every claim's, only at `Final`; until then the escrow is withheld and never minted for a claim that is voided — that is the
+reward being **provisional**. When the class leaves `Capped` (ready seats at least `required_ready_seats` and a panel's worth), each capped claim
+still waiting gets a **window** of `PALW_CAPPED_REVERIFY_WINDOW_DAA_V1` = 2,400 DAA from that boundary (its deadline is re-armed from the one
+function): a claim the holders bind a panel to inside it leaves the capped row and is licensed and finalized by the ordinary receipt/tally path —
+**every capped claim is re-verified by the class's holders** (open question 8, settled), a forged one gets no `Valid`, times out, and is voided with
+its reward forfeited (or, if a holder opens the exact court, convicted and slashed as any claim is); a claim that never binds is voided at the window's
+end like any claim that never bound. Already-accepted blocks are not undone: the cap bounds by how much.
+
+---
+
+## 18.18 The three fences and their drills
+
+| fence | arms | prerequisites (in force at or below it, by name) | drill flag |
+| --- | --- | --- | --- |
+| `palw_witness_manifest_v1` | §18.15 | `palw_tir_v1`, `palw_unavailable_abstains` | `--palw-drill-witness-at=H` |
+| `palw_audit_mesh_v1` | §18.16 | `palw_verification_vertex_v1`, `palw_tir_v1`, `palw_panel_economy` | `--palw-drill-audit-mesh-at=H` |
+| `palw_capped_onboarding_v1` | §18.17 | `palw_audit_mesh_v1`, `palw_admission_independence`, `palw_registry_resilience` | `--palw-drill-capped-at=H` |
+
+Each is a bare height in the four places (the `Params` field; `for_each_fence`; the Some-only writes in both ids; the `never()` collapse), mirrored on
+the V2 bundle (`witness_manifest_from_daa`, `audit_mesh_from_daa`, `capped_from_daa`; `sync_palw_*`), **`None` on every shipped preset**, in no testnet-12
+flag-day list, and refused by `validate_palw_v2` by name without its prerequisites or with its mirror unsynced (`consensus/core/tests/palw_mesh_fences.rs`).
+The drill flags work only with `--palw-drill-genesis-salt`; each moves nothing else; heights must be ones no other fence uses.
+
+---
+
+## 18.19 Rules
+
+- **PALW-AV-1 (the witness)** *(node)*. A producer of a class with a witness profile MUST keep the canonical witness of a claim, in the pinned number of
+  chunks, for the claim's retention, and SHOULD serve a chunk on request during the receipt window.
+- **PALW-AV-2 (secrecy)** *(node)*. A seat MUST NOT disclose its sketch secret, its keys or its sketches.
+- **PALW-AV-3 (moduli)** *(node)*. A seat checking a node algebraically MUST use moduli whose product exceeds the span of the node's refined proven
+  interval and MUST refuse a served value outside it.
+- **PALW-AV-4 (failure is not a verdict)** *(node)*. A seat whose check fails MUST NOT file `Valid`; it escalates by §II.8.
+- **PALW-WM-1 (the pin).** Past `palw_witness_manifest_v1`, admission MUST refuse an attempt whose `trace_chunk_count` is not `1 + chunks` of its class's
+  profile (1 for a class with none) or whose manifest root is not the v1 (count 1) or v2 (count > 1) derivation.
+- **PALW-AM-1 (audit assignment).** Past `palw_audit_mesh_v1`, a claim of an IR class MUST be assigned its auditors at acceptance from all bonded seats by
+  stake, after the claim commits, and each auditor MUST reserve the trap penalty.
+- **PALW-AM-2 (positive attestation).** Only an `Audited` leaf counts as an audit. Absence MUST NOT count as a match.
+- **PALW-AM-3 (traps).** A `TrapRevealed` that opens a prior `TrapCommitted` of the setter's own audited claim MUST void the trap claim without slashing the
+  setter, MUST slash every auditor whose `Audited` leaf attested a match on the planted tile, and MUST pay those who attested the mismatch.
+- **PALW-AM-4 (capped mode).** Past `palw_capped_onboarding_v1`, a class in `Capped` MUST admit at most `capped_admission_permille`; all capped claims together
+  MUST NOT hold more than `w_cap` of the immature weight (past it the next claim is refused); a capped claim MUST owe no bind deadline while its class is
+  `Capped`, MUST get its re-verification window when the class leaves it, and MUST reach `Final` (and be paid) only through a panel.
+
+---
+
+## 18.20 The decisions of 2026-10-03 on RFC open questions 5 to 10
+
+| # | Question | Decision (the lead) | Where |
+| --- | --- | --- | --- |
+| 5 | Witness bytes in the class profile | They enter the verification-window derivation, **not** seat pay | §18.15.4 |
+| 6 | Seat pay for algebraic checks | A sketching seat's receipt earns what a replay's earns | §18.15.4 |
+| 7 | Audit-mesh parameters | `trap_rate` 1 %; `trap_penalty` a reservation equal to 10 × the audit pay; 2 audits per claim; audit pay 4 ‰ of the claim's escrowed reward per attested audit, from the panel reserve; trap bounty 5 audit pays; trap deposit 100 MSK | §18.16 |
+| 8 | `w_cap` and re-verification | `w_cap` = 1 % (10 ‰); `capped_admission_permille` = 20; re-verify **all** capped claims on testnet-12 | §18.17 |
+| 9 | Per-row history sketches | Build them | §18.15.5, `misaka-palw-tir-sketch::history` |
+| 10 | The canonical serving set | Pin it in the class profile | §18.15.2 |
+
+Where this chapter fixed what the RFC left room for: audit pay has no on-chain measure of "openings fetched", so it is a fixed share of the claim's reward;
+the trap slot lottery is a hash lottery over `(bond, slot)` rather than the anchor beacon (a trap setter learns nothing by predicting its own slot); the
+witness root is **not** a chain field (§18.15.3); and the mesh's licence role for capped claims is realised as the holders' ordinary path (§18.17.4) rather
+than a second licensing arm, because every licensing door the chain has reads a panel's receipts and the rcore ledger beside them.
+
+---
+
+## 18.21 Tests of this part
+
+- consensus-core `tests/palw_mesh_v1.rs` (the v2 manifest root and its pins, the canonical serving set read off a program, the window term, the audit draw's
+  determinism, stake weighting and one-seat-per-operator, pay/penalty/bounty, the trap commitment's binding and its slot lottery near 1 %, the domain
+  registry), `tests/palw_mesh_fences.rs` (dormancy on every preset, the four places, prerequisites by name, mirrors, the drill movers),
+  `palw_state_v2::tests::mesh_fold_v1` (the draw at acceptance, `Audited` leaves counted and paid, silence not a match, traps settled, hostile trap moves
+  refused by name, the sweep, the witness pin and the window term), `palw_state_v2::tests::adr0135::capped_onboarding_v1` (entry on a certificate, the
+  capped claim waiting, the window and the void, the weight cap, and the holders' ordinary path to `Final`).
+- `misaka-palw-tir-sketch` `tests/history.rs` (per-row history sketches), `tests/mirror.rs` (the witness codec and chunks, the mirror and its agreement table).
+- node `palw_panel::mesh::tests` (the audit leaf, the trap book), `palw_panel::sketch::tests` (the secret, the retained witness and its chunks).

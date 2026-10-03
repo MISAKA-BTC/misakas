@@ -200,6 +200,11 @@ pub struct PalwProducerFactsV2 {
     /// pins it by equality (ADR-0072 Decision 8), so it is not the producer's to get right but the
     /// chain's, and this is where a producer reads it.
     pub min_trace_retention_daa: u64,
+    /// **RFC-0007 Part II: the witness chunks an attempt of this class must commit** beyond the trace's own — 0 below
+    /// `palw_witness_manifest_v1` and for a class with no witness profile. Admission pins the attempt's `trace_chunk_count` to
+    /// `1 + this` and its manifest root to the v2 derivation ([`crate::palw_mesh_v1::palw_attempt_trace_manifest_root_v2`]), so it is
+    /// not the producer's to choose but the chain's, and this is where a producer reads it.
+    pub witness_chunks: u32,
     pub bond: Option<PalwProducerBondFactsV2>,
 
     /// **The chain's PALW weight, and how many claims are still unresolved** — the two numbers that
@@ -619,6 +624,11 @@ pub fn palw_producer_facts_v4(
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
         min_trace_retention_daa: palw_min_trace_retention_daa_v1(state_params),
+        witness_chunks: if state_params.witness_manifest_active_at(daa_score) {
+            state.mesh_witness_profile_v1(&class_id).map_or(0, |profile| profile.chunks)
+        } else {
+            0
+        },
         chain_point,
         daa_score,
         class_id,

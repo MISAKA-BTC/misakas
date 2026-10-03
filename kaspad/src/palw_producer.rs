@@ -1565,8 +1565,15 @@ impl PalwProducerService {
             output_root: run.output_root,
             execution_root: run.execution_root,
             pwu: facts.pwu,
-            trace_manifest_root: run.trace_manifest_root,
-            trace_chunk_count: run.trace_chunk_count,
+            // **RFC-0007 Part II**: a class with a witness profile commits `1 + chunks` trace chunks under the v2 manifest root — the
+            // chain's pin (`check_palw_attempt_witness_pin_v1`), derived from the facts and the trace root, never chosen. A class
+            // without one keeps the backend's own count and root, byte for byte.
+            trace_manifest_root: if facts.witness_chunks > 0 {
+                kaspa_consensus_core::palw_mesh_v1::palw_attempt_trace_manifest_root_v2(run.trace_root, 1 + facts.witness_chunks)
+            } else {
+                run.trace_manifest_root
+            },
+            trace_chunk_count: if facts.witness_chunks > 0 { 1 + facts.witness_chunks } else { run.trace_chunk_count },
             // The retention window a producer promises to keep the trace for. The material is in
             // hand (`run.material`, encoded by the backend), which is what makes the promise one
             // it can keep. Derived, not chosen, and PINNED by admission (ADR-0072 Decision 8):
@@ -1635,6 +1642,25 @@ impl PalwProducerService {
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
             let material = self.retain_execution(message, &run.material)?;
+            // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
+            // witness for the claim — the canonical serving set's `MatMul` outputs, in exactly the pinned number of chunks, with their
+            // digests — before the block that promises it is published. A producer that cannot make it does not publish: a claim whose
+            // witness nobody can be served is a claim every seat answers `Unavailable` and the chain voids.
+            if facts.witness_chunks > 0 {
+                let entry = self
+                    .backends()
+                    .tir_entry_v1(facts.class_id, facts.artifact_root)
+                    .ok_or("this class commits a witness and this node holds no IR artifact to make it from")?;
+                let (prompt_w, decode_w, dir) = (prompt.clone(), job.exact_decode_tokens, self.config.retention_dir.clone());
+                let chunks = facts.witness_chunks;
+                tokio::task::spawn_blocking(move || {
+                    let image = crate::palw_panel::sketch_witness_image_v1(&entry, &prompt_w, decode_w)?;
+                    crate::palw_panel::sketch_witness_retain_v1(&dir, &message, &image, chunks).map(|digests| digests.len())
+                })
+                .await
+                .map_err(|e| format!("the witness task did not finish: {e}"))?
+                .map_err(|e| format!("cannot keep the witness this class's attempt commits ({e}): not publishing"))?;
+            }
             // The last bracket of the attempt (ADR-0151 follow-up): the material is on disk, the
             // execution's buffers are gone, and this is what the process holds after one attempt.
             crate::palw_backends::log_memory_phase_v1(PALW_PRODUCER, "attempt returned and its material retained", crate::palw_backends::armed_ram_scale_pub_v1());
