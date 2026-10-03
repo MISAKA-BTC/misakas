@@ -515,7 +515,7 @@ def outcome_of(erow):
 # post-genesis bonds, the just-in-time liar nodes, the capacity sampler (int-11 combined drill)
 # ---------------------------------------------------------------------------------------------------------------------
 XB = PLAN.get("extra_bonds", {})
-XB_ORDER = [int(x) for x in XB.get("order", [10, 11, 12, 13, 8, 9])]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
+XB_ORDER = [int(x) for x in (E.get("XB_ORDER", "").replace(",", " ").split() or XB.get("order", [10, 11, 12, 13, 8, 9]))]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
 XB_FROM_DAA = int(E.get("XB_FROM_DAA") or XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
 XB_FLOAT_MSK = int(XB.get("float_msk", 150))                              # on top of the collateral: the 100 MSK fee float the genesis seats carry, and fees
 XB_WAIT_DAA = int(XB.get("registrar_wait_daa", 12))                       # a registrar that has not printed its bond after this many DAA is stopped and tried again
