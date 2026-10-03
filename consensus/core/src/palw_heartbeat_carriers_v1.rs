@@ -165,6 +165,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // ADR-0160 F-Q (tag 60): an audit receipt batch is the licence's second half for a credited
         // claim — market traffic like the licence, not a conviction a halt must let through.
         | O::AuditReceiptBatchV1 { .. }
+        // ADR-0164 F-M1 (tag 95): riders are production traffic like the attempts they ride on, not a conviction a halt must let through.
+        | O::AttemptRidersV1 { .. }
         | O::SeatReadinessProvedV2 { .. }
         // RFC-0006 (tags 91–93): a layer-shard plan, a part and a shard readiness proof are registration, licence and
         // possession traffic like their whole-class twins above — market traffic, not a conviction a halt must let through.

@@ -2577,6 +2577,27 @@ pub struct Params {
     /// [`Self::sync_palw_seat_availability`]; dormant on every shipped preset; hashed Some-only with the `never()`
     /// collapse.
     pub palw_seat_availability: Option<ForkActivation>,
+    /// **ADR-0164 F-EM: the per-DAA PALW reward budget** (stage 5's emission redesign; `palw_capacity_emission_budget`). Past it an
+    /// attempt claim's acceptance charges its block's whole carve to a rooted ledger keyed by the accepting block's DAA and is
+    /// refused (non-fatal, the carve burned as a skipped attempt's) beyond
+    /// [`crate::palw_capacity_s567_v1::PALW_EMISSION_BLOCKS_PER_DAA_V1`] carves a DAA — so emission per DAA does not depend on the
+    /// number of claims or on ρ. Refused by `validate_palw_v2` off ConsensusV2 and without F-L (`palw_capacity_aggregate_liability`)
+    /// and F-E (`palw_capacity_escrow_at_licence`) at or below it. Mirrored by [`Self::sync_palw_capacity_s567`]; dormant on every
+    /// shipped preset; hashed Some-only with the `never()` collapse.
+    pub palw_capacity_emission_budget: Option<ForkActivation>,
+    /// **ADR-0164 F-M1: riders** (stage 5's multi-claim carriage, D-12; `palw_capacity_multi_claim`). Past it a lead attempt claim
+    /// may take up to 64 rider attempts of its own bond in one `AttemptRidersV1` object (tag 95): each rider is its own claim
+    /// (panel, licence, slot, share, room, audit), paid out of the lead's carve — Σ escrow of a block's claims is the block's carve.
+    /// Refused without F-EM, F-B (`palw_capacity_batch_licence`), F-N (`palw_capacity_network_room`), F-S, F-W and F-Q at or below
+    /// it. Mirrored by [`Self::sync_palw_capacity_s567`]; dormant on every shipped preset; hashed Some-only with the `never()` collapse.
+    pub palw_capacity_multi_claim: Option<ForkActivation>,
+    /// **ADR-0164 F-K: the lower-only ρ breaker** (stage 6; `palw_capacity_rho_breaker`). Past it one rooted row counts, per aligned
+    /// 1,000-DAA epoch, what the chain itself shows of the ramp's health — receipt-deadline overruns, panel backlog, slash
+    /// shortfalls, false audits, audit service — and at the end of the first block of each epoch steps the issuance tier down one
+    /// rung (to ρ = 1 on a severe signal) and back up one rung only after two clean epochs; the tier is `min(schedule ρ, breaker
+    /// level)`, never above the flag days' schedule. Refused without F-L, F-S and F-Q at or below it. Mirrored by
+    /// [`Self::sync_palw_capacity_s567`]; dormant on every shipped preset; hashed Some-only with the `never()` collapse.
+    pub palw_capacity_rho_breaker: Option<ForkActivation>,
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -4146,6 +4167,8 @@ impl Params {
         self.validate_palw_panel_unavailable_expiry_v1()?;
         self.validate_palw_panel_standby_v1()?;
         self.validate_palw_seat_availability_v1()?;
+        // ADR-0164 (stages 5–7): F-EM, F-M1, F-K and the ρ ≥ 250 steps' prerequisites.
+        self.validate_palw_capacity_s567_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -6275,6 +6298,16 @@ impl Params {
         }
         if self.palw_seat_availability == Some(ForkActivation::never()) {
             self.palw_seat_availability = None;
+        }
+        // ADR-0164 (stages 5–7): the three bare fences, the same collapse.
+        if self.palw_capacity_emission_budget == Some(ForkActivation::never()) {
+            self.palw_capacity_emission_budget = None;
+        }
+        if self.palw_capacity_multi_claim == Some(ForkActivation::never()) {
+            self.palw_capacity_multi_claim = None;
+        }
+        if self.palw_capacity_rho_breaker == Some(ForkActivation::never()) {
+            self.palw_capacity_rho_breaker = None;
         }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
@@ -8448,6 +8481,119 @@ impl Params {
         }
     }
 
+    /// **ADR-0164 F-M1: are riders accepted at `daa`?** (The ruleset's field, resolved off ConsensusV2 — what a producer's own decision
+    /// turns on; the fold reads the bundle's mirror.)
+    pub fn palw_capacity_riders_active_at_v1(&self, daa: u64) -> bool {
+        matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            && self.palw_capacity_multi_claim.filter(|f| *f != ForkActivation::never()).is_some_and(|f| f.is_active(daa))
+    }
+
+    /// **ADR-0164: the fold's mirror of F-EM, F-M1 and F-K** — their heights on the `#[borsh(skip)]` copy of `PalwStateParamsV2`.
+    /// Written here and nowhere else; call it wherever one of the three is set on an assembled ruleset
+    /// (`validate_palw_v2` refuses a ruleset whose copy disagrees, so a missed call is a startup refusal).
+    pub fn sync_palw_capacity_s567(&mut self) {
+        let height = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        let (emission, riders, breaker) =
+            (height(self.palw_capacity_emission_budget), height(self.palw_capacity_multi_claim), height(self.palw_capacity_rho_breaker));
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_s567_mirror(emission, riders, breaker);
+        }
+    }
+
+    /// **What F-EM, F-M1, F-K and the ρ ≥ 250 steps refuse** (ADR-0164 §6; called by `validate_palw_v2`, public so a test can name
+    /// each refusal): any of the three armed off ConsensusV2 (the fold that reads it is not running); F-EM without F-L and F-E at or
+    /// below it; F-M1 without F-EM, F-B, F-N, F-S, F-W and F-Q at or below it (a rider is a claim: it needs the budget it is paid
+    /// from, the batch licence and audit door every claim leaves through, the network share and slots that bound it, and J-1); F-K
+    /// without F-L, F-S and F-Q at or below it (its counters are the ramp's own observables); **an F-L step at ρ ≥ 250 without all
+    /// three at or below the step's height** (×250 and ×1000 are not armable without the budget, the riders and the breaker); and a
+    /// mirror that disagrees with a field.
+    pub fn validate_palw_capacity_s567_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let armed = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never());
+        let (emission, riders, breaker) =
+            (armed(self.palw_capacity_emission_budget), armed(self.palw_capacity_multi_claim), armed(self.palw_capacity_rho_breaker));
+        let bundle = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
+            _ => None,
+        };
+        let mirrored = bundle.map(|bundle| {
+            (bundle.state.capacity_emission_from_daa(), bundle.state.capacity_riders_from_daa(), bundle.state.capacity_breaker_from_daa())
+        });
+        let want = (emission.map(|f| f.daa_score()), riders.map(|f| f.daa_score()), breaker.map(|f| f.daa_score()));
+        if want == (None, None, None) {
+            if mirrored.is_some_and(|mirrored| mirrored != (None, None, None)) {
+                return Err(Invalid(
+                    "the V2 bundle mirrors palw_capacity_emission_budget / palw_capacity_multi_claim / palw_capacity_rho_breaker \
+                     without the fence armed: mirror them with Params::sync_palw_capacity_s567 after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        }
+        let Some(mirrored) = mirrored else {
+            return Err(Invalid(
+                "palw_capacity_emission_budget / palw_capacity_multi_claim / palw_capacity_rho_breaker is armed off ConsensusV2: the \
+                 fold that reads it is not running",
+            ));
+        };
+        let at_or_below =
+            |fence: Option<ForkActivation>, h: u64| fence.filter(|f| *f != ForkActivation::never()).is_some_and(|f| f.daa_score() <= h);
+        let liability = self.palw_capacity_aggregate_liability.as_ref().filter(|value| value.activation != ForkActivation::never());
+        let liability_below = |h: u64| liability.is_some_and(|value| value.activation.daa_score() <= h);
+        if let Some(h) = emission.map(|f| f.daa_score())
+            && !(liability_below(h) && at_or_below(self.palw_capacity_escrow_at_licence, h))
+        {
+            return Err(Invalid(
+                "palw_capacity_emission_budget is armed without palw_capacity_aggregate_liability (F-L) and \
+                 palw_capacity_escrow_at_licence (F-E) at or below it: the budget charges the carve a claim escrows at acceptance",
+            ));
+        }
+        if let Some(h) = riders.map(|f| f.daa_score())
+            && !(at_or_below(self.palw_capacity_emission_budget, h)
+                && at_or_below(self.palw_capacity_batch_licence, h)
+                && at_or_below(self.palw_capacity_network_room, h)
+                && at_or_below(self.palw_capacity_issuance_slots, h)
+                && at_or_below(self.palw_capacity_weight_cap, h)
+                && at_or_below(self.palw_capacity_audit_door, h))
+        {
+            return Err(Invalid(
+                "palw_capacity_multi_claim is armed without palw_capacity_emission_budget, palw_capacity_batch_licence, \
+                 palw_capacity_network_room, palw_capacity_issuance_slots, palw_capacity_weight_cap and palw_capacity_audit_door all \
+                 armed at or below it: a rider is a claim, and the budget it is paid from, the licence and audit it leaves through, \
+                 the share and slots that bound it and J-1 must already hold",
+            ));
+        }
+        if let Some(h) = breaker.map(|f| f.daa_score())
+            && !(liability_below(h) && at_or_below(self.palw_capacity_issuance_slots, h) && at_or_below(self.palw_capacity_audit_door, h))
+        {
+            return Err(Invalid(
+                "palw_capacity_rho_breaker is armed without palw_capacity_aggregate_liability, palw_capacity_issuance_slots and \
+                 palw_capacity_audit_door at or below it: its counters are the ramp's own observables and its tier is the slots'",
+            ));
+        }
+        if let Some(value) = liability {
+            for step in value.steps.iter().filter(|step| step.rho >= crate::palw_audit_door_v1::PALW_CAPACITY_AUDIT_K2_RHO_V1) {
+                let h = step.from_daa;
+                if !(at_or_below(self.palw_capacity_emission_budget, h)
+                    && at_or_below(self.palw_capacity_multi_claim, h)
+                    && at_or_below(self.palw_capacity_rho_breaker, h))
+                {
+                    return Err(Invalid(
+                        "palw_capacity_aggregate_liability has a step at rho >= 250 without palw_capacity_emission_budget, \
+                         palw_capacity_multi_claim and palw_capacity_rho_breaker all armed at or below its height: x250 and x1000 \
+                         need the per-DAA budget, the riders and the breaker",
+                    ));
+                }
+            }
+        }
+        if mirrored != want {
+            return Err(Invalid(
+                "palw_capacity_emission_budget / palw_capacity_multi_claim / palw_capacity_rho_breaker disagrees with the V2 bundle's \
+                 mirror: mirror them with Params::sync_palw_capacity_s567 after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     /// **The verification term's fence** ([`Self::palw_capacity_network_verify`]), resolved like F-N's.
     pub fn palw_capacity_network_verify_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_capacity_network_verify) {
@@ -9864,6 +10010,9 @@ impl Params {
             palw_panel_unavailable_expiry,
             palw_panel_standby,
             palw_seat_availability,
+            palw_capacity_emission_budget,
+            palw_capacity_multi_claim,
+            palw_capacity_rho_breaker,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -10121,6 +10270,9 @@ impl Params {
             ("palw_panel_unavailable_expiry", *palw_panel_unavailable_expiry),
             ("palw_panel_standby", *palw_panel_standby),
             ("palw_seat_availability", *palw_seat_availability),
+            ("palw_capacity_emission_budget", *palw_capacity_emission_budget),
+            ("palw_capacity_multi_claim", *palw_capacity_multi_claim),
+            ("palw_capacity_rho_breaker", *palw_capacity_rho_breaker),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -10804,6 +10956,18 @@ impl Params {
             h.write(b"palw_seat_availability");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_capacity_emission_budget {
+            h.write(b"palw_capacity_emission_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_capacity_multi_claim {
+            h.write(b"palw_capacity_multi_claim");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_capacity_rho_breaker {
+            h.write(b"palw_capacity_rho_breaker");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -11006,6 +11170,9 @@ impl Params {
             palw_panel_unavailable_expiry,
             palw_panel_standby,
             palw_seat_availability,
+            palw_capacity_emission_budget,
+            palw_capacity_multi_claim,
+            palw_capacity_rho_breaker,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -11617,6 +11784,15 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_seat_availability.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capacity_emission_budget.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capacity_multi_claim.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capacity_rho_breaker.as_mut() {
             fork(activation, visit);
         }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
@@ -12233,6 +12409,9 @@ impl Params {
             palw_panel_unavailable_expiry,
             palw_panel_standby,
             palw_seat_availability,
+            palw_capacity_emission_budget,
+            palw_capacity_multi_claim,
+            palw_capacity_rho_breaker,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -12914,6 +13093,18 @@ impl Params {
         }
         if let Some(activation) = palw_seat_availability {
             h.write(b"palw_seat_availability");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_emission_budget {
+            h.write(b"palw_capacity_emission_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_multi_claim {
+            h.write(b"palw_capacity_multi_claim");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_rho_breaker {
+            h.write(b"palw_capacity_rho_breaker");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -13748,6 +13939,9 @@ impl Params {
             palw_panel_unavailable_expiry: self.palw_panel_unavailable_expiry,
             palw_panel_standby: self.palw_panel_standby,
             palw_seat_availability: self.palw_seat_availability,
+            palw_capacity_emission_budget: self.palw_capacity_emission_budget,
+            palw_capacity_multi_claim: self.palw_capacity_multi_claim,
+            palw_capacity_rho_breaker: self.palw_capacity_rho_breaker,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -14830,6 +15024,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_panel_unavailable_expiry: None,
     palw_panel_standby: None,
     palw_seat_availability: None,
+    palw_capacity_emission_budget: None,
+    palw_capacity_multi_claim: None,
+    palw_capacity_rho_breaker: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -15107,6 +15304,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_panel_unavailable_expiry: None,
     palw_panel_standby: None,
     palw_seat_availability: None,
+    palw_capacity_emission_budget: None,
+    palw_capacity_multi_claim: None,
+    palw_capacity_rho_breaker: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -15366,6 +15566,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_panel_unavailable_expiry: None,
     palw_panel_standby: None,
     palw_seat_availability: None,
+    palw_capacity_emission_budget: None,
+    palw_capacity_multi_claim: None,
+    palw_capacity_rho_breaker: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -20770,6 +20973,50 @@ pub const PALW_T12_CAPACITY_RHO100_STEP_2_V1: PalwPostLaunchFenceV1 = PalwPostLa
     set: |params, at| palw_t12_capacity_step_set_v1(params, 2, at, 100),
 };
 
+/// **ADR-0164 stage 7: the ready ρ = 250 step — F-L's fourth step** (`…_step_4`; `k_aud` = 2 from here, ADR-0160 D-23). Armed after
+/// ρ = 100's third; `validate_palw_v2` refuses it without F-EM, F-M1 and F-K at or below its height.
+pub const PALW_T12_CAPACITY_RHO250_STEP_4_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability_step_4",
+    set: |params, at| palw_t12_capacity_step_set_v1(params, 4, at, 250),
+};
+
+/// **ADR-0164 stage 7: the ready ρ = 1000 step — F-L's fifth step** (`…_step_5`), after ρ = 250. The per-bond ceiling of ADR-0160
+/// §9.1's last row (2,030 concurrent claims on 13,000 MSK); the network's queue stays bounded by F-N's `L_ver` (ADR-0164 §9).
+pub const PALW_T12_CAPACITY_RHO1000_STEP_5_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability_step_5",
+    set: |params, at| palw_t12_capacity_step_set_v1(params, 5, at, 1_000),
+};
+
+/// **ADR-0164 stage 5: F-EM, the per-DAA PALW reward budget** — a flag-day entry (`palw_capacity_emission_budget`): past its
+/// height an attempt claim's acceptance charges its block's carve to a DAA-keyed ledger, 16 carves a DAA at most. The
+/// field and the V2 bundle's mirror in one place.
+pub const PALW_T12_CAPACITY_EMISSION_BUDGET_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_emission_budget",
+    set: |params, at| {
+        params.palw_capacity_emission_budget = at;
+        params.sync_palw_capacity_s567();
+    },
+};
+
+/// **ADR-0164 stage 5: F-M1, riders** (`palw_capacity_multi_claim`, object tag 95): a lead takes up to 64 riders paid out of its
+/// own carve.
+pub const PALW_T12_CAPACITY_MULTI_CLAIM_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_multi_claim",
+    set: |params, at| {
+        params.palw_capacity_multi_claim = at;
+        params.sync_palw_capacity_s567();
+    },
+};
+
+/// **ADR-0164 stage 6: F-K, the lower-only ρ breaker** (`palw_capacity_rho_breaker`).
+pub const PALW_T12_CAPACITY_RHO_BREAKER_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_rho_breaker",
+    set: |params, at| {
+        params.palw_capacity_rho_breaker = at;
+        params.sync_palw_capacity_s567();
+    },
+};
+
 /// A ready ρ variant's `set`: step `slot` of F-L at `at`, then the mirror. **Arming it on a ruleset whose
 /// F-L does not carry the earlier steps panics** — the flag day that appends a step must come after the
 /// ones it builds on, and a silently dropped step would leave a scheduled ρ unarmed; `None` (or
@@ -21109,13 +21356,40 @@ pub const PALW_T12_INT11_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // RFC-0002 rest: the class-seating fence and P0a's GDN key heads (`palw_tir_only_v1` is a MAINNET step and is NOT here).
     crate::palw_class_seating_fence_v1::PALW_CLASS_SEATING_ENTRY_V1,
     PALW_GDN_KEY_HEADS_ENTRY_V1,
+    // Lane PL (ADR-0166, part of the Useful Work Transition): verifier silence stops slashing an honest producer; standby seats;
+    // the availability factor in panel assignment.
+    PALW_T12_PANEL_UNAVAILABLE_EXPIRY_V1,
+    PALW_T12_PANEL_STANDBY_V1,
+    PALW_T12_SEAT_AVAILABILITY_V1,
+    // Lane RS (ADR-0165): the base floor becomes a reserve, real-model attempts advance the clock.
+    crate::palw_real_share_v1::PALW_T12_FLOOR_RESERVE_ENTRY,
+    crate::palw_real_share_v1::PALW_T12_REAL_CLOCK_TICK_ENTRY,
     PALW_T12_CAPACITY_NETWORK_VERIFY_V1,
+    // ADR-0164 (the user's decision of 2026-10-03: the ×1000 capacity change ships in this release): stage 5's budget and riders and
+    // stage 6's breaker arm at H with ρ = 25; the ρ = 250 and ρ = 1000 steps are their own entries at H + 190 and H + 285.
+    PALW_T12_CAPACITY_EMISSION_BUDGET_V1,
+    PALW_T12_CAPACITY_MULTI_CLAIM_V1,
+    PALW_T12_CAPACITY_RHO_BREAKER_V1,
     PALW_T12_CAPACITY_RHO25_STEP_2_V1,
 ];
 
 /// **The int-11 flag day's second height: ρ = 100** — F-L's third step, [`PALW_T12_INT11_RHO100_OFFSET_DAA`] (95) DAA after H (the
 /// user's decision of 2026-10-01), in an entry of its own: the fork id names the step's height.
 pub const PALW_T12_INT11_RHO100_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_CAPACITY_RHO100_STEP_3_V1];
+
+/// **The int-11 flag day's third height: ρ = 250** — F-L's fourth step ([`PALW_T12_CAPACITY_RHO250_STEP_4_V1`], `k_aud` = 2 from it),
+/// [`PALW_T12_INT11_RHO250_OFFSET_DAA`] (190) DAA after H (the user's decision of 2026-10-03), in an entry of its own: the fork id
+/// names the step's height.
+pub const PALW_T12_INT11_RHO250_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_CAPACITY_RHO250_STEP_4_V1];
+
+/// **The int-11 flag day's fourth height: ρ = 1000** — F-L's fifth step ([`PALW_T12_CAPACITY_RHO1000_STEP_5_V1`]),
+/// [`PALW_T12_INT11_RHO1000_OFFSET_DAA`] (285) DAA after H.
+pub const PALW_T12_INT11_RHO1000_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_CAPACITY_RHO1000_STEP_5_V1];
+
+/// ρ = 250 arms this many DAA after H (the user's decision of 2026-10-03: 5,490 at H = 5,300).
+pub const PALW_T12_INT11_RHO250_OFFSET_DAA: u64 = 190;
+/// ρ = 1000 arms this many DAA after H (5,585 at H = 5,300).
+pub const PALW_T12_INT11_RHO1000_OFFSET_DAA: u64 = 285;
 
 /// **The int-11 flag day's height H — DAA 5,300 (tentative: the user names the final one)**, ONE named constant that the preset, a
 /// drill's `--palw-drill-int11-at` offsets and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to this
@@ -21129,6 +21403,18 @@ pub const PALW_T12_INT11_RHO100_OFFSET_DAA: u64 = 95;
 /// **ρ = 100's height, H + 95** — `None` while H is.
 pub const PALW_T12_INT11_RHO100_DAA: Option<u64> = match PALW_T12_INT11_FLAG_DAY_DAA {
     Some(at) => Some(at + PALW_T12_INT11_RHO100_OFFSET_DAA),
+    None => None,
+};
+
+/// **ρ = 250's height, H + 190** — `None` while H is.
+pub const PALW_T12_INT11_RHO250_DAA: Option<u64> = match PALW_T12_INT11_FLAG_DAY_DAA {
+    Some(at) => Some(at + PALW_T12_INT11_RHO250_OFFSET_DAA),
+    None => None,
+};
+
+/// **ρ = 1000's height, H + 285** — `None` while H is.
+pub const PALW_T12_INT11_RHO1000_DAA: Option<u64> = match PALW_T12_INT11_FLAG_DAY_DAA {
+    Some(at) => Some(at + PALW_T12_INT11_RHO1000_OFFSET_DAA),
     None => None,
 };
 
@@ -21150,9 +21436,20 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             for fence in PALW_T12_INT11_RHO100_FENCES_V1 {
                 (fence.set)(params, Some(ForkActivation::new(at.saturating_add(PALW_T12_INT11_RHO100_OFFSET_DAA))));
             }
+            for fence in PALW_T12_INT11_RHO250_FENCES_V1 {
+                (fence.set)(params, Some(ForkActivation::new(at.saturating_add(PALW_T12_INT11_RHO250_OFFSET_DAA))));
+            }
+            for fence in PALW_T12_INT11_RHO1000_FENCES_V1 {
+                (fence.set)(params, Some(ForkActivation::new(at.saturating_add(PALW_T12_INT11_RHO1000_OFFSET_DAA))));
+            }
         }
         None => {
-            for fence in PALW_T12_INT11_RHO100_FENCES_V1.iter().chain(PALW_T12_INT11_FENCES_V1.iter().rev()) {
+            for fence in PALW_T12_INT11_RHO1000_FENCES_V1
+                .iter()
+                .chain(PALW_T12_INT11_RHO250_FENCES_V1)
+                .chain(PALW_T12_INT11_RHO100_FENCES_V1)
+                .chain(PALW_T12_INT11_FENCES_V1.iter().rev())
+            {
                 (fence.set)(params, None);
             }
         }
@@ -22762,6 +23059,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_panel_unavailable_expiry: None,
     palw_panel_standby: None,
     palw_seat_availability: None,
+    palw_capacity_emission_budget: None,
+    palw_capacity_multi_claim: None,
+    palw_capacity_rho_breaker: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it
@@ -31490,7 +31790,7 @@ mod post_launch_fence_arming_tests {
         // The schedule: 750, D1's 1,000, and — on this build — the second and third flag days' own
         // heights (`PALW_T12_POST_LAUNCH_FENCES_V2`/`_V3`), the IR flag day's
         // (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`) and the DAA-3,600 flag day's
-        // (`PALW_T12_TIR_FENCE2_FENCES_V1`) and the int-11 flag day's two (H and ρ = 100's H + 95); the DAA-750 release as the fleet
+        // (`PALW_T12_TIR_FENCE2_FENCES_V1`) and the int-11 flag day's four (H, ρ = 100's H + 95, ρ = 250's H + 190 and ρ = 1000's H + 285); the DAA-750 release as the fleet
         // ran it is 750 and 1,000 alone.
         let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
@@ -31500,6 +31800,8 @@ mod post_launch_fence_arming_tests {
         expected_schedule.extend(PALW_T12_INT11_FLAG_DAY_DAA);
         expected_schedule.extend(PALW_T12_INT11_RHO100_DAA);
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V4_DAA);
+        expected_schedule.extend(PALW_T12_INT11_RHO250_DAA);
+        expected_schedule.extend(PALW_T12_INT11_RHO1000_DAA);
         expected_schedule.sort_unstable();
         expected_schedule.dedup();
         assert_eq!(
@@ -31520,9 +31822,13 @@ mod post_launch_fence_arming_tests {
         let pre_flag_day = palw_t12_release_v4_params();
         assert!(!pre_flag_day.palw_tir_fence2_active_at(flag_day), "the pre-flag release keeps the release's IR rules");
         let mut pre_flag_schedule = expected_schedule.clone();
-        // The pre-flag release (int-8) omits the DAA-3,600 flag day's height and the int-11 flag day's two.
+        // The pre-flag release (int-8) omits the DAA-3,600 flag day's height and the int-11 flag day's four.
         pre_flag_schedule.retain(|height| {
-            *height != flag_day && Some(*height) != PALW_T12_INT11_FLAG_DAY_DAA && Some(*height) != PALW_T12_INT11_RHO100_DAA
+            *height != flag_day
+                && Some(*height) != PALW_T12_INT11_FLAG_DAY_DAA
+                && Some(*height) != PALW_T12_INT11_RHO100_DAA
+                && Some(*height) != PALW_T12_INT11_RHO250_DAA
+                && Some(*height) != PALW_T12_INT11_RHO1000_DAA
         });
         assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the later flag days' heights");
         assert_eq!(

@@ -577,6 +577,7 @@ pub mod palw_verification_v2;
 /// outstanding, burst and rate caps at the step's ρ; queue bounds, never the safety.
 pub mod palw_issuance_slots_v1;
 pub mod palw_network_room_v1;
+pub mod palw_capacity_s567_v1;
 /// ADR-0160 lane verify V2: room v2 (F-R, `Params::palw_capacity_verify_room`) — the measured `k = 2`
 /// capacity, the stake-proportional bond share, the floor's seat-capital room.
 pub mod palw_verify_capacity_v1;

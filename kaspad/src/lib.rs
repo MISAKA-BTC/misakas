@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 pub mod args;
 pub mod chain_participation_store;
 pub mod daemon;
@@ -39,6 +40,7 @@ pub mod palw_panel;
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
+pub mod palw_rider_outbox;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;

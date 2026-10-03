@@ -79,6 +79,10 @@ pub struct PalwProducerBondFactsV2 {
     /// **ADR-0160 F-Q (stage 2): a claim of this class would be credited and the audit backlog is full**
     /// (`palw_audit_door_v1`, §5.9 (f)). `false` below `Params::palw_capacity_audit_door`.
     pub audit_backlog_full: bool,
+    /// **ADR-0164 F-EM: the DAA's PALW reward budget is spent at the candidate DAA** (`palw_emission_admits_v1` over the rooted ledger's
+    /// row for it) — admission and the fold skip the attempt (`EmissionBudgetExhausted`) and its carve is burned. `false` below
+    /// `Params::palw_capacity_emission_budget`.
+    pub emission_spent: bool,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -356,6 +360,9 @@ impl PalwProducerFactsV2 {
         if bond.audit_backlog_full {
             return Err(PALW_NOT_READY_AUDIT_BACKLOG_V1);
         }
+        if bond.emission_spent {
+            return Err(PALW_NOT_READY_EMISSION_SPENT_V1);
+        }
         Ok(())
     }
 }
@@ -391,6 +398,8 @@ pub const PALW_NOT_READY_ISSUANCE_CAPPED_V1: &str = "the bond's issuance is capp
 /// `ready_to_produce_v3` (ADR-0160 F-Q, stage 2): this class's claim would be credited and the credited
 /// claims awaiting their audit are at `A_max` — admission and the fold refuse it (`AuditBacklogFull`).
 pub const PALW_NOT_READY_AUDIT_BACKLOG_V1: &str = "the audit backlog is full: a credited claim waits for audits";
+/// `ready_to_produce_v3` (ADR-0164 F-EM): the DAA's PALW reward budget is spent — a block mined now is skipped and its carve burned.
+pub const PALW_NOT_READY_EMISSION_SPENT_V1: &str = "the DAA's PALW reward budget is spent: a block mined now would be skipped";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
@@ -606,6 +615,8 @@ pub fn palw_producer_facts_v4(
             frozen: crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key),
             issuance_capped: crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, key, bond_state.collateral, daa_score)
                 .is_some_and(|read| read.admits_v1().is_err()),
+            emission_spent: state_params.capacity_emission_active_at(daa_score)
+                && crate::palw_capacity_s567_v1::palw_emission_admits_v1(state.emission_spent_milli_v1(daa_score)).is_err(),
             audit_backlog_full: state_params.capacity_audit_active_at(daa_score) && {
                 let template = crate::palw_state_v2::palw_claim_template_v1(class_id, *key, daa_score, 0, claim_escrow);
                 crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(state_params, &template)

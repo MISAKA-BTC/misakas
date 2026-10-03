@@ -80,6 +80,8 @@ pub struct PalwProducerConfig {
     /// **How long an ATTEMPT capture stays on disk** (`--palw-attempt-retention-minutes`) — see
     /// [`retained_capture_prune_due_v1`]. Free-prompt captures do not read it.
     pub attempt_retention: std::time::Duration,
+    /// **ADR-0164 F-M1: riders per lead** (`--palw-riders`): 0 builds none.
+    pub riders: u32,
     /// **The operator's `--enable-unsynced-mining`, threaded to the producer** — the same escape
     /// the RPC mining path honours (`rpc/service`: `!enable_unsynced_mining && !is_synced` ⇒
     /// refuse). Without it a PALW network cannot be BORN: `should_mine` requires the sink to be
@@ -146,6 +148,9 @@ pub struct PalwProducerService {
     /// `bits` — the count that names a chain whose `bits` has priced the lane out (5f card §10b:
     /// bits at p = 1.5e-3 while every class ticket that won lost here, and nothing said so).
     network_draw_lost: std::sync::atomic::AtomicU64,
+    /// **ADR-0164 F-M1: the `trace_retention_daa` of the lead this producer built last** — a rider carries its lead's, so the riders
+    /// built right after it read it here.
+    last_lead_retention: std::sync::atomic::AtomicU64,
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
@@ -737,6 +742,7 @@ impl PalwProducerService {
             miner_data,
             class_holdings,
             network_draw_lost: std::sync::atomic::AtomicU64::new(0),
+            last_lead_retention: std::sync::atomic::AtomicU64::new(0),
             class_refusal,
         }
     }
@@ -1129,7 +1135,7 @@ impl PalwProducerService {
             last_hold = None;
             last_hold_at = None;
             self.flow_context.update_palw_runtime(|r| r.set_producer("drawing", ""));
-            let outcome = self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await;
+            let outcome = self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, &mut Vec::new()).await;
             let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
             self.flow_context.update_palw_runtime(|r| {
                 r.draws = draws + u64::from(outcome.is_ok());
@@ -1147,6 +1153,30 @@ impl PalwProducerService {
                     info!(
                         "[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket under target; Layer-0 as the fence reads it)"
                     );
+                    // ADR-0164 F-M1: this lead's riders, if the operator asked for them and the fence is armed.
+                    if self.config.riders > 0
+                        && self.consensus_config.params.palw_capacity_riders_active_at_v1(facts.daa_score)
+                        && !self.exiting()
+                    {
+                        let retention = self.last_lead_retention.load(std::sync::atomic::Ordering::Relaxed);
+                        let mut built = Vec::new();
+                        for index in 0..self.config.riders {
+                            if self.exiting() {
+                                break;
+                            }
+                            if let Err(e) = self
+                                .produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
+                                .await
+                            {
+                                warn!("[{PALW_PRODUCER}] rider {index} of {claim} not built: {e}");
+                                break;
+                            }
+                        }
+                        if !built.is_empty() {
+                            info!("[{PALW_PRODUCER}] queues {} rider(s) of lead {claim} (ADR-0164 F-M1, tag 95)", built.len());
+                            crate::palw_rider_outbox::palw_rider_outbox_push_v1(claim, built);
+                        }
+                    }
                     // ADR-0122 Decision 8: the work's own line, by the id every later stage of it
                     // carries — the claim id is the attempt id — beside the prose line above.
                     let id = claim.to_string();
@@ -1314,6 +1344,11 @@ impl PalwProducerService {
         bond: TransactionOutpoint,
         miner_data: MinerData,
         cursor: &mut Option<(Hash64, u64)>,
+        // **ADR-0164 F-M1: `Some((lead, index, retention))` builds RIDER `index` of `lead` instead of a block** — the job under the rider's
+        // derived anchor, the rider's challenge and its lead's retention; the signed envelope is pushed to `riders_out` and no block is
+        // made (`Ok(None)`).
+        rider: Option<(Hash64, u32, u64)>,
+        riders_out: &mut Vec<PalwAttemptEnvelopeV2>,
     ) -> Result<Option<(kaspa_consensus_core::BlockHash, Hash64)>, String> {
         let mut template = self
             .mining_manager
@@ -1347,13 +1382,18 @@ impl PalwProducerService {
         // drawn, and any other template starts at zero. Bucket 2^42 would push the nonce out of
         // its 64 bits; a template that has lost that many draws has long since gone stale.
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-        let nonce_bucket = match *cursor {
-            Some((at, next)) if at == pre_pow && next < (1u64 << (64 - PALW_TICKET_NONCE_BUCKET_LOG2)) => next,
-            _ => 0,
+        let (nonce_bucket, nonce, anchor) = if let Some((lead, index, _)) = rider {
+            // A rider has no header position and draws no bucket: its job is the one its lead and its index derive.
+            (0u64, 0u64, kaspa_consensus_core::palw_capacity_s567_v1::palw_rider_job_anchor_v1(&lead, index))
+        } else {
+            let nonce_bucket = match *cursor {
+                Some((at, next)) if at == pre_pow && next < (1u64 << (64 - PALW_TICKET_NONCE_BUCKET_LOG2)) => next,
+                _ => 0,
+            };
+            *cursor = Some((pre_pow, nonce_bucket + 1));
+            let nonce = nonce_bucket << PALW_TICKET_NONCE_BUCKET_LOG2;
+            (nonce_bucket, nonce, base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond, nonce_bucket))
         };
-        *cursor = Some((pre_pow, nonce_bucket + 1));
-        let nonce = nonce_bucket << PALW_TICKET_NONCE_BUCKET_LOG2;
-        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond, nonce_bucket);
 
         // **The class comes from the CHAIN, not from a constant here.** This resolved the floor by
         // name — `base0_profile_v1(PALW_RC_BASE0_GEOMETRY)` and `palw_rc_base0_artifact_v1()` —
@@ -1580,6 +1620,28 @@ impl PalwProducerService {
             // this header's own DAA score plus the network's lattice windows.
             trace_retention_daa: template.block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
+        // **A rider is done here**: no lottery (it has no position), the challenge and the retention its lead's, signed once, the
+        // material retained as any attempt's.
+        if let Some((lead, index, retention)) = rider {
+            attempt.challenge = kaspa_consensus_core::palw_capacity_s567_v1::palw_rider_challenge_v1(&lead, index);
+            attempt.trace_retention_daa = retention;
+            let kp = self.keypair.as_ref().ok_or("no signing key")?;
+            let message = attempt_id_v2(&attempt);
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &kp.signing_key,
+                message.as_byte_slice(),
+                PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+                [0x5Au8; 32],
+            )
+            .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
+            .as_ref()
+            .to_vec();
+            let material = self.retain_execution(message, &run.material)?;
+            let announced = palw_attempt_announcement_v1(material, None);
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
+            riders_out.push(PalwAttemptEnvelopeV2 { attempt, signature });
+            return Ok(None);
+        }
         // A dummy of the right length so the shape gate sees the real wire size at the draw. The
         // signature is outside the priced bytes, so it changes neither lottery — it is made once,
         // over the attempt id, after the draw is known to have won.
@@ -1680,6 +1742,7 @@ impl PalwProducerService {
                     warn!("[{PALW_PRODUCER}] cannot retain the answer envelope for attempt {message}: {e}");
                 }
             }
+            self.last_lead_retention.store(attempt.trace_retention_daa, std::sync::atomic::Ordering::Relaxed);
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
             template.block.header.finalize();

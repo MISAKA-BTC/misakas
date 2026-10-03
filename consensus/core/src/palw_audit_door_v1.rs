@@ -245,6 +245,22 @@ pub fn palw_capacity_audit_backlog_v1(state: &crate::palw_state_v2::PalwChainSta
     state.claims_iter().filter(|(id, claim)| palw_capacity_awaits_audit_v1(params, claim, state.audit_status_of_v1(id))).count() as u64
 }
 
+/// **ADR-0164 F-K's K6: the credited licences past their audit window** — claims licensed at least
+/// [`crate::palw_capacity_s567_v1::PALW_BREAKER_AUDIT_WINDOW_DAA_V1`] DAA before `now_daa` that still await their audit. Counted over the
+/// claims, once an epoch, by the breaker's evaluation.
+pub fn palw_capacity_audit_overdue_v1(state: &crate::palw_state_v2::PalwChainStateV2, params: &PalwStateParamsV2, now_daa: u64) -> u64 {
+    state
+        .claims_iter()
+        .filter(|(id, claim)| match claim.phase {
+            PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
+                licensed_daa.saturating_add(crate::palw_capacity_s567_v1::PALW_BREAKER_AUDIT_WINDOW_DAA_V1) <= now_daa
+                    && palw_capacity_awaits_audit_v1(params, claim, state.audit_status_of_v1(id))
+            }
+            _ => false,
+        })
+        .count() as u64
+}
+
 /// **What makes a receipt batch INVALID** (the fold refuses the block; the acceptance layer drops the
 /// object first): the auditor is not an operator bond or is excluded; the batch is empty, longer than
 /// [`PALW_AUDIT_RECEIPT_BATCH_MAX_ENTRIES_V1`], or not in strictly increasing claim order; or an entry

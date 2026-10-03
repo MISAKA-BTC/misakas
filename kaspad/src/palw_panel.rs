@@ -12584,6 +12584,13 @@ impl PalwPanelService {
             )
             .await;
 
+            // --- ADR-0164 F-M1: the riders this node's producer built, onto the carrier queue (`palw_rider_outbox`) ---
+            for (lead, object) in crate::palw_rider_outbox::palw_rider_outbox_drain_v1() {
+                let key = (lead, crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1, false);
+                court_due.insert(key, current_daa);
+                court_pending.push((key.0, key.1, key.2, object));
+            }
+
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
                 // Resolve the fee UTXO ONCE per tick and then CHAIN it: the change of a carrier
@@ -14080,6 +14087,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::TrapCommittedV1 { .. } => "TrapCommittedV1",
         PalwConsensusObjectV2::TrapRevealedV1 { .. } => "TrapRevealedV1",
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
+        PalwConsensusObjectV2::AttemptRidersV1 { .. } => "AttemptRidersV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",

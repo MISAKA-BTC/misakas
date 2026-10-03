@@ -11421,6 +11421,37 @@ impl VirtualStateProcessor {
                         return Err(format!("audit receipt batch by {auditor:?}: {why}"));
                     }
                 }
+                // **ADR-0164 F-M1: riders** (tag 95). Past `palw_capacity_multi_claim` only (the bundle's mirror): between one and 64
+                // riders, each of the current attempt version on this network, carrying the challenge its lead and its index derive
+                // (it has no header position), signed by its executor key. Everything stateful — the lead, its window, the bond's room,
+                // the budget, the admission of each rider at its share — is the fold's (step 4b′), which skips a refused batch.
+                Obj::AttemptRidersV1 { lead, riders } => {
+                    use kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION;
+                    if !state_params.capacity_riders_active_at(point.daa_score) {
+                        return Err("an attempt-riders object below palw_capacity_multi_claim (ADR-0164 F-M1)".to_string());
+                    }
+                    if riders.is_empty() || riders.len() > kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
+                        return Err(format!("riders of {lead}: between one and 64 riders a batch"));
+                    }
+                    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    for (index, envelope) in riders.iter().enumerate() {
+                        envelope.validate_shape_v2_at_version(PALW_ATTEMPT_V2_VERSION).map_err(|e| format!("rider {index} of {lead}: {e}"))?;
+                        if envelope.attempt.network_domain != network_domain
+                            || envelope.attempt.challenge
+                                != kaspa_consensus_core::palw_capacity_s567_v1::palw_rider_challenge_v1(lead, index as u32)
+                        {
+                            return Err(format!("rider {index} of {lead}: not bound to this network, its lead and its index"));
+                        }
+                        envelope
+                            .validate_signature_v2(|key, message, sig, context| {
+                                Self::verify_mldsa87_with_context_bool(key, message, sig, context)
+                            })
+                            .map_err(|e| format!("rider {index} of {lead}: {e}"))?;
+                    }
+                }
                 Obj::OptimisticLicensed { claim, receipts } => {
                     if !self.palw_verification_s2_at(point.daa_score) {
                         return Err(format!("claim {claim}: an optimistic licence below Verification S2's fence (ADR-0133)"));
@@ -14072,6 +14103,7 @@ impl VirtualStateProcessor {
             // Lane bind-deadlock: enforced here; only the binder re-check
             // (`palw_v2_anchor_at_ceiling_binder_v1`) waives it.
             exposure_ceiling_waived: false,
+            emission_waived: false,
         }
     }
 
@@ -20346,6 +20378,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
+        O::AttemptRidersV1 { .. } => "AttemptRidersV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         O::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",

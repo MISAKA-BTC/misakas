@@ -82,6 +82,12 @@ pub struct PalwDrillExtraFencesV1 {
     pub capacity_step2_at: Option<u64>,
     pub capacity_step3_at: Option<u64>,
     pub capacity_rho100_at: Option<u64>,
+    /// ADR-0164's ready entries: ρ = 250 and ρ = 1000 (F-L's fourth and fifth steps), F-EM, F-M1 and F-K.
+    pub capacity_step4_at: Option<u64>,
+    pub capacity_step5_at: Option<u64>,
+    pub capacity_emission_at: Option<u64>,
+    pub capacity_multi_claim_at: Option<u64>,
+    pub capacity_rho_breaker_at: Option<u64>,
     pub gen_at: Option<u64>,
     pub decode_rules_at: Option<u64>,
     pub fp_v5_at: Option<u64>,
@@ -126,6 +132,11 @@ impl PalwDrillExtraFencesV1 {
             capacity_step2_at: args.palw_drill_capacity_step2_at,
             capacity_step3_at: args.palw_drill_capacity_step3_at,
             capacity_rho100_at: args.palw_drill_capacity_rho100_at,
+            capacity_step4_at: args.palw_drill_capacity_step4_at,
+            capacity_step5_at: args.palw_drill_capacity_step5_at,
+            capacity_emission_at: args.palw_drill_capacity_emission_at,
+            capacity_multi_claim_at: args.palw_drill_capacity_multi_claim_at,
+            capacity_rho_breaker_at: args.palw_drill_capacity_rho_breaker_at,
             gen_at: args.palw_drill_gen_at,
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
@@ -181,6 +192,16 @@ impl PalwDrillExtraFencesV1 {
             || self.capacity_step2_at.is_some()
             || self.capacity_step3_at.is_some()
             || self.capacity_rho100_at.is_some()
+            || self.capacity2_any()
+    }
+
+    /// Does any of ADR-0164's five flags stand?
+    fn capacity2_any(&self) -> bool {
+        self.capacity_step4_at.is_some()
+            || self.capacity_step5_at.is_some()
+            || self.capacity_emission_at.is_some()
+            || self.capacity_multi_claim_at.is_some()
+            || self.capacity_rho_breaker_at.is_some()
     }
 
     /// The first flag that stands, named (for the unsalted refusal).
@@ -207,6 +228,11 @@ impl PalwDrillExtraFencesV1 {
                 "the capacity ramp's rho = 100 step after rho = 25 (F-L's third step)",
             ),
             ("--palw-drill-capacity-rho100-at", self.capacity_rho100_at, "the capacity ramp's rho = 100 step straight after rho = 10"),
+            ("--palw-drill-capacity-step4-at", self.capacity_step4_at, "the capacity ramp's rho = 250 step (F-L's fourth step)"),
+            ("--palw-drill-capacity-step5-at", self.capacity_step5_at, "the capacity ramp's rho = 1000 step (F-L's fifth step)"),
+            ("--palw-drill-capacity-emission-at", self.capacity_emission_at, "the per-DAA PALW reward budget (palw_capacity_emission_budget, F-EM)"),
+            ("--palw-drill-capacity-multi-claim-at", self.capacity_multi_claim_at, "riders (palw_capacity_multi_claim, F-M1)"),
+            ("--palw-drill-capacity-rho-breaker-at", self.capacity_rho_breaker_at, "the lower-only rho breaker (palw_capacity_rho_breaker, F-K)"),
             ("--palw-drill-gen-at", self.gen_at, "RFC-0003's generative fence (palw_gen_v1)"),
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
@@ -257,11 +283,16 @@ impl PalwDrillExtraFencesV1 {
                 ("--palw-drill-capacity-step2-at", self.capacity_step2_at),
                 ("--palw-drill-capacity-step3-at", self.capacity_step3_at),
                 ("--palw-drill-capacity-rho100-at", self.capacity_rho100_at),
+                ("--palw-drill-capacity-step4-at", self.capacity_step4_at),
+                ("--palw-drill-capacity-step5-at", self.capacity_step5_at),
+                ("--palw-drill-capacity-emission-at", self.capacity_emission_at),
+                ("--palw-drill-capacity-multi-claim-at", self.capacity_multi_claim_at),
+                ("--palw-drill-capacity-rho-breaker-at", self.capacity_rho_breaker_at),
             ];
             if let Some((flag, _)) = per_fence.into_iter().find(|(_, at)| at.is_some()) {
                 return Err(format!(
                     "--palw-drill-int11-at moves the int-11 flag day's whole list (decode rules, gen, FP Job V5, the held leaf challenge, \
-                     improvement, F-N's verification term, rho = 25 at H' and rho = 100 at H' + 95), and {flag} moves one of its entries: \
+                     improvement, F-N's verification term, F-EM, F-M1, F-K, rho = 25 at H', rho = 100 at H' + 95, rho = 250 at H' + 190 and rho = 1000 at H' + 285), and {flag} moves one of its entries: \
                      pick the combined crossing or the per-fence flags"
                 ));
             }
@@ -301,6 +332,26 @@ impl PalwDrillExtraFencesV1 {
         }
         if let Some(at) = self.capacity_step3_at {
             moves.extend(d::palw_drill_capacity_step3_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-step3-at: {e}"))?);
+        }
+        // ADR-0164's entries: the budget, the riders and the breaker before the steps that need them, then ρ = 250 and ρ = 1000.
+        if let Some(at) = self.capacity_emission_at {
+            moves.extend(d::palw_drill_capacity_emission_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-emission-at: {e}"))?);
+        }
+        if let Some(at) = self.capacity_multi_claim_at {
+            moves.extend(
+                d::palw_drill_capacity_multi_claim_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-multi-claim-at: {e}"))?,
+            );
+        }
+        if let Some(at) = self.capacity_rho_breaker_at {
+            moves.extend(
+                d::palw_drill_capacity_rho_breaker_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-rho-breaker-at: {e}"))?,
+            );
+        }
+        if let Some(at) = self.capacity_step4_at {
+            moves.extend(d::palw_drill_capacity_step4_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-step4-at: {e}"))?);
+        }
+        if let Some(at) = self.capacity_step5_at {
+            moves.extend(d::palw_drill_capacity_step5_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-step5-at: {e}"))?);
         }
         if let Some(at) = self.gen_at {
             moves.extend(d::palw_drill_gen_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-gen-at: {e}"))?);
@@ -384,6 +435,23 @@ impl PalwDrillExtraFencesV1 {
         )
     }
 
+    /// The marker's `capacity2_at=` line — ADR-0164's five entries (`none` when none stands, else
+    /// `step4:… step5:… emission:… multi:… breaker:…`), its own line so no earlier line changes its text.
+    fn capacity2_marker_text(&self) -> String {
+        if !self.capacity2_any() {
+            return palw_drill_marker_fence_text_v1(None);
+        }
+        let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
+        format!(
+            "step4:{},step5:{},emission:{},multi:{},breaker:{}",
+            at(self.capacity_step4_at),
+            at(self.capacity_step5_at),
+            at(self.capacity_emission_at),
+            at(self.capacity_multi_claim_at),
+            at(self.capacity_rho_breaker_at)
+        )
+    }
+
     /// **The marker's lines for the flags that came after `extra_at=`** (int-11): one line each — `(key=, flag, text)` —
     /// `none` when absent, also what a marker written before the flag existed counts as, so no earlier line changes its text
     /// and a chain a release line's binary started reopens under this build.
@@ -400,6 +468,11 @@ impl PalwDrillExtraFencesV1 {
             ("fence4_at=", "--palw-drill-fence4-at", palw_drill_marker_fence_text_v1(self.fence4_at)),
             ("class_seating_at=", "--palw-drill-class-seating-at", palw_drill_marker_fence_text_v1(self.class_seating_at)),
             ("panel_liveness_at=", "--palw-drill-panel-liveness-at", palw_drill_marker_fence_text_v1(self.panel_liveness_at)),
+            (
+                "capacity2_at=",
+                "--palw-drill-capacity-step4-at/-step5-at/-emission-at/-multi-claim-at/-rho-breaker-at",
+                self.capacity2_marker_text(),
+            ),
         ]
     }
 
@@ -1032,6 +1105,11 @@ pub fn palw_drill_write_keyring_v4(
         "capacity_step2_at": extra.capacity_step2_at,
         "capacity_step3_at": extra.capacity_step3_at,
         "capacity_rho100_at": extra.capacity_rho100_at,
+        "capacity_step4_at": extra.capacity_step4_at,
+        "capacity_step5_at": extra.capacity_step5_at,
+        "capacity_emission_at": extra.capacity_emission_at,
+        "capacity_multi_claim_at": extra.capacity_multi_claim_at,
+        "capacity_rho_breaker_at": extra.capacity_rho_breaker_at,
         "gen_at": extra.gen_at,
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
