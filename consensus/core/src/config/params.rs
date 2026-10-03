@@ -2893,6 +2893,22 @@ pub struct Params {
     /// it, or with the bundle's mirror unsynced.
     pub palw_tir_fence2: Option<ForkActivation>,
 
+    /// **ADR-0165 (the Useful Work Transition), A: the base floor is a reserve**
+    /// (`crate::palw_real_share_v1`). Past it a `PALW-BASE-0` attempt is refused by name
+    /// (`FloorDormant`; no claim, no reward, no weight) while Final real-class claims in a 60-DAA
+    /// rolling window stand at or above 12, and the reserve returns below 3. A bare height; `None` on
+    /// every preset until the DAA-5,300 flag day arms it. Hashed Some-only (with the ledger's constants)
+    /// in every writer with the `never()` collapse. Refused by [`Self::validate_palw_useful_work_v1`] off
+    /// ConsensusV2, without `palw_model_registry` at or below it, or with the bundle's mirror unsynced.
+    pub palw_floor_reserve_v1: Option<ForkActivation>,
+
+    /// **ADR-0165, B: an attempt-lane block is a clock tick source beside the heartbeat.** The DAA still
+    /// advances once per slot (the cursor's rule); the heartbeat miner waits a grace for an attempt
+    /// before it mints. A bare height; `None` on every preset until the DAA-5,300 flag day arms it.
+    /// Refused by [`Self::validate_palw_useful_work_v1`] without the anchor clock, the single lottery,
+    /// the cursor, the floor and the lead cap at or below it.
+    pub palw_real_clock_tick_v1: Option<ForkActivation>,
+
     /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
     /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
     /// jobs, promotion and rewards (spec 17). The value carries the scoring library's and the sign
@@ -3908,6 +3924,8 @@ impl Params {
         self.validate_palw_fp_job_v5_v1()?;
         // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
         self.validate_palw_tir_fence2()?;
+        // **ADR-0165: the Useful Work Transition's refusals** (`crate::palw_real_share_v1`).
+        self.validate_palw_useful_work_v1()?;
         // **RFC-0004: the improvement fence's own refusals** (`crate::palw_improve_v1`).
         self.validate_palw_improvement_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
@@ -6142,6 +6160,13 @@ impl Params {
         // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
         if self.palw_tir_fence2 == Some(ForkActivation::never()) {
             self.palw_tir_fence2 = None;
+        }
+        // ADR-0165's two fences: Some-only hashed, so the same collapse.
+        if self.palw_floor_reserve_v1 == Some(ForkActivation::never()) {
+            self.palw_floor_reserve_v1 = None;
+        }
+        if self.palw_real_clock_tick_v1 == Some(ForkActivation::never()) {
+            self.palw_real_clock_tick_v1 = None;
         }
         // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -9410,6 +9435,8 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_floor_reserve_v1,
+            palw_real_clock_tick_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_fused_dissectable,
@@ -9649,6 +9676,8 @@ impl Params {
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_tir_fence2", *palw_tir_fence2),
+            ("palw_floor_reserve_v1", *palw_floor_reserve_v1),
+            ("palw_real_clock_tick_v1", *palw_real_clock_tick_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_fused_dissectable", *palw_fused_dissectable),
@@ -9905,6 +9934,19 @@ impl Params {
         // and the DA court from its height.
         if let Some(activation) = self.palw_tir_fence2 {
             h.write(b"palw_tir_fence2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0165, NAMED likewise: the reserve changes which attempts are admitted from its height (the
+        // ledger's constants are part of the rule, so they are hashed with it); the tick changes the DAA.
+        if let Some(activation) = self.palw_floor_reserve_v1 {
+            h.write(b"palw_floor_reserve_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_real_share_v1::palw_floor_reserve_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        if let Some(activation) = self.palw_real_clock_tick_v1 {
+            h.write(b"palw_real_clock_tick_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // RFC-0004, NAMED likewise, with its value reported (not gated).
@@ -10426,6 +10468,8 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_floor_reserve_v1,
+            palw_real_clock_tick_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_fused_dissectable,
@@ -11129,6 +11173,13 @@ impl Params {
         if let Some(activation) = palw_tir_fence2.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0165's two fences: Some-only, bare heights.
+        if let Some(activation) = palw_floor_reserve_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_real_clock_tick_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
         if let Some(fence) = palw_improvement_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -11567,6 +11618,8 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_floor_reserve_v1,
+            palw_real_clock_tick_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_fused_dissectable,
@@ -12316,6 +12369,18 @@ impl Params {
             h.write(b"palw_tir_fence2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0165, Some-only: every shipped preset leaves both `None` and fingerprints byte-identically.
+        if let Some(activation) = palw_floor_reserve_v1 {
+            h.write(b"palw_floor_reserve_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_real_share_v1::palw_floor_reserve_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        if let Some(activation) = palw_real_clock_tick_v1 {
+            h.write(b"palw_real_clock_tick_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // RFC-0004, Some-only: every shipped preset leaves it `None` and fingerprints
         // byte-identically to a build without the field. Armed, the ruleset states its scoring
         // library, its sign-test table, the protocol version and its ceilings.
@@ -12977,6 +13042,8 @@ impl Params {
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_tir_fence2: self.palw_tir_fence2,
+            palw_floor_reserve_v1: self.palw_floor_reserve_v1,
+            palw_real_clock_tick_v1: self.palw_real_clock_tick_v1,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
@@ -14039,6 +14106,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_floor_reserve_v1: None,
+    palw_real_clock_tick_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_kimi_k3: None,
@@ -14298,6 +14367,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_floor_reserve_v1: None,
+    palw_real_clock_tick_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_kimi_k3: None,
@@ -14539,6 +14610,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_floor_reserve_v1: None,
+    palw_real_clock_tick_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_kimi_k3: None,
@@ -21560,6 +21633,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_gen_v1();
     // RFC-0002 Phase F's second IR fence, likewise.
     params.sync_palw_tir_fence2();
+    // ADR-0165's reserve fence, likewise.
+    params.sync_palw_floor_reserve_v1();
     // RFC-0004's improvement fence, likewise.
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
@@ -21820,6 +21895,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_floor_reserve_v1: None,
+    palw_real_clock_tick_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_kimi_k3: None,

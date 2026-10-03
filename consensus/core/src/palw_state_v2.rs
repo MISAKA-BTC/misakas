@@ -1615,6 +1615,11 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **ADR-0165: `Params::palw_floor_reserve_v1`'s height**, mirrored by
+    /// `Params::sync_palw_floor_reserve_v1` for `tir_fence2_from_daa`'s reason (the fold's class gate
+    /// reads it). `None` on every shipped preset.
+    #[borsh(skip)]
+    floor_reserve_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1831,6 +1836,7 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            floor_reserve_from_daa: None,
         })
     }
 
@@ -2138,6 +2144,23 @@ impl PalwStateParamsV2 {
     /// **RFC-0003 decision 22: the held leaf challenge's mirror** — written by
     /// `Params::sync_palw_held_close_chunks_v1` and by nothing else (and by fixtures); `None` where the
     /// fence is not armed.
+    /// **ADR-0165: the floor reserve's mirror** — written by `Params::sync_palw_floor_reserve_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_floor_reserve_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.floor_reserve_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_floor_reserve_v1`'s height, if the network arms it (the mirror).
+    pub fn floor_reserve_from_daa(&self) -> Option<u64> {
+        self.floor_reserve_from_daa
+    }
+
+    /// **Is the base floor a reserve at `daa_score`?** `false` on every shipped preset.
+    pub fn floor_reserve_active_at(&self, daa_score: u64) -> bool {
+        self.floor_reserve_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
     pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.held_close_chunks_from_daa = from_daa;
         self
@@ -9858,6 +9881,13 @@ pub enum PalwStateV2Error {
         "bond {bond:?} holds {unlicensed} unlicensed claims of class {class}, its share of the class is {share} (ADR-0152 T-2(a))"
     )]
     BondClassShareExceeded { bond: PalwBondKeyV2, class: Hash64, unlicensed: u32, share: u64 },
+    /// **ADR-0165: the base floor is a reserve and real-model work is being finalised** — `finals` Final
+    /// real-class claims in the rolling window (dormant at `PALW_REAL_WORK_DORMANT_AT_V1`, active again
+    /// below `PALW_REAL_WORK_ACTIVE_BELOW_V1`). Checked before any write, so step 4 skips a refused own
+    /// attempt and a merged one is skipped generically: no claim is written, so the attempt earns no
+    /// reward and no fork-choice weight. The producer's pre-check asks the same question first.
+    #[error("the base class {class} is a reserve while real-model work is being finalised ({finals} Final real claims in the window; ADR-0165)")]
+    FloorDormant { class: Hash64, finals: u64 },
     /// **ADR-0160 F-B: a batch licence (tag 59) below `Params::palw_capacity_batch_licence`.** The
     /// acceptance layer refuses it first; the block stands and nothing folds.
     #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
@@ -10298,6 +10328,11 @@ pub struct PalwChainStateV2 {
     /// release's retention bound; a class is never removed, so a row never outlives its class. Enters the root
     /// and the carriage (tail `0xE0`) only once written, which nothing below the fence can do.
     class_court_windows: BTreeMap<Hash64, u64>,
+    /// **ADR-0165: the rolling ledger of Final real-class attempt claims and the floor reserve's mode**
+    /// (`crate::palw_real_share_v1`): bucket index -> count, plus two sentinel keys holding the mode and
+    /// the last bucket evaluated. Written only past `Params::palw_floor_reserve_v1`; enters the root and
+    /// the carriage (tail `0xEA`) only when non-empty, so a dormant network roots exactly as before.
+    real_work: BTreeMap<u64, u64>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -10795,6 +10830,7 @@ impl PalwChainStateV2 {
             held_leaf_demands: BTreeMap::new(),
             class_step_ladders: BTreeMap::new(),
             class_court_windows: BTreeMap::new(),
+            real_work: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -11991,6 +12027,11 @@ impl PalwChainStateV2 {
         self.class_court_windows.get(class_id).copied()
     }
 
+    /// **ADR-0165: the floor reserve's rolling ledger** (`crate::palw_real_share_v1`).
+    pub fn real_work_ledger(&self) -> &BTreeMap<u64, u64> {
+        &self.real_work
+    }
+
     /// The registered class's finite dispute backstop, or the network default.
     pub fn class_court_window_v1(&self, class_id: &Hash64, network_window: u64) -> u64 {
         self.class_model_court_window_v1(class_id).unwrap_or(network_window)
@@ -12986,6 +13027,11 @@ impl PalwChainStateV2 {
         }
         if !self.class_court_windows.is_empty() {
             state.update(collection_root(b"class_court_windows", &self.class_court_windows).as_byte_slice());
+        }
+        // **ADR-0165.** Its own block, for the same reason: empty until a Final real-class claim is
+        // recorded past `Params::palw_floor_reserve_v1`, which nothing below the fence can do.
+        if !self.real_work.is_empty() {
+            state.update(collection_root(b"real_work", &self.real_work).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
@@ -14977,6 +15023,13 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
+    /// **101: one row of the Useful Work Transition's ledger** (`real_work`, ADR-0165). Appended at the
+    /// end of the enum; written only past `palw_floor_reserve_v1`, so no stored delta carries it below.
+    RealWork {
+        key: u64,
+        old: Option<u64>,
+        new: Option<u64>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -15860,6 +15913,19 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
+        // **ADR-0165: the base floor is a reserve.** First, before any lifecycle or room question: a
+        // dormant reserve takes no attempt whatever room it has.
+        if incoming == PalwGatedClaimV1::Attempt
+            && self.params.floor_reserve_active_at(now_daa)
+            && *class_id == self.params.base_class_id()
+            && crate::palw_real_share_v1::palw_real_work_dormant_at_v1(&self.state.real_work, now_daa)
+        {
+            let bucket = crate::palw_real_share_v1::palw_real_work_bucket_v1(now_daa);
+            return Err(PalwStateV2Error::FloorDormant {
+                class: *class_id,
+                finals: crate::palw_real_share_v1::palw_real_work_count_v1(&self.state.real_work, bucket),
+            });
+        }
         // ADR-0160 X-I5: past `palw_capacity_escrow_at_licence` no attempt of a class C7 by its window
         // but absent from C7's list — its escrow term would be priced as attributable.
         crate::palw_escrow_funding_v2::palw_escrow_class_gate_v1(
@@ -18576,6 +18642,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassStepLadder { key, old, new });
+        }
+    }
+
+    fn write_real_work(&mut self, key: u64, new: Option<u64>) {
+        let old = match new {
+            Some(v) => self.state.real_work.insert(key, v),
+            None => self.state.real_work.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RealWork { key, old, new });
         }
     }
 
@@ -25707,6 +25783,14 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
         self.note_final_work(&id, claim, final_daa);
+        // ADR-0165: a Final real-class attempt claim is one unit of the reserve's rolling ledger.
+        if matches!(claim.source, PalwClaimSourceV2::Attempt)
+            && self.params.floor_reserve_active_at(final_daa)
+            && claim.class_id != self.params.base_class_id()
+        {
+            let (key, _old, new) = crate::palw_real_share_v1::palw_real_work_note_final_v1(&self.state.real_work, final_daa);
+            self.write_real_work(key, new);
+        }
         // RFC-0004 (spec 17 §17.4.5): a Final claim of a governed line's head counts toward its trigger.
         self.note_improvement_usage_at_final_v1(claim, final_daa);
         // RFC-0004 A6 (MIP-17): an evaluation claim's Final records its score and pays its fee.
@@ -26867,6 +26951,14 @@ pub fn palw_v2_pre_object_base_v1(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
+    // 1e. ADR-0165: the floor reserve's mode, re-evaluated at the first block of each bucket — before the
+    //     sweeps, so the Finals this block records land in the bucket it is in and never in the window
+    //     it was just judged by, and before any attempt, so own and merged attempts read one mode.
+    if params.floor_reserve_active_at(ctx.daa_score) {
+        for (key, _old, new) in crate::palw_real_share_v1::palw_real_work_roll_v1(&builder.state.real_work, ctx.daa_score) {
+            builder.write_real_work(key, new);
+        }
+    }
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -27237,6 +27329,14 @@ pub fn apply_palw_transition_v7(
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
+    // 1e. ADR-0165: the floor reserve's mode, re-evaluated at the first block of each bucket — before the
+    //     sweeps, so the Finals this block records land in the bucket it is in and never in the window
+    //     it was just judged by, and before any attempt, so own and merged attempts read one mode.
+    if params.floor_reserve_active_at(ctx.daa_score) {
+        for (key, _old, new) in crate::palw_real_share_v1::palw_real_work_roll_v1(&builder.state.real_work, ctx.daa_score) {
+            builder.write_real_work(key, new);
+        }
+    }
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -27472,6 +27572,8 @@ pub fn apply_palw_transition_v7(
                     | PalwStateV2Error::ProducerBelowFloor { .. }
                     | PalwStateV2Error::BondClassShareExceeded { .. }
                     | PalwStateV2Error::ProducerFrozen { .. }
+                    // ADR-0165: the reserve's gate is checked first in the class gate, before any write.
+                    | PalwStateV2Error::FloorDormant { .. }
                     // ADR-0160 F-R (J-6): the floor room, for the share's reason — this block's own
                     // objects move the seats' capital under the producer — and checked, like it,
                     // before `apply_attempt`'s first write. Unreachable below the fence.
@@ -37852,6 +37954,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.improvement_composite_classes, key, old, new)
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
+        PalwDeltaEntryV2::RealWork { key, old, new } => swap_write!(state.real_work, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -38227,6 +38330,8 @@ pub struct PalwStateCarriageV2 {
     pub class_step_ladders: BTreeMap<Hash64, u64>,
     /// Model-specific court backstops in appended tail `0xC2`, present only when non-empty.
     pub class_court_windows: BTreeMap<Hash64, u64>,
+    /// ADR-0165: the Useful Work Transition's ledger, in appended tail `0xEA`, present only when non-empty.
+    pub real_work: BTreeMap<u64, u64>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -38552,6 +38657,10 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
 /// `0xE0` or above in any branch; `model_court_window_tail_is_pinned_at_0xe0` pins the value.
 const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
 
+/// **ADR-0165: the Useful Work Transition's ledger** (`real_work`). `0xEA`: past `0xE0` (the court
+/// windows) and clear of every tail another lane of the DAA-5,300 release was told to take.
+const PALW_CARRIAGE_REAL_WORK_TAIL_V1: u8 = 0xEA;
+
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
 /// snapshot written by another `PALW_STATE_V2_VERSION` has other record layouts, so decoding it fails
@@ -38861,6 +38970,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1.serialize(writer)?;
             self.class_court_windows.serialize(writer)?;
         }
+        if !self.real_work.is_empty() {
+            PALW_CARRIAGE_REAL_WORK_TAIL_V1.serialize(writer)?;
+            self.real_work.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -39034,6 +39147,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_eval_jobs = false;
         let mut class_court_windows = BTreeMap::new();
         let mut seen_class_court_windows = false;
+        let mut real_work = BTreeMap::new();
+        let mut seen_real_work = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -39272,6 +39387,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_court_windows = true;
                     class_court_windows = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_REAL_WORK_TAIL_V1 if !seen_real_work => {
+                    seen_real_work = true;
+                    real_work = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -39402,6 +39521,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_composite_classes,
             improvement_eval_jobs,
             class_court_windows,
+            real_work,
         })
     }
 }
@@ -39510,6 +39630,7 @@ impl PalwStateCarriageV2 {
             improvement_composite_classes: state.improvement_composite_classes.clone(),
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             class_court_windows: state.class_court_windows.clone(),
+            real_work: state.real_work.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -39721,6 +39842,7 @@ impl PalwStateCarriageV2 {
             improvement_licence_expiries: BTreeSet::new(),
             improvement_eval_claims: BTreeMap::new(),
             class_court_windows: self.class_court_windows,
+            real_work: self.real_work,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -57736,6 +57858,7 @@ pub(crate) mod tests {
             improvement_composite_classes: _,
             improvement_eval_jobs: _,
             class_court_windows: _,
+            real_work: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
