@@ -1768,7 +1768,7 @@ mod tests {
         assert!(why.contains("--palw-drill-capacity-network-room-at") && why.contains("does not validate"), "{why}");
         let straight = config_of(&parsed(&["--palw-drill-capacity-rho100-at=30"]));
         // The release's own third step (ρ = 100 at H + 95) stays: the same ρ, so it changes nothing past 30.
-        assert_eq!(ramp(&straight), vec![(14, 10), (30, 100), (rho100, 100)]);
+        assert_eq!(ramp(&straight), vec![(14, 10), (30, 100), (rho100, 100), (5490, 250), (5585, 1000)]);
         // Refused by name, never by a panic: step 3 without step 2, a height not above the step before, both ramps.
         let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-step3-at=40"])).unwrap_err().to_string();
         // The release carries step 2 at H, so step 3 alone below it is refused for its height (before the release: for the missing step).
