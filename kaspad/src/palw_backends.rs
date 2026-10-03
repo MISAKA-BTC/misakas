@@ -1322,6 +1322,20 @@ pub fn load_class_holdings_v1(
             }
         }
     }
+    // **Token-table sidecars beside the artifacts load automatically** (`<artifact>.palwtokens`); `--palw-token-table` still adds
+    // or overrides (the root-keyed set holds both).
+    match load_token_table_sidecars_v1(&holdings) {
+        Ok(loaded) => {
+            for (path, root, ids) in loaded {
+                info!("[{role}] token table sidecar {}: {ids} ids, root {root}", path.display());
+            }
+        }
+        Err(why) => {
+            println!("{why}");
+            error!("[{role}] {why}");
+            std::process::exit(1);
+        }
+    }
     // **The sidecar, said out loud at load** — once per artifact, where the operator is already
     // reading, rather than on a resolve that retries every thirty seconds.
     //
@@ -3591,6 +3605,31 @@ pub fn load_token_tables_v1(paths: &[std::path::PathBuf]) -> Result<Vec<(std::pa
     Ok(loaded)
 }
 
+/// **The token-table sidecar beside a class artifact**: `<artifact>.palwtokens`, the file `palw-a16-fp-worker --emit-token-table`
+/// writes (`PALWTTB1`).
+pub fn token_table_sidecar_path_v1(artifact: &std::path::Path) -> std::path::PathBuf {
+    let mut name = artifact.as_os_str().to_owned();
+    name.push(".palwtokens");
+    std::path::PathBuf::from(name)
+}
+
+/// **Load the token table of every held class artifact that has a sidecar** (ADR-0096 Decision 8, automatic). The table is
+/// registered under the root this node derives from its bytes; a constrained claim selects its table by the root the job
+/// COMMITS (`PalwFpConstraintTailV1::table_root`), so a sidecar that does not match a claim's committed root is simply never
+/// used for it (the seat abstains `Unverifiable`) and a hostile one cannot be substituted. An artifact with no sidecar is not an
+/// error — `--palw-token-table` remains the override — but a sidecar that does not decode is a refusal, by name.
+pub fn load_token_table_sidecars_v1(
+    holdings: &[PalwLoadedArtifactV1],
+) -> Result<Vec<(std::path::PathBuf, kaspa_hashes::Hash64, usize)>, String> {
+    let paths: Vec<std::path::PathBuf> = holdings
+        .iter()
+        .filter_map(|h| h.path.as_ref())
+        .map(|artifact| token_table_sidecar_path_v1(artifact))
+        .filter(|sidecar| sidecar.is_file())
+        .collect();
+    load_token_tables_v1(&paths)
+}
+
 #[cfg(test)]
 mod token_table_tests {
     use super::*;
@@ -3630,6 +3669,20 @@ mod token_table_tests {
             assert!(err.contains(needle) && err.contains("--palw-token-table"), "{name}: {err}");
         }
         assert!(load_token_tables_v1(&[dir.join("absent")]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sidecar_sits_beside_the_artifact_and_loads_by_the_same_loader() {
+        let table = PalwTokenTableV1 { entries: vec![Some(b"x".to_vec()), Some(b"<e>".to_vec())], eog_token_ids: vec![1], tokenizer_id: kaspa_hashes::Hash64::from_u64_word(0x71) };
+        let dir = std::env::temp_dir().join(format!("palw-token-sidecar-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let artifact = dir.join("model.gguf");
+        let sidecar = token_table_sidecar_path_v1(&artifact);
+        assert_eq!(sidecar.file_name().unwrap(), "model.gguf.palwtokens");
+        std::fs::write(&sidecar, palw_token_table_file_encode_v1(&table)).unwrap();
+        let loaded = load_token_tables_v1(&[sidecar]).expect("the sidecar loads");
+        assert_eq!(loaded[0].1, table.root());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

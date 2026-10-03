@@ -226,6 +226,39 @@ pub fn palw_fp_prefix_stand_in_v1(payload: &PalwFpCommitmentTxPayloadV3) -> Palw
     stand_in
 }
 
+/// The walk's refusal text for a version-12 claim over a class that is not inheritance-safe.
+pub const PALW_FP_PREFIX_INHERIT_CLASS_REFUSAL_V1: &str =
+    "an inherited-prefix claim (FP job version 12) over a class whose leaves are not inheritance-safe (fused attention, KV aux, held, IR/generative, or no published integer-lane profile)";
+
+/// **RFC-0001 stage 2b admission: which classes may carry inherited prefix leaves.** Only a class proven so: a dense integer-lane class
+/// (`PalwStepLaneV1::Int32`) with a published profile, no KV aux series (`kv_chunk_calls == 0`), no fused-attention court window,
+/// not held, not an IR or generative class. Everything else (fused attention, KV aux, checkpoint-inheriting kinds, unproven kinds)
+/// is refused by name. `Err` carries the reason.
+pub fn palw_fp_prefix_inherit_class_safe_v1(
+    profile: Option<&crate::palw_step::PalwShapeProfileV3>,
+    held: bool,
+    ir_or_generative: bool,
+    has_court_window: bool,
+) -> Result<(), &'static str> {
+    if held {
+        return Err("a held class's leaves are not inheritance-safe");
+    }
+    if ir_or_generative {
+        return Err("an IR or generative class is not a proven inheritance-safe kind");
+    }
+    if has_court_window {
+        return Err("a class with a fused-attention court window is not inheritance-safe");
+    }
+    let Some(profile) = profile else { return Err("the class published no shape profile") };
+    if profile.lane != crate::palw_step::PalwStepLaneV1::Int32 {
+        return Err("only the integer lane is a proven inheritance-safe kind");
+    }
+    if profile.kv_chunk_calls != 0 {
+        return Err("a class with a KV aux series is not inheritance-safe");
+    }
+    Ok(())
+}
+
 /// **Is this FP payload a prefix-state claim's?** Its job's version word — bytes 2..4, after the payload's own version —
 /// is [`PALW_FP_PREFIX_VERSION`]. Nothing else is read.
 pub fn palw_fp_payload_is_prefix_v1(payload: &[u8]) -> bool {
@@ -366,6 +399,23 @@ pub fn palw_fp_prefix_walk_view_v1(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inheritance_admission_refuses_every_unproven_kind_by_name() {
+        use super::palw_fp_prefix_inherit_class_safe_v1 as safe;
+        let base = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("floor profile");
+        assert_eq!(safe(Some(&base), false, false, false), Ok(()));
+        assert!(safe(Some(&base), true, false, false).unwrap_err().contains("held"));
+        assert!(safe(Some(&base), false, true, false).unwrap_err().contains("IR or generative"));
+        assert!(safe(Some(&base), false, false, true).unwrap_err().contains("fused-attention"));
+        assert!(safe(None, false, false, false).unwrap_err().contains("no shape profile"));
+        let mut kv = base.clone();
+        kv.kv_chunk_calls = 4;
+        assert!(safe(Some(&kv), false, false, false).unwrap_err().contains("KV aux"));
+        let mut float = base.clone();
+        float.lane = crate::palw_step::PalwStepLaneV1::Float32;
+        assert!(safe(Some(&float), false, false, false).unwrap_err().contains("integer lane"));
+    }
+
     use super::*;
     use crate::constants::TX_VERSION;
     use crate::palw_decode_pipeline_v4::DecodeConfigV4;
@@ -472,7 +522,7 @@ mod tests {
                 derived_work: PalwFpDerivedWorkCapV1::Declared,
                 logits_q24: true,
                 prefix_state_armed: armed,
-                prefix_inherit_armed: false,
+                prefix_inherit_armed: false, prefix_inherit_class_safe: false,
                 constraint_armed: false,
                 constraint_v2_armed: false,
                 tokenizer,

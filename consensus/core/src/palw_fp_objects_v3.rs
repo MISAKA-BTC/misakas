@@ -208,7 +208,7 @@ where
             derived_work: PalwFpDerivedWorkCapV1::Declared,
             logits_q24: true,
             prefix_state_armed: false,
-            prefix_inherit_armed: false,
+            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -247,6 +247,10 @@ pub struct PalwFpClassCapsV1<'a> {
     /// **RFC-0001 §2.6 stage 2b: whether `Params::palw_fp_prefix_inherit` is in force at the accepting block** — an
     /// inherited-prefix claim (FP job version 12) is skipped by name where it is not.
     pub prefix_inherit_armed: bool,
+    /// **RFC-0001 stage 2b: whether the class's leaves are inheritance-safe**
+    /// ([`crate::palw_fp_prefix_v1::palw_fp_prefix_inherit_class_safe_v1`]) — an inherited-prefix claim (FP job version 12)
+    /// naming any other class is skipped by name.
+    pub prefix_inherit_class_safe: bool,
     /// **ADR-0096 Decision 8: whether `Params::palw_fp_decode_constraint` is in force at the accepting block** — a
     /// constrained claim (FP job version 6) is skipped by name where it is not.
     pub constraint_armed: bool,
@@ -341,6 +345,11 @@ where
                 continue;
             }
         };
+        // **RFC-0001 stage 2b admission: a version-12 claim only over a class whose leaves are inheritance-safe.**
+        if payload.commitment.job.is_prefix_inherit() && !caps.prefix_inherit_class_safe {
+            out.skipped.push((id, crate::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_CLASS_REFUSAL_V1));
+            continue;
+        }
         // **ADR-0096 Decision 7: a constrained claim (FP job version 6) is judged on its V3 stand-in** — a constrained job
         // is a V3 job, so its view meets the V3 rule whatever the decode-rules fence says.
         let constrained = payload.commitment.job.is_constraint();
@@ -699,7 +708,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
             prefix_state_armed: false,
-            prefix_inherit_armed: false,
+            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -769,7 +778,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24,
             prefix_state_armed: false,
-            prefix_inherit_armed: false,
+            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -892,7 +901,7 @@ mod tests {
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
                         logits_q24: true,
                         prefix_state_armed: false,
-                        prefix_inherit_armed: false,
+                        prefix_inherit_armed: false, prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
                         tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -1395,7 +1404,7 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, prefix_inherit_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, prefix_inherit_armed: false, prefix_inherit_class_safe: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
                 },
                 false,
                 true,

@@ -4,7 +4,7 @@ Everything here changes what a gateway/worker serves and nothing a block contain
 
 | need | flag | notes |
 |---|---|---|
-| KV prefix cache (§2.6 stage 1) | worker `--kv-cache-budget-mib N`, `--kv-cache-verify-every K` (via the gateway) | LRU by bytes; keyed by class, tokenizer and the exact prefix ids. A boot self-check and a sampled re-prefill (every K-th hit, logits and K/V) disable the cache for good on any difference. Serves the **answer-only** path (`--no-answer-fast-path` turns that path off): the committed run still folds every prefill tile under a ctx-bound leaf hash, so it is not faster — an inherited-leaf form (stage 2b) is not built. |
+| KV prefix cache (§2.6 stage 1) | worker `--kv-cache-budget-mib N`, `--kv-cache-verify-every K` (via the gateway) | LRU by bytes; keyed by class, tokenizer and the exact prefix ids. A boot self-check and a sampled re-prefill (every K-th hit, logits and K/V) disable the cache for good on any difference. Serves the **answer-only** path (`--no-answer-fast-path` turns that path off): the committed run still folds every prefill tile under a ctx-bound leaf hash, so it is not faster — the inherited-leaf form (stage 2b, FP job version 12, `palw_fp_prefix_inherit`) is built at the consensus level but is NOT a speed-up yet: no executor compute saving and no seat-side prefix-leaf cache (both after the 10-04 freeze). |
 | concurrency (§2.7) | gateway `--worker-processes N`, `--max-connections-per-source`, `--max-jobs-per-source` | N resident workers per class (each holds the artifact: mind RAM); the decode scheduler batches the `n` candidates and concurrent requests, batch-invariant (a sequence's ids are what it selects alone — golden tested at engine, scheduler, backend and frame level). |
 | `n > 1` (§2.4) | request `n` (≤ 8) | candidate `i` runs under seed `H(base_seed ‖ i)`; each is an ordinary job. |
 | local embeddings (§2.8) | `POST /v1/embeddings`, `misaka.pool` mean/last, `misaka.normalize` | local only: no job, no claim, no reward. `misaka.claim: true` is refused by name (the claim form is RFC-0003's `Embedding` profile, `tensor::embedding_claim_job_v1`). |
@@ -17,6 +17,8 @@ Everything here changes what a gateway/worker serves and nothing a block contain
 listed one), `palw_fp_constraint_v2` (the second constraint form: bigger bounds, JSON Schema `$ref` / `anyOf` / integer ranges compiled by
 `misaka-palw-constraint::compile_v2`; rides `palw_fp_decode_constraint`, now armable), `palw_adapter_class_v1`
 (ADR-0163, object tag 94). Salted drills arm them with `--palw-drill-fp-prefix-at`, `--palw-drill-fp-tokenizer-at`, `--palw-drill-fp-constraint2-at`,
-`--palw-drill-adapter-at` (each over its prerequisites, refused by name otherwise).
+`--palw-drill-adapter-at`; stage 2b (`palw_fp_prefix_inherit`, FP job version 12, admitted only over classes proven inheritance-safe: integer lane, no KV aux, no fused-attention window, not held/IR/generative) with `--palw-drill-fp-prefix-inherit-at` (each over its prerequisites, refused by name otherwise).
 
-Drill: `scripts/misaka-palw-rfc1-drill.sh dry|wait-lock|run` (never takes a held `DRILL.lock`).
+Token tables: a seat registers `<artifact>.palwtokens` beside each held class artifact at start (the file `palw-a16-fp-worker --emit-token-table` writes); `--palw-token-table` still adds or overrides. A table is selected by the root a constrained job commits, so a sidecar with another root is never used for it.
+
+Drill: `scripts/misaka-palw-rfc1-drill.sh dry|run` (never takes a held `DRILL.lock`). Claim producer: `misaka-palw-rfc1-drill-claim` + `scripts/misaka-palw-rfc1-drill-claims.sh constraint|constraint2|prefix|inherit` (floor class; the adapter listing has none).

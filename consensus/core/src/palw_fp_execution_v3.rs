@@ -145,8 +145,19 @@ pub fn palw_fp_job_context_v3(
             max: job.max_context_tokens,
         });
     }
+    // **RFC-0001 §2.6 stage 2b: an inherited-prefix job (version 12) binds its first `k` prefill positions' step leaves to the
+    // job-independent prefix context**, which a version-3 context names: `job_nullifier` carries `k` and `assignment_id` the
+    // prefix state's root (the free-prompt lane zeroes both otherwise). Every other job is a version-2 context, byte for byte.
+    let (version, job_nullifier, assignment_id) = match crate::palw_fp_prefix_v1::palw_fp_prefix_tail_v1(job) {
+        Some(state) if job.is_prefix_inherit() => (
+            crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V3_INHERITED,
+            Hash64::from_u64_word(u64::from(state.prefix_tokens)),
+            state.state_root,
+        ),
+        _ => (crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2, Hash64::default(), Hash64::default()),
+    };
     Ok(PalwJobContextV2 {
-        version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+        version,
         network_id: network_id.to_vec(),
         // The job id IS the job's identity; reusing it rather than minting a second one is what
         // keeps "which job is this" a single answer across the two lanes.
@@ -155,8 +166,8 @@ pub fn palw_fp_job_context_v3(
         // against and no assignment to name. Zeroing them is the honest encoding of "this concept
         // does not apply here"; inventing values would make two lanes' contexts look alike while
         // meaning different things.
-        job_nullifier: Hash64::default(),
-        assignment_id: Hash64::default(),
+        job_nullifier,
+        assignment_id,
         // **Audit H7, closed on this lane: the seed is DERIVED, never supplied.**
         //
         // `execution_seed` is a free field on the V2 envelope — carriage never inspects it — so

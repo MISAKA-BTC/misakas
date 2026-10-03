@@ -914,7 +914,7 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
                     prefix_state_armed: false,
-                    prefix_inherit_armed: false,
+                    prefix_inherit_armed: false, prefix_inherit_class_safe: false,
                     constraint_armed: armed,
                     constraint_v2_armed: v2,
                     tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,

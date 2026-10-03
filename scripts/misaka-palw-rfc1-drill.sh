@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# misaka-palw-rfc1-drill.sh — RFC-0001 drill: the five dormant fences crossed on the SHIPPING binary of the branch.
+# misaka-palw-rfc1-drill.sh — RFC-0001 drill: the six dormant fences crossed on the SHIPPING binary of the branch.
 #
 # One salted drill chain (the runner and node layout are audit-tir/df.sh's, or the int-11 drill's: `up` starts every node —
 # the `old` relay last: the release before these fences, keyless, the same salt and flag days, none of the --palw-drill-*
@@ -16,7 +16,7 @@
 #   runner's own flag-day lists — `dry` prints what is missing.)
 #
 # What it shows, each from log bytes written after its own cursor and from RPC:
-#   old      the old relay runs this drill and moved none of the five fences
+#   old      the old relay runs this drill and moved none of the six fences
 #   below    below each fence, the claim/object the CLAIM COMMAND submits is refused by name and the block stands:
 #              "[palw-fp] carrier … produced no object: a constrained claim (FP job version 6) below palw_fp_decode_constraint"
 #              "[palw-fp] carrier … produced no object: a prefix-state claim (FP job version 11) below palw_fp_prefix_state"
@@ -39,12 +39,14 @@
 #   SUBMIT_PREFIX_CMD       produce a prompt with a cached prefix and submit the version-11 claim
 #   SUBMIT_ADAPTER_CMD      register a composite class (a LoRA over the drill class) and list it (tag 94)
 #   Each is called with BELOW=1 while below its fence (the submission must then be refused by name) and BELOW=0 past it.
-#   They are the lane's producers and are NOT in this repository's drill kit yet: without them `below`/`above` are INCOMPLETE,
-#   and the in-process e2e tests (misaka-palw-base0/tests/fp_job_v4_t12_e2e.rs: the V11 and V6 claims; the processor gate
-#   t12_an_adapter_class_listing_is_gated_...) are the evidence of the flow until they exist.
+#   SUBMIT_CONSTRAINT_CMD and SUBMIT_PREFIX_CMD default to scripts/misaka-palw-rfc1-drill-claims.sh (the floor-class producer
+#   `misaka-palw-rfc1-drill-claim` + the executor rail; needs BOND_KEY_SEED and CLASS_ID, see that script; the nodes must hold the
+#   token table it writes). SUBMIT_INHERIT_CMD (stage 2b, FP job version 12) defaults to `claims.sh inherit`; SUBMIT_ADAPTER_CMD to
+#   `claims.sh adapter`, which lists the RFC-0004 drill's composite `winc` (audit-improve/dm.sh composites: H + a PALWTIRS adapter section)
+#   as an adapter class (needs MODEL_DIR, TOOLS_BIN, FUNDING_KEY_FILE and H/winc registered on the chain; see that script).
 #
 # ENV: SALT (else $WORK_DIR/SALT), WORK_DIR (~/.misaka-palw-rfc1-drill), KASPAD_BIN (the branch's shipping binary),
-#   OLD_KASPAD_BIN (the int-11 release or earlier), CLI_BIN, the five heights (defaults 6 / 8 / 10 / 12 / 14, all below
+#   OLD_KASPAD_BIN (the int-11 release or earlier), CLI_BIN, the six heights (defaults 6 / 8 / 10 / 12 / 14 / 16 = INHERIT_AT, all below
 #   CROSS_AT = 20, none equal to another fence's height in the runner's lists: the fork id hashes sorted heights),
 #   NEW0_P2P (56200) NEW0_RPC (57200) NEW0_LOG, OLD_P2P (56208) OLD_RPC (57208) OLD_LOG, LOCK_DIR
 #   (~/Downloads/MISAKA-wt-b/lanes/DRILL.lock), LANE (U), LOCK_POLL (300 s), STALL_WAIT (3600 s), STEP_WAIT (43200 s).
@@ -55,11 +57,19 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
 OLD_KASPAD_BIN="${OLD_KASPAD_BIN:-}"
 CLI_BIN="${CLI_BIN:-$(dirname "$KASPAD_BIN")/misaka}"
+# The claim producers (scripts/misaka-palw-rfc1-drill-claims.sh over misaka-palw-rfc1-drill-claim and the executor rail): the defaults
+# for the three SUBMIT_*_CMD below; set them to override. The adapter listing has no floor producer (it needs a composite class).
+CLAIMS_HELPER="$REPO_ROOT/scripts/misaka-palw-rfc1-drill-claims.sh"
+SUBMIT_CONSTRAINT_CMD="${SUBMIT_CONSTRAINT_CMD:-$CLAIMS_HELPER constraint && $CLAIMS_HELPER constraint2}"
+SUBMIT_PREFIX_CMD="${SUBMIT_PREFIX_CMD:-$CLAIMS_HELPER prefix}"
+SUBMIT_INHERIT_CMD="${SUBMIT_INHERIT_CMD:-$CLAIMS_HELPER inherit}"
+SUBMIT_ADAPTER_CMD="${SUBMIT_ADAPTER_CMD:-$CLAIMS_HELPER adapter}"
 CONSTRAINT_AT="${CONSTRAINT_AT:-6}"
 CONSTRAINT2_AT="${CONSTRAINT2_AT:-8}"
 PREFIX_AT="${PREFIX_AT:-10}"
 TOKENIZER_AT="${TOKENIZER_AT:-12}"
 ADAPTER_AT="${ADAPTER_AT:-14}"
+INHERIT_AT="${INHERIT_AT:-16}"
 CROSS_AT="${CROSS_AT:-20}"
 NEW0_P2P="${NEW0_P2P:-56200}"
 NEW0_RPC="${NEW0_RPC:-57200}"
@@ -75,7 +85,7 @@ STEP_WAIT="${STEP_WAIT:-43200}"
 UHOME="$WORK_DIR/userhome"
 EVIDENCE="$WORK_DIR/evidence/rfc1"
 PUBLIC_T12_PORTS="26311 26210 27210 28210 8545 26312 26313 26314 26321 26323 26324 26331 26333 26334 26341 26343 26344 26351 26353 26354"
-FLAGS="--palw-drill-fp-constraint-at --palw-drill-fp-constraint2-at --palw-drill-fp-prefix-at --palw-drill-fp-tokenizer-at --palw-drill-adapter-at"
+FLAGS="--palw-drill-fp-constraint-at --palw-drill-fp-constraint2-at --palw-drill-fp-prefix-at --palw-drill-fp-prefix-inherit-at --palw-drill-fp-tokenizer-at --palw-drill-adapter-at"
 
 RC_FAIL=1
 RC_INCOMPLETE=3
@@ -92,12 +102,13 @@ load_salt() {
 need_env() {
   load_salt
   local v p q
-  for v in CONSTRAINT_AT CONSTRAINT2_AT PREFIX_AT TOKENIZER_AT ADAPTER_AT CROSS_AT NEW0_P2P NEW0_RPC OLD_P2P OLD_RPC; do
+  for v in CONSTRAINT_AT CONSTRAINT2_AT PREFIX_AT TOKENIZER_AT ADAPTER_AT INHERIT_AT CROSS_AT NEW0_P2P NEW0_RPC OLD_P2P OLD_RPC; do
     [[ "${!v}" =~ ^[0-9]+$ ]] || die "$v must be a number"
   done
   # Five distinct heights, the first fence a prerequisite of the second (constraint ≤ constraint2), all below CROSS_AT.
-  local heights="$CONSTRAINT_AT $CONSTRAINT2_AT $PREFIX_AT $TOKENIZER_AT $ADAPTER_AT"
-  [ "$(printf '%s\n' $heights | sort -n | uniq | wc -l | tr -d ' ')" = 5 ] || die "the five fence heights must be distinct (got $heights)"
+  local heights="$CONSTRAINT_AT $CONSTRAINT2_AT $PREFIX_AT $TOKENIZER_AT $ADAPTER_AT $INHERIT_AT"
+  [ "$(printf '%s\n' $heights | sort -n | uniq | wc -l | tr -d ' ')" = 6 ] || die "the six fence heights must be distinct (got $heights)"
+  [ "$PREFIX_AT" -le "$INHERIT_AT" ] || die "PREFIX_AT must be at or below INHERIT_AT (version 12 is a prefix-state job)"
   [ "$CONSTRAINT_AT" -le "$CONSTRAINT2_AT" ] || die "CONSTRAINT_AT must be at or below CONSTRAINT2_AT (the second form rides the first)"
   for v in $heights; do [ "$v" -gt 0 ] && [ "$v" -lt "$CROSS_AT" ] || die "fence height $v must be in 1..CROSS_AT-1 ($CROSS_AT)"; done
   for p in "$NEW0_P2P" "$NEW0_RPC" "$OLD_P2P" "$OLD_RPC"; do
@@ -160,15 +171,15 @@ cmd_dry() {
     log "dry: OLD_KASPAD_BIN is not an executable (the int-11 release)"; problems=1
   fi
   [ -x "$CLI_BIN" ] || { log "dry: no misaka CLI at $CLI_BIN"; problems=1; }
-  for f in SUBMIT_CONSTRAINT_CMD SUBMIT_PREFIX_CMD SUBMIT_ADAPTER_CMD; do
+  for f in SUBMIT_CONSTRAINT_CMD SUBMIT_PREFIX_CMD SUBMIT_INHERIT_CMD SUBMIT_ADAPTER_CMD; do
     [ -n "${!f:-}" ] || { log "dry: $f is not set: the claim producers are not in the kit yet (below/above will be INCOMPLETE)"; problems=1; }
   done
   if [ -d "$LOCK_DIR" ]; then log "dry: DRILL.lock is held by $(lock_holder) (wait-lock will poll)"; else log "dry: DRILL.lock is free"; fi
   log "dry: the plan —"
-  log "  nodes    new0 gets: --palw-drill-fp-constraint-at=$CONSTRAINT_AT --palw-drill-fp-constraint2-at=$CONSTRAINT2_AT --palw-drill-fp-prefix-at=$PREFIX_AT"
+  log "  nodes    new0 gets: --palw-drill-fp-constraint-at=$CONSTRAINT_AT --palw-drill-fp-constraint2-at=$CONSTRAINT2_AT --palw-drill-fp-prefix-at=$PREFIX_AT --palw-drill-fp-prefix-inherit-at=$INHERIT_AT"
   log "                      --palw-drill-fp-tokenizer-at=$TOKENIZER_AT --palw-drill-adapter-at=$ADAPTER_AT (and the runner's prerequisite lists)"
   log "           old gets none of them; the fork id separates them once new0 passes the first fence (DAA $CONSTRAINT_AT)"
-  log "  old      $OLD_LOG names none of the five fences"
+  log "  old      $OLD_LOG names none of the six fences"
   log "  below    each claim command with BELOW=1 below its fence: dropped by name, block stands"
   log "  cross    new0 past DAA $CROSS_AT: 'Fork-id mismatch … crossed fence'; old stops while new0 goes on"
   log "  above    each claim command with BELOW=0: the claim licenses and reaches Final (new0's log, GetPalw* RPC)"
@@ -179,10 +190,10 @@ step_old() {
   [ -s "$OLD_LOG" ] || incomplete "no old relay log at $OLD_LOG"
   mkdir -p "$EVIDENCE"
   local f
-  for f in palw_fp_decode_constraint palw_fp_constraint_v2 palw_fp_prefix_state palw_fp_tokenizer_match palw_adapter_class_v1; do
+  for f in palw_fp_decode_constraint palw_fp_constraint_v2 palw_fp_prefix_state palw_fp_prefix_inherit palw_fp_tokenizer_match palw_adapter_class_v1; do
     ! grep -q "PALW DRILL FLAG DAY: .*$f" "$OLD_LOG" || die "the old relay moved $f: it is the release under test"
   done
-  log "PASS: the old relay moved none of the five fences"
+  log "PASS: the old relay moved none of the six fences"
   echo ok > "$EVIDENCE/old.pass"
 }
 
@@ -204,10 +215,13 @@ step_below() {
   from="$(cursor "$NEW0_LOG")"; run_claim SUBMIT_PREFIX_CMD 1
   wait_after "$NEW0_LOG" "$from" "produced no object: a prefix-state claim \(FP job version 11\) below palw_fp_prefix_state" "the prefix-state claim refused by name" \
     > "$EVIDENCE/below-prefix.log"
+  from="$(cursor "$NEW0_LOG")"; run_claim SUBMIT_INHERIT_CMD 1
+  wait_after "$NEW0_LOG" "$from" "produced no object: an inherited-prefix claim \(FP job version 12\) below palw_fp_prefix_inherit" "the inherited-prefix claim refused by name" \
+    > "$EVIDENCE/below-inherit.log"
   from="$(cursor "$NEW0_LOG")"; run_claim SUBMIT_ADAPTER_CMD 1
   wait_after "$NEW0_LOG" "$from" "an adapter class listing was dropped by name below palw_adapter_class_v1, and the block stands" "the adapter listing dropped by name" \
     > "$EVIDENCE/below-adapter.log"
-  log "PASS: the three objects were refused by name below their fences"
+  log "PASS: the four objects were refused by name below their fences"
   echo ok > "$EVIDENCE/below.pass"
 }
 
@@ -221,9 +235,10 @@ step_cross() {
 step_above() {
   need_lock; mkdir -p "$EVIDENCE"
   local daa; daa="$(new_daa)"
-  [[ "$daa" =~ ^[0-9]+$ ]] && [ "$daa" -gt "$ADAPTER_AT" ] || incomplete "new0 is at DAA ${daa:-?}, not yet past the last fence ($ADAPTER_AT)"
+  [[ "$daa" =~ ^[0-9]+$ ]] && [ "$daa" -gt "$ADAPTER_AT" ] && [ "$daa" -gt "$INHERIT_AT" ] || incomplete "new0 is at DAA ${daa:-?}, not yet past the last fence ($ADAPTER_AT, $INHERIT_AT)"
   run_claim SUBMIT_CONSTRAINT_CMD 0
   run_claim SUBMIT_PREFIX_CMD 0
+  run_claim SUBMIT_INHERIT_CMD 0
   run_claim SUBMIT_ADAPTER_CMD 0
   wait_after "$NEW0_LOG" 0 "claim .* Final" "the claims reaching Final" > "$EVIDENCE/above-final.log"
   log "PASS: $(cat "$EVIDENCE/above-final.log")"
