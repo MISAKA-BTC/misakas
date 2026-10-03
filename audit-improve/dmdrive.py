@@ -1197,13 +1197,13 @@ class Drive:
     def step_seat_operator_ids(self):
         """Lane D's scenarios (`seat_field <n> operator_id`) read a genesis seat's operator id from the keyring manifest, which the keyring writer does not put there
         (it has the operator PUBKEY). Read each seat's id from the chain once and add it as `operator_id` to the manifest's seats — an added field, nothing else changes."""
-        if self.s.done("seat-operator-ids") or self.daa < 2:
+        if self.s.done("seat-operator-ids") or self.daa < 2 or not self.ids.get("head"):
             return
         m = manifest()
         ids = []
         for seat in m["seats"]:
             t, i = seat["bond_outpoint"].rsplit(":", 1)
-            f = rpc("getPalwProducerFacts", {"classId": "", "bondTransactionId": t, "bondIndex": int(i), "withBond": True})
+            f = rpc("getPalwProducerFacts", {"classId": self.ids["head"], "bondTransactionId": t, "bondIndex": int(i), "withBond": True})   # the release layer reads the bond only under a class id
             op = str(pick(f, "bondOperatorId", default="") or "")
             if not op:
                 return
