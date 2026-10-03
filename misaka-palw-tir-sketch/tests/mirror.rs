@@ -112,7 +112,7 @@ fn an_image_splits_into_exactly_the_pinned_number_of_chunks() {
         assert_eq!(parts.concat(), image, "and they are the image");
     }
     assert!(codec::split_into(&image, 0).is_empty());
-    assert_eq!(codec::split_into(&[], 3), vec![&[][..], &[][..], &[][..]], "an empty image is `count` empty chunks");
+    assert_eq!(codec::split_into(&[] as &[u8], 3), vec![&[] as &[u8], &[] as &[u8], &[] as &[u8]], "an empty image is `count` empty chunks");
 }
 
 #[test]

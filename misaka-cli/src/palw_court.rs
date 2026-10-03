@@ -1205,6 +1205,8 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::EvalCone { .. } => "EvalCone",
         PalwCourtVerdictProofV2::EvalDecodeToken { .. } => "EvalDecodeToken",
         PalwCourtVerdictProofV2::EvalDissection { .. } => "EvalDissection",
+        // RFC-0001 (ADR-0096): the decode close that names its constraint binding, named for the same reason.
+        PalwCourtVerdictProofV2::DecodeTokenConstrained { .. } => "DecodeTokenConstrained",
     }
 }
 

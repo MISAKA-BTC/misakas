@@ -213,6 +213,7 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
             logits_q24: true,
             prefix_state_armed: false,
             prefix_inherit_armed: false,
+            prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: kaspa_consensus_core::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
