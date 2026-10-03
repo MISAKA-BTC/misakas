@@ -15,6 +15,7 @@ import argparse
 import datetime as dt
 import gzip
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -27,6 +28,31 @@ def gate(row: dict, view: str, name: str) -> dict:
     return next(g for g in row[view] if g["gate"] == name)
 
 
+# A gate row without an `arg` is labelled from its evidence for the buckets' "leading arguments" column only (the code is the row's).
+_ARG_RULES = [
+    (re.compile(r"GGUF architecture `([^`]+)` has no mapping"), "gguf-arch:{0}"),
+    (re.compile(r"GGUF metadata `([^`]+)` is not mapped"), "gguf-meta:{0}"),
+    (re.compile(r"GGUF rope scaling `([^`]+)` is not mapped"), "gguf-rope:{0}"),
+    (re.compile(r"GGUF: no `([^`]+)`"), "gguf-missing:{0}"),
+    (re.compile(r"(\w+): trust_remote_code module"), "remote-code:{0}"),
+    (re.compile(r"(\w+): config key\(s\) this lowerer does not model: ([^—]+?) —"), "config-key:{1}"),
+    (re.compile(r"config has no `([^`]+)`"), "config-no:{0}"),
+    (re.compile(r"`([^`]+)` is an encoder–decoder no adapter"), "encdec-no-adapter:{0}"),
+    (re.compile(r"NOT_LOWERABLE\((\w+):"), "{0}"),
+]
+
+
+def arg_of(g: dict) -> str:
+    if g.get("arg"):
+        return g["arg"]
+    ev = " ".join(g.get("evidence") or [])
+    for rx, fmt in _ARG_RULES:
+        m = rx.search(ev)
+        if m:
+            return fmt.format(*m.groups())
+    return ""
+
+
 def stop_key(row: dict, view: str = "technical") -> tuple[str, str, str]:
     """Where the repository stops: the first gate that FAILs or is NOT_RUN — skipping `pack`'s NOT_RUN_NEEDS_WEIGHTS, which no
     header census runs (the admit gate after it is judged at the shape depth)."""
@@ -35,7 +61,7 @@ def stop_key(row: dict, view: str = "technical") -> tuple[str, str, str]:
             continue
         if g["gate"] == "pack" and g.get("blocking") == "NOT_RUN_NEEDS_WEIGHTS":
             continue
-        return g["gate"], g.get("blocking") or g["status"], g.get("arg") or ""
+        return g["gate"], g.get("blocking") or g["status"], arg_of(g)
     return "none", "PASS", ""
 
 
