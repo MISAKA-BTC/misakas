@@ -34,7 +34,9 @@ pub use cell::{
     verify_cell_stepping_v1, verify_cell_v1,
 };
 pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
-pub use shardrows::{TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1};
+pub use shardrows::{
+    TirFileMirrorV1, TirHeldRowsV1, TirRowFetcherV1, TirRowPursuitV1, TirShardHoldingV1, fetch_shard_params_v1, serve_rows_v1,
+};
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,
     tir_family_drill_v1, tir_family_evidence_v1, tir_family_id_v1, tir_prim_kernel_id_v1, tir_terminal_close_sizes_v1,

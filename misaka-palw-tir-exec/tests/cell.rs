@@ -963,3 +963,96 @@ fn a_shard_only_holder_fetches_its_rows_proves_each_and_verifies_its_cells() {
     }
     assert!(done >= 4);
 }
+
+/// **D-S6 over the network** (gap 1): a shard-only seat's pursuit asks for rows one reply at a time from whichever peer answers,
+/// keeps only rows proven against the registered root, refuses a reply whole when it lies (a false row, another leaf, a leaf
+/// outside the shard, junk bytes), and ends holding what the file mirror's fetch gives — the same cells verify over it.
+#[test]
+fn a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use misaka_palw_tir::interval::analyze_ranges;
+    use misaka_palw_tir_exec::node::{
+        TirArtifactV1, TirBackendV1, TirCaptureV1, TirFileMirrorV1, TirRowPursuitV1, fetch_shard_params_v1, serve_rows_v1,
+        tir_shard_cells_over_v1, tir_verify_capture_cells_over_v1,
+    };
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!("tir-exec-pursuit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut done = 0;
+    for (k, (name, program, params)) in programs().into_iter().enumerate() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() || program.schedule.layers.len() < 2 {
+            continue;
+        }
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor).unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, leaf_count) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let class_id = class.class_id(&root);
+        let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class_id, (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact.clone(), root, canonical, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
+        let outcome = backend.execute(&job, &prompt).unwrap();
+        let capture = TirCaptureV1::decode(&outcome.material).unwrap();
+        let positions = backend.space().job_shape(&job).unwrap().positions;
+        // Past the inventory nothing is served; a cap under one row serves nothing.
+        assert!(serve_rows_v1(artifact.as_ref(), leaf_count, 4, 1 << 20).is_none());
+        assert!(serve_rows_v1(artifact.as_ref(), 0, 4, 8).is_none());
+        assert!(serve_rows_v1(artifact.as_ref(), 0, 0, 1 << 20).is_none());
+        for shard in 0..2u16 {
+            let mut pursuit = TirRowPursuitV1::new(&capture.binding.class, class_id, root, 2, shard).unwrap();
+            // A small byte cap so one reply is a part of the shard, not all of it.
+            let cap = 6_000usize;
+            let (mut asks, mut refused_seen) = (0u32, 0u32);
+            while let Some((first, count)) = pursuit.next_ask() {
+                asks += 1;
+                assert!(asks < 10_000, "the pursuit makes progress");
+                let honest = serve_rows_v1(artifact.as_ref(), first, count, cap).expect("the holder serves");
+                // The first three peers asked lie (a false row, another leaf, junk); every later one is honest.
+                let reply = match if asks <= 3 { asks - 1 } else { 3 } {
+                    0 => {
+                        let mut o: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1> = borsh::from_slice(&honest).unwrap();
+                        o[0].operand.bytes[0] ^= 1;
+                        borsh::to_vec(&o).unwrap()
+                    }
+                    1 => {
+                        let mut o: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1> = borsh::from_slice(&honest).unwrap();
+                        o[0].leaf_index = o[0].leaf_index.wrapping_add(1);
+                        borsh::to_vec(&o).unwrap()
+                    }
+                    2 => vec![0xAB; 64],
+                    _ => honest,
+                };
+                match pursuit.admit(first, count, &reply) {
+                    Ok(n) => assert!(n >= 1, "{name}: an honest reply keeps rows"),
+                    Err(_) => refused_seen += 1,
+                }
+            }
+            assert_eq!(pursuit.refused, refused_seen);
+            assert_eq!(refused_seen, if asks == 0 { 0 } else { 3 }, "{name}: the three liars were refused (a shard with no rows asks nothing)");
+            let holding = pursuit.holding().unwrap();
+            let by_mirror = fetch_shard_params_v1(&capture.binding.class, class_id, root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+            assert_eq!((holding.leaves, holding.bytes), (by_mirror.leaves, by_mirror.bytes), "{name} shard {shard}");
+            let cells = tir_shard_cells_over_v1(&holding.space, positions, shard, 2, 1, PalwSegmentMaskV2::full(1)).unwrap();
+            let v = tir_verify_capture_cells_over_v1(&holding.space, &holding.plan, &holding.params, class_id, false, &capture, &cells, &mut CpuKernelBackendV1).unwrap();
+            assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name} shard {shard}: {v:?}");
+        }
+        // A reply of more rows than asked is refused whole.
+        let mut p = TirRowPursuitV1::new(&capture.binding.class, class_id, root, 2, 0).unwrap();
+        if let Some((first, count)) = p.next_ask() {
+            let wide = serve_rows_v1(artifact.as_ref(), first, count + 1, 1 << 24).unwrap();
+            let n = borsh::from_slice::<Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>>(&wide).unwrap().len() as u32;
+            if n > count {
+                assert!(p.admit(first, count, &wide).is_err(), "{name}: more rows than asked");
+            }
+        }
+        done += 1;
+    }
+    assert!(done >= 4);
+}

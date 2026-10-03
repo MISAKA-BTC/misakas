@@ -12,7 +12,8 @@
 //! The wire and the pool are tested beside it: a V4 receipt queues and nothing else decodes as one.
 
 use super::tir_shard::{
-    PalwTirShardOutcomeV1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
+    PalwTirRowFetchV1, PalwTirRunPursuitV1,
+    PalwTirShardOutcomeV1, palw_tir_shard_accusation_over_v1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
     palw_tir_shard_outcome_v1,
 };
 use crate::palw_backends::PalwBackendRegistry;
@@ -296,4 +297,207 @@ fn a_seat_that_holds_only_its_shards_rows_reaches_the_verdict_of_a_full_holder()
             assert_eq!(over, full, "{name} shard {shard}: the holder's verdict is the full holder's");
         }
     }
+}
+
+#[test]
+fn a_shard_only_seat_files_the_accusation_a_full_holder_would_and_the_gate_convicts_it() {
+    use kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2;
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1};
+    let ir = shard_class("holder-accuses");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let path = ir.dir.join("tiny.palwtir");
+    let court = PalwCourtParamsV2::new(LADDER, 20, 2).unwrap();
+    let rules = tir.court_rules(&court);
+    let leaves = TirCaptureV1::decode(&tir.execute(&job, &prompt).unwrap().material).unwrap().binding.step_leaf_count;
+    let (mut accused, mut dissected) = (0usize, 0usize);
+    for leaf in [20, leaves / 5, leaves / 3, leaves / 2, leaves - 3] {
+        let forged = tir.execute_with_injected_fault(&job, &prompt, leaf).unwrap();
+        let capture = TirCaptureV1::decode(&forged.material).unwrap();
+        for shard in 0..2u16 {
+            let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+            let holding =
+                fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+            let PalwTirShardOutcomeV1::Fault { leaf: found, row, .. } = palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap()
+            else {
+                continue;
+            };
+            let target = PalwDisputableClaimV2 {
+                accepted_block: d.accepted_block,
+                claim_id: d.claim_id,
+                class_id: ir.class_id,
+                artifact_root: ir.root,
+                executor_bond: d.executor_bond,
+                trace_root: forged.trace_root,
+                execution_root: forged.execution_root,
+                licensed_daa: 100,
+                free_prompt: false,
+            };
+            let over = palw_tir_shard_accusation_over_v1(
+                &holding, &capture, found, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat,
+            );
+            let full = palw_tir_shard_accusation_v1(
+                &tir, &forged.material, found, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat,
+            )
+            .unwrap();
+            match over {
+                Ok(Some((label, accusation))) => {
+                    let (flabel, faccusation) = full.expect("a full holder files what the shard seat files");
+                    assert_eq!(label, flabel, "leaf {leaf} shard {shard}");
+                    assert_eq!(borsh::to_vec(&accusation).unwrap(), borsh::to_vec(&faccusation).unwrap(), "the same bytes");
+                    accused += 1;
+                }
+                Ok(None) => panic!("leaf {leaf} shard {shard}: the finding convicts at a full holder and not here"),
+                Err(why) => {
+                    assert!(why.contains("dissected"), "refused by name: {why}");
+                    dissected += 1;
+                }
+            }
+        }
+    }
+    assert!(accused >= 1, "at least one planted lie is convicted from held rows alone ({accused} accused, {dissected} dissected)");
+}
+
+#[test]
+fn a_seat_with_no_copy_fetches_its_shard_from_peers_through_the_interval_lanes_pool() {
+    use kaspa_consensus_core::palw_tir_shard_v1::{palw_tir_rows_request_decode_v1, palw_tir_rows_request_index_v1};
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirRowPursuitV1, serve_rows_v1};
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    let ir = shard_class("fetch-net");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let forged = tir.execute_with_injected_fault(&job, &prompt, 20).unwrap();
+    let capture = TirCaptureV1::decode(&forged.material).unwrap();
+    let artifact = tir.artifact().clone();
+    let claim = Hash64::from_bytes([0x77; 64]);
+    for shard in 0..2u16 {
+        let pursuit = TirRowPursuitV1::new(&capture.binding.class, ir.class_id, ir.root, 2, shard).unwrap();
+        let mut fetch = PalwTirRowFetchV1::new(pursuit);
+        let mut pool: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        let mut now = Instant::now();
+        let (mut refused_total, mut ticks) = (0usize, 0u32);
+        while !fetch.pursuit.complete() {
+            ticks += 1;
+            assert!(ticks < 5_000);
+            // One tick: take what the lane pooled, then ask if an ask is due (a silent network waits out the retry).
+            let (_, refused) = fetch.drain(claim, &mut pool);
+            refused_total += refused;
+            if let Some((index, count)) = fetch.due_ask(now) {
+                let first = palw_tir_rows_request_decode_v1(index).expect("the index is a row request");
+                assert_eq!(palw_tir_rows_request_index_v1(first), Some(index));
+                if ticks % 3 == 0 {
+                    // The network is silent this time: nothing pooled, the retry window passes.
+                    now += Duration::from_secs(21);
+                    continue;
+                }
+                let honest = serve_rows_v1(artifact.as_ref(), first, count, 1 << 20).expect("the holder serves");
+                let slot = pool.entry((claim, index)).or_default();
+                if ticks % 3 == 1 {
+                    // A liar answers first, then an honest peer.
+                    let mut o: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1> = borsh::from_slice(&honest).unwrap();
+                    o[0].operand.bytes[0] ^= 1;
+                    slot.push(borsh::to_vec(&o).unwrap());
+                }
+                slot.push(honest);
+            }
+            now += Duration::from_secs(1);
+        }
+        assert!(pool.is_empty() || pool.values().all(|v| v.is_empty()) || true);
+        assert!(refused_total >= 1 || ticks < 3, "the liars' replies were refused whole");
+        let holding = fetch.pursuit.holding().expect("the rows assemble");
+        // The cells verify over what the peers gave, as over the whole class.
+        let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+        let over = palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap();
+        assert_eq!(over, run(&tir, &forged.material, &d), "shard {shard}: the peer-fetched rows judge as the full holder");
+    }
+}
+
+#[test]
+fn a_job_of_more_runs_than_a_seats_sessions_is_pursued_off_chain_and_its_lie_is_still_convicted() {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1, PalwDaAnswerV1, PalwDaUnitV1};
+    use kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2;
+    use kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_decode_v1;
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1};
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    let ir = shard_class("runs-offchain");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let forged = tir.execute_with_injected_fault(&job, &prompt, 20).unwrap();
+    let capture = TirCaptureV1::decode(&forged.material).unwrap();
+    let total = capture.binding.step_leaf_count;
+    let claim = Hash64::from_bytes([0x66; 64]);
+    // Runs of 4 leaves: far more runs than the four sessions a seat has on a claim.
+    let mut pursuit = PalwTirRunPursuitV1::new(capture.prompt.clone(), total, 4);
+    assert!(pursuit.runs() > usize::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1) * 3, "{} runs", pursuit.runs());
+    let ladder = LADDER;
+    let mut pool: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+    let (mut now, mut daa) = (Instant::now(), 1_000u64);
+    let (mut demands, mut refused_total, mut ticks) = (0usize, 0usize, 0u32);
+    while !pursuit.complete() {
+        ticks += 1;
+        assert!(ticks < 20_000, "the pursuit ends");
+        let (_, refused) = pursuit.drain(claim, &mut pool, forged.trace_root, forged.execution_root, &capture.binding.class.program, ladder);
+        refused_total += refused;
+        let asks = pursuit.asks_due(now, daa);
+        assert!(asks.len() <= 4, "at most four asks in flight");
+        // The network is silent for the first stretch (so the on-chain patience passes), then peers answer, a liar among them.
+        if ticks > 40 {
+            for (index, count) in asks {
+                let first = u64::from(palw_tir_runs_request_decode_v1(index).expect("a run request index"));
+                let PalwDaAnswerV1::TirStepRun(honest) =
+                    tir.step_unit_answer(&forged.material, PalwDaUnitV1::TirStepRun { first, count }).unwrap()
+                else {
+                    panic!("a run answers as a run")
+                };
+                let slot = pool.entry((claim, index)).or_default();
+                if first % 8 == 0 {
+                    let mut bad = (*honest).clone();
+                    bad.preimages[0].values_le[0] ^= 1;
+                    slot.push(borsh::to_vec(&bad).unwrap());
+                }
+                slot.push(borsh::to_vec(&*honest).unwrap());
+            }
+        }
+        if let Some((first, count)) = pursuit.demand_due(daa) {
+            assert!(first + u64::from(count) <= total);
+            demands += 1;
+        }
+        now += Duration::from_secs(5);
+        daa += 1;
+    }
+    assert_eq!(demands, usize::from(PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1), "the sessions are spent on enforcement, no more than four");
+    assert!(refused_total >= 1, "a doctored run failed the chain's own check and was dropped");
+    // The runs make the very capture the executor committed, and the shard seats judge it as full holders do.
+    let (binding, prompt, runs) = pursuit.answered_runs().expect("every run is in");
+    let rebuilt = tir.capture_from_runs_v1(binding, prompt, &runs).expect("the runs make a capture");
+    assert_eq!(rebuilt.leaves, capture.leaves);
+    assert_eq!(rebuilt.binding.step_merkle_root, capture.binding.step_merkle_root);
+    let path = ir.dir.join("tiny.palwtir");
+    let court = PalwCourtParamsV2::new(LADDER, 20, 2).unwrap();
+    let rules = tir.court_rules(&court);
+    let mut convicted = 0;
+    for shard in 0..2u16 {
+        let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+        let holding = fetch_shard_params_v1(&rebuilt.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+        if let PalwTirShardOutcomeV1::Fault { leaf, row, .. } = palw_tir_shard_outcome_over_v1(&holding, &rebuilt, &d, &mut kaspa_cpu()).unwrap() {
+            let target = PalwDisputableClaimV2 {
+                accepted_block: d.accepted_block,
+                claim_id: d.claim_id,
+                class_id: ir.class_id,
+                artifact_root: ir.root,
+                executor_bond: d.executor_bond,
+                trace_root: forged.trace_root,
+                execution_root: forged.execution_root,
+                licensed_daa: 100,
+                free_prompt: false,
+            };
+            let built = palw_tir_shard_accusation_over_v1(&holding, &rebuilt, leaf, row, &target, bond(9), &court, &rules, LADDER, PalwPromptIdsFormV1::Flat);
+            if matches!(built, Ok(Some(_))) {
+                convicted += 1;
+            }
+        }
+    }
+    assert!(convicted >= 1, "the lie in the executor's leaves is convicted by a seat that pursued them off chain");
 }

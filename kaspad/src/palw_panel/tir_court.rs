@@ -185,7 +185,15 @@ pub(crate) fn palw_tir_one_move_case_v1(
 /// whose cone reduces over the history (RFC-0002 F7, `palw_tir_dissected_commit_points_v1`), which the
 /// held regime never tries in one move: a cone accusation there opens a dissection instead.
 pub(crate) fn palw_tir_leaf_is_dissected_v1(tir: &TirBackendV1, ctx: &PalwJobContextV2, index: u64) -> bool {
-    let space = tir.space();
+    palw_tir_space_leaf_is_dissected_v1(tir.space(), ctx, index)
+}
+
+/// [`palw_tir_leaf_is_dissected_v1`] over a step space alone (a shard-only seat holds no backend).
+pub(crate) fn palw_tir_space_leaf_is_dissected_v1(
+    space: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1,
+    ctx: &PalwJobContextV2,
+    index: u64,
+) -> bool {
     let Some(leaf) = space.leaf_at(ctx, index) else { return false };
     let PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else { return false };
     kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&space.program).contains(&(block, node))

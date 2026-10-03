@@ -3616,6 +3616,11 @@ pub struct PalwPanelConfig {
     /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
     /// inventory root the chain registered.
     pub tir_shard_mirror: Option<PathBuf>,
+    /// **RFC-0006: fetch the shard's rows from peers** (`--palw-tir-shard-fetch`) when this node holds no copy of the class and has
+    /// no mirror: a signed request per reply through the interval lane, rows proven against the registered root.
+    pub tir_shard_fetch: bool,
+    /// **RFC-0006: the length of the runs a seat without a capture pursues** (`--palw-tir-shard-run-leaves`, 0 = the chain's ceiling).
+    pub tir_shard_run_leaves: u32,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
@@ -9880,7 +9885,7 @@ impl PalwPanelService {
                     });
                 }
                 if !shard_duties.is_empty() {
-                    self.tir_shard_seat_pass_v1(&session, bond_key, network_domain, current_daa, &shard_duties, &materials, &mut shard_books)
+                    self.tir_shard_seat_pass_v1(&session, bond_key, network_domain, current_daa, &shard_duties, &materials, &mut interval_openings, &mut shard_books)
                         .await;
                 }
                 if !shard_books.filed.is_empty() {
@@ -13998,11 +14003,71 @@ impl PalwPanelService {
         }
     }
 
+    /// **The serving half of D-S6 over the network**: the rows of the claim's class from `first`, as many as the lane carries, off the
+    /// class this node HOLDS (the class resolved from the capture it retains for the claim, as the annex's server does). Silence where
+    /// this node holds no capture of the claim, or not the class, or nothing at `first`.
+    fn serve_tir_rows_v1(&self, claim: Hash64, first: u32, count: u32) -> Option<Vec<u8>> {
+        let capture = self
+            .retained_capture(&claim)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
+            .filter(|bytes| bytes.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC))?;
+        let decoded = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&capture).ok()?;
+        let binding = &decoded.binding;
+        let class_id = binding.class.class_id(&binding.artifact_root);
+        let tir = self.backends().resolve_tir_v1(class_id, binding.artifact_root)?.ok()?;
+        let reply = misaka_palw_sdk::lineages::tir::serve_rows_v1(
+            tir.artifact().as_ref(),
+            first,
+            count,
+            kaspa_p2p_flows::palw_gossip::PALW_INTERVAL_OPENING_MAX_BYTES - (64 << 10),
+        )?;
+        info!("[{PALW_PANEL}] claim {claim}: served {count} inventory row(s) of class {class_id} from leaf {first} ({} bytes) — RFC-0006 D-S6", reply.len());
+        Some(reply)
+    }
+
+    /// **The serving half of the off-chain run request**: the `TirStepRun { first, count }` answer of the claim's retained capture (the
+    /// executor's, or a foreign copy this node holds), as borsh of the disclosure — the very object the chain's DA answer carries, so
+    /// the asker verifies it with `check_tir_step_run_disclosure_v1`. Silence where this node does not hold the capture or the class.
+    fn serve_tir_run_v1(&self, claim: Hash64, first: u64, count: u32) -> Option<Vec<u8>> {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+        if count == 0 || count > kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1 {
+            return None;
+        }
+        let capture = self
+            .retained_capture(&claim)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
+            .filter(|bytes| bytes.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC))?;
+        let decoded = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&capture).ok()?;
+        let binding = &decoded.binding;
+        let class_id = binding.class.class_id(&binding.artifact_root);
+        let tir = self.backends().resolve_tir_v1(class_id, binding.artifact_root)?.ok()?;
+        let PalwDaAnswerV1::TirStepRun(disclosure) = tir.step_unit_answer(&capture, PalwDaUnitV1::TirStepRun { first, count }).ok()? else {
+            return None;
+        };
+        let bytes = borsh::to_vec(&*disclosure).ok()?;
+        (bytes.len() <= kaspa_p2p_flows::palw_gossip::PALW_INTERVAL_OPENING_MAX_BYTES).then_some(bytes)
+    }
+
+    /// **A signed off-chain request for the run `[first, first + count)`** of a claim's step leaves (the run request kind).
+    pub async fn request_tir_run_v1(&self, network_domain: Hash64, claim: Hash64, first: u32, count: u32, requested_daa: u64) -> bool {
+        let Some(index) = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_index_v1(first) else { return false };
+        self.request_tir_rows_v1_at(network_domain, claim, index, count, requested_daa).await
+    }
+
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
         // **ADR-0111 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
         // named the leaf; this node answers with the one-move court's object for it — the builder
         // the on-chain disclosure uses too, so the two paths carry one set of bytes.
+        // **RFC-0006 D-S6 over the network: a shard-only seat's row request** (bit 28 of the index) — the inventory rows of the
+        // claim's class from the named leaf, each a Merkle opening the asker proves against the registered root itself.
+        if let Some(first) = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_rows_request_decode_v1(interval_index) {
+            return self.serve_tir_rows_v1(claim, first, leaf_index.unwrap_or(1).min(u64::from(u32::MAX)) as u32);
+        }
+        // **RFC-0006 §3 off chain: a seat's request for a RUN of step leaves** (bit 27) — answered as the chain's `TirStepRun` unit is.
+        if let Some(first) = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_decode_v1(interval_index) {
+            return self.serve_tir_run_v1(claim, u64::from(first), leaf_index.unwrap_or(0).min(u64::from(u32::MAX)) as u32);
+        }
         if let Some(leaf) = leaf_index
             .filter(|_| kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(interval_index).is_some())
         {
@@ -16513,6 +16578,39 @@ impl PalwPanelService {
             asked += 1;
         }
         asked
+    }
+
+    /// **A signed request for `count` inventory rows** under the row-request index (RFC-0006 D-S6): the leaf-request signature scheme
+    /// carries the count where a leaf evidence request carries its leaf, so one signature is one run, not a standing right.
+    pub async fn request_tir_rows_v1(&self, network_domain: Hash64, claim: Hash64, index: u32, count: u32, requested_daa: u64) -> bool {
+        self.request_tir_rows_v1_at(network_domain, claim, index, count, requested_daa).await
+    }
+
+    /// The signed ask both row and run requests ride: the leaf-request scheme with the count in the leaf slot.
+    async fn request_tir_rows_v1_at(&self, network_domain: Hash64, claim: Hash64, index: u32, count: u32, requested_daa: u64) -> bool {
+        let Some(kp) = self.keypair.as_ref() else { return false };
+        let Some(signature) = crate::palw_fp_seat::palw_fp_sign_leaf_request_v1(
+            &kp.signing_key,
+            network_domain,
+            claim,
+            index,
+            u64::from(count),
+            requested_daa,
+        ) else {
+            return false;
+        };
+        self.flow_context.palw_gossip().note_interval_pull_request(claim, index);
+        self.flow_context
+            .request_palw_interval_opening(
+                claim,
+                index,
+                kp.verification_key.as_ref().to_vec(),
+                signature,
+                requested_daa,
+                Some(u64::from(count)),
+            )
+            .await;
+        true
     }
 
     /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps
