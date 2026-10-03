@@ -340,8 +340,12 @@ fn judge_at_contexts(
                     let a2 = admit_of(&r2);
                     let implied =
                         a2.status == GateStatus::Fail && a2.codes.iter().all(|c| IMPLIED_AT_WIDER_CONTEXT.contains(&c.as_str()));
+                    let spent = a2.blocking.as_deref() == Some(codes::NOT_RUN_JUDGMENT_BUDGET);
                     admit_retry = Some(a2);
-                    if implied {
+                    if spent {
+                        // The narrower context's search spent the budget: the wider one costs more, so it is not run either.
+                        Ok(r2)
+                    } else if implied {
                         cx.primary_implied = true;
                         Ok(r2)
                     } else {
