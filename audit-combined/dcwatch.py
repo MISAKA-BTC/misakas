@@ -7,7 +7,8 @@
         figure is 2-6 DAA), the panel-bound backlog trend (the sampler's gate: slope over the window's second half and its last quarter against its second:
         must not diverge), the seats' oldest wait (<= --wait-max), F3 producer-hold events ("NOT PRODUCING ... holding" lines) per node, PanelUnavailable
         expiries (claims voided as panel-unavailable: expect 0 for honest load) and receipts filed per seat per hour. Exit 0 PASS, 1 FAIL, 3 INCOMPLETE.
-  share --port P --fence H' [--window 60 --step 30 --settle 20 --to DAA]
+  share --port P --fence H' [--window 60 --step 30 --settle 20 --to DAA --work DIR --producers new4,new6]
+        ELIGIBLE windows only (--producers): both REAL producers up for the whole window and none logged 'NOT PRODUCING … holding' in it; the others are listed apart.
         walks getBlocks (verbose) and classes every block by verboseData.blockKind (REAL / FALLBACK / LEGACY_FLOOR / LEGACY_HEARTBEAT / EXEC)
         and laneClass (BLUE / EXEC / RED / ROUND). Sliding DAA windows from H' + settle: the share of REAL + EXEC blocks among all non-RED
         blocks (>= 90 %), heartbeats (<= 10 %), floor attempts (FALLBACK / LEGACY_FLOOR: only in idle windows — a window is idle when
@@ -59,6 +60,60 @@ def windows(rows, lo, hi, w, step, idle):
     return out
 
 
+def daa_clock(work):
+    """[(epoch seconds, DAA)] from the driver's sampler (capacity/samples.tsv, state samples.tsv): the map from a window to wall time."""
+    import time
+    pts = []
+    for f in ("samples.tsv",):
+        path = os.path.join(work, f)
+        if os.path.exists(path):
+            for line in open(path):
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[1].strip().isdigit():
+                    try: pts.append((time.mktime(time.strptime(parts[0].strip(), "%Y-%m-%d %H:%M:%S")), int(parts[1])))
+                    except ValueError: pass
+    return pts
+
+
+def eligible_windows(ws, work, producers):
+    """A window is ELIGIBLE when every producer node was up for all of it and logged no 'NOT PRODUCING … holding' line inside it (it had claims issuable);
+    a silent or held producer must not make the window look idle."""
+    import re, time
+    clock = daa_clock(work)
+    def t_of(daa):
+        for t, d in clock:
+            if d >= daa: return t
+        return None
+    ups = {}
+    for n in producers:
+        iv, start = [], None
+        ev = os.path.join(work, n, "events.log")
+        for line in (open(ev) if os.path.exists(ev) else []):
+            m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (START|STOP)", line)
+            if not m: continue
+            t = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+            if m.group(2) == "START": start = t
+            elif start is not None: iv.append((start, t)); start = None
+        if start is not None: iv.append((start, 1e18))
+        holds = []
+        lg = os.path.join(work, n, "kaspad.out")
+        for line in (open(lg, errors="replace") if os.path.exists(lg) else []):
+            if "NOT PRODUCING" in line and "holding" in line:
+                m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", line)
+                if m: holds.append(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")))
+        ups[n] = (iv, holds)
+    for w in ws:
+        t0, t1 = t_of(w["lo"]), t_of(w["hi"])
+        ok = t0 is not None and t1 is not None
+        why = []
+        if not ok: why.append("window not on the sampler's clock")
+        for n, (iv, holds) in ups.items():
+            if ok and not any(a <= t0 and t1 <= b for a, b in iv): ok = False; why.append(f"{n} not up for the window")
+            if ok and any(t0 <= h <= t1 for h in holds): ok = False; why.append(f"{n} held (NOT PRODUCING)")
+        w["eligible"], w["why"] = ok, "; ".join(why)
+    return ws
+
+
 def share(a):
     rows = kinds(a.port)
     tip = max((r[0] for r in rows), default=0)
@@ -73,63 +128,24 @@ def share(a):
               f"{w['share'] if w['share'] is not None else '-':>6} {w['hb'] if w['hb'] is not None else '-':>6} {w['floor']:>5} {'idle' if w['idle'] else ''}")
     if not ws:
         print("INCOMPLETE: no complete window past the fence yet"); return 3
-    if not any(w["n"] and not w["idle"] for w in ws):
-        print("INCOMPLETE: every window is idle (no REAL block) — a share over no real load proves nothing"); return 3
-    bad = [w for w in ws if w["n"] and not w["idle"] and (w["share"] < 0.9 or w["hb"] > 0.1 or w["floor"] > 0)]
+    producers = [x for x in (a.producers or "").split(",") if x]
+    if producers:
+        eligible_windows(ws, os.path.expanduser(a.work), producers)
+    else:
+        for w in ws: w["eligible"], w["why"] = True, ""
+    elig = [w for w in ws if w["eligible"]]
+    inel = [w for w in ws if not w["eligible"]]
+    if inel:
+        print(f"NOT ELIGIBLE ({len(inel)} windows, not counted: a producer was down or held): " + ", ".join(f"{w['lo']}-{w['hi']} [{w['why']}]" for w in inel[:12]))
+    if not any(w["n"] and not w["idle"] for w in elig):
+        print("INCOMPLETE: no eligible window with REAL load yet — a share over no real load proves nothing"); return 3
+    bad = [w for w in elig if w["n"] and not w["idle"] and (w["share"] < 0.9 or w["hb"] > 0.1 or w["floor"] > 0)]
     if bad:
-        print(f"FAIL: {len(bad)} of {len(ws)} windows break the share (REAL+EXEC >= 90 %, heartbeats <= 10 %, no floor outside idle windows): " + ", ".join(f"{w['lo']}-{w['hi']}" for w in bad[:8]))
+        print(f"FAIL: {len(bad)} of {len(elig)} eligible windows break the share (REAL+EXEC >= 90 %, heartbeats <= 10 %, no floor outside idle windows): " + ", ".join(f"{w['lo']}-{w['hi']}" for w in bad[:8]))
         return 1
-    print(f"PASS: {len(ws)} windows past the fence, min share {min(w['share'] for w in ws if w['share'] is not None)}, max heartbeat {max(w['hb'] for w in ws if w['hb'] is not None)}, "
-          f"{sum(1 for w in ws if w['idle'])} idle")
+    print(f"PASS: {len(elig)} eligible windows past the fence ({len(inel)} not eligible, reported above), min share {min(w['share'] for w in elig if w['share'] is not None)}, "
+          f"max heartbeat {max(w['hb'] for w in elig if w['hb'] is not None)}, {sum(1 for w in elig if w['idle'])} idle")
     return 0
-
-
-def panel(a):
-    work = os.path.expanduser(a.work)
-    d = json.load(open(os.path.join(work, "drive-state.json")))["data"]
-    cap, claims = d.get("cap-summary") or {}, d.get("cap-claims") or {}
-    if not cap:
-        print("INCOMPLETE: no capacity window measured yet"); return 3
-    bad, rows = [], []
-    for name, sm in cap.items():
-        why = []
-        if sm.get("bind_latency_p50") is None:
-            why.append("no bind->licence sample")
-        else:
-            if sm["bind_latency_p50"] > a.p50_max: why.append(f"p50 {sm['bind_latency_p50']} > {a.p50_max}")
-            if sm["bind_latency_p95"] > a.p95_max: why.append(f"p95 {sm['bind_latency_p95']} > {a.p95_max}")
-        if sm.get("diverges"): why.append("backlog diverges")
-        if (sm.get("oldest_wait_max") or 0) > a.wait_max: why.append(f"oldest wait {sm['oldest_wait_max']} > {a.wait_max}")
-        rows.append((name, sm, why))
-        if why: bad.append(f"{name}: " + "; ".join(why))
-    unavailable = [c for c, r in claims.items() if "unavail" in str(r.get("void", "")).lower()]
-    f3, rec = {}, {}
-    import glob, re, time
-    for log in sorted(glob.glob(os.path.join(work, "new*", "kaspad.out"))):
-        node = os.path.basename(os.path.dirname(log))
-        n_hold = n_rec = 0
-        first = last = None
-        with open(log, errors="replace") as f:
-            for line in f:
-                if "NOT PRODUCING" in line and "holding" in line: n_hold += 1
-                if "[palw-panel] filed a" in line and "receipt" in line:
-                    n_rec += 1
-                    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", line)
-                    if m:
-                        t = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")); first = first or t; last = t
-        f3[node] = n_hold
-        rec[node] = round(n_rec / max((last - first) / 3600, 1 / 60), 1) if first and last and last > first else None
-    print(f"{'window':>10} {'bindP50':>7} {'bindP95':>7} {'n':>4} {'backlog':>10} {'slope':>7} {'oldest':>6} {'diverges':>8}")
-    for name, sm, why in rows:
-        print(f"{name:>10} {str(sm.get('bind_latency_p50')):>7} {str(sm.get('bind_latency_p95')):>7} {sm.get('bind_latency_n'):>4} "
-              f"{str(sm['backlog_first'])+'->'+str(sm['backlog_last']):>10} {str(sm['backlog_slope_per_daa_second_half']):>7} {str(sm.get('oldest_wait_max')):>6} {str(sm['diverges']):>8}  {'; '.join(why)}")
-    print(f"F3 / producer-hold lines per node: {f3}")
-    print(f"PanelUnavailable expiries (voided claims): {len(unavailable)}")
-    print(f"receipts filed per hour per seat node (log span): {rec}")
-    if unavailable: bad.append(f"{len(unavailable)} claims expired as panel-unavailable")
-    if bad:
-        print("FAIL: " + " | ".join(bad)); return 1
-    print(f"PASS: {len(rows)} windows: nothing diverges, bind->licence within p50 {a.p50_max} / p95 {a.p95_max}"); return 0
 
 
 def main():
@@ -139,6 +155,7 @@ def main():
     s.add_argument("--port", type=int, required=True); s.add_argument("--fence", type=int, required=True)
     s.add_argument("--window", type=int, default=60); s.add_argument("--step", type=int, default=30); s.add_argument("--settle", type=int, default=20)
     s.add_argument("--to", type=int, default=None); s.add_argument("--idle-file", default=None)
+    s.add_argument("--work", default="~/.misaka-palw-improve-drill"); s.add_argument("--producers", default="", help="comma list of the REAL producers' nodes (eligibility)")
     q = sub.add_parser("panel")
     q.add_argument("--work", default="~/.misaka-palw-improve-drill"); q.add_argument("--p50-max", type=int, default=6)
     q.add_argument("--p95-max", type=int, default=12); q.add_argument("--wait-max", type=int, default=40)

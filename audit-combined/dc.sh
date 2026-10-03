@@ -64,7 +64,7 @@ case $cmd in
   up|status|verdicts|down|model|keys|plan-dm) bash "$DM" "$cmd" "$@" ;;
   gen) bash "$DM" gen "$@" ;;
   panel) python3 "$C/dcwatch.py" panel --work "$WORK_DIR" "$@" ;;
-  share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" "$@" ;;
+  share) python3 "$C/dcwatch.py" share --port "$((JSON_BASE+3))" --fence "$INT11_AT" --work "$WORK_DIR" --producers new4,new6 "$@" ;;
   evidence) mkdir -p "$EVD"; cp -R "$WORK_DIR"/verdict "$WORK_DIR"/capacity "$WORK_DIR"/drive.log "$WORK_DIR"/drive.out "$WORK_DIR"/milestones.tsv "$WORK_DIR"/memory.tsv "$WORK_DIR"/samples.tsv "$EVD"/ 2>/dev/null || true
             python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel.txt" 2>&1 || true; bash "$0" share > "$EVD/share.txt" 2>&1 || true; echo "evidence in $EVD" ;;
   *) sed -n '2,16p' "$0"; exit 2 ;;
