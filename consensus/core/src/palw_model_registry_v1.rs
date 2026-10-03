@@ -377,6 +377,16 @@ pub enum PalwModelLifecycleV1 {
     /// build unable to sync testnet-11 from genesis on 2026-09-10. The order a reader wants lives
     /// in `palw_lifecycle_step_v1` and in this doc, never in the tag.
     Candidate,
+    /// **RFC-0007 Part IV.2: staged onboarding** (spec 18; written only past `Params::palw_capped_onboarding_v1`). A class that has
+    /// not seated a panel's worth of holders yet but shows a DA certificate produces **capped** (the weight cap and
+    /// `capped_admission_permille`) with **provisional** rewards (a claim's escrow is paid only at `Final`, and a capped claim reaches
+    /// a panel only once the holders are seated), and its claims are re-verified by the holders inside a window. **Appended last**,
+    /// for `Candidate`'s reason: the enum is borsh and its discriminants are chain bytes. Its place in the walk is between
+    /// `Prefetching` and `Probation`.
+    Capped {
+        /// The DAA of the span boundary that stepped the class into `Capped`.
+        since_daa: u64,
+    },
 }
 
 impl PalwModelLifecycleV1 {
@@ -386,7 +396,7 @@ impl PalwModelLifecycleV1 {
     /// not eligibility. The list is positive — states that DO admit — so a state added later
     /// admits nothing until someone writes it here on purpose.
     pub fn admits_claims(&self) -> bool {
-        matches!(self, Self::Probation { .. } | Self::ActiveLimited { .. } | Self::Active)
+        matches!(self, Self::Probation { .. } | Self::ActiveLimited { .. } | Self::Active | Self::Capped { .. })
     }
     /// The fraction of the derived admission the state allows, in permille: probation runs the
     /// probe claims only, limited activation a tenth, `Active` all of it.
@@ -398,6 +408,8 @@ impl PalwModelLifecycleV1 {
             Self::Probation { .. } => 50,
             Self::ActiveLimited { .. } => 100,
             Self::Active => 1_000,
+            // RFC-0007 Part IV.2: `capped_admission_permille`.
+            Self::Capped { .. } => crate::palw_mesh_v1::PALW_CAPPED_ADMISSION_PERMILLE_V1,
             _ => 0,
         }
     }
@@ -441,6 +453,10 @@ pub struct PalwLifecycleObservationV1 {
     /// (the `Default`) can never turn an admitted class back. `false` for a genesis class by
     /// construction: the fold never puts one in `Candidate`.
     pub admission_jury_seated: bool,
+    /// **RFC-0007 Part IV.2: a `Prefetching` class may step to `Capped`** — past `Params::palw_capped_onboarding_v1`, its ready seats do
+    /// not fill a panel, a DA certificate stands for it, and the capped classes together would stay within `w_cap`. Read ONLY by the
+    /// `Prefetching` arm, so a caller that leaves it `false` (the `Default`, every network without the fence) steps exactly as before.
+    pub capped_entry: bool,
 }
 
 /// **ADR-0147: how often a `Candidate` class meets an admission jury**, in execution spans — one
@@ -570,9 +586,17 @@ pub fn palw_lifecycle_step_v1(
         Prefetching => {
             if ready_enough {
                 Probation { probes_passed: 0 }
+            } else if obs.capped_entry && !panel_drawable {
+                // The caller writes the DAA (the step knows no clock).
+                Capped { since_daa: 0 }
             } else {
                 Prefetching
             }
+        }
+        // **RFC-0007 Part IV.2**: a capped class returns to the ordinary walk — at `Probation`, where `Prefetching` would have put it —
+        // once holders are seated (`ready_enough`); not before, and never to `Held`: a capped class has no panel to lose.
+        Capped { since_daa } => {
+            if ready_enough && panel_drawable { Probation { probes_passed: 0 } } else { Capped { since_daa } }
         }
         Probation { probes_passed } => {
             if !panel_drawable || overloaded {
@@ -1528,6 +1552,12 @@ pub fn palw_lifecycle_reason_v2(
             }
         }
         PalwModelLifecycleV1::Active => "admitting in full".to_string(),
+        PalwModelLifecycleV1::Capped { since_daa } => format!(
+            "capped since DAA {since_daa}: producing under the mesh at {} ‰ of its admission with provisional rewards, until {} holders \
+             are seated and re-verify every capped claim",
+            crate::palw_mesh_v1::PALW_CAPPED_ADMISSION_PERMILLE_V1,
+            row.profile.required_ready_seats
+        ),
         PalwModelLifecycleV1::Held => {
             if row.ready_seats < seats {
                 // **The number the DECISION used, said to be that** (audit 2026-09-19). The row's
@@ -2135,6 +2165,8 @@ pub fn palw_model_registry_read_v2(
             // for a state that cannot exist below a dormant fence. The distinction an operator
             // needs is in the class's own reason line, which names independence by name.
             PalwModelLifecycleV1::Candidate => 4,
+            // RFC-0007 Part IV.2: a `Capped` class is counted with the classes still gathering holders.
+            PalwModelLifecycleV1::Capped { .. } => 3,
         };
         counts[slot] += 1;
     }
@@ -2356,8 +2388,7 @@ mod tests {
             window_fits_receipt: fits,
             span_stable: true,
             // ADR-0145 §7: the `Candidate` arm's only input, and this fixture starts past it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
             assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
         }
@@ -2560,8 +2591,7 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         let mut s = Registered;
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { manifest: PalwManifestVerdictV1Flag::Invalid, ..calm(0) }, &k, &G);
         assert_eq!(s, Registered, "an invalid manifest never leaves registration");
@@ -2644,8 +2674,7 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: true,
             span_stable: failed == 0,
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0));
         let none = PalwProbationMemoryV1::default();
         let step = |s, o: &PalwLifecycleObservationV1, m: &PalwProbationMemoryV1| palw_lifecycle_step_resilient_v1(s, o, &k, &G, m);
@@ -2918,8 +2947,7 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false,
-        };
+            admission_jury_seated: false, capped_entry: false, };
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),
             Active,

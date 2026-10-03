@@ -87,6 +87,14 @@ pub struct PalwDrillExtraFencesV1 {
     pub fp_v5_at: Option<u64>,
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
+    /// RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 100 and 101).
+    pub vertex_at: Option<u64>,
+    /// RFC-0007 Part II's witness manifest (`palw_witness_manifest_v1`).
+    pub witness_at: Option<u64>,
+    /// RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 102 and 103).
+    pub audit_mesh_at: Option<u64>,
+    /// RFC-0007 Part IV.2's capped onboarding (`palw_capped_onboarding_v1`).
+    pub capped_at: Option<u64>,
     pub improve_at: Option<u64>,
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
     /// per-fence flags of its entries, never with them.
@@ -108,6 +116,10 @@ impl PalwDrillExtraFencesV1 {
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
             held_chunks_at: args.palw_drill_held_chunks_at,
+            vertex_at: args.palw_drill_vertex_at,
+            witness_at: args.palw_drill_witness_at,
+            audit_mesh_at: args.palw_drill_audit_mesh_at,
+            capped_at: args.palw_drill_capped_at,
             improve_at: args.palw_drill_improve_at,
             int11_at: args.palw_drill_int11_at,
         }
@@ -122,6 +134,10 @@ impl PalwDrillExtraFencesV1 {
             || self.decode_rules_at.is_some()
             || self.fp_v5_at.is_some()
             || self.held_chunks_at.is_some()
+            || self.vertex_at.is_some()
+            || self.witness_at.is_some()
+            || self.audit_mesh_at.is_some()
+            || self.capped_at.is_some()
             || self.improve_at.is_some()
             || self.int11_at.is_some()
     }
@@ -161,6 +177,10 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
             ("--palw-drill-held-chunks-at", self.held_chunks_at, "RFC-0003's held leaf challenge (palw_held_close_chunks_v1)"),
+            ("--palw-drill-vertex-at", self.vertex_at, "RFC-0007's verification vertex (palw_verification_vertex_v1)"),
+            ("--palw-drill-witness-at", self.witness_at, "RFC-0007's witness manifest (palw_witness_manifest_v1)"),
+            ("--palw-drill-audit-mesh-at", self.audit_mesh_at, "RFC-0007's audit mesh (palw_audit_mesh_v1)"),
+            ("--palw-drill-capped-at", self.capped_at, "RFC-0007's capped onboarding (palw_capped_onboarding_v1)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
         ]
@@ -245,6 +265,18 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.held_chunks_at {
             moves.extend(d::palw_drill_held_close_chunks_at_v1(params, at).map_err(|e| format!("--palw-drill-held-chunks-at: {e}"))?);
         }
+        if let Some(at) = self.vertex_at {
+            moves.extend(d::palw_drill_vertex_at_v1(params, at).map_err(|e| format!("--palw-drill-vertex-at: {e}"))?);
+        }
+        if let Some(at) = self.witness_at {
+            moves.extend(d::palw_drill_witness_at_v1(params, at).map_err(|e| format!("--palw-drill-witness-at: {e}"))?);
+        }
+        if let Some(at) = self.audit_mesh_at {
+            moves.extend(d::palw_drill_audit_mesh_at_v1(params, at).map_err(|e| format!("--palw-drill-audit-mesh-at: {e}"))?);
+        }
+        if let Some(at) = self.capped_at {
+            moves.extend(d::palw_drill_capped_at_v1(params, at).map_err(|e| format!("--palw-drill-capped-at: {e}"))?);
+        }
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
@@ -286,6 +318,10 @@ impl PalwDrillExtraFencesV1 {
         vec![
             ("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at)),
             ("int11_at=", "--palw-drill-int11-at", palw_drill_marker_fence_text_v1(self.int11_at)),
+            ("vertex_at=", "--palw-drill-vertex-at", palw_drill_marker_fence_text_v1(self.vertex_at)),
+            ("witness_at=", "--palw-drill-witness-at", palw_drill_marker_fence_text_v1(self.witness_at)),
+            ("audit_mesh_at=", "--palw-drill-audit-mesh-at", palw_drill_marker_fence_text_v1(self.audit_mesh_at)),
+            ("capped_at=", "--palw-drill-capped-at", palw_drill_marker_fence_text_v1(self.capped_at)),
         ]
     }
 
@@ -905,6 +941,10 @@ pub fn palw_drill_write_keyring_v4(
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
         "held_chunks_at": extra.held_chunks_at,
+        "vertex_at": extra.vertex_at,
+        "witness_at": extra.witness_at,
+        "audit_mesh_at": extra.audit_mesh_at,
+        "capped_at": extra.capped_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
@@ -2162,5 +2202,67 @@ mod tests {
         let path = palw_drill_write_keyring_v3(&a, keys_without.path(), Some(6), Some(10), Some(14), Some(20)).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(manifest["held_chunks_at"], serde_json::Value::Null);
+    }
+
+    /// **RFC-0007's verification vertex is a drill flag of its own** (`--palw-drill-vertex-at`, object tags 100 and 101): refused without
+    /// the salt; with the salt it ARMS `palw_verification_vertex_v1` at its height and moves nothing else (its prerequisites are armed at
+    /// the drill's genesis); the marker keeps it on a line of its own (`vertex_at=`, `none` where a marker written before it has none) and
+    /// a stored chain is never reopened under another height; the keyring's manifest names it.
+    #[test]
+    fn the_verification_vertex_is_a_drill_flag_of_its_own() {
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14"];
+        let parsed = |extra: &[&str]| {
+            let v: Vec<String> =
+                base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect();
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-vertex-at=140"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-vertex-at=140") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        let without = config_of(&parsed(&[]));
+        let with = config_of(&parsed(&["--palw-drill-vertex-at=140"]));
+        assert_eq!(without.params.palw_verification_vertex_v1, None);
+        assert_eq!(
+            with.params.palw_verification_vertex_v1,
+            Some(kaspa_consensus_core::config::params::ForkActivation::new(140)),
+            "armed at its height"
+        );
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "one fence moved");
+        with.params.validate_palw_v2().expect("the drill with the verification vertex validates");
+        assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
+        assert_eq!(
+            with.params.palw_verification_vertex_fence().map(|f| f.daa_score()),
+            Some(140),
+            "and the node's own reader sees it (the seat speaks in vertices from there)"
+        );
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-vertex-at=140"])).expect("the flag validates on a salted drill");
+        // The marker's own line, and a stored chain is never reopened under another height.
+        let dir = root.path().join("x/misaka-testnet-12");
+        let set = PalwDrillExtraFencesV1 { vertex_at: Some(140), ..Default::default() };
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
+        assert!(marker_of(&dir).contains("vertex_at=140\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("kept");
+        let moved = PalwDrillExtraFencesV1 { vertex_at: Some(150), ..Default::default() };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved).unwrap_err();
+        assert!(why.contains("--palw-drill-vertex-at (recorded 140, now 150)"), "{why}");
+        // A marker written before the flag existed counts as `none`.
+        let old = root.path().join("y/misaka-testnet-12");
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("created");
+        let text = marker_of(&old).replace("vertex_at=none\n", "");
+        std::fs::write(old.join(PALW_DRILL_DATADIR_MARKER_V1), text).unwrap();
+        std::fs::create_dir_all(old.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("an older marker is none");
+        // The keyring's manifest names it.
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), None, set).expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["vertex_at"], serde_json::json!(140));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
     }
 }

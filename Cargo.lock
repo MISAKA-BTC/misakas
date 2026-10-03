@@ -5286,7 +5286,9 @@ dependencies = [
  "misaka-palw-sdk",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
+ "misaka-palw-tir-sketch",
  "num_cpus",
  "rand 0.8.6",
  "rayon",
@@ -6317,6 +6319,19 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-tir-sketch"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "misaka-palw-tir",
+ "misaka-palw-tir-exec",
+ "misaka-palw-tir-lower",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rayon",
 ]
 
 [[package]]

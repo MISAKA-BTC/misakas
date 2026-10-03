@@ -405,6 +405,28 @@ pub struct Args {
     /// line only, like the salt.
     #[serde(skip)]
     pub palw_drill_held_chunks_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0007's verification vertex (`palw_verification_vertex_v1`, object tags 100 and 101) at this DAA**
+    /// (`config::drill::palw_drill_vertex_at_v1`): a seat signs one vertex a round of its verdicts, the fold tallies them and licenses a
+    /// claim at quorum, and two vertices of one round are slashed. It needs `palw_verification_v2`, `palw_rcore_plus`,
+    /// `palw_unavailable_abstains`, `palw_panel_economy` and `palw_objective_offence` in force at or below it. Command line only, like
+    /// the salt.
+    #[serde(skip)]
+    pub palw_drill_vertex_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0007 Part II's witness manifest (`palw_witness_manifest_v1`) at this DAA** (`config::drill::palw_drill_witness_at_v1`): a
+    /// class registered at or past it pins its witness profile, and its attempts commit `1 + chunks` trace chunks so an `Unavailable`
+    /// verdict can name a witness chunk. It needs `palw_tir_v1` and `palw_unavailable_abstains` in force at or below it. Command line only.
+    #[serde(skip)]
+    pub palw_drill_witness_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0007 Part IV.1's audit mesh (`palw_audit_mesh_v1`, object tags 102 and 103) at this DAA**
+    /// (`config::drill::palw_drill_audit_mesh_at_v1`). It needs `palw_verification_vertex_v1`, `palw_tir_v1` and `palw_panel_economy` in
+    /// force at or below it. Command line only.
+    #[serde(skip)]
+    pub palw_drill_audit_mesh_at: Option<u64>,
+    /// **DRILL ONLY: arm RFC-0007 Part IV.2's capped onboarding (`palw_capped_onboarding_v1`) at this DAA**
+    /// (`config::drill::palw_drill_capped_at_v1`). It needs `palw_audit_mesh_v1`, `palw_admission_independence` and
+    /// `palw_registry_resilience` in force at or below it. Command line only.
+    #[serde(skip)]
+    pub palw_drill_capped_at: Option<u64>,
     /// **DRILL ONLY: cross the int-11 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int11_at_v1`): the
     /// whole list — decode rules, the generative fence, FP Job V5, the held leaf challenge, the improvement fence, F-N's
     /// verification term and the capacity ramp's ρ = 25 step — at H', and ρ = 100 at H' + 95, the offset the release uses. The
@@ -462,6 +484,11 @@ pub struct Args {
     /// This node refuses every leaf-evidence request on the interval lane, so a seat that named a
     /// leaf must demand its evidence on chain (ADR-0111 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
+    /// **DRILL ONLY (a salted testnet-12 drill: `palw_private_drill_network_v1`): this seat signs a SECOND vertex for one round** — once, at
+    /// the first round at or past this DAA, with the first vertex's leaves' verdicts changed — so the drill can show RFC-0007's
+    /// equivocation caught, slashed and ejected. Any node watching blocks files the evidence. Command line only.
+    #[serde(skip)]
+    pub palw_drill_vertex_equivocate_at: Option<u64>,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
     pub palw_canonical_claims: bool,
@@ -595,6 +622,15 @@ pub struct Args {
     /// replay of its class reserves none of its bytes. Off, every replay reserves the file again, as
     /// before this release.
     pub palw_no_artifact_pin: bool,
+    /// **RFC-0007: name claims by whole id in this seat's verification vertices** (`--palw-vertex-full-refs`). Off by default: a vertex
+    /// names a claim by the DAA its panel bound at and a 16-byte prefix of its id (20 bytes against 64), which is what takes the
+    /// per-claim carriage of a licence to a few tens of bytes. Node policy: the chain takes both, and nothing changes below the fence.
+    pub palw_vertex_full_refs: bool,
+    /// **RFC-0007 Part II (`--palw-sketch-check`)**: run the seat-local algebraic checker's mirror beside every full replay of an IR class this
+    /// seat holds — the seat produces the claim's witness itself, checks it against its secret sketches, and compares the verdict with
+    /// the replay's; a disagreement is logged at error level and counted in the status line. Node policy, off by default (a node without it
+    /// never opens the sketch state); the chain reads none of it.
+    pub palw_sketch_check: bool,
     /// int-10.2 A1: the most file bytes this process pins (`None` = a quarter of the host's memory).
     pub palw_artifact_pin_max_bytes: Option<u64>,
     /// int-10.2 A2: the widest prefill run (positions a layer at a time) a replay or an attempt runs at
@@ -697,6 +733,10 @@ impl Default for Args {
             palw_drill_decode_rules_at: None,
             palw_drill_fp_v5_at: None,
             palw_drill_held_chunks_at: None,
+            palw_drill_vertex_at: None,
+            palw_drill_witness_at: None,
+            palw_drill_audit_mesh_at: None,
+            palw_drill_capped_at: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -709,6 +749,7 @@ impl Default for Args {
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
             palw_drill_refuse_leaf_evidence: false,
+            palw_drill_vertex_equivocate_at: None,
             palw_canonical_claims: false,
             palw_canonical_class: None,
             palw_canonical_interval_daa: 600,
@@ -783,6 +824,8 @@ impl Default for Args {
             palw_host_memory_share: None,
             palw_seat_replay_slots: None,
             palw_no_artifact_pin: false,
+            palw_vertex_full_refs: false,
+            palw_sketch_check: false,
             palw_artifact_pin_max_bytes: None,
             palw_prefill_run_max: None,
             palw_host_ledger_dir: None,
@@ -1623,6 +1666,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-vertex-equivocate-at")
+                .long("palw-drill-vertex-equivocate-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "PALW DRILL ONLY (RFC-0007): this seat signs a second, different vertex for one round, once, at the first round \
+                     at or past this DAA — an equivocation, slashed 100 per mille with its locks forfeited and its bond ejected. \
+                     A SALTED TESTNET-12 DRILL ONLY (it needs --palw-drill-genesis-salt and --palw-drill-vertex-at).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-tamper-fp-leaf")
                 .long("palw-drill-tamper-fp-leaf")
                 .env("KASPAD_PALW_DRILL_TAMPER_FP_LEAF")
@@ -1828,6 +1882,72 @@ pub fn cli() -> Command {
                      tag 90) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another \
                      fence uses, and unless palw_tir_v1 and palw_held_context are in force at or below it (--palw-drill-tir-at \
                      arms the first).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-vertex-at")
+                .long("palw-drill-vertex-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0007's verification vertex (palw_verification_vertex_v1, object \
+                     tags 100 and 101) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height \
+                     another fence uses, and unless palw_verification_v2, palw_rcore_plus, palw_unavailable_abstains, \
+                     palw_panel_economy and palw_objective_offence are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-witness-at")
+                .long("palw-drill-witness-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0007 Part II's witness manifest (palw_witness_manifest_v1) at this \
+                     DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, and \
+                     unless palw_tir_v1 and palw_unavailable_abstains are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-audit-mesh-at")
+                .long("palw-drill-audit-mesh-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0007 Part IV.1's audit mesh (palw_audit_mesh_v1, object tags 102 and \
+                     103) at this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence \
+                     uses, and unless palw_verification_vertex_v1, palw_tir_v1 and palw_panel_economy are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-capped-at")
+                .long("palw-drill-capped-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm RFC-0007 Part IV.2's capped onboarding (palw_capped_onboarding_v1) at \
+                     this DAA on the drill chain. Nothing else moves. Refused without the salt, at 0, at a height another fence uses, \
+                     and unless palw_audit_mesh_v1, palw_admission_independence and palw_registry_resilience are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-sketch-check")
+                .long("palw-sketch-check")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW (RFC-0007 Part II): run the seat-local algebraic checker's MIRROR beside every full replay of an IR class \
+                     this seat holds — the seat produces the claim's witness itself, checks it against sketches only it can derive, and \
+                     compares the verdict with the replay's. A disagreement is logged at error level and counted in the status line. \
+                     Off by default; node policy only (the chain reads none of it).",
+                ),
+        )
+        .arg(
+            Arg::new("palw-vertex-full-refs")
+                .long("palw-vertex-full-refs")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW (RFC-0007): name each claim by its whole 64-byte id in this seat's verification vertices, \
+                     instead of by the DAA its panel bound at and a 16-byte prefix (the default, 20 bytes a leaf). The chain \
+                     accepts both; this changes nothing below palw_verification_vertex_v1.",
                 ),
         )
         .arg(
@@ -2932,6 +3052,12 @@ impl Args {
             palw_drill_decode_rules_at: m.get_one::<u64>("palw-drill-decode-rules-at").copied(),
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
+            palw_drill_vertex_at: m.get_one::<u64>("palw-drill-vertex-at").copied(),
+            palw_drill_witness_at: m.get_one::<u64>("palw-drill-witness-at").copied(),
+            palw_drill_audit_mesh_at: m.get_one::<u64>("palw-drill-audit-mesh-at").copied(),
+            palw_drill_capped_at: m.get_one::<u64>("palw-drill-capped-at").copied(),
+            palw_sketch_check: arg_match_unwrap_or::<bool>(&m, "palw-sketch-check", defaults.palw_sketch_check),
+            palw_vertex_full_refs: arg_match_unwrap_or::<bool>(&m, "palw-vertex-full-refs", defaults.palw_vertex_full_refs),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
@@ -2950,6 +3076,7 @@ impl Args {
                 .get_one::<bool>("palw-drill-refuse-leaf-evidence")
                 .copied()
                 .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
+            palw_drill_vertex_equivocate_at: m.get_one::<u64>("palw-drill-vertex-equivocate-at").copied(),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m

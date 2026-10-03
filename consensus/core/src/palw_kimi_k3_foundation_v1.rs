@@ -446,8 +446,7 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: true,
             span_stable: true,
-            admission_jury_seated: jury,
-        };
+            admission_jury_seated: jury, capped_entry: false, };
         let mut s = PalwModelLifecycleV1::Candidate;
         s = palw_lifecycle_step_v1(s, &calm(ready, false), &profile, &g);
         assert_eq!(s, PalwModelLifecycleV1::Candidate, "the registrant cannot seat the jury alone");

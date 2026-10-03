@@ -178,8 +178,13 @@ struct Sim {
 
 impl Sim {
     async fn new(at: Option<u64>) -> Self {
+        Self::from_ruleset(verify_ruleset(at)).await
+    }
+
+    /// A simulation over any ruleset the harness can build (RFC-0007's vertex fence rides this one).
+    async fn from_ruleset(ruleset: (Config, PalwConsensusParamsV2, Utxos, Utxos)) -> Self {
         kaspa_core::log::try_init_logger("warn");
-        let (config, bundle, premine, floats) = verify_ruleset(at);
+        let (config, bundle, premine, floats) = ruleset;
         let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -1727,4 +1732,395 @@ async fn adr0160_vt3_the_8k_network_at_the_x10_room() {
         "{{\"run\":\"vt3-8k-network\",\"armed\":{armed},\"daa\":{daa_len},\"bonds\":{bonds},\"lic_delay\":{lic_delay},\"accepted_8k\":{accepted},\"per_80_daa\":{per_80:.1},\"holds\":{holds:?},\"elapsed_s\":{}}}",
         started.elapsed().as_secs()
     ));
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// RFC-0007 Part I (spec 18): the verification vertex on a real testnet-12 chain, through real blocks
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Testnet-12 as launched with harness keys, the verification vertex fence at `at` through its own entry (the field and the fold's mirror),
+/// exactly as `--palw-drill-vertex-at` sets it.
+fn vertex_ruleset(at: u64) -> (Config, PalwConsensusParamsV2, Utxos, Utxos) {
+    let (config, released_bundle, premine, floats) = t12_with_harness_cards();
+    let mut params: Params = config.params.clone();
+    (kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_ENTRY_V1.set)(&mut params, Some(ForkActivation::new(at)));
+    params.validate_palw_v2().expect("testnet-12 with the verification vertex armed is a runnable ruleset");
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
+    assert_eq!(bundle.state.vertex_from_daa(), Some(at), "the fold's mirror followed");
+    assert_eq!(bundle.panel, released_bundle.panel, "the fence is a Params field: the panel does not move");
+    let bundle = bundle.clone();
+    (config, bundle, premine, floats)
+}
+
+impl Sim {
+    /// **Every seat's vertex over `claims`, signed now**: one vertex a seat, a `Valid` leaf (compact reference unless `full`) for every claim
+    /// whose panel seats it. Real ML-DSA-87 by the key the chain registered.
+    fn vertices(&self, claims: &[Hash64], full: bool) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVerificationVertexV1> {
+        use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexLeafV1};
+        let state = self.state();
+        let now = self.daa();
+        let mut leaves: BTreeMap<PalwBondKeyV2, Vec<PalwVertexLeafV1>> = BTreeMap::new();
+        for claim in claims {
+            let Some(panel) = state.panel(claim) else { continue };
+            for seat in &panel.seats {
+                let reference = if full {
+                    PalwClaimRefV1::Full(*claim)
+                } else {
+                    PalwClaimRefV1::compact_of(claim, panel.bound_daa).expect("a DAA that fits 32 bits")
+                };
+                leaves.entry(seat.bond).or_default().push(PalwVertexLeafV1::Verdict { claim: reference, verdict: PalwReceiptVerdictV2::Valid });
+            }
+        }
+        leaves
+            .into_iter()
+            .map(|(seat, leaves)| {
+                let n = self.keys[&seat];
+                PalwVerificationVertexV1::sign_v1(self.domain, seat, now, leaves, |message, context| Some(sign(n, message, context)))
+                    .expect("a non-empty vertex")
+            })
+            .collect()
+    }
+}
+
+fn vertex_object(v: kaspa_consensus_core::palw_vertex_v1::PalwVerificationVertexV1) -> Obj {
+    Obj::VerificationVertexV1 { vertex: Box::new(v) }
+}
+
+/// **RFC-0007 Part I crossed on a real chain** (the memory rule "a flag day needs a drill that crosses it"): the vertex fence at `H`, a chain from
+/// genesis to well past it, real blocks, real ML-DSA-87.
+///
+/// * a vertex below `H` is dropped by name and licenses nothing; a claim bound below `H` licenses on the receipt path, **also when the licence
+///   lands after `H`** (the cross-fence claim: no stranding);
+/// * claims bound at or after `H` license by TALLY: eight vertices (one a seat, compact references) license every one, and no licence object
+///   is carried; a receipt licence for one of them is refused by name at the gate and by the assemblers;
+/// * the equivocating seat — two vertices of one round — is slashed 100 ‰ by the evidence block and its bond ejected;
+/// * the carriage per licence, measured in transient mass against the receipt path's.
+#[tokio::test]
+async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
+    const H: u64 = 70;
+    let mut s = Sim::from_ruleset(vertex_ruleset(H)).await;
+    let base = s.base;
+    let anchor_delay = s.chain.bundle.panel.anchor_delay();
+    // ---- below the fence: claims bound before H -------------------------------------------------------------------
+    s.beat_to(34).await;
+    let mut old_path = Vec::new();
+    for card in 0..4 {
+        let (claim, created) = s.attempt(Who::Card(card), base, Vec::new()).await;
+        assert!(created, "card {card}'s floor claim below the fence");
+        old_path.push(claim);
+    }
+    s.beat_to(34 + anchor_delay).await;
+    s.attempt(Who::Card(4), base, Vec::new()).await;
+    let bound = s.bound_claims();
+    assert!(old_path.iter().all(|c| bound.contains(c)), "the four bound at their anchor ({bound:?})");
+    assert!(s.daa() < H, "still below the fence at DAA {}", s.daa());
+    // A vertex below the fence: dropped by name at the gate, and the walk drops it with the block standing.
+    {
+        let vertices = s.vertices(&old_path[..1], false);
+        let object = vertex_object(vertices[0].clone());
+        let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
+        let refused = vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect_err("below the fence");
+        assert!(refused.contains("below palw_verification_vertex_v1"), "{refused}");
+        assert!(vp.palw_v2_accepted_objects_for_tests(&tip, &sp, &point, vec![object.clone()], s.chain.sink()).is_empty(), "dropped");
+        let tx = s.carrier(object).expect("funding");
+        s.queued.push(tx);
+        s.beat().await;
+        s.beat().await;
+        assert_eq!(s.state().vertex_counts_v1(), (0, 0, 0), "a vertex below the fence writes nothing");
+    }
+    // One of them licenses by receipts below H (the old path, as ever): this carrier is the receipt-path baseline for the carriage numbers.
+    let single = s.single_licence(old_path[0]);
+    let single_tx = s.carrier(single).expect("funding");
+    let receipt_mass = s.transient_mass(&single_tx);
+    s.queued.push(single_tx);
+    s.beat().await;
+    s.beat().await;
+    assert!(matches!(s.state().claim(&old_path[0]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed by receipts below H");
+
+    // ---- across the fence: claims bound at or after H ---------------------------------------------------------------
+    s.beat_to(H - 2).await;
+    let mut by_tally = Vec::new();
+    for card in 0..6 {
+        let (claim, created) = s.attempt(Who::Card(card % 8), base, Vec::new()).await;
+        assert!(created, "a floor claim straddling the fence");
+        by_tally.push(claim);
+    }
+    s.beat_to(H - 2 + anchor_delay).await;
+    s.attempt(Who::Card(7), base, Vec::new()).await;
+    assert!(s.daa() >= H, "past the fence at DAA {}", s.daa());
+    let bound = s.bound_claims();
+    assert!(by_tally.iter().all(|c| bound.contains(c)), "the straddling claims are bound ({bound:?})");
+    let state = s.state();
+    for claim in &by_tally {
+        assert!(state.panel(claim).unwrap().bound_daa >= H, "bound at or after the fence");
+    }
+    for claim in &old_path[1..] {
+        assert!(state.panel(claim).unwrap().bound_daa < H, "the old-path claims bound below it");
+    }
+    // The path rule at the gate: a receipt licence for a tally claim is refused by name; the assemblers offer nothing for it.
+    {
+        let receipts = s.v3_receipts(by_tally[0]);
+        let object = Obj::ReceiptLicensedV2 { claim: by_tally[0], receipts: receipts.clone() };
+        let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
+        let refused = vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect_err("the receipt path is closed");
+        assert!(refused.contains("licenses by tally"), "{refused}");
+        assert!(vp.palw_v2_receipt_coverage_assemble_impl(by_tally[0], &receipts).is_none(), "the assembler offers nothing for it");
+        // …and the old-path claim is still offered one past the fence: no stranding.
+        assert!(
+            vp.palw_v2_receipt_coverage_assemble_impl(old_path[1], &s.v3_receipts(old_path[1])).is_some(),
+            "a claim bound before the fence still licenses on receipts"
+        );
+    }
+    // The cross-fence claim: bound below H, licensed on the old path AFTER H.
+    let cross = s.single_licence(old_path[1]);
+    let cross_tx = s.carrier(cross).expect("funding");
+    s.queued.push(cross_tx);
+    // Eight vertices, one a seat, over the straddling claims AND a claim of the old path (whose leaf must count for nothing).
+    let mut claims_for_vertices = by_tally.clone();
+    claims_for_vertices.push(old_path[2]);
+    let vertices = s.vertices(&claims_for_vertices, false);
+    assert!(vertices.len() >= 5, "a panel's worth of seats signed: {}", vertices.len());
+    let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
+    let mut vertex_mass = 0u64;
+    let mut vertex_bytes = 0usize;
+    for v in &vertices {
+        let object = vertex_object(v.clone());
+        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect("a signed vertex passes the gate past the fence");
+        let tx = s.carrier(object).expect("funding");
+        vertex_mass += s.transient_mass(&tx);
+        vertex_bytes += tx.payload.len();
+        s.queued.push(tx);
+    }
+    for _ in 0..4 {
+        s.beat().await;
+    }
+    let st = s.state();
+    for claim in &by_tally {
+        assert!(
+            matches!(st.claim(claim).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::ReceiptLicensed { .. })),
+            "claim {claim} licensed by tally"
+        );
+        assert!(st.vertex_tally_of_v1(claim).is_none(), "and holds no tally once licensed");
+    }
+    assert!(
+        matches!(st.claim(&old_path[1]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "the cross-fence claim licensed on the old path after H"
+    );
+    assert!(
+        matches!(st.claim(&old_path[2]).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) && st.vertex_tally_of_v1(&old_path[2]).is_none(),
+        "a leaf naming a claim bound before the fence counted for nothing"
+    );
+    let (rows, tallies, held) = st.vertex_counts_v1();
+    assert!(rows >= 5 && tallies == 0 && held == 0, "one row a vertex, no tally left: {:?}", st.vertex_counts_v1());
+    out_line(format!(
+        "{{\"rfc7_vertex\":1,\"claims_licensed_by_tally\":{},\"vertices\":{},\"vertex_payload_bytes\":{vertex_bytes},\"vertex_transient_mass\":{vertex_mass},\"mass_per_licence\":{},\"receipt_licence_transient_mass\":{receipt_mass}}}",
+        by_tally.len(),
+        vertices.len(),
+        vertex_mass / by_tally.len() as u64
+    ));
+    assert!(vertex_mass / (by_tally.len() as u64) < receipt_mass, "per licence the vertices carry less than the five-receipt licence");
+
+    // ---- equivocation: a seat signs one round twice ---------------------------------------------------------------------
+    let seat_card = 2usize;
+    let seat = s.chain.bonds[seat_card];
+    let before = s.state().bond(&seat).unwrap().clone();
+    assert!(matches!(before.status, PalwBondStatusV2::Active));
+    let now = s.daa();
+    use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
+    let n = s.keys[&seat];
+    let leaf = |claim: Hash64, verdict| PalwVertexLeafV1::Verdict { claim: PalwClaimRefV1::Full(claim), verdict };
+    let a = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Valid)], |m, c| Some(sign(n, m, c))).unwrap();
+    let b = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Sampled)], |m, c| Some(sign(n, m, c))).unwrap();
+    assert_eq!((a.round, a.seat_bond), (b.round, b.seat_bond));
+    let tx_a = s.carrier(vertex_object(a.clone())).expect("funding");
+    let tx_b = s.carrier(vertex_object(b.clone())).expect("funding");
+    s.queued.push(tx_a);
+    s.queued.push(tx_b);
+    s.beat().await;
+    s.beat().await;
+    // The first landed; the second was dropped as the round's second vertex — and this node's own watch caught the pair.
+    assert!(s.state().vertex_round_row_v1(a.round, &seat).is_some_and(|row| !row.convicted && row.leaves_root == a.leaves_root));
+    let pending = s.vp().palw_v2_pending_vertex_equivocations_impl();
+    assert!(
+        pending.iter().any(|ev| ev.a.seat_bond == seat && ev.a.round == a.round),
+        "the node's watch holds the evidence of the seat's two vertices"
+    );
+    let evidence = pending.into_iter().find(|ev| ev.a.seat_bond == seat && ev.a.round == a.round).unwrap();
+    let evidence_object = Obj::VertexEquivocationV1 { evidence: Box::new(evidence.clone()) };
+    {
+        let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
+        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&evidence_object)).expect("the evidence carries both signatures");
+        // Hostile evidence is refused at the gate by name: a forged signature on one side.
+        let mut forged = evidence.clone();
+        forged.b.signature = sign(15, b"not the vertex message", PALW_VERTEX_CONTEXT);
+        let refused = vp
+            .palw_v2_validate_objects(&tip, &sp, &point, &[Obj::VertexEquivocationV1 { evidence: Box::new(forged) }])
+            .expect_err("a forged side");
+        assert!(refused.contains("does not verify"), "{refused}");
+    }
+    let tx = s.carrier(evidence_object).expect("funding");
+    s.queued.push(tx);
+    s.beat().await;
+    s.beat().await;
+    let after = s.state().bond(&seat).unwrap().clone();
+    assert!(s.state().vertex_round_row_v1(a.round, &seat).unwrap().convicted, "the pair is convicted");
+    assert!(matches!(after.status, PalwBondStatusV2::Retiring { .. }), "the bond is ejected");
+    let penalty = u64::try_from(before.collateral as u128 * 100 / 1_000).unwrap();
+    assert!(before.collateral - after.collateral >= penalty, "at least 100 per mille of the bond: {} -> {}", before.collateral, after.collateral);
+    assert!(s.vp().palw_v2_pending_vertex_equivocations_impl().iter().all(|ev| ev.a.seat_bond != seat), "convicted evidence leaves the watch");
+    out_line(format!(
+        "{{\"rfc7_vertex_equivocation\":1,\"collateral_before\":{},\"collateral_after\":{},\"penalty_permille\":100,\"status\":\"{:?}\"}}",
+        before.collateral, after.collateral, after.status
+    ));
+
+    // ---- the chain is chain data: below the fence an armed node IS a released node, and a second armed node reaches the same root ---------------
+    let armed_blocks = s.inserted.clone();
+    let released = {
+        let (config, bundle, premine, floats) = t12_with_harness_cards();
+        t12_genesis_chain(&config, &bundle, &premine, &floats)
+    };
+    let mut compared = 0;
+    for block in &armed_blocks {
+        if block.header.daa_score >= H {
+            break;
+        }
+        released
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("the released node refuses an armed block below H: {e}"));
+        let tip = block.header.hash;
+        let armed_root = s.vp().palw_state_v2_store.read().state_root_of(tip).expect("the armed node's root of the block");
+        let released_root = released.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
+        assert_eq!(released_root, armed_root, "block {tip} at DAA {}: one root below the fence", block.header.daa_score);
+        compared += 1;
+    }
+    assert!(compared > 30, "{compared} blocks compared below the fence");
+    let second = {
+        let (config, bundle, premine, floats) = vertex_ruleset(H);
+        t12_genesis_chain(&config, &bundle, &premine, &floats)
+    };
+    for block in &armed_blocks {
+        second.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a second armed node takes the chain");
+    }
+    assert_eq!(second.sink(), s.chain.sink(), "the same sink");
+    assert_eq!(second.tip_state().1.state_root(), s.root(), "the same PALW root on a second armed node: the vertex rules are chain data");
+}
+
+/// The signing context of a vertex (the test forges a signature under it).
+const PALW_VERTEX_CONTEXT: &[u8] = kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_MLDSA87_CONTEXT_V1;
+
+/// [`vertex_ruleset`] over testnet-12 with ADR-0160's capacity fences armed from genesis as well (ρ = 10, F-B, F-R), so one planted 1M bond makes the
+/// claims a DAA the carriage measurement needs.
+fn vertex_capacity_ruleset(at: u64) -> (Config, PalwConsensusParamsV2, Utxos, Utxos) {
+    let (config, _bundle, premine, floats) = verify_ruleset(Some(0));
+    let mut params: Params = config.params.clone();
+    (kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_ENTRY_V1.set)(&mut params, Some(ForkActivation::new(at)));
+    params.validate_palw_v2().expect("a runnable ruleset");
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
+    let bundle = bundle.clone();
+    (config, bundle, premine, floats)
+}
+
+/// **RFC-0007 §I.9, measured: the carriage per licence of the vertex path against the receipt path**, on a real chain at several issuance rates (a
+/// planted 1M bond making `CAP_PER_DAA` floor claims a DAA, as ADR-0160's V-T2 does): each DAA the eight seats sign one vertex over every claim
+/// bound and not yet answered (compact references, at most 1,024 leaves a vertex), the vertices ride as ordinary carriers, the fold licenses by
+/// tally. JSON lines to `CAP_OUT`: the transient mass and the payload bytes of the vertices per licence, per block, and the accept → licence tail.
+#[tokio::test]
+#[ignore = "a measurement run (RFC-0007 §I.9): minutes; run with --ignored"]
+async fn rfc7_vertex_carriage_per_licence() {
+    let daa_len: u64 = env_or("CAP_DAA", 24);
+    let per_daa: u64 = env_or("CAP_PER_DAA", 24);
+    let lic_delay: u64 = env_or("CAP_LIC_DELAY", 1);
+    let full_refs: bool = env_or("CAP_FULL_REFS", 0u64) == 1;
+    let mut s = Sim::from_ruleset(vertex_capacity_ruleset(0)).await;
+    let base = s.base;
+    s.beat_to(34).await;
+    let subject = s.plant_bonds(8, 1, env_or("CAP_BOND_MSK", 1_000_000), false)[0];
+    let started = std::time::Instant::now();
+    let mut sent: BTreeSet<Hash64> = BTreeSet::new();
+    let mut accepted: BTreeMap<Hash64, u64> = BTreeMap::new();
+    let mut vertex_txs = 0u64;
+    let mut vertex_mass = 0u64;
+    let mut vertex_bytes = 0u64;
+    let mut per_block: Vec<(u64, u64, u64)> = Vec::new();
+    let calc = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&s.chain.config.params);
+    for rel in 0..daa_len {
+        let card = (rel % 8) as usize;
+        let txs = s.take_carriers();
+        s.attempt(Who::Card(card), base, txs).await;
+        for _ in 0..per_daa {
+            if s.ready(Who::Planted(8), base).is_err() {
+                break;
+            }
+            let txs = s.take_carriers();
+            let (claim, created) = s.attempt(Who::Planted(8), base, txs).await;
+            if created {
+                accepted.insert(claim, s.daa());
+            }
+        }
+        // One vertex a seat over every due claim (the seats' verdicts of the DAA), in groups the leaf cap allows.
+        let due = s.due(lic_delay, &sent);
+        for group in due.chunks(1_000) {
+            for v in s.vertices(group, full_refs) {
+                let Some(tx) = s.carrier(vertex_object(v)) else { break };
+                vertex_txs += 1;
+                vertex_mass += calc.calc_non_contextual_masses(&tx).transient_mass;
+                vertex_bytes += tx.payload.len() as u64;
+                s.queued.push(tx);
+            }
+            sent.extend(group.iter().copied());
+        }
+        let before = s.daa();
+        for _ in 0..8 {
+            let txs = s.take_carriers();
+            let carried = txs.iter().filter(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE).count() as u64;
+            let mass: u64 = txs.iter().map(|tx| calc.calc_non_contextual_masses(tx).transient_mass).sum();
+            let block = s.chain.heartbeat(s.chain.config.params.target_time_per_block(), txs).await;
+            s.blocks += 1;
+            s.inserted.push(block);
+            if carried > 0 {
+                per_block.push((s.daa(), carried, mass));
+            }
+            if s.daa() > before {
+                break;
+            }
+        }
+        if rel % 5 == 0 {
+            eprintln!("[cap-verify] rfc7 rel {rel} daa {} accepted {} sent {} elapsed {:?}", s.daa(), accepted.len(), sent.len(), started.elapsed());
+        }
+    }
+    let st = s.state();
+    let mut accept_to_licence = Vec::new();
+    let mut licensed = 0u64;
+    for (claim, at) in &accepted {
+        if let Some(c) = st.claim(claim)
+            && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = c.phase
+        {
+            licensed += 1;
+            accept_to_licence.push(licensed_daa - at);
+        }
+    }
+    let per = |n: u64| if licensed == 0 { 0 } else { n / licensed };
+    out_line(format!(
+        "{{\"run\":\"rfc7-vertex\",\"full_refs\":{full_refs},\"daa\":{daa_len},\"claims_a_daa\":{per_daa},\"accepted\":{},\"licensed_by_tally\":{licensed},\"vertex_txs\":{vertex_txs},\"vertex_payload_bytes\":{vertex_bytes},\"vertex_transient_mass\":{vertex_mass},\"payload_bytes_per_licence\":{},\"transient_mass_per_licence\":{},\"receipt_licence_transient_mass\":125768,\"accept_to_licence_p50\":{},\"p90\":{},\"max\":{},\"blocks_carrying\":{},\"max_block_mass\":{},\"subject\":\"{subject:?}\",\"elapsed_s\":{}}}",
+        accepted.len(),
+        per(vertex_bytes),
+        per(vertex_mass),
+        percentile(&mut accept_to_licence.clone(), 50),
+        percentile(&mut accept_to_licence.clone(), 90),
+        accept_to_licence.iter().max().copied().unwrap_or(0),
+        per_block.len(),
+        per_block.iter().map(|(_, _, m)| *m).max().unwrap_or(0),
+        started.elapsed().as_secs()
+    ));
+    for (daa, n, mass) in &per_block {
+        out_line(format!("{{\"run\":\"rfc7-vertex\",\"block_daa\":{daa},\"lifecycle_txs\":{n},\"transient_mass\":{mass}}}"));
+    }
+    assert!(licensed > 0, "the tally licensed claims");
 }

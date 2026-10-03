@@ -144,6 +144,15 @@ impl PalwBackendRegistry {
         Some(misaka_palw_sdk::lineages::tir::TirLineageV1::backend(&entry, self.sdk.court(), self.sdk.prompt_ids_form()))
     }
 
+    /// **The IR class entry of a chain-named class** — the held artifact itself (its plan, its params, its program), for the verbs that
+    /// read weights directly rather than through a backend (RFC-0007 Part II's sketch checker and its mirror). `None` when no holding
+    /// is an IR artifact of exactly this `(class_id, artifact_root)`.
+    pub fn tir_entry_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<misaka_palw_sdk::lineage::PalwTirClassEntryV1> {
+        misaka_palw_sdk::tir_registration::tir_entries_of_v1(&self.holdings)
+            .into_iter()
+            .find(|e| e.class_id() == class_id && e.artifact_root == artifact_root)
+    }
+
     /// **The generative backend for a chain-named pipeline class, concretely** (RFC-0003 §II.2.1) — for the
     /// verbs only a pipeline class has (the tensor worker, a seat's replay, a court's output close). `None`
     /// when no holding is a generative artifact of exactly this `(class_id, artifact_root)`: the class is not

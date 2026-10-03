@@ -2916,6 +2916,25 @@ pub struct Params {
     /// below the height are untouched.
     pub palw_held_close_chunks_v1: Option<ForkActivation>,
 
+    /// **RFC-0007 Part I (spec 18): verification vertices, licence by tally, equivocation evidence and `Held` leaves**
+    /// ([`crate::palw_vertex_v1`]) — a seat signs one vertex per round of its verdicts, the fold tallies the leaves and licenses a claim
+    /// when its panel's `Valid` leaves reach quorum, two vertices of one round are slashed, and DA attestations ride as `Held` leaves.
+    /// A bare height; `None` on every preset (testnet-12 included) until a later flag day arms it. Hashed Some-only in every writer with
+    /// the `never()` collapse, so a build without the field and a dormant network fingerprint alike; mirrored on the V2 bundle's state
+    /// params (`vertex_from_daa`, written by [`Self::sync_palw_verification_vertex_v1`]) because the fold holds only the bundle.
+    /// [`Self::validate_palw_verification_vertex_v1`] refuses it off ConsensusV2 and without its prerequisites in force at or below it.
+    /// Claims whose panels bound below the height license on the receipt path until they are licensed or void (spec 18 §18.6).
+    pub palw_verification_vertex_v1: Option<ForkActivation>,
+
+    /// **RFC-0007 Part II (spec 18): the witness root in the trace manifest** ([`crate::palw_mesh_v1`]) — a class registered at or past the height pins a witness profile; its attempts commit `1 + witness_chunks` trace chunks under the v2 manifest root, so an `Unavailable` verdict can name a witness chunk. A bare height; `None` on every preset until a later flag day arms it; Some-only in every hash with the `never()` collapse; mirrored on the V2 bundle (`witness_manifest_from_daa`).
+    pub palw_witness_manifest_v1: Option<ForkActivation>,
+
+    /// **RFC-0007 Part IV.1 (spec 18): the global audit mesh** ([`crate::palw_mesh_v1`]) — post-commit audit draws over all bonded seats, `Audited` leaves, `TrapCommitted` / `TrapRevealed`, audit pay. A bare height; `None` on every preset; needs `palw_verification_vertex_v1`; mirrored on the V2 bundle (`audit_mesh_from_daa`).
+    pub palw_audit_mesh_v1: Option<ForkActivation>,
+
+    /// **RFC-0007 Part IV.2 (spec 18): staged onboarding (capped mode)** ([`crate::palw_mesh_v1`]) — the `Capped` lifecycle state, the weight cap, provisional rewards and the re-verification window. A bare height; `None` on every preset; needs `palw_audit_mesh_v1`; mirrored on the V2 bundle (`capped_from_daa`).
+    pub palw_capped_onboarding_v1: Option<ForkActivation>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3912,6 +3931,11 @@ impl Params {
         self.validate_palw_improvement_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
+        // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
+        self.validate_palw_verification_vertex_v1()?;
+        self.validate_palw_witness_manifest_v1()?;
+        self.validate_palw_audit_mesh_v1()?;
+        self.validate_palw_capped_onboarding_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6150,6 +6174,19 @@ impl Params {
         // RFC-0003's held leaf challenge, likewise.
         if self.palw_held_close_chunks_v1 == Some(ForkActivation::never()) {
             self.palw_held_close_chunks_v1 = None;
+        }
+        // RFC-0007's verification vertex, likewise.
+        if self.palw_verification_vertex_v1 == Some(ForkActivation::never()) {
+            self.palw_verification_vertex_v1 = None;
+        }
+        if self.palw_witness_manifest_v1 == Some(ForkActivation::never()) {
+            self.palw_witness_manifest_v1 = None;
+        }
+        if self.palw_audit_mesh_v1 == Some(ForkActivation::never()) {
+            self.palw_audit_mesh_v1 = None;
+        }
+        if self.palw_capped_onboarding_v1 == Some(ForkActivation::never()) {
+            self.palw_capped_onboarding_v1 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9412,6 +9449,10 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_verification_vertex_v1,
+            palw_witness_manifest_v1,
+            palw_audit_mesh_v1,
+            palw_capped_onboarding_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9651,6 +9692,10 @@ impl Params {
             ("palw_tir_fence2", *palw_tir_fence2),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
+            ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
+            ("palw_witness_manifest_v1", *palw_witness_manifest_v1),
+            ("palw_audit_mesh_v1", *palw_audit_mesh_v1),
+            ("palw_capped_onboarding_v1", *palw_capped_onboarding_v1),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9916,6 +9961,23 @@ impl Params {
         // RFC-0003's held leaf challenge, NAMED likewise: it changes which court objects open a session.
         if let Some(activation) = self.palw_held_close_chunks_v1 {
             h.write(b"palw_held_close_chunks_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0007's verification vertex, NAMED likewise: it changes which objects a block accepts and how a claim licenses.
+        if let Some(activation) = self.palw_verification_vertex_v1 {
+            h.write(b"palw_verification_vertex_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_witness_manifest_v1 {
+            h.write(b"palw_witness_manifest_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_audit_mesh_v1 {
+            h.write(b"palw_audit_mesh_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_capped_onboarding_v1 {
+            h.write(b"palw_capped_onboarding_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
@@ -10428,6 +10490,10 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_verification_vertex_v1,
+            palw_witness_manifest_v1,
+            palw_audit_mesh_v1,
+            palw_capped_onboarding_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -11137,6 +11203,19 @@ impl Params {
         if let Some(activation) = palw_held_close_chunks_v1.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0007's verification vertex. Some-only, a bare height.
+        if let Some(activation) = palw_verification_vertex_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_witness_manifest_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_audit_mesh_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capped_onboarding_v1.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11569,6 +11648,10 @@ impl Params {
             palw_tir_fence2,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
+            palw_verification_vertex_v1,
+            palw_witness_manifest_v1,
+            palw_audit_mesh_v1,
+            palw_capped_onboarding_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -12329,6 +12412,23 @@ impl Params {
             h.write(b"palw_held_close_chunks_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0007's verification vertex, Some-only for the same reason.
+        if let Some(activation) = palw_verification_vertex_v1 {
+            h.write(b"palw_verification_vertex_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_witness_manifest_v1 {
+            h.write(b"palw_witness_manifest_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_audit_mesh_v1 {
+            h.write(b"palw_audit_mesh_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capped_onboarding_v1 {
+            h.write(b"palw_capped_onboarding_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12979,6 +13079,10 @@ impl Params {
             palw_tir_fence2: self.palw_tir_fence2,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
+            palw_verification_vertex_v1: self.palw_verification_vertex_v1,
+            palw_witness_manifest_v1: self.palw_witness_manifest_v1,
+            palw_audit_mesh_v1: self.palw_audit_mesh_v1,
+            palw_capped_onboarding_v1: self.palw_capped_onboarding_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -14041,6 +14145,10 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_verification_vertex_v1: None,
+    palw_witness_manifest_v1: None,
+    palw_audit_mesh_v1: None,
+    palw_capped_onboarding_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14300,6 +14408,10 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_verification_vertex_v1: None,
+    palw_witness_manifest_v1: None,
+    palw_audit_mesh_v1: None,
+    palw_capped_onboarding_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14541,6 +14653,10 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_verification_vertex_v1: None,
+    palw_witness_manifest_v1: None,
+    palw_audit_mesh_v1: None,
+    palw_capped_onboarding_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21564,6 +21680,12 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
     params.sync_palw_held_close_chunks_v1();
+    // RFC-0007's verification vertex, likewise.
+    params.sync_palw_verification_vertex_v1();
+    // RFC-0007 Parts II and IV, likewise.
+    params.sync_palw_witness_manifest_v1();
+    params.sync_palw_audit_mesh_v1();
+    params.sync_palw_capped_onboarding_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21822,6 +21944,10 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_fence2: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
+    palw_verification_vertex_v1: None,
+    palw_witness_manifest_v1: None,
+    palw_audit_mesh_v1: None,
+    palw_capped_onboarding_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,

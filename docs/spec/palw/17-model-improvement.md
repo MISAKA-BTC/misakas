@@ -99,7 +99,9 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
 | 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
 | 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
-| 91 and up | free | the next tag is 91 | |
+| 91 | `VerificationVertexV1` | RFC-0007 Part I (spec 18 §18.1): a seat's one signed vertex of a round's verdicts; the fold tallies its leaves and licenses by tally, under the dormant fence `palw_verification_vertex_v1` (lane V, 2026-10-03) | yes |
+| 92 | `VertexEquivocationV1` | RFC-0007 §I.6 (spec 18 §18.6): two vertices of one `(seat, round)` with different roots; slashed 100 ‰, locks forfeited, bond ejected; unsigned (two signatures are the proof) | yes |
+| 93 and up | free | the next tag is 93 | |
 
 **Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
 a held leaf challenge opens is at a fused IR or pipeline terminal with no phase open, where the court clocks the
@@ -185,9 +187,9 @@ Evaluation jobs are RFC-0003 pipeline jobs, adjudicated by the courts that alrea
 or fault is added only if A6/A7 show one is needed, and takes the next number here. A6 needed three proofs
 (13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
 analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
-evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 91
-and up, court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
-object tags 83–90 are allocated above): a lane asks the core lane before taking one.
+evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 93
+and up (91 and 92 are RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+object tags 83–92 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
 

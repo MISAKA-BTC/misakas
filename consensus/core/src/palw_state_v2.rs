@@ -122,6 +122,10 @@ mod palw_class_seating_v1;
 // RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
 #[path = "palw_held_close_fold_v1.rs"]
 mod palw_held_close_fold_v1;
+#[path = "palw_vertex_fold_v1.rs"]
+mod palw_vertex_fold_v1;
+#[path = "palw_mesh_fold_v1.rs"]
+mod palw_mesh_fold_v1;
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
 /// survives. ADR-0045 added `class_shares` and `epoch_budgets` to the root preimage in their
@@ -1615,6 +1619,20 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **RFC-0007 Part I: `Params::palw_verification_vertex_v1`'s height**, mirrored by
+    /// `Params::sync_palw_verification_vertex_v1` for `held_close_chunks_from_daa`'s reason (the fold's vertex arms and the
+    /// tally read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    vertex_from_daa: Option<u64>,
+    /// **RFC-0007 Part II: `Params::palw_witness_manifest_v1`'s height** (mirrored by `Params::sync_palw_witness_manifest_v1`). `None` on every preset.
+    #[borsh(skip)]
+    witness_manifest_from_daa: Option<u64>,
+    /// **RFC-0007 Part IV.1: `Params::palw_audit_mesh_v1`'s height** (mirrored by `Params::sync_palw_audit_mesh_v1`). `None` on every preset.
+    #[borsh(skip)]
+    audit_mesh_from_daa: Option<u64>,
+    /// **RFC-0007 Part IV.2: `Params::palw_capped_onboarding_v1`'s height** (mirrored by `Params::sync_palw_capped_onboarding_v1`). `None` on every preset.
+    #[borsh(skip)]
+    capped_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1831,6 +1849,10 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            vertex_from_daa: None,
+            witness_manifest_from_daa: None,
+            audit_mesh_from_daa: None,
+            capped_from_daa: None,
         })
     }
 
@@ -1934,7 +1956,9 @@ impl PalwStateParamsV2 {
         if let Some(row) = self.class_verify_row_at(class_id, bound_daa) {
             return row.daa(row.positions_of(shape));
         }
-        let canonical = state.model_lifecycle(class_id).map_or(0, |row| palw_derived_verify_daa_v1(row.work.verification_ccu));
+        let canonical = state
+            .model_lifecycle(class_id)
+            .map_or(0, |row| palw_derived_verify_daa_v1(palw_class_verify_ccu_v1(state, class_id, row.work.verification_ccu)));
         match shape {
             PalwClaimVerifyShapeV1::Attempt => canonical,
             PalwClaimVerifyShapeV1::FreePrompt { .. } => canonical.max(palw_class_fp_verify_daa_v1(state, class_id).unwrap_or(0)),
@@ -2141,6 +2165,71 @@ impl PalwStateParamsV2 {
     pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.held_close_chunks_from_daa = from_daa;
         self
+    }
+
+    /// **RFC-0007 Part I: the verification vertex fence's mirror** — written by
+    /// `Params::sync_palw_verification_vertex_v1` and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_vertex_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.vertex_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_verification_vertex_v1`'s height, if the network arms it (the mirror).
+    pub fn vertex_from_daa(&self) -> Option<u64> {
+        self.vertex_from_daa
+    }
+
+    /// **Is the verification vertex in force at `daa_score`?** `false` on every shipped preset.
+    pub fn vertex_active_at(&self, daa_score: u64) -> bool {
+        self.vertex_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// RFC-0007: the `witness_manifest` fence's mirror — written by its `Params::sync_*` and nothing else (and fixtures).
+    pub fn with_witness_manifest_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.witness_manifest_from_daa = from_daa;
+        self
+    }
+
+    /// RFC-0007: the `witness_manifest` fence's height, if the network arms it (the mirror).
+    pub fn witness_manifest_from_daa(&self) -> Option<u64> {
+        self.witness_manifest_from_daa
+    }
+
+    /// RFC-0007: is the `witness_manifest` fence in force at `daa_score`? `false` on every shipped preset.
+    pub fn witness_manifest_active_at(&self, daa_score: u64) -> bool {
+        self.witness_manifest_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// RFC-0007: the `audit_mesh` fence's mirror — written by its `Params::sync_*` and nothing else (and fixtures).
+    pub fn with_audit_mesh_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.audit_mesh_from_daa = from_daa;
+        self
+    }
+
+    /// RFC-0007: the `audit_mesh` fence's height, if the network arms it (the mirror).
+    pub fn audit_mesh_from_daa(&self) -> Option<u64> {
+        self.audit_mesh_from_daa
+    }
+
+    /// RFC-0007: is the `audit_mesh` fence in force at `daa_score`? `false` on every shipped preset.
+    pub fn audit_mesh_active_at(&self, daa_score: u64) -> bool {
+        self.audit_mesh_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// RFC-0007: the `capped` fence's mirror — written by its `Params::sync_*` and nothing else (and fixtures).
+    pub fn with_capped_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.capped_from_daa = from_daa;
+        self
+    }
+
+    /// RFC-0007: the `capped` fence's height, if the network arms it (the mirror).
+    pub fn capped_from_daa(&self) -> Option<u64> {
+        self.capped_from_daa
+    }
+
+    /// RFC-0007: is the `capped` fence in force at `daa_score`? `false` on every shipped preset.
+    pub fn capped_active_at(&self, daa_score: u64) -> bool {
+        self.capped_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_held_close_chunks_v1`'s height, if the network arms it (the mirror).
@@ -4342,6 +4431,15 @@ pub fn palw_rcore_release_record_holds_v1(state: &PalwChainStateV2, claim_id: &H
 // (`Params::palw_class_verify_deadline`; the pure half is `palw_class_verify_deadline_v1`)
 // ---------------------------------------------------------------------------------------------
 
+/// **The compute a class's verification window is derived from** (RFC-0007 Part II, question 5): the registry's `verification_ccu`
+/// plus, for a class that recorded a witness profile past `palw_witness_manifest_v1`, the compute-equivalent of the witness bytes at
+/// the reference link ([`crate::palw_mesh_v1::palw_witness_ccu_v1`]). **The window reads this; seat pay does not** — pay reads the
+/// registry row, which no witness term touches. Equal to `base` for every class without a profile, which is every class on every
+/// shipped preset.
+pub fn palw_class_verify_ccu_v1(state: &PalwChainStateV2, class_id: &Hash64, base: u128) -> u128 {
+    state.vertex.mesh.witness.get(class_id).map_or(base, |profile| base.saturating_add(crate::palw_mesh_v1::palw_witness_ccu_v1(profile.bytes)))
+}
+
 /// **The deadline of the largest free-prompt run `class_id`'s context holds**, derived:
 /// `5 × window_spans(ccu of that run)` ([`crate::palw_class_verify_deadline_v1::palw_fp_class_verify_ccu_v1`]
 /// over the class's published work profile). `None` where the class has published no profile (no
@@ -4366,7 +4464,9 @@ pub fn palw_class_fp_verify_daa_v1(state: &PalwChainStateV2, class_id: &Hash64) 
 /// post-genesis registration gate (V2b/V2c), not to this claim gate.
 pub fn palw_class_needs_measured_row_v1(params: &PalwStateParamsV2, state: &PalwChainStateV2, class_id: &Hash64) -> bool {
     let Some(row) = state.model_lifecycle(class_id) else { return false };
-    if crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1(row.work.verification_ccu) > params.window_receipt() {
+    if crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1(palw_class_verify_ccu_v1(state, class_id, row.work.verification_ccu))
+        > params.window_receipt()
+    {
         return true;
     }
     state.class_is_held_v1(class_id)
@@ -7763,6 +7863,47 @@ pub enum PalwConsensusObjectV2 {
     HeldLeafChallengeDeclared {
         challenge: Box<crate::palw_held_close_v1::PalwHeldLeafChallengeV1>,
     } = 90,
+    /// **RFC-0007 Part I (spec 18): a seat's verification vertex** — one signed statement of every verdict the seat reached in
+    /// one round ([`crate::palw_vertex_v1::PalwVerificationVertexV1`]). The fold tallies its `Verdict` leaves and licenses a
+    /// claim when its panel's counted `Valid` leaves reach quorum; `Held` leaves are DA attestations. **Its tag is 100, declared
+    /// explicitly** (spec 17 section 17.0: the next free tag). Below `palw_verification_vertex_v1` the acceptance walk drops it
+    /// by name and the fold refuses it as the second lock.
+    VerificationVertexV1 {
+        vertex: Box<crate::palw_vertex_v1::PalwVerificationVertexV1>,
+    } = 100,
+    /// **RFC-0007 §I.6: two vertices of one `(seat, round)` with different roots**
+    /// ([`crate::palw_vertex_v1::PalwVertexEquivocationV1`]): the fold slashes the bond 100 ‰, forfeits the seat's locks on the
+    /// claims the vertices name and ejects the bond. Unsigned: two signatures over one round are the proof, and anyone may carry
+    /// it. **Its tag is 101.** Dropped by name below the fence.
+    VertexEquivocationV1 {
+        evidence: Box<crate::palw_vertex_v1::PalwVertexEquivocationV1>,
+    } = 101,
+    /// **RFC-0007 Part IV.1 (spec 18): a trap setter's commitment** ([`crate::palw_mesh_v1::PalwTrapCommittedV1`]) — `H(claim ‖
+    /// fault leaf ‖ tiles ‖ salt)`, signed by the setter bond, carried before the trap claim. **Tag 102** (this lane's range is
+    /// 100 to 109). Dropped by name below `palw_audit_mesh_v1`.
+    TrapCommittedV1 {
+        trap: Box<crate::palw_mesh_v1::PalwTrapCommittedV1>,
+    } = 102,
+    /// **RFC-0007 Part IV.1: a trap's reveal** ([`crate::palw_mesh_v1::PalwTrapRevealedV1`]) — the claim, the planted tile and the
+    /// salt that open a commitment, after the audit window. The fold slashes the auditors who attested a match on the planted
+    /// tile, pays those who attested the mismatch, and voids the trap claim without slashing its setter. **Tag 103.**
+    TrapRevealedV1 {
+        reveal: Box<crate::palw_mesh_v1::PalwTrapRevealedV1>,
+    } = 103,
+}
+
+/// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_audit_mesh_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it, and the
+/// fold refuses it as the second lock.
+pub fn palw_object_is_mesh_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::TrapCommittedV1 { .. } | PalwConsensusObjectV2::TrapRevealedV1 { .. })
+}
+
+/// **Is this object an RFC-0007 verification vertex move** (tag 100 or 101) — a variant an older build cannot decode and skips
+/// (A-2)? Below `Params::palw_verification_vertex_v1` the acceptance walk drops it by name before any slot, rent or budget is
+/// charged for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_vertex_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::VerificationVertexV1 { .. } | PalwConsensusObjectV2::VertexEquivocationV1 { .. })
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -10029,6 +10170,15 @@ pub enum PalwStateV2Error {
     /// fence, off the held regime, a leaf outside the claim's step space, a claim of no IR or pipeline class).
     #[error("a held leaf challenge is refused: {0}")]
     HeldLeafChallengeRefused(String),
+    /// **RFC-0007 Part I: a verification vertex move the fold refuses**, by the rule's own reason (below the fence, a
+    /// malformed vertex, a second vertex in a round, an inadmissible equivocation, or a receipt licence for a claim that licenses
+    /// by tally).
+    #[error("a verification vertex move is refused: {0}")]
+    VertexRefused(String),
+    /// **RFC-0007 Parts II and IV: a mesh move the fold refuses** (a trap object below its fence, an inadmissible commit or reveal,
+    /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
+    #[error("an audit mesh move is refused: {0}")]
+    MeshRefused(String),
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -10298,6 +10448,11 @@ pub struct PalwChainStateV2 {
     /// release's retention bound; a class is never removed, so a row never outlives its class. Enters the root
     /// and the carriage (tail `0xE0`) only once written, which nothing below the fence can do.
     class_court_windows: BTreeMap<Hash64, u64>,
+    /// **RFC-0007 Part I: the verification vertex's three tables** — the `(round, seat)` rows that make "one vertex per seat
+    /// per round" and equivocation answerable, each live claim's tally of counted verdict leaves, and the `Held` attestations.
+    /// One Some-only root block and one carriage tail (`0xE4`) once any row exists, which nothing below
+    /// `Params::palw_verification_vertex_v1` can write.
+    vertex: crate::palw_vertex_v1::PalwVertexStateV1,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -10795,6 +10950,7 @@ impl PalwChainStateV2 {
             held_leaf_demands: BTreeMap::new(),
             class_step_ladders: BTreeMap::new(),
             class_court_windows: BTreeMap::new(),
+            vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -11989,6 +12145,89 @@ impl PalwChainStateV2 {
     /// takes the rule exactly as the release before this one folded it.
     pub fn class_model_court_window_v1(&self, class_id: &Hash64) -> Option<u64> {
         self.class_court_windows.get(class_id).copied()
+    }
+
+    /// **RFC-0007 Part II: a class's witness profile**, if it recorded one past `palw_witness_manifest_v1`.
+    pub fn mesh_witness_profile_v1(&self, class_id: &Hash64) -> Option<&crate::palw_mesh_v1::PalwWitnessProfileRowV1> {
+        self.vertex.mesh.witness.get(class_id)
+    }
+
+    /// **RFC-0007 Part IV.1: a claim's audit row**, while it stands.
+    pub fn mesh_audit_row_v1(&self, claim: &Hash64) -> Option<&crate::palw_mesh_v1::PalwAuditRowV1> {
+        self.vertex.mesh.audits.get(claim)
+    }
+
+    /// **RFC-0007 Part IV.1: the trap row of a commitment**, while it is open.
+    pub fn mesh_trap_row_v1(&self, commitment: &Hash64) -> Option<&crate::palw_mesh_v1::PalwTrapRowV1> {
+        self.vertex.mesh.traps.get(commitment)
+    }
+
+    /// **RFC-0007 Part IV.2: a claim's capped row**, while it stands.
+    pub fn mesh_capped_row_v1(&self, claim: &Hash64) -> Option<&crate::palw_mesh_v1::PalwCappedClaimRowV1> {
+        self.vertex.mesh.capped.get(claim)
+    }
+
+    /// **RFC-0007 Parts II and IV: what a node reads of the mesh** at the tip — the table sizes, the fences, and `seat`'s open audits.
+    pub fn mesh_status_v1(&self, params: &PalwStateParamsV2, seat: &PalwBondKeyV2) -> crate::palw_mesh_v1::PalwMeshStatusV1 {
+        crate::palw_mesh_v1::PalwMeshStatusV1 {
+            witness_fence_daa: params.witness_manifest_from_daa(),
+            audit_fence_daa: params.audit_mesh_from_daa(),
+            capped_fence_daa: params.capped_from_daa(),
+            witness_profiles: self.vertex.mesh.witness.len() as u64,
+            audit_rows: self.vertex.mesh.audits.len() as u64,
+            traps_open: self.vertex.mesh.traps.len() as u64,
+            capped_claims: self.vertex.mesh.capped.len() as u64,
+            own_audits: self
+                .vertex
+                .mesh
+                .audits
+                .iter()
+                .filter_map(|(claim, row)| row.assignment_of(seat).map(|a| (*claim, a.ticket, a.outcome.is_some())))
+                .collect(),
+        }
+    }
+
+    /// **RFC-0007: the row the chain holds for `(round, seat)`** — the first vertex it accepted, or the conviction.
+    pub fn vertex_round_row_v1(&self, round: u64, seat: &PalwBondKeyV2) -> Option<&crate::palw_vertex_v1::PalwVertexRoundRowV1> {
+        self.vertex.rounds.get(&(round, *seat))
+    }
+
+    /// **RFC-0007: a `PanelBound` claim's tally of counted verdict leaves**, if any leaf counted.
+    pub fn vertex_tally_of_v1(&self, claim: &Hash64) -> Option<&crate::palw_vertex_v1::PalwVertexTallyV1> {
+        self.vertex.tallies.get(claim)
+    }
+
+    /// **RFC-0007: a live claim's `Held` attestations**, if any.
+    pub fn vertex_held_of_v1(&self, claim: &Hash64) -> Option<&Vec<crate::palw_vertex_v1::PalwVertexHeldRowV1>> {
+        self.vertex.held.get(claim)
+    }
+
+    /// **RFC-0007: what a node reads of the vertex tables** — the counts, and `seat`'s own rows from `from_round`.
+    pub fn vertex_status_v1(&self, params: &PalwStateParamsV2, seat: &PalwBondKeyV2, from_round: u64) -> crate::palw_vertex_v1::PalwVertexStatusV1 {
+        crate::palw_vertex_v1::PalwVertexStatusV1 {
+            fence_from_daa: params.vertex_from_daa(),
+            rounds: self.vertex.rounds.len() as u64,
+            tallies: self.vertex.tallies.len() as u64,
+            held_claims: self.vertex.held.len() as u64,
+            own: self
+                .vertex
+                .rounds
+                .iter()
+                .filter(|((round, bond), _)| *round >= from_round && bond == seat)
+                .map(|((round, _), row)| (*round, row.leaves_root, row.convicted))
+                .collect(),
+        }
+    }
+
+    /// RFC-0007: the number of `(round, seat)` rows, tallies and claims with `Held` rows (telemetry and the status the kit reads).
+    pub fn vertex_counts_v1(&self) -> (usize, usize, usize) {
+        (self.vertex.rounds.len(), self.vertex.tallies.len(), self.vertex.held.len())
+    }
+
+    /// **RFC-0007: the claims whose panel bound at `bound_daa`**, by a walk of the panels (the compact reference's
+    /// resolution; the fold keeps a per-block index so a vertex of many compact leaves walks once).
+    pub fn claims_bound_at_v1(&self, bound_daa: u64) -> Vec<Hash64> {
+        self.panels.iter().filter(|(_, panel)| panel.bound_daa == bound_daa).map(|(claim, _)| *claim).collect()
     }
 
     /// The registered class's finite dispute backstop, or the network default.
@@ -13201,6 +13440,22 @@ impl PalwChainStateV2 {
             state.update(b"improvement-eval/v1");
             state.update(collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs).as_byte_slice());
         }
+        // **RFC-0007 Part I: the verification vertex's tables, ONE Some-only block** after `improvement-eval/v1` — empty until
+        // a vertex is accepted, which nothing below `palw_verification_vertex_v1` can do.
+        if !self.vertex.is_empty() {
+            state.update(b"vertex/v1");
+            state.update(collection_root(b"vertex_rounds", &self.vertex.rounds).as_byte_slice());
+            state.update(collection_root(b"vertex_tallies", &self.vertex.tallies).as_byte_slice());
+            state.update(collection_root(b"vertex_held", &self.vertex.held).as_byte_slice());
+        }
+        // **RFC-0007 Parts II and IV: the mesh's tables, ONE more Some-only block** — empty until a fence's first write.
+        if !self.vertex.mesh.is_empty() {
+            state.update(b"mesh/v1");
+            state.update(collection_root(b"mesh_witness", &self.vertex.mesh.witness).as_byte_slice());
+            state.update(collection_root(b"mesh_audits", &self.vertex.mesh.audits).as_byte_slice());
+            state.update(collection_root(b"mesh_traps", &self.vertex.mesh.traps).as_byte_slice());
+            state.update(collection_root(b"mesh_capped", &self.vertex.mesh.capped).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -13264,6 +13519,8 @@ impl PalwChainStateV2 {
                 )));
             }
         }
+        self.assert_vertex_consistency_v1()?;
+        self.assert_mesh_consistency_v1()?;
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
@@ -13557,6 +13814,23 @@ impl PalwChainStateV2 {
                 return Err(PalwStateV2Error::CarriageInconsistent(format!(
                     "the share table sums to {sum}‰ — the donation arithmetic conserves exactly 1000‰"
                 )));
+            }
+        }
+        // **RFC-0007 Part IV.1: the audit mesh's reservations** — an auditor's penalty and a trap setter's deposit ride in
+        // `reserved_exposure` (so the withdrawal rule and every free-collateral reader see them), re-derived here from the rows
+        // that hold them.
+        for row in self.vertex.mesh.audits.values() {
+            for assignment in &row.assignments {
+                if assignment.reserved > 0 {
+                    let held = exposure.entry(assignment.auditor).or_insert(0);
+                    *held = held.checked_add(assignment.reserved).ok_or(PalwStateV2Error::Overflow("consistency audit reservation"))?;
+                }
+            }
+        }
+        for row in self.vertex.mesh.traps.values() {
+            if row.deposit > 0 {
+                let held = exposure.entry(row.setter).or_insert(0);
+                *held = held.checked_add(row.deposit).ok_or(PalwStateV2Error::Overflow("consistency trap deposit"))?;
             }
         }
         // **ADR-0160 F-W: where the fence's mirror is set, a zero row and an absent row are one fact.**
@@ -14375,6 +14649,16 @@ pub const PALW_IMPROVE_TABLE_RESULTS_V1: u8 = 10;
 pub const PALW_IMPROVE_TABLE_GRANTS_V1: u8 = 11;
 pub const PALW_IMPROVE_TABLE_EARNINGS_V1: u8 = 12;
 
+/// RFC-0007: the table ids of [`PalwDeltaEntryV2::VertexRow`].
+pub const PALW_VERTEX_TABLE_ROUNDS_V1: u8 = 1;
+pub const PALW_VERTEX_TABLE_TALLIES_V1: u8 = 2;
+pub const PALW_VERTEX_TABLE_HELD_V1: u8 = 3;
+/// RFC-0007 Parts II and IV: the mesh's tables ride the same delta entry under their own table ids.
+pub const PALW_MESH_TABLE_WITNESS_V1: u8 = 4;
+pub const PALW_MESH_TABLE_AUDITS_V1: u8 = 5;
+pub const PALW_MESH_TABLE_TRAPS_V1: u8 = 6;
+pub const PALW_MESH_TABLE_CAPPED_V1: u8 = 7;
+
 /// One entry of a block's state delta: which key changed, from what, to what. `old` is carried so
 /// application can verify it is being applied to the state it was computed from, and so a reorg
 /// can revert without recomputing the branch.
@@ -14977,6 +15261,10 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
+    /// A row of one of RFC-0007's vertex tables was written or dropped (**101**, the next free discriminant after 100; spec 18
+    /// §18.7): `table` names it ([`PALW_VERTEX_TABLE_ROUNDS_V1`] …), and the key and rows ride as their borsh bytes. One entry
+    /// for the three tables, so a table added later takes a table id and not a delta discriminant.
+    VertexRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -15820,7 +16108,7 @@ impl PalwFoldReadV1<'_> {
                     let derived_daa = self
                         .state
                         .model_lifecycle(class_id)
-                        .map(|row| palw_derived_verify_daa_v1(row.work.verification_ccu))
+                        .map(|row| palw_derived_verify_daa_v1(palw_class_verify_ccu_v1(self.state, class_id, row.work.verification_ccu)))
                         .unwrap_or(0);
                     return Err(PalwStateV2Error::ClassDeadlineUnmeasured { class: *class_id, derived_daa, open_daa });
                 }
@@ -15890,6 +16178,11 @@ impl PalwFoldReadV1<'_> {
             return Ok(());
         }
         let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
+        // **RFC-0007 Part IV.2: a `Capped` class has no panel room to read** (it has fewer than a panel's holders by definition): its gate
+        // is the capped weight cap and the capped table's bound, and the lifecycle's own refusal above.
+        if palw_mesh_fold_v1::palw_lifecycle_row_is_capped_v1(row) {
+            return palw_mesh_fold_v1::capped_class_admits_v1(self.state);
+        }
         // **H-2 of the 2026-09-18 audit: the room check waits for the grace the registry already
         // computes.** The work target and the registry arm at the same height, and a readiness proof
         // is refused below that height — so on the flag day itself every class has zero ready seats,
@@ -18279,6 +18572,19 @@ impl<'a> TransitionBuilder<'a> {
                 self.write_held_forfeit((key, session), None);
             }
         }
+        // RFC-0007 Part I: a claim's tally lives exactly while it is `PanelBound` (every door out of that phase — licensed, voided,
+        // redrawn — drops it HERE), and its `Held` attestations while it is live.
+        if self.state.vertex.tallies.contains_key(&key) && !new.as_ref().is_some_and(|claim| matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. })) {
+            self.write_vertex_tally(key, None);
+        }
+        if self.state.vertex.held.contains_key(&key) && new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
+            self.write_vertex_held(key, None);
+        }
+        // RFC-0007 Part IV.2: a capped claim's row lives exactly while it waits `Provisional` for the holders; the moment it binds a
+        // panel (the ordinary path takes it from there) or leaves the chain, the row goes.
+        if self.state.vertex.mesh.capped.contains_key(&key) && !new.as_ref().is_some_and(|claim| matches!(claim.phase, PalwClaimPhaseV2::Provisional)) {
+            self.write_mesh_capped(key, None);
+        }
         // ADR-0124 Decision 3: the seats' duty — and the exposure it stands for — lives exactly as
         // long as the claim is live. Every door to a terminal phase passes here; the exposure is
         // released by the same doors (`release_seat_duties`), BEFORE this write drops the row it
@@ -18587,6 +18893,71 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassCourtWindow { key, old, new });
         }
+    }
+
+    /// **RFC-0007: the one journaled writer of every vertex table** (`VertexRow`, 101): `table` names the table, and the key and
+    /// rows ride as their borsh bytes.
+    fn write_vertex_row<K, V>(
+        &mut self,
+        table: u8,
+        key: K,
+        new: Option<V>,
+        map: fn(&mut PalwChainStateV2) -> &mut BTreeMap<K, V>,
+    ) -> Option<V>
+    where
+        K: Ord + Clone + borsh::BorshSerialize,
+        V: Clone + PartialEq + borsh::BorshSerialize,
+    {
+        let rows = map(&mut self.state);
+        let old = match new.clone() {
+            Some(row) => rows.insert(key.clone(), row),
+            None => rows.remove(&key),
+        };
+        if old != new {
+            let encode = |row: &V| borsh::to_vec(row).expect("a vertex row is borsh-serializable");
+            self.entries.push(PalwDeltaEntryV2::VertexRow {
+                table,
+                key: borsh::to_vec(&key).expect("a vertex key is borsh-serializable"),
+                old: old.as_ref().map(encode),
+                new: new.as_ref().map(encode),
+            });
+        }
+        old
+    }
+
+    /// **RFC-0007: the one writer of the `(round, seat)` rows.**
+    pub(crate) fn write_vertex_round(&mut self, key: (u64, PalwBondKeyV2), new: Option<crate::palw_vertex_v1::PalwVertexRoundRowV1>) {
+        self.write_vertex_row(PALW_VERTEX_TABLE_ROUNDS_V1, key, new, |s| &mut s.vertex.rounds);
+    }
+
+    /// **RFC-0007: the one writer of the per-claim tallies.**
+    pub(crate) fn write_vertex_tally(&mut self, key: Hash64, new: Option<crate::palw_vertex_v1::PalwVertexTallyV1>) {
+        self.write_vertex_row(PALW_VERTEX_TABLE_TALLIES_V1, key, new, |s| &mut s.vertex.tallies);
+    }
+
+    /// **RFC-0007: the one writer of the per-claim `Held` attestations.**
+    pub(crate) fn write_vertex_held(&mut self, key: Hash64, new: Option<Vec<crate::palw_vertex_v1::PalwVertexHeldRowV1>>) {
+        self.write_vertex_row(PALW_VERTEX_TABLE_HELD_V1, key, new, |s| &mut s.vertex.held);
+    }
+
+    /// **RFC-0007 Part II: the one writer of the witness profiles** (by class).
+    pub(crate) fn write_mesh_witness(&mut self, key: Hash64, new: Option<crate::palw_mesh_v1::PalwWitnessProfileRowV1>) {
+        self.write_vertex_row(PALW_MESH_TABLE_WITNESS_V1, key, new, |s| &mut s.vertex.mesh.witness);
+    }
+
+    /// **RFC-0007 Part IV.1: the one writer of the audit rows** (by claim).
+    pub(crate) fn write_mesh_audit(&mut self, key: Hash64, new: Option<crate::palw_mesh_v1::PalwAuditRowV1>) {
+        self.write_vertex_row(PALW_MESH_TABLE_AUDITS_V1, key, new, |s| &mut s.vertex.mesh.audits);
+    }
+
+    /// **RFC-0007 Part IV.1: the one writer of the trap rows** (by commitment).
+    pub(crate) fn write_mesh_trap(&mut self, key: Hash64, new: Option<crate::palw_mesh_v1::PalwTrapRowV1>) {
+        self.write_vertex_row(PALW_MESH_TABLE_TRAPS_V1, key, new, |s| &mut s.vertex.mesh.traps);
+    }
+
+    /// **RFC-0007 Part IV.2: the one writer of the capped claim rows** (by claim).
+    pub(crate) fn write_mesh_capped(&mut self, key: Hash64, new: Option<crate::palw_mesh_v1::PalwCappedClaimRowV1>) {
+        self.write_vertex_row(PALW_MESH_TABLE_CAPPED_V1, key, new, |s| &mut s.vertex.mesh.capped);
     }
 
     fn write_held_leaf_demands(&mut self, key: Hash64, new: Option<BTreeMap<PalwBondKeyV2, u64>>) {
@@ -19801,7 +20172,10 @@ impl<'a> TransitionBuilder<'a> {
         // dropped them, and a pausing challenger's session keeps its claim from `Final`).
         let withheld = self.held_forfeits_withheld_v1(&claim_id, now);
         let charge = PalwDaDefaultChargeV1 { claim_id, producer: claim.bond, stage, g, covering, winner };
+        // RFC-0007 §I.7: the attesters of the claim's data, read before the charge's void drops their rows.
+        let attesters = palw_vertex_fold_v1::held_attesters_to_charge_v1(&self.state, &claim_id);
         self.da_default_charge_v1(ctx, &claim, &charge)?;
+        palw_vertex_fold_v1::charge_held_attesters_v1(self, &claim_id, &attesters)?;
         // ...and, the conviction closed, each such challenger made whole.
         self.refund_held_forfeits_v1(&withheld);
         Ok(())
@@ -23755,6 +24129,8 @@ impl<'a> TransitionBuilder<'a> {
                         }
                         jury.as_ref().is_some_and(|jury| jury.seated)
                     },
+                    // RFC-0007 Part IV.2: only a `Prefetching` row reads it.
+                    capped_entry: palw_mesh_fold_v1::capped_entry_v1(self, ctx, class_id, &row, ready, fold.globals.seat_count as u32),
                 };
                 // **Lane F1 (the 2026-09-25 sweep's V03(2)/V05), on a span the fence governs**: the step
                 // reads and rewrites the class's probation memory — a readiness hold keeps the
@@ -23776,6 +24152,13 @@ impl<'a> TransitionBuilder<'a> {
                     (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
                 }
             };
+            // **RFC-0007 Part IV.2**: a class stepping into `Capped` takes this boundary's DAA (the step knows no clock), and a class
+            // already capped keeps the DAA it entered at.
+            let state = match (row.state, state) {
+                (PalwModelLifecycleV1::Capped { since_daa }, PalwModelLifecycleV1::Capped { .. }) => PalwModelLifecycleV1::Capped { since_daa },
+                (_, PalwModelLifecycleV1::Capped { .. }) => PalwModelLifecycleV1::Capped { since_daa: ctx.daa_score },
+                (_, other) => other,
+            };
             let admission_milli = profile.admission_claims_per_span_milli.saturating_mul(state.admission_permille() as u64) / 1_000;
             let changed = state != row.state;
             let next = PalwModelLifecycleRowV1 {
@@ -23796,6 +24179,10 @@ impl<'a> TransitionBuilder<'a> {
             };
             if next != row {
                 self.write_model_lifecycle(*class_id, Some(next));
+            }
+            // RFC-0007 Part IV.2: holders seated — the class's waiting capped claims get their re-verification window.
+            if crate::palw_mesh_v1::palw_lifecycle_left_capped_v1(&row.state, &state) {
+                palw_mesh_fold_v1::capped_exit_v1(self, ctx, class_id);
             }
             // ADR-0152-adjacent (Activation Pool): (a) at this Candidate's audit, prep's move once the
             // class is past Candidate, (b)'s run opened at Probation and paid past it.
@@ -26888,6 +27275,9 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_panel_obligations(&mut builder, parent, ctx);
     // ADR-0152 R-3 (S-7): and the reporter commitments past their TTL, as the fold's step 2 does.
     sweep_reporter_commitments(&mut builder, ctx);
+    // RFC-0007: the vertex rounds past their evidence window (a no-op on a chain with no row).
+    palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
+    palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
@@ -27279,6 +27669,10 @@ pub fn apply_palw_transition_v7(
     // this block is about to prune. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     // `Params::palw_rcore_plus`.
     sweep_reporter_commitments(&mut builder, ctx);
+    // RFC-0007: the vertex rounds past their evidence window, before this block's objects (mirrored in
+    // `palw_v2_pre_object_base_v1`). A no-op on a chain with no row.
+    palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
+    palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
     // ADR-0143 Decision 6: the one-time canonicalisation, before any object of this block is
     // folded — a block that crosses the fence AND founds a line must see the index the migration
     // built, not the empty one it found.
@@ -30752,6 +31146,11 @@ pub fn palw_provisional_bind_deadline_v1(
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
 ) -> Result<u64, PalwStateV2Error> {
+    // **RFC-0007 Part IV.2: a capped claim owes no bind deadline while its class is `Capped`** (it waits for the holders; `u64::MAX` is
+    // "never"), and the re-verification window's end once the class has left it.
+    if let Some(row) = state.vertex.mesh.capped.get(claim_id) {
+        return Ok(row.window_end_daa.unwrap_or(u64::MAX));
+    }
     let base = if palw_claim_awaits_ncp_retry_v1(state, params, claim_id, claim) { claim.accepted_daa } else { claim.bind_base_daa() };
     base.checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))
 }
@@ -30804,11 +31203,16 @@ fn palw_retry_fits_its_bind_window_v1(
     anchor_daa: u64,
     anchor_delay: u64,
 ) -> bool {
+    // RFC-0007 Part IV.2: a capped claim's backstop is its own ([`palw_provisional_bind_deadline_v1`]), not the bind window's.
+    let backstop = match state.vertex.mesh.capped.get(claim_id) {
+        Some(row) => Some(row.window_end_daa.unwrap_or(u64::MAX)),
+        None => claim.accepted_daa.checked_add(params.window_bind),
+    };
     matches!(claim.phase, PalwClaimPhaseV2::Provisional)
         && !state.panels.contains_key(claim_id)
         && anchor_daa
             .checked_add(anchor_delay.max(1))
-            .zip(claim.accepted_daa.checked_add(params.window_bind))
+            .zip(backstop)
             .is_some_and(|(next_slot, backstop)| next_slot <= backstop)
 }
 
@@ -32076,7 +32480,39 @@ fn apply_object(
     if palw_object_is_held_close_chunks_v1(object) && !builder.params.held_close_chunks_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::HeldLeafChallengeRefused("a held leaf challenge before palw_held_close_chunks_v1 is in force".into()));
     }
+    // **RFC-0007 Part I, likewise**: below `palw_verification_vertex_v1` a vertex move is a payload an older build cannot decode;
+    // the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_vertex_v1(object) && !builder.params.vertex_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::VertexRefused(crate::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string()));
+    }
+    // **RFC-0007 Part IV.1, likewise**: below `palw_audit_mesh_v1` a trap move is a payload an older build cannot decode.
+    if palw_object_is_mesh_v1(object) && !builder.params.audit_mesh_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::MeshRefused(crate::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string()));
+    }
+    // **RFC-0007's path rule, the second lock**: a receipt-path licence for a claim whose panel bound at or after
+    // `palw_verification_vertex_v1` is refused by name (it licenses by tally); the acceptance walk drops it first.
+    if let Some(claim) = crate::palw_vertex_v1::palw_receipt_object_claim_v1(object)
+        && crate::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(&builder.state, builder.params, ctx.daa_score, claim)
+    {
+        return Err(PalwStateV2Error::VertexRefused(format!(
+            "claim {claim} bound at or after palw_verification_vertex_v1: it licenses by tally, not by a receipt object"
+        )));
+    }
     match object {
+        // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
+        PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
+            palw_vertex_fold_v1::apply_vertex_v1(builder, ctx, vertex)?;
+        }
+        PalwConsensusObjectV2::VertexEquivocationV1 { evidence } => {
+            palw_vertex_fold_v1::apply_vertex_equivocation_v1(builder, ctx, evidence)?;
+        }
+        // ---- RFC-0007 Part IV.1: the audit mesh's traps (tags 102, 103) ----
+        PalwConsensusObjectV2::TrapCommittedV1 { trap } => {
+            palw_mesh_fold_v1::apply_trap_committed_v1(builder, ctx, trap)?;
+        }
+        PalwConsensusObjectV2::TrapRevealedV1 { reveal } => {
+            palw_mesh_fold_v1::apply_trap_revealed_v1(builder, ctx, reveal)?;
+        }
         // ---- RFC-0004: the core lane's objects (spec 17 §17.4.2, §17.10) ----
         PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature: _ } => {
             palw_improve_fold_v1::apply_improvement_policy_set_v1(builder, ctx, payload)?;
@@ -33154,6 +33590,8 @@ fn apply_object(
                 builder.write_class_court_window(*class_id, Some(window));
             }
             builder.write_tir_class(*class_id, Some(record));
+            // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
+            palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context);
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -37515,6 +37953,10 @@ fn apply_attempt(
     let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     builder.arm_deadline(deadline, claim_id);
 
+    // **RFC-0007 Part IV.1**: the claim's audit draw, past `palw_audit_mesh_v1` (infallible: a write above this line must not be
+    // stranded by a refusal below it).
+    palw_mesh_fold_v1::on_claim_accepted_v1(builder, ctx, &claim_id);
+
     // Epoch production counter (ADR-0039 D5 as a counter; the budget PREDICATE reads it in PR-04).
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
     let previous = builder.state.epoch_counters.get(&attempt.class_id).cloned();
@@ -37583,6 +38025,50 @@ pub fn revert_delta_v2(
     rebuild_deadline_index_v2(&mut state, params)?;
     rebuild_capacity_weight_index_v1(&mut state, params);
     Ok(state)
+}
+
+/// RFC-0007: one [`PalwDeltaEntryV2::VertexRow`] applied or reverted — decode the key and the rows as the table's types, check the
+/// expected row, install the other.
+fn apply_vertex_row_v1(
+    state: &mut PalwChainStateV2,
+    table: u8,
+    key: &[u8],
+    old: &Option<Vec<u8>>,
+    new: &Option<Vec<u8>>,
+    revert: bool,
+) -> Result<(), PalwStateV2Error> {
+    fn swap<K, V>(map: &mut BTreeMap<K, V>, key: &[u8], old: &Option<Vec<u8>>, new: &Option<Vec<u8>>, revert: bool) -> Result<(), PalwStateV2Error>
+    where
+        K: Ord + borsh::BorshDeserialize,
+        V: PartialEq + borsh::BorshDeserialize,
+    {
+        let bad = |_| PalwStateV2Error::DeltaMismatch("a vertex row's bytes do not decode");
+        let key: K = borsh::from_slice(key).map_err(bad)?;
+        let (expected, install) = if revert { (new, old) } else { (old, new) };
+        let expected: Option<V> = expected.as_deref().map(borsh::from_slice).transpose().map_err(bad)?;
+        if map.get(&key) != expected.as_ref() {
+            return Err(PalwStateV2Error::DeltaMismatch("a vertex row does not match the delta's expectation"));
+        }
+        match install.as_deref() {
+            Some(bytes) => {
+                map.insert(key, borsh::from_slice(bytes).map_err(bad)?);
+            }
+            None => {
+                map.remove(&key);
+            }
+        }
+        Ok(())
+    }
+    match table {
+        PALW_VERTEX_TABLE_ROUNDS_V1 => swap(&mut state.vertex.rounds, key, old, new, revert),
+        PALW_VERTEX_TABLE_TALLIES_V1 => swap(&mut state.vertex.tallies, key, old, new, revert),
+        PALW_VERTEX_TABLE_HELD_V1 => swap(&mut state.vertex.held, key, old, new, revert),
+        PALW_MESH_TABLE_WITNESS_V1 => swap(&mut state.vertex.mesh.witness, key, old, new, revert),
+        PALW_MESH_TABLE_AUDITS_V1 => swap(&mut state.vertex.mesh.audits, key, old, new, revert),
+        PALW_MESH_TABLE_TRAPS_V1 => swap(&mut state.vertex.mesh.traps, key, old, new, revert),
+        PALW_MESH_TABLE_CAPPED_V1 => swap(&mut state.vertex.mesh.capped, key, old, new, revert),
+        _ => Err(PalwStateV2Error::DeltaMismatch("a vertex row names no table")),
+    }
 }
 
 /// RFC-0004: one [`PalwDeltaEntryV2::ImprovementRow`] applied or reverted — decode the key and the
@@ -37852,6 +38338,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.improvement_composite_classes, key, old, new)
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
+        PalwDeltaEntryV2::VertexRow { table, key, old, new } => apply_vertex_row_v1(state, *table, key, old, new, revert)?,
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -38227,6 +38714,8 @@ pub struct PalwStateCarriageV2 {
     pub class_step_ladders: BTreeMap<Hash64, u64>,
     /// Model-specific court backstops in appended tail `0xC2`, present only when non-empty.
     pub class_court_windows: BTreeMap<Hash64, u64>,
+    /// RFC-0007 Part I: the vertex tables in appended tail `0xE4`, present only when any is non-empty.
+    pub vertex: crate::palw_vertex_v1::PalwVertexStateV1,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -38551,6 +39040,9 @@ fn palw_improvement_carriage_consistent_v1(c: &PalwStateCarriageV2) -> Result<()
 /// carriage written here would decode as another lane's table the day those merge. Nothing is allocated at
 /// `0xE0` or above in any branch; `model_court_window_tail_is_pinned_at_0xe0` pins the value.
 const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
+/// **RFC-0007 Part I: the vertex tables' tail** (`0xE4`; spec 18 §18.7): after the court windows' `0xE0`, disjoint from every
+/// tail another lane has taken or reserved (`0xC0`–`0xDA`, `0xE0`).
+const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -38861,6 +39353,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1.serialize(writer)?;
             self.class_court_windows.serialize(writer)?;
         }
+        if !self.vertex.is_fully_empty() {
+            PALW_CARRIAGE_VERTEX_TAIL_V1.serialize(writer)?;
+            self.vertex.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -39034,6 +39530,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_eval_jobs = false;
         let mut class_court_windows = BTreeMap::new();
         let mut seen_class_court_windows = false;
+        let mut vertex = crate::palw_vertex_v1::PalwVertexStateV1::default();
+        let mut seen_vertex = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -39272,6 +39770,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_court_windows = true;
                     class_court_windows = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_VERTEX_TAIL_V1 if !seen_vertex => {
+                    seen_vertex = true;
+                    vertex = crate::palw_vertex_v1::PalwVertexStateV1::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -39402,6 +39904,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_composite_classes,
             improvement_eval_jobs,
             class_court_windows,
+            vertex,
         })
     }
 }
@@ -39510,6 +40013,7 @@ impl PalwStateCarriageV2 {
             improvement_composite_classes: state.improvement_composite_classes.clone(),
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
             class_court_windows: state.class_court_windows.clone(),
+            vertex: state.vertex.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -39721,6 +40225,7 @@ impl PalwStateCarriageV2 {
             improvement_licence_expiries: BTreeSet::new(),
             improvement_eval_claims: BTreeMap::new(),
             class_court_windows: self.class_court_windows,
+            vertex: self.vertex,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -41227,6 +41732,8 @@ pub(crate) mod tests {
         mod activation_pool_r2_v1;
         // RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class proves readiness over its adapter section.
         mod composite_readiness_v1;
+        // RFC-0007 Part IV.2 (spec 18): capped onboarding through the registry's span step.
+        mod capped_onboarding_v1;
 
         /// The registry's fixture params: the shared `params()` with a receipt window of four spans
         /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least
@@ -56807,6 +57314,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ImprovementArtifact { .. } => "improvement_artifact",
                     PalwDeltaEntryV2::ImprovementLicence { .. } => "improvement_licence",
                     PalwDeltaEntryV2::ImprovementCompositeClass { .. } => "improvement_composite_class",
+                    PalwDeltaEntryV2::VertexRow { .. } => "vertex_row",
                 });
             }
         }
@@ -57090,6 +57598,8 @@ pub(crate) mod tests {
             // The release line's model-specific finite court horizon, at the END of the delta enum (spec 17 §17.0:
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
+            // RFC-0007 Part I, after the court window: the vertex tables' one generic entry.
+            (101, PalwDeltaEntryV2::VertexRow { table: PALW_VERTEX_TABLE_ROUNDS_V1, key: Vec::new(), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -57736,6 +58246,8 @@ pub(crate) mod tests {
             improvement_composite_classes: _,
             improvement_eval_jobs: _,
             class_court_windows: _,
+            // RFC-0007 Part I: one Some-only block of three, empty here.
+            vertex: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -69564,6 +70076,10 @@ pub(crate) mod tests {
     mod activation_pool_r1_v1;
     // ADR-0160 F-W (lane cap-weight): staged weight and the per-bond weight cap through the fold.
     mod capacity_weight_cap_v1;
+    // RFC-0007 Part I (spec 18): verification vertices, licence by tally, equivocation, `Held` leaves, the path rule.
+    mod vertex_fold_v1;
+    // RFC-0007 Parts II and IV (spec 18): the witness profile's reads, the audit mesh and its traps.
+    mod mesh_fold_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

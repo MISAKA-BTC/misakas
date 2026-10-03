@@ -90,6 +90,22 @@ mod palw_audit_duty;
 #[allow(dead_code)]
 mod batch_licence;
 
+/// RFC-0007 Part I: a seat's verification vertex — the book of leaves a round's verdicts become, the one-signature-a-round seal that is
+/// persisted before it leaves the node, and the landing check (node policy; dormant below `palw_verification_vertex_v1`).
+mod vertex;
+
+/// RFC-0007 Part IV.1: the audit duty (a seat that holds the class replays the claim it was drawn on and attests the result in its vertex)
+/// and the trap book (node policy; dormant below `palw_audit_mesh_v1`).
+mod mesh;
+
+/// RFC-0007 Part II: the seat-local algebraic checker's service and its mirror check beside the replay (node policy; behind
+/// `--palw-sketch-check`, off by default).
+mod sketch;
+
+/// RFC-0007 Part II, the producer's half: a claim's witness image, kept as the producer's obligation and served by chunk.
+pub(crate) use sketch::palw_witness_image_v1 as sketch_witness_image_v1;
+pub(crate) use sketch::palw_witness_retain_v1 as sketch_witness_retain_v1;
+
 /// **Take the host ledger's reservation for a replay of `role`** — the body of
 /// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
 /// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
@@ -3561,6 +3577,13 @@ pub struct PalwPanelConfig {
     pub class_cache_bytes: u64,
     /// `--palw-seat-replay-slots`: seat replays at once (`None` = [`PalwSeatReplaysV1::IN_FLIGHT`]).
     pub seat_replay_slots: Option<usize>,
+    /// `--palw-vertex-full-refs` (RFC-0007): name claims by whole id in this seat's vertices (default: compact references).
+    pub vertex_full_refs: bool,
+    /// `--palw-drill-vertex-equivocate-at` (a salted drill only): sign a second vertex for one round, once, from this DAA.
+    pub vertex_equivocate_at: Option<u64>,
+    /// `--palw-sketch-check` (RFC-0007 Part II): run the algebraic checker's mirror beside every full replay of an IR class this seat holds.
+    /// Off by default; a node without it never opens the sketch state.
+    pub sketch_check: bool,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// ADR-0132: the node's per-class counters this seat reports its replays and receipts into.
@@ -3742,6 +3765,10 @@ pub struct PalwPanelService {
     /// ([`PalwCarrierReplacementV1`]) — set by `open_stuck_carrier_v1`, read by the shared builder and
     /// the shared submit, and taken back at the end of the same tick. `None` between ticks.
     carrier_replacement: std::sync::Mutex<Option<PalwCarrierReplacementV1>>,
+    /// RFC-0007 §I.6: the vertex equivocations this node last carried, by `(round, seat)` → the DAA (a debounce, not a receipt).
+    vertex_equivocations_sent: std::sync::Mutex<HashMap<(u64, PalwBondKeyV2), u64>>,
+    /// RFC-0007 Part II: the sketch checker's service (its secret, its stores, the mirror's totals); `None` unless `--palw-sketch-check`.
+    sketch: Option<std::sync::Arc<sketch::PalwSketchServiceV1>>,
     /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
     /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
     /// so without this a seat rebuilt the whole proof per tick. Measured on the item 6 acceptance
@@ -4100,6 +4127,18 @@ impl PalwPanelService {
             config.class_cache_bytes,
             config.class_residency,
         );
+        // RFC-0007 Part II: the sketch service opens only when asked (`--palw-sketch-check`), in the state dir beside the vertex round.
+        let sketch = if config.sketch_check {
+            match sketch::PalwSketchServiceV1::open(&config.state_dir, misaka_palw_tir_sketch::TirCheckPolicyV1::default()) {
+                Ok(service) => Some(std::sync::Arc::new(service)),
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] --palw-sketch-check: the sketch service does not open ({why}); the mirror stays off");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Self {
             config,
             consensus_manager,
@@ -4121,6 +4160,8 @@ impl PalwPanelService {
             leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
             readiness_submitted: std::sync::Mutex::new(HashMap::new()),
             carrier_replacement: std::sync::Mutex::new(None),
+            vertex_equivocations_sent: std::sync::Mutex::new(HashMap::new()),
+            sketch,
             readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
             readiness_read_at: std::sync::Mutex::new(None),
@@ -6123,6 +6164,76 @@ impl PalwPanelService {
                 }
             }
         }
+        // **RFC-0007 §I.6: and a seat's two vertices of one round**, filed behind the permit evidence in the same slot.
+        self.carry_vertex_equivocations_v1(session, current_daa, funding, inflight).await;
+    }
+
+    /// **RFC-0007 §I.6: carry the equivocations this node has seen** (a seat's two vertices of one round) — one carrier a tick at most,
+    /// in the priority lane's slot, each pair re-offered after the replan interval until the tip convicts it. Evidence proves itself, so
+    /// any funded node may carry it; a refusal by the mempool is logged and the pair retried later.
+    async fn carry_vertex_equivocations_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+    ) {
+        if *inflight >= MAX_INFLIGHT_CARRIERS || self.consensus_config.params.palw_verification_vertex_fence().is_none() {
+            return;
+        }
+        let mut sent = self.vertex_equivocations_sent.lock().unwrap().clone();
+        let pending = session.palw_v2_pending_vertex_equivocations_v1();
+        sent.retain(|key, _| pending.iter().any(|ev| (ev.a.round, ev.a.seat_bond) == *key));
+        *self.vertex_equivocations_sent.lock().unwrap() = sent.clone();
+        let Some(evidence) = pending.into_iter().find(|ev| {
+            sent.get(&(ev.a.round, ev.a.seat_bond)).is_none_or(|at| current_daa >= at.saturating_add(COURT_MOVE_REPLAN_DAA))
+        }) else {
+            return;
+        };
+        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return };
+        if self.stuck_carrier_open_on_v1(&funding_outpoint) {
+            return;
+        }
+        let key = (evidence.a.round, evidence.a.seat_bond);
+        let object = PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) };
+        // Asked of the chain first: evidence the fold would refuse (convicted meanwhile, too old) is not worth a carrier.
+        if let Some(answer) = session.palw_object_rehearsal_v1(&object)
+            && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+        {
+            trace!("[{PALW_PANEL}] a vertex equivocation (seat {:?}, round {}) is not offered a carrier now: {answer:?}", key.1, key.0);
+            self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
+            return;
+        }
+        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+            Ok(tx) => {
+                let txid = tx.id();
+                let change = tx.outputs[0].clone();
+                match self.submit_carrier_v1(session, tx).await {
+                    Ok(()) => {
+                        info!("[{PALW_PANEL}] filed a vertex equivocation (seat {:?}, round {}) in tx {txid} (RFC-0007)", key.1, key.0);
+                        let next = TransactionOutpoint::new(txid, 0);
+                        self.persist_fee_outpoint(next);
+                        *funding = Some((
+                            next,
+                            UtxoEntry {
+                                amount: change.value,
+                                script_public_key: change.script_public_key,
+                                block_daa_score: current_daa,
+                                is_coinbase: false,
+                            },
+                        ));
+                        *inflight += 1;
+                        self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
+                    }
+                    Err(e) => {
+                        warn!("[{PALW_PANEL}] the mempool refused the vertex equivocation (seat {:?}, round {}): {e}", key.1, key.0);
+                        self.vertex_equivocations_sent.lock().unwrap().insert(key, current_daa);
+                        *funding = None;
+                    }
+                }
+            }
+            Err(e) => warn!("[{PALW_PANEL}] cannot build the vertex equivocation carrier: {e}"),
+        }
     }
 
     /// Build and sign the funded 0x4b carrier for one lifecycle object. The same 1-in/1-out shape
@@ -7547,6 +7658,15 @@ impl PalwPanelService {
         // seat, the receipt rides a supplementary object until the window closes.
         let mut own_receipts: HashMap<Hash64, (PalwSeatReceiptV2, u64)> = HashMap::new();
         let mut supplementary_submitted: HashMap<Hash64, u64> = HashMap::new();
+        // **RFC-0007: this seat's vertex book** — the leaves of the round, the vertices sealed and not yet landed, and the last round
+        // this seat signed (persisted: a seat never signs one round twice, restarts included).
+        let vertex_state_path = self.config.state_dir.join("palw-vertex-round");
+        let mut vertex_book = vertex::PalwVertexBookV1::resume(vertex::palw_vertex_state_read_v1(&vertex_state_path));
+        // DRILL ONLY: whether this seat has already signed its deliberate second vertex.
+        let mut vertex_equivocated = false;
+        // **RFC-0007 Part IV.1: the audit duty's book and the trap plans** (dormant below `palw_audit_mesh_v1`: nothing reads them).
+        let mut mesh_node = mesh::PalwMeshNodeV1::default();
+        let mut trap_book = mesh::PalwTrapBookV1::load(&self.config.state_dir.join("palw-traps.json"));
         // ADR-0152 SR-10 / Q-7: when this node last carried a supplementary set for a claim — a
         // debounce like `submitted`'s, re-offered after the replan interval if the carrier was lost.
         let mut supplementary_v3_submitted: HashMap<Hash64, u64> = HashMap::new();
@@ -7729,6 +7849,14 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            // **RFC-0007: the verification vertex's fence, if it is in force at this tip** — the only thing that makes this node's seat
+            // speak in vertices; `None` on every chain that has not armed it, and then every line below the fence is the code that always ran.
+            let vertex_fence = self
+                .consensus_config
+                .params
+                .palw_verification_vertex_fence()
+                .filter(|fence| fence.is_active(current_daa))
+                .map(|fence| fence.daa_score());
             // **RFC-0004 (A10): the improvement loop** — past `palw_improvement_v1` only (dormant on every
             // shipped preset): the open epochs read through the core's doors, the plan logged, adapter
             // prefetch, and the evaluation runs started and reaped.
@@ -8146,6 +8274,12 @@ impl PalwPanelService {
                         },
                     ));
                 }
+            }
+
+            // **RFC-0007 Part IV.1: the audit duty** — a seat the chain drew to audit a claim, and that holds the claim's class, replays it and
+            // attests the result in its vertex (the leaf goes into this round's vertex below). Silence where it cannot.
+            if vertex_fence.is_some() && self.consensus_config.params.palw_audit_mesh_active_at(current_daa) {
+                self.mesh_audit_pass_v1(&session, bond_key, network_domain, current_daa, &mut vertex_book, &mut mesh_node).await;
             }
 
             // **RFC-0002 Phase F (F6): an IR claim's court where no bisection is played.** The
@@ -11597,6 +11731,62 @@ impl PalwPanelService {
                     );
                     continue;
                 }
+                // **RFC-0007: past `palw_verification_vertex_v1`, a verdict on a claim whose panel bound at or after the fence is a LEAF of
+                // this seat's round vertex, and no receipt is signed** (the chain's path rule: such a claim licenses by tally; one bound
+                // before the fence keeps the receipt path to its licence or its void). A role that files no V3 form files no leaf either,
+                // and a `Valid` leaf attests exactly the seat's assigned mask, which is all the chain takes of it.
+                if let Some(fence) = vertex_fence
+                    && duty.bound_daa >= fence
+                {
+                    if forms.segments.is_none() {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: a verdict in a seat role that files no leaf ({:?}) — nothing filed (SEAT-R)",
+                            duty.claim_id, seat_r_duty.role
+                        );
+                        continue;
+                    }
+                    vertex_book.record(vertex::palw_vertex_verdict_leaf_v1(
+                        &duty.claim_id,
+                        duty.bound_daa,
+                        verdict,
+                        self.config.vertex_full_refs,
+                    ));
+                    // **A seat that verified a claim's material and kept it says so** — a `Held` leaf beside its verdict (RFC-0007 §I.7;
+                    // voluntary): three equal ones are a DA certificate, and an attester of a claim whose data the court concludes was
+                    // not served is charged its exposure.
+                    if valid
+                        && let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                            std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
+                        })
+                        && let Some(held) = vertex::palw_vertex_held_capture_leaf_v1(
+                            &duty.claim_id,
+                            duty.bound_daa,
+                            &bytes,
+                            self.config.vertex_full_refs,
+                        )
+                    {
+                        vertex_book.record(held);
+                    }
+                    self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
+                    receipts_filed_at.push_back(std::time::Instant::now());
+                    info!("[{PALW_PANEL}] recorded a {:?} leaf for claim {} in this round's vertex (RFC-0007)", verdict_name(&verdict), duty.claim_id);
+                    if valid {
+                        service.note_served(duty.claim_id);
+                    }
+                    if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })
+                        && service.is_unserved(&duty.claim_id)
+                        && let Some(accuse_by) = palw_seat_da_accuse_by_v1(
+                            self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                            replay_refuted.contains(&duty.claim_id),
+                            current_daa,
+                            deadline,
+                        )
+                    {
+                        accusations.want(duty.claim_id, accuse_by);
+                    }
+                    answered.insert(seat_duty_panel_key_v1(duty));
+                    continue;
+                }
                 let kp = self.keypair.as_ref().expect("checked at start");
                 let sign = |message: Hash64, context: &'static [u8], form: &str| -> Option<Vec<u8>> {
                     match libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), context, [0u8; 32]) {
@@ -11704,6 +11894,81 @@ impl PalwPanelService {
                     accusations.want(duty.claim_id, by);
                 }
                 answered.insert(key);
+            }
+
+            // --- RFC-0007: this seat's vertex for the round ---
+            //
+            // Past the fence only. The vertices this seat has sealed are reconciled with the chain's rows (a landed one is forgotten, one that
+            // waited out the carry window returns its leaves to the next round), then the pending leaves are sealed into this round's one
+            // vertex — the round persisted FIRST, so a restart can never sign it twice — and queued for the carrier site below.
+            if let Some(fence) = vertex_fence {
+                let kp = self.keypair.as_ref().expect("checked at start");
+                let from_round = (current_daa / kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_ROUND_DAA_V1)
+                    .saturating_sub(kaspa_consensus_core::palw_vertex_v1::PALW_VERTEX_MAX_CARRY_DAA_V1 + 2);
+                let status = session.palw_v2_vertex_status_v1(bond_key, from_round);
+                let rows: Vec<(u64, Hash64)> = status.own.iter().map(|(round, root, _)| (*round, *root)).collect();
+                for round in vertex_book.reconcile(&rows, current_daa) {
+                    info!("[{PALW_PANEL}] this seat's vertex of round {round} is on the chain (RFC-0007)");
+                }
+                let sealed = vertex_book.seal(
+                    network_domain,
+                    bond_key,
+                    current_daa,
+                    &|message, context| Self::sign_hedged(&kp.signing_key, message, context),
+                    &|round| vertex::palw_vertex_state_write_v1(&vertex_state_path, round),
+                );
+                if let Some(round) = sealed {
+                    info!(
+                        "[{PALW_PANEL}] sealed this seat's vertex of round {round} ({} leaves pending after it, {} sealed waiting)",
+                        vertex_book.pending_leaves(),
+                        vertex_book.sealed_waiting()
+                    );
+                }
+                // **DRILL ONLY: sign the round's second vertex** — the first vertex's leaves with every verdict changed — once, from the
+                // configured DAA. The persisted round is not consulted: this is the one thing a seat must never do, done on purpose in a
+                // salted drill so the equivocation's catch, slash and ejection can be shown.
+                if let (Some(round), Some(at)) = (sealed, self.config.vertex_equivocate_at)
+                    && current_daa >= at
+                    && !vertex_equivocated
+                    && let Some(first) = vertex_book.sealed_vertex(round)
+                {
+                    let leaves: Vec<_> = first
+                        .leaves
+                        .iter()
+                        .filter_map(|leaf| match leaf {
+                            kaspa_consensus_core::palw_vertex_v1::PalwVertexLeafV1::Verdict { claim, .. } => {
+                                Some(kaspa_consensus_core::palw_vertex_v1::PalwVertexLeafV1::Verdict {
+                                    claim: *claim,
+                                    verdict: PalwReceiptVerdictV2::Sampled,
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(second) = kaspa_consensus_core::palw_vertex_v1::PalwVerificationVertexV1::sign_v1(
+                        network_domain,
+                        bond_key,
+                        first.signed_daa,
+                        leaves,
+                        |message, context| Self::sign_hedged(&kp.signing_key, message, context),
+                    ) && second.leaves_root != first.leaves_root
+                    {
+                        warn!("[{PALW_PANEL}] DRILL: signing a SECOND vertex for round {round} (equivocation)");
+                        vertex_equivocated = true;
+                        vertex_book.drill_extra(second);
+                    }
+                }
+                let mut status_line = vertex_book.status_v1(Some(fence), status.rounds, status.tallies, status.held_claims);
+                // RFC-0007 Parts II and IV: the mesh at the tip, this seat's audits and trap plans, and the sketch mirror's totals.
+                status_line.push(' ');
+                status_line.push_str(&mesh_node.status_v1(&session.palw_v2_mesh_status_v1(bond_key)));
+                status_line.push(' ');
+                status_line.push_str(&trap_book.status_v1());
+                if let Some(sketch) = &self.sketch {
+                    status_line.push(' ');
+                    status_line.push_str(&sketch.status_v1());
+                }
+                self.flow_context.update_palw_runtime(|r| r.verification_vertex = status_line);
             }
 
             // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
@@ -12707,6 +12972,130 @@ impl PalwPanelService {
                 // credited" mean (`palw_v2_supplementary_receipt_assemble` runs the acceptance
                 // validator itself), so this loop only asks, and re-asks after the replan interval
                 // if the carrier it sent was lost.
+                // **RFC-0007: a sealed vertex rides once, in the seat's own slot** — the oldest not yet sent (or whose carrier has waited out the
+                // replan interval), as an ordinary lifecycle carrier; every node relays it and any block takes it, so there is no collector.
+                if vertex_fence.is_some()
+                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
+                    && !readiness_waiting
+                    && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                    // (DRILL ONLY: after the round's first vertex has gone out, its deliberate second one — `take_drill_extra` is `None`
+                    // on every node that was not started with `--palw-drill-vertex-equivocate-at`.)
+                    && let Some(vertex) = vertex_book.next_to_send(current_daa).cloned().or_else(|| vertex_book.take_drill_extra())
+                {
+                    let object = vertex::palw_vertex_object_v1(&vertex);
+                    // **Asked of the chain first** (P2-8e): the fold's own answer on the tip at the virtual's DAA — a vertex the chain
+                    // already holds (its carrier landed while this tick ran), or one whose clock has passed, is not worth a carrier. It waits
+                    // out the replan interval and is re-asked; the seat's row appearing at the tip retires it.
+                    if let Some(answer) = session.palw_object_rehearsal_v1(&object)
+                        && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+                    {
+                        trace!("[{PALW_PANEL}] this seat's vertex of round {} is not offered a carrier now: {answer:?}", vertex.round);
+                        vertex_book.mark_sent(vertex.round, current_daa);
+                    } else {
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        Ok(tx) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.submit_carrier_v1(&session, tx).await {
+                                Ok(()) => {
+                                    info!(
+                                        "[{PALW_PANEL}] submitted this seat's vertex of round {} ({} leaves) in tx {txid} (RFC-0007)",
+                                        vertex.round,
+                                        vertex.leaves.len()
+                                    );
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    inflight += 1;
+                                    vertex_book.mark_sent(vertex.round, current_daa);
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused this seat's vertex of round {}: {e}", vertex.round);
+                                    funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's vertex of round {}: {e}", vertex.round),
+                    }
+                    }
+                }
+                // **RFC-0007 Part IV.1: a trap move** — the commitment (when this bond is drawn by the slot lottery) or the reveal (once the
+                // claim's audit window has closed), each carried once from `palw-traps.json`'s plans, rehearsed on the tip first.
+                if vertex_fence.is_some()
+                    && self.consensus_config.params.palw_audit_mesh_active_at(current_daa)
+                    && slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight)
+                    && !readiness_waiting
+                    && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                    && let Some(kp) = self.keypair.as_ref()
+                {
+                    trap_book.refresh();
+                    let sign_trap = |message: &[u8], context: &[u8]| Self::sign_hedged(&kp.signing_key, message, context);
+                    let audit_window = |claim: &Hash64| session.palw_v2_mesh_audit_window_v1(*claim);
+                    let next = trap_book
+                        .next_reveal(network_domain, bond_key, current_daa, &audit_window, &sign_trap)
+                        .map(|(index, reveal)| (index, true, PalwConsensusObjectV2::TrapRevealedV1 { reveal: Box::new(reveal) }))
+                        .or_else(|| {
+                            trap_book
+                                .next_commit(network_domain, bond_key, current_daa, &sign_trap)
+                                .map(|(index, trap)| (index, false, PalwConsensusObjectV2::TrapCommittedV1 { trap: Box::new(trap) }))
+                        });
+                    if let Some((index, is_reveal, object)) = next {
+                        let rehearsal = session.palw_object_rehearsal_v1(&object);
+                        if let Some(answer) = rehearsal
+                            && !matches!(answer, kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted)
+                        {
+                            trace!(
+                                "[{PALW_PANEL}] this seat's trap {} is not offered a carrier now: {answer:?}",
+                                if is_reveal { "reveal" } else { "commitment" }
+                            );
+                        } else {
+                            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                                Ok(tx) => {
+                                    let txid = tx.id();
+                                    let change = tx.outputs[0].clone();
+                                    match self.submit_carrier_v1(&session, tx).await {
+                                        Ok(()) => {
+                                            info!(
+                                                "[{PALW_PANEL}] submitted this seat's trap {} in tx {txid} (RFC-0007 Part IV.1)",
+                                                if is_reveal { "reveal" } else { "commitment" }
+                                            );
+                                            let next = TransactionOutpoint::new(txid, 0);
+                                            self.persist_fee_outpoint(next);
+                                            funding = Some((
+                                                next,
+                                                UtxoEntry {
+                                                    amount: change.value,
+                                                    script_public_key: change.script_public_key,
+                                                    block_daa_score: current_daa,
+                                                    is_coinbase: false,
+                                                },
+                                            ));
+                                            inflight += 1;
+                                            if is_reveal {
+                                                trap_book.mark_revealed(index);
+                                            } else {
+                                                trap_book.mark_committed(index);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("[{PALW_PANEL}] the mempool refused this seat's trap move: {e}");
+                                            funding = None;
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for this seat's trap move: {e}"),
+                            }
+                        }
+                    }
+                }
                 let mut own: Vec<(Hash64, PalwSeatReceiptV2)> =
                     own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
                 own.sort_by_key(|(claim, _)| *claim);
@@ -13275,6 +13664,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
+        PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",
+        PalwConsensusObjectV2::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
+        PalwConsensusObjectV2::TrapCommittedV1 { .. } => "TrapCommittedV1",
+        PalwConsensusObjectV2::TrapRevealedV1 { .. } => "TrapRevealedV1",
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
@@ -15547,6 +15940,22 @@ impl PalwPanelService {
                         warn!("[{PALW_PANEL}] claim {}: the replay refused: {e} — no verdict from it (SEAT-R)", duty.claim_id)
                     }
                     _ => {}
+                }
+                // **RFC-0007 Part II: the sketch checker's mirror, beside this replay** (behind `--palw-sketch-check`, off by default).
+                // Once per claim, when the replay finishes: the checker's verdict on this seat's own witness of the job is compared with
+                // the replay's, off the loop, and a disagreement is an alarm in the log and in the status line.
+                if fresh
+                    && result.is_ok()
+                    && let Some(sketch) = self.sketch.clone()
+                    && let Some(entry) = self.backends().tir_entry_v1(duty.class_id, duty.artifact_root)
+                {
+                    let reproduced = step == PalwSeatReplayStepV1::Licensed;
+                    let (claim, prompt, decode, daa) = (duty.claim_id, prompt.to_vec(), ctx.exact_decode_tokens, current_daa);
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(why) = sketch.mirror_replay_v1(&entry, claim, &prompt, decode, reproduced, daa) {
+                            warn!("[{PALW_PANEL}] claim {claim}: the sketch mirror did not run ({why})");
+                        }
+                    });
                 }
                 let backend = (step != PalwSeatReplayStepV1::Licensed).then_some(backend);
                 (step, backend)
@@ -21369,7 +21778,7 @@ mod p2_6_da_accusation_policy {
             "the supplementary collector rides the Licences site: after the licences, before the priority lane's turn after them"
         );
         assert_eq!(gate("PriorityAfterLicences"), 1);
-        assert_eq!(gate("OwnReceipts"), 1);
+        assert_eq!(gate("OwnReceipts"), 3, "a seat's own receipt, and (RFC-0007) its sealed vertex and its trap object (Part IV.1)");
         assert!(
             sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && self.config.canonical_claims")
         );
@@ -22600,7 +23009,11 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert!(tick[..escalated].trim_end().ends_with("!stuck_opened\n                        &&"), "the escalated site defers to it");
         let tail_at = tick.find("last_lane = slots.finish(inflight);").expect("the tail");
         let (sites, tail) = tick.split_at(tail_at);
-        assert_eq!(sites.matches("self.submit_carrier_v1(&session, tx)").count(), 4, "class registration, licences, sets, receipts");
+        assert_eq!(
+            sites.matches("self.submit_carrier_v1(&session, tx)").count(),
+            6,
+            "class registration, licences, sets, receipts, and (RFC-0007) the seat's vertex and its trap object"
+        );
         assert_eq!(sites.matches("self.flow_context.submit_rpc_transaction(").count(), 1, "the canonical claim alone");
         let canonical = sites.find("self.flow_context.submit_rpc_transaction(").unwrap();
         assert!(sites[..canonical].rfind("&& !stuck_opened").is_some_and(|guard| canonical - guard < 2_000), "and it never replaces");

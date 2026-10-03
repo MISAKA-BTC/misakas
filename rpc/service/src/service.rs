@@ -1874,7 +1874,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             genesis_hash: params.genesis.hash.to_string(),
             drill_salt_id: self.config.palw_drill_genesis_salt.as_ref().map(|salt| salt.id()).unwrap_or_default(),
             // The verification debt (the 2026-10-01 panel backlog): the three owners' `key=value` halves, one line.
-            verification: [rt.verification_memory.as_str(), rt.verification_seat.as_str(), rt.verification_producer.as_str()]
+            verification: [
+                rt.verification_memory.as_str(),
+                rt.verification_seat.as_str(),
+                rt.verification_producer.as_str(),
+                // RFC-0007: the seat's vertices, and the vertex tables at the tip.
+                rt.verification_vertex.as_str(),
+            ]
                 .iter()
                 .filter(|part| !part.is_empty())
                 .copied()

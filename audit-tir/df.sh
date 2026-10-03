@@ -298,7 +298,7 @@ up() {
         mkdir -p "$KR" "$WORK_DIR/keyring-app"; chmod 700 "$KR"
         "$KASPAD_BIN" --testnet --netsuffix=12 --appdir="$WORK_DIR/keyring-app" --palw-drill-genesis-salt="$(salt)" \
             "--palw-drill-fence-at=$FENCE_AT" "--palw-drill-fence2-at=$FENCE2_AT" "--palw-drill-fence3-at=$FENCE3_AT" \
-            "--palw-drill-tir-at=$TIR_AT" ${TIR2_AT:+"--palw-drill-tir2-at=$TIR2_AT"} \
+            "--palw-drill-tir-at=$TIR_AT" ${TIR2_AT:+"--palw-drill-tir2-at=$TIR2_AT"} ${VERTEX_AT:+"--palw-drill-vertex-at=$VERTEX_AT"} \
             --palw-drill-write-keyring="$KR" 2>&1 \
             | tail -2 | sed -E "s/[0-9a-f]{64}/<64hex>/g"
         chmod 600 "$KR"/*

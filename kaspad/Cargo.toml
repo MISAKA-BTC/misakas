@@ -44,6 +44,10 @@ kaspa-perf-monitor.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-palw-base0.workspace = true
 misaka-palw-sdk.workspace = true
+# RFC-0007 Part II: the seat-local algebraic checker, its mirror check beside the replay, and the IR it reads.
+misaka-palw-tir.workspace = true
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec", features = ["node"] }
+misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 kaspa-rpc-core.workspace = true
 kaspa-rpc-service.workspace = true
 kaspa-txscript.workspace = true
