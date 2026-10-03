@@ -40,7 +40,7 @@ use crate::palw_step::{
     kernel_semantics_id_v1,
 };
 use crate::palw_step_leg::{
-    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1, step_tile_leaf_hash_v1,
+    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1,
 };
 use crate::palw_transcendental::{ggml_v_silu_v1, glibc_expf_v1};
 
@@ -4514,7 +4514,6 @@ pub fn check_execution_step_refutation_opened_capped_v1(
         Err(e) => return Err(e.into()),
     }
 
-    let context_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let out_coord = refutation.output_preimage.coord;
     let (node, layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
@@ -4556,7 +4555,7 @@ pub fn check_execution_step_refutation_opened_capped_v1(
             if preimage.values_le.len() != 4 * preimage.value_count as usize {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("input bytes are not 4 per value"));
             }
-            leaf_hashes.push(step_tile_leaf_hash_v1(&context_hash, &profile_hash, preimage));
+            leaf_hashes.push(crate::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, preimage));
         }
         // Maximal contiguous runs, DERIVED from the canonical indices — the carrier never says
         // where its runs are, it only answers for the ones the enumeration implies.
@@ -5354,6 +5353,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
+    use crate::palw_step_leg::step_tile_leaf_hash_v1;
     use crate::palw_step::{
         PALW_STEP_OBJECT_VERSION_V1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
         canonical_step_coordinates, kv_aux_leaf_count, step_leaf_count,

@@ -2032,7 +2032,7 @@ impl Qwen25A16Backend {
         carried_prompt: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
         let binding = &filing.binding;
         if binding.shape_profile.shape_profile_id() != self.class_profile_id {
             return Err("the filing is not this class's".to_string());
@@ -2084,7 +2084,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
                     if index == query_leaf {
                         query_tile = Some(tile);
                     }
@@ -2145,7 +2145,7 @@ impl Qwen25A16Backend {
     ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
         use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOutLenV1, PalwStepTableV1};
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
         if !self.court_capable {
             return Err("the v1 class carries no capture to read a cache row out of".to_string());
         }
@@ -2221,7 +2221,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
                     if wanted.contains(&index) {
                         kept.push((index, tile));
                     }
@@ -4340,7 +4340,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
@@ -4384,7 +4384,7 @@ fn a16_leaves_by_position(
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
         }
     }
     leaves

@@ -31,7 +31,7 @@
 
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
-    PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_v1,
+    PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_ctx_v1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -237,7 +237,7 @@ impl Base0StepCaptureV1 {
                 if self.leaves[index as usize] == Hash64::default() {
                     self.filled += 1;
                 }
-                self.leaves[index as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf);
+                self.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf);
                 // The tile object (8 + 2 + 16 + 4 + 24, padded) and its values' own allocation.
                 self.tile_bytes = self.tile_bytes.saturating_add(56 + leaf.values_le.capacity() as u64);
                 self.tiles.push((index, leaf));
@@ -482,7 +482,7 @@ pub fn base0_step_tiles_v1(
                 // `int32` lane is.
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
-            out.leaves[index as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf);
+            out.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf);
             out.tiles.push((index, leaf));
         }
     }
@@ -2055,7 +2055,7 @@ pub fn base0_refutation_from_opening_capped_v1(
     }
     let ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf);
     // The served range holding `index`, if any: the accused's committed hash and the opening to
     // derive paths from.
     let holder = |index: u64| {
