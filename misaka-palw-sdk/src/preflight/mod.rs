@@ -67,7 +67,7 @@ impl Depth {
 }
 
 /// The three stages, in the order a model meets them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Convert,
@@ -86,7 +86,7 @@ impl Stage {
 }
 
 /// One thing that stops a stage. Codes are stable once published (RFC-0002 §II.2.4).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Blocker {
     pub stage: Stage,
     pub code: String,
@@ -174,7 +174,7 @@ pub struct Verdict {
 }
 
 /// One condition of the chain, as needed against limit.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Condition {
     pub id: String,
     pub what: String,
@@ -468,6 +468,9 @@ pub struct JudgeCache {
     map: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::OnceLock<chain::ChainOutput>>>>,
     hits: std::sync::atomic::AtomicU64,
     misses: std::sync::atomic::AtomicU64,
+    /// A file the judgments are appended to and read back from (one `{"key", "chain"}` per line), so a census that restarts does not
+    /// judge a program twice. The caller names it per build: a judgment is a function of the build's consensus code.
+    file: Option<std::sync::Mutex<std::fs::File>>,
 }
 
 impl JudgeCache {
@@ -493,7 +496,39 @@ impl JudgeCache {
         source::hex(st.finalize().as_bytes())
     }
 
+    /// A cache backed by `path`: its judgments are loaded, and every new one is appended.
+    pub fn with_file(path: &Path) -> Result<JudgeCache, String> {
+        let c = JudgeCache::default();
+        let mut n = 0;
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let mut m = c.map.lock().map_err(|_| "poisoned")?;
+            for line in text.lines() {
+                // A line cut short by a stopped process is skipped.
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+                let (Some(k), Some(ch)) = (v.get("key").and_then(|k| k.as_str()), v.get("chain")) else { continue };
+                let Ok(out) = serde_json::from_value::<chain::ChainOutput>(ch.clone()) else { continue };
+                let cell = std::sync::OnceLock::new();
+                let _ = cell.set(out);
+                m.insert(k.to_string(), std::sync::Arc::new(cell));
+                n += 1;
+            }
+        }
+        let f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let _ = n;
+        Ok(JudgeCache { file: Some(std::sync::Mutex::new(f)), ..c })
+    }
+
+    /// The judgments the cache holds.
+    pub fn len(&self) -> usize {
+        self.map.lock().map(|m| m.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn get_or_judge(&self, key: String, f: impl FnOnce() -> chain::ChainOutput) -> chain::ChainOutput {
+        let key_for_file = key.clone();
         let cell = {
             let mut m = self.map.lock().unwrap_or_else(|p| p.into_inner());
             m.entry(key).or_default().clone()
@@ -507,6 +542,14 @@ impl JudgeCache {
             .clone();
         let counter = if computed { &self.misses } else { &self.hits };
         counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if computed
+            && let Some(file) = &self.file
+            && let Ok(line) = serde_json::to_string(&serde_json::json!({"key": key_for_file, "chain": out}))
+            && let Ok(mut f) = file.lock()
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
         out
     }
 

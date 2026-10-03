@@ -80,7 +80,7 @@ impl PreflightNetwork {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct FenceRow {
     pub name: String,
     /// `None`: dormant on this network.
@@ -90,7 +90,7 @@ pub struct FenceRow {
     pub needed: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
 pub struct NetworkInfo {
     pub id: String,
     /// The height the conditions were judged at.
@@ -104,7 +104,7 @@ pub struct NetworkInfo {
     pub fences: Vec<FenceRow>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct LayoutInfo {
     pub max_context: u32,
     pub checkpoint_interval: u32,
@@ -117,7 +117,7 @@ pub struct LayoutInfo {
     pub widest_context: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct GateNumbers {
     pub max_step_leaf_count: u64,
     pub canonical_step_leaf_count: u64,
@@ -126,7 +126,7 @@ pub struct GateNumbers {
     pub max_operand_count: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct AdmissionInfo {
     /// `tir_admit_v1`'s verdict over the shape-only program (`ADMISSIBLE`, `EXCEEDS(...)`, ...).
     pub verdict: String,
@@ -146,7 +146,7 @@ pub struct AdmissionInfo {
     pub not_asked: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct SeatInfo {
     pub artifact_bytes: u64,
     /// The K/V history and recurrent state at the declared context.
@@ -160,7 +160,7 @@ pub struct SeatInfo {
     pub note: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct SeatTier {
     pub name: String,
     pub share_bytes: u64,
@@ -169,7 +169,7 @@ pub struct SeatTier {
     pub fits_at_context: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct Forecast {
     pub verification_window_spans: u32,
     pub artifact_prefetch_spans: u32,
@@ -190,7 +190,7 @@ pub struct Forecast {
 }
 
 /// The seating floor against the operators the network has.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct ForecastIndependence {
     /// `palw_class_seating` is in force on the network at the judged height (its floor is then asked of every claim).
     pub fence_in_force: bool,
@@ -205,7 +205,7 @@ pub struct ForecastIndependence {
     pub note: String,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, serde::Deserialize)]
 pub struct ChainOutput {
     pub network: NetworkInfo,
     pub admission: Option<AdmissionInfo>,

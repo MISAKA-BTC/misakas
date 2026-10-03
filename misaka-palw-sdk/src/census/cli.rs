@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--judge-budget-secs N] [--dirs FILE [--follow]]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--judge-budget-secs N] [--judge-cache FILE] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -50,6 +50,7 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
         Some(other) => return Err(format!("--depth {other}: headers | shape")),
     };
     let assume_task = take(&mut args, "--assume-task");
+    let judge_cache = take(&mut args, "--judge-cache");
     let judge_budget = match take(&mut args, "--judge-budget-secs") {
         Some(b) => Some(std::time::Duration::from_secs(b.parse::<u64>().map_err(|e| format!("--judge-budget-secs {b}: {e}"))?)),
         None => None,
@@ -68,6 +69,10 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     let mut ctx = CensusContext::new(&snapshot, &network, height, policy, &tree);
     ctx.options.depth = depth;
     ctx.assume_task = assume_task;
+    if let Some(path) = &judge_cache {
+        ctx.cache = crate::preflight::JudgeCache::with_file(std::path::Path::new(path))?;
+        eprintln!("census: {} judgment(s) read from {path}", ctx.cache.len());
+    }
     ctx.judge_budget = judge_budget;
     if let Some(b) = judge_budget {
         ctx.ruleset.context_rule = format!("{}; a layout search's budget {} s", ctx.ruleset.context_rule, b.as_secs());
