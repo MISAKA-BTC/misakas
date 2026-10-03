@@ -250,6 +250,9 @@ pub struct CensusContext {
     pub context_rule: ContextRule,
     /// The chain's judgment shared by identical programs (one process, every worker).
     pub cache: preflight::JudgeCache,
+    /// A frame's task for a repository that declares none (RFC-0002 §II.12: a GGUF the Hub lists without a task is in the local-LLM
+    /// frame as text generation). `None` in the Hub-wide census, where an undeclared task is `TASK_UNKNOWN`.
+    pub assume_task: Option<String>,
 }
 
 impl CensusContext {
@@ -272,6 +275,7 @@ impl CensusContext {
             },
             context_rule,
             cache: Default::default(),
+            assume_task: None,
         }
     }
 
@@ -582,7 +586,13 @@ fn stopped_at(gates: &[GateResultV1]) -> String {
 
 /// **The row of one repository**: the listing alone (`fetched` = `None`), or the listing and its header store.
 pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -> CensusRowV1 {
-    let task = task_of(l);
+    let mut task = task_of(l);
+    if task.task == "unknown"
+        && let Some(t) = &ctx.assume_task
+    {
+        let r = super::tasks::task_row(t);
+        task = TaskV1 { task: t.clone(), group: r.group.to_string(), profile: r.profile, source: "frame".into() };
+    }
     let sel = select(l);
     let strata = strata_of(l, &task, &sel);
     let rights = rights_of(l, ctx.policy);

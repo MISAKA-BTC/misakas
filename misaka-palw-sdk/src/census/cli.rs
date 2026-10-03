@@ -18,7 +18,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--dirs FILE [--follow]]";
+const USAGE: &str = "palw-class census classify|gates [--snapshot ID] [--network ID] [--height DAA] [--max-context N] [--policy none|permissive-card-v0] [--tree SHA] [--threads N] [--depth headers|shape] [--assume-task TASK] [--dirs FILE [--follow]]";
 
 fn take(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -49,6 +49,7 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
         Some("headers") => crate::preflight::Depth::Headers,
         Some(other) => return Err(format!("--depth {other}: headers | shape")),
     };
+    let assume_task = take(&mut args, "--assume-task");
     let follow = args.iter().any(|a| a == "--follow");
     args.retain(|a| a != "--follow");
     let max_context = match take(&mut args, "--max-context") {
@@ -62,6 +63,7 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     // times per class): `--max-context N` fixes it, else the model's declared maximum capped at 8,192 with one retry at 2,048.
     let mut ctx = CensusContext::new(&snapshot, &network, height, policy, &tree);
     ctx.options.depth = depth;
+    ctx.assume_task = assume_task;
     if let Some(c) = max_context {
         ctx = ctx.with_context_rule(super::gates::ContextRule::Fixed(c));
     }
