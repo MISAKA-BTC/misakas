@@ -786,7 +786,15 @@ impl PalwClassSdk {
             shape.gdn_key_heads,
         )
         .map_err(|e| {
-            format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
+            // The refusal in one structured shape (code, rule, needed against limit, what decided the reading), beside the sentence:
+            // a registrant sees it before paying the fee, in JSON output too.
+            let decided_by = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(shape.held.armed, None, None);
+            format!(
+                "the {} registration would be refused by the admission gate, so nothing was signed or funded: {} ({e}) [refusal {}]",
+                entry.model_id,
+                e.code(),
+                e.refusal_v1(&decided_by).to_json()
+            )
         })
         .and_then(|admitted| {
             // **And the two checks the processor asks beside the gate** (ADR-0152 §4-ter C5,

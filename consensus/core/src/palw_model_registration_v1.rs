@@ -299,6 +299,9 @@ pub struct PalwModelPreflightReportV1 {
     pub processor_verdict: String,
     pub reject_code: String,
     pub checks: Vec<PalwModelPreflightCheckV1>,
+    /// The gate's refusal in its structured form (code, rule, needed against limit, what decided the reading), when the gate refused
+    /// — the same JSON every tool prints beside its sentence (`crate::palw_refusal_v1`).
+    pub refusal: Option<crate::palw_refusal_v1::PalwRefusalV1>,
 }
 
 impl PalwModelPreflightReportV1 {
@@ -314,6 +317,7 @@ impl PalwModelPreflightReportV1 {
             admissible: false,
             processor_verdict: String::new(),
             reject_code: String::new(),
+            refusal: None,
             checks: Vec::new(),
         }
     }
@@ -390,6 +394,7 @@ pub fn palw_model_preflight_v1(
         shape.prompt_ids_form,
     );
 
+    let mut refusal: Option<crate::palw_refusal_v1::PalwRefusalV1> = None;
     let mut reject_code = String::new();
     let mut processor_verdict = PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();
     let admissible = match (&admission, &attribution) {
@@ -408,7 +413,18 @@ pub fn palw_model_preflight_v1(
             false
         }
         (Err(err), _) => {
-            checks.push(PalwModelPreflightCheckV1::from_admission_err(err));
+            let decided_by = crate::palw_refusal_v1::palw_refusal_decided_by_v1(
+                shape.held.armed,
+                Some(daa_score),
+                params.palw_held_context.map(|f| f.daa_score()),
+            );
+            let structured = err.refusal_v1(&decided_by);
+            checks.push(PalwModelPreflightCheckV1 {
+                code: err.code().to_string(),
+                ok: false,
+                message: format!("{err} [refusal {}]", structured.to_json()),
+            });
+            refusal = Some(structured);
             reject_code = err.code().to_string();
             processor_verdict = err.code().to_string();
             if !matches!(err, PalwClassAdmissionError::CoverageGap) {
@@ -433,6 +449,7 @@ pub fn palw_model_preflight_v1(
         processor_verdict,
         reject_code,
         checks,
+        refusal,
     })
 }
 
