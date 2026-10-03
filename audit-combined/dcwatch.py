@@ -48,12 +48,12 @@ SLOT_S = 120
 # --------------------------------------------------------------------------------------------------------------------
 # the chain as a list of blocks
 # --------------------------------------------------------------------------------------------------------------------
-def raw_blocks(port):
+def raw_blocks(port, with_txs=False):
     dag = call(port, "getBlockDagInfo", {})
     cursor = pick(dag, "pruningPointHash", default=None)
     seen = set()
     while True:
-        r = call(port, "getBlocks", {"lowHash": cursor, "includeBlocks": True, "includeTransactions": False}, timeout=120)
+        r = call(port, "getBlocks", {"lowHash": cursor, "includeBlocks": True, "includeTransactions": with_txs}, timeout=120)
         page = pick(r, "blocks", default=[]) or []
         fresh = [b for b in page if pick(pick(b, "header", default={}), "hash") not in seen]
         if not fresh:
@@ -74,7 +74,8 @@ def load_blocks(port):
         parents = list(levels[0]) if levels and isinstance(levels[0], list) else []
         out.append({"hash": str(pick(h, "hash", default="")), "parents": [str(p) for p in parents], "daa": int(pick(h, "daaScore", default=0) or 0),
                     "ts": int(pick(h, "timestamp", default=0) or 0), "kind": str(pick(v, "blockKind", default="") or ""),
-                    "lane": str(pick(v, "laneClass", default="") or ""), "chain": bool(pick(v, "isChainBlock", default=False))})
+                    "lane": str(pick(v, "laneClass", default="") or ""), "chain": bool(pick(v, "isChainBlock", default=False)),
+                    "merged": [str(x) for x in (list(pick(v, "mergeSetBluesHashes", default=[]) or []) + list(pick(v, "mergeSetRedsHashes", default=[]) or []))]})
     return out
 
 
@@ -727,6 +728,162 @@ def bind_wait_report(claims, blocks, fence, work, tip, st):
             f"operator claims in the leg: {len(ys)}"]
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# G-R1: capacity riders (ADR-0164 F-M1 / ADR-0167 D2) admitted through the real processor
+# --------------------------------------------------------------------------------------------------------------------
+RIDER_TAG = 95
+
+
+def rider_objects(port, fence=0):
+    """[(daa, block hash, lead claim id, riders offered)] — every AttemptRidersV1 (tag 95) object the chain carries: a lifecycle payload is {version: u16, tag: u8, lead: 64 bytes,
+    riders: borsh Vec (u32 LE length)}."""
+    out = []
+    for b in raw_blocks(port, with_txs=True):
+        h = pick(b, "header", default={}) or {}
+        daa = int(pick(h, "daaScore", default=0) or 0)
+        if daa < fence:
+            continue
+        for tx in (pick(b, "transactions", default=[]) or []):
+            sub, payload = str(pick(tx, "subnetworkId", default="")), str(pick(tx, "payload", default=""))
+            if not sub.startswith("4b") or len(payload) < 150:
+                continue
+            raw = bytes.fromhex(payload)
+            if len(raw) >= 71 and raw[2] == RIDER_TAG:
+                out.append((daa, str(pick(h, "hash", default="")), raw[3:67].hex(), int.from_bytes(raw[67:71], "little")))
+    return out
+
+
+def rider_log_counts(work, nodes=("new4", "new6", "new9")):
+    """The producers' own counts: riders queued ('queues N rider(s) of lead …') and not built ('rider i of … not built'), and the nodes' refusals ('riders refused')."""
+    import re
+    q = nb = refused = 0
+    for n in nodes:
+        lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
+        if os.path.exists(lg):
+            for ln in open(lg, errors="replace"):
+                m = re.search(r"queues (\d+) rider\(s\) of lead", ln)
+                if m:
+                    q += int(m.group(1))
+                elif re.search(r"rider \d+ of \S+ not built", ln):
+                    nb += 1
+    for lg in __import__("glob").glob(os.path.join(os.path.expanduser(work), "new*", "kaspad.out")):
+        for ln in open(lg, errors="replace"):
+            if "riders refused" in ln or re.search(r"rider \d+ of [0-9a-f]+: ", ln):
+                refused += 1
+    return {"queued": q, "not_built": nb, "refused_lines": refused}
+
+
+def _int(x, default=0):
+    try:
+        return int(str(x))
+    except (TypeError, ValueError):
+        return default
+
+
+def rider_claims(objs, claims):
+    """For each carried object: its lead's row and the companion claims (the riders): same executor bond and class, accepted within 9 DAA of the lead, the escrow of a rider is
+    floor(E / (1 + n)) and the lead keeps E minus n of them, so a companion's escrow is within n + 1 sompi of the lead's (post-batch) escrow. -> [{lead, offered, riders: [rows]}]"""
+    out = []
+    for daa, blk, lead, n in objs:
+        lr = claims.get(lead)
+        if lr is None:
+            out.append({"lead": lead, "offered": n, "row": None, "riders": [], "daa": daa})
+            continue
+        acc, bond, cls, esc = _int(pick(lr, "acceptedDaa")), str(pick(lr, "executorBond", default="")), str(pick(lr, "classId", default="")), _int(pick(lr, "escrowSompi"))
+        comp = [c for cid, c in claims.items() if cid != lead and str(pick(c, "executorBond", default="")) == bond and str(pick(c, "classId", default="")) == cls
+                and acc <= _int(pick(c, "acceptedDaa")) <= acc + 9 and abs(_int(pick(c, "escrowSompi")) - esc) <= n + 1]
+        out.append({"lead": lead, "offered": n, "row": lr, "riders": comp, "daa": daa})
+    return out
+
+
+def rider_floor_state_causes(blocks, work, nodes=("new0", "new1", "new2", "new3")):
+    """Transitions the nodes logged at a block with NO REAL attempt in it or in its mergeset (a rider-only block): the riders must not step the state machine."""
+    log = node_floor_log(work, nodes)
+    if not log:
+        return None
+    by = {b["hash"]: b for b in blocks}
+    bad, total = [], 0
+    node = max(log, key=lambda n: len(log[n]))
+    import re
+    pat = re.compile(r"\[palw-floor-state\] daa=(\d+) block=(\S+) ")
+    seen = set()
+    with open(os.path.join(os.path.expanduser(work), node, "kaspad.out"), errors="replace") as f:
+        for ln in f:
+            m = pat.search(ln)
+            if not m or m.group(2) in seen:
+                continue
+            seen.add(m.group(2))
+            b = by.get(m.group(2))
+            total += 1
+            if b is None:
+                continue
+            kinds = [b["kind"]] + [by[x]["kind"] for x in b.get("merged", []) if x in by]
+            if "REAL" not in kinds:
+                bad.append((int(m.group(1)), m.group(2)[:12]))
+    return {"transitions": total, "rider_only": bad}
+
+
+def gate_riders(objs, claims, blocks, work, tip, windows=None, mature=60):
+    """G-R1: riders admitted with a sane price and licensed like ordinary claims, and without stepping the floor state machine. Carried (tag 95 objects / riders in them), queued by the
+    producers, refused by the nodes, ADMITTED (companion claims in the state), their price (committed / reserved sompi against the lead's: a rider priced without the work-target fold
+    would be saturated), their bind / licence share against the leads' of the same age."""
+    if not objs:
+        return 3, "INCOMPLETE: no AttemptRidersV1 object on the chain yet (the producers run with --palw-riders; the object needs palw_capacity_multi_claim armed)"
+    rc = rider_claims(objs, claims)
+    offered = sum(x["offered"] for x in rc)
+    admitted = sum(len(x["riders"]) for x in rc)
+    logs = rider_log_counts(work)
+    bad, notes = [], []
+    insane = []
+    riders_all, leads_all = [], []
+    for x in rc:
+        if x["row"] is None:
+            continue
+        leads_all.append(x["row"])
+        lc, lr_ = _int(pick(x["row"], "committedSompi")), _int(pick(x["row"], "reservedSompi"))
+        for r in x["riders"]:
+            riders_all.append(r)
+            rcm, rrs, resc = _int(pick(r, "committedSompi")), _int(pick(r, "reservedSompi")), _int(pick(r, "escrowSompi"))
+            if resc >= 2 ** 60 or rcm >= 2 ** 60 or (lc and rcm > 4 * lc) or (lr_ and rrs > 4 * lr_):
+                insane.append(str(pick(r, "claimId"))[:12])
+    if admitted == 0:
+        return 1, f"FAIL: {len(objs)} rider objects carried ({offered} riders offered; producers queued {logs['queued']}, not built {logs['not_built']}, refusal lines {logs['refused_lines']}) but NO rider claim was admitted"
+    if insane:
+        bad.append(f"{len(insane)} riders priced out of range against their lead (committed / reserved > 4x the lead's, or u64-max-like): {insane[:5]}")
+    def share(rows):
+        old = [r for r in rows if tip - _int(pick(r, "acceptedDaa")) >= mature]
+        if len(old) < 5:
+            return None, len(old)
+        ok = [r for r in old if str(pick(r, "phase", default="")).lower().startswith(("receipt_licensed", "final", "licensed")) or pick(r, "boundDaa", default=None) is not None]
+        lic = [r for r in old if str(pick(r, "phase", default="")).lower() in ("receipt_licensed", "final") or str(pick(r, "phase", default="")).lower().startswith("final")]
+        return (len(ok) / len(old), len(lic) / len(old)), len(old)
+    rs, rn = share(riders_all)
+    ls, ln = share(leads_all)
+    txt = (f"{len(objs)} rider objects carried ({offered} riders offered; producers queued {logs['queued']}, not built {logs['not_built']}, refusal lines {logs['refused_lines']}), "
+           f"{admitted} rider claims ADMITTED ({100.0 * admitted / max(offered, 1):.0f} % of the offer)")
+    if rs is None:
+        notes.append(f"only {rn} riders old enough (>= {mature} DAA) to judge bind / licence")
+    else:
+        txt += f"; riders bound {100 * rs[0]:.0f} % licensed {100 * rs[1]:.0f} % (n={rn})" + (f" against leads bound {100 * ls[0]:.0f} % licensed {100 * ls[1]:.0f} % (n={ln})" if ls else "")
+        if ls and rs[1] < 0.9 * ls[1]:
+            bad.append(f"riders licensed {100 * rs[1]:.0f} % against the leads' {100 * ls[1]:.0f} %")
+    fs = rider_floor_state_causes(blocks, work)
+    if fs is None:
+        notes.append("no [palw-floor-state] log: rider-only transitions not checked")
+    else:
+        txt += f"; {fs['transitions']} floor-state transitions, {len(fs['rider_only'])} at a block with no REAL attempt in it or its mergeset"
+        if fs["rider_only"]:
+            bad.append(f"floor-state transitions with no REAL attempt (riders alone?): {fs['rider_only'][:5]}")
+    if windows:
+        per = {n: sum(1 for o in objs if lo <= o[0] < hi) for n, (lo, hi) in windows.items()}
+        txt += f"; rider objects per rho window {per}"
+    if bad:
+        return 1, "FAIL: " + "; ".join(bad) + " | " + txt
+    if notes:
+        return 3, "INCOMPLETE: " + "; ".join(notes) + " | " + txt
+    return 0, "PASS: " + txt
+
+
 def user_metrics(blocks, claims, fence, tip=None):
     """The user's three metrics, past the fence: the REAL attempts' BLUE rate, the REAL share of the selected chain (chain blocks whose kind is REAL or EXEC), and the
     REAL work that reached Final (claims accepted in a REAL block, old enough to have had the time, that are Final)."""
@@ -994,6 +1151,12 @@ def gates(a):
     rows.append(("G-A1", *gate_admission(a.work, states, r1d, tipd)))
     rows.append(("G-A2", *gate_exec_seed(read_exec_samples(os.path.join(os.path.expanduser(a.evd), "roundlane.tsv")), fence)))
     rows.append(("G-A3", *gate_bind_wait(claims, blocks, fence, a.work, tipd)))
+    capw = {}
+    try:
+        capw = {k: (v["lo"], v["hi"]) for k, v in (json.load(open(os.path.join(os.path.expanduser(a.work), "drive-state.json")))["data"].get("cap-summary") or {}).items()}
+    except (OSError, ValueError, KeyError):
+        pass
+    rows.append(("G-R1", *gate_riders(rider_objects(a.port, fence), claims, blocks, a.work, tipd, capw)))
     a.json_base = int(os.environ.get("JSON_BASE", "53200"))
     for nm, c, t in fork_checks(a, blocks):
         rows.append((nm, c, t))
@@ -1341,6 +1504,32 @@ def selftest():
             cl[k]["boundDaa"] = cl[k]["acceptedDaa"] + 55                         # the non-operator wait is long
     assert gate_bind_wait(cl, cb, 26, wd, 200)[0] == 1
     assert gate_bind_wait({k: v for k, v in cl.items() if v["executorBond"] == "op:0"}, cb, 26, wd, 200)[0] == 3     # no non-operator REAL: incomplete
+    # G-R1: riders admitted with a sane price, licensed, and no rider-only floor-state transition
+    wr = tempfile.mkdtemp()
+    for n in ("new4", "new0"):
+        os.makedirs(os.path.join(wr, n))
+    L = "aa" * 64
+    open(os.path.join(wr, "new4", "kaspad.out"), "w").write(f"[palw-producer] queues 4 rider(s) of lead {L} (ADR-0164 F-M1, tag 95)\n")
+    def claim(cid, acc, esc, phase="final", committed="9000", reserved="500", bond="op:0", cls="C"):
+        return {"claimId": cid, "acceptedDaa": acc, "escrowSompi": esc, "phase": phase, "committedSompi": committed, "reservedSompi": reserved, "executorBond": bond, "classId": cls, "boundDaa": acc + 5}
+    cr = {L: claim(L, 100, 2004)}
+    for i in range(4):
+        cr[f"r{i}"] = claim(f"r{i}", 101, 2000, phase="receipt_licensed")
+    for i in range(12):       # ordinary leads of other DAAs: the licensing baseline
+        cr[f"l{i}"] = claim(f"l{i}", 100 + i, 10000)
+    objs = [(101, "bh", L, 4)]
+    bl = [dict(_blk("bh", [], 101, "LEGACY_HEARTBEAT", "BLUE"), merged=[]), dict(_blk("rb", [], 101, "REAL", "BLUE"), merged=[])]
+    ok_, txt = gate_riders(objs, cr, bl, wr, 300)
+    assert ok_ in (0, 3), (ok_, txt)
+    assert gate_riders([], cr, bl, wr, 300)[0] == 3
+    assert gate_riders(objs, {k: v for k, v in cr.items() if not k.startswith("r")}, bl, wr, 300)[0] == 1          # carried, none admitted
+    crz = {k: dict(v) for k, v in cr.items()}
+    crz["r0"]["committedSompi"] = str(2 ** 64 - 1)
+    assert gate_riders(objs, crz, bl, wr, 300)[0] == 1                                                                 # a rider priced u64-max-like
+    open(os.path.join(wr, "new0", "kaspad.out"), "w").write("[palw-floor-state] daa=101 block=bh idle->probe last_blue=- until=109 last_probe_end=-\n")
+    assert gate_riders(objs, cr, bl, wr, 300)[0] == 1                                                                  # a transition at a block with no REAL attempt
+    bl2 = [dict(_blk("bh", [], 101, "LEGACY_HEARTBEAT", "BLUE"), merged=["rb"]), dict(_blk("rb", [], 101, "REAL", "BLUE"), merged=[])]
+    assert gate_riders(objs, cr, bl2, wr, 300)[0] in (0, 3), gate_riders(objs, cr, bl2, wr, 300)                       # the REAL attempt is in its mergeset: the attempt stepped it
     print("selftest ok")
     return 0
 
