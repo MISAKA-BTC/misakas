@@ -100,6 +100,8 @@ pub struct PalwDrillExtraFencesV1 {
     pub audit_mesh_at: Option<u64>,
     /// RFC-0007 Part IV.2's capped onboarding (`palw_capped_onboarding_v1`).
     pub capped_at: Option<u64>,
+    /// Lane PL's panel-liveness list (ADR-0166; `palw_panel_unavailable_expiry`, `palw_panel_standby`, `palw_seat_availability`).
+    pub panel_liveness_at: Option<u64>,
     pub improve_at: Option<u64>,
     /// RFC-0006's layer-sharded panels (`--palw-drill-tir-shard-at`, `palw_tir_shard_v1`): armed after the fences it names.
     pub tir_shard_at: Option<u64>,
@@ -137,6 +139,7 @@ impl PalwDrillExtraFencesV1 {
             witness_at: args.palw_drill_witness_at,
             audit_mesh_at: args.palw_drill_audit_mesh_at,
             capped_at: args.palw_drill_capped_at,
+            panel_liveness_at: args.palw_drill_panel_liveness_at,
             improve_at: args.palw_drill_improve_at,
             tir_shard_at: args.palw_drill_tir_shard_at,
             int11_at: args.palw_drill_int11_at,
@@ -163,6 +166,7 @@ impl PalwDrillExtraFencesV1 {
             || self.witness_at.is_some()
             || self.audit_mesh_at.is_some()
             || self.capped_at.is_some()
+            || self.panel_liveness_at.is_some()
             || self.improve_at.is_some()
             || self.tir_shard_at.is_some()
             || self.int11_at.is_some()
@@ -216,6 +220,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-witness-at", self.witness_at, "RFC-0007's witness manifest (palw_witness_manifest_v1)"),
             ("--palw-drill-audit-mesh-at", self.audit_mesh_at, "RFC-0007's audit mesh (palw_audit_mesh_v1)"),
             ("--palw-drill-capped-at", self.capped_at, "RFC-0007's capped onboarding (palw_capped_onboarding_v1)"),
+            ("--palw-drill-panel-liveness-at", self.panel_liveness_at, "lane PL's panel-liveness list (ADR-0166)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-tir-shard-at", self.tir_shard_at, "RFC-0006's layer-sharded panels (palw_tir_shard_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
@@ -336,6 +341,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.capped_at {
             moves.extend(d::palw_drill_capped_at_v1(params, at).map_err(|e| format!("--palw-drill-capped-at: {e}"))?);
         }
+        if let Some(at) = self.panel_liveness_at {
+            moves.extend(d::palw_drill_panel_liveness_at_v1(params, at).map_err(|e| format!("--palw-drill-panel-liveness-at: {e}"))?);
+        }
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
@@ -391,6 +399,7 @@ impl PalwDrillExtraFencesV1 {
             ("rfc1_at=", "--palw-drill-fp-prefix-at / -fp-tokenizer-at / -fp-constraint2-at / -adapter-at", self.rfc1_marker_text()),
             ("fence4_at=", "--palw-drill-fence4-at", palw_drill_marker_fence_text_v1(self.fence4_at)),
             ("class_seating_at=", "--palw-drill-class-seating-at", palw_drill_marker_fence_text_v1(self.class_seating_at)),
+            ("panel_liveness_at=", "--palw-drill-panel-liveness-at", palw_drill_marker_fence_text_v1(self.panel_liveness_at)),
         ]
     }
 
@@ -1031,6 +1040,7 @@ pub fn palw_drill_write_keyring_v4(
         "witness_at": extra.witness_at,
         "audit_mesh_at": extra.audit_mesh_at,
         "capped_at": extra.capped_at,
+        "panel_liveness_at": extra.panel_liveness_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "tir_shard_at": extra.tir_shard_at,
