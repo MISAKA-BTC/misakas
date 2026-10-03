@@ -153,6 +153,7 @@ pub async fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) ->
         residency_pin_below_bytes: defaults.residency_pin_below_bytes,
         node,
         full: misaka_palw_sdk::preflight::full::FullInputs { pack: a.pack.clone(), artifact: a.artifact_file.clone() },
+        lora: None,
     };
     // A repository id or an http(s) base URL is read by ranges (the headers only); anything else is a local model.
     let spelled = input.to_string_lossy().to_string();
