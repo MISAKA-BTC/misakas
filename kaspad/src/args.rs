@@ -264,6 +264,10 @@ pub struct Args {
     /// one re-made by that same replay, so the file only has to serve the first minutes. A
     /// free-prompt capture keeps its own rule (48 h, and while the chain can still ask about it).
     pub palw_attempt_retention_minutes: u64,
+    /// **ADR-0164 F-M1: riders per lead attempt this producer builds** (`--palw-riders=N`, 0 = none, at most 64): after a lead block is
+    /// submitted, the producer executes `N` further jobs of its own bond under the riders' derived anchors and queues one
+    /// `AttemptRidersV1` object (tag 95) for the panel's carrier lane to file. Inert below `palw_capacity_multi_claim`.
+    pub palw_riders: u32,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -685,6 +689,7 @@ impl Default for Args {
             palw_class_cache_bytes: 0,
             palw_class_resident_bytes: None,
             palw_attempt_retention_minutes: 60,
+            palw_riders: 0,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -2069,6 +2074,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-riders")
+                .long("palw-riders")
+                .value_name("riders")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32).range(0..=64))
+                .help(
+                    "MISAKA PALW (ADR-0164 F-M1): riders per lead attempt — after each block this producer submits, execute this many                      further jobs of its own bond (each a claim of its own, paid out of the lead's carve) and file them as one                      AttemptRidersV1 object. 0 (the default) builds none; at most 64. Inert below palw_capacity_multi_claim.",
+                ),
+        )
+        .arg(
             Arg::new("palw-attempt-retention-minutes")
                 .long("palw-attempt-retention-minutes")
                 .value_name("minutes")
@@ -2956,6 +2971,7 @@ impl Args {
                 .unwrap_or(defaults.palw_class_artifact),
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
+            palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
             palw_attempt_retention_minutes: m
                 .get_one::<u64>("palw-attempt-retention-minutes")
                 .copied()

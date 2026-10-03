@@ -309,6 +309,7 @@ CAPBATCH = "consensus/core/tests/palw_capacity_batch_licence_is_t12_only.rs"
 CAPQS = "consensus/core/tests/palw_capacity_stage2_is_t12_only.rs"
 CAPN = "consensus/core/tests/palw_capacity_network_room_is_t12_only.rs"
 CAPNV = "consensus/core/tests/palw_capacity_network_verify_is_t12_only.rs"
+CAPS567 = "consensus/core/tests/palw_capacity_s567_is_t12_only.rs"
 RETROLIFE = "consensus/core/tests/palw_final_lock_life_retro_is_t12_only.rs"
 FLOOR2 = "consensus/core/tests/palw_floor_refusal_retry_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
@@ -584,6 +585,9 @@ def registry() -> list[Pin]:
     # int-11 (rfc4/int-capdrill: F-N's static verification term L_ver; dormant): testnet-12 as shipped.
     pins += _triple("capnv.T12_RELEASE", "t12", CAPNV, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPNV}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0164 (rcore/cap-1000: F-EM, F-M1 and F-K, armed by the int-11 flag day): the DAA-1,300 release.
+    pins += _triple("caps567.T12_RELEASE", "t12", CAPS567, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
+                    (f"{CAPS567}::the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

@@ -37,6 +37,8 @@ pub enum PalwCapacityLedgerKeyV1 {
     RiderLead(Hash64),
     /// F-K: the breaker's row.
     Breaker,
+    /// F-K: one bond's own breaker row (B1, B2) — present only while the bond's level is lowered or its epoch counted something.
+    BondBreaker(PalwBondKeyV2),
 }
 
 /// **A row of the ledger.**
@@ -48,6 +50,8 @@ pub enum PalwCapacityLedgerRowV1 {
     Riders { riders: u16, daa: u64 },
     /// F-K.
     Breaker(PalwRhoBreakerV1),
+    /// F-K: a bond's own row.
+    Bond(PalwBondBreakerV1),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -124,6 +128,26 @@ pub fn palw_rider_job_anchor_v1(lead: &Hash64, index: u32) -> Hash64 {
     hasher.update(lead.as_bytes().as_slice());
     hasher.update(&index.to_le_bytes());
     Hash64::from_bytes(hasher.finalize().as_bytes().try_into().expect("64 bytes"))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The verification supply behind L_ver, stepped with the tier
+// ---------------------------------------------------------------------------------------------
+
+/// **RFC-0006's seat-work factor, in milli**: layer sharding takes a claim's verification from about five full replays (a k = 2 panel plus
+/// the audit and the court margin) to about two replay-equivalents, so the same seats license 5 / 2 = 2.5 times the claims in the receipt
+/// window. The factor applies to `L_ver`'s `μ_floor` from the ρ = 250 step (the release that adds the sharding arms it at H, the step at
+/// H + 190), and ONLY while the issuance tier is at or above 250: a breaker that has lowered the tier below it takes the factor back.
+/// (RFC-0007's tally licensing cuts per-claim signature carriage from 14.4 KB to 66–330 B, which relieves `L_carry`, not `L_ver`; `L_carry`
+/// at 64 licences a block already clears the network level, so it is not stepped.)
+pub const PALW_VERIFY_SUPPLY_SHARDED_MILLI_V1: u64 = 2_500;
+
+/// The tier from which the sharded supply counts.
+pub const PALW_VERIFY_SUPPLY_TIER_V1: u32 = 250;
+
+/// **The verification supply factor (milli) at an issuance tier**: 1,000 below ρ = 250, [`PALW_VERIFY_SUPPLY_SHARDED_MILLI_V1`] from it.
+pub const fn palw_verify_supply_milli_v1(tier_rho: u32) -> u64 {
+    if tier_rho >= PALW_VERIFY_SUPPLY_TIER_V1 { PALW_VERIFY_SUPPLY_SHARDED_MILLI_V1 } else { 1_000 }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -330,6 +354,67 @@ pub fn palw_breaker_evaluate_v1(row: &PalwRhoBreakerV1, step_rho: u32, overdue: 
     PalwRhoBreakerV1 { level, clean_epochs: clean, ..PalwRhoBreakerV1::fresh_v1(new_epoch) }
 }
 
+/// **One bond's breaker row** (ADR-0160 §8.3's per-bond metrics, which lower only the bond's OWN tier): B1 — its own
+/// producer-attributable endings (a data-availability default, `ProducerWithholding`; never a receipt-deadline expiry, which is the
+/// network's) are at least a fifth of at least ten of its claims reaching a deadline in the epoch; B2 — any conviction of the bond, which restarts it one rung below the tier in force. Rooted
+/// (`PalwCapacityLedgerKeyV1::BondBreaker`).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBondBreakerV1 {
+    pub epoch: u64,
+    pub level: u8,
+    pub clean_epochs: u8,
+    pub reached: u32,
+    pub voids: u32,
+    pub convicted: bool,
+}
+
+/// B1: a fifth of the bond's claims reaching a deadline, of at least this many.
+pub const PALW_BOND_BREAKER_MIN_COUNT_V1: u32 = 10;
+
+impl PalwBondBreakerV1 {
+    pub fn fresh_v1(epoch: u64) -> Self {
+        Self { epoch, level: PALW_BREAKER_TOP_LEVEL_V1, clean_epochs: 0, reached: 0, voids: 0, convicted: false }
+    }
+
+    /// The row with one claim reaching its receipt deadline (`void`: it failed there) counted.
+    pub fn reached_v1(&self, void: bool) -> Self {
+        let mut next = self.clone();
+        next.reached = next.reached.saturating_add(1);
+        next.voids = next.voids.saturating_add(u32::from(void));
+        next
+    }
+
+    /// The row with a conviction of the bond counted (B2).
+    pub fn convicted_v1(&self) -> Self {
+        Self { convicted: true, ..self.clone() }
+    }
+
+    /// **The bond's epoch step**: a conviction or B1 lowers one rung below the tier in force (`step_rho` is the schedule's ρ at the
+    /// boundary; the network's own level is the network row's business), a clean epoch counts toward one rung up after two. `None`: the row
+    /// is idle (top level, nothing counted) and leaves the ledger.
+    pub fn evaluated_v1(&self, step_rho: u32, new_epoch: u64) -> Option<Self> {
+        let tier = self.level.min(palw_breaker_index_of_rho_v1(step_rho));
+        let b1 = self.reached >= PALW_BOND_BREAKER_MIN_COUNT_V1 && u64::from(self.voids) * 5 >= u64::from(self.reached);
+        let (mut level, mut clean) = (self.level, self.clean_epochs);
+        if self.convicted || b1 {
+            level = tier.saturating_sub(1);
+            clean = 0;
+        } else if self.voids == 0 || u64::from(self.voids) * 10 < u64::from(self.reached) {
+            clean = clean.saturating_add(1).min(2);
+        } else {
+            clean = 0;
+        }
+        if clean >= 2 && level < PALW_BREAKER_TOP_LEVEL_V1 {
+            level += 1;
+            clean = 0;
+        }
+        if level >= PALW_BREAKER_TOP_LEVEL_V1 {
+            return None;
+        }
+        Some(Self { epoch: new_epoch, level, clean_epochs: clean, reached: 0, voids: 0, convicted: false })
+    }
+}
+
 /// **The issuance tier**: `min(step ρ, Λ[level])` — `step_rho` untouched where the breaker holds no row.
 pub fn palw_breaker_tier_v1(step_rho: u32, row: Option<&PalwRhoBreakerV1>) -> u32 {
     match row {
@@ -344,6 +429,35 @@ mod tests {
 
     fn bond(n: u8) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_bytes([n; 64]), 0))
+    }
+
+    #[test]
+    fn a_bond_breaker_lowers_on_a_conviction_or_its_own_voids_and_recovers_after_two_clean_epochs() {
+        let row = PalwBondBreakerV1::fresh_v1(3).convicted_v1();
+        let lowered = row.evaluated_v1(1_000, 4).expect("a conviction lowers");
+        assert_eq!((lowered.level, lowered.epoch), (6, 4));
+        let mut b1 = PalwBondBreakerV1::fresh_v1(3);
+        for _ in 0..8 {
+            b1 = b1.reached_v1(false);
+        }
+        for _ in 0..2 {
+            b1 = b1.reached_v1(true);
+        }
+        assert_eq!(b1.evaluated_v1(100, 4).map(|r| r.level), Some(3), "2 of 10: B1, one rung under ρ = 100");
+        let mut nine = PalwBondBreakerV1::fresh_v1(3);
+        for _ in 0..8 {
+            nine = nine.reached_v1(true);
+        }
+        assert_eq!(nine.evaluated_v1(100, 4).map(|r| r.level), None, "under ten claims: no metric, an idle row");
+        let one = lowered.evaluated_v1(1_000, 5).expect("one clean epoch");
+        assert_eq!((one.level, one.clean_epochs), (6, 1));
+        assert_eq!(one.evaluated_v1(1_000, 6), None, "two clean epochs: back to the top, the row leaves");
+    }
+
+    #[test]
+    fn the_verification_supply_steps_with_the_tier_and_435_becomes_1087() {
+        assert_eq!([1, 100, 249, 250, 1_000].map(palw_verify_supply_milli_v1), [1_000, 1_000, 1_000, 2_500, 2_500]);
+        assert_eq!(435 * palw_verify_supply_milli_v1(1_000) / 1_000, 1_087);
     }
 
     #[test]

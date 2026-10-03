@@ -1,4 +1,4 @@
-//! **testnet-12's int-11 flag day: RFC-0003, RFC-0004 and the capacity ramp to ρ = 25 / ρ = 100** (the user's decision of
+//! **testnet-12's int-11 flag day: RFC-0003, RFC-0004 and the capacity ramp to ρ = 25 / 100 / 250 / 1000** (the user's decision of
 //! 2026-10-01, "100倍にして"; the coordinator's of 2026-10-02: the ceilings, the list, the +95 offset).
 //!
 //! * **the list** — [`PALW_T12_INT11_FENCES_V1`] arms, at ONE height H ([`PALW_T12_INT11_FLAG_DAY_DAA`], 5,300), decode rules, the
@@ -24,8 +24,9 @@ use kaspa_consensus_core::config::drill::{
     palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1, palw_drill_tir_fence2_at_v1, palw_drill_tir_fence_at_v1,
 };
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA,
-    PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
+    ForkActivation, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
+    PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT11_RHO250_DAA,
+    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params,
     palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
     palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
@@ -41,15 +42,28 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 const H: u64 = 5_300;
 /// ρ = 100's height.
 const RHO100: u64 = H + 95;
+/// ρ = 250's and ρ = 1000's heights (ADR-0164; the user's decision of 2026-10-03).
+const RHO250: u64 = H + 190;
+const RHO1000: u64 = H + 285;
+/// The later steps' fence names, in order (F-L's third, fourth and fifth steps).
+const LATER: [&str; 3] = [
+    "palw_capacity_aggregate_liability_step_3",
+    "palw_capacity_aggregate_liability_step_4",
+    "palw_capacity_aggregate_liability_step_5",
+];
 
 /// The names of the list, in the order the entries' prerequisites need.
-const LIST: [&str; 7] = [
+const LIST: [&str; 10] = [
     "palw_fp_decode_rules",
     "palw_gen_v1",
     "palw_fp_job_v5",
     "palw_held_close_chunks_v1",
     "palw_improvement_v1",
     "palw_capacity_network_verify",
+    // ADR-0164: stage 5's per-DAA budget and riders, stage 6's breaker.
+    "palw_capacity_emission_budget",
+    "palw_capacity_multi_claim",
+    "palw_capacity_rho_breaker",
     "palw_capacity_aggregate_liability_step_2",
 ];
 
@@ -87,12 +101,15 @@ fn the_flag_day_is_the_list_at_h_and_rho100_at_h_plus_95_heights_no_other_fence_
     assert_eq!(PALW_T12_INT11_FLAG_DAY_DAA, Some(H), "H (tentative: the user names the final height)");
     assert_eq!(PALW_T12_INT11_RHO100_OFFSET_DAA, 95, "ρ = 100 arms 95 DAA after H (the user's decision of 2026-10-01)");
     assert_eq!(PALW_T12_INT11_RHO100_DAA, Some(RHO100));
+    assert_eq!((PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO1000_DAA), (Some(RHO250), Some(RHO1000)), "H + 190 and H + 285");
     let names: Vec<&str> = PALW_T12_INT11_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, LIST, "the int-11 list, in the order its prerequisites need");
-    assert_eq!(PALW_T12_INT11_RHO100_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), ["palw_capacity_aggregate_liability_step_3"]);
+    assert_eq!(PALW_T12_INT11_RHO100_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), [LATER[0]]);
+    assert_eq!(PALW_T12_INT11_RHO250_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), [LATER[1]]);
+    assert_eq!(PALW_T12_INT11_RHO1000_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), [LATER[2]]);
     // On no earlier list (the DAA-750, the second and the capacity flag days).
     for earlier in PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).chain(PALW_T12_POST_LAUNCH_FENCES_V3) {
-        assert!(!LIST.contains(&earlier.name) && earlier.name != "palw_capacity_aggregate_liability_step_3", "{} is on an earlier list", earlier.name);
+        assert!(!LIST.contains(&earlier.name) && !LATER.contains(&earlier.name), "{} is on an earlier list", earlier.name);
     }
     // The dormant decode-rules list keeps its own (dormant) height; the court window and ADR-0162 stay dormant by decision.
     assert_eq!(PALW_T12_DECODE_RULES_DAA, None, "the decode rules arm with the int-11 list, not with their own dormant one");
@@ -103,22 +120,26 @@ fn the_flag_day_is_the_list_at_h_and_rho100_at_h_plus_95_heights_no_other_fence_
     for name in LIST {
         assert_eq!(fence_at(&shipped, name), Some(H), "{name} arms at H");
     }
-    assert_eq!(fence_at(&shipped, "palw_capacity_aggregate_liability_step_3"), Some(RHO100));
+    assert_eq!(fence_at(&shipped, LATER[0]), Some(RHO100));
+    assert_eq!(fence_at(&shipped, LATER[1]), Some(RHO250));
+    assert_eq!(fence_at(&shipped, LATER[2]), Some(RHO1000));
     // A height no other fence uses.
     for (name, fence) in shipped.palw_fences_v1() {
         let at = fence.map(|f| f.daa_score());
         if !LIST.contains(&name) {
             assert_ne!(at, Some(H), "{name}: 5,300 is the int-11 list's alone");
         }
-        if name != "palw_capacity_aggregate_liability_step_3" {
-            assert_ne!(at, Some(RHO100), "{name}: 5,395 is ρ = 100's alone");
+        if !LATER.contains(&name) {
+            for (height, what) in [(RHO100, "ρ = 100's"), (RHO250, "ρ = 250's"), (RHO1000, "ρ = 1000's")] {
+                assert_ne!(at, Some(height), "{name}: {height} is {what} alone");
+            }
         }
     }
     let schedule = shipped.fence_schedule_v1();
     for earlier in [750, 1_000, 1_300, 1_700, PALW_T12_TIR_FLAG_DAY_DAA.expect("the IR flag day"), PALW_T12_TIR_FENCE2_DAA.expect("the 3,600 flag day")] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    assert_eq!(&schedule[schedule.len() - 2..], [H, RHO100], "the int-11 flag day's two heights are the schedule's last ({schedule:?})");
+    assert_eq!(&schedule[schedule.len() - 4..], [H, RHO100, RHO250, RHO1000], "the int-11 flag day's four heights are the schedule's last ({schedule:?})");
 }
 
 #[test]
@@ -127,7 +148,7 @@ fn the_release_v5_baseline_is_int10s_ruleset_to_the_id() {
     let (params, identity, schedule) = ids(&baseline);
     assert_eq!(params, int10_params_id(), "the baseline is the fleet's int-10 ruleset");
     assert_eq!(schedule, int10_schedule_id(), "…and its schedule");
-    for name in LIST.iter().chain(["palw_capacity_aggregate_liability_step_3"].iter()) {
+    for name in LIST.iter().chain(LATER.iter()) {
         assert_eq!(fence_at(&baseline, name), None, "{name} is dormant on the int-10 baseline");
     }
     assert_eq!(fence_at(&baseline, "palw_tir_fence2"), PALW_T12_TIR_FENCE2_DAA, "the DAA-3,600 flag day is the baseline's");
@@ -149,7 +170,9 @@ fn the_release_v5_baseline_is_int10s_ruleset_to_the_id() {
         for entry in LIST {
             assert_eq!(fence_at(&p, entry), None, "{name}: {entry} is dormant");
         }
-        assert_eq!(fence_at(&p, "palw_capacity_aggregate_liability_step_3"), None, "{name}: ρ = 100");
+        for later in LATER {
+            assert_eq!(fence_at(&p, later), None, "{name}: {later}");
+        }
         p.validate_palw_v2().unwrap_or_else(|e| panic!("{name} validates: {e}"));
     }
 }
@@ -169,7 +192,7 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     // No other fence moved.
     for ((name, now), (was_name, was)) in shipped.palw_fences_v1().into_iter().zip(baseline.palw_fences_v1()) {
         assert_eq!(name, was_name);
-        let moved_here = LIST.contains(&name) || name == "palw_capacity_aggregate_liability_step_3";
+        let moved_here = LIST.contains(&name) || LATER.contains(&name);
         if moved_here {
             assert_eq!(was, None, "{name} is dormant on the int-10 baseline");
             assert!(now.is_some(), "{name} is armed");
@@ -180,7 +203,12 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     // `set(None)` gives int-10 back, to the id; `set(Some(never()))` keeps the identity and is dormant.
     assert_eq!(ids(&with_list(shipped.clone(), None)), ids(&baseline), "set(None): the int-10 ruleset");
     let mut never = shipped.clone();
-    for f in PALW_T12_INT11_RHO100_FENCES_V1.iter().chain(PALW_T12_INT11_FENCES_V1.iter().rev()) {
+    for f in PALW_T12_INT11_RHO1000_FENCES_V1
+        .iter()
+        .chain(PALW_T12_INT11_RHO250_FENCES_V1)
+        .chain(PALW_T12_INT11_RHO100_FENCES_V1)
+        .chain(PALW_T12_INT11_FENCES_V1.iter().rev())
+    {
         (f.set)(&mut never, Some(ForkActivation::never()));
     }
     never.validate_palw_v2().expect("never() is dormant");
@@ -202,7 +230,18 @@ fn the_rules_are_live_from_h_and_rho_steps_up_at_h_and_at_h_plus_95() {
     assert_eq!(bundle.state.capacity_network_verify_level_at(H - 1), None, "L_ver is not in force below H");
     assert_eq!(bundle.state.capacity_network_verify_level_at(H), Some(435), "L_ver = 435 at the shipped 600 / 20, from H");
     let rho = |daa: u64| shipped.palw_capacity_step_at_v1(daa).map(|s| s.rho);
-    for (daa, want) in [(1_700, 10), (H - 1, 10), (H, 25), (RHO100 - 1, 25), (RHO100, 100), (RHO100 + 10_000, 100)] {
+    for (daa, want) in [
+        (1_700, 10),
+        (H - 1, 10),
+        (H, 25),
+        (RHO100 - 1, 25),
+        (RHO100, 100),
+        (RHO250 - 1, 100),
+        (RHO250, 250),
+        (RHO1000 - 1, 250),
+        (RHO1000, 1_000),
+        (RHO1000 + 10_000, 1_000),
+    ] {
         assert_eq!(rho(daa), Some(want), "ρ at {daa}");
     }
     // The values the fences carry: testnet-12's ceilings, provisional.
@@ -269,6 +308,38 @@ fn the_fork_id_keeps_an_int10_node_below_h_and_refuses_it_from_h() {
     assert!(evaluate_fork_id_v1(&partial, RHO100, n.fired.as_bytes().as_slice(), n.next).refuses(), "…and refuses the build that has it");
 }
 
+/// **ρ = 250 and ρ = 1000 are their own fork-id slots** (ADR-0164): a build without them is kept below their heights and refused from them,
+/// in both directions, and the new build announces each next.
+#[test]
+fn a_build_without_rho_250_or_rho_1000_is_refused_from_their_heights() {
+    let new = palw_t12_shipped_params();
+    let mut up_to_100 = new.clone();
+    for f in PALW_T12_INT11_RHO1000_FENCES_V1.iter().chain(PALW_T12_INT11_RHO250_FENCES_V1) {
+        (f.set)(&mut up_to_100, None);
+    }
+    let mut up_to_250 = new.clone();
+    for f in PALW_T12_INT11_RHO1000_FENCES_V1 {
+        (f.set)(&mut up_to_250, None);
+    }
+    for daa in [RHO100, RHO100 + 40, RHO250 - 1] {
+        let (n, o) = (fork_id_v1(&new, daa), fork_id_v1(&up_to_100, daa));
+        assert_eq!(n.next, RHO250, "ρ = 250 is announced next at {daa}");
+        assert!(!evaluate_fork_id_v1(&new, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "kept below ρ = 250 at {daa}");
+        assert!(!evaluate_fork_id_v1(&up_to_100, daa, n.fired.as_bytes().as_slice(), n.next).refuses(), "…in both directions at {daa}");
+    }
+    let (n, o) = (fork_id_v1(&new, RHO250), fork_id_v1(&up_to_100, RHO250));
+    assert!(evaluate_fork_id_v1(&new, RHO250, o.fired.as_bytes().as_slice(), o.next).refuses(), "refused from H + 190");
+    assert!(evaluate_fork_id_v1(&up_to_100, RHO250, n.fired.as_bytes().as_slice(), n.next).refuses());
+    for daa in [RHO250, RHO250 + 40, RHO1000 - 1] {
+        let (n, o) = (fork_id_v1(&new, daa), fork_id_v1(&up_to_250, daa));
+        assert_eq!(n.next, RHO1000, "ρ = 1000 is announced next at {daa}");
+        assert!(!evaluate_fork_id_v1(&new, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "kept below ρ = 1000 at {daa}");
+    }
+    let (n, o) = (fork_id_v1(&new, RHO1000), fork_id_v1(&up_to_250, RHO1000));
+    assert!(evaluate_fork_id_v1(&new, RHO1000, o.fired.as_bytes().as_slice(), o.next).refuses(), "refused from H + 285");
+    assert!(evaluate_fork_id_v1(&up_to_250, RHO1000, n.fired.as_bytes().as_slice(), n.next).refuses());
+}
+
 #[test]
 fn the_list_holds_its_prerequisites_by_name() {
     let baseline = palw_t12_release_v5_params();
@@ -311,7 +382,7 @@ fn the_list_holds_its_prerequisites_by_name() {
     (PALW_T12_INT11_RHO100_FENCES_V1[0].set)(&mut steps, at(H));
     refused(&steps, "ρ = 100 at ρ = 25's own height");
     let mut under = with_list(baseline.clone(), Some(H));
-    (PALW_T12_INT11_FENCES_V1[6].set)(&mut under, at(1_700));
+    (PALW_T12_CAPACITY_RHO25_STEP_2_V1.set)(&mut under, at(1_700));
     refused(&under, "ρ = 25 at ρ = 10's own height");
     // Everything in order validates, and so does ρ = 100 a DAA after ρ = 25.
     let mut ok = with_list(baseline, Some(H));
@@ -337,9 +408,14 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_with_rho100_95_later_and_mov
     assert_eq!(fence_at(&before, "palw_gen_v1"), Some(H));
     let mut moved = before.clone();
     let moves = palw_drill_int11_at_v1(&mut moved, 28).expect("a salted drill crosses the int-11 flag day low");
-    assert_eq!(moves.len(), LIST.len() + 1, "the list and ρ = 100");
+    assert_eq!(moves.len(), LIST.len() + 3, "the list, ρ = 100, ρ = 250 and ρ = 1000");
     for m in &moves {
-        let want = if m.name == "palw_capacity_aggregate_liability_step_3" { 28 + 95 } else { 28 };
+        let want = match m.name {
+            "palw_capacity_aggregate_liability_step_3" => 28 + 95,
+            "palw_capacity_aggregate_liability_step_4" => 28 + 190,
+            "palw_capacity_aggregate_liability_step_5" => 28 + 285,
+            _ => 28,
+        };
         assert_eq!(m.at, want, "{}", m.name);
         assert!(m.was.is_some(), "{} was armed at the release's height on the drill ruleset", m.name);
     }
@@ -347,14 +423,15 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_with_rho100_95_later_and_mov
     for ((name, was), (_, now)) in before.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
         if LIST.contains(name) {
             assert_eq!(now.map(|f| f.daa_score()), Some(28), "{name}");
-        } else if *name == "palw_capacity_aggregate_liability_step_3" {
-            assert_eq!(now.map(|f| f.daa_score()), Some(28 + 95), "{name}");
+        } else if LATER.contains(name) {
+            let offset = [95, 190, 285][LATER.iter().position(|later| later == name).unwrap()];
+            assert_eq!(now.map(|f| f.daa_score()), Some(28 + offset), "{name}");
         } else {
             assert_eq!(was, now, "{name} did not move");
         }
     }
     let rho = |p: &Params, daa: u64| p.palw_capacity_step_at_v1(daa).map(|s| s.rho);
-    for (daa, want) in [(27, 10), (28, 25), (122, 25), (123, 100)] {
+    for (daa, want) in [(27, 10), (28, 25), (122, 25), (123, 100), (217, 100), (218, 250), (312, 250), (313, 1_000)] {
         assert_eq!(rho(&moved, daa), Some(want), "ρ at {daa}");
     }
     assert_eq!(ids(&moved).1, ids(&before).1, "a future height: the identity is the drill's");

@@ -12882,6 +12882,14 @@ impl PalwChainStateV2 {
         }
     }
 
+    /// **ADR-0164 F-K: a bond's own breaker row**, if it holds one.
+    pub fn bond_breaker_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_capacity_s567_v1::PalwBondBreakerV1> {
+        match self.capacity_ledger.get(&crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::BondBreaker(*bond)) {
+            Some(crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1::Bond(row)) => Some(row),
+            _ => None,
+        }
+    }
+
     /// The ledger itself (read-only; tests and the node's views).
     pub fn capacity_ledger_v1(
         &self,
@@ -14151,6 +14159,11 @@ impl PalwChainStateV2 {
                     }
                     let _ = lead;
                 }
+                (K::BondBreaker(_), R::Bond(bond)) => {
+                    if bond.level >= crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1 || bond.clean_epochs > 2 {
+                        return bad("a bond's row is lowered and counts at most two clean epochs");
+                    }
+                }
                 (K::Breaker, R::Breaker(breaker)) => {
                     if breaker.level > crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1
                         || breaker.clean_epochs > 2
@@ -15138,7 +15151,12 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
-    /// A row of the capacity ledger was written or dropped (**101**, after the court window's 100; ADR-0164 — F-EM's per-DAA
+    /// Delta numbers 101–103 are RFC-0007's (`VertexRow`) and RFC-0006's (the lead's allocation of 2026-10-03): placeholders here so
+    /// the capacity ledger's number is 104 on the wire. The integration replaces them with the real variants; no state writes them.
+    Reserved101,
+    Reserved102,
+    Reserved103,
+    /// A row of the capacity ledger was written or dropped (**104**, after the court window's 100 and the reserved 101–103; ADR-0164 — F-EM's per-DAA
     /// budget, F-M1's rider marks and F-K's breaker, one entry for all three). Dormant on every network below the three fences.
     CapacityLedger {
         key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
@@ -16776,7 +16794,20 @@ impl PalwFoldReadV1<'_> {
         // **int-11: past `palw_capacity_network_verify` the level is also capped by `L_ver`** — what the seats can verify
         // inside the receipt window at the floor supply (lane P's finding on the live backlog); `None` below it: today's
         // level, byte for byte.
-        let l_ver = self.params.capacity_network_verify_level_at(now_daa);
+        // **ADR-0167: and `L_ver` steps with the issuance tier** — the verification supply the release adds (RFC-0006's sharding) counts from
+        // ρ = 250, and the breaker (F-K) takes it back by lowering the tier, so a backlog or an overrun lowers the network level too.
+        let tier = {
+            let step = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa);
+            if self.params.capacity_breaker_active_at(now_daa) {
+                crate::palw_capacity_s567_v1::palw_breaker_tier_v1(step, self.state.rho_breaker_v1())
+            } else {
+                step
+            }
+        };
+        let l_ver = self
+            .params
+            .capacity_network_verify_level_at(now_daa)
+            .map(|base| base.saturating_mul(crate::palw_capacity_s567_v1::palw_verify_supply_milli_v1(tier)) / 1_000);
         n::palw_network_level_with_verify_v1(
             self.network_seat_level_v1(claim, now_daa),
             n::palw_network_a_op_milli_v1(&self.state.operator_ring, now_daa),
@@ -19374,7 +19405,22 @@ impl<'a> TransitionBuilder<'a> {
         self.write_capacity_ledger_v1(K::Breaker, Some(R::Breaker(row.noted_v1(event))));
     }
 
-    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (101).
+    /// **ADR-0164 F-K (B1, B2): count one event in `bond`'s own row** (past the fence at `daa`).
+    fn note_bond_breaker_v1(&mut self, daa: u64, bond: PalwBondKeyV2, event: Option<bool>) {
+        use crate::palw_capacity_s567_v1::{PALW_BREAKER_EPOCH_DAA_V1, PalwBondBreakerV1, PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
+        if !self.params.capacity_breaker_active_at(daa) {
+            return;
+        }
+        let row = self.state.bond_breaker_v1(&bond).cloned().unwrap_or_else(|| PalwBondBreakerV1::fresh_v1(daa / PALW_BREAKER_EPOCH_DAA_V1));
+        // `Some(void)`: a claim reached its receipt deadline; `None`: the bond was convicted.
+        let next = match event {
+            Some(void) => row.reached_v1(void),
+            None => row.convicted_v1(),
+        };
+        self.write_capacity_ledger_v1(K::BondBreaker(bond), Some(R::Bond(next)));
+    }
+
+    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (104).
     fn write_capacity_ledger_v1(
         &mut self,
         key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
@@ -20236,6 +20282,7 @@ impl<'a> TransitionBuilder<'a> {
                 },
             );
         }
+        self.note_bond_breaker_v1(conv.now_daa, accused, None);
         self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
         // **ADR-0160 F-Q (§5.9 (g)): a conviction of a claim that holds audit receipts excludes every
         // auditor that receipted it** from every pool, for good (only a flag day removes one).
@@ -25700,6 +25747,7 @@ impl<'a> TransitionBuilder<'a> {
         if !before.as_ref().is_some_and(|before| matches!(before.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })) {
             let credited = crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(self.params, &claim);
             self.note_breaker_v1(daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Licensed { credited });
+            self.note_bond_breaker_v1(daa_score, licensed_bond_of(&claim), Some(false));
         }
         let mut licensed = claim;
         licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa_score };
@@ -26130,8 +26178,12 @@ impl<'a> TransitionBuilder<'a> {
         // counted once, here, where every such void is written. The reasons that carry a conviction are the conviction funnel's (K2).
         match reason {
             PalwVoidReasonV2::ReceiptTimeout | PalwVoidReasonV2::UnavailableQuorum | PalwVoidReasonV2::NotReplayBacked => {
-                self.note_breaker_v1(voided_daa, crate::palw_capacity_s567_v1::PalwBreakerEventV1::ReceiptVoid)
+                // A receipt-deadline expiry is a property of the network's verification supply (lane PL: it charges no producer), so it
+                // moves the NETWORK row only — never a bond's.
+                self.note_breaker_v1(voided_daa, crate::palw_capacity_s567_v1::PalwBreakerEventV1::ReceiptVoid);
             }
+            // B1 counts only outcomes the producer is answerable for: a data-availability default.
+            PalwVoidReasonV2::ProducerWithholding => self.note_bond_breaker_v1(voided_daa, claim.bond, Some(true)),
             PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => {
                 self.note_breaker_v1(voided_daa, crate::palw_capacity_s567_v1::PalwBreakerEventV1::BindVoid)
             }
@@ -37508,12 +37560,33 @@ fn apply_model_evaluation_posted(
 
 /// **ADR-0164 F-K, step 8: judge the epoch the block closes** ([`crate::palw_capacity_s567_v1::palw_breaker_evaluate_v1`]): the counters the
 /// hooks wrote, plus K6 counted over the claims (credited licences past their audit window), against the schedule's ρ at this block.
+fn licensed_bond_of(claim: &PalwClaimStateV2) -> PalwBondKeyV2 {
+    claim.bond
+}
+
 fn apply_rho_breaker_epoch_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     use crate::palw_capacity_s567_v1 as m;
     if !builder.params.capacity_breaker_active_at(ctx.daa_score) {
         return;
     }
     let epoch = ctx.daa_score / m::PALW_BREAKER_EPOCH_DAA_V1;
+    // The bonds' own rows (B1, B2): each past its epoch is judged here, at the same boundary rule as the network's.
+    let due: Vec<(PalwBondKeyV2, m::PalwBondBreakerV1)> = builder
+        .state
+        .capacity_ledger
+        .iter()
+        .filter_map(|(key, row)| match (key, row) {
+            (m::PalwCapacityLedgerKeyV1::BondBreaker(bond), m::PalwCapacityLedgerRowV1::Bond(row)) if row.epoch < epoch => Some((*bond, row.clone())),
+            _ => None,
+        })
+        .collect();
+    if !due.is_empty() {
+        let step_rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(builder.params, ctx.daa_score);
+        for (bond, row) in due {
+            let next = row.evaluated_v1(step_rho, epoch).map(m::PalwCapacityLedgerRowV1::Bond);
+            builder.write_capacity_ledger_v1(m::PalwCapacityLedgerKeyV1::BondBreaker(bond), next);
+        }
+    }
     let Some(row) = builder.state.rho_breaker_v1().cloned() else { return };
     if row.epoch >= epoch {
         return;
@@ -38305,6 +38378,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
         // ADR-0164: the capacity ledger, verify-then-install.
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
+        PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 => {
+            return Err(PalwStateV2Error::CarriageInconsistent("a reserved delta entry (101-103) is no entry this build writes".into()));
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -57172,6 +57248,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
                     // ADR-0164: its round trip is the stage-5–7 suite's.
                     PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
+                    PalwDeltaEntryV2::Reserved101 | PalwDeltaEntryV2::Reserved102 | PalwDeltaEntryV2::Reserved103 => "reserved",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -57564,7 +57641,7 @@ pub(crate) mod tests {
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
             // ADR-0164 (the capacity ledger), after the court window's.
-            (101, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
+            (104, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");

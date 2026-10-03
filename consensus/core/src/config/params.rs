@@ -8212,6 +8212,13 @@ impl Params {
         }
     }
 
+    /// **ADR-0164 F-M1: are riders accepted at `daa`?** (The ruleset's field, resolved off ConsensusV2 — what a producer's own decision
+    /// turns on; the fold reads the bundle's mirror.)
+    pub fn palw_capacity_riders_active_at_v1(&self, daa: u64) -> bool {
+        matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            && self.palw_capacity_multi_claim.filter(|f| *f != ForkActivation::never()).is_some_and(|f| f.is_active(daa))
+    }
+
     /// **ADR-0164: the fold's mirror of F-EM, F-M1 and F-K** — their heights on the `#[borsh(skip)]` copy of `PalwStateParamsV2`.
     /// Written here and nowhere else; call it wherever one of the three is set on an assembled ruleset
     /// (`validate_palw_v2` refuses a ruleset whose copy disagrees, so a missed call is a startup refusal).

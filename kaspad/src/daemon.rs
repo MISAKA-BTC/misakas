@@ -1564,6 +1564,7 @@ Do you confirm? (y/n)";
                         // outlive a restart the way the chain it answers to does.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         attempt_retention: std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
+                        riders: args.palw_riders,
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,

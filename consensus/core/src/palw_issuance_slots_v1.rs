@@ -183,6 +183,10 @@ pub fn palw_issuance_read_at_v1(
     // flight keeps the price it was accepted at (only the caps on NEW claims follow the tier).
     if params.capacity_breaker_active_at(now_daa) {
         rho = crate::palw_capacity_s567_v1::palw_breaker_tier_v1(rho, state.rho_breaker_v1());
+        // …and the bond's own row lowers its tier alone (B1, B2).
+        if let Some(own) = state.bond_breaker_v1(bond) {
+            rho = rho.min(crate::palw_capacity_s567_v1::PALW_RHO_LADDER_V1[usize::from(own.level.min(crate::palw_capacity_s567_v1::PALW_BREAKER_TOP_LEVEL_V1))]);
+        }
     }
     Some(PalwIssuanceReadV1::of_v1(collateral_sompi, rho, outstanding as u64, state.issuance_bucket_of_v1(bond), now_daa))
 }
