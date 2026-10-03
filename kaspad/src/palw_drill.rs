@@ -1551,7 +1551,9 @@ mod tests {
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-step2-at=30", "--palw-drill-capacity-step3-at=40"]))
             .expect("both");
         let step2 = config_of(&parsed(&["--palw-drill-capacity-step2-at=30"]));
-        assert_eq!(ramp(&step2), vec![(14, 10), (30, 25)]);
+        // The release keeps ρ = 100 at its own H + 95: moving ρ = 25 alone leaves that step where the release armed it.
+        let rho100 = kaspa_consensus_core::config::params::PALW_T12_INT11_RHO100_DAA.expect("the release's ρ = 100");
+        assert_eq!(ramp(&step2), vec![(14, 10), (30, 25), (rho100, 100)]);
         assert_eq!(step2.palw_drill_fence_moves.len() + 1, both.palw_drill_fence_moves.len(), "each flag moves its one step");
         // F-N moves alone, later than the list's 14 (the stage-4 gate timed apart); never below the rooms it needs.
         let room = config_of(&parsed(&["--palw-drill-capacity-network-room-at=50"]));
@@ -1565,10 +1567,16 @@ mod tests {
         let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-network-room-at=12"])).unwrap_err().to_string();
         assert!(why.contains("--palw-drill-capacity-network-room-at") && why.contains("does not validate"), "{why}");
         let straight = config_of(&parsed(&["--palw-drill-capacity-rho100-at=30"]));
-        assert_eq!(ramp(&straight), vec![(14, 10), (30, 100)]);
+        // The release's own third step (ρ = 100 at H + 95) stays: the same ρ, so it changes nothing past 30.
+        assert_eq!(ramp(&straight), vec![(14, 10), (30, 100), (rho100, 100)]);
         // Refused by name, never by a panic: step 3 without step 2, a height not above the step before, both ramps.
         let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-step3-at=40"])).unwrap_err().to_string();
-        assert!(why.contains("--palw-drill-capacity-step3-at") && why.contains("builds on 2 earlier step(s)"), "{why}");
+        // The release carries step 2 at H, so step 3 alone below it is refused for its height (before the release: for the missing step).
+        assert!(
+            why.contains("--palw-drill-capacity-step3-at")
+                && (why.contains("builds on 2 earlier step(s)") || why.contains("must start above step 2")),
+            "{why}"
+        );
         let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-step2-at=14"])).unwrap_err().to_string();
         assert!(why.contains("must start above step 1"), "{why}");
         let why = palw_drill_validate_args_v1(&parsed(&["--palw-drill-capacity-rho100-at=30", "--palw-drill-capacity-step2-at=30"]))
@@ -2152,7 +2160,9 @@ mod tests {
         // With the IR fence below it the flag arms the fence and moves nothing else.
         let without = config_of(&parsed(&["--palw-drill-tir-at=20"]));
         let with = config_of(&parsed(&["--palw-drill-tir-at=20", "--palw-drill-held-chunks-at=140"]));
-        assert_eq!(without.params.palw_held_close_chunks_v1, None);
+        // The release arms the held leaf challenge at H; the flag moves it to the drill's height.
+        let h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day");
+        assert_eq!(without.params.palw_held_close_chunks_v1, Some(kaspa_consensus_core::config::params::ForkActivation::new(h)));
         assert_eq!(
             with.params.palw_held_close_chunks_v1,
             Some(kaspa_consensus_core::config::params::ForkActivation::new(140)),

@@ -550,13 +550,12 @@ mod tests {
         assert!(include_str!("palw_panel.rs").contains("self.improve_tick_v1(&mut improve, current_daa).await"));
         let _ = PalwTirArtifactRefV1::Single { root: h(0) };
         assert!(palw_improve_held_classes_v1(&[]).is_empty(), "a node with no IR artifact holds no class");
-        for net in [
-            kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12),
-            kaspa_consensus_core::network::NetworkId::new(kaspa_consensus_core::network::NetworkType::Mainnet),
-        ] {
-            let params = Params::from(net);
-            assert!(!palw_improve_watch_armed_v1(&params, u64::MAX / 2), "{net}: dormant");
-        }
+        // Testnet-12 arms the improvement fence with the int-11 flag day (H, DAA 5,300); mainnet keeps it dormant.
+        let t12 = Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
+        let h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day");
+        assert!(!palw_improve_watch_armed_v1(&t12, h - 1) && palw_improve_watch_armed_v1(&t12, h), "testnet-12: armed at H");
+        let mainnet = Params::from(kaspa_consensus_core::network::NetworkId::new(kaspa_consensus_core::network::NetworkType::Mainnet));
+        assert!(!palw_improve_watch_armed_v1(&mainnet, u64::MAX / 2), "mainnet: dormant");
     }
 
     /// **The status file's shape**: an empty status is an empty list under the schema tag; the format the
