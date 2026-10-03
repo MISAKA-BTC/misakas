@@ -39,7 +39,9 @@ export POST_DAA=${POST_DAA:-$((K_SLOTS+8))}                # leg B2: both back; 
 export X_DAA=${X_DAA:-0}                                   # leg X (a policy-ignoring floor producer, report-only): off; X_DAA=24 with EXT_FLOOR_FLAG turns it on
 export REGISTER_LATE=${REGISTER_LATE:-"lose:$((STALE_END_DAA+12))"}   # G-A1: a class registered with REAL flowing and floors held (the state is Normal), Probation within 2 audit periods (200 DAA)
 export O_DAA=${O_DAA:-0}                                   # leg O (report-only): the operator producers stopped, only the non-operator REAL flows; O_DAA=80 turns it on (bind wait expected near 60 slots)
-export USEFUL_WORK_AT=${USEFUL_WORK_AT:-}                 # set only if the int11 flag does NOT arm palw_floor_reserve_v1 + palw_real_clock_tick_v1 (a height of its own; 'dc.sh dry' shows the manifest)
+# RS (int-12 @ 4d5f97d58): --palw-drill-int11-at ALREADY arms palw_floor_reserve_v1 and palw_real_clock_tick_v1 (entries 22, 23 of the 28; P2's palw_anchor_window_v1 rides it as entry 24 of 29).
+# --palw-drill-useful-work-at must NOT be passed with it: the pair is not refused and it would re-move those two fences to the later call's height.
+if [ -n "${USEFUL_WORK_AT:-}" ]; then echo "REFUSED: USEFUL_WORK_AT is for a drill of the two useful-work fences without the rest; the combined drill's --palw-drill-int11-at already arms them (a second flag would move them again)" >&2; exit 2; fi
 export ANCHOR_DUTY_AFTER_SLOTS=${ANCHOR_DUTY_AFTER_SLOTS:-}   # RS's --palw-drill-anchor-duty-after-slots=N on the operator floor producer (release: 30); unset = the release's value (G-A3 is measured under it)
 export HOLD_PATTERN=${HOLD_PATTERN:-'\[palw-producer\] holding:[^\n]*idle-only fallback'}   # RS's hold line (info level, never 'NOT PRODUCING')
 export EXT_FLOOR_FLAG=${EXT_FLOOR_FLAG:---palw-drill-floor-ignore-policy}
@@ -54,7 +56,8 @@ local R100=$((INT11_AT+95)) R250=$((INT11_AT+190)) R1000=$((INT11_AT+285))
 local END_DAA=$((INT11_AT + 285 + CAP_SETTLE_DAA + CAP_WINDOW_DAA + 6))
 cat <<EOF
 == combined drill plan (H' = $INT11_AT; IR fence $TIR_AT; ~125 s per DAA = ~29 DAA/h measured; ends at ~DAA $END_DAA = ~$((END_DAA*125/3600)).$(( (END_DAA*125%3600)*10/3600 )) h after the chain starts)
-  chain     salted testnet-12, flag days 6/10/14, IR $TIR_AT, IR-2 24, then --palw-drill-int11-at=$INT11_AT (every fence of the candidate at H'; rho 100 / 250 / 1000 at $R100 / $R250 / $R1000)
+  chain     salted testnet-12, flag days 6/10/14, IR $TIR_AT, IR-2 24, then --palw-drill-int11-at=$INT11_AT (every fence of the candidate at H' — the useful-work pair palw_floor_reserve_v1 / palw_real_clock_tick_v1 and
+            P2's palw_anchor_window_v1 included, so no --palw-drill-useful-work-at; rho 100 / 250 / 1000 at $R100 / $R250 / $R1000)
   nodes     new0 floor + heartbeat clock | new1..new3 seats | new4 head (seat; REAL producer, class H, fast, from leg B1) | new5 evaluator | new6 evaluator + REAL producer of class win (the 8k emulation) |
             new9 OUTSIDER seat (post-genesis bond 14) | extfloor (bond 15; leg X only) | the old relay int-10.3 for FORK-a / D-M5 (stopped when done) | joiner (FORK-b) | registrar JIT (<= 9 processes)
   load      REAL producers new4 + new6 with --palw-riders=$RIDERS; new6 holds every attempt --palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S (P2's live 8k p50 342 s, p95 418 s; floors 3 per slot) so fast
@@ -71,7 +74,7 @@ cat <<EOF
             (gates 1-4 are final by ~DAA $((STALE_END_DAA+30)) = ~$(( (STALE_END_DAA+30)*125/3600 )) h; the PANEL / BLUE windows by DAA $((R250+CAP_SETTLE_DAA+CAP_WINDOW_DAA)))
   the floor rule (5,300 as RS has it): floors are NOT rejected at the header; the fold refuses a floor unless the per-branch state is Idle (no claim, reward or weight) and honest floor producers hold by
             policy. Idle / Probe / Normal: floor_idle_slots $K_SLOTS, probe_slots $PROBE_SLOTS, probe_cooldown $COOLDOWN; a BLUE REAL from any mode -> Normal; a RED REAL accepted in Idle -> Probe iff the cooldown (counted from the END of an unanswered probe) has passed; Normal lasts to last_blue + $K_SLOTS, floors again from last_blue + $((K_SLOTS+1));
-            RED never extends. The nodes' [palw-floor-state] logs are the source where they exist (a floor counts as outside Idle only if both readings of a logged transition — in force from t or from t + 1 — say so); dcwatch's model (floor_states) reconstructs it
+            RED never extends. The nodes' [palw-floor-state] logs are the source where they exist (a floor merged by a block with a logged line counts as outside Idle only if BOTH its time-advanced stored state and the new state say so — RS's recipe: the block's own event applies to the floors merged after it); dcwatch's model (floor_states) reconstructs it
             otherwise and cross-checks the logs.
   RELEASE GATES (all must PASS to ship; 'dc.sh gates', exit 0 / 1 / 3):
             PANEL (no window diverges, bind->licence p50 <= 6 / p95 <= 12 DAA, oldest wait <= 40, PanelUnavailable expiries 0; acceptance->licence includes the ~20-DAA anchor delay: bind->licence is the metric)

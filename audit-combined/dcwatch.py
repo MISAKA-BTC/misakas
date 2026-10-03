@@ -347,52 +347,82 @@ def hold_lines(work, nodes=("new0",), pattern=None):
     return out
 
 
-def node_floor_transitions(work, nodes=("new0", "new1", "new2", "new3")):
-    """The nodes' own transition lines (RS, ADR-0165): `[palw-floor-state] daa=<N> block=<hash> <from>-><to> last_blue=<n|-> until=<n|-> last_probe_end=<n|->`, one per chain
-    block whose fold moved the state. {node: [(daa, from, to)]}."""
+def node_floor_log(work, nodes=("new0", "new1", "new2", "new3")):
+    """The nodes' own transition lines (RS, ADR-0165): `[palw-floor-state] daa=<N> block=<hash> <from>-><to> last_blue=<n|-> until=<n|-> last_probe_end=<n|->` — one per chain
+    block whose fold moved the state; from = the STORED parent state, to = the state after the block's last event, the three fields describe the NEW state.
+    {node: [{daa, frm, to, last_blue, until, last_probe_end}]} (a missing field is None)."""
     import re
-    pat = re.compile(r"\[palw-floor-state\] daa=(\d+) block=\S+ (idle|probe|normal)->(idle|probe|normal)", re.I)
+    pat = re.compile(r"\[palw-floor-state\] daa=(\d+) block=\S+ (idle|probe|normal)->(idle|probe|normal) last_blue=(\S+) until=(\S+) last_probe_end=(\S+)", re.I)
+    num = lambda x: int(x) if x.isdigit() else None  # noqa: E731
     out = {}
     for n in nodes:
         lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
         if not os.path.exists(lg):
             continue
-        rows = []
+        rows, seen = [], set()
         for ln in open(lg, errors="replace"):
             m = pat.search(ln)
             if m:
-                rows.append((int(m.group(1)), m.group(2).title(), m.group(3).title()))
+                row = (int(m.group(1)), m.group(2).title(), m.group(3).title(), num(m.group(4)), num(m.group(5)), num(m.group(6)))
+                if row not in seen:
+                    seen.add(row)
+                    rows.append({"daa": row[0], "frm": row[1], "to": row[2], "last_blue": row[3], "until": row[4], "last_probe_end": row[5]})
         if rows:
-            out[n] = sorted(set(rows))
+            out[n] = sorted(rows, key=lambda r: r["daa"])
     return out
 
 
-def states_from_transitions(rows, lo, hi, lag=1):
-    """{daa: state} from (daa, from, to) rows: a transition logged at DAA t is in force for the blocks of DAA t + lag on (lag 1: it was caused by the block at t)."""
-    by, state, i = {}, "Idle", 0
-    rows = sorted(rows)
-    for d in range(lo, hi + 1):
-        while i < len(rows) and rows[i][0] + lag <= d:
-            state = rows[i][2]
+def node_floor_transitions(work, nodes=("new0", "new1", "new2", "new3")):
+    """{node: [(daa, from, to)]} — the short form of node_floor_log."""
+    return {n: [(r["daa"], r["frm"], r["to"]) for r in rows] for n, rows in node_floor_log(work, nodes).items()}
+
+
+def time_advance(state, last_blue, until, t, idle=IDLE_SLOTS):
+    """The stored state advanced to DAA t (RS's fold): Normal with t - last_blue > idle is already Idle; Probe with t >= until is already Idle."""
+    if state == "Normal" and last_blue is not None and t - last_blue > idle:
+        return "Idle"
+    if state == "Probe" and until is not None and t >= until:
+        return "Idle"
+    return state
+
+
+def judged_states_from_log(rows, lo, hi, idle=IDLE_SLOTS):
+    """{daa: state a floor merged by a chain block of that DAA is judged under}, from one node's transition rows. A block with no logged line leaves the stored state alone
+    (time-advanced to its DAA); a block with a line judges the floors it merges ahead of its own event under time_advance(from) and those after it under `to`: the benefit of the
+    doubt, Idle if either says Idle (no false FAIL). The stored state's last_blue / until come from the previous line's fields (they describe the NEW state)."""
+    by = {}
+    stored = ("Idle", None, None)                         # (state, last_blue, until) of the stored state before the blocks of DAA t
+    rows = sorted(rows, key=lambda r: r["daa"])
+    i = 0
+    for t in range(lo, hi + 1):
+        while i < len(rows) and rows[i]["daa"] < t:       # lines of earlier blocks: their `to` is the stored state now
+            stored = (rows[i]["to"], rows[i]["last_blue"], rows[i]["until"])
             i += 1
-        by[d] = state
+        here = []
+        while i < len(rows) and rows[i]["daa"] == t:
+            here.append(rows[i])
+            i += 1
+        before = time_advance(stored[0], stored[1], stored[2], t, idle)
+        if here:
+            after = here[-1]["to"]
+            by[t] = "Idle" if "Idle" in (before, after) else after
+            stored = (after, here[-1]["last_blue"], here[-1]["until"])
+        else:
+            by[t] = before
     return by
 
 
 def floor_states_best(blocks, fence, work=None, lag=None, **kw):
     """(states, probes, source, note): the node's own `[palw-floor-state]` transitions where it logs them (the node decides, my model only cross-checks), else the model."""
     model, mprobes = floor_states(blocks, fence, **kw)
-    tr = node_floor_transitions(work) if work else {}
-    if not tr or not model:
+    log = node_floor_log(work) if work else {}
+    if not log or not model:
         return model, mprobes, "model", "no [palw-floor-state] lines in the nodes' logs: the states are RECONSTRUCTED by the model"
-    node = max(tr, key=lambda n: len(tr[n]))
-    by1 = states_from_transitions(tr[node], min(model), max(model), 1)      # a transition logged at DAA t takes effect for the blocks of t + 1 on ...
-    by0 = states_from_transitions(tr[node], min(model), max(model), 0)      # ... or already for the blocks of t (an expiry is decided by the DAA itself)
-    # a floor is judged by the chain block that merges it, whose own events may or may not count: Idle if EITHER reading says Idle (the benefit of the doubt: no false FAIL)
-    by = {d: ("Idle" if "Idle" in (by0.get(d), by1.get(d)) else by1.get(d)) for d in by1} if lag is None else (by0 if lag == 0 else by1)
+    node = max(log, key=lambda n: len(log[n]))
+    by = judged_states_from_log(log[node], min(model), max(model), kw.get("idle", IDLE_SLOTS))
     diff = [d for d in model if model[d] != by.get(d)]
-    probes = sorted({d for d, _, to in tr[node] if to == "Probe"})
-    note = f"states from {node}'s [palw-floor-state] log ({len(tr[node])} transitions); the model differs at {len(diff)} of {len(model)} DAA" + (f" (first: {diff[:5]})" if diff else "")
+    probes = sorted({r["daa"] for r in log[node] if r["to"] == "Probe"})
+    note = f"states from {node}'s [palw-floor-state] log ({len(log[node])} transitions; a floor merged at a block with a line counts as Idle if either its time-advanced stored state or the new state is); the model differs at {len(diff)} of {len(model)} DAA" + (f" (first: {diff[:5]})" if diff else "")
     return by, probes, f"node:{node}", note
 
 
@@ -1269,8 +1299,11 @@ def selftest():
                                                            "[palw-floor-state] daa=95 block=ef56 idle->normal last_blue=95 until=- last_probe_end=58\n")
     tr = node_floor_transitions(d)
     assert tr["new0"] == [(50, "Idle", "Probe"), (58, "Probe", "Idle"), (95, "Idle", "Normal")], tr
-    stn = states_from_transitions(tr["new0"], 40, 100, lag=1)
-    assert stn[50] == "Idle" and stn[51] == "Probe" and stn[58] == "Probe" and stn[59] == "Idle" and stn[96] == "Normal", stn
+    jl = judged_states_from_log(node_floor_log(d)["new0"], 40, 130)
+    # DAA 50: the block that opens the probe judges the floors it merges ahead of its RED event as Idle; 51..57 Probe; 58 (until reached) Idle; 95 Idle (ahead of the BLUE event); 96..115 Normal;
+    # 116 (> last_blue + 20) Idle with no line at all: time alone ended it
+    assert [jl[t] for t in (49, 50, 51, 57, 58, 59, 94, 95, 96, 115, 116, 125)] == ["Idle", "Idle", "Probe", "Probe", "Idle", "Idle", "Idle", "Idle", "Normal", "Normal", "Idle", "Idle"], jl
+    assert time_advance("Normal", 95, None, 115) == "Normal" and time_advance("Normal", 95, None, 116) == "Idle" and time_advance("Probe", None, 58, 58) == "Idle"
     best = floor_states_best(chainf, 0, d)                                         # a node log in force: the source says so
     assert best[2].startswith("node:"), best[2]
     assert gate_red2blue(chainf, {"restart_daa": 108})[0] == 0, gate_red2blue(chainf, {"restart_daa": 108})
