@@ -38,7 +38,7 @@ PY
 JSON_BASE_3=$((JSON_BASE + 3))
 FENCES="6 10 14 $TIR_AT 24 $H $((H+95)) $((H+190)) $((H+285))"
 GATE_ARGS=(--port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers "$PRODUCERS" --evd "$EVD" --state "$EVD/recovery.json" --stale "$EVD/stale.json" --restart1 "$EVD/restart1.json"
-           --k "$K_SLOTS" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN")
+           --k "$K_SLOTS" --fences "$FENCES" --idle-slots "$K_SLOTS" --probe-slots "$PROBE_SLOTS" --cooldown "$COOLDOWN")
 snap() { local d; d=$(now); python3 "$C/dcwatch.py" panel --work "$WORK_DIR" > "$EVD/panel-$d.txt" 2>&1
          python3 "$C/dcwatch.py" share --port "$JSON_BASE_3" --fence "$H" --work "$WORK_DIR" --producers "$PRODUCERS" > "$EVD/share-$d.txt" 2>&1
          python3 "$C/dcwatch.py" gates "${GATE_ARGS[@]}" > "$EVD/gates-$d.txt" 2>&1; }
