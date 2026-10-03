@@ -124,7 +124,9 @@ old 10 - old 0 0"
 # XB_FROM_DAA) on its own node new9, started by the driver once its bond is registered and never stopped: the panels then seat an operator that is not
 # a genesis one. Ten processes would be too many for this Mac, so the driver also stops the old relay as soon as D-M5's crossing is done.
 if [ "${OUTSIDER:-0}" = 1 ]; then NODES="$NODES
-new9 11 14 outsider 0 1 jit"; fi
+new9 11 14 outsider 0 1 jit
+extfloor 12 15 extfloor 0 0 jit
+joiner 13 - joiner 0 0 jit"; fi
 # RIDERS=N: --palw-riders=N on every producing node (ADR-0164 F-M1: N further jobs of the producer's own bond per lead attempt).
 
 # NO_OLD=1: no old relay (D-M5 is then not run). The just-in-time nodes (liars, registrar) never run in the steady state: seven nodes + the relay.
@@ -211,7 +213,7 @@ node_args() {
     d=$WORK_DIR/$n
     local a=(--testnet --netsuffix=12 "--palw-drill-genesis-salt=$(salt)" "--appdir=$d/app" --yes
              --nodnsseed --disable-upnp
-             "--listen=127.0.0.1:$((P2P_BASE + k))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
+             "--listen=127.0.0.1:$((P2P_BASE + k + $([ "${ISOLATE_NODE:-}" = "$n" ] && echo "${ISO_PORT_SHIFT:-800}" || echo 0))))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
              "--rpclisten-json=127.0.0.1:$((JSON_BASE + k))" "--evm-rpc-listen=127.0.0.1:$((EVM_BASE + k))"
              --utxoindex --unsaferpc --nogrpc)
     local bin=$KASPAD_BIN
@@ -261,6 +263,12 @@ node_args() {
     case $role in
         floor) a+=(--palw-produce) ;;
         outsider) ;;
+        # extfloor (OUTSIDER=1): the EXTERNAL floor producer of the combined drill (post-genesis bond 15): a floor producer that does not honour the idle rule where the build has
+        # a drill flag for that (EXT_FLOOR_FLAG, else the first `--palw-drill-*floor*` flag the binary lists besides the fence movers), so its blocks must be REJECTED in
+        # Normal / Probe by the honest nodes' header rule. Without such a flag it is an ordinary floor producer (the gate then reports it could not test rejection).
+        extfloor) a+=(--palw-produce)
+                  local ef=${EXT_FLOOR_FLAG:-$(bin_help "$bin" | grep -oE -- '--palw-drill-[a-z0-9-]*floor[a-z0-9-]*' | grep -vE -- '-at$|reserve' | head -1)}
+                  [ -n "$ef" ] && grep -q -- "$ef" <<<"$(bin_help "$bin")" && a+=("$ef") ;;
         head) a+=(--palw-produce "${rid[@]}" "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
         eval|liar) a+=(--palw-improve-evaluate) ;;
         # evalw produces the FULL-WEIGHT winner's claims: the usage of line R once `win` heads it (D-M4's second epoch). W1's composite winner
@@ -273,7 +281,8 @@ node_args() {
                    a+=("--palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S"); fi ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
-    local m; for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
+    # ISOLATE_NODE=<n>: that node is partitioned — it listens on a shifted P2P port (nobody dials the old one) and dials nobody (FORK-c: a reorg across the fence)
+    local m; if [ "${ISOLATE_NODE:-}" != "$n" ]; then for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done; fi
     # Per-node additions (a tamper flag, a challenger), one per line.
     local extra="$d/extra-args"; if [ -s "$extra" ]; then while read -r x; do [ -n "$x" ] && a+=("$x"); done < "$extra"; fi
     printf '%s\n' "${a[@]}" "$@"
@@ -287,6 +296,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

@@ -519,15 +519,17 @@ XB_ORDER = [int(x) for x in (E.get("XB_ORDER", "").replace(",", " ").split() or 
 XB_FROM_DAA = int(E.get("XB_FROM_DAA") or XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
 XB_FLOAT_MSK = int(XB.get("float_msk", 150))                              # on top of the collateral: the 100 MSK fee float the genesis seats carry, and fees
 XB_WAIT_DAA = int(XB.get("registrar_wait_daa", 12))                       # a registrar that has not printed its bond after this many DAA is stopped and tried again
-LIARS = PLAN.get("liars", {})
+LIARS = {} if E.get("DM_NO_LIARS") == "1" else PLAN.get("liars", {})     # the combined drill has no D-M3: no sacrificial liars
 LIAR_START_DAA = int(LIARS.get("start_daa", 440))
 LIAR_DEADLINE_DAA = int(LIARS.get("deadline_daa", 300))                   # past start + this a liar that never lied or was never convicted is stopped, and the verdict says so
 CAP = PLAN.get("capacity", {})
-_W, _S = int(CAP.get("window_daa", 80)), int(CAP.get("settle_daa", 10))
+_W, _S = int(E.get("CAP_WINDOW_DAA") or CAP.get("window_daa", 80)), int(E.get("CAP_SETTLE_DAA") or CAP.get("settle_daa", 10))
 if E.get("INT12") == "1":     # the combined drill of the DAA-5,300 candidate: rho 25 / 100 / 250 / 1000 at H' / +95 / +190 / +285 (the release's offsets)
     _H = int(E.get("CAP2_AT", "560"))
-    CAP_STEPS = (("rho25", "int11"), ("rho100", "int11"), ("rho250", "int11"), ("rho1000", "int11"))
-    CAP_WINDOWS = {n: (_H + k * 95 + _S, _H + k * 95 + _S + _W) for k, (n, _) in enumerate(CAP_STEPS)}
+    _OFF = {"rho25": 0, "rho100": 95, "rho250": 190, "rho1000": 285}
+    _NAMES = [n for n in (E.get("CAP_RHOS") or "rho25,rho100,rho250,rho1000").replace(",", " ").split() if n in _OFF]    # CAP_RHOS: the steps measured (the combined drill skips rho25: no REAL load yet)
+    CAP_STEPS = tuple((n, "int11") for n in _NAMES)
+    CAP_WINDOWS = {n: (_H + _OFF[n] + _S, _H + _OFF[n] + _S + _W) for n in _NAMES}
 else:
     CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
         "rho25": (int(E.get("CAP2_AT", "560")) + _S, int(E.get("CAP2_AT", "560")) + _S + _W),
@@ -837,6 +839,9 @@ class Drive:
                         why=f"new0 {'dropped it' if got_new else 'did NOT log the drop'}; old {'skipped it' if got_old else 'did NOT log the skip'}; tips {agree}")
 
     def step_m5_cross(self):
+        """D-M5's crossing, and FORK-a of the combined drill. On a build with the crossing re-judgement (int-10.7: a connection kept since before a gate fence is dropped
+        when this node crosses it) the refusal is logged AT the crossing, no restart. A build without it logs the refusal only when the old relay reconnects: after
+        STALL ticks without the line the old relay is restarted (what an operator's old node does) and the result says so (old_restarted)."""
         if self.s.done("m5-cross") or not self.s.done("m5-below"):
             return
         lack = first_lacking_fence()
@@ -845,18 +850,18 @@ class Drive:
         pat = rf"Fork-id mismatch on network \S+ at DAA \d+ - this node has crossed fence (\d+)"
         line = self.log_after("new0", 0, pat)
         d_old = daa_of("old") if node_alive("old") else None
-        info = {"lack": lack, "refusal": line, "old_daa": d_old, "new_daa": self.daa}
-        if line is None and node_alive("old") and not self.s.get("m5-old-restarted"):
-            # A peer connected before the fence is never handshaken again: the old relay keeps relaying, rejects every block past the fence (disqualified: PALW state
-            # root) and stalls at the fence's DAA, and the fork-id refusal is only logged when it RECONNECTS. A restart is what an operator's old node does.
-            self.s.put("m5-old-restarted", self.daa)
-            run(["bash", f"{HERE}/nodes.sh", "stop", "old"], timeout=200)
-            run(["bash", f"{HERE}/nodes.sh", "start", "old"], timeout=200)
-            return
+        restarted = bool(self.s.get("m5-old-restarted"))
+        info = {"lack": lack, "refusal": line, "old_daa": d_old, "new_daa": self.daa, "old_restarted": restarted}
+        write_json(f"{WORK}/fork-a.json", {"mismatch_line": line, "old_restarted": restarted, "old_daa": d_old, "new_daa": self.daa, "fence": lack[1]})
         if line is None:
             n = self.s.tried("m5-cross")
-            if n >= 10:
-                self.s.mark("m5-cross", result="FAIL", why="no fork-id refusal logged by new0 after the fence", **info)
+            if not restarted and node_alive("old") and n >= int(E.get("M5_STALL_TICKS", "12")):
+                self.s.put("m5-old-restarted", self.daa)
+                run(["bash", f"{HERE}/nodes.sh", "stop", "old"], timeout=200)
+                run(["bash", f"{HERE}/nodes.sh", "start", "old"], timeout=200)
+                return
+            if n >= int(E.get("M5_STALL_TICKS", "12")) + 12:
+                self.s.mark("m5-cross", result="FAIL", why="no fork-id refusal logged by new0 after the fence, even after the old relay was restarted", **info)
             return
         self.s.mark("m5-cross", result="PASS", **info)
 
@@ -1449,9 +1454,9 @@ class Drive:
         """The combined drill's OUTSIDER seat (OUTSIDER=1): a node on a post-genesis bond, started once the bond is registered and never stopped. Also stops
         the old relay once D-M5's crossing is done (ten processes are too many for this Mac)."""
         for node, v in NODES.items():
-            if v["role"] != "outsider":
+            if v["role"] != "outsider":       # extfloor and joiner are started by dc-run.sh, on its own clock
                 continue
-            if "m5-cross" in self.s.d["done"] and "old" in NODES and node_alive("old") and not self.s.done("old-stopped"):
+            if "m5-cross" in self.s.d["done"] and "old" in NODES and node_alive("old") and not self.s.done("old-stopped") and node == next(iter(n for n, w in NODES.items() if w["role"] == "outsider")):
                 self.nodes_sh("stop", "old")
                 self.s.mark("old-stopped", daa=self.daa)
                 log(f"the old relay stopped at DAA {self.daa} (D-M5's crossing is done)")
@@ -1667,7 +1672,8 @@ def verdict_dm5(sd):
     lack = cross["lack"]
     note = "" if lack[0] == "improve" else (f" (the old release is int-10: the first fence it lacks is {lack[0]}@{lack[1]}, the flag day that follows it on testnet-12; the improvement fence "
                                              f"comes after it, so the crossing shown is that flag day's, refused by the fork id as every later one would be)")
-    return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]}: {cross['refusal']}{note}"
+    how = "re-judged AT the crossing, no restart" if not cross.get("old_restarted") else "logged only after the old relay was restarted (no crossing re-judgement in this build)"
+    return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]} ({how}): {cross['refusal']}{note}"
 
 
 def _outcome_class(outcome):

@@ -74,7 +74,7 @@ def load_blocks(port):
         parents = list(levels[0]) if levels and isinstance(levels[0], list) else []
         out.append({"hash": str(pick(h, "hash", default="")), "parents": [str(p) for p in parents], "daa": int(pick(h, "daaScore", default=0) or 0),
                     "ts": int(pick(h, "timestamp", default=0) or 0), "kind": str(pick(v, "blockKind", default="") or ""),
-                    "lane": str(pick(v, "laneClass", default="") or "")})
+                    "lane": str(pick(v, "laneClass", default="") or ""), "chain": bool(pick(v, "isChainBlock", default=False))})
     return out
 
 
@@ -273,6 +273,306 @@ def eligible_windows(ws, work, producers):
 # --------------------------------------------------------------------------------------------------------------------
 # share
 # --------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------
+# the floor rule's states (lane RS's redesign, 10-04): floors are HEADER-invalid unless the block's state is Idle
+# --------------------------------------------------------------------------------------------------------------------
+IDLE_SLOTS, PROBE_SLOTS, COOL_SLOTS = 20, 6, 20       # floor_idle_slots, probe_slots, probe_cooldown
+
+
+def floor_states(blocks, fence=0, idle=IDLE_SLOTS, probe=PROBE_SLOTS, cool=COOL_SLOTS):
+    """MODEL of the rule as briefed (the frozen spec text decides; this is the one place to change):
+         Normal  a BLUE REAL attempt was accepted within the last `idle` slots; floors are header-invalid;
+         Idle    no BLUE REAL attempt for `idle` slots (absent = idle); floors are header-valid;
+         Probe   a REAL attempt arrived in Idle (RED or not) and the last probe began >= `cool` slots ago: floors are header-invalid for `probe` slots; a BLUE REAL
+                 inside it makes the state Normal, none returns it to Idle; a RED attempt never extends Normal or Probe.
+       Returns ({daa: state the blocks of that DAA are validated under}, [probe start DAAs]). The events of a DAA move the state from the next DAA on."""
+    real_blue, real_any = set(), set()
+    for b in blocks:
+        if b["kind"] == "REAL" and b["daa"] >= fence:
+            real_any.add(b["daa"])
+            if b["lane"] in ("BLUE", "EXEC"):
+                real_blue.add(b["daa"])
+    if not blocks:
+        return {}, []
+    lo, hi = max(fence, min(b["daa"] for b in blocks)), max(b["daa"] for b in blocks)
+    state, last_blue, probe_at, last_probe = "Idle", None, None, None
+    by, probes = {}, []
+    for d in range(lo, hi + 1):
+        if state == "Normal" and last_blue is not None and d - last_blue >= idle:
+            state = "Idle"
+        if state == "Probe" and d - probe_at >= probe:
+            state = "Idle"
+        by[d] = state
+        if d in real_blue:
+            state, last_blue = "Normal", d
+        elif d in real_any and state == "Idle" and (last_probe is None or d - last_probe >= cool):
+            state, probe_at, last_probe = "Probe", d, d
+            probes.append(d)
+    return by, probes
+
+
+def floor_blocks(blocks, fence=0):
+    """The floor attempts that stand in the DAG past the fence (kind FALLBACK: a header-invalid one never gets in)."""
+    return [b for b in blocks if b["kind"] == "FALLBACK" and b["daa"] >= fence]
+
+
+def gather_claims(port, work):
+    """Every claim of every seat bond and of the drill's post-genesis bonds (getPalwClaims, executor role, terminal included): {claimId: row}."""
+    work = os.path.expanduser(work)
+    bonds = []
+    try:
+        bonds += [x["bond_outpoint"] for x in json.load(open(os.path.join(work, "keyring", "manifest.json")))["seats"]]
+    except (OSError, ValueError, KeyError):
+        pass
+    for f in sorted(os.listdir(os.path.join(work, "liars"))) if os.path.isdir(os.path.join(work, "liars")) else []:
+        try:
+            bonds.append(json.load(open(os.path.join(work, "liars", f)))["bond_outpoint"])
+        except (OSError, ValueError, KeyError):
+            pass
+    rows = {}
+    for bond in bonds:
+        r = call(port, "getPalwClaims", {"bond": bond, "role": "executor", "includeTerminal": True, "limit": 0})
+        for c in (pick(r, "claims", default=[]) or []):
+            rows[str(pick(c, "claimId"))] = c
+    return rows
+
+
+def hold_lines(work, nodes=("new0",), pattern=None):
+    """The compliant floor producers' own log: lines saying they hold (the policy's default: no floor attempt outside Idle)."""
+    import re
+    pat = re.compile(pattern or os.environ.get("HOLD_PATTERN", r"holding[^\n]{0,120}(idle|floor)|floor[^\n]{0,120}(held|holding|not idle|hold)|FloorNotIdle"), re.I)
+    out = {}
+    for n in nodes:
+        lg = os.path.join(os.path.expanduser(work), n, "kaspad.out")
+        out[n] = sum(1 for ln in open(lg, errors="replace") if pat.search(ln)) if os.path.exists(lg) else None
+    return out
+
+
+def gate_floor_policy(blocks, fence, claims, holds, **kw):
+    """RELEASE GATE: floors outside Idle EARN NOTHING (the fold refuses them: no claim row names such a floor block as its accepted block) and the compliant
+    producers log holds. A floor that stands in the DAG outside Idle is not a failure by itself (a compliant producer can lose a race at a state change);
+    an EARNED one is."""
+    by, probes = floor_states(blocks, fence, **kw)
+    if not any(b["kind"] == "REAL" and b["daa"] >= fence for b in blocks):
+        return 3, "INCOMPLETE: no REAL attempt past the fence yet (the states never left Idle)"
+    fl = floor_blocks(blocks, fence)
+    outside = [b for b in fl if by.get(b["daa"], "Idle") != "Idle"]
+    earned_by = {str(pick(c, "acceptedBlock", default="")) for c in claims.values()}
+    earned = [b for b in outside if b["hash"] in earned_by]
+    visited = {st: sum(1 for v in by.values() if v == st) for st in ("Idle", "Probe", "Normal")}
+    nonidle = visited["Probe"] + visited["Normal"]
+    held = sum(v or 0 for v in holds.values())
+    txt = (f"{len(fl)} floor blocks stand past the fence, {len(outside)} of them outside Idle, {len(earned)} of those earned a claim; slots Idle {visited['Idle']}, Probe {visited['Probe']}, "
+           f"Normal {visited['Normal']}; hold lines {holds}")
+    if earned:
+        return 1, f"FAIL: floors outside Idle earned claims at DAA " + ", ".join(str(b["daa"]) for b in earned[:8]) + " — " + txt
+    if not nonidle:
+        return 3, "INCOMPLETE: the chain never left Idle — " + txt
+    if held == 0:
+        return 3, "INCOMPLETE: no hold line in the compliant producers' logs (set HOLD_PATTERN to the producer's wording) — " + txt
+    if not outside:
+        return 0, "PASS (nothing to refuse: every floor stood in Idle; the refusal itself is shown by the policy-ignoring leg, report-only): " + txt
+    return 0, "PASS: " + txt
+
+
+def gate_states_daa(blocks, fence, max_gap_s=4 * SLOT_S, **kw):
+    """RELEASE GATE: the DAA advances through every state — Idle, Probe and Normal each visited, and in every run of one state a block at every DAA and no stamp gap
+    over four slots."""
+    by, _ = floor_states(blocks, fence, **kw)
+    if not by:
+        return 3, "INCOMPLETE: no blocks"
+    first = {}
+    for b in blocks:
+        if b["ts"] and (b["daa"] not in first or b["ts"] < first[b["daa"]]):
+            first[b["daa"]] = b["ts"]
+    have = {b["daa"] for b in blocks}
+    seen, bad = set(), []
+    for d, st in by.items():
+        seen.add(st)
+        if d not in have:
+            bad.append(f"DAA {d} ({st}) has no block")
+        elif d + 1 in first and d in first and by.get(d + 1) == st and (first[d + 1] - first[d]) / 1000.0 > max_gap_s:
+            bad.append(f"DAA {d}->{d + 1} ({st}) took {(first[d + 1] - first[d]) / 1000.0:.0f} s")
+    missing = [st for st in ("Idle", "Probe", "Normal") if st not in seen]
+    if bad:
+        return 1, "FAIL: " + "; ".join(bad[:6])
+    if missing:
+        return 3, f"INCOMPLETE: no DAA was seen in {missing} yet"
+    return 0, "PASS: every DAA of every state has a block, none over 4 slots"
+
+
+def gate_red2blue(blocks, st, probe=PROBE_SLOTS):
+    """RELEASE GATE (RED -> BLUE recovery): after the idle stretch of the recovery leg the first REAL attempt may be RED, but a BLUE one follows inside the probe."""
+    after = sorted(b["daa"] for b in blocks if b["kind"] == "REAL" and b["daa"] > int(st["restart_daa"]))
+    if not after:
+        return 3, "INCOMPLETE: no REAL attempt after the restart yet"
+    r1 = after[0]
+    first = [b for b in blocks if b["kind"] == "REAL" and b["daa"] == r1]
+    blue = sorted(b["daa"] for b in blocks if b["kind"] == "REAL" and b["lane"] in ("BLUE", "EXEC") and b["daa"] >= r1)
+    colour = "BLUE" if any(b["lane"] in ("BLUE", "EXEC") for b in first) else "RED"
+    if not blue:
+        return 3, f"INCOMPLETE: the first REAL attempt after the restart (DAA {r1}, {colour}) has no BLUE successor yet"
+    if blue[0] - r1 > probe:
+        return 1, f"FAIL: the first REAL attempt after the restart (DAA {r1}, {colour}); the first BLUE one only at DAA {blue[0]} ({blue[0] - r1} slots, probe = {probe})"
+    return 0, f"PASS: first REAL attempt after the restart at DAA {r1} ({colour}), BLUE at DAA {blue[0]} ({blue[0] - r1} slots, inside the probe of {probe})"
+
+
+def gate_stale(blocks, fence, st, **kw):
+    """RELEASE GATE (RED-only cannot keep floors invalid): in the stale leg every REAL attempt lands RED; floors become valid again after `probe_slots`, and
+    probes start no more often than every `cooldown`. st = {start_daa, end_daa}."""
+    cool, probe = kw.get("cool", COOL_SLOTS), kw.get("probe", PROBE_SLOTS)
+    s0, s1 = int(st["start_daa"]), int(st["end_daa"])
+    reals = [b for b in blocks if b["kind"] == "REAL" and s0 <= b["daa"] < s1]
+    if not reals:
+        return 3, "INCOMPLETE: no REAL attempt in the stale leg"
+    blue = [b for b in reals if b["lane"] in ("BLUE", "EXEC")]
+    if len(blue) > 0.1 * len(reals):
+        return 3, f"INCOMPLETE: the injection is not stale enough — {len(blue)} of {len(reals)} REAL attempts in the leg are BLUE"
+    by, probes = floor_states(blocks, fence, **kw)
+    inside = [p for p in probes if s0 <= p < s1]
+    if len(inside) < 2:
+        return 3, f"INCOMPLETE: {len(inside)} probe(s) in the stale leg (need 2 to see the cooldown)"
+    gaps = [b - a for a, b in zip(inside, inside[1:])]
+    fl = sorted(b["daa"] for b in floor_blocks(blocks, fence) if s0 <= b["daa"] < s1)
+    bad = []
+    if min(gaps) < cool:
+        bad.append(f"probes {inside} are closer than the cooldown {cool}")
+    for p, nxt in zip(inside, inside[1:] + [s1]):
+        if not any(p + probe <= d < nxt for d in fl):
+            bad.append(f"no floor stood after the probe at DAA {p} ended (DAA {p + probe}..{nxt - 1})")
+        if any(p < d < p + probe for d in fl):
+            bad.append(f"a floor stood inside the probe at DAA {p}")
+    if bad:
+        return 1, "FAIL: " + "; ".join(bad[:5])
+    return 0, f"PASS: {len(reals)} stale REAL attempts (all RED), probes at DAA {inside}, spacing {gaps} >= {cool}, floors valid again after each {probe}-slot probe"
+
+
+def gate_delay_active(work, node="new6", flag="--palw-drill-real-submit-delay-s"):
+    """The 8k emulation is really on: the delayed producer's argv carries the flag."""
+    f = os.path.join(os.path.expanduser(work), node, "args.redacted")
+    if not os.path.exists(f):
+        return 3, f"INCOMPLETE: no argv record for {node}"
+    args = [ln.strip() for ln in open(f) if flag in ln]
+    if not args:
+        return 1, f"FAIL: {node} runs without {flag}: the BLUE rate below is NOT under the delay injection"
+    return 0, f"PASS: {node} runs with {args[0]}"
+
+
+def user_metrics(blocks, claims, fence, tip=None):
+    """The user's three metrics, past the fence: the REAL attempts' BLUE rate, the REAL share of the selected chain (chain blocks whose kind is REAL or EXEC), and the
+    REAL work that reached Final (claims accepted in a REAL block, old enough to have had the time, that are Final)."""
+    post = [b for b in blocks if b["daa"] >= fence]
+    real = [b for b in post if b["kind"] == "REAL"]
+    blue = [b for b in real if b["lane"] in ("BLUE", "EXEC")]
+    chain = [b for b in post if b["chain"]]
+    chain_real = [b for b in chain if b["kind"] in ("REAL", "EXEC")]
+    tip = tip or max((b["daa"] for b in blocks), default=0)
+    by_hash = {b["hash"]: b for b in blocks}
+    mature = [c for c in claims.values() if str(pick(c, "acceptedBlock", default="")) in by_hash
+              and by_hash[str(pick(c, "acceptedBlock"))]["kind"] == "REAL" and int(pick(c, "acceptedDaa", default=0) or 0) <= tip - 200]
+    final = [c for c in mature if str(pick(c, "phase", default="")).lower().startswith("final")]
+    sompi = lambda cs: sum(int(str(pick(c, "committedSompi", default=0) or 0)) for c in cs)  # noqa: E731
+    return {"real_attempts": len(real), "real_blue": len(blue), "real_blue_rate": round(len(blue) / len(real), 3) if real else None,
+            "chain_blocks": len(chain), "chain_real": len(chain_real), "real_share_of_chain": round(len(chain_real) / len(chain), 3) if chain else None,
+            "real_claims_mature": len(mature), "real_claims_final": len(final), "real_final_rate": round(len(final) / len(mature), 3) if mature else None,
+            "real_final_sompi": sompi(final), "real_mature_sompi": sompi(mature)}
+
+
+def print_metrics(m):
+    print("== the user's metrics (past the fence) ==")
+    pct = lambda x: "-" if x is None else f"{100.0 * x:.1f} %"  # noqa: E731
+    print(f"  REAL attempts BLUE: {m['real_blue']} of {m['real_attempts']} ({pct(m['real_blue_rate'])})")
+    print(f"  REAL share of the selected chain: {m['chain_real']} of {m['chain_blocks']} chain blocks ({pct(m['real_share_of_chain'])})")
+    print(f"  REAL work reaching Final: {m['real_claims_final']} of {m['real_claims_mature']} claims old enough (>= 200 DAA) ({pct(m['real_final_rate'])}); "
+          f"{m['real_final_sompi']} of {m['real_mature_sompi']} sompi committed")
+
+
+def ignore_report(blocks, fence, st, claims):
+    """REPORT-ONLY (never a gate): leg X ran one policy-IGNORING floor producer. How many REAL attempts did it turn RED, against the same number of slots before it,
+    and what did the floors it got into the DAG outside Idle earn? st = {start_daa, end_daa}."""
+    s0, s1 = int(st["start_daa"]), int(st["end_daa"])
+    n = s1 - s0
+    during = [b for b in blocks if b["kind"] == "REAL" and s0 <= b["daa"] < s1]
+    before = [b for b in blocks if b["kind"] == "REAL" and s0 - n <= b["daa"] < s0]
+    red = lambda bs: sum(1 for b in bs if b["lane"] == "RED")  # noqa: E731
+    by, _ = floor_states(blocks, fence)
+    fl = [b for b in floor_blocks(blocks, fence) if s0 <= b["daa"] < s1]
+    outside = [b for b in fl if by.get(b["daa"], "Idle") != "Idle"]
+    earned_by = {str(pick(c, "acceptedBlock", default="")) for c in claims.values()}
+    earned = [b for b in outside if b["hash"] in earned_by]
+    dag = Dag(blocks)
+    ac = {"floor": 0, "hb": 0, "real": 0, "exec": 0, "other": 0}
+    for b in [b for b in during if b["lane"] == "RED"][:60]:
+        for k, v in dag.blue_kinds(b["hash"]).items():
+            ac[k] += v
+    return [f"policy-ignoring floor producer, DAA {s0}..{s1}: REAL attempts RED {red(during)} of {len(during)} (the {n} slots before: {red(before)} of {len(before)})",
+            f"  floors that stood in the DAG in the leg: {len(fl)}, outside Idle {len(outside)}, of which earned a claim {len(earned)} (the fold refuses them: nothing earned expected)",
+            f"  blue blocks in the anticones of the RED REAL attempts: floor {ac['floor']}, heartbeat {ac['hb']}, other REAL {ac['real']}, exec {ac['exec']}"]
+
+
+def fork_checks(a, blocks):
+    """RELEASE GATE (fork checks), from dc-run.sh's record fork.json: (a) the old release and the new one refuse each other past the fence — the new node dropped the
+    old peer AT the crossing (the re-judgement, no restart needed) and the old node stalled at the fence; (b) a fresh node synced from genesis across the fence to the tip
+    with the same sink; (c) the node that was partitioned across the fence and rejoined converged to the same sink. IBD via the pruning proof is not reachable in a drill
+    this short (pruning depth is thousands of blocks) and is reported as not run."""
+    f = os.path.join(os.path.expanduser(a.evd), "fork.json")
+    rec = json.load(open(f)) if os.path.exists(f) else {}
+    fa = os.path.join(os.path.expanduser(a.work), "fork-a.json")
+    if os.path.exists(fa):
+        rec.update(json.load(open(fa)))
+    out = []
+    port = lambda n: a.json_base + {"new0": 0, "new1": 1, "new2": 2, "new3": 3, "old": 10, "joiner": 13}[n]  # noqa: E731
+
+    def info(n):
+        r = call(port(n), "getBlockDagInfo", {})
+        return int(pick(r, "virtualDaaScore", default=0) or 0), str(pick(r, "sink", default=""))
+    work = os.path.expanduser(a.work)
+    # (a)
+    line_new = rec.get("mismatch_line")
+    try:
+        od, _ = info("old")
+        nd, _ = info("new3")
+    except Exception:  # noqa: BLE001
+        od = nd = None
+    if not line_new:
+        out.append(("FORK-a", 3, "INCOMPLETE: no fork-id refusal logged by the new node at the crossing yet"))
+    elif rec.get("old_restarted"):
+        out.append(("FORK-a", 1, f"FAIL: the refusal came only after the old node was restarted ({line_new[:100]}): the connection kept across the fence was not re-judged"))
+    elif od is not None and nd is not None and nd - od >= 3:
+        out.append(("FORK-a", 0, f"PASS: the new node dropped the old peer at the crossing without a restart ({line_new[:110]}); the old node stands at DAA {od}, the chain at {nd}"))
+    else:
+        out.append(("FORK-a", 3, f"INCOMPLETE: refusal logged but old DAA {od} vs new {nd}"))
+    # (b)
+    j = rec.get("joiner")
+    if not j:
+        out.append(("FORK-b", 3, "INCOMPLETE: the fresh node has not run yet"))
+    else:
+        try:
+            jd, js = info("joiner")
+            _, ns = info("new3")
+            nd2, _ = info("new3")
+            ok = jd >= nd2 - 3
+            out.append(("FORK-b", 0 if ok else 1, f"{'PASS' if ok else 'FAIL'}: the fresh node (started at DAA {j.get('start_daa')}, fence {a.fence}) synced from genesis to DAA {jd} (chain {nd2}); sink {'equal' if js == ns else 'differs by the moving tip'}"))
+        except Exception as e:  # noqa: BLE001
+            out.append(("FORK-b", 3, f"INCOMPLETE: the fresh node is not answering ({type(e).__name__}); record {j}"))
+    # (c)
+    p = rec.get("partition")
+    if not p or "rejoin_daa" not in p:
+        out.append(("FORK-c", 3, "INCOMPLETE: the partition across the fence has not finished yet"))
+    else:
+        try:
+            d2, s2 = info(p["node"])
+            d1, s1 = info("new1")
+            crossed = int(p.get("isolated_tip_daa", 0)) >= a.fence
+            ok = crossed and abs(d2 - d1) <= 3
+            out.append(("FORK-c", 0 if ok else (3 if not crossed else 1),
+                        f"{'PASS' if ok else ('INCOMPLETE' if not crossed else 'FAIL')}: {p['node']} was isolated from DAA {p.get('start_daa')} to {p.get('isolated_tip_daa')} (fence {a.fence}), rejoined at {p['rejoin_daa']}; now DAA {d2} vs {d1}"))
+        except Exception as e:  # noqa: BLE001
+            out.append(("FORK-c", 3, f"INCOMPLETE: {type(e).__name__}"))
+    out.append(("FORK-d", 3, "NOT RUN: IBD via the pruning proof needs a pruning point past genesis (pruning depth is thousands of blocks; this drill makes ~2,000)"))
+    return out
+
+
 def share_ctx(a):
     """The blocks, the windows past the fence (eligible or not), and the before / after windows — one read of the chain for `share` and `gates`."""
     blocks = load_blocks(a.port)
@@ -390,15 +690,30 @@ def gates(a):
         pc = panel(argparse.Namespace(work=a.work, p50_max=a.p50_max, p95_max=a.p95_max, wait_max=a.wait_max))
     plines = [x for x in buf.getvalue().splitlines() if x.strip()]
     rows.append(("PANEL", pc, plines[-1] if plines else ""))
+    blocks, fence = ctx["blocks"], a.fence
+    kw = {"idle": a.idle_slots, "probe": a.probe_slots, "cool": a.cooldown}
+    claims = gather_claims(a.port, a.work)
+    holds = hold_lines(a.work, ("new0",))
     rows.append(("BLUE", *gate_blue(ctx)))
-    rows.append(("FLOOR", *gate_floor(ctx)))
+    rows.append(("DELAY", *gate_delay_active(a.work)))
+    rows.append(("FLOOR", *gate_floor_policy(blocks, fence, claims, holds, **kw)))
     state = os.path.expanduser(a.state)
     if os.path.exists(state):
-        rc, rl = recovery_verdict(load_blocks(a.port), json.load(open(state)), a.k, a.margin)
+        st = json.load(open(state))
+        rc, rl = recovery_verdict(blocks, st, a.k, a.margin)
         rows.append(("RECOVERY", rc, rl[-1]))
+        rows.append(("RED>BLUE", *gate_red2blue(blocks, st, a.probe_slots)))
     else:
         rows.append(("RECOVERY", 3, "INCOMPLETE: the recovery leg has not run yet (dc-run.sh at its DAA)"))
+        rows.append(("RED>BLUE", 3, "INCOMPLETE: needs the recovery leg"))
+    stale = os.path.expanduser(a.stale)
+    rows.append(("STALE", *(gate_stale(blocks, fence, json.load(open(stale)), **kw) if os.path.exists(stale)
+                           else (3, "INCOMPLETE: the stale-injection leg has not run yet"))))
     rows.append(("DAA", *gate_daa(ctx)))
+    rows.append(("STATES", *gate_states_daa(blocks, fence, **kw)))
+    a.json_base = int(os.environ.get("JSON_BASE", "53200"))
+    for nm, c, t in fork_checks(a, blocks):
+        rows.append((nm, c, t))
     lane = []
     work = os.path.expanduser(a.work)
     for f in sorted(glob.glob(os.path.join(work, "verdict", "*.verdict"))):
@@ -413,20 +728,37 @@ def gates(a):
         if m:
             lane.append((m[-1][0], 0 if m[-1][1] == "PASS" else 1, m[-1][1]))
     names = [n for n, _, _ in lane]
-    for need in ("dm1", "dm2", "dm3", "dm4", "dm5", "dm6"):
+    for need in ("dm5",):
         if need not in names:
             lane.append((need, 3, "INCOMPLETE: no verdict file yet"))
+    info = [(n, c, t) for n, c, t in lane if n in ("dm1", "dm2", "dm3", "dm4", "dm6", "cap")]      # not gates here: their epochs need ~1,000 DAA
+    lane = [(n, c, t) for n, c, t in lane if (n, c, t) not in info]
+    for lf in sorted(glob.glob(os.path.join(os.path.expanduser(a.lanes), "*", "verdict.txt"))):    # the lane pre-checks' own verdict files
+        txt = open(lf).read().strip().splitlines()
+        if txt:
+            lane.append(("pre:" + os.path.basename(os.path.dirname(lf)), {"PASS": 0, "FAIL": 1}.get(txt[0].split()[0], 3), txt[0][:140]))
     label = {0: "PASS", 1: "FAIL", 3: "INCOMPLETE"}
     print("== RELEASE GATES (all must PASS to ship) ==")
     for n, c, t in rows:
         print(f"  [{n:<8}] {label[c]:<10} {t}")
-    print("  per-lane verdicts:")
+    print("  per-lane verdicts (crossings in this chain; the lane pre-checks' verdict.txt):")
     for n, c, t in lane:
+        print(f"  [{n:<8}] {label[c]:<10} {t}")
+    print("  informational, not gates (D-M epochs need ~1,000 DAA, longer than this drill):")
+    for n, c, t in info:
         print(f"  [{n:<8}] {label[c]:<10} {t}")
     allc = [c for _, c, _ in rows] + [c for _, c, _ in lane]
     overall = 1 if 1 in allc else (3 if 3 in allc else 0)
     print(f"RELEASE GATES: {label[overall]}")
     print_share(ctx, table=False)
+    print_metrics(user_metrics(blocks, claims, fence))
+    xs = os.path.join(os.path.expanduser(a.evd), "ignore.json")
+    print("== report-only (never a gate) ==")
+    if os.path.exists(xs):
+        for ln in ignore_report(blocks, fence, json.load(open(xs)), claims):
+            print("  " + ln)
+    else:
+        print("  policy-ignoring floor producer: the leg has not run (or the binary has no flag to ignore the policy)")
     gc, gt = goal_verdict(ctx)
     print("== goal (supply-bound; reported, never blocks shipping) ==")
     print(f"  SHARE REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks: {gt}")
@@ -473,6 +805,12 @@ def recovery_verdict(blocks, st, k=20, margin=6):
     missing = [d for d in range(stop, min(restart, end) + 1) if d not in first_ts]
     gaps = [((first_ts[d + 1] - first_ts[d]) / 1000.0, d) for d in range(stop, min(restart, end)) if d in first_ts and d + 1 in first_ts]
     worst = max(gaps, default=(0, None))
+    after_blue = sorted(b["daa"] for b in blocks if b["kind"] == "REAL" and blue(b) and b["daa"] > restart)
+    after_any = sorted(b["daa"] for b in blocks if b["kind"] == "REAL" and b["daa"] > restart)
+    last_floor_after = max((d for d in floors if d > restart), default=None)
+    out.append("recovery time (slots after the restart): first REAL attempt " + (str(after_any[0] - restart) if after_any else "-") + ", first BLUE REAL attempt "
+               + (str(after_blue[0] - restart) if after_blue else "-") + ", last floor standing " + (str(last_floor_after - restart) if last_floor_after else "none") + "; floors resumed "
+               + (str(min((d for d in floors if d > last_real), default=0) - stop) if any(d > last_real for d in floors) else "-") + " slots after the stop")
     out.append(f"(a) DAA over the stop: {len(missing)} DAA without a block; longest slot gap {worst[0]:.0f} s at DAA {worst[1]}")
     if missing:
         bad.append(f"(a) DAA {missing[:6]} had no block while the producers were down")
@@ -630,6 +968,36 @@ def selftest():
     early20 = [dict(b) for b in chain20]
     early20[21]["kind"] = "FALLBACK"             # DAA 31: eleven idle slots after the last REAL attempt (DAA 20), well before K = 20
     assert recovery_verdict(early20, st20)[0] == 1
+    # the floor states (idle 20, probe 6, cooldown 20): Normal after BLUE REAL attempts, Idle after 20 quiet slots, a RED attempt in Idle opens a probe (floors invalid
+    # for 6 slots), a RED attempt inside the cooldown opens none, a BLUE one inside a probe makes it Normal
+    def build(extra_floor=(), no_floor=()):
+        out = []
+        reals = {d: ("REAL", "BLUE") for d in list(range(11, 21)) + list(range(95, 131))}
+        reals.update({50: ("REAL", "RED"), 60: ("REAL", "RED"), 71: ("REAL", "RED"), 92: ("REAL", "RED"), 94: ("REAL", "BLUE")})
+        for d in range(1, 131):
+            out.append(_blk(f"t{d}", [f"t{d - 1}"] if d > 1 else [], d, "LEGACY_HEARTBEAT", "BLUE"))
+            if d in reals:
+                out.append(_blk(f"r{d}", [f"t{d - 1}"] if d > 1 else [], d, reals[d][0], reals[d][1]))
+        for d in list(range(1, 11)) + list(range(40, 50)) + list(range(57, 72)) + list(range(78, 92)) + list(extra_floor):
+            if d not in no_floor:
+                out.append(_blk(f"f{d}", [f"t{d - 1}"], d, "FALLBACK", "BLUE"))
+        return out
+    chainf = build()
+    by, probes = floor_states(chainf, 0)
+    assert probes == [50, 71, 92], probes
+    assert [by[d] for d in (45, 52, 58, 61, 73, 94, 96, 125)] == ["Idle", "Probe", "Idle", "Idle", "Probe", "Probe", "Normal", "Normal"], by
+    holds_ok, holds_none = {"new0": 7}, {"new0": 0}
+    assert gate_floor_policy(chainf, 0, {}, holds_ok)[0] == 0, gate_floor_policy(chainf, 0, {}, holds_ok)
+    assert gate_floor_policy(chainf, 0, {}, holds_none)[0] == 3                  # no hold line: the producers' policy is not shown
+    stand = build(extra_floor=[53, 100])                                          # floors that stand in a probe and in Normal (a policy-ignoring producer)
+    assert gate_floor_policy(stand, 0, {}, holds_ok)[0] == 0                      # they stand but earned nothing: the fold refused them
+    assert gate_floor_policy(stand, 0, {"c1": {"acceptedBlock": "f100"}}, holds_ok)[0] == 1     # one earned a claim: FAIL
+    assert gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})[0] == 0, gate_stale(chainf, 0, {"start_daa": 45, "end_daa": 92})
+    assert gate_stale(build(no_floor=range(57, 71)), 0, {"start_daa": 45, "end_daa": 92})[0] == 1     # floors never came back after the first probe
+    assert gate_red2blue(chainf, {"restart_daa": 90})[0] == 0, gate_red2blue(chainf, {"restart_daa": 90})
+    slow = [dict(b) for b in chainf if b["hash"] not in {f"r{d}" for d in range(94, 101)}]   # the BLUE successor comes only at DAA 101: 9 slots after the first REAL attempt
+    assert gate_red2blue(slow, {"restart_daa": 90})[0] == 1
+    assert gate_states_daa(chainf, 0)[0] == 0, gate_states_daa(chainf, 0)
     print("selftest ok")
     return 0
 
@@ -675,8 +1043,13 @@ def main():
     g.add_argument("--producers", default="new4,new6")
     g.add_argument("--state", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/recovery.json")
     g.add_argument("--evd", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill")
+    g.add_argument("--lanes", default="~/Downloads/MISAKA-wt-b/lanes/evidence", help="directory of <lane>/verdict.txt files (the pre-checks)")
     g.add_argument("--k", type=int, default=20)
     g.add_argument("--margin", type=int, default=6)
+    g.add_argument("--idle-slots", type=int, default=IDLE_SLOTS)
+    g.add_argument("--probe-slots", type=int, default=PROBE_SLOTS)
+    g.add_argument("--cooldown", type=int, default=COOL_SLOTS)
+    g.add_argument("--stale", default="~/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill/stale.json")
     g.add_argument("--p50-max", type=int, default=6)
     g.add_argument("--p95-max", type=int, default=12)
     g.add_argument("--wait-max", type=int, default=40)
