@@ -212,3 +212,8 @@ open http://localhost:8765/. Screenshots of each state: ~/Downloads/MISAKA-wt-b/
 Home now has ONE **Recent blocks** table (arrival order, every round block on its own row) with a Type column and filters [All] [Consensus] [Model execution] [Red], 25 rows per page over a 150-block window.
 Types: `C-BLUE · consensus` (chain/blue attempt, legacy heartbeat/floor), `E · model execution (merged)` for a round block before the lane-EX fence, `E-BLUE · model execution` once the node sends `blockKind` REAL_ROUND, `FALLBACK` (blockKind FALLBACK), `RED · not selected` (non-chain non-round blocks, or a block the node marked RED).
 Round rows show model, claim (or "claim unknown") and "Round n/N" when the node reports the ticket index. The per-claim *Recent model executions* panel stays, collapsed under the table. index.html is the live file of 10-03 with `app.js?v=scan-20261003b`.
+
+### 10c. Consensus composition card (2026-10-03, explorer-only; deploy with the 5,300 release unless told earlier)
+Top of the home page: the last 600 **selected-chain** blocks by kind / model class (counts and %), and **DAA advanced by** — for each DAA tick, the kind/class of the first chain block of that score (a block that jumps k ticks carries k).
+Kind comes from `verboseData.blockKind` when the node sends it, else it is derived (algo 8 = heartbeat (legacy), floor class = PALW-BASE-0 floor (legacy), other attempt = REAL with its model name; FALLBACK past the fence).
+Round/execution blocks are never on the chain and appear on their own line, counted over the recent-blocks window. Sampling is one `getBlock` per chain block ever seen (cached in `msk_comp_v1`), so the first visit makes up to 600 calls; later refreshes fetch only new tips.
