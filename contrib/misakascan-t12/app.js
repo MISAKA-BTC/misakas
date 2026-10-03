@@ -453,7 +453,7 @@ function summarize(blk){
            classId: (h.palwCommitment && h.palwCommitment.length && Number(h.powAlgoId) !== 10) ? ((llmDecodeAttempt(h.palwCommitment) || {}).classId || null) : null,
            // SCAN: a round block's envelope (round, permit, producing bond) and what the node says of it
            round: (Number(h.powAlgoId) === 10 && h.palwCommitment && h.palwCommitment.length) ? scanDecodeRound(h.palwCommitment) : null,
-           laneClass: v.laneClass || "", exec: v.exec || null };
+           laneClass: v.laneClass || "", exec: v.exec || null, nodeKind: v.blockKind || v.kind || "" };
 }
 // The Recent blocks MODEL cell. A heartbeat block used no model at all (ADR-0066 D1) and says so;
 // the floor class is not a model either; an unnamed class shows the chain's id rather than a guess.
@@ -983,6 +983,34 @@ function scanDecodeRound(raw){
 }
 const scanIsRound = b => Number(b.algo) === 10;
 
+// ---- block KIND (design of the 5,300 release: heartbeat and PALW-BASE-0 give way to ONE liveness block,
+//      MISAKA-FALLBACK-V1): REAL (a real-model attempt) · EXEC (an execution round block) · FALLBACK (idle-time
+//      liveness) · RED (merged, not selected). The node's own field (verboseData.blockKind / kind, lane RS) is
+//      read first; otherwise the kind is derived from the header. Before the fence a heartbeat (algo-8) or a
+//      floor attempt shows as before, labelled "legacy".
+function scanKindOf(b){
+  const nk = String(b.nodeKind || "").toUpperCase();
+  const lc = String(b.laneClass || "").toUpperCase();
+  if (nk) {
+    if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
+    if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
+    if (/EXEC/.test(nk)) return { k: "EXEC", legacy: false };
+    if (/LEGACY.*HEARTBEAT|HEARTBEAT/.test(nk)) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
+    if (/LEGACY.*FLOOR|FLOOR/.test(nk)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+  }
+  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
+  if (Number(b.algo) === 8) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
+  if (b.classId && llmIsFloor(b.classId)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+  if (b.classId) return { k: "REAL", legacy: false };
+  return { k: "", legacy: false };
+}
+function scanKindPill(b){
+  const x = scanKindOf(b);
+  if (!x.k) return "";
+  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
+  const cls = x.k === "REAL" ? "blue" : x.k === "EXEC" ? "chain" : "";
+  return `<span class="pill ${cls}" title="${esc(title)}">${x.k}${x.legacy ? " · legacy" : ""}</span>`;
+}
 // ---- claims of an executor bond (cached; one call per bond per 20 s)
 const scanClaimCache = new Map();   // bond -> { ts, rows|null }
 async function scanClaimsOf(bond){
@@ -1623,14 +1651,15 @@ function renderRecent(){
   scanRefreshExecutions(all);
   scanPaintLaneCard(all);
   const rows = all.filter(b => !scanIsRound(b)).slice(0, 25);
-  const classCell = b => {
+  const classCell = b => scanKindPill(b) + " " + classCell0(b);
+  const classCell0 = b => {
     const lc = String(b.laneClass || "");
     if (lc === "BLUE" || b.isChain) return b.isChain ? `<span class="pill chain" title="on the selected chain">BLUE · chain</span>` : `<span class="pill blue" title="merged blue">BLUE</span>`;
     if (lc === "RED") return `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, and its transactions are not accepted">RED · not selected</span>`;
     return `<span class="pill red" title="in the DAG but not on the selected chain (a red or a not-yet-merged block); this is not a rejection">off chain</span>`;
   };
   w.innerHTML = `<table class="tbl"><thead><tr>
-      <th>Block hash</th><th>Class</th><th class="num">DAA</th><th class="num">Blue</th>
+      <th>Block hash</th><th title="kind (REAL / EXEC / FALLBACK) and selection (BLUE / RED)">Kind · class</th><th class="num">DAA</th><th class="num">Blue</th>
       <th class="num">Parents</th><th class="num">Txs</th><th title="the model that mined the block, from its header">Model</th><th class="right">Age</th>
     </tr></thead><tbody>${rows.map(b => `
       <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? 'rowNew' : ''}"><td>${linkBlock(b.hash)}</td>
