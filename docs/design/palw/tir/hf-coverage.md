@@ -1388,8 +1388,10 @@ natural-log units × 2^24 in an `i32`, whatever the model.**
 | --- | ---: | ---: |
 | A — the standard keys and names | 8 | 8 % |
 | B — a data adapter (built in, or a file the corpus carries) | 84 | 84 % |
-| **A + B** | **92** | **92 %** |
+| **A + B (the entry reads)** | **92** | **92 %** |
 | C — a capability is missing | 8 | 8 % |
+
+**By the full harness** (`corpus_v2 --ignored`, `tools/corpus/report.json`, the tables of `corpus-v2.md`) a failing later stage also counts an entry as C: A 6, B 84, C 10 — **A + B = 90 %**, the Part II acceptance figure. The two extra C entries are `deepseek_v32` and `nemotron_h`, which read but whose float reference differs from `transformers` beyond tolerance (8.5e-2 and 3.0e-3 of scale; known, in `corpus-v2.md`). mllama's text and cross-attention stages and `zamba2`, `kimi_linear` pass all stages.
 
 What moved from C to B on this line, each by a general feature and a built-in adapter, with every later stage passing (admission, float reference
 against `transformers`, integer against float, reference ↔ ref2 ↔ exec bit identity, court property): `kimi_linear` (FR-16), `gemma3n_text` (FR-12),

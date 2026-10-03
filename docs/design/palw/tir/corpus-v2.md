@@ -191,38 +191,35 @@ architectures here (§8).
 | | entries | share of corpus | usage-weighted |
 | --- | ---: | ---: | ---: |
 | Level A — the config alone | 6 | 6 % | 9 % |
-| Level B — a thin data adapter | 57 | 57 % | 55 % |
-| Level C — a capability is missing | 37 | 37 % | 37 % |
-| **A + B (expressible with existing features)** | **63** | **63 %** | **63 %** |
+| Level B — a thin data adapter | 84 | 84 % | 80 % |
+| Level C — a capability is missing | 10 | 10 % | 11 % |
+| **A + B (expressible with existing features)** | **90** | **90 %** | **89 %** |
 | *of the A + B, encoder-decoders read by a data adapter and proven to lower and be admitted only (no weights stage in this harness): `t5`, `t5_gated`, `bart`, `mbart`, `marian`* | 5 | 5 % | |
-| *of the A + B, read-level only (the reference is remote code, no weights to run): `internlm2`, `minicpm`* | 2 | 2 % | |
-| *A + B with every stage proven on weights* | 56 | 56 % | |
-| *Level C, but lowered today by a per-family Rust route (not data): `clip_vision`, `siglip_vision`* | 2 | 2 % | |
-| *supported today by any route (A + B + Rust routes)* | 65 | 65 % | |
+| *of the A + B, read-level only (the reference is remote code, no weights to run): `longt5`, `t5_encoder`, `clip_vision`, `siglip_vision`, `vit`, `resnet`, `sd3`, `vae_kl`, `whisper`, `internlm2`, `minicpm`* | 11 | 11 % | |
+| *A + B with every stage proven on weights* | 74 | 74 % | |
 
 Level C by kind of gap (this lane's classification, `tools/corpus/blockers.json`):
 
 | kind | entries | meaning |
 | --- | ---: | --- |
-| feature | 15 | a generic FEATURE is missing; lowerable in principle with the existing primitives |
-| route | 14 | no data route exists for this kind of model yet (the lowering is Rust per family, or absent); existing primitives suffice |
-| protocol | 7 | a protocol capability beyond the IR is needed (an input binding, a second history, a stage kind) |
-| remote | 1 | the reference semantics are remote code outside transformers (cannot be pinned) |
+| protocol | 6 | a protocol capability beyond the IR is needed (an input binding, a second history, a stage kind) |
+| feature | 2 | a generic FEATURE is missing; lowerable in principle with the existing primitives |
+| route | 2 | no data route exists for this kind of model yet (the lowering is Rust per family, or absent); existing primitives suffice |
 
-Court coverage: 53687 commit points over 56 lowered models reproduced by the cone evaluator from their opened leaves (reference evaluator and typed backend; 0 failures); 25 of the 25 primitives and 6 commit-point roles reached.
+Court coverage: 81547 commit points over 73 lowered models reproduced by the cone evaluator from their opened leaves (reference evaluator and typed backend; 0 failures); 25 of the 25 primitives and 6 commit-point roles reached.
 
 | category | A | B | C | total |
 | --- | ---: | ---: | ---: | ---: |
-| audio | 0 | 0 | 5 | 5 |
-| encdec | 0 | 5 | 2 | 7 |
-| encoder | 0 | 6 | 4 | 10 |
-| image-gen | 0 | 0 | 6 | 6 |
-| remote-code | 0 | 2 | 1 | 3 |
-| text/dense | 6 | 18 | 4 | 28 |
-| text/hybrid | 0 | 8 | 5 | 13 |
-| text/moe | 0 | 12 | 4 | 16 |
-| vision | 0 | 0 | 4 | 4 |
-| vlm | 0 | 6 | 2 | 8 |
+| audio | 0 | 1 | 4 | 5 |
+| encdec | 0 | 7 | 0 | 7 |
+| encoder | 0 | 10 | 0 | 10 |
+| image-gen | 0 | 2 | 4 | 6 |
+| remote-code | 0 | 3 | 0 | 3 |
+| text/dense | 6 | 22 | 0 | 28 |
+| text/hybrid | 0 | 12 | 1 | 13 |
+| text/moe | 0 | 15 | 1 | 16 |
+| vision | 0 | 4 | 0 | 4 |
+| vlm | 0 | 8 | 0 | 8 |
 <!-- END GENERATED: summary -->
 
 ### 3.1 Per entry
@@ -248,16 +245,16 @@ Court coverage: 53687 commit points over 56 lowered models reproduced by the con
 | `glm4` | text/dense | **B** | built-in adapter `glm4` | 11 |  |  |
 | `smollm3` | text/dense | **B** | built-in adapter `smollm3` | 9 |  |  |
 | `arcee` | text/dense | **B** | third-party adapter `arcee` (tools/corpus/adapters) | 7 | the checkpoint does not fit the reading |  |
-| `apertus` | text/dense | **C** | - |  | xIELU activation (learned per-layer parameters) → FR-05 | read |
+| `apertus` | text/dense | **B** | built-in adapter `apertus` | 11 |  |  |
 | `helium` | text/dense | **B** | third-party adapter `helium` (tools/corpus/adapters) | 7 |  |  |
 | `hunyuan_v1_dense` | text/dense | **B** | third-party adapter `hunyuan-v1-dense` (tools/corpus/adapters) | 10 |  |  |
 | `seed_oss` | text/dense | **B** | third-party adapter `seed-oss` (tools/corpus/adapters) | 8 |  |  |
 | `ernie4_5` | text/dense | **B** | third-party adapter `ernie4-5` (tools/corpus/adapters) | 9 |  |  |
-| `bitnet` | text/dense | **C** | standard template (no adapter) (refuted: bind) | 7 | checkpoint tensors the reading never uses → FR-03 | bind |
+| `bitnet` | text/dense | **B** | built-in adapter `bitnet` | 8 |  |  |
 | `persimmon` | text/dense | **B** | third-party adapter `persimmon` (tools/corpus/adapters) | 12 |  |  |
-| `diffllama` | text/dense | **C** | - |  | differential attention (head-pair difference, 2d RMS group norm, derived lambda) → FR-04 | read |
+| `diffllama` | text/dense | **B** | built-in adapter `diffllama` | 10 |  |  |
 | `cwm` | text/dense | **A** | standard template (no adapter) | 9 |  |  |
-| `gemma3n_text` | text/dense | **C** | - |  | RESIDUAL_ALTUP, RESIDUAL_LAUREL, FFN_ACTIVATION_SPARSITY → FR-12 | read |
+| `gemma3n_text` | text/dense | **B** | built-in adapter `gemma3n-text` | 20 |  |  |
 | `mixtral` | text/moe | **B** | built-in adapter `mixtral` | 9 |  |  |
 | `qwen2_moe` | text/moe | **B** | built-in adapter `qwen2-moe` | 12 |  |  |
 | `qwen3_moe` | text/moe | **B** | built-in adapter `qwen3-moe` | 11 |  |  |
@@ -267,13 +264,13 @@ Court coverage: 53687 commit points over 56 lowered models reproduced by the con
 | `llama4_text` | text/moe | **B** | built-in adapter `llama4-text` | 20 |  |  |
 | `glm4_moe` | text/moe | **B** | built-in adapter `glm4-moe` | 17 |  |  |
 | `dbrx` | text/moe | **B** | built-in adapter `dbrx` | 11 |  |  |
-| `jetmoe` | text/moe | **C** | - |  | mixture-of-attention: routed per-expert q/o projections → FR-06 | read |
+| `jetmoe` | text/moe | **B** | built-in adapter `jetmoe` | 11 |  |  |
 | `ernie4_5_moe` | text/moe | **B** | built-in adapter `ernie4-5-moe` | 15 |  |  |
 | `hunyuan_v1_moe` | text/moe | **B** | third-party adapter `hunyuan-v1-moe` (tools/corpus/adapters) | 13 |  |  |
 | `minimax_m2` | text/moe | **B** | third-party adapter `minimax-m2` (tools/corpus/adapters) | 12 |  |  |
-| `longcat_flash` | text/moe | **C** | - |  | zero-computation experts and shortcut-connected MoE → FR-08, FR-07, FR-27 | read |
-| `deepseek_v32` | text/moe | **C** | - |  | DeepSeek sparse attention: a token-level top-k indexer → FR-09 | read |
-| `deepseek_v4` | text/moe | **C** | - |  | hyper-connections, compressed sparse/heavily compressed attention, hash routing, sqrt-softplus scoring → FR-10 | read |
+| `longcat_flash` | text/moe | **B** | built-in adapter `longcat-flash` | 14 |  |  |
+| `deepseek_v32` | text/moe | **C** | built-in adapter `deepseek-v32` (refuted: float_vs_hf) | 15 | DeepSeek sparse attention: a token-level top-k indexer → FR-09 | float_vs_hf |
+| `deepseek_v4` | text/moe | **B** | built-in adapter `deepseek-v4` | 20 |  |  |
 | `qwen3_next` | text/hybrid | **B** | built-in adapter `qwen3-next` | 19 |  |  |
 | `qwen3_5_moe` | text/hybrid | **B** | built-in adapter `qwen3-5-moe` | 18 |  |  |
 | `jamba` | text/hybrid | **B** | built-in adapter `jamba` | 11 |  |  |
@@ -281,55 +278,55 @@ Court coverage: 53687 commit points over 56 lowered models reproduced by the con
 | `mamba2` | text/hybrid | **B** | built-in adapter `mamba2` | 6 |  |  |
 | `falcon_mamba` | text/hybrid | **B** | built-in adapter `falcon-mamba` | 7 |  |  |
 | `rwkv` | text/hybrid | **B** | built-in adapter `rwkv4` | 8 |  |  |
-| `falcon_h1` | text/hybrid | **C** | - |  | MIXER_PARALLEL_BRANCH, SCALE_MUP → FR-11 | read |
+| `falcon_h1` | text/hybrid | **B** | built-in adapter `falcon-h1` | 16 |  |  |
 | `granitemoehybrid` | text/hybrid | **B** | built-in adapter `granitemoehybrid` | 12 |  |  |
-| `zamba2` | text/hybrid | **C** | - |  | ATTN_SHARED_BLOCK → FR-13 | read |
-| `nemotron_h` | text/hybrid | **C** | - |  | LAYER_FFN_ONLY → FR-14 | read |
-| `lfm2` | text/hybrid | **C** | - |  | gated short convolution mixer → FR-15 | read |
-| `kimi_linear` | text/hybrid | **C** | - |  | Kimi delta attention (channel-wise gated delta rule) → FR-16, FR-27 | read |
+| `zamba2` | text/hybrid | **B** | built-in adapter `zamba2` | 15 |  |  |
+| `nemotron_h` | text/hybrid | **C** | built-in adapter `nemotron-h` (refuted: float_vs_hf) | 16 | layers that are a single block (no mixer) → FR-14 | float_vs_hf |
+| `lfm2` | text/hybrid | **B** | built-in adapter `lfm2` | 12 |  |  |
+| `kimi_linear` | text/hybrid | **B** | built-in adapter `kimi-linear` | 15 |  |  |
 | `bert` | encoder | **B** | built-in adapter `bert` | 13 |  |  |
 | `roberta` | encoder | **B** | built-in adapter `roberta` | 13 |  |  |
 | `xlm_roberta` | encoder | **B** | built-in adapter `roberta` | 13 |  |  |
 | `distilbert` | encoder | **B** | built-in adapter `distilbert` | 12 |  |  |
 | `mpnet` | encoder | **B** | built-in adapter `mpnet` | 13 |  |  |
-| `deberta_v2` | encoder | **C** | - |  | an adapter for `DebertaV2Model` → FR-17 | read |
-| `albert` | encoder | **C** | third-party adapter `albert` (tools/corpus/adapters) (refuted: lower) | 14 | checkpoint tensors the reading never uses, the checkpoint does not fit the reading → FR-17, FR-26 | lower |
-| `modernbert` | encoder | **C** | - |  | an adapter for `ModernBertModel` → FR-17 | read |
-| `nomic_bert` | encoder | **C** | - |  | an adapter for `NomicBertModel` → FR-17 | read |
+| `deberta_v2` | encoder | **B** | built-in adapter `deberta-v2` | 12 |  |  |
+| `albert` | encoder | **B** | built-in adapter `albert` | 14 |  |  |
+| `modernbert` | encoder | **B** | built-in adapter `modernbert` | 11 |  |  |
+| `nomic_bert` | encoder | **B** | built-in adapter `nomic-bert` | 10 |  |  |
 | `clip_text` | encoder | **B** | built-in adapter `clip-text` | 10 |  |  |
 | `t5` | encdec | **B** | built-in encdec adapter `t5` (lower + admit only) ; core Rust route | 9 |  |  |
 | `t5_gated` | encdec | **B** | built-in encdec adapter `t5` (lower + admit only) ; core Rust route | 8 |  |  |
 | `bart` | encdec | **B** | built-in encdec adapter `bart` (lower + admit only) ; core Rust route | 12 |  |  |
 | `mbart` | encdec | **B** | built-in encdec adapter `mbart` (lower + admit only) ; core Rust route | 13 |  |  |
 | `marian` | encdec | **B** | built-in encdec adapter `marian` (lower + admit only) ; core Rust route | 12 |  |  |
-| `longt5` | encdec | **C** | - |  | an encoder–decoder adapter for `LongT5ForConditionalGeneration` → FR-18 | read |
-| `t5_encoder` | encdec | **C** | - |  | an adapter for `T5EncoderModel` → FR-18 | read |
+| `longt5` | encdec | **B** | built-in encdec adapter `longt5` (read + lower + admit) | 10 |  |  |
+| `t5_encoder` | encdec | **B** | built-in encdec adapter `t5-encoder` (read + lower + admit) | 7 | the checkpoint does not fit the reading |  |
 | `llava` | vlm | **B** | built-in adapter `vlm-llama` | 7 |  |  |
 | `qwen2_vl` | vlm | **B** | built-in adapter `vlm-qwen2-vl` | 9 |  |  |
 | `qwen2_5_vl` | vlm | **B** | built-in adapter `vlm-qwen2-vl` | 9 |  |  |
 | `qwen3_vl` | vlm | **B** | third-party adapter `qwen3-vl` (tools/corpus/adapters) | 10 |  |  |
 | `gemma3_vlm` | vlm | **B** | built-in adapter `vlm-gemma3` | 14 |  |  |
-| `paligemma` | vlm | **C** | - |  | ATTN_PREFIX_LM → FR-20 | read |
+| `paligemma` | vlm | **B** | built-in adapter `vlm-gemma` | 10 |  |  |
 | `idefics3` | vlm | **B** | third-party adapter `idefics3` (tools/corpus/adapters) | 7 |  |  |
-| `mllama` | vlm | **C** | - |  | ATTN_CROSS → FR-21 | read |
-| `clip_vision` | vision | **C** | core Rust route |  | an adapter for `CLIPVisionModelWithProjection` → FR-19 | read |
-| `siglip_vision` | vision | **C** | core Rust route |  | an adapter for `SiglipVisionModel` → FR-19 | read |
-| `vit` | vision | **C** | - |  | an adapter for `ViTModel` → FR-19 | read |
-| `resnet` | vision | **C** | - |  | an adapter for `ResNetModel` → FR-19 | read |
-| `unet2d_condition` | image-gen | **C** | - |  | Conv2d, GroupNorm, timestep embedding, cross-attention, denoise loop; skip connections need carry pass-through (FR-22 C1) → FR-22 | read |
-| `unet_sdxl` | image-gen | **C** | - |  | as the SD UNet plus added text/time conditioning; 12+ skip carries (FR-22 C1) → FR-22 | read |
-| `dit` | image-gen | **C** | - |  | patchify, adaLN-Zero, class conditioning, denoise loop → FR-22 | read |
-| `flux` | image-gen | **C** | - |  | MMDiT double/single blocks, 3-axis RoPE, flow-matching loop → FR-22 | read |
-| `sd3` | image-gen | **C** | - |  | MMDiT joint attention, adaLN, flow-matching loop → FR-22 | read |
-| `vae_kl` | image-gen | **C** | - |  | convolutional encoder/decoder with a mid-block attention → FR-22 | read |
-| `whisper` | audio | **C** | - |  | an encoder–decoder adapter for `WhisperForConditionalGeneration` → FR-23 | read |
+| `mllama` | vlm | **B** | built-in adapter `mllama` | 9 |  |  |
+| `clip_vision` | vision | **B** | built-in vision adapter `clip-vision` (read + lower + admit) ; core Rust route | 8 |  |  |
+| `siglip_vision` | vision | **B** | built-in vision adapter `siglip-vision` (read + lower + admit) ; core Rust route | 7 |  |  |
+| `vit` | vision | **B** | built-in vision adapter `vit` (read + lower + admit) ; core Rust route | 8 |  |  |
+| `resnet` | vision | **B** | built-in cnn adapter `resnet` (read + lower + admit) | 6 |  |  |
+| `unet2d_condition` | image-gen | **C** | - |  | GEN_UNET_SKIP, GEN_RESNET_TIME_COND, GEN_SPATIAL_TRANSFORMER, ATTN_CROSS, GEN_SAMPLER_EPS → FR-22 | read |
+| `unet_sdxl` | image-gen | **C** | - |  | GEN_UNET_SKIP, GEN_RESNET_TIME_COND, GEN_SPATIAL_TRANSFORMER, ATTN_CROSS, GEN_SAMPLER_EPS, EMBED_ADDITION_TEXT_TIME → FR-22 | read |
+| `dit` | image-gen | **C** | - |  | EMBED_CLASS_LABEL, GEN_BLOCK_ADALN_ZERO, EMBED_POSITION_SINCOS, GEN_OUTPUT_LEARNED_SIGMA, GEN_SAMPLER_EPS → FR-22 | read |
+| `flux` | image-gen | **C** | - |  | POS_ROPE_AXES, ATTN_QK_NORM_JOINT, GEN_BLOCK_SINGLE_STREAM, EMBED_GUIDANCE → FR-22 | read |
+| `sd3` | image-gen | **B** | built-in diffusers adapter `diffusers:sd3-transformer` (read + lower + admit) | 6 |  |  |
+| `vae_kl` | image-gen | **B** | built-in diffusers adapter `diffusers:autoencoder-kl-decoder` (read + lower + admit) | 4 |  |  |
+| `whisper` | audio | **B** | built-in encdec adapter `whisper` (read + lower + admit) | 11 |  |  |
 | `wav2vec2` | audio | **C** | - |  | an adapter for `Wav2Vec2ForCTC` → FR-23 | read |
 | `speecht5` | audio | **C** | - |  | an encoder–decoder adapter for `SpeechT5ForTextToSpeech` → FR-23 | read |
 | `musicgen` | audio | **C** | - |  | an encoder–decoder adapter for `MusicgenForConditionalGeneration` → FR-23 | read |
 | `encodec` | audio | **C** | - |  | an adapter for `EncodecModel` → FR-23 | read |
-| `chatglm3` | remote-code | **C** | - |  | REFERENCE_REMOTE_CODE → FR-24 | read |
-| `internlm2` | remote-code | **B** | built-in adapter `internlm2` | 8 |  |  |
-| `minicpm` | remote-code | **B** | built-in adapter `minicpm` | 11 |  |  |
+| `chatglm3` | remote-code | **B** | built-in adapter `chatglm3` | 11 | the checkpoint does not fit the reading |  |
+| `internlm2` | remote-code | **B** | built-in adapter `internlm2` | 9 |  |  |
+| `minicpm` | remote-code | **B** | built-in adapter `minicpm` | 12 |  |  |
 <!-- END GENERATED: results -->
 
 ### 3.2 The census: the same question on the tail
@@ -543,30 +540,10 @@ lane's effort: S days, M one to two weeks, L weeks, XL months) show what would m
 <!-- BEGIN GENERATED: frs -->
 | FR | feature | size | entries it names | entries |
 | --- | --- | :-: | ---: | --- |
-| FR-22 | image generation: conv/GroupNorm/adaLN/joint attention, denoise loop, VAE; UNets need carry pass-through (C1) | XL | 6 | `unet2d_condition`, `unet_sdxl`, `dit`, `flux`, `sd3`, `vae_kl` |
-| FR-23 | audio: STFT/mel front end, Conv1d, codec/vocoder, audio input and output bindings | XL | 5 | `whisper`, `wav2vec2`, `speecht5`, `musicgen`, `encodec` |
-| FR-17 | one rows-mode encoder lowerer driven by the ModelSpec (bidirectional, band, rope, embedding projection order, shared layers) | L | 4 | `deberta_v2`, `albert`, `modernbert`, `nomic_bert` |
-| FR-19 | vision towers and convolutions as data (patch front, conv by index table, pooling, padded carry) | L | 4 | `clip_vision`, `siglip_vision`, `vit`, `resnet` |
-| FR-18 | encoder-decoders as data (cross-attention, relative bias, local/transient-global attention) | L | 2 | `longt5`, `t5_encoder` |
-| FR-27 | five small lowerer details (gated-norm gate act, router eps, MLA norm eps, ...) | S | 2 | `longcat_flash`, `kimi_linear` |
-| FR-03 | sub-layer norms (norm before o_proj, norm before down_proj) | S | 1 | `bitnet` |
-| FR-04 | differential attention | M | 1 | `diffllama` |
-| FR-05 | learned pointwise activation (xIELU) | S | 1 | `apertus` |
-| FR-06 | mixture-of-attention (routed per-expert q/o projections) | M | 1 | `jetmoe` |
-| FR-07 | selection bias under softmax routing (+ refuse a flag the lowerer would drop) | S | 1 | `longcat_flash` |
-| FR-08 | zero-computation experts and shortcut-connected MoE | M | 1 | `longcat_flash` |
+| FR-22 | image generation: conv/GroupNorm/adaLN/joint attention, denoise loop, VAE; UNets need carry pass-through (C1) | XL | 4 | `unet2d_condition`, `unet_sdxl`, `dit`, `flux` |
+| FR-23 | audio: STFT/mel front end, Conv1d, codec/vocoder, audio input and output bindings | XL | 4 | `wav2vec2`, `speecht5`, `musicgen`, `encodec` |
 | FR-09 | token-level top-k indexer attention (DeepSeek sparse attention) | L | 1 | `deepseek_v32` |
-| FR-10 | DeepSeek-V4 set: hyper-connections, compressed attention, hash routing, sqrt-softplus | L | 1 | `deepseek_v4` |
-| FR-11 | parallel mixers in one layer (attention + Mamba-2) and muP multipliers | M | 1 | `falcon_h1` |
-| FR-12 | Gemma-3n set: AltUp, LAuReL, activation sparsity | L | 1 | `gemma3n_text` |
-| FR-13 | shared attention block with per-depth LoRA (Zamba2) | L | 1 | `zamba2` |
 | FR-14 | layers without a mixer, ungated and latent MoE experts (Nemotron-H) | M | 1 | `nemotron_h` |
-| FR-15 | gated short-convolution mixer | M | 1 | `lfm2` |
-| FR-16 | Kimi delta attention | L | 1 | `kimi_linear` |
-| FR-20 | prefix-LM attention | M | 1 | `paligemma` |
-| FR-21 | cross-attention layers in a decoder | L | 1 | `mllama` |
-| FR-24 | a way to pin a remote-code reference | policy | 1 | `chatglm3` |
-| FR-26 | lowerer robustness and Level A honesty (panics, dropped flags, unread tensors) | S | 1 | `albert` |
 <!-- END GENERATED: frs -->
 
 FR-17/18/19 (encoders, encoder–decoders, vision towers from a spec) are the single largest lever by entries and by
@@ -575,19 +552,19 @@ hub weight; FR-01 plus the small decoder features (FR-02..07, 14, 15, 25) are ch
 ## 6. Level A uplift (what would let more models need no adapter)
 
 <!-- BEGIN GENERATED: uplift -->
-The standard template (no adapter) reads 10 of the 65 decoder-route entries without refusing; for the rest it names the keys it does not model:
+The standard template (no adapter) reads 10 of the 66 decoder-route entries without refusing; for the rest it names the keys it does not model:
 
 | convention the template lacks | entries it blocks | the keys |
 | --- | ---: | --- |
-| MoE hyper-parameters and layer pattern | 13 | `decoder_sparse_step`, `first_k_dense_replace`, `mlp_only_layers`, `moe_intermediate_size`, `moe_topk`, `n_group`, `n_routed_experts`, `n_shared_experts`, `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `num_nextn_predict_layers`, `routed_scaling_factor`, `router_jitter_noise`, `shared_expert_intermediate_size`, `topk_group` |
+| MoE hyper-parameters and layer pattern | 14 | `decoder_sparse_step`, `first_k_dense_replace`, `mlp_only_layers`, `moe_intermediate_size`, `moe_topk`, `n_group`, `n_routed_experts`, `n_shared_experts`, `norm_topk_prob`, `num_experts`, `num_experts_per_tok`, `num_local_experts`, `num_nextn_predict_layers`, `routed_scaling_factor`, `router_jitter_noise`, `shared_expert_intermediate_size`, `topk_group` |
 | MLA dimensions | 2 | `kv_lora_rank`, `q_lora_rank`, `qk_head_dim`, `qk_nope_head_dim`, `qk_rope_head_dim`, `v_head_dim` |
-| nested VLM wrapper (text_config, vision_config, token ids) | 6 | `boi_token_index`, `eoi_token_index`, `image_token_id`, `image_token_index`, `mm_tokens_per_image`, `text_config`, `video_token_id`, `vision_config`, `vision_end_token_id`, `vision_start_token_id` |
-| bias switches | 8 | `attention_out_bias`, `bias`, `enable_bias`, `qkv_bias`, `use_bias` |
-| norm epsilon / norm kind aliases | 8 | `_remove_final_layer_norm`, `do_layer_norm_before`, `layer_norm_elementwise_affine`, `layer_norm_eps`, `layer_norm_epsilon`, `norm_epsilon` |
-| activation aliases | 5 | `activation`, `activation_function`, `hidden_activation` |
+| nested VLM wrapper (text_config, vision_config, token ids) | 7 | `boi_token_index`, `eoi_token_index`, `image_token_id`, `image_token_index`, `mm_tokens_per_image`, `text_config`, `video_token_id`, `vision_config`, `vision_end_token_id`, `vision_start_token_id` |
+| bias switches | 10 | `add_bias_linear`, `attention_out_bias`, `bias`, `enable_bias`, `qkv_bias`, `use_bias` |
+| norm epsilon / norm kind aliases | 9 | `_remove_final_layer_norm`, `do_layer_norm_before`, `layer_norm_elementwise_affine`, `layer_norm_eps`, `layer_norm_epsilon`, `norm_epsilon` |
+| activation aliases | 6 | `activation`, `activation_function`, `hidden_activation`, `mlp_hidden_act` |
 | dimension aliases (n_embd, n_head, n_layer, ...) | 5 | `d_model`, `ffn_dim`, `ffn_hidden_size`, `max_seq_len`, `n_embd`, `n_head`, `n_heads`, `n_inner`, `n_layer`, `n_layers`, `n_positions`, `word_embed_proj_dim` |
 | rope / position keys | 4 | `alibi`, `multi_query`, `new_decoder_architecture`, `no_rope_layer_interval`, `original_max_position_embeddings`, `use_parallel_residual` |
-| everything else (family-specific keys) | 18 | 60 distinct keys |
+| everything else (family-specific keys) | 21 | 100 distinct keys |
 <!-- END GENERATED: uplift -->
 
 **Measured.** `tools/corpus/a-candidates/standard-v2.json` is a 14-line data file that extends the built-in template with
