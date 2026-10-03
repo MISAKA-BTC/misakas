@@ -422,7 +422,33 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
         None => None,
     };
     let src = source::open(path, kind, opts.headers.as_deref(), reg)?;
-    let analysis = model::analyze(&src, opts, reg, adapter_text.as_deref());
+    run_on_source(&src, Some(path), kind, over, opts, reg, adapter_text.as_deref())
+}
+
+/// **The preflight of a source already read** — the Hugging Face census (RFC-0002 §II.10, [`crate::census`]) builds its [`source::Source`]
+/// from a header store (the files' sizes are the Hub's, the shards are their headers) and judges it here, with the built-in registries.
+pub fn run_census_source(src: &source::Source, label: &str, bytes_read: u64, opts: &Options) -> Result<Report, String> {
+    run_on_source(
+        src,
+        None,
+        InputKind::Remote,
+        InputInfoOverride { label: Some(label.to_string()), bytes_read: Some(bytes_read) },
+        opts,
+        misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
+        None,
+    )
+}
+
+fn run_on_source(
+    src: &source::Source,
+    path: Option<&Path>,
+    kind: InputKind,
+    over: InputInfoOverride,
+    opts: &Options,
+    reg: &misaka_palw_tir_lower::quantfmt::QuantRegistry,
+    adapter_text: Option<&str>,
+) -> Result<Report, String> {
+    let analysis = model::analyze(src, opts, reg, adapter_text);
 
     // The depth reached: the shape depth needs a network and a program.
     let mut stopped_at: Option<String> = None;
@@ -441,7 +467,7 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
                 {
                     return Err(format!("--node is on {} and --network is {}: the conditions would be judged on another chain", node.network, net.id));
                 }
-                chain_out = chain::judge(&net, opts, program, &analysis, &src);
+                chain_out = chain::judge(&net, opts, program, &analysis, src);
                 network = Some(chain_out.network.clone());
                 reached = Depth::Shape;
             }
@@ -452,7 +478,7 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
     let mut full_register: Vec<Blocker> = Vec::new();
     let mut full_mine: Vec<Blocker> = Vec::new();
     if opts.depth == Depth::Full && stopped_at.is_none() {
-        let model_dir = (kind == InputKind::HfDirectory).then_some(path);
+        let model_dir = path.filter(|_| kind == InputKind::HfDirectory);
         let (info, blockers) = full::judge_full(&opts.full, model_dir, network.as_ref().map(|n| n.id.as_str()), opts.node.as_ref());
         for b in blockers {
             match b.stage {
@@ -495,7 +521,7 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
         },
         depth: DepthInfo { requested: opts.depth, reached, stopped_at },
         network,
-        source: model::source_info(&src),
+        source: model::source_info(src),
         model: analysis.model.clone(),
         scope: analysis.scope.clone(),
         storage: analysis.storage.clone(),

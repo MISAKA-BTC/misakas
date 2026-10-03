@@ -27,6 +27,7 @@ const USAGE: &str = "palw-class — inspect and preflight PALW model classes thr
 
 USAGE:
     palw-class pack build|verify|show ...   runtime packs: build one from a model, verify one, show one (palw-class pack for its usage)
+    palw-class census classify|gates ...    the Hugging Face census (RFC-0002 §II.10): listing rows and fetch plans; gate rows of fetched repositories
     palw-class ledger    --network <id>
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight [--network <id>] <model>  [--depth headers|shape] [--height <DAA>] [--json] [more: see below]
@@ -261,6 +262,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "census" => misaka_palw_sdk::census::cli::run(&args, network),
         "pack" => match misaka_palw_sdk::runtime_pack::cli::run(&args)? {
             0 => Ok(()),
             code => std::process::exit(code),
