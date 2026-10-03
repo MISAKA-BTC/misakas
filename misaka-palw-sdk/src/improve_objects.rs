@@ -113,6 +113,18 @@ impl PalwImproveSignerV1<'_> {
         PalwConsensusObjectV2::CandidateSubmitted { payload: Box::new(payload), submitter, signature }
     }
 
+    /// **Tag 94** (RFC-0001 §2.10, `palw_adapter_class_v1`): a registered composite class's listing, signed by its lister's bond
+    /// under the listing's own message and context.
+    pub fn adapter_class_listed(
+        &self,
+        lister: PalwBondKeyV2,
+        payload: kaspa_consensus_core::palw_adapter_class_v1::PalwAdapterClassListingV1,
+    ) -> PalwConsensusObjectV2 {
+        let message = kaspa_consensus_core::palw_adapter_class_v1::palw_adapter_listing_message_v1(&self.network_domain, &payload, &lister);
+        let signature = self.sign(message, kaspa_consensus_core::palw_adapter_class_v1::PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1);
+        PalwConsensusObjectV2::AdapterClassListed { payload: Box::new(payload), lister, signature }
+    }
+
     /// **Tag 81**: a rollback of the latest promotion, signed by its filer bond (the owner within the
     /// policy's window, or any bond with a proof).
     pub fn rollback(&self, filer: PalwBondKeyV2, payload: PalwLineageRollbackV1) -> PalwConsensusObjectV2 {

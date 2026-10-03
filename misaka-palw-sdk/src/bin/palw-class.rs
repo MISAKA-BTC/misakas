@@ -48,7 +48,7 @@ USAGE:
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>]
                          [--parent <the parent's declared .palwtir>] <lowered.palwtir>
-    palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|rollback>
+    palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|adapter-list|rollback>
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
                          [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
                          [--commitment-tx <fp-commitment-tx.borsh>] --out <path>
@@ -915,6 +915,29 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
             println!("candidate class   {class_id}");
             let payload = obj::improve_candidate_v1(line, epoch, class_id, artifact, layout, declarations);
             write(&out, &signer.candidate(need_bond()?, payload), "CandidateSubmitted (tag 80)")
+        }
+        "adapter-list" => {
+            // RFC-0001 §2.10: list a composite (parent + adapter section) as an adapter class — no spec, the artifacts say it all.
+            let parent = take_flag(args, "--parent").ok_or("--parent <parent.palwtir> is required")?;
+            let section = take_flag(args, "--section").ok_or("--section <candidate.palwtirs> is required")?;
+            let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
+            use misaka_palw_sdk::PalwModelLineageV1;
+            lineage.load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache).map_err(|e| format!("{parent}: {e}"))?;
+            let entry = lineage.open_composite_entry(std::path::Path::new(&section))?;
+            let r = *entry.artifact.composite_ref().ok_or("the section opened as a single artifact")?;
+            let class_id = entry.class_id();
+            println!("adapter class     {class_id}");
+            let payload = kaspa_consensus_core::palw_adapter_class_v1::PalwAdapterClassListingV1 {
+                class_id,
+                artifact: kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1 {
+                    parent_class: r.parent_class,
+                    parent_root: r.parent_root,
+                    adapter_root: r.adapter_root,
+                    p: r.p,
+                },
+                layout: entry.class.layout.clone(),
+            };
+            write(&out, &signer.adapter_class_listed(need_bond()?, payload), "AdapterClassListed (tag 94)")
         }
         "rollback" => {
             let v = spec_json(args)?;
