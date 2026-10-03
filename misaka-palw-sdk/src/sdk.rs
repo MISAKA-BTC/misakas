@@ -716,86 +716,29 @@ impl PalwClassSdk {
         shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwClassCatalogEntryV2, String> {
         let canonical = self.registration_canonical_v1(entry)?;
-        // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
-        // reads, so a preflight that says "this would be admitted" is answering the question the
-        // chain will actually ask.
-        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
-        // **The probe's share is the one this class may actually take**, not a placeholder. Every
-        // other economic field here is ignored by the gate; the share is not, since ADR-0069, and a
-        // probe that asked for weight on behalf of an uncertified family would report "refused" for
-        // a class that is in fact perfectly registrable — weightless. That refusal reads as "your
-        // model cannot join", which is the opposite of what the chain means.
-        let share = if kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
-            bundle.court_e2e_root,
-            &certified,
-            chain_certified,
-            &kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&entry.profile),
-        )
-        .map_err(|e| format!("this node cannot price a registration for {}: {e}", entry.model_id))?
-        .is_some()
-        {
-            1
-        } else {
-            0
-        };
-        // **Counted against the RULESET's ladder** (audit D H-5b): the uncapped helper counts at
-        // the executor's `2^22`, so the graph-v5 512 row could not even be EXPRESSED as an object
-        // — "the canonical job does not count against this profile: job shape yields 4223328 step
-        // leaves, exceeding the 4194304 cap" — while the gate this probe feeds recounts at the
-        // bundle's `2^26`. The preflight has the bundle in hand, so it uses it.
-        let probe = palw_post_genesis_registration_capped_v1(
-            entry.profile.clone(),
-            canonical.clone(),
-            artifact_root,
-            share,
-            1,
-            1,
-            0,
-            PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0)),
-            Vec::new(),
-            bundle.court.max_step_leaf_count(),
-        )
-        .map_err(|e| {
-            // A canonical job that does not count against this ruleset's ladder is a class this
-            // ruleset would refuse, so it is the gate's answer in substance and says so in the
-            // gate's words — nothing here is signed or funded either way.
-            format!(
-                "the {} registration cannot be expressed against this ruleset, so nothing was signed or funded: {e}",
-                entry.model_id
-            )
-        })?;
-        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(
-            bundle,
-            &entry.profile,
-            &canonical,
-            &probe,
-            &certified,
-            chain_certified,
-            shape.ladder,
-            shape.court,
-            false,
-            shape.token_lift,
-            shape.fused_dissectable,
-            // F4's deepest-legal-job bound, at the height the shape was read at — what the chain
-            // passes (route-matrix #6: this was `false` while testnet-12 armed it).
-            shape.legal_job_bound,
-            shape.held,
-            shape.kimi_family,
-            // 2026-09-23 audit C-4 — the fence the acceptance path passes, read into the shape.
-            shape.attention_geometry_bound,
-            shape.gdn_key_heads,
-        )
-        .map_err(|e| {
-            // The refusal in one structured shape (code, rule, needed against limit, what decided the reading), beside the sentence:
-            // a registrant sees it before paying the fee, in JSON output too.
-            let decided_by = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(shape.held.armed, None, None);
-            format!(
-                "the {} registration would be refused by the admission gate, so nothing was signed or funded: {} ({e}) [refusal {}]",
-                entry.model_id,
-                e.code(),
-                e.refusal_v1(&decided_by).to_json()
-            )
-        })
+        // The ONE probe (`palw_admission_probe_v1`): the share this class may take, the object counted against the ruleset's ladder, and the
+        // gate asked with the court, ladder, HELD regime and fences of `shape` — the manifest verifier calls the same function.
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionProbeRefusalV1 as P, palw_admission_probe_v1};
+        palw_admission_probe_v1(bundle, &entry.profile, &canonical, artifact_root, chain_certified, shape)
+            .map(|(admitted, _prosecutable)| admitted)
+            .map_err(|e| match e {
+                P::Price(m) => format!("this node cannot price a registration for {}: {m}", entry.model_id),
+                P::Express(e) => format!(
+                    "the {} registration cannot be expressed against this ruleset, so nothing was signed or funded: {e}",
+                    entry.model_id
+                ),
+                P::Gate(e) => {
+                    // The refusal in one structured shape (code, rule, needed against limit, what decided the reading), beside the
+                    // sentence: a registrant sees it before paying the fee, in JSON output too.
+                    let decided_by = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(shape.held.armed, None, None);
+                    format!(
+                        "the {} registration would be refused by the admission gate, so nothing was signed or funded: {} ({e}) [refusal {}]",
+                        entry.model_id,
+                        e.code(),
+                        e.refusal_v1(&decided_by).to_json()
+                    )
+                }
+            })
         .and_then(|admitted| {
             // **And the two checks the processor asks beside the gate** (ADR-0152 §4-ter C5,
             // addendum §4-bis.8), through the one function every pre-check shares. Testnet-12

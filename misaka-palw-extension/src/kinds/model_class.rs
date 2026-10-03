@@ -13,15 +13,14 @@
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::palw_class_admission_v2::{
-    PalwAdmissionShapeV1, PalwClassAdmissionError, palw_admission_shape_at_v1, palw_post_genesis_registration_capped_v1,
-    reachable_kernels_v1, verify_class_admission_v6,
+    PalwAdmissionShapeV1, PalwClassAdmissionError, palw_admission_shape_at_v1,
+    reachable_kernels_v1,
 };
 use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eFamilyV1, family_certified_for_weight_v2, palw_rc_certified_families_v1};
 use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
-use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use misaka_palw_sdk::PalwClassEntryV1;
 
@@ -216,9 +215,9 @@ pub(crate) enum ProbeRefusalV1 {
     Gate(PalwClassAdmissionError),
 }
 
-/// **The SDK's `preflight_admission_with_chain`, with the variant kept.** Same probe, same share
-/// rule (a class no certified family covers asks for 0 and joins weightless), same ladder (the
-/// bundle's), same gate at the same shape.
+/// **The shared probe, with the extension's refusal type** (`palw_admission_probe_v1`: the SDK's `preflight_admission_with_chain` calls the same
+/// function). It called `verify_class_admission_v6(..., false)` directly — no held regime — and so priced a held-context network's class at
+/// the ladder clock (5,102 DAA against a 3,000-DAA window, 2026-10-03); there is one gate call now, and it reads `shape.held`.
 pub(crate) fn admission_probe_v1(
     bundle: &PalwConsensusParamsV2,
     profile: &PalwShapeProfileV3,
@@ -227,28 +226,12 @@ pub(crate) fn admission_probe_v1(
     chain_certified: &[PalwE2eFamilyV1],
     shape: &PalwAdmissionShapeV1,
 ) -> Result<(PalwClassCatalogEntryV2, bool), ProbeRefusalV1> {
-    let certified = palw_rc_certified_families_v1();
-    let prosecutable =
-        family_certified_for_weight_v2(bundle.court_e2e_root, &certified, chain_certified, &reachable_kernels_v1(profile))
-            .map_err(|e| ProbeRefusalV1::Price(e.to_string()))?
-            .is_some();
-    let probe = palw_post_genesis_registration_capped_v1(
-        profile.clone(),
-        canonical.clone(),
-        artifact_root,
-        if prosecutable { 1 } else { 0 },
-        1,
-        1,
-        0,
-        PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0)),
-        Vec::new(),
-        bundle.court.max_step_leaf_count(),
-    )
-    .map_err(ProbeRefusalV1::Express)?;
-    let entry =
-        verify_class_admission_v6(bundle, profile, canonical, &probe, &certified, chain_certified, shape.ladder, shape.court, false)
-            .map_err(ProbeRefusalV1::Gate)?;
-    Ok((entry, prosecutable))
+    use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionProbeRefusalV1 as P, palw_admission_probe_v1};
+    palw_admission_probe_v1(bundle, profile, canonical, artifact_root, chain_certified, shape).map_err(|e| match e {
+        P::Price(m) => ProbeRefusalV1::Price(m),
+        P::Express(e) => ProbeRefusalV1::Express(e),
+        P::Gate(e) => ProbeRefusalV1::Gate(e),
+    })
 }
 
 /// Which of the ruleset's walls a width hits first (Decision 7).
@@ -288,7 +271,16 @@ fn classify_gate_refusal(
                     ),
                 }
             }
-            _ => cx.refuse(field, format!("the class exceeds {wall} of this ruleset: {err}")),
+            _ => {
+                // The refusal structured (code, rule, needed against limit, the regime and fence that decided it), beside the sentence.
+                let (held_from, held_now) = cx.fence_active_now("palw_held_context").unwrap_or((None, false));
+                let decided_by = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(
+                    held_now,
+                    Some(cx.daa),
+                    held_from.map(|f| f.daa_score()),
+                );
+                cx.refuse(field, format!("the class exceeds {wall} of this ruleset: {err} [refusal {}]", err.refusal_v1(&decided_by).to_json()))
+            }
         };
     }
     match err {
@@ -400,24 +392,10 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
 
     let reachable = reachable_kernels_v1(&class.profile);
     cx.record("reachable_kernels", reachable.len());
-    // ADR-0067: a kernel outside this build's adjudication table is a release, and the question is
-    // answerable from the profile alone — so it is answered here, before the gate would fold it
-    // into `CoverageGap`.
-    let catalogued = kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1();
-    let outside: Vec<String> = reachable.difference(&catalogued).map(|k| k.to_string()).collect();
-    if !outside.is_empty() {
-        let reason = format!(
-            "kernel{} {} {} outside this build's vocabulary — a new kernel is a release (ADR-0067)",
-            if outside.len() == 1 { "" } else { "s" },
-            outside.join(", "),
-            if outside.len() == 1 { "is" } else { "are" }
-        );
-        cx.fail("kernel_vocabulary", reason.clone());
-        return Ok(KindOutcomeV1::at(
-            PalwExtensionClassificationV1::RulesetChange { fences: Vec::new(), would_print: None, flag_day: true, reason },
-            Structural,
-        ));
-    }
+    // ADR-0067: a kernel outside this build's adjudication table is a release. That question is the GATE's (`CoverageGap`, explained by
+    // `classify_gate_refusal`), asked under the shape's fences: a kernel only a fenced table carries (the token lift, the Kimi family, the
+    // held regime's) is in the vocabulary of a network that armed the fence. This pre-check compared against the SHIPPED table alone —
+    // another second copy of a gate decision — and called an admissible class a release.
     cx.pass("kernel_vocabulary");
     if !manifest.requires.kernel_ids.is_empty() {
         let mut listed = BTreeSet::new();
@@ -563,6 +541,22 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
         Ok((entry, _)) => {
             cx.record("pwu_per_inference", entry.canonical_step_leaf_count);
             cx.pass("admission.gate");
+            // **The two checks the processor asks beside the gate** (ADR-0152 §4-ter C5 and addendum §4-bis.8), through the one function every
+            // pre-check shares — the SDK's preflight and the node's ask the same: a class the processor would drop is refused here by name.
+            if let Err(e) = kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v1(
+                &class.profile,
+                &canonical,
+                shape.offence_attribution,
+                shape.prompt_ids_form,
+            ) {
+                return Ok(KindOutcomeV1::at(
+                    cx.refuse(
+                        class.profile_field,
+                        format!("the registration would be dropped by the processor: {} ({e})", e.code()),
+                    ),
+                    Structural,
+                ));
+            }
             // The transition's one rule the gate does not hold: the registrant bond must afford the
             // registration's exposure (`RegistrationExposureUnaffordable`). Bond state is the chain's.
             cx.skip(
@@ -792,7 +786,8 @@ mod tests {
             match (theirs, ours) {
                 (Ok(a), Ok((b, _))) => assert_eq!(format!("{a:?}"), format!("{b:?}"), "{}", entry.model_id),
                 (Err(text), Err(ProbeRefusalV1::Gate(err))) => {
-                    assert!(text.ends_with(&err.to_string()), "{}: {text} / {err}", entry.model_id)
+                    // The SDK's text is `… {code} ({err}) [refusal {json}]`: the gate's own sentence and code are inside it.
+                    assert!(text.contains(&err.to_string()) && text.contains(err.code()), "{}: {text} / {err}", entry.model_id)
                 }
                 (Err(text), Err(ProbeRefusalV1::Express(err))) => {
                     assert!(text.ends_with(&err.to_string()), "{}: {text} / {err}", entry.model_id)
