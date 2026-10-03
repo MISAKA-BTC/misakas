@@ -102,6 +102,10 @@ pub struct PalwProducerConfig {
     /// annexes or the chain's demand (RFC-0002's evidence transport, on a class small enough to
     /// drill live). The daemon refuses it off a private drill.
     pub drill_answer_only: bool,
+    /// **DRILL ONLY (`--palw-drill-real-submit-delay-s`): a REAL (non-floor) attempt is submitted at its template
+    /// plus this long** (`palw_drill_real_submit_wait_v1`), emulating an 8k inference's minutes on a drill-sized
+    /// class. `None` everywhere but a salted drill chain; the daemon refuses the flag elsewhere.
+    pub drill_real_submit_delay: Option<std::time::Duration>,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -1321,6 +1325,8 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
+        // DRILL (`--palw-drill-real-submit-delay-s`): the clock a REAL attempt's delay is counted from.
+        let template_at = std::time::Instant::now();
         // **Either attempt id, because the template's id is the CHAIN's answer** (ADR-0072 SA-4).
         //
         // Spelled `!= POW_ALGO_ID_PALW_COMMITTED_V2` this was a stall with a deploy date: past an
@@ -1665,6 +1671,20 @@ impl PalwProducerService {
             // the block — queued behind the bytes — never entered the DAG (card §6l). The material
             // is retained and SERVED (the pull, answered with the answer envelope when the capture
             // does not fit); the announcement is a courtesy the transport skips over the cap.
+            // DRILL (`--palw-drill-real-submit-delay-s`): a REAL attempt waits out the rest of its delay, as an 8k
+            // inference would have taken it. Nothing is held while it waits — the template is already built and
+            // the block is final — and it yields to the exit signal like the submit below.
+            let wait = palw_drill_real_submit_wait_v1(self.config.drill_real_submit_delay, facts.is_base_class, template_at.elapsed());
+            if !wait.is_zero() {
+                info!(
+                    "[{PALW_PRODUCER}] PALW DRILL: holding REAL attempt block {hash} for {} s more before it is submitted \
+                     (--palw-drill-real-submit-delay-s): the chain moves on under it, as under an 8k inference",
+                    wait.as_secs()
+                );
+                palw_until_exit_v1(&self.shutdown.listener, tokio::time::sleep(wait))
+                    .await
+                    .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?;
+            }
             // T12-049: past the exit signal the consensus pipeline no longer drains its queue, and a
             // block submitted into it waits forever on its validation result — the AsyncRuntime's
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
@@ -1679,6 +1699,20 @@ impl PalwProducerService {
             return Ok(Some((hash, message)));
         }
         Ok(None)
+    }
+}
+
+/// **DRILL ONLY: how much longer a block waits before it is submitted** (`--palw-drill-real-submit-delay-s`):
+/// the rest of `delay` after `since_template`, for a REAL (non-floor) attempt; zero for the floor class, for no
+/// flag, and once the delay has already elapsed. Pure, so the rule is tested without a node.
+pub(crate) fn palw_drill_real_submit_wait_v1(
+    delay: Option<std::time::Duration>,
+    is_base_class: bool,
+    since_template: std::time::Duration,
+) -> std::time::Duration {
+    match delay {
+        Some(delay) if !is_base_class => delay.saturating_sub(since_template),
+        _ => std::time::Duration::ZERO,
     }
 }
 
@@ -1907,6 +1941,42 @@ mod answer_only_tests {
         assert!(!src.contains("self.flow_context.broadcast_palw_material(message, material)"), "no capture announced past the switch");
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_answer_only: args.palw_drill_answer_only && palw_private_drill,"), "a private drill's only");
+    }
+}
+
+#[cfg(test)]
+mod real_submit_delay_tests {
+    use super::palw_drill_real_submit_wait_v1 as wait;
+    use std::time::Duration as D;
+
+    /// **The drill's hold, as a rule**: a REAL attempt is submitted at its template plus the delay — the rest of it
+    /// after the time the draw already took — the floor class and an unset flag wait for nothing, and a delay already
+    /// spent leaves nothing to wait (it never underflows).
+    #[test]
+    fn a_real_attempt_waits_out_the_rest_of_the_delay_and_nothing_else_waits() {
+        let delay = Some(D::from_secs(300));
+        assert_eq!(wait(delay, false, D::from_secs(0)), D::from_secs(300));
+        assert_eq!(wait(delay, false, D::from_secs(40)), D::from_secs(260), "the draw's own time counts toward it");
+        assert_eq!(wait(delay, false, D::from_secs(300)), D::ZERO);
+        assert_eq!(wait(delay, false, D::from_secs(9_999)), D::ZERO, "already past it: saturating");
+        assert_eq!(wait(delay, true, D::ZERO), D::ZERO, "the floor class is never delayed");
+        assert_eq!(wait(None, false, D::ZERO), D::ZERO, "no flag, no wait");
+    }
+
+    /// The wait sits between the finished block and its submit, yields to the exit signal, and the daemon
+    /// arms it on a private drill only.
+    #[test]
+    fn the_wait_is_before_the_submit_yields_to_exit_and_is_a_private_drills_only() {
+        let src = include_str!("palw_producer.rs");
+        let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
+        let template = src.find("let template_at = std::time::Instant::now();").expect("the clock starts at the template");
+        let hold = src.find("palw_drill_real_submit_wait_v1(self.config.drill_real_submit_delay, facts.is_base_class").expect("the hold");
+        let submit = src.find("self.flow_context.submit_rpc_block(session, block))\n                .await\n                .ok_or_else(|| format!(\"{PALW_PRODUCER_EXITING}: block {hash}").expect("the attempt's submit");
+        assert!(template < hold && hold < submit, "template, then the hold, then the submit");
+        assert!(src[hold..submit].contains("palw_until_exit_v1(&self.shutdown.listener, tokio::time::sleep(wait))"), "the hold yields to exit");
+        let daemon = include_str!("daemon.rs");
+        assert!(daemon.contains("drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {"));
+        assert!(daemon.contains("!config.palw_drill_genesis_salt.is_some() || !palw_private_drill"), "refused off a salted chain");
     }
 }
 

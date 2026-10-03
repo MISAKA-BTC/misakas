@@ -16,11 +16,56 @@ use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use std::collections::BTreeMap;
 
-/// **K — clock slots without an accepted REAL attempt before the chain is idle** (ADR-0165 §5.2). A slot is
-/// one DAA (120 s), so 3 is six minutes: a REAL producer winning a few attempts a slot is never idle between
-/// them, and a stall costs at most six minutes of fallback weight. K does not bound the clock — the tick is
-/// lane-based and moves regardless.
-pub const PALW_REAL_IDLE_K_SLOTS_V1: u64 = 3;
+/// One clock slot, in milliseconds — ADR-0142's recovery interval, the cadence the DAA moves at.
+pub const PALW_REAL_SLOT_MS_V1: u64 = crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
+
+/// **The measurement K is chosen from** (P2's, `lanes/evidence/8k-red-1003/`: the last 300 DAA of testnet-12 before
+/// 2026-10-03, 72 attempts of the 8k class): the 95th percentile of the gap between two accepted REAL attempts,
+/// **17.3 slots** (p50 3.1, max 30.6; the long gaps are panel and backpressure holds). The 8k producer's inference
+/// is 342 s at the median and 418 s at p95 (2.9–3.5 slots), and it is INSIDE that gap — the gap runs from one
+/// acceptance to the next, and the next attempt is drawn within it — so K is chosen on the gap alone and does not
+/// add the inference to it.
+pub const PALW_REAL_MEASURED_GAP_P95_MS_V1: u64 = 2_076_000;
+
+/// **The margin over the measured gap, in slots**: one for the accepting block's lag (a REAL attempt is accepted,
+/// and the ledger written, at the block that merges it, a slot or so after the attempt was drawn) and one for the
+/// rounding and the clock's jitter.
+pub const PALW_REAL_IDLE_K_MARGIN_SLOTS_V1: u64 = 2;
+
+/// **K, the ONE constant: clock slots without an accepted REAL attempt before the chain is idle** (ADR-0165 §00.2) —
+/// **20 slots, 40 minutes** (the coordinator's decision of 2026-10-03). While a REAL attempt was accepted within the
+/// last K slots the floor is refused (`FloorNotIdle`) and every honest floor producer holds, so a slow REAL attempt
+/// in flight is not buried by floor attempts that colour classically against it (testnet-12's `ghostdag_k` = 1: two
+/// floors in its anticone make it RED). **A REAL attempt that arrives within K slots of the previous acceptance
+/// meets no floor under it**; the first one after a longer gap can still go RED (the floor resumed and extended the
+/// chain under it) — it is accepted all the same, and the next is BLUE.
+///
+/// **The price**: after REAL work stops, the chain is heartbeat-only (unbonded, weight ε a block) for up to K slots
+/// before the bonded floor resumes (ADR-0165 §00.3). `K = palw_real_idle_k_for_v1(measured gap, margin)` — pinned
+/// by `k_is_one_constant_from_the_measured_gap_and_bounded` so a new measurement or margin is a decision, not an
+/// edit. Hashed with the fence (`palw_floor_reserve_value_v1`): changing K is a new network id.
+pub const PALW_REAL_IDLE_K_SLOTS_V1: u64 = 20;
+
+/// **The ceiling on K, in slots (one hour — the merge-depth duration, 3,600 s).** The weak stretch after REAL work
+/// stops is at most K slots, so K's ceiling is the longest such stretch the network accepts. A measurement that asks
+/// for more is answered by a smaller K and a floor that resumes sooner than the slowest REAL attempt (which then
+/// goes RED as it does today), not by a longer unbonded window.
+pub const PALW_REAL_IDLE_K_MAX_SLOTS_V1: u64 = 30;
+
+/// **K from a measurement** (ADR-0165 §00.2): `⌈p95 gap between accepted REAL attempts / slot⌉ + margin`, at least 1
+/// and at most [`PALW_REAL_IDLE_K_MAX_SLOTS_V1`]. Pure and `const`, so the constant above is checked against it and a
+/// new measurement is one call.
+pub const fn palw_real_idle_k_for_v1(p95_gap_ms: u64, margin_slots: u64) -> u64 {
+    let k = p95_gap_ms.div_ceil(PALW_REAL_SLOT_MS_V1).saturating_add(margin_slots);
+    if k < 1 {
+        1
+    } else if k > PALW_REAL_IDLE_K_MAX_SLOTS_V1 {
+        PALW_REAL_IDLE_K_MAX_SLOTS_V1
+    } else {
+        k
+    }
+}
+
 /// The ledger's one key: the DAA a REAL attempt was last accepted at, plus one (so a value of 0 is never stored).
 pub const PALW_REAL_LAST_ACCEPT_KEY_V1: u64 = 0;
 
@@ -275,6 +320,43 @@ mod tests {
         }
     }
 
+    /// **K is one constant, and it is the measured gap plus the margin, bounded.** Pins the derivation (P2's
+    /// measurement, 17.3 slots at p95, and the two-slot margin give the coordinator's 20), the ceiling, and that the
+    /// shipped K sits inside it and in the fingerprint — so a new measurement is a decision and a wild one cannot
+    /// lengthen the unbonded stretch past an hour.
+    #[test]
+    fn k_is_one_constant_from_the_measured_gap_and_bounded() {
+        assert_eq!(PALW_REAL_MEASURED_GAP_P95_MS_V1, 17_300 * PALW_REAL_SLOT_MS_V1 / 1_000, "17.3 slots");
+        assert_eq!(
+            palw_real_idle_k_for_v1(PALW_REAL_MEASURED_GAP_P95_MS_V1, PALW_REAL_IDLE_K_MARGIN_SLOTS_V1),
+            PALW_REAL_IDLE_K_SLOTS_V1,
+            "ceil(17.3) + 2 = 20: the shipped K is the measured gap with its margin"
+        );
+        assert_eq!(PALW_REAL_IDLE_K_SLOTS_V1, 20);
+        // The derivation on other inputs: a rounding up, a floor of one, a ceiling.
+        assert_eq!(palw_real_idle_k_for_v1(0, 0), 1, "never below one slot");
+        assert_eq!(palw_real_idle_k_for_v1(1, 0), 1);
+        assert_eq!(palw_real_idle_k_for_v1(PALW_REAL_SLOT_MS_V1, 0), 1);
+        assert_eq!(palw_real_idle_k_for_v1(PALW_REAL_SLOT_MS_V1 + 1, 0), 2, "rounds the gap up");
+        assert_eq!(palw_real_idle_k_for_v1(30_600 * PALW_REAL_SLOT_MS_V1 / 1_000, 2), 33.min(PALW_REAL_IDLE_K_MAX_SLOTS_V1), "the max gap, capped");
+        assert_eq!(palw_real_idle_k_for_v1(u64::MAX, u64::MAX), PALW_REAL_IDLE_K_MAX_SLOTS_V1, "saturating, capped, never a panic");
+        // Monotone in both inputs.
+        for gap in (0..40).map(|i| i * PALW_REAL_SLOT_MS_V1 / 2) {
+            for margin in 0..4 {
+                assert!(palw_real_idle_k_for_v1(gap, margin) <= palw_real_idle_k_for_v1(gap + PALW_REAL_SLOT_MS_V1, margin));
+                assert!(palw_real_idle_k_for_v1(gap, margin) <= palw_real_idle_k_for_v1(gap, margin + 1));
+            }
+        }
+        // The shipped constant: inside the bound (an hour, the merge-depth duration), in the fingerprint, and what the rule reads.
+        assert!((1..=PALW_REAL_IDLE_K_MAX_SLOTS_V1).contains(&PALW_REAL_IDLE_K_SLOTS_V1));
+        assert_eq!(PALW_REAL_IDLE_K_MAX_SLOTS_V1 * PALW_REAL_SLOT_MS_V1 / 1_000, crate::config::constants::consensus::MERGE_DEPTH_DURATION);
+        assert_eq!(palw_floor_reserve_value_v1(), [PALW_REAL_IDLE_K_SLOTS_V1], "the fingerprint sees K");
+        let accepted_at = 1_000;
+        let ledger = BTreeMap::from([(PALW_REAL_LAST_ACCEPT_KEY_V1, accepted_at + 1)]);
+        assert!(!palw_real_idle_at_v1(&ledger, accepted_at + PALW_REAL_IDLE_K_SLOTS_V1 - 1));
+        assert!(palw_real_idle_at_v1(&ledger, accepted_at + PALW_REAL_IDLE_K_SLOTS_V1), "the weak stretch is exactly K slots");
+    }
+
     #[test]
     fn idle_detection_reads_the_last_accepted_real_attempt() {
         let mut l = BTreeMap::new();
@@ -283,10 +365,10 @@ mod tests {
         assert_eq!((k, old, new), (PALW_REAL_LAST_ACCEPT_KEY_V1, None, Some(101)));
         l.insert(k, 101);
         assert_eq!(palw_real_last_accept_v1(&l), Some(100));
-        for now in [100, 101, 102] {
+        for now in [100, 101, 100 + PALW_REAL_IDLE_K_SLOTS_V1 - 1] {
             assert!(!palw_real_idle_at_v1(&l, now), "within K slots of the last real attempt: {now}");
         }
-        assert!(palw_real_idle_at_v1(&l, 103), "K = 3 slots without one: idle");
+        assert!(palw_real_idle_at_v1(&l, 100 + PALW_REAL_IDLE_K_SLOTS_V1), "K slots without one: idle");
         // Only a LATER acceptance writes; an earlier or equal one (a merged blue at a lower score) does not.
         assert!(palw_real_accept_note_v1(&l, 100).is_none() && palw_real_accept_note_v1(&l, 50).is_none());
         assert_eq!(palw_real_accept_note_v1(&l, 105), Some((PALW_REAL_LAST_ACCEPT_KEY_V1, Some(101), Some(106))));

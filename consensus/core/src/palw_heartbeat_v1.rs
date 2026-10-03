@@ -380,6 +380,43 @@ mod tests {
     use super::*;
     use crate::pow_layer0::{PALW_HEARTBEAT_WORK_LOG2, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
 
+    /// **ADR-0165 (`palw_real_clock_tick_v1`): the heartbeat is the clock's fallback carrier.** Past the fence the
+    /// miner holds `PALW_REAL_TICK_GRACE_MS_V1` past the slot's opening for an attempt to carry the tick (a
+    /// `SlotTaken` to `slot + grace`, even with a granted source already waiting in the virtual — the step is any
+    /// block, and an attempt producer builds one), and after the grace the hint is the ordinary one. Without the
+    /// fence the hint is ADR-0142's, byte for byte.
+    #[test]
+    fn the_heartbeat_miner_waits_a_grace_for_an_attempt_to_carry_the_slot() {
+        use crate::palw_clock_cursor_v1::{PalwClockCursorV1, PalwClockStepV1};
+        use crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1 as GRACE;
+        let cursor = |next| Some(PalwClockCursorV1 { next_slot_ms: next, slots_consumed: 0 });
+        let step = |granted, attempt_ticks| PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted, floor: true, attempt_ticks };
+        let nothing = HeartbeatYieldHintV1::NothingToYieldTo;
+        // Fence on: before the slot opens, and during the grace, the miner waits for slot + grace.
+        for now in [0, 9_999, 10_000, 10_000 + GRACE - 1] {
+            for granted in [false, true] {
+                assert_eq!(
+                    heartbeat_slot_hint_v1(nothing, Some(&step(granted, true)), now),
+                    HeartbeatYieldHintV1::SlotTaken(10_000 + GRACE),
+                    "now {now}, granted {granted}: an attempt may still carry the slot"
+                );
+            }
+        }
+        // After the grace: the ordinary hint — mint into a slot nothing carried; step a source that waits.
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(false, true)), 10_000 + GRACE), nothing, "no attempt came: mint");
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(true, true)), 10_000 + GRACE + 5), nothing, "a waiting source is stepped");
+        // A bonded selected parent keeps its own answer.
+        assert_eq!(
+            heartbeat_slot_hint_v1(HeartbeatYieldHintV1::BondedSelectedParent, Some(&step(false, true)), 0),
+            HeartbeatYieldHintV1::BondedSelectedParent
+        );
+        // Fence off: ADR-0142's hint — taken while the slot is closed and nothing waits, free otherwise.
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(false, false)), 9_999), HeartbeatYieldHintV1::SlotTaken(10_000));
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(true, false)), 9_999), nothing);
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(false, false)), 10_000), nothing);
+        assert_eq!(heartbeat_slot_hint_v1(nothing, None, 0), nothing, "no cursor, no wait");
+    }
+
     /// **H3: F5's chain exemption, priced by the chain's own timestamps.** An honest chain — two
     /// beats a slot, slots an interval apart — always fits, with up to two intervals of clock skew
     /// between its miners; a burst stamped for one slot gets the flat bound and no more.

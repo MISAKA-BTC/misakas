@@ -1574,6 +1574,22 @@ Do you confirm? (y/n)";
                         // The panel's config refuses the flag off a private drill; the producer
                         // takes it only there too.
                         drill_answer_only: args.palw_drill_answer_only && palw_private_drill,
+                        // **DRILL ONLY** (`--palw-drill-real-submit-delay-s`): `validate_args` already refused it off a
+                        // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
+                        // arm it on public testnet-12.
+                        drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {
+                            Some(seconds) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                                panic!("--palw-drill-real-submit-delay-s={seconds} is a drill and is a salted testnet-12 drill only")
+                            }
+                            Some(seconds) => {
+                                warn!(
+                                    "PALW DRILL: this producer will hold every REAL (non-floor) attempt it wins for {seconds} s after its \
+                                     template before submitting it, to emulate an 8k inference. Its blocks reach the chain late on purpose."
+                                );
+                                Some(std::time::Duration::from_secs(seconds))
+                            }
+                            None => None,
+                        },
                         drill_tamper_leaf: match args.palw_drill_tamper_leaf {
                             Some(leaf) if network.is_mainnet() => {
                                 panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")

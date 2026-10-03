@@ -394,6 +394,14 @@ pub struct Args {
     /// (`config::drill::palw_drill_useful_work_at_v1`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_useful_work_at: Option<u64>,
+    /// **DRILL ONLY (a salted testnet-12 chain; refused anywhere else): hold a REAL attempt's submission until
+    /// this many seconds after its template** — a REAL (non-floor) attempt this producer wins is submitted at
+    /// `template + N s`, however quickly its drill-sized class ran, so the chain moves on under it exactly as it
+    /// does under an 8k inference of minutes (ADR-0165: the slow attempt's anticone, its colouring and the idle
+    /// window K). The bare flag is 340 s (the live 8k producer's median inference). The floor class is never
+    /// delayed. Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_real_submit_delay_s: Option<u64>,
     /// **DRILL ONLY: arm the decode rules (`palw_fp_decode_rules`, ADR-0082 D10/D11) at this DAA**
     /// (`config::drill::palw_drill_decode_rules_at_v1`) — the prerequisite FP Job V5 and RFC-0004's
     /// improvement fence name: each needs it in force at or below its own height. Command line only.
@@ -703,6 +711,7 @@ impl Default for Args {
             palw_drill_fp_v5_at: None,
             palw_drill_held_chunks_at: None,
             palw_drill_useful_work_at: None,
+            palw_drill_real_submit_delay_s: None,
             palw_drill_int11_at: None,
             palw_drill_improve_at: None,
             palw_improve_evaluate: false,
@@ -1822,6 +1831,20 @@ pub fn cli() -> Command {
                     "With --palw-drill-genesis-salt only: arm FP Job V5 (palw_fp_job_v5) at this DAA on the drill chain. Nothing else \
                      moves. Refused without the salt, at 0, at a height another fence uses, and unless palw_gen_v1 and \
                      palw_fp_decode_rules are in force at or below it.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-real-submit-delay-s")
+                .long("palw-drill-real-submit-delay-s")
+                .require_equals(true)
+                .num_args(0..=1)
+                .default_missing_value("340")
+                .value_parser(clap::value_parser!(u64).range(1..=3_600))
+                .help(
+                    "PALW DRILL ONLY (needs --palw-drill-genesis-salt; refused otherwise): submit a REAL (non-floor) attempt this node \
+                     wins N seconds after its template (1..=3600; the bare flag is 340, the live 8k producer's median inference), to \
+                     emulate an 8k inference's minutes on a tiny drill class: the chain moves on under the attempt, so its colouring \
+                     and the idle window are what a live 8k producer meets. The floor class is never delayed.",
                 ),
         )
         .arg(
@@ -2950,6 +2973,7 @@ impl Args {
             palw_drill_fp_v5_at: m.get_one::<u64>("palw-drill-fp-v5-at").copied(),
             palw_drill_held_chunks_at: m.get_one::<u64>("palw-drill-held-chunks-at").copied(),
             palw_drill_useful_work_at: m.get_one::<u64>("palw-drill-useful-work-at").copied(),
+            palw_drill_real_submit_delay_s: m.get_one::<u64>("palw-drill-real-submit-delay-s").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
