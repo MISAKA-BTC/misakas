@@ -70392,7 +70392,9 @@ pub(crate) mod tests {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtHeldVerdict).unwrap(), vec![8]);
             // ADR-0160 lane liab (AG-2): the forfeiture's void, appended as the tenth.
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::AggregateForfeit).unwrap(), vec![9]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[10]).is_err(), "no eleventh reason");
+            // Lane PL part C (ADR-0166): `PanelUnavailable`, appended as the eleventh.
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::PanelUnavailable).unwrap(), vec![10]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[11]).is_err(), "no twelfth reason");
             assert_eq!(
                 crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
                 "court_held_verdict"
