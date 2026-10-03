@@ -62,7 +62,7 @@ impl PalwIntervalFlow {
                         continue; // an opening for no claim is addressed to nobody
                     };
                     // ADR-0111 Decision 2: the leaf is meaningful only under a leaf-evidence index.
-                    // RFC-0007 §II.8: a weight-block request (bit 28) carries the class's root tag in the same field, and the signature binds it.
+                    // RFC-0007 §II.8: a weight-block request (bit 26) carries the class's root tag in the same field, and the signature binds it.
                     let leaf_index =
                         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(inner.interval_index)
                             .or_else(|| {

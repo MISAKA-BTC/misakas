@@ -2,7 +2,7 @@
 //!
 //! When the sketch check of a weight product fails, [`misaka_palw_tir_sketch::TirCheckFailureV1::blocks`] names the free-axis blocks whose own
 //! check fails. This module carries the seat's side of getting those blocks' weight bytes — **at most `F` = 2 MiB each** — from the producer or
-//! any holder of the class, over the interval lane's existing request/answer messages (request kind: bit 28,
+//! any holder of the class, over the interval lane's existing request/answer messages (request kind: bit 26,
 //! `kaspa_consensus_core::palw_weight_block_v1`), and hands them to the checker's escalation, which recomputes and concludes.
 //!
 //! * **Serving** ([`palw_weight_block_serve_v1`]): any node holding the class opens the inventory leaves that cover a block's byte ranges as one

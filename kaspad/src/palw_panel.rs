@@ -14266,7 +14266,7 @@ impl PalwPanelService {
 
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
-        // **RFC-0007 §II.7: a witness-chunk request (bit 27)** — the producer serves the chunk of the claim's retained witness, on the lane's own
+        // **RFC-0007 §II.7: a witness-chunk request (bit 25)** — the producer serves the chunk of the claim's retained witness, on the lane's own
         // authentication; `None` (silence) where it keeps no such witness or the retained piece no longer matches its digest.
         if let Some(chunk) = kaspa_consensus_core::palw_weight_block_v1::palw_witness_chunk_request_decode_v1(interval_index) {
             let served = sketch::palw_witness_chunk_v1(&self.config.retention_dir, &claim, chunk);
@@ -14276,7 +14276,7 @@ impl PalwPanelService {
             }
             return served;
         }
-        // **RFC-0007 §II.8: a weight-block request (bit 28)** — any node holding the class answers with the inventory openings of the block's bytes,
+        // **RFC-0007 §II.8: a weight-block request (bit 26)** — any node holding the class answers with the inventory openings of the block's bytes,
         // on the lane's own authentication. The class is named by the root tag the signature binds; the seat verifies the answer against the root.
         if let (Some((site, block)), Some(tag)) =
             (kaspa_consensus_core::palw_weight_block_v1::palw_weight_block_request_decode_v1(interval_index), leaf_index)
