@@ -104,6 +104,7 @@ impl M<'_> {
         // the plain attention and MLP projections are (`crate::lower::qlinear`).
         const ALSO_FLOAT: &[&str] = &[
             "mla.q_a", "mla.q_b", "mla.q", "mla.kv_a", "mla.kv_b", "mla.o", "gdn.qkvz", "gdn.ba", "gdn.qkv", "gdn.z", "gdn.b", "gdn.a", "gdn.out",
+            "kda.q", "kda.k", "kda.v", "kda.b", "kda.f_a", "kda.f_b", "kda.g_a", "kda.g_b", "kda.out",
             "mamba.in", "mamba.x", "mamba.dt", "mamba.out", "mamba2.in", "mamba2.out",
         ];
         let Some(q) = &self.st.quant else { return Ok(None) };
@@ -343,6 +344,7 @@ fn bind_mixer(m: &mut M, spec: &ArchSpec, mixer: &Mixer, rescale: Option<usize>)
         Mixer::Attention(a) => attention(m, a)?,
         Mixer::Mla(a) => mla(m, a)?,
         Mixer::GatedDeltaNet(g) => gdn(m, g)?,
+        Mixer::Kda(k) => kda(m, k)?,
         Mixer::Mamba(mm) => mamba(m, mm)?,
         Mixer::Mamba2(mm) => mamba2(m, mm)?,
         Mixer::ShortConv(c) => short_conv(m, c, spec.hidden_size)?,
@@ -581,6 +583,25 @@ fn gdn(m: &mut M, g: &GdnSpec) -> Result<()> {
     m.put("gdn.A", Src::t(m.role("gdn.A_log")?).map(MapFn::NegExp))?;
     m.put("gdn.norm.gain", Src::t(format!("{}.weight", m.role("gdn.norm")?)))?;
     m.lin("gdn.out", "gdn.out", false)
+}
+
+/// **`MIXER_KDA_V1`**: the projections, three convolutions (one tensor each: the hub's `q_conv1d`, `k_conv1d`, `v_conv1d`), the low-rank gates, and
+/// `A_log` — stored `[1, 1, heads, 1]` — as the per-channel decay rate `-exp(A_log[head])` of every key channel of the head.
+fn kda(m: &mut M, k: &KdaSpec) -> Result<()> {
+    let n = k.heads * k.head_dim;
+    for part in ["q", "k", "v"] {
+        m.lin(&format!("kda.{part}"), &format!("kda.{part}"), false)?;
+        conv(m, &format!("kda.{part}_conv"), n, k.conv_kernel, false)?;
+    }
+    for part in ["b", "f_a", "f_b", "g_a", "g_b", "out"] {
+        m.lin(&format!("kda.{part}"), &format!("kda.{part}"), false)?;
+    }
+    m.put("kda.dt_bias", Src::t(m.role("kda.dt_bias")?))?;
+    m.put(
+        "kda.A",
+        Src::t(m.role("kda.A_log")?).reshape(vec![k.heads]).map(MapFn::NegExp).take(0, Pick::Repeat { each: k.head_dim, groups: k.heads }),
+    )?;
+    m.put("kda.norm.gain", Src::t(format!("{}.weight", m.role("kda.norm")?)))
 }
 
 fn mamba(m: &mut M, s: &MambaSpec) -> Result<()> {

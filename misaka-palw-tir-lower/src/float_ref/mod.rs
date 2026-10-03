@@ -839,9 +839,12 @@ impl<'a> Session<'a> {
                     None => pre,
                 })
             }
-            Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale } => {
+            Op::GatedDelta { k_heads, v_heads, dk, dv, head_map, q_scale, channel_decay } => {
                 let Ref::State(s) = ins[5] else { return Err(LowerError::eval("GDN without state")) };
                 let (q, k, v, g, beta) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec(), x(3)?.to_vec(), x(4)?.to_vec());
+                if g.len() != if *channel_decay { v_heads * dk } else { *v_heads } {
+                    return Err(LowerError::eval(format!("internal: a gated delta's decay has {} values, not {}", g.len(), if *channel_decay { v_heads * dk } else { *v_heads })));
+                }
                 let st = self.fixed_mut(s, lyr);
                 let mut deltas = Vec::new();
                 let out =
@@ -1483,8 +1486,16 @@ pub fn gated_delta_traced(
             HeadMap::Tile => vh % nk,
         };
         let st = &mut s[vh * dk * dv..(vh + 1) * dk * dv];
-        let decay = (g[vh] as f64).exp();
-        st.iter_mut().for_each(|x| *x = (*x as f64 * decay) as f32);
+        // A decay of `nv·dk` values is channel-wise (`MIXER_KDA_V1`): row `i` of the state (a key channel) decays by `exp(g[vh, i])`.
+        if g.len() == nv * dk && dk > 1 {
+            for i in 0..dk {
+                let decay = (g[vh * dk + i] as f64).exp();
+                st[i * dv..(i + 1) * dv].iter_mut().for_each(|x| *x = (*x as f64 * decay) as f32);
+            }
+        } else {
+            let decay = (g[vh] as f64).exp();
+            st.iter_mut().for_each(|x| *x = (*x as f64 * decay) as f32);
+        }
         let kv = &k[kh * dk..(kh + 1) * dk];
         let qv = &q[kh * dk..(kh + 1) * dk];
         let vv = &v[vh * dv..(vh + 1) * dv];

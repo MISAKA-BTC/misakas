@@ -177,6 +177,17 @@ CONFIGS = {
     "falcon_h1_gate": (c("falcon_h1", "FalconH1ForCausalLM", L, num_hidden_layers=2, mamba_d_ssm=64, mamba_n_heads=8, mamba_d_state=4, mamba_n_groups=2,
                          mamba_d_conv=4, mamba_rms_norm=True, mamba_norm_before_gate=False, max_position_embeddings=128,
                          rope_parameters={"rope_type": "default", "rope_theta": 10000.0}), {}),
+    # Kimi-Linear: Kimi delta attention (channel-wise forget gate, three depthwise convolutions, low-rank gates, sigmoid-gated per-head norm) on
+    # layers 0, 1, 3 and NoPE latent attention on layer 2; a dense MLP on layers 0 and 3, the DeepSeek-V3 mixture of experts with a shared expert
+    # on 1 and 2 (MIXER_KDA_V1, MIXER_MLA_NOPE_V1). The dense layers' tensors are renamed to the hub's `mlp.*` (see `hub_rename`).
+    "kimi_linear": (c("kimi_linear", "KimiLinearForCausalLM", L, num_hidden_layers=4, num_key_value_heads=4, head_dim=4,
+                      layer_types=["linear_attention", "linear_attention", "full_attention", "linear_attention"],
+                      mlp_layer_types=["dense", "sparse", "sparse", "dense"], linear_head_dim=8, linear_num_heads=4,
+                      linear_conv_kernel_dim=4, kv_lora_rank=8, q_lora_rank=None, qk_rope_head_dim=4, qk_nope_head_dim=8,
+                      v_head_dim=8, num_experts=8, num_experts_per_token=2, moe_intermediate_size=16, num_shared_experts=1,
+                      num_expert_group=2, topk_group=1, routed_scaling_factor=2.446, tie_word_embeddings=False,
+                      pad_token_id=0, bos_token_id=1, eos_token_id=2),
+                     {"hub_rename": [[r"\.layers\.(\d+)\.block_sparse_moe\.(gate_proj|up_proj|down_proj)\.", r".layers.\1.mlp.\2."]]}),
     "cohere": (c("cohere", "CohereForCausalLM", L, num_hidden_layers=2, use_qk_norm=True, logit_scale=0.5), {}),
     "cohere2": (c("cohere2", "Cohere2ForCausalLM", L, num_hidden_layers=4, head_dim=8, sliding_window=4,
                   layer_types=["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]), {}),
@@ -362,6 +373,25 @@ def decode_logits(model, ids):
     return out
 
 
+def hub_rename(d, rules):
+    """Rewrite tensor names of the saved checkpoint by `[regex, replacement]` rules, keeping dtype and values (the same helper as
+    `tools/corpus/gen_fixtures.py`): `save_pretrained` writes the reverse of the loader's conversion mapping, which for Kimi-Linear names the dense
+    layers' MLP like the MoE layers'; the hub's checkpoint does not. The reference below is computed from a reload of the renamed files."""
+    if not rules:
+        return
+    import re
+    from safetensors.torch import load_file, save_file
+    for fn in sorted(os.listdir(d)):
+        if fn.endswith(".safetensors"):
+            out = {}
+            for k, v in load_file(os.path.join(d, fn)).items():
+                for pat, rep in rules:
+                    k = re.sub(pat, rep, k)
+                assert k not in out, f"hub_rename: two tensors named {k}"
+                out[k] = v
+            save_file(out, os.path.join(d, fn), metadata={"format": "pt"})
+
+
 def make(name, cfg_dict, opts):
     cfg_dict = dict(cfg_dict)
     model_type = cfg_dict.pop("model_type")
@@ -394,6 +424,7 @@ def make(name, cfg_dict, opts):
     # weights in place on the first inference forward, so a model that has run is not the file).
     model.to(torch.bfloat16)
     model.save_pretrained(d)
+    hub_rename(d, opts.get("hub_rename", []))
     for extra in ("generation_config.json",):
         pth = os.path.join(d, extra)
         if os.path.exists(pth):

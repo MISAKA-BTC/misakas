@@ -218,6 +218,9 @@ pub enum Op {
         dv: usize,
         head_map: HeadMap,
         q_scale: f64,
+        /// **`MIXER_KDA_V1`**: the decay `g` is channel-wise — `[v_heads·dk]`, one forget gate per key channel of each head
+        /// (`S[i, :] ← S[i, :]·exp(g[vh, i])`), not one per head (`[v_heads]`).
+        channel_decay: bool,
     },
     /// Mamba-1 selective scan step. In: `[x, dt, B, C, A [I,N], D [I], State(h [I,N])]`.
     SelectiveScan {

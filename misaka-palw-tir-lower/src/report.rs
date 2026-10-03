@@ -152,11 +152,15 @@ fn mixer(m: &Mixer) -> String {
             m.qk_rope_head_dim,
             m.v_head_dim,
             m.scale,
-            position(&Position::Rope(m.rope.clone()))
+            m.rope.as_ref().map_or_else(|| position(&Position::None), |r| position(&Position::Rope(r.clone())))
         ),
         Mixer::GatedDeltaNet(g) => format!(
             "gated delta net {} k-heads × {} / {} v-heads × {}, conv {}, head map {:?}",
             g.k_heads, g.k_dim, g.v_heads, g.v_dim, g.conv_kernel, g.head_map
+        ),
+        Mixer::Kda(k) => format!(
+            "Kimi delta attention {} heads × {}, conv {}, channel-wise forget gate (rank {})",
+            k.heads, k.head_dim, k.conv_kernel, k.gate_rank
         ),
         Mixer::Mamba(m) => format!(
             "Mamba inner {} state {} conv {} dt_rank {}{}",

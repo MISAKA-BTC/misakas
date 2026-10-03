@@ -527,6 +527,12 @@ pub enum Pick {
     PerLayer {
         len: usize,
     },
+    /// Each of the `groups` indices `0..groups` repeated `each` times in a row (`0,0,…,1,1,…`): a per-head value spread over the head's
+    /// channels (Kimi delta attention's `A_log[head]` as one decay rate per key channel). Every value is an exact copy.
+    Repeat {
+        each: usize,
+        groups: usize,
+    },
 }
 
 impl Pick {
@@ -537,6 +543,7 @@ impl Pick {
             Pick::Strided { block, offset, len, groups } => {
                 (0..*groups).flat_map(|g| (g * block + offset)..(g * block + offset + len)).collect()
             }
+            Pick::Repeat { each, groups } => (0..*groups).flat_map(|g| std::iter::repeat_n(g, *each)).collect(),
             Pick::PerLayer { len } => {
                 let l = layer.ok_or_else(|| LowerError::weights("a per-layer slice outside a layer"))?;
                 (l * len..(l + 1) * len).collect()
@@ -547,6 +554,7 @@ impl Pick {
         match self {
             Pick::Range { len, .. } | Pick::PerLayer { len } => *len,
             Pick::Strided { len, groups, .. } => len * groups,
+            Pick::Repeat { each, groups } => each * groups,
         }
     }
 }

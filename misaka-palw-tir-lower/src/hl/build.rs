@@ -667,6 +667,7 @@ impl Builder<'_> {
             Mixer::Attention(a) => self.attention(bk, a, x),
             Mixer::Mla(a) => self.mla(bk, a, x),
             Mixer::GatedDeltaNet(g) => self.gdn(bk, g, x),
+            Mixer::Kda(k) => self.kda(bk, k, x),
             Mixer::Mamba(mm) => self.mamba(bk, mm, x),
             Mixer::Mamba2(mm) => self.mamba2(bk, mm, x),
             Mixer::RwkvTime(r) => self.rwkv_time(bk, r, x),
@@ -1153,22 +1154,30 @@ impl Builder<'_> {
             }
             None => self.linear(bk, x, "mla.q", h * qd, d, false, true, "mla.q")?,
         };
-        let t = self.rope_table(&a.rope.freqs);
-        let q = bk.f(
-            Op::Rope { heads: h, head_dim: qd, rotary_dim: rope, offset: nope, style: a.rope.style, table: t },
-            vec![q, Ref::Pos],
-            h * qd,
-            "mla.q_rope",
-        );
+        // `MIXER_MLA_NOPE_V1`: with no rotation the slices stay what the projections made them.
+        let q = match &a.rope {
+            Some(rp) => {
+                let t = self.rope_table(&rp.freqs);
+                bk.f(
+                    Op::Rope { heads: h, head_dim: qd, rotary_dim: rope, offset: nope, style: rp.style, table: t },
+                    vec![q, Ref::Pos],
+                    h * qd,
+                    "mla.q_rope",
+                )
+            }
+            None => q,
+        };
         let c = self.linear(bk, x, "mla.kv_a.latent", r, d, a.a_bias, true, "mla.kv_a")?;
         let c = self.norm(bk, c, a.kv_a_norm, "mla.kv_a_norm", r, 1, vec![r], true, "mla.latent")?;
-        let kr = self.linear(bk, x, "mla.kv_a.rope", rope, d, a.a_bias, true, "mla.k_rope_in")?;
-        let kr = bk.f(
-            Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: a.rope.style, table: t },
-            vec![kr, Ref::Pos],
-            rope,
-            "mla.k_rope",
-        );
+        let kr_site = if a.rope.is_some() { "mla.k_rope_in" } else { "mla.k_rope" };
+        let kr = self.linear(bk, x, "mla.kv_a.rope", rope, d, a.a_bias, true, kr_site)?;
+        let kr = match &a.rope {
+            Some(rp) => {
+                let t = self.rope_table(&rp.freqs);
+                bk.f(Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: rp.style, table: t }, vec![kr, Ref::Pos], rope, "mla.k_rope")
+            }
+            None => kr,
+        };
         let ls = self.state("mla.latent_hist", StateKind::Hist { window: None }, vec![r], 0.0)?;
         let rs = self.state("mla.k_rope_hist", StateKind::Hist { window: None }, vec![rope], 0.0)?;
         bk.append(c, ls);
@@ -1247,7 +1256,7 @@ impl Builder<'_> {
         let gl = bk.f(Op::Mul, vec![sp, aa], nv, "gdn.log_decay");
         let st = self.state("gdn.S", StateKind::Fixed, vec![nv, dk, dv], 0.0)?;
         let o = bk.fw(
-            Op::GatedDelta { k_heads: nk, v_heads: nv, dk, dv, head_map: g.head_map, q_scale: 1.0 / (dk as f64).sqrt() },
+            Op::GatedDelta { k_heads: nk, v_heads: nv, dk, dv, head_map: g.head_map, q_scale: 1.0 / (dk as f64).sqrt(), channel_decay: false },
             vec![q, k, v, gl, beta, st],
             nv * dv,
             Some("gdn.core"),
@@ -1256,6 +1265,47 @@ impl Builder<'_> {
         let w = self.param("gdn.norm.gain", vec![dv], true, Init::Uniform(0.6, 1.4))?;
         let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: nv, gate_first: false, act: g.gate_act }, vec![o, z, w], nv * dv, "gdn.normed");
         self.linear(bk, o, "gdn.out", d, nv * dv, false, true, "gdn.out")
+    }
+
+    /// **`MIXER_KDA_V1`** (Kimi delta attention): the gated delta rule of [`Self::gdn`] with the forget gate per KEY CHANNEL. q, k, v are
+    /// three projections with a depthwise causal convolution each (the library's one convolution over the concatenation is the same
+    /// function: depthwise channels are independent), the forget gate and the output gate are low-rank (`f_a`, `f_b`; `g_a`, `g_b`), the
+    /// output norm gates by `gate_act` (sigmoid) and `kda.A` is the per-channel decay rate `-exp(A_log[head])`.
+    fn kda(&mut self, bk: &mut Bk, g: &KdaSpec, x: Ref) -> Result<Ref> {
+        let d = self.s.hidden_size;
+        let (h, dd, r) = (g.heads, g.head_dim, g.gate_rank);
+        let n = h * dd;
+        let mut qkv = [Ref::Token; 3];
+        for (i, role) in ["q", "k", "v"].into_iter().enumerate() {
+            let p = self.linear(bk, x, &format!("kda.{role}"), n, d, false, true, &format!("kda.{role}"))?;
+            qkv[i] = self.conv_act(bk, p, n, g.conv_kernel, false, &format!("kda.{role}_conv"), Some(g.conv_act))?;
+        }
+        let [q, k, v] = qkv;
+        let q = bk.f(Op::L2Norm { groups: h, eps: g.l2_eps }, vec![q], n, "kda.q_l2");
+        let k = bk.f(Op::L2Norm { groups: h, eps: g.l2_eps }, vec![k], n, "kda.k_l2");
+        let b = self.linear(bk, x, "kda.b", h, d, false, true, "kda.b")?;
+        let beta = bk.f(Op::Act(Act::Sigmoid), vec![b], h, "kda.beta");
+        let fa = self.linear(bk, x, "kda.f_a", r, d, false, true, "kda.f_a")?;
+        let a = self.linear(bk, fa, "kda.f_b", n, r, false, true, "kda.f_b")?;
+        let dtb = self.param("kda.dt_bias", vec![n], true, Init::Uniform(-1.0, 1.0))?;
+        let t = bk.f(Op::Add, vec![a, dtb], n, "kda.dt");
+        let sp = bk.f(Op::Act(Act::Softplus), vec![t], n, "kda.dt_softplus");
+        // `kda.A` is the (negative) decay rate, one value per channel (the head's `-exp(A_log)` repeated over its channels).
+        let aa = self.param("kda.A", vec![n], true, Init::Uniform(-4.0, -0.3))?;
+        let gl = bk.f(Op::Mul, vec![sp, aa], n, "kda.log_decay");
+        let st = self.state("kda.S", StateKind::Fixed, vec![h, dd, dd], 0.0)?;
+        let o = bk.fw(
+            Op::GatedDelta { k_heads: h, v_heads: h, dk: dd, dv: dd, head_map: HeadMap::Group, q_scale: 1.0 / (dd as f64).sqrt(), channel_decay: true },
+            vec![q, k, v, gl, beta, st],
+            n,
+            Some("kda.core"),
+            vec![sid(st)],
+        );
+        let ga = self.linear(bk, x, "kda.g_a", r, d, false, true, "kda.g_a")?;
+        let gate = self.linear(bk, ga, "kda.g_b", n, r, false, true, "kda.g_b")?;
+        let w = self.param("kda.norm.gain", vec![dd], true, Init::Uniform(0.6, 1.4))?;
+        let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: h, gate_first: false, act: g.gate_act }, vec![o, gate, w], n, "kda.normed");
+        self.linear(bk, o, "kda.out", d, n, false, true, "kda.out")
     }
 
     /// Depthwise causal conv under role `name` (`name.w [C, K]`, `name.b`), SiLU activated.
@@ -1589,6 +1639,7 @@ fn mixer_name(m: &Mixer) -> String {
         }
         Mixer::Mla(_) => "mla".into(),
         Mixer::GatedDeltaNet(_) => "gdn".into(),
+        Mixer::Kda(_) => "kda".into(),
         Mixer::Mamba(_) => "mamba".into(),
         Mixer::Mamba2(_) => "mamba2".into(),
         Mixer::ShortConv(_) => "shortconv".into(),

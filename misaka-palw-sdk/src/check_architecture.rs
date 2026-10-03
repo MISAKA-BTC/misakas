@@ -629,6 +629,7 @@ fn mixer_name(m: &Mixer) -> &'static str {
         Mixer::Attention(_) => "attention",
         Mixer::Mla(_) => "multi-head latent attention",
         Mixer::GatedDeltaNet(_) => "gated-delta",
+        Mixer::Kda(_) => "Kimi delta attention",
         Mixer::Mamba(_) => "Mamba",
         Mixer::Mamba2(_) => "Mamba2",
         Mixer::RwkvTime(_) => "RWKV",
@@ -1433,7 +1434,7 @@ mod tests {
             .filter(|p| p.join("config.json").exists())
             .collect();
         dirs.sort();
-        assert_eq!(dirs.len(), 93, "tir-lower's HF tiny fixtures (the 16 Qwen4-Exp ones included)");
+        assert_eq!(dirs.len(), 94, "tir-lower's HF tiny fixtures (the 16 Qwen4-Exp ones included)");
         for d in dirs {
             let text = std::fs::read_to_string(d.join("config.json")).expect("config");
             let r = check_ir_config_v1(&params, &text, false);

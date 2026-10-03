@@ -13,30 +13,30 @@
    32
   ]
  },
- "model.layers.0.block_sparse_moe.down_proj.weight": {
+ "model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp.down_proj.weight": {
   "dtype": "BF16",
   "shape": [
    32,
    64
   ]
  },
- "model.layers.0.block_sparse_moe.gate_proj.weight": {
+ "model.layers.0.mlp.gate_proj.weight": {
   "dtype": "BF16",
   "shape": [
    64,
    32
   ]
  },
- "model.layers.0.block_sparse_moe.up_proj.weight": {
+ "model.layers.0.mlp.up_proj.weight": {
   "dtype": "BF16",
   "shape": [
    64,
-   32
-  ]
- },
- "model.layers.0.input_layernorm.weight": {
-  "dtype": "BF16",
-  "shape": [
    32
   ]
  },

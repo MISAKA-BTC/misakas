@@ -19,6 +19,10 @@ fn silu() -> Act {
     Act::Silu
 }
 
+fn sigmoid() -> Act {
+    Act::Sigmoid
+}
+
 fn yes() -> bool {
     true
 }
@@ -29,6 +33,11 @@ fn is_true(b: &bool) -> bool {
 
 fn infinity() -> f64 {
     f64::INFINITY
+}
+
+/// An `Option` that must be written (`null` for `None`): a missing key is an error, not `None`.
+fn present_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> std::result::Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)
 }
 
 fn f64_or_infinity<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<f64, D::Error> {
@@ -403,7 +412,10 @@ pub struct MlaSpec {
     /// Bias on `q_a_proj` / `kv_a_proj_with_mqa` (`attention_bias`).
     #[serde(default)]
     pub a_bias: bool,
-    pub rope: RopeSpec,
+    /// The rotation of the rope slice of q and of the shared key. **`MIXER_MLA_NOPE_V1`** (Kimi-Linear's MLA layers): `None` is no rotation at
+    /// all — the shared key's slice is the raw projection and q's slice is not rotated either. Written `null` in an adapter, never omitted.
+    #[serde(deserialize_with = "present_option")]
+    pub rope: Option<RopeSpec>,
     pub scale: f64,
     /// **`ATTN_TOKEN_INDEXER_V1`**: DeepSeek sparse attention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -441,6 +453,30 @@ pub struct GdnSpec {
     /// The activation of the output norm's gate (`output_gate_type`): SiLU unless the config says
     /// sigmoid.
     #[serde(default = "silu")]
+    pub gate_act: Act,
+}
+
+/// **`MIXER_KDA_V1`** (Kimi delta attention, `modeling_kimi_linear.py:KimiLinearDeltaAttention`): `heads` heads of width `head_dim`. q, k, v are
+/// projections of the input, each through its own depthwise causal convolution of `conv_kernel` taps (no bias, `conv_act`); q and k are
+/// L2-normalised per head (`l2_eps`) and q is scaled by `head_dim^-1/2`. The forget gate is **channel-wise**,
+/// `g[h,c] = -exp(A_log[h]) * softplus(f_b(f_a(x))[h,c] + dt_bias[h,c])` (`f_a: D -> head_dim`, `f_b: head_dim -> heads*head_dim`), and the write
+/// strength is `beta = sigmoid(b_proj x)` per head; per head `S <- S * exp(g)[:, None]`, `u = beta (v - S^T k)`, `S += k u^T`, `o = S^T q`.
+/// The output is `o_norm(o, gate)` — a per-head RMS norm (gain `[head_dim]`, `norm_eps`) times `gate_act(g_b(g_a(x)))` — then `o_proj`.
+/// Tensors: roles `kda.q`, `kda.k`, `kda.v`, `kda.q_conv`, `kda.k_conv`, `kda.v_conv` (`[H*d, 1, K]` each), `kda.f_a`, `kda.f_b`, `kda.dt_bias`,
+/// `kda.A_log`, `kda.b`, `kda.g_a`, `kda.g_b`, `kda.norm`, `kda.out`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KdaSpec {
+    pub heads: usize,
+    pub head_dim: usize,
+    pub conv_kernel: usize,
+    /// The width of the low-rank forget-gate and output-gate projections (`f_a`, `g_a`): `head_dim` in the library's release.
+    pub gate_rank: usize,
+    #[serde(default = "silu")]
+    pub conv_act: Act,
+    pub l2_eps: f64,
+    pub norm_eps: f64,
+    /// The activation of the output norm's gate: the library's `KimiLinearRMSNormGated` is sigmoid.
+    #[serde(default = "sigmoid")]
     pub gate_act: Act,
 }
 
@@ -541,6 +577,8 @@ pub enum Mixer {
     Attention(AttnSpec),
     Mla(MlaSpec),
     GatedDeltaNet(GdnSpec),
+    /// **`MIXER_KDA_V1`** (Kimi-Linear): the gated delta rule with a channel-wise forget gate ([`KdaSpec`]).
+    Kda(KdaSpec),
     Mamba(MambaSpec),
     Mamba2(Mamba2Spec),
     RwkvTime(RwkvTimeSpec),
