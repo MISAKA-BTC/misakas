@@ -865,8 +865,9 @@ fn carry_out(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, c: usize, o
             if v.len != lb.carry_in[c].0 {
                 return Err(LowerError::eval(format!("internal: carry {c} of {} lanes gets {}", lb.carry_in[c].0, v.len)));
             }
-            if lb.role == BlockRole::Pre {
-                // The pre block's rows are zeros, which no layer reads before the slot is filled.
+            // The pre block's KV rows are zeros, which no layer reads before the slot is filled; its other carry is the embedding
+            // (`EMBED_CARRY_V1`), a value the layers read, and so a carry with a scale (below, the pre block being the one that fills it).
+            if lb.role == BlockRole::Pre && matches!(cx.hl.blocks[lb.hb].nodes[i as usize].op, Op::Zeros) {
                 return Ok(v.r);
             }
             let [prefix] = lb.prefixes.as_slice() else {

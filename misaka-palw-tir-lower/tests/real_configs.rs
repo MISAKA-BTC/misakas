@@ -593,6 +593,52 @@ fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
     assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
 }
 
+/// **Zamba2** (`ATTN_SHARED_BLOCK_V1` and its companions, a data adapter) at the class's own defaults (the shape `Zamba2Config()` documents as the
+/// 2.7B one): 54 layers, nine of them hybrid by the default pattern, one shared block, an adapter rank of 128 on the shared MLP. Written from the class's
+/// defaults, so the test is of the structure (which layers are hybrid, what is shared, that every param binds), not of any release's numbers.
+#[test]
+fn zamba2_at_the_class_defaults_has_nine_hybrid_layers_over_one_shared_block_and_binds_every_tensor() {
+    let (s, p) = ok("zamba2-class-defaults");
+    assert_eq!(s.layers.len(), 54);
+    let hybrid: Vec<usize> = (0..54).filter(|l| s.layers[*l].pre_branch.is_some()).collect();
+    assert_eq!(hybrid, [6, 12, 18, 24, 30, 36, 42, 47, 51]);
+    assert!(hybrid.iter().all(|l| s.layers[*l].pre_branch.as_ref().is_some_and(|b| b.group == 0 && b.weights_layer == 6)));
+    let Mixer::Mamba2(m) = &s.layers[0].mixer else { panic!() };
+    assert_eq!((m.heads, m.head_dim, m.state, m.conv_kernel, m.groups), (8, 640, 64, 4, 1));
+    assert!(m.conv_bias && m.dt_min == 0.0 && m.norm_eps == 1e-5);
+    let pb = s.layers[6].pre_branch.as_ref().unwrap();
+    assert_eq!((pb.attn.heads, pb.attn.head_dim, pb.attn.in_dim), (32, 160, Some(5120)));
+    assert_eq!(pb.mlp.intermediate, 10240);
+    assert_eq!(pb.lowrank.map(|l| (l.rank, l.attn)), Some((128, false)));
+    assert!(s.head.tied);
+    assert_eq!(s.hf.names["pb.attn.q"], "model.layers.{B}.shared_transformer.self_attn.q_proj");
+    // One shared set of weights for nine layers; nine adapters of their own.
+    assert!(p.params.iter().filter(|d| d.name == "pb0.attn.q.w").count() == 1);
+    assert_eq!(p.params.iter().filter(|d| d.name.ends_with(".mlp.gate.lora_a")).count(), 9);
+}
+
+/// **ChatGLM3** (`REFERENCE_REMOTE_CODE_V1`, a data adapter over remote code): THUDM/chatglm3-6b's published-style configuration — 28 layers, multi-query attention with two key/value
+/// groups over 32 heads of 128, a fused `query_key_value` with a bias, a rotary embedding over the first half of each head on adjacent pairs, a SwiGLU MLP of 13,696, an untied head over
+/// 65,024 tokens. Written from the repository's config as remembered, and the adapter follows a modelling file this crate has no copy of: the architecture is LOWERABLE_UNVERIFIED.
+#[test]
+fn chatglm3_6b_is_a_partial_interleaved_multi_query_decoder_and_binds_every_tensor() {
+    let (s, p) = ok("chatglm3-6b");
+    assert_eq!(s.layers.len(), 28);
+    let a = attn(&s, 0);
+    assert_eq!((a.heads, a.kv_heads, a.head_dim), (32, 2, 128));
+    assert_eq!((rope(a).rotary_dim, rope(a).style), (64, crate_rope::RopeStyle::Interleaved));
+    assert_eq!(rope(a).freqs.theta, 10000.0);
+    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.intermediate == 13696));
+    assert_eq!(s.vocab_size, 65024);
+    assert!(!s.head.tied);
+    assert_eq!(kinds(&p), 1);
+    assert!(matches!(s.reference, Reference::RemoteCode { ref module, pin: None } if module == "modeling_chatglm.ChatGLMForConditionalGeneration"));
+    // ChatGLM3-32k's `rope_ratio` scales the base.
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/chatglm3-6b.json")).unwrap();
+    let long = parse_config_str(&cfg.replace("\"rmsnorm\": true", "\"rmsnorm\": true, \"rope_ratio\": 50")).unwrap();
+    assert_eq!(rope(attn(&long, 0)).freqs.theta, 500000.0);
+}
+
 /// **Gemma-3n's text decoder** (FR-12): four AltUp streams, LAuReL, per-layer inputs, the first ten layers sparse, the last fifteen
 /// sharing keys and values — and no tensor name left unmapped.
 #[test]

@@ -57,7 +57,7 @@ pub(crate) fn phi(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
             residual: Residual::Parallel { norm, ffn_norm: None },
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "model.layers.{L}.";
@@ -127,7 +127,7 @@ pub(crate) fn gpt2(p: &mut P) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: pre_norm(norm),
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -214,7 +214,7 @@ pub(crate) fn gpt_neo(p: &mut P) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: pre_norm(norm),
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -281,7 +281,7 @@ pub(crate) fn gpt_neox(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "gpt_neox.layers.{L}.";
@@ -337,7 +337,7 @@ pub(crate) fn gptj(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
             residual: Residual::Parallel { norm, ffn_norm: None },
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -440,7 +440,7 @@ pub(crate) fn falcon(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -517,7 +517,7 @@ pub(crate) fn gpt_bigcode(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -589,7 +589,7 @@ pub(crate) fn bloom(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::GeluTanh, true)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.h.{L}.";
@@ -698,7 +698,7 @@ pub(crate) fn mpt(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(4 * hidden, Act::Gelu, false)),
             residual: pre_norm(norm),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "transformer.blocks.{L}.";
@@ -755,7 +755,7 @@ pub(crate) fn opt(p: &mut P) -> Result<ArchSpec> {
             mixer: Mixer::Attention(at.clone()),
             ffn: Ffn::Mlp(plain_mlp(ffn, act, bias)),
             residual: residual.clone(),
-            post_scale: 1.0,
+            pre_branch: None, post_scale: 1.0,
         })
         .collect();
     let l = "model.decoder.layers.{L}.";

@@ -177,7 +177,7 @@ pub fn parse_legacy(v: &Value) -> Result<ArchSpec> {
                     "{arch}: trust_remote_code module `{module}` is not modelled — its forward may differ from any transformers class"
                 )));
             }
-            Reference::RemoteCode { module }
+            Reference::RemoteCode { module, pin: None }
         }
         None => {
             if REMOTE_ONLY.contains(&arch.as_str()) {
@@ -552,6 +552,7 @@ impl P<'_> {
             notes: std::mem::take(&mut self.notes),
             prefix_lm: false,
             cross_states: None,
+            embed_carry: false,
         }
     }
 }
@@ -674,6 +675,7 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
         sparse: None,
         gate: None,
         v_scale: 1.0,
+        in_dim: None,
         differential: None,
         moa: None,
     }

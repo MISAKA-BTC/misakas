@@ -46,7 +46,7 @@ pub(crate) fn clip_text(p: &mut P, projection: bool) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: pre_norm(norm),
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();
@@ -184,7 +184,7 @@ pub(crate) fn bert_like(p: &mut P, flavor: BertFlavor) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: Residual::PostNorm { mixer_norm: norm, ffn_norm: norm },
-                post_scale: 1.0,
+                pre_branch: None, post_scale: 1.0,
             }
         })
         .collect();

@@ -154,6 +154,7 @@ fixtures!(
     apertus,
     lfm2,
     kimi_linear,
+    zamba2,
     nemotron_h,
     nemotron_h_latent,
     falcon_h1,

@@ -51,8 +51,15 @@ pub enum Reference {
     /// `transformers`' own modeling file for `model_type`.
     #[default]
     Native,
-    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice).
-    RemoteCode { module: String },
+    /// A `trust_remote_code` module shipped with the checkpoint (pinned by revision in practice). **`REFERENCE_REMOTE_CODE_V1`**: `pin` is the
+    /// sha256 of the modelling file the lowering follows, as the adapter DECLARES it (`remote_code_pin`, the hash `tools/remote_reference.py` records when
+    /// a registrant builds the tiny reference from that file); `None` when the adapter names no file. Declared, never attested: no part of the chain runs
+    /// remote code, so a model of this kind is `LOWERABLE_UNVERIFIED` pinned or not.
+    RemoteCode {
+        module: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+    },
     /// A third-party library the checkpoint names (e.g. flash-linear-attention for RWKV-7).
     ExternalLibrary { name: String },
 }
@@ -290,6 +297,10 @@ pub struct AttnSpec {
     /// **`ATTN_VALUE_SCALE_V1`**: a constant on the values after their projection (`attention_value_scale`, MiMo-V2-Flash).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub v_scale: f64,
+    /// The width of the attention's input when it is not the hidden size (`ATTN_SHARED_BLOCK_V1`: Zamba2's shared block reads
+    /// `[hidden state | embedding]`, `2·hidden` wide); `q`, `k`, `v` project from it and `o` returns to the hidden width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_dim: Option<usize>,
     /// **`ATTN_DIFFERENTIAL_V1`**: differential attention (DiffLlama): every head pair `(i, i + H/2)` shares one value read, the second
     /// head's context is subtracted from the first's with a learned `λ`, and the result is RMS-normed over the pair's width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1113,6 +1124,64 @@ pub struct LayerSpec {
     /// Multiplier on the layer output (RWKV `rescale_every`: 0.5 every N layers; else 1).
     #[serde(default = "one")]
     pub post_scale: f64,
+    /// **`LAYER_PRE_BRANCH_V1`**: an attention + MLP branch (Zamba2's shared transformer) computed from `[h | e0]` whose output is ADDED to the
+    /// mixer's input: `h <- h + mixer(norm(h + branch))`. Only under [`Residual::Sequential`] with a mixer norm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_branch: Option<PreBranch>,
+}
+
+/// **`LAYER_PRE_BRANCH_V1`** (with `ATTN_SHARED_BLOCK_V1`, `EMBED_CARRY_V1`, `LINEAR_LOWRANK_ADAPTER_V1`): Zamba2's hybrid layer.
+///
+/// `u = in_norm(concat[h, e0])` (`e0` is [`ModelSpec::embed_carry`]'s carried embedding), `a = attn(u)`, `m = mid_norm(a)`, `f = mlp(m)`,
+/// `t = out(f)`, and the layer's mixer reads `norm(h + t)`. The branch has NO residual of its own. Its weights (`in_norm`, the attention,
+/// `mid_norm`, the MLP) are SHARED by every layer of the same `group`: one set of integer tensors in the artifact (global params named
+/// `pb{group}.*`), each occurrence with its own activation scales, KV history and low-rank adapters. `out` and the adapters are per layer.
+/// The attention's `in_dim` must be `2·hidden`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreBranch {
+    pub in_norm: NormSpec,
+    pub attn: AttnSpec,
+    pub mid_norm: NormSpec,
+    pub mlp: MlpSpec,
+    /// Per-layer low-rank adapters (`LINEAR_LOWRANK_ADAPTER_V1`): `y = W x + B (A x)`, `A: [rank, in]`, `B: [out, rank]`, on the q, k, v
+    /// projections of the attention (`attn`) and on the MLP's fused gate/up projection (`mlp`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lowrank: Option<LowRankSpec>,
+    /// The sharing group: layers of one group read one set of branch weights.
+    pub group: usize,
+    /// The layer whose checkpoint module stores the group's weights (`{B}` in a tensor-name template), and this layer's ordinal among the
+    /// layers with a pre-branch (`{O}`: its adapters' index). Data of the binding, not of the function; they make every pre-branch layer
+    /// a block of its own (its adapters are its own tensors).
+    pub weights_layer: usize,
+    pub ordinal: usize,
+}
+
+impl PreBranch {
+    /// The HL names of the branch's params (frontend-neutral; `crate::hl::build` and `crate::hf_weights` both read them here).
+    pub fn attn_prefix(&self) -> String {
+        format!("pb{}.attn", self.group)
+    }
+    pub fn mlp_name(&self) -> String {
+        format!("pb{}.mlp", self.group)
+    }
+    pub fn in_norm_name(&self) -> String {
+        format!("pb{}.in_norm", self.group)
+    }
+    pub fn mid_norm_name(&self) -> String {
+        format!("pb{}.mid_norm", self.group)
+    }
+    /// The base of the HL names of this layer's adapters.
+    pub fn adapter_base(&self) -> String {
+        format!("pb{}.d{}", self.group, self.ordinal)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LowRankSpec {
+    pub rank: usize,
+    /// The attention's q, k, v projections carry an adapter too (`use_shared_attention_adapter`); the MLP's always does.
+    #[serde(default)]
+    pub attn: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1276,6 +1345,10 @@ pub struct ModelSpec {
     /// skipped, as HF skips them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_states: Option<CrossStatesSpec>,
+    /// **`EMBED_CARRY_V1`**: the embedding block's output rides through every layer as one more carry (`e0`, the hidden width), for
+    /// the layers with a [`PreBranch`] to read (Zamba2 concatenates it to the hidden state).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embed_carry: bool,
 }
 
 /// The states the cross-attention layers read: `rows` rows of `hidden_size` values (fixed per class, like a vision class's image size).
