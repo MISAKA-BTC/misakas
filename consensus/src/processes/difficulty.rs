@@ -514,8 +514,16 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // (`palw_clock_slot_admits_v1`) gives a slot to the newest source's stamp. Where the fence does not
         // govern, `attempts` is never read and this is the heartbeat-only rule, byte for byte.
         let attempt_ticks = self.real_clock_tick.is_some_and(|fence| fence.is_active(parent_daa));
-        let stand_in = stand_in || (attempt_ticks && priced == 0 && attempts > 0);
-        let beat_ms = if attempt_ticks { newest_beat_ms.into_iter().chain(newest_attempt_ms).max() } else { newest_beat_ms }.unwrap_or(0);
+        let (stand_in, beat_ms) = kaspa_consensus_core::palw_real_share_v1::palw_clock_tick_source_v1(
+            &kaspa_consensus_core::palw_real_share_v1::PalwClockMergesetFactsV1 {
+                priced,
+                heartbeats,
+                attempts,
+                newest_beat_ms,
+                newest_attempt_ms,
+            },
+            attempt_ticks,
+        );
         let granted = stand_in
             && parent_cursor
                 .is_none_or(|cursor| kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_slot_admits_v1(&cursor, beat_ms).is_ok());

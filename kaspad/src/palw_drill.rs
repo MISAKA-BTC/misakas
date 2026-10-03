@@ -87,6 +87,8 @@ pub struct PalwDrillExtraFencesV1 {
     pub fp_v5_at: Option<u64>,
     /// RFC-0003's held leaf challenge (decision 22; `palw_held_close_chunks_v1`, object tag 90).
     pub held_chunks_at: Option<u64>,
+    /// ADR-0165's Useful Work Transition (`palw_floor_reserve_v1` + `palw_real_clock_tick_v1`).
+    pub useful_work_at: Option<u64>,
     pub improve_at: Option<u64>,
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
     /// per-fence flags of its entries, never with them.
@@ -108,6 +110,7 @@ impl PalwDrillExtraFencesV1 {
             decode_rules_at: args.palw_drill_decode_rules_at,
             fp_v5_at: args.palw_drill_fp_v5_at,
             held_chunks_at: args.palw_drill_held_chunks_at,
+            useful_work_at: args.palw_drill_useful_work_at,
             improve_at: args.palw_drill_improve_at,
             int11_at: args.palw_drill_int11_at,
         }
@@ -122,6 +125,7 @@ impl PalwDrillExtraFencesV1 {
             || self.decode_rules_at.is_some()
             || self.fp_v5_at.is_some()
             || self.held_chunks_at.is_some()
+            || self.useful_work_at.is_some()
             || self.improve_at.is_some()
             || self.int11_at.is_some()
     }
@@ -161,6 +165,7 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
             ("--palw-drill-held-chunks-at", self.held_chunks_at, "RFC-0003's held leaf challenge (palw_held_close_chunks_v1)"),
+            ("--palw-drill-useful-work-at", self.useful_work_at, "ADR-0165's Useful Work Transition (palw_floor_reserve_v1, palw_real_clock_tick_v1)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
         ]
@@ -245,6 +250,9 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.held_chunks_at {
             moves.extend(d::palw_drill_held_close_chunks_at_v1(params, at).map_err(|e| format!("--palw-drill-held-chunks-at: {e}"))?);
         }
+        if let Some(at) = self.useful_work_at {
+            moves.extend(d::palw_drill_useful_work_at_v1(params, at).map_err(|e| format!("--palw-drill-useful-work-at: {e}"))?);
+        }
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
@@ -286,6 +294,7 @@ impl PalwDrillExtraFencesV1 {
         vec![
             ("held_chunks_at=", "--palw-drill-held-chunks-at", palw_drill_marker_fence_text_v1(self.held_chunks_at)),
             ("int11_at=", "--palw-drill-int11-at", palw_drill_marker_fence_text_v1(self.int11_at)),
+            ("useful_work_at=", "--palw-drill-useful-work-at", palw_drill_marker_fence_text_v1(self.useful_work_at)),
         ]
     }
 
@@ -905,6 +914,7 @@ pub fn palw_drill_write_keyring_v4(
         "decode_rules_at": extra.decode_rules_at,
         "fp_v5_at": extra.fp_v5_at,
         "held_chunks_at": extra.held_chunks_at,
+        "useful_work_at": extra.useful_work_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "public_genesis_hash": public.genesis.hash.to_string(),

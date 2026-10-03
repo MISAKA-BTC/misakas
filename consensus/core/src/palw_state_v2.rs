@@ -15023,8 +15023,29 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
-    /// **101: one row of the Useful Work Transition's ledger** (`real_work`, ADR-0165). Appended at the
-    /// end of the enum; written only past `palw_floor_reserve_v1`, so no stored delta carries it below.
+    /// **101: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot101,
+    /// **102: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot102,
+    /// **103: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot103,
+    /// **104: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot104,
+    /// **105: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot105,
+    /// **106: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot106,
+    /// **107: reserved for another lane of the DAA-5,300 release** (the coordinator's numbering of 2026-10-03); never written here, so the
+    /// index below is pinned at 108 whatever order the lanes merge in. Integration replaces each with that lane's variant.
+    ReservedLaneSlot107,
+    /// **108: one row of the Useful Work Transition's ledger** (`real_work`, ADR-0165). Written only past
+    /// `palw_floor_reserve_v1`, so no stored delta carries it below.
     RealWork {
         key: u64,
         old: Option<u64>,
@@ -37955,6 +37976,15 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ClassCourtWindow { key, old, new } => swap_write!(state.class_court_windows, key, old, new),
         PalwDeltaEntryV2::RealWork { key, old, new } => swap_write!(state.real_work, key, old, new),
+        PalwDeltaEntryV2::ReservedLaneSlot101
+        | PalwDeltaEntryV2::ReservedLaneSlot102
+        | PalwDeltaEntryV2::ReservedLaneSlot103
+        | PalwDeltaEntryV2::ReservedLaneSlot104
+        | PalwDeltaEntryV2::ReservedLaneSlot105
+        | PalwDeltaEntryV2::ReservedLaneSlot106
+        | PalwDeltaEntryV2::ReservedLaneSlot107 => {
+            return Err(PalwStateV2Error::DeltaMismatch("a delta entry reserved for another lane carries no change"));
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -56821,6 +56851,14 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassWalk { .. } => "class_walk",
                     PalwDeltaEntryV2::Class { .. } => "class",
                     PalwDeltaEntryV2::ClassCourtWindow { .. } => "class_court_window",
+                    PalwDeltaEntryV2::RealWork { .. } => "real_work",
+                    PalwDeltaEntryV2::ReservedLaneSlot101
+                    | PalwDeltaEntryV2::ReservedLaneSlot102
+                    | PalwDeltaEntryV2::ReservedLaneSlot103
+                    | PalwDeltaEntryV2::ReservedLaneSlot104
+                    | PalwDeltaEntryV2::ReservedLaneSlot105
+                    | PalwDeltaEntryV2::ReservedLaneSlot106
+                    | PalwDeltaEntryV2::ReservedLaneSlot107 => "reserved",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
@@ -57212,6 +57250,10 @@ pub(crate) mod tests {
             // The release line's model-specific finite court horizon, at the END of the delta enum (spec 17 §17.0:
             // `GenClass` keeps 90; the window is dormant on every network, so no stored delta moved).
             (100, PalwDeltaEntryV2::ClassCourtWindow { key, old: None, new: Some(9_000) }),
+            // ADR-0165 (lane RS): 101–107 are other lanes' (reserved here), the Useful Work ledger is 108.
+            (101, PalwDeltaEntryV2::ReservedLaneSlot101),
+            (107, PalwDeltaEntryV2::ReservedLaneSlot107),
+            (108, PalwDeltaEntryV2::RealWork { key: 7, old: None, new: Some(1) }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -69687,6 +69729,7 @@ pub(crate) mod tests {
     mod activation_pool_r1_v1;
     // ADR-0160 F-W (lane cap-weight): staged weight and the per-bond weight cap through the fold.
     mod capacity_weight_cap_v1;
+    mod real_work_reserve_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

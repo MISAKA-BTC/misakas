@@ -129,6 +129,38 @@ pub const PALW_T12_FLOOR_RESERVE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFe
 pub const PALW_T12_REAL_CLOCK_TICK_ENTRY: PalwPostLaunchFenceV1 =
     PalwPostLaunchFenceV1 { name: "palw_real_clock_tick_v1", set: |params, at| params.palw_real_clock_tick_v1 = at };
 
+/// **What a mergeset holds, as the clock reads it** — the counts and newest stamps `palw_clock_step_v1`
+/// gathers from the headers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClockMergesetFactsV1 {
+    /// Blocks `bits` prices (any one of them is the clock's own source and no tick source is needed).
+    pub priced: u64,
+    pub heartbeats: u64,
+    pub attempts: u64,
+    pub newest_beat_ms: Option<u64>,
+    pub newest_attempt_ms: Option<u64>,
+}
+
+/// **The tick source rule, one function** (ADR-0165 B; read by `palw_clock_step_v1`, asked by the tests):
+/// `(stand_in, source_ms)` — whether the mergeset has a tick source, and the stamp the cursor's slot is
+/// measured against (the NEWEST source's; `0` where there is none). With `attempt_ticks` false it is the
+/// heartbeat-only rule (ADR-0138 §3b), byte for byte; with it true an attempt-lane block is a source
+/// beside the heartbeat. A mergeset has ONE tick however many sources it holds: the caller removes one
+/// exemption, never one per source.
+pub fn palw_clock_tick_source_v1(facts: &PalwClockMergesetFactsV1, attempt_ticks: bool) -> (bool, u64) {
+    let beat = facts.priced == 0 && facts.heartbeats > 0;
+    let attempt = attempt_ticks && facts.priced == 0 && facts.attempts > 0;
+    let newest = if attempt_ticks { facts.newest_beat_ms.into_iter().chain(facts.newest_attempt_ms).max() } else { facts.newest_beat_ms };
+    (beat || attempt, newest.unwrap_or(0))
+}
+
+/// **The release's list** (ADR-0165): the Useful Work Transition's two consensus fences, which the
+/// DAA-5,300 flag day arms together (lane INT places the entries in its own list).
+pub const PALW_T12_USEFUL_WORK_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_FLOOR_RESERVE_ENTRY, PALW_T12_REAL_CLOCK_TICK_ENTRY];
+
+/// The drill's list (`--palw-drill-useful-work-at`, [`crate::config::drill::palw_drill_useful_work_at_v1`]).
+pub const PALW_DRILL_USEFUL_WORK_FENCES_V1: &[PalwPostLaunchFenceV1] = PALW_T12_USEFUL_WORK_FENCES_V1;
+
 impl Params {
     /// `palw_floor_reserve_v1`, resolved: `Some` only on a `ConsensusV2` network that armed it.
     pub fn palw_floor_reserve_fence(&self) -> Option<ForkActivation> {
@@ -220,6 +252,92 @@ impl Params {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_clock_cursor_v1::{palw_clock_cursor_from_reference_v1, palw_clock_slot_admits_v1};
+    use crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
+
+    fn facts(heartbeats: u64, attempts: u64, beat: Option<u64>, attempt: Option<u64>) -> PalwClockMergesetFactsV1 {
+        PalwClockMergesetFactsV1 { priced: 0, heartbeats, attempts, newest_beat_ms: beat, newest_attempt_ms: attempt }
+    }
+
+    #[test]
+    fn without_the_fence_an_attempt_is_no_tick_source_and_with_it_the_newest_source_decides() {
+        let f = facts(0, 7, None, Some(500));
+        assert_eq!(palw_clock_tick_source_v1(&f, false), (false, 0), "heartbeat-only below the fence");
+        assert_eq!(palw_clock_tick_source_v1(&f, true), (true, 500));
+        let both = facts(2, 100, Some(900), Some(400));
+        assert_eq!(palw_clock_tick_source_v1(&both, true), (true, 900), "the newest of either kind");
+        assert_eq!(palw_clock_tick_source_v1(&both, false), (true, 900));
+        let priced = PalwClockMergesetFactsV1 { priced: 1, ..f };
+        assert_eq!(palw_clock_tick_source_v1(&priced, true).0, false, "a bits-priced block is the clock; no stand-in");
+    }
+
+    /// **The clock-safety simulation (ADR-0165 §3.4).** A chain of steps, each merging every tick source
+    /// that arrived since the last one; sources are heartbeats or attempts stamped by an adversary anywhere
+    /// from `now` to `now + 132 s`, in bursts of up to 100 at one instant. A step is stamped at
+    /// `max(now, slot)` and may be withheld by the adversary for a while. Whatever it does, with the
+    /// fence ON: (1) the DAA advances at most ONCE per step, whatever the burst; (2) ticks are never
+    /// closer than one interval in stamp; (3) over any horizon the DAA has advanced at most
+    /// `horizon / interval + 2` — what a heartbeat-only miner can do, and the burst bound `⌊132/120⌋ + 1`.
+    #[test]
+    fn a_producer_of_any_mix_cannot_run_the_clock_faster_than_a_heartbeat_miner() {
+        let mut seed = 0xC10C_u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed >> 33
+        };
+        for attempt_ticks in [false, true] {
+            for _round in 0..300 {
+                let start = 10_000_000u64;
+                let mut now = start;
+                let mut reference = start; // the stamp of the block that last advanced the score
+                let mut daa = 0u64;
+                let mut last_tick_stamp = start;
+                let steps = 40 + next() % 80;
+                for _ in 0..steps {
+                    now += next() % (2 * I);
+                    // a burst of sources at this instant: counts and stamps as the adversary likes
+                    let n_beats = next() % 4;
+                    let n_attempts = next() % 101;
+                    let stamp = |r: u64| now + r % 132_001;
+                    let newest_beat = (n_beats > 0).then(|| (0..n_beats).map(|_| stamp(next())).max().unwrap());
+                    let newest_attempt = (n_attempts > 0).then(|| (0..n_attempts).map(|_| stamp(next())).max().unwrap());
+                    let f = facts(n_beats, n_attempts, newest_beat, newest_attempt);
+                    let (stand_in, source_ms) = palw_clock_tick_source_v1(&f, attempt_ticks);
+                    let cursor = palw_clock_cursor_from_reference_v1(reference, I);
+                    let granted = stand_in && palw_clock_slot_admits_v1(&cursor, source_ms).is_ok();
+                    if granted {
+                        // H5 + the lead cap: the step is stamped at or past its slot and not past now + 132 s.
+                        let step_stamp = now.max(cursor.next_slot_ms);
+                        if step_stamp > now + 132_000 {
+                            continue; // refused by the lead cap: not merged now
+                        }
+                        daa += 1;
+                        assert!(step_stamp >= last_tick_stamp, "stamps of ticks never go back");
+                        assert!(step_stamp - reference >= I, "two ticks are at least one interval apart in stamp");
+                        last_tick_stamp = step_stamp;
+                        reference = step_stamp;
+                    }
+                }
+                let horizon = (now - start).max(1);
+                assert!(daa <= horizon / I + 2, "attempt_ticks={attempt_ticks}: {daa} ticks over {horizon} ms (≤ {})", horizon / I + 2);
+            }
+        }
+    }
+
+    /// One tick however many attempts: the exemption count a mergeset leaves is `exempt − 1` for any
+    /// number of attempts (the arithmetic `palw_clock_step_v1` performs on `granted`).
+    #[test]
+    fn a_hundred_attempts_in_one_slot_advance_the_score_by_one() {
+        let cursor = palw_clock_cursor_from_reference_v1(1_000, I);
+        for attempts in [1u64, 2, 100, 10_000] {
+            let f = facts(0, attempts, None, Some(1_000 + I));
+            let (stand_in, ms) = palw_clock_tick_source_v1(&f, true);
+            let granted = stand_in && palw_clock_slot_admits_v1(&cursor, ms).is_ok();
+            let exempt = attempts; // every attempt is exempt past the single lottery
+            let after = if granted { exempt.saturating_sub(1) } else { exempt };
+            assert_eq!(exempt - after, 1, "{attempts} attempts, one tick");
+        }
+    }
 
     fn ledger(finals: &[(u64, u64)]) -> BTreeMap<u64, u64> {
         finals.iter().copied().collect()
