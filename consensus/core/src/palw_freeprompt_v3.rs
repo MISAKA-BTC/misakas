@@ -446,10 +446,11 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
         let (v5, eval) = (crate::palw_fp_job_v5::PALW_FP_V5_VERSION, crate::palw_improve_eval_v1::PALW_FP_EVAL_VERSION);
         let gen_version = crate::palw_gen_claim_v1::PALW_FP_GEN_VERSION;
         let prefix = crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
-        if version == PALW_FP_V4_VERSION || version == v5 || version == eval || version == prefix {
+        let inherit = crate::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION;
+        if version == PALW_FP_V4_VERSION || version == v5 || version == eval || version == prefix || version == inherit {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
-        if version == prefix {
+        if version == prefix || version == inherit {
             job.tail = Some(PalwFpJobTailV1::Prefix(borsh::BorshDeserialize::deserialize_reader(reader)?));
         }
         if version == crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION {
@@ -506,7 +507,12 @@ impl PalwFreePromptJobV3 {
 
     /// Is this a prefix-state job (RFC-0001 §2.6 stage 2: version 11, a V4 job naming the KV prefix it consumed)?
     pub fn is_prefix_state(&self) -> bool {
-        self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
+        self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION || self.is_prefix_inherit()
+    }
+
+    /// Is this a prefix-state job whose prefix leaves are INHERITED (RFC-0001 §2.6 stage 2b: version 12)?
+    pub fn is_prefix_inherit(&self) -> bool {
+        self.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION
     }
 
     /// Is this a tensor job (RFC-0003 §I.4: FP job version 10, an image or an embedding)?
@@ -555,7 +561,7 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
         return crate::palw_improve_eval_v1::fp_job_id_eval_carried_v1(job);
     }
     // RFC-0001 §2.6 stage 2: a prefix-state job, under its own domain.
-    if job.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION {
+    if job.is_prefix_state() {
         return crate::palw_fp_prefix_v1::fp_job_id_prefix_v1(job);
     }
     // ADR-0096 Decision 7: a constrained job, under its own.

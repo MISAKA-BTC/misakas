@@ -211,6 +211,8 @@ impl ConsensusServices {
         // RFC-0001 §2.6 stage 2 (the prefix-state claim, FP job version 11): its two doors, where the ruleset carries
         // `palw_fp_prefix_state`. `None` on every shipped preset.
         .with_fp_prefix_state_fence(params.palw_fp_prefix_state_fence())
+        // RFC-0001 §2.6 stage 2b: the inherited-prefix claim's fence. `None` on every shipped preset.
+        .with_fp_prefix_inherit_fence(params.palw_fp_prefix_inherit_fence())
         // ADR-0096 Decision 8 and RFC-0001 §2.5: the constrained claim's fences. `None` on every shipped preset.
         .with_fp_decode_constraint_fence(params.palw_fp_decode_constraint_fence())
         .with_fp_constraint_v2_fence(params.palw_fp_constraint_v2_fence());

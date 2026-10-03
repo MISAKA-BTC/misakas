@@ -2336,7 +2336,7 @@ mod tests {
             Hash64::from_bytes([0x10; 64]),
             &freeprompt(),
             false,
-            |_| PalwFpClassCapsV1 { step_ladder: class_ladder, held, derived_work: PalwFpDerivedWorkCapV1::Declared, logits_q24: true, prefix_state_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant },
+            |_| PalwFpClassCapsV1 { step_ladder: class_ladder, held, derived_work: PalwFpDerivedWorkCapV1::Declared, logits_q24: true, prefix_state_armed: false, prefix_inherit_armed: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant },
             ruleset_caps_armed,
             held_armed,
             FORM,

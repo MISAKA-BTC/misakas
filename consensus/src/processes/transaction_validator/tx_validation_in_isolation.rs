@@ -57,6 +57,8 @@ impl TransactionValidator {
             // RFC-0001 §2.6 stage 2: the prefix-state claim's height-free door — `true` only where the ruleset carries
             // `palw_fp_prefix_state`; the header-context door decides the height.
             self.palw_fp_prefix_state_fence.is_some(),
+            // RFC-0001 §2.6 stage 2b: the inherited-prefix claim's height-free door.
+            self.palw_fp_prefix_inherit_fence.is_some(),
             // ADR-0096 Decision 8: the constrained claim's height-free door — `true` only where the ruleset carries
             // `palw_fp_decode_constraint`; the header-context door decides the height.
             self.palw_fp_decode_constraint_fence.is_some(),
@@ -372,6 +374,8 @@ fn check_transaction_subnetwork(
     palw_gen_door: bool,
     // RFC-0001 §2.6 stage 2: the ruleset carries `palw_fp_prefix_state` — height-free, as isolation is.
     palw_prefix_door: bool,
+    // RFC-0001 §2.6 stage 2b: the ruleset carries `palw_fp_prefix_inherit` — height-free.
+    palw_inherit_door: bool,
     // ADR-0096 Decision 8: the ruleset carries `palw_fp_decode_constraint` — height-free.
     palw_constraint_door: bool,
 ) -> TxResult<()> {
@@ -492,6 +496,7 @@ fn check_transaction_subnetwork(
             palw_improvement_door,
             palw_gen_door,
             palw_prefix_door,
+            palw_inherit_door,
             palw_constraint_door,
         )
         .map_err(TxRuleError::InvalidPalwFpPayload)?;
@@ -1487,6 +1492,7 @@ mod pq_output_class_enforcement_tests {
                 tv.palw_improvement_fence.is_some(),
                 tv.palw_fp_job_v5_fence.is_some(),
                 tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_prefix_inherit_fence.is_some(),
                 tv.palw_fp_decode_constraint_fence.is_some(),
             )
         };
@@ -1651,6 +1657,7 @@ mod pq_output_class_enforcement_tests {
                 tv.palw_improvement_fence.is_some(),
                 tv.palw_fp_job_v5_fence.is_some(),
                 tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_prefix_inherit_fence.is_some(),
                 tv.palw_fp_decode_constraint_fence.is_some(),
             )
         };

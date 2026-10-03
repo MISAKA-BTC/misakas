@@ -2880,6 +2880,15 @@ pub struct Params {
     /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
     pub palw_fp_job_v5: Option<ForkActivation>,
 
+    /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
+    /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
+    /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
+    /// commits byte-identical leaves there — a seat holds them once, and a court opens them against any claim that committed them.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only. Requires `palw_fp_prefix_state` in force at
+    /// or below it ([`Self::validate_palw_fp_prefix_inherit_v1`]).
+    pub palw_fp_prefix_inherit: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2: the prefix-STATE receipt** (ADR-0145 §6). Past this height a free-prompt claim may be FP job
     /// version 11: a V4 job whose tail names the KV prefix state it consumed ([`crate::palw_fp_prefix_v1`]), credited for the new
     /// positions only. Below it, and on every network that leaves it `None`, such a job is refused by name.
@@ -4003,6 +4012,8 @@ impl Params {
         self.validate_palw_gen_v1()?;
         // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
         self.validate_palw_fp_job_v5_v1()?;
+        // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
+        self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_state_v1()?;
         // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
@@ -6277,6 +6288,9 @@ impl Params {
         // FP Job V5, likewise.
         if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
             self.palw_fp_job_v5 = None;
+        }
+        if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
+            self.palw_fp_prefix_inherit = None;
         }
         if self.palw_fp_prefix_state == Some(ForkActivation::never()) {
             self.palw_fp_prefix_state = None;
@@ -9603,6 +9617,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
             palw_fp_constraint_v2,
@@ -9854,6 +9869,7 @@ impl Params {
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
+            ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
             ("palw_fp_constraint_v2", *palw_fp_constraint_v2),
@@ -10119,6 +10135,11 @@ impl Params {
         if let Some(v5) = self.palw_fp_job_v5 {
             h.write(b"palw_fp_job_v5");
             h.write(v5.daa_score().to_le_bytes());
+        }
+        // palw_fp_prefix_inherit, NAMED likewise.
+        if let Some(at) = self.palw_fp_prefix_inherit {
+            h.write(b"palw_fp_prefix_inherit");
+            h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_state, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_state {
@@ -10703,6 +10724,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
             palw_fp_constraint_v2,
@@ -11415,6 +11437,10 @@ impl Params {
         if let Some(activation) = palw_fp_job_v5.as_mut() {
             fork(activation, visit);
         }
+        // palw_fp_prefix_inherit. Some-only.
+        if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_state. Some-only.
         if let Some(activation) = palw_fp_prefix_state.as_mut() {
             fork(activation, visit);
@@ -11904,6 +11930,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
             palw_fp_constraint_v2,
@@ -12660,6 +12687,11 @@ impl Params {
             h.write(b"palw_fp_job_v5");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // palw_fp_prefix_inherit, Some-only for the same reason.
+        if let Some(activation) = palw_fp_prefix_inherit {
+            h.write(b"palw_fp_prefix_inherit");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_state, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_state {
             h.write(b"palw_fp_prefix_state");
@@ -13384,6 +13416,7 @@ impl Params {
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
+            palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
             palw_fp_constraint_v2: self.palw_fp_constraint_v2,
@@ -14459,6 +14492,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
     palw_fp_constraint_v2: None,
@@ -14730,6 +14764,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
     palw_fp_constraint_v2: None,
@@ -14983,6 +15018,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
     palw_fp_constraint_v2: None,
@@ -22330,6 +22366,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
     palw_fp_constraint_v2: None,

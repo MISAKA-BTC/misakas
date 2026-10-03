@@ -135,6 +135,9 @@ pub struct TransactionValidator {
     /// the ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one
     /// below the height. `None` on every shipped preset.
     palw_fp_prefix_state_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.6 stage 2b: `Params::palw_fp_prefix_inherit_fence()`** — isolation asks `.is_some()` (a version-12 claim passes the
+    /// door's stateless rules where the ruleset carries the fence at all); the header-context door refuses one below its height.
+    palw_fp_prefix_inherit_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint_fence()`** (`never()` read as absence). Isolation asks the
     /// height-free question (`.is_some()`: a constrained claim, FP job version 6, passes the door's stateless rules where the
@@ -203,6 +206,7 @@ impl TransactionValidator {
             palw_fp_decode_rules_fence: None,
             palw_fp_job_v5_fence: None,
             palw_fp_prefix_state_fence: None,
+            palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
@@ -229,6 +233,13 @@ impl TransactionValidator {
     /// version-11 commitment's stateless rules at isolation and refuses one below the fence's height in the header context.
     pub fn with_fp_prefix_state_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_prefix_state_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0001 §2.6 stage 2b: declare the inherited-prefix claim's fence (`Params::palw_fp_prefix_inherit_fence()`).
+    pub fn with_fp_prefix_inherit_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_prefix_inherit_fence =
             fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
         self
     }
@@ -330,6 +341,7 @@ impl TransactionValidator {
             // Every shipped preset's door: the tensor claim is dormant, so version 10 is refused at isolation.
             palw_fp_job_v5_fence: None,
             palw_fp_prefix_state_fence: None,
+            palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
