@@ -885,3 +885,81 @@ fn a_capture_is_reassembled_from_answered_runs_and_refuses_a_false_leaf_or_a_gap
     }
     assert!(done >= 5);
 }
+
+/// **A shard-only holder's fetch** (D-S6): the rows of ONE shard, each proven against the registered root, make exactly the params
+/// the shard's cells read — the cells verify over them as over the whole class, a holder that lies about a row or opens another leaf is
+/// refused by name, and the seat held a fraction of the class.
+#[test]
+fn a_shard_only_holder_fetches_its_rows_proves_each_and_verifies_its_cells() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use misaka_palw_tir::interval::analyze_ranges;
+    use misaka_palw_tir_exec::node::{
+        TirArtifactV1, TirBackendV1, TirCaptureV1, TirFileMirrorV1, TirRowFetcherV1, fetch_shard_params_v1, tir_shard_cells_over_v1,
+        tir_verify_capture_cells_over_v1,
+    };
+    use std::sync::Arc;
+    struct Liar<'a>(&'a TirFileMirrorV1, u8);
+    impl TirRowFetcherV1 for Liar<'_> {
+        fn open_rows(&self, leaves: &[u32]) -> Result<Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, String> {
+            let mut o = self.0.open_rows(leaves)?;
+            match self.1 {
+                0 => o[0].operand.bytes[0] ^= 1,                    // a false row
+                1 => o[0].leaf_index = o[0].leaf_index.wrapping_add(1), // another leaf
+                _ => o.truncate(o.len() - 1),                        // fewer rows
+            }
+            Ok(o)
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("tir-exec-rows-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut done = 0;
+    for (k, (name, program, params)) in programs().into_iter().enumerate() {
+        if analyze_ranges(&program).is_err() || program.params.is_empty() || program.schedule.layers.len() < 2 {
+            continue;
+        }
+        let lay = layout(&program, 5, 2, 2, 64);
+        let path = dir.join(format!("{}.palwtir", name.replace(' ', "-")));
+        let mut tensor = |j: u16, l: Option<u16>| -> Result<Vec<u8>, String> {
+            params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or_else(|| format!("no tensor {j} {l:?}"))
+        };
+        misaka_palw_tir_artifact::write_container_v1(&path, &program, borsh::to_vec(&lay).unwrap(), [2; 64], name.clone(), &mut tensor).unwrap();
+        let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, leaf_count) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let class_id = class.class_id(&root);
+        let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class_id, (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
+        let outcome = backend.execute(&job, &prompt).unwrap();
+        let capture = TirCaptureV1::decode(&outcome.material).unwrap();
+        let positions = backend.space().job_shape(&job).unwrap().positions;
+        let mirror = TirFileMirrorV1(path.clone());
+        let mut fetched_fraction = Vec::new();
+        for shard in 0..2u16 {
+            let holding = fetch_shard_params_v1(&capture.binding.class, class_id, root, 2, shard, &mirror).unwrap_or_else(|e| panic!("{name} shard {shard}: {e}"));
+            fetched_fraction.push((holding.leaves, u64::from(leaf_count)));
+            assert!(holding.leaves < u64::from(leaf_count) || program.params.iter().all(|p| !p.per_layer), "{name}: a shard is a part of the class");
+            let cells = tir_shard_cells_over_v1(&holding.space, positions, shard, 2, 1, PalwSegmentMaskV2::full(1)).unwrap();
+            let v = tir_verify_capture_cells_over_v1(&holding.space, &holding.plan, &holding.params, class_id, false, &capture, &cells, &mut CpuKernelBackendV1).unwrap();
+            assert!(matches!(v, TirCellVerdictV1::Verified { .. }), "{name} shard {shard}: {v:?}");
+            // The shard's rows are exactly what the shard's cells read: the OTHER shard's cells do not run over them.
+            let other = tir_shard_cells_over_v1(&holding.space, positions, 1 - shard, 2, 1, PalwSegmentMaskV2::full(1)).unwrap();
+            let refused = tir_verify_capture_cells_over_v1(&holding.space, &holding.plan, &holding.params, class_id, false, &capture, &other, &mut CpuKernelBackendV1).unwrap();
+            let program_has_layer_params = program.params.iter().any(|p| p.per_layer);
+            if program_has_layer_params {
+                assert!(matches!(refused, TirCellVerdictV1::Refused(_)), "{name}: another shard's cell needs rows this seat did not fetch: {refused:?}");
+            }
+        }
+        // A lying holder: a false row, another leaf, fewer rows.
+        for mode in 0..3u8 {
+            let e = fetch_shard_params_v1(&capture.binding.class, class_id, root, 2, 0, &Liar(&mirror, mode)).err().expect("a lying holder is refused");
+            eprintln!("{name}: mode {mode}: {e}");
+        }
+        // A wrong registered root: every row fails its path.
+        assert!(fetch_shard_params_v1(&capture.binding.class, class_id, Hash64::from_bytes([1; 64]), 2, 0, &mirror).is_err());
+        done += 1;
+    }
+    assert!(done >= 4);
+}

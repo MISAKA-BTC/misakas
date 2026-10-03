@@ -271,6 +271,18 @@ defaults (`ProducerWithholding`).
   crate (`misaka-palw-tir-gpu`, an isolated workspace) implements `TirDeviceV1`; its `tests/cell.rs` holds the cell grain equal to
   the CPU executor's. A node binary that carries it needs a plug-in boundary, because wgpu 30 (`js-sys ^0.3.104`) and the consensus
   stack (`js-sys =0.3.77`) have no common lock.
+- **The device helper.** A device that cannot share the node's lock runs as a helper process (`palw-tir-gpu-helper`, built in the
+  GPU workspace): `--palw-tir-shard-gpu` spawns it and speaks the versioned cell wire of `misaka_palw_tir_exec::cellproc` over its
+  stdin and stdout (`Hello`, `Open{program, occ, params}`, `Step`, state reads, `Close`). With `--palw-tir-shard-gpu-mirror` (always
+  in shadow) every answer is checked against the CPU executor's byte for byte; a difference, an error or a refusal takes the helper out
+  of service and the CPU runs the cell.
+- **A seat without the capture** (`--palw-tir-shard-demand-runs`): it demands the job's leaves as `TirStepRun` units (at most one
+  run of 256 leaves per session, four sessions), and once the executor has answered every run the leaves make the capture
+  (`TirBackendV1::capture_from_runs_v1`: the step root recomputed over them must be the binding's) which it verifies its cells over.
+- **A seat without the class** (`--palw-tir-shard-mirror`): it fetches only its shard's inventory rows
+  (`palw_tir_shard_inventory_ranges_v1`), each an artifact opening proven by its Merkle path against the registered root
+  (`fetch_shard_params_v1`), and verifies its cells over exactly those rows; a lying holder is refused by name. Such a seat
+  does not build the accusation of a finding (its cone opens parameters through a backend it does not hold).
 - **Shadow.** `--palw-tir-shard-shadow` runs the pass and files nothing.
 - **Holding a shard.** `--palw-tir-shard-hold` limits the shards a node proves and answers. The executor runs a shard from the
   params of its own occurrences alone (`TirExecutor::new_cell` refuses a cell whose occurrences read an unbound instance).

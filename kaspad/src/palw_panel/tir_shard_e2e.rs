@@ -12,7 +12,8 @@
 //! The wire and the pool are tested beside it: a V4 receipt queues and nothing else decodes as one.
 
 use super::tir_shard::{
-    PalwTirShardOutcomeV1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_v1,
+    PalwTirShardOutcomeV1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
+    palw_tir_shard_outcome_v1,
 };
 use crate::palw_backends::PalwBackendRegistry;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
@@ -273,4 +274,26 @@ fn a_cell_masked_receipt_queues_and_no_other_version_decodes_as_one() {
     // And the V4 bytes are no V3 or V2 receipt.
     assert!(borsh::from_slice::<PalwSeatReceiptV3>(&borsh::to_vec(&v4).unwrap()).is_err());
     assert!(borsh::from_slice::<PalwSeatReceiptV2>(&borsh::to_vec(&v4).unwrap()).is_err());
+}
+
+#[test]
+fn a_seat_that_holds_only_its_shards_rows_reaches_the_verdict_of_a_full_holder() {
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1};
+    let ir = shard_class("holder");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let forged = tir.execute_with_injected_fault(&job, &prompt, 20).unwrap();
+    let path = ir.dir.join("tiny.palwtir");
+    for (material, name) in [(&honest.material, "honest"), (&forged.material, "forged")] {
+        let capture = TirCaptureV1::decode(material).unwrap();
+        for shard in 0..2u16 {
+            let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+            let holding =
+                fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+            let over = palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap();
+            let full = run(&tir, material, &d);
+            assert_eq!(over, full, "{name} shard {shard}: the holder's verdict is the full holder's");
+        }
+    }
 }

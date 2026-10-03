@@ -36,8 +36,9 @@ use kaspa_consensus_core::palw_tir_shard_v1::{
 };
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{
-    KernelBackendV1, TirBackendV1, TirCellVerdictV1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_v1,
-    tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1,
+    KernelBackendV1, TirBackendV1, TirCaptureV1, TirCellVerdictV1, TirFileMirrorV1, TirShardHoldingV1, fetch_shard_params_v1,
+    tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_shard_cells_over_v1, tir_shard_cells_v1, tir_shard_geometry_v1,
+    tir_shard_weight_bytes_v1, tir_verify_capture_cells_over_v1, tir_verify_capture_cells_v1,
 };
 
 use super::tir_court::{
@@ -93,20 +94,52 @@ pub(crate) fn palw_tir_shard_outcome_v1(
     let ctx = &capture.binding.job_context;
     let positions = tir.space().job_shape(ctx).map_err(|e| e.to_string())?.positions;
     let cells = tir_shard_cells_v1(tir, positions, place.shard, place.s_l, place.s_p, place.segments)?;
-    Ok(match tir_verify_capture_cells_v1(tir, material, &cells, device)? {
+    let verdict = tir_verify_capture_cells_v1(tir, material, &cells, device)?;
+    Ok(outcome_of_verdict(ctx.declared_prefill_tokens, verdict))
+}
+
+/// **The same verdict for a seat that holds only its shard's rows** (RFC-0006 §4.2, D-S6): the cells run over the params it fetched
+/// and proved, and nothing else.
+pub(crate) fn palw_tir_shard_outcome_over_v1(
+    holding: &TirShardHoldingV1,
+    capture: &TirCaptureV1,
+    duty: &PalwSeatDutyV2,
+    device: &mut dyn KernelBackendV1,
+) -> Result<PalwTirShardOutcomeV1, String> {
+    let place = duty.tir_shard.ok_or("the duty is a flat panel's")?;
+    if !capture.is_dense() {
+        return Ok(PalwTirShardOutcomeV1::Abstain("the material is a fold: it carries no committed rows".to_string()));
+    }
+    let ctx = &capture.binding.job_context;
+    let positions = holding.space.job_shape(ctx).map_err(|e| e.to_string())?.positions;
+    let cells = tir_shard_cells_over_v1(&holding.space, positions, place.shard, place.s_l, place.s_p, place.segments)?;
+    let verdict = tir_verify_capture_cells_over_v1(
+        &holding.space,
+        &holding.plan,
+        &holding.params,
+        holding.class_id,
+        false,
+        capture,
+        &cells,
+        device,
+    )?;
+    Ok(outcome_of_verdict(ctx.declared_prefill_tokens, verdict))
+}
+
+fn outcome_of_verdict(prefill: u32, verdict: TirCellVerdictV1) -> PalwTirShardOutcomeV1 {
+    match verdict {
         TirCellVerdictV1::Verified { leaves, positions } => PalwTirShardOutcomeV1::Valid { leaves, positions },
         TirCellVerdictV1::Faulted { leaf, position } => PalwTirShardOutcomeV1::Fault { leaf: Some(leaf), row: None, position },
         TirCellVerdictV1::TokenFault { position } => {
             // Position `a` selects row `a + 1 − prefill` of the decode trace.
-            let row =
-                (u64::from(position) + 1).checked_sub(u64::from(ctx.declared_prefill_tokens)).and_then(|r| u32::try_from(r).ok());
+            let row = (u64::from(position) + 1).checked_sub(u64::from(prefill)).and_then(|r| u32::try_from(r).ok());
             PalwTirShardOutcomeV1::Fault { leaf: None, row, position }
         }
         TirCellVerdictV1::Unavailable { leaf } => {
             PalwTirShardOutcomeV1::Abstain(format!("the capture does not carry leaf {leaf} the duty's cells read"))
         }
         TirCellVerdictV1::Refused(why) => PalwTirShardOutcomeV1::Abstain(why),
-    })
+    }
 }
 
 /// **The IR one-move accusation a finding builds** — the first close the court convicts on, at the leaf the cell found (its
@@ -245,8 +278,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     run_pursuits: HashMap<Hash64, PalwTirRunPursuitV1>,
     /// Captures reassembled from answered runs: this seat's material for a claim whose executor served none.
     synthesised: HashMap<Hash64, Vec<u8>>,
-    /// Classes the mirror was tried for (once each).
-    mirror_tried: HashSet<Hash64>,
+    /// The shards this node holds the rows of without holding the class: fetched once, proven, kept.
+    holdings: HashMap<(Hash64, u16), std::sync::Arc<TirShardHoldingV1>>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
     /// `(claim)` → the DAA a part was last carried.
@@ -448,37 +481,13 @@ impl super::PalwPanelService {
             {
                 continue;
             }
-            // **An outsider that holds no copy of the class fetches it from the mirror** (RFC-0006 §4.2, D-S6), once per class, and keeps
-            // it only if it derives exactly the class and inventory root the chain registered.
-            if self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root).is_none()
-                && let Some(path) = self.config.tir_shard_mirror.as_ref()
-                && books.mirror_tried.insert(duty.class_id)
-            {
-                match self.backends().load_mirror_v1(path) {
-                    Ok(loaded) => {
-                        let ours = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&loaded))
-                            .iter()
-                            .any(|e| e.class_id() == duty.class_id && e.artifact_root == duty.artifact_root);
-                        if ours {
-                            info!(
-                                "[{PALW_PANEL}] class {}: fetched from the mirror {} and verified against the registered inventory root \
-                                 {} — this seat now holds the class for its sharded duties (RFC-0006)",
-                                duty.class_id,
-                                path.display(),
-                                duty.artifact_root
-                            );
-                            self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").push(loaded);
-                        } else {
-                            warn!(
-                                "[{PALW_PANEL}] the mirror {} does not derive class {} under root {}: not used",
-                                path.display(),
-                                duty.class_id,
-                                duty.artifact_root
-                            );
-                        }
-                    }
-                    Err(why) => warn!("[{PALW_PANEL}] the mirror {} does not load: {why}", path.display()),
+            // **A seat that holds no copy of the class fetches ITS SHARD's rows from the mirror** (RFC-0006 §4.2, D-S6): only the
+            // inventory rows its cells read, each proven against the registered root, nothing else.
+            if self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root).is_none() {
+                if let Some(path) = self.config.tir_shard_mirror.clone() {
+                    self.tir_shard_holder_duty_v1(bond_key, network_domain, current_daa, duty, &path, materials, books).await;
                 }
+                continue;
             }
             let tir = match self.backends().resolve_tir_v1(duty.class_id, duty.artifact_root) {
                 None => continue,
@@ -666,6 +675,114 @@ impl super::PalwPanelService {
             }
         }
         let _ = session;
+    }
+
+    /// **A duty of a seat that holds only its shard** (RFC-0006 §4.2, D-S6): the claim's capture is found among the pooled material
+    /// (authenticated by the class the capture's own binding names, which must be the chain's class id under its registered root), the
+    /// shard's rows are fetched once and proven, and the cells run over them. `Valid` files the receipt; a finding is recorded and
+    /// not accused (the accusation's cone opens parameters through a backend this seat does not hold — a seat that does files it).
+    #[allow(clippy::too_many_arguments)]
+    async fn tir_shard_holder_duty_v1(
+        &self,
+        bond_key: PalwBondKeyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        duty: &PalwSeatDutyV2,
+        mirror: &std::path::Path,
+        materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        books: &mut PalwTirShardBooksV1,
+    ) {
+        let Some(place) = duty.tir_shard else { return };
+        let key = seat_duty_panel_key_v1(duty);
+        let capture = materials.get(&duty.claim_id).and_then(|pool| {
+            pool.iter().find_map(|m| {
+                let c = TirCaptureV1::decode(m).ok()?;
+                (c.binding.committed_execution_root == duty.execution_root
+                    && c.binding.full_logits_trace_root == duty.trace_root
+                    && c.binding.artifact_root == duty.artifact_root
+                    && c.binding.class.class_id(&c.binding.artifact_root) == duty.class_id)
+                    .then_some(c)
+            })
+        });
+        let Some(capture) = capture else {
+            self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
+            return;
+        };
+        let hold_key = (duty.class_id, place.shard);
+        if !books.holdings.contains_key(&hold_key) {
+            let (class, class_id, root, path) =
+                (capture.binding.class.clone(), duty.class_id, duty.artifact_root, mirror.to_path_buf());
+            let (s_l, shard) = (place.s_l, place.shard);
+            let fetched =
+                tokio::task::spawn_blocking(move || fetch_shard_params_v1(&class, class_id, root, s_l, shard, &TirFileMirrorV1(path)))
+                    .await;
+            match fetched {
+                Ok(Ok(h)) => {
+                    info!(
+                        "[{PALW_PANEL}] class {}: fetched shard {}/{} from the mirror {} — {} inventory rows, {} bytes, each proven against the registered \
+                         root {}; this seat judges its cells without holding the class (RFC-0006 §4.2)",
+                        duty.class_id,
+                        place.shard,
+                        place.s_l,
+                        mirror.display(),
+                        h.leaves,
+                        h.bytes,
+                        duty.artifact_root
+                    );
+                    books.holdings.insert(hold_key, std::sync::Arc::new(h));
+                }
+                Ok(Err(why)) => {
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", duty.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the mirror's rows are refused: {why}", duty.class_id, place.shard)
+                    });
+                    return;
+                }
+                Err(_) => return,
+            }
+        }
+        let holding = books.holdings.get(&hold_key).cloned().expect("just inserted");
+        let (want_device, shadow) = (self.config.tir_shard_gpu, self.config.tir_shard_shadow);
+        let task_duty = duty.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let (mut device, _) = tir_kernel_backend_v1(want_device);
+            palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, device.as_mut())
+        })
+        .await;
+        match outcome {
+            Ok(Ok(PalwTirShardOutcomeV1::Valid { leaves, positions })) => {
+                books.cells_verified += 1;
+                books.leaves_recomputed += leaves;
+                info!(
+                    "[{PALW_PANEL}] claim {} shard {}/{} (segments {:#x}{}): every cell verifies over the fetched rows ({leaves} leaves over {positions} positions){}",
+                    duty.claim_id,
+                    place.shard,
+                    place.s_l,
+                    place.segments.0,
+                    if place.outsider { ", the shard's outsider" } else { "" },
+                    if shadow { " — shadow: nothing filed" } else { "" }
+                );
+                if !shadow {
+                    self.tir_shard_file_receipt_v1(bond_key, network_domain, current_daa, duty, PalwReceiptVerdictV2::Valid, books)
+                        .await;
+                }
+                books.answered.insert(key);
+            }
+            Ok(Ok(PalwTirShardOutcomeV1::Fault { leaf, row, position })) => {
+                warn!(
+                    "[{PALW_PANEL}] claim {} shard {}/{}: a cell finds the executor's commitment false (leaf {leaf:?}, token row {row:?}, position {position}) — \
+                     no receipt; this seat holds no backend to build the accusation (a full holder files it)",
+                    duty.claim_id, place.shard, place.s_l
+                );
+                books.refuted.insert(duty.claim_id);
+                books.answered.insert(key);
+            }
+            Ok(Ok(PalwTirShardOutcomeV1::Abstain(why))) | Ok(Err(why)) => {
+                crate::palw_backends::note_throttled_v1(&format!("tir-shard-holder-{}", duty.claim_id), || {
+                    format!("[{PALW_PANEL}] claim {} shard {}: the cells are not run ({why})", duty.claim_id, place.shard)
+                });
+            }
+            Err(_) => {}
+        }
     }
 
     /// **One tick of a claim's pursuit of its leaves through `TirStepRun` units** (RFC-0006 §3, D-S4). On the first tick the job's leaf

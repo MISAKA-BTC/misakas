@@ -31,6 +31,11 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1};
 use misaka_palw_tir_exec::node::{TirResidencyDeclinedV1, TirResidencyPolicyV1, TirResidencyStatsV1};
 
+/// RFC-0006: a shard-only holder's fetch (D-S6).
+pub use misaka_palw_tir_exec::node::{
+    TirFileMirrorV1, TirRowFetcherV1, TirShardHoldingV1, fetch_shard_params_v1, tir_shard_cells_over_v1, tir_verify_capture_cells_over_v1,
+};
+
 /// RFC-0006: the out-of-process device (the GPU helper's client).
 pub use misaka_palw_tir_exec::TirProcessDeviceV1;
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).

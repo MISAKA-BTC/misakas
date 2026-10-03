@@ -2045,9 +2045,9 @@ pub fn cli() -> Command {
                 .long("palw-tir-shard-mirror")
                 .require_equals(true)
                 .help(
-                    "RFC-0006: where an outsider fetches a class container it does not hold (a path on this host; a mirror's copy). Loaded on \
-                     the first sharded duty of such a class and used only if it derives exactly the class and the inventory root the chain \
-                     registered.",
+                    "RFC-0006: where a seat that holds no copy of a class fetches its shard's rows (a class container on this host, read through \
+                     the holder's opening door). Only the inventory rows its cells read are taken, each proven by its Merkle path against the \
+                     root the chain registered.",
                 ),
         )
         .arg(

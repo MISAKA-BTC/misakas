@@ -713,8 +713,12 @@ use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
 /// The layer partition of a class under `s_l` shards, exactly as the fold derives it (`palw_tir_shard_weights_v1` over the class's
 /// `max_context`, `palw_tir_shard_partition_v1`), and the segment alignment `lcm(C, h_tile)`.
 pub fn tir_shard_geometry_v1(tir: &TirBackendV1, s_l: u16) -> Result<(Vec<Range<usize>>, u32), String> {
-    let space = tir.space();
-    let weights = shard_rules::palw_tir_shard_weights_v1(&space.program, tir.class().layout.max_context);
+    tir_shard_geometry_over_v1(tir.space(), s_l)
+}
+
+/// [`tir_shard_geometry_v1`] over a step space alone — what a seat holding only a shard's rows has (no backend).
+pub fn tir_shard_geometry_over_v1(space: &PalwTirStepSpaceV1, s_l: u16) -> Result<(Vec<Range<usize>>, u32), String> {
+    let weights = shard_rules::palw_tir_shard_weights_v1(&space.program, space.layout.max_context);
     let parts = shard_rules::palw_tir_shard_partition_v1(&weights, s_l)
         .ok_or_else(|| format!("a plan of {s_l} shards over {} layers", weights.layer_bytes.len()))?;
     let align = shard_rules::palw_tir_shard_segment_align_v1(space.layout.checkpoint_interval, space.layout.h_tile)
@@ -742,8 +746,20 @@ pub fn tir_shard_cells_v1(
     s_p: u16,
     mask: PalwSegmentMaskV2,
 ) -> Result<Vec<TirCellV1>, String> {
-    let (parts, align) = tir_shard_geometry_v1(tir, s_l)?;
-    let layers = tir.space().program.schedule.layers.len();
+    tir_shard_cells_over_v1(tir.space(), positions, shard, s_l, s_p, mask)
+}
+
+/// [`tir_shard_cells_v1`] over a step space alone.
+pub fn tir_shard_cells_over_v1(
+    space: &PalwTirStepSpaceV1,
+    positions: u32,
+    shard: u16,
+    s_l: u16,
+    s_p: u16,
+    mask: PalwSegmentMaskV2,
+) -> Result<Vec<TirCellV1>, String> {
+    let (parts, align) = tir_shard_geometry_over_v1(space, s_l)?;
+    let layers = space.program.schedule.layers.len();
     let part = parts.get(usize::from(shard)).ok_or_else(|| format!("shard {shard} of {s_l}"))?;
     let occ = shard_rules::palw_tir_shard_occurrences_v1(part, layers);
     let mut cells = Vec::new();
@@ -770,27 +786,32 @@ pub fn tir_verify_capture_cells_v1(
     backend: &mut dyn KernelBackendV1,
 ) -> Result<TirCellVerdictV1, String> {
     let capture = tir.decode_capture(material)?;
+    tir_verify_capture_cells_over_v1(tir.space(), tir.artifact().plan(), tir.artifact().params(), tir.class_id(), tir.fused_kernels(), &capture, cells, backend)
+}
+
+/// [`tir_verify_capture_cells_v1`] over what the cells read and nothing else: the step space, the plan and the params of the
+/// cell's own occurrences (a held artifact's, or the rows a shard-only seat fetched and verified). `capture` is decoded and its class
+/// checked by the caller.
+#[allow(clippy::too_many_arguments)]
+pub fn tir_verify_capture_cells_over_v1(
+    space: &PalwTirStepSpaceV1,
+    plan: &TirPlan,
+    params: &TirParams<'_>,
+    class_id: Hash64,
+    fused: bool,
+    capture: &TirCaptureV1,
+    cells: &[TirCellV1],
+    backend: &mut dyn KernelBackendV1,
+) -> Result<TirCellVerdictV1, String> {
     if !capture.is_dense() {
         return Err("a fold carries no preimages: a cell needs the committed rows".into());
     }
     let ctx = &capture.binding.job_context;
-    let class_id = tir.class_id();
     let inputs = TirCaptureInputsV1::new(&capture.leaves, ctx, &class_id, &capture.binding.step_merkle_root, u64::MAX)?;
-    let tokens = tokens_of_capture_v1(&capture);
-    let params = tir.artifact().params();
+    let tokens = tokens_of_capture_v1(capture);
     let mut total = (0u64, 0u32);
     for cell in cells {
-        let req = TirCellRequestV1 {
-            space: tir.space(),
-            plan: tir.artifact().plan(),
-            params,
-            class_id,
-            ctx,
-            cell,
-            tokens: &tokens,
-            inputs: &inputs,
-            fused: tir.fused_kernels(),
-        };
+        let req = TirCellRequestV1 { space, plan, params, class_id, ctx, cell, tokens: &tokens, inputs: &inputs, fused };
         let verdict = match backend.verify_cell(&req) {
             Ok(v) => v,
             Err(_) => CpuKernelBackendV1.verify_cell(&req).expect("the CPU backend runs every cell"),
