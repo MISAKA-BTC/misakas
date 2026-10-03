@@ -2102,6 +2102,50 @@ mod tests {
         assert!(std::fs::read_to_string(v3.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap().contains("extra_at=none\n"));
     }
 
+    /// **Lane PL's panel-liveness list is one drill flag** (`--palw-drill-panel-liveness-at`, ADR-0166): refused without the
+    /// salt; with it ARMS `palw_panel_unavailable_expiry`, `palw_panel_fast_switch` and `palw_seat_availability` at its height
+    /// (mirrors included) and moves nothing else; the marker keeps its own line (`panel_liveness_at=`) and the manifest names it.
+    #[test]
+    fn the_panel_liveness_list_is_a_drill_flag_of_its_own() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = ["--palw-drill-fence-at=6", "--palw-drill-fence2-at=10", "--palw-drill-fence3-at=14"];
+        let parsed = |extra: &[&str]| {
+            let v: Vec<String> =
+                base.iter().copied().chain([salted.as_str()]).chain(days).chain(extra.iter().copied()).map(str::to_owned).collect();
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-panel-liveness-at=60"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-panel-liveness-at=60") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+        let without = config_of(&parsed(&[]));
+        let with = config_of(&parsed(&["--palw-drill-panel-liveness-at=60"]));
+        assert_eq!(
+            (without.params.palw_panel_unavailable_expiry, without.params.palw_panel_fast_switch, without.params.palw_seat_availability),
+            (None, None, None),
+            "dormant on the release drill"
+        );
+        let at = Some(ForkActivation::new(60));
+        assert_eq!(
+            (with.params.palw_panel_unavailable_expiry, with.params.palw_panel_fast_switch, with.params.palw_seat_availability),
+            (at, at, at)
+        );
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 3, "three fences armed, nothing else");
+        with.params.validate_palw_v2().expect("the drill with the panel-liveness list validates");
+        let dir = root.path().join("x/misaka-testnet-12");
+        let set = PalwDrillExtraFencesV1 { panel_liveness_at: Some(60), ..Default::default() };
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, set).expect("created");
+        assert!(marker_of(&dir).contains("panel_liveness_at=60\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        let moved = PalwDrillExtraFencesV1 { panel_liveness_at: Some(70), ..Default::default() };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, moved).unwrap_err();
+        assert!(why.contains("--palw-drill-panel-liveness-at (recorded 60, now 70)"), "{why}");
+    }
+
     /// **RFC-0003's held leaf challenge is a drill flag of its own** (`--palw-drill-held-chunks-at`, decision 22,
     /// object tag 90): refused without the salt, and — by the ruleset's own check, never a panic — without
     /// `palw_tir_v1` at or below it; with the IR fence in force it ARMS `palw_held_close_chunks_v1` at its height and
