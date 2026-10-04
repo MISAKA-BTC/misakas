@@ -11,7 +11,7 @@ first; this file is the how.
 | fence | `Params::palw_accounting_v2: Option<ForkActivation>` (bare height; companion values hashed with it) |
 | companion values (`palw_accounting_v2_value_v1()`) | `[G_ms = 20_000, σ_permille = 0, version = 1]` (a `w_fb` value joins when Q11 is decided) |
 | FALLBACK lane | `POW_ALGO_ID_PALW_FALLBACK_V1 = 12` (Q1) |
-| state | delta 130 `FallbackWeight`, 131 `FallbackBondSlot`, 132 `ExecCredit`, 133 `AccountingMeta`; carriage tail `0xF1`; root block `accounting_v2/v1` Some-only |
+| state | delta 130 `FallbackWeight`, 131 `FallbackBondSlot`, 132 `ExecCredit`, 133 `AccountingMeta`; carriage tail `0xF3`; root block `accounting_v2/v1` Some-only |
 | prerequisites (at or below F) | `palw_consensus_mode = ConsensusV2`, `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`, `palw_clock_cursor`, `palw_clock_floor`, `palw_clock_lead_cap`, `palw_anchor_clock`, `palw_single_lottery`, `palw_heartbeat_transparent`, `palw_heartbeat_transparent_same_chain` (F1), `palw_execution_lane`, `palw_anchor_window_v1`, `palw_model_registry`, the capacity budget (`W_claim`) |
 | mutually exclusive (must be `None`) | `palw_exec_class_v1`, `palw_ws_clock_v1`, `palw_merge_admission_v1`, `palw_work_slice_v1` |
 | written in | the four places: the field; `for_each_fence` (Some-only, at the tail); Some-only `consensus_params_id` + `consensus_schedule_id` with the value array; the `never() -> None` collapse; plus `palw_fences_v1`, the fork-id probe arm (`fork_id_v1.rs`), `override_params`, `validate_palw_v2` (last) |
