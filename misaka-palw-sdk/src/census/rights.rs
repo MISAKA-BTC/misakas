@@ -111,6 +111,7 @@ mod tests {
             id: "b/x".into(),
             found: true,
             license: Some("llama3".into()),
+            renamed_from: None,
             ..Default::default()
         }];
         assert!(!rights_of(&l, RightsPolicy::PermissiveCardV0).confirmed);

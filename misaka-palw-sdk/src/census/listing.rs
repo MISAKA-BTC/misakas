@@ -63,6 +63,32 @@ pub struct BaseResolvedV1 {
     pub gated: bool,
     pub disabled: bool,
     pub license: Option<String>,
+    /// Base resolution v2: the id the card or adapter config wrote, when the Hub redirects it to `id` (a renamed repository).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
+}
+
+/// **The base an adapter is composed with** (base resolution v2): the adapter's own `adapter_config.json`
+/// `base_model_name_or_path` when it names one — what PEFT loads — else the card's single base; matched through a rename.
+/// `Err((arg, evidence))` names why none is pinned: `absent`, `ambiguous` (several card bases and no adapter config naming one),
+/// `base_gated`, `not_in_snapshot`.
+pub fn pinned_base(l: &ListingV1) -> Result<&BaseResolvedV1, (&'static str, String)> {
+    let peft = l.config.get("peft").and_then(|p| p.get("base_model_name_or_path")).and_then(|b| b.as_str()).filter(|b| !b.is_empty());
+    let id = match (peft, l.base_ids.as_slice()) {
+        (Some(b), _) => b.to_string(),
+        (None, [one]) => one.clone(),
+        (None, []) => return Err(("absent", "an adapter that names no base".into())),
+        (None, many) => return Err(("ambiguous", format!("{} bases: {}", many.len(), many.join(", ")))),
+    };
+    let r = l.base_resolved.iter().find(|r| r.id == id || r.renamed_from.as_deref() == Some(id.as_str()));
+    match r {
+        Some(r) if r.found && !r.gated && !r.disabled && r.sha.is_some() => Ok(r),
+        Some(r) if r.found && r.gated => Err(("base_gated", format!("base {} is gated", r.id))),
+        _ => Err((
+            "not_in_snapshot",
+            format!("base `{id}` is not a public repository of the snapshot (a local path, a renamed or private repository)"),
+        )),
+    }
 }
 
 impl ListingV1 {
@@ -736,9 +762,7 @@ pub fn plan_of(l: &ListingV1, sel: &SelectedV1) -> PlanV1 {
     let mut p = PlanV1::default();
     if sel.kind == ArtifactKind::Adapter
         && sel.config.is_some()
-        && let [b] = l.base_resolved.as_slice()
-        && b.found
-        && !b.gated
+        && let Ok(b) = pinned_base(l)
         && let Some(sha) = &b.sha
     {
         p.base = Some(BaseRefV1 { repo: b.id.clone(), sha: sha.clone() });
@@ -776,6 +800,29 @@ pub fn plan_of(l: &ListingV1, sel: &SelectedV1) -> PlanV1 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_adapter_s_base_is_its_peft_config_s_through_a_rename_and_never_a_guess() {
+        let mut l = listing(&["adapter_config.json", "adapter_model.safetensors"]);
+        let b = |id: &str, from: Option<&str>| super::BaseResolvedV1 {
+            id: id.into(),
+            found: true,
+            sha: Some("s".into()),
+            gated: false,
+            disabled: false,
+            license: None,
+            renamed_from: from.map(str::to_string),
+        };
+        assert_eq!(super::pinned_base(&l).unwrap_err().0, "absent");
+        l.base_ids = vec!["a/x".into(), "b/y".into()];
+        l.base_resolved = vec![b("a/x", None), b("b/y", None)];
+        assert_eq!(super::pinned_base(&l).unwrap_err().0, "ambiguous");
+        l.config = serde_json::json!({"peft": {"base_model_name_or_path": "b/y"}});
+        assert_eq!(super::pinned_base(&l).unwrap().id, "b/y");
+        l.config = serde_json::json!({"peft": {"base_model_name_or_path": "old/name"}});
+        l.base_resolved.push(b("new/name", Some("old/name")));
+        assert_eq!(super::pinned_base(&l).unwrap().id, "new/name");
+    }
+
     #[test]
     fn a_missing_task_is_inferred_from_a_head_class_or_a_gguf_architecture_and_nothing_else() {
         use super::{task_of_architecture_class as a, task_of_gguf_architecture as g};

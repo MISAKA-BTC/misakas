@@ -405,34 +405,10 @@ fn source_listing(l: &ListingV1, sel: &SelectedV1) -> Vec<Found> {
     if sel.kind == ArtifactKind::None {
         f.push(found(codes::MISSING_WEIGHTS, None, vec![format!("{} files, none a weight file", l.siblings.len())]));
     }
-    if sel.kind == ArtifactKind::Adapter {
-        let mut ids: Vec<String> = l.base_ids.clone();
-        if let Some(b) = l.config.get("peft").and_then(|p| p.get("base_model_name_or_path")).and_then(|b| b.as_str())
-            && !ids.iter().any(|x| x == b)
-        {
-            ids.push(b.to_string());
-        }
-        match ids.len() {
-            0 => f.push(found(codes::BASE_UNPINNED, Some("absent".into()), vec!["an adapter that names no base".into()])),
-            1 => {
-                let r = l.base_resolved.iter().find(|r| r.id == ids[0]);
-                match r {
-                    Some(r) if r.found && !r.gated && !r.disabled && r.sha.is_some() => {}
-                    Some(r) if r.found && r.gated => {
-                        f.push(found(codes::BASE_UNPINNED, Some("base_gated".into()), vec![format!("base {} is gated", r.id)]))
-                    }
-                    _ => f.push(found(
-                        codes::BASE_UNPINNED,
-                        Some("not_in_snapshot".into()),
-                        vec![format!(
-                            "base `{}` is not a public repository of the snapshot (a local path, a renamed or private repository)",
-                            ids[0]
-                        )],
-                    )),
-                }
-            }
-            n => f.push(found(codes::BASE_UNPINNED, Some("ambiguous".into()), vec![format!("{n} bases: {}", ids.join(", "))])),
-        }
+    if sel.kind == ArtifactKind::Adapter
+        && let Err((arg, why)) = crate::census::listing::pinned_base(l)
+    {
+        f.push(found(codes::BASE_UNPINNED, Some(arg.into()), vec![why]));
     }
     // A shard set named `-0000k-of-0000n` with a part missing from the listing.
     let mut by_set: std::collections::BTreeMap<(String, u32), Vec<u32>> = Default::default();
