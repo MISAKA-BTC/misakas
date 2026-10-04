@@ -243,6 +243,7 @@ mod tests {
                 utilization_permille: 0,
                 admission_milli: 0,
                 cap_utilization_permille: 0,
+                priced_share_permille: 0,
             }),
             ready_seats_now: 0,
             seating: None,
@@ -279,10 +280,10 @@ mod tests {
     fn the_command_line_carries_the_class_the_root_and_only_what_is_declared() {
         let want = PalwRootWantV1 { class_id: h(1), root: h(11), kind: PalwRootWantKindV1::InForceRoot };
         let argv = palw_root_fetch_argv_v1("fetch-bundle --fast", &want, None, None, Path::new("/d")).unwrap();
-        assert_eq!(argv.len(), 6);
+        assert_eq!(argv.len(), 5);
         assert_eq!((argv[0].as_str(), argv[1].as_str()), ("fetch-bundle", "--fast"));
         assert_eq!(argv[2], h(1).to_string());
-        assert_eq!(argv[5], "drop_dir=/d");
+        assert_eq!(argv[4], "drop_dir=/d");
         let with = palw_root_fetch_argv_v1("x", &want, Some(&h(5)), Some(&h(6)), Path::new("/d")).unwrap();
         assert!(with.iter().any(|a| a.starts_with("btv2_infohash=")) && with.iter().any(|a| a.starts_with("bundle_commitment=")));
         assert!(palw_root_fetch_argv_v1("  ", &want, None, None, Path::new("/d")).is_none());
