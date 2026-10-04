@@ -673,7 +673,7 @@ class Drive:
         self.status, self.status_path = got if got else (None, None)
         self.ids = {n: model_id(n) for n in ASSETS}
         self.milestones()
-        for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
+        for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_head_register, self.step_register_classes, self.step_lines, self.step_policies,
                      self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit, self.step_outsider,
                      self.step_capacity):
             key = step.__name__
@@ -868,6 +868,27 @@ class Drive:
                 self.s.mark("m5-cross", result="FAIL", why="no fork-id refusal logged by new0 after the fence, even after the old relay was restarted", **info)
             return
         self.s.mark("m5-cross", result="PASS", **info)
+
+    # ----- the head class H: new4's panel registers it ONCE at start; before the IR fence the gate answers FAMILY_FENCE_CLOSED and the node never retries ----------
+    def step_head_register(self):
+        """In the int-11 drill the nodes were restarted across the IR fence, so new4 registered H at ~DAA 21. The combined drill runs the nodes through it without a restart: new4's single attempt
+        at start is refused (FAMILY_FENCE_CLOSED) and H stays 'absent' for ever, so no line, no extra bond, no gen claim and no REAL producer can start (run 1, 2026-10-04: 0 REAL attempts to DAA 160).
+        Once the IR fence is past, restart new4 (its env: HEAD_PRODUCE as the driver holds it) so it registers H; retried every 3 DAA while H is still absent."""
+        if not self.ids.get("head") or self.daa < TIR_AT:
+            return
+        if lifecycle_of(self.reg, self.ids["head"])[0] != "absent":
+            if not self.s.done("head-register"):
+                self.s.mark("head-register", daa=self.daa, note="H is in the registry")
+            return
+        last = int(self.s.get("head-register-last") or -99)
+        n = int(self.s.get("head-register-tries") or 0)
+        if self.daa < last + 3 or n >= 6:
+            return
+        self.s.put("head-register-last", self.daa)
+        self.s.put("head-register-tries", n + 1)
+        self.nodes_sh("stop", "new4")
+        rc, text = self.nodes_sh("start", "new4")
+        log(f"head class absent past the IR fence at DAA {self.daa}: new4 restarted so its panel registers H (try {n + 1}, rc {rc}: {text.strip()[-120:]})")
 
     # ----- candidate classes: ordinary registrations, early, so the lifecycle is done long before the draw -----------
     def step_register_classes(self):

@@ -1111,11 +1111,12 @@ def fork_checks(a, blocks):
         out.append(("FORK-b", 3, "INCOMPLETE: the fresh node has not run yet"))
     else:
         try:
-            jd, js = info("joiner")
-            _, ns = info("new3")
-            nd2, _ = info("new3")
+            # the joiner is stopped 2 minutes after it caught up: its record (synced_daa at catch-up vs the main DAA then) is the evidence, a live query reads a dead node as DAA 0
+            jd = int(j.get("synced_daa") or 0)
+            nd2 = int(j.get("main_daa") or 0)
+            js = ns = None
             ok = jd >= nd2 - 3
-            out.append(("FORK-b", 0 if ok else 1, f"{'PASS' if ok else 'FAIL'}: the fresh node (started at DAA {j.get('start_daa')}, fence {a.fence}) synced from genesis to DAA {jd} (chain {nd2}); sink {'equal' if js == ns else 'differs by the moving tip'}"))
+            out.append(("FORK-b", 0 if ok else 1, f"{'PASS' if ok else 'FAIL'}: the fresh node (started at DAA {j.get('start_daa')}, fence {a.fence}) synced from genesis to DAA {jd} (chain {nd2} at that moment); record at catch-up"))
         except Exception as e:  # noqa: BLE001
             out.append(("FORK-b", 3, f"INCOMPLETE: the fresh node is not answering ({type(e).__name__}); record {j}"))
     # (c)

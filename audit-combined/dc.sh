@@ -18,7 +18,7 @@ export INT11=1 INT12=1
 # measured by the int-11 drill), then the legs. D-M's epochs (~1,000 DAA) do not fit: they run as background load and are informational; only D-M5's crossing and
 # DG-1 / DG-2 are crossing checks here.
 export INT11_AT=${INT11_AT:-26}
-export TIR_AT=${TIR_AT:-18}                       # the head registers at ~19: its admission slot (91) is >= 71 DAA later; at TIR 20 it missed the slot by one DAA and waited a period
+export TIR_AT=${TIR_AT:-16}   # H registers ~17 (the driver restarts new4 once the IR fence is past); its admission slot 91 needs registration <= DAA 20
 export CAP_RHOS=${CAP_RHOS:-"rho100 rho250 rho1000"} CAP_WINDOW_DAA=${CAP_WINDOW_DAA:-32} CAP_SETTLE_DAA=${CAP_SETTLE_DAA:-8} DM_NO_LIARS=${DM_NO_LIARS:-1}
 # the PANEL windows, each inside its rho regime (rho100 from H'+95, rho250 from H'+190, rho1000 from H'+285), placed so that the floor-policy legs run BETWEEN them:
 # stale-only first (from the first REAL attempt), then both producers (RED -> BLUE after the idle stretch), the rho100 window, the rho250 window, leg A, rho1000.
