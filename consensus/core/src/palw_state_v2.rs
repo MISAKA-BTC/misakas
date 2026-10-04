@@ -13746,7 +13746,17 @@ impl PalwChainStateV2 {
     /// encoding covers — is a consensus change and needs a new version constant, a matching
     /// ADR-0043 amendment, and new golden vectors; the tests refuse anything less.
     pub fn state_root(&self) -> Hash64 {
-        let mut state = keyed(PALW_STATE_V2_DOMAIN_STATE_ROOT);
+        // **One spelling: the root is the keyed hash of the preimage, and the preimage is what `state_root_preimage` writes.** (RFC-0009 stage D:
+        // a light client is shown the preimage — every collection's ROOT, never its rows — to prove one collection's root belongs to a header's
+        // committed state root, then opens only that collection. Splitting the function in two changed no byte: BLAKE2b streaming is hashing the
+        // concatenation, and the golden vectors hold it.)
+        palw_state_root_of_preimage_v1(&self.state_root_preimage())
+    }
+
+    /// The exact byte string [`Self::state_root`] hashes, in the order ADR-0043 §2 freezes. Collections appear as their 64-byte
+    /// [`collection_root`]; scalars and the small borsh blocks appear in full.
+    pub fn state_root_preimage(&self) -> Vec<u8> {
+        let mut state = RootPreimageV1::default();
         state.update(&PALW_STATE_V2_VERSION.to_le_bytes());
         state.update(collection_root(b"bonds", &self.bonds).as_byte_slice());
         state.update(collection_root(b"reserved_exposure", &self.reserved_exposure).as_byte_slice());
@@ -14107,7 +14117,7 @@ impl PalwChainStateV2 {
                 state.update(&borsh::to_vec(p).expect("PalwBlockContextV2 is borsh-serializable"));
             }
         }
-        finish(state)
+        state.0
     }
 
     // ---- consistency ----
@@ -15299,19 +15309,51 @@ fn palw_gen_classes_root_v1(map: &BTreeMap<Hash64, crate::palw_gen_class_v1::Pal
     finish(state)
 }
 
+/// The state root's preimage as it is written: `update` appends, exactly as the hasher it replaces consumed bytes.
+#[derive(Default)]
+struct RootPreimageV1(Vec<u8>);
+
+impl RootPreimageV1 {
+    fn update(&mut self, bytes: &[u8]) -> &mut Self {
+        self.0.extend_from_slice(bytes);
+        self
+    }
+}
+
 fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[u8], map: &BTreeMap<K, V>) -> Hash64 {
+    palw_collection_root_of_entries_v1(
+        label,
+        map.len(),
+        map.iter().map(|(key, value)| {
+            (
+                borsh::to_vec(key).expect("state keys are borsh-serializable"),
+                borsh::to_vec(value).expect("state records are borsh-serializable"),
+            )
+        }),
+    )
+}
+
+/// **The collection root over raw `(key, value)` borsh entries, in key order** — the single spelling [`collection_root`] uses and a light client
+/// (RFC-0009 stage D, `crate::palw_state_proof_v1`) recomputes to check an opened collection against the root a state commits. `len` must be the
+/// number of entries the iterator yields.
+pub fn palw_collection_root_of_entries_v1(label: &[u8], len: usize, entries: impl Iterator<Item = (Vec<u8>, Vec<u8>)>) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_COLLECTION);
     state.update(&(label.len() as u64).to_le_bytes());
     state.update(label);
-    state.update(&(map.len() as u64).to_le_bytes());
-    for (key, value) in map {
-        let key_bytes = borsh::to_vec(key).expect("state keys are borsh-serializable");
-        let value_bytes = borsh::to_vec(value).expect("state records are borsh-serializable");
+    state.update(&(len as u64).to_le_bytes());
+    for (key_bytes, value_bytes) in entries {
         state.update(&(key_bytes.len() as u64).to_le_bytes());
         state.update(&key_bytes);
         state.update(&(value_bytes.len() as u64).to_le_bytes());
         state.update(&value_bytes);
     }
+    finish(state)
+}
+
+/// The state root of a preimage ([`PalwChainStateV2::state_root_preimage`]): what [`PalwChainStateV2::state_root`] and a light client's check share.
+pub fn palw_state_root_of_preimage_v1(preimage: &[u8]) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_STATE_ROOT);
+    state.update(preimage);
     finish(state)
 }
 

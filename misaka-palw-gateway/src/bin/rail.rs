@@ -146,6 +146,9 @@ fn main() {
     let mut view_checkpoint: Option<String> = None;
     // RFC-0009 stage A: `--track <claim-id> --bond <txid:index> [--tx-id <hex>] (--relay a,b | --rpc a) [--finality-depth N]` polls each node once and
     // reports where the claim stands (built → relayed → included → licensed → final/void), per node, and whether the nodes agree.
+    // RFC-0009 stage B: `--evidence-out <dir>` places the claim's material in an evidence-provider directory (an `EvidenceManifestV1` and its chunks) so a panel
+    // seat can fetch it from any provider with this PC off. Needs `--capture`; the producer pull is unchanged and stays the fallback.
+    let mut evidence_out: Option<PathBuf> = None;
     let mut track_claim: Option<String> = None;
     let mut track_tx_id: Option<String> = None;
     let mut finality_depth: u64 = 60;
@@ -193,6 +196,7 @@ fn main() {
                 redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
             }
             "--checkpoint" => view_checkpoint = Some(value("--checkpoint")),
+            "--evidence-out" => evidence_out = Some(PathBuf::from(value("--evidence-out"))),
             "--track" => track_claim = Some(value("--track")),
             "--tx-id" => track_tx_id = Some(value("--tx-id")),
             "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
@@ -576,6 +580,42 @@ fn main() {
             .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
             .expect("the builder already refused a sub-quantum job"),
     };
+    // **RFC-0009 stage B: the evidence, placed with a provider** — the SAME bytes the node would serve (`encode_claim_material`), split into chunks and
+    // named by a manifest whose roots are the claim's own. Written chunks first and the manifest last, so a reader never sees a manifest without its chunks.
+    let evidenced = evidence_out.as_ref().map(|dir| {
+        let capture_bytes = capture_path.as_ref().map(|path| {
+            std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the capture at {}: {e}", path.display())))
+        });
+        let (payload, _) = misaka_palw_fp_submit::decode_commitment_payload(&tx).unwrap_or_else(|e| die(e.to_string()));
+        let prompt_ids = misaka_palw_fp_submit::staged_prompt_ids(&payload, Some(&result.prompt_token_ids)).unwrap_or_else(|e| die(e.to_string()));
+        let material = misaka_palw_fp_submit::encode_claim_material(&payload, prompt_ids, capture_bytes.as_deref())
+            .unwrap_or_else(|e| die(e.to_string()));
+        let chunks = misaka_palw_remote::evidence::fs::chunk_material(&material, 1 << 20);
+        let manifest = misaka_palw_remote::evidence::EvidenceManifestV1::build(
+            commitment.job.network_domain,
+            &commitment.job.executor_bond,
+            &commitment.job.job_nonce,
+            commitment.trace_root,
+            commitment.output_root,
+            commitment.execution_root,
+            commitment.trace_chunk_count,
+            commitment.trace_retention_daa,
+            &chunks,
+        );
+        manifest
+            .validate_shape(&misaka_palw_remote::evidence::ManifestLimits::default())
+            .unwrap_or_else(|e| die(format!("the evidence manifest is not admissible: {e}")));
+        misaka_palw_remote::evidence::fs::publish(dir, &claim_id.to_string(), &manifest, &chunks)
+            .unwrap_or_else(|e| die(format!("cannot write the evidence to {}: {e}", dir.display())));
+        serde_json::json!({
+            "dir": dir.display().to_string(),
+            "claim_id": hex(claim_id),
+            "manifest_id": misaka_palw_remote::evidence::manifest_id_v1(&manifest).to_string(),
+            "chunks": chunks.len(),
+            "material_bytes": material.len(),
+            "note": "a promise by this directory's operator, not proof of availability: the producer (you) stays accountable until a provider court is armed",
+        })
+    });
     // **RFC-0009: the redemption authorization**, signed once, for every quantum of this claim (`[0, quanta)`). A builder holding the file
     // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
     // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
@@ -634,6 +674,8 @@ fn main() {
         "relayed": relayed,
         // RFC-0009 stage C: the authorization file a builder redeems with (None unless `--redeem-auth-out`).
         "redemption_authorization": redeemed,
+        // RFC-0009 stage B: where the evidence was placed (None unless `--evidence-out`).
+        "evidence": evidenced,
         // The change output, spendable by the next submission once this one is accepted: pass it
         // as `--funding-outpoint`/`--funding-amount`. Null when the carrier left no change.
         "next_funding": next_funding,

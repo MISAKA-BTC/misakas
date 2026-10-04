@@ -500,6 +500,12 @@ pub mod palw_real_share_v1;
 pub mod palw_anchor_window_v1;
 /// RFC-0009 stage C: public receipt redemption (`palw_receipt_spend_v4`, DORMANT): the V4 spend envelope, its admission and the reward split.
 pub mod palw_receipt_v4;
+/// RFC-0009 stage B: the canonical evidence manifest and the checks a claim's material is held to.
+pub mod palw_evidence_v1;
+/// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
+pub mod palw_evidence_court_v1;
+/// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
+pub mod palw_state_proof_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).

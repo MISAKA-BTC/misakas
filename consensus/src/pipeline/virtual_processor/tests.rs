@@ -14743,6 +14743,64 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     let payouts_mixed = vp.palw_v2_receipt_v4_payouts(&injected, &gd_mixed, &non_daa, &unentitled_mixed);
     assert!(payouts_mixed.is_empty(), "the V3 block is paid as V3 always was (no split); the refused V4 one is not paid at all");
 
+    // **The coinbase, through the processor's own manager and fee split** (the template path's expression, fed the entitlement and payout map
+    // the walk computed above): the V4 receipt block is paid as two outputs — the miner leg to the executor's payout, the rest to the block's
+    // own script — and the pair sums to exactly what the V3 expression pays the same block.
+    {
+        use kaspa_consensus_core::coinbase::{BlockRewardData, MinerData};
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+        let a_daa = ctx.consensus.headers_store.get_header(v4_a).unwrap().daa_score;
+        let subsidy = vp.coinbase_manager.calc_block_subsidy(a_daa);
+        let carve = vp.fee_split_at(a_daa);
+        let builder_script = kaspa_txscript::pay_to_script_hash_script(b"rfc9-builder");
+        let tip_script = kaspa_txscript::pay_to_script_hash_script(b"rfc9-tip");
+        let mut rewards = BlockHashMap::default();
+        rewards.insert(tip, BlockRewardData::new(subsidy, 0, 0, tip_script));
+        rewards.insert(v4_a, BlockRewardData::new(subsidy, 0, 0, builder_script.clone()));
+        let miner = MinerData::new(builder_script.clone(), vec![]);
+        let build = |v4: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>| {
+            vp.coinbase_manager
+                .expected_coinbase_transaction(
+                    a_daa,
+                    subsidy,
+                    miner.clone(),
+                    &gd_one,
+                    &rewards,
+                    &non_daa,
+                    &[],
+                    carve.as_ref(),
+                    (0, 0),
+                    0,
+                    &unentitled_one,
+                    true,
+                    &Default::default(),
+                    &Default::default(),
+                    v4,
+                )
+                .expect("the coinbase builds")
+                .tx
+        };
+        let v3_like = build(&BlockHashMap::default());
+        let v4_cb = build(&payouts);
+        let total = |tx: &kaspa_consensus_core::tx::Transaction| tx.outputs.iter().map(|o| o.value).sum::<u64>();
+        assert_eq!(total(&v4_cb), total(&v3_like), "the split moves value between two payees of one block, never in or out");
+        let part = match &carve {
+            Some(fs) => kaspa_consensus_core::dns_finality::split_block_subsidy(subsidy, fs).worker_base_sompi,
+            None => subsidy,
+        };
+        let (leg, fee) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(part, 500);
+        let paid = |tx: &kaspa_consensus_core::tx::Transaction, s: &ScriptPublicKey| {
+            tx.outputs.iter().filter(|o| &o.script_public_key == s).map(|o| o.value).sum::<u64>()
+        };
+        assert_eq!(paid(&v4_cb, &expected_script), leg, "the miner leg reaches the executor bond's registered payout");
+        assert!(leg > 0 && fee > 0, "the fixture's reward is large enough for both legs to be non-zero (leg {leg}, fee {fee})");
+        assert_eq!(
+            paid(&v4_cb, &builder_script) + leg,
+            paid(&v3_like, &builder_script),
+            "the builder keeps exactly what the V3 expression paid, less the miner leg"
+        );
+    }
+
     // The fold takes the winning V4 spend exactly once: weight added once, the second is skipped as QuantumAlreadySpent.
     let spend_view = |bytes: &[u8]| {
         kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(bytes).expect("decodes").to_fold_envelope()

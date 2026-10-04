@@ -910,4 +910,44 @@ mod tests {
         // Reorg: the delta reverts the spend bit-for-bit.
         assert_eq!(revert_delta_v2(&after_v4, &delta, &p).unwrap(), state);
     }
+
+    /// RFC-0009 stage D, on a populated state: a bond, a class and a claim are each proven against the root a (pinned) header commits, absence is
+    /// proven, and every way of lying — a changed row, a missing row, another root, another collection — is refused.
+    #[test]
+    fn stage_d_a_bond_a_class_and_a_claim_are_proven_against_the_committed_root() {
+        use crate::palw_state_proof_v1::{
+            PalwProofErrorV1, prove_bonds_v1, prove_claims_v1, prove_classes_v1, verify_bond_v1, verify_claim_v1, verify_class_v1,
+        };
+        use crate::palw_state_v2::palw_state_root_of_preimage_v1;
+        let state = certified_with_builder();
+        let root = state.state_root();
+        assert_eq!(palw_state_root_of_preimage_v1(&state.state_root_preimage()), root, "the preimage IS what the root hashes");
+        let b1 = crate::palw_state_v2::PalwBondKeyV2(bond_op(1));
+        let b2 = crate::palw_state_v2::PalwBondKeyV2(bond_op(2));
+        let absent = crate::palw_state_v2::PalwBondKeyV2(bond_op(9));
+
+        let bonds = prove_bonds_v1(&state);
+        let bond = verify_bond_v1(&bonds, root, &b1).expect("the executor's bond is in the committed state");
+        assert_eq!(bond.pubkey, vec![7; 4], "its registered key, proven");
+        assert_eq!(verify_bond_v1(&bonds, root, &b2).unwrap().pubkey, vec![8; 4], "and the builder's");
+        assert_eq!(verify_bond_v1(&bonds, root, &absent), Err(PalwProofErrorV1::Absent), "absence is a proof too");
+        assert_eq!(verify_class_v1(&prove_classes_v1(&state), root, &h64(1)).unwrap().artifact_root, h64(11));
+        let claim = verify_claim_v1(&prove_claims_v1(&state), root, &h64(0xFC)).unwrap();
+        assert_eq!(claim.bond, b1, "the claim's executor bond, proven");
+        assert!(matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }));
+
+        // Lies. A row changed by one byte (e.g. a swapped key) no longer hashes to a root the state contains.
+        let mut changed = bonds.clone();
+        let last = changed.collection.rows[0].1.len() - 1;
+        changed.collection.rows[0].1[last] ^= 1;
+        assert_eq!(verify_bond_v1(&changed, root, &b1), Err(PalwProofErrorV1::CollectionNotInState));
+        // A row dropped (to fake absence) or added (to fake presence) changes the root the same way.
+        let mut dropped = bonds.clone();
+        dropped.collection.rows.pop();
+        assert_eq!(verify_bond_v1(&dropped, root, &b2), Err(PalwProofErrorV1::CollectionNotInState));
+        // The bond table opened as the class table, and a proof for another state's root.
+        assert!(matches!(verify_class_v1(&bonds, root, &h64(1)), Err(PalwProofErrorV1::WrongCollection { .. })));
+        let other = certified_state(u128::MAX);
+        assert!(matches!(verify_bond_v1(&bonds, other.state_root(), &b1), Err(PalwProofErrorV1::OpeningDoesNotMatchRoot(_))));
+    }
 }

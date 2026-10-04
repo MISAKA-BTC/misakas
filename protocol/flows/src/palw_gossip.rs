@@ -778,6 +778,24 @@ impl PalwGossipCenter {
         verdict
     }
 
+    /// **RFC-0009 stage B: admit a material a LOCAL source produced** — an evidence provider's chunks, already checked against a manifest that
+    /// agrees with the claim's own on-chain roots. It enters the inbox exactly as a peer's answer does (so the duty loop's `verify_material`
+    /// and re-execution still judge it), is deduplicated by the same digest, is never relayed, and spends no peer's budget: there is no peer.
+    pub fn inject_local_material(&self, claim: Hash64, bytes: &[u8]) -> PalwGossipAdmit {
+        if bytes.len() > PALW_MATERIAL_MAX_BYTES {
+            return PalwGossipAdmit::TooBig;
+        }
+        let Ok(permit) = self.inbox_permit() else { return PalwGossipAdmit::Duplicate };
+        let digest = self.digest(1, Some(&claim), bytes);
+        let verdict = self.admit_digest(digest, None, true);
+        if verdict == PalwGossipAdmit::Fresh
+            && let Some(permit) = permit
+        {
+            permit.send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+        }
+        verdict
+    }
+
     /// Admit a receipt broadcast. Same contract as [`Self::admit_material`].
     pub fn admit_receipt(&self, bytes: &[u8]) -> PalwGossipAdmit {
         if bytes.len() > PALW_RECEIPT_MAX_BYTES {

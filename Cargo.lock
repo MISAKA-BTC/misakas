@@ -5283,6 +5283,7 @@ dependencies = [
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-pow-driver",
+ "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
@@ -6210,6 +6211,7 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-txscript",
+ "libcrux-ml-dsa",
  "thiserror 1.0.64",
 ]
 

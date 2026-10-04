@@ -2060,6 +2060,12 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        // RFC-0009 stage B: the directories a material pull is also answered from (empty: as before).
+                        evidence_provider_dirs: args
+                            .palw_evidence_provider_dir
+                            .as_deref()
+                            .map(|dirs| dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect())
+                            .unwrap_or_default(),
                         drill_answer_only: {
                             let drill = palw_private_drill;
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {

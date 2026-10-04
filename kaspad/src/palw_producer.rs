@@ -1809,46 +1809,32 @@ impl PalwProducerService {
         // `facts`', and the challenge binds the position — this template, this timestamp, this
         // nonce — and moves neither lottery. The draw was made the moment the inference finished.
         let timestamp = template.block.header.timestamp;
-        let mut attempt = PalwAttemptUnsignedV2 {
-            // **The current version, on both ids this producer can build for** (ADR-0072 SA-3).
-            //
-            // `PalwAttemptLaneV1::attempt_version` is the current version on `Unfenced` (every
-            // shipped preset) and on `ExecutionArm` (algo-9, past an armed fence), so a template
-            // declaring either id wants exactly this number. The third arm — `LegacyArm`, an armed
-            // network BELOW its fence — wants the pre-ADR-0072 version, and this producer cannot
-            // build for it: the pre-ADR-0072 lottery arithmetic those blocks were mined under was
-            // deleted at Relaunch 5's re-genesis, so a legacy envelope could not pass PoW here
-            // whatever version it declared. That is the honest limit of §3 option (b), and it is
-            // why arming this fence is safe at genesis (`ForkActivation::always()`, where
-            // `LegacyArm` is unreachable) and not safe at a future height on a chain with real
-            // pre-ADR-0072 history.
-            version: PALW_ATTEMPT_V2_VERSION,
+        // RFC-0009: one assembly, shared with a remote miner (`palw_attempt_from_execution_v1`) — the version, the challenge, the roots, the chain's
+        // pins (witness chunks, retention) are spelled there once. The pre-ADR-0072 legacy version is not built (the honest limit of SA-3 option b).
+        let mut attempt = kaspa_consensus_core::palw_attempt_v2::palw_attempt_from_execution_v1(
             network_domain,
-            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond),
-            class_id: facts.class_id,
-            executor_bond: bond,
-            executor_pubkey: self.verification_key(),
-            operator_id: facts.bond.as_ref().ok_or("the bond vanished between the pre-flight and the build")?.operator_id,
-            artifact_root: facts.artifact_root,
-            trace_root: run.trace_root,
-            output_root: run.output_root,
-            execution_root: run.execution_root,
-            pwu: facts.pwu,
-            // **RFC-0007 Part II**: a class with a witness profile commits `1 + chunks` trace chunks under the v2 manifest root — the
-            // chain's pin (`check_palw_attempt_witness_pin_v1`), derived from the facts and the trace root, never chosen. A class
-            // without one keeps the backend's own count and root, byte for byte.
-            trace_manifest_root: if facts.witness_chunks > 0 {
-                kaspa_consensus_core::palw_mesh_v1::palw_attempt_trace_manifest_root_v2(run.trace_root, 1 + facts.witness_chunks)
-            } else {
-                run.trace_manifest_root
+            pre_pow,
+            timestamp,
+            nonce,
+            bond,
+            self.verification_key(),
+            &kaspa_consensus_core::palw_attempt_v2::PalwAttemptChainFactsV1 {
+                class_id: facts.class_id,
+                artifact_root: facts.artifact_root,
+                pwu: facts.pwu,
+                min_trace_retention_daa: facts.min_trace_retention_daa,
+                witness_chunks: facts.witness_chunks,
+                operator_id: facts.bond.as_ref().ok_or("the bond vanished between the pre-flight and the build")?.operator_id,
             },
-            trace_chunk_count: if facts.witness_chunks > 0 { 1 + facts.witness_chunks } else { run.trace_chunk_count },
-            // The retention window a producer promises to keep the trace for. The material is in
-            // hand (`run.material`, encoded by the backend), which is what makes the promise one
-            // it can keep. Derived, not chosen, and PINNED by admission (ADR-0072 Decision 8):
-            // this header's own DAA score plus the network's lattice windows.
-            trace_retention_daa: template.block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
-        };
+            &kaspa_consensus_core::palw_attempt_v2::PalwAttemptExecutionV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+            },
+            template.block.header.daa_score,
+        );
         // **A rider is done here**: no lottery (it has no position), the challenge and the retention its lead's, signed once, the
         // material retained as any attempt's.
         if let Some((lead, index, retention)) = rider {

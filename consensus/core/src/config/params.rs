@@ -3032,6 +3032,15 @@ pub struct Params {
     /// `palw_audit_2026_09_11` and `palw_audit_2026_09_23` at or below it.
     pub palw_receipt_spend_v4: Option<ForkActivation>,
 
+    /// **RFC-0009 stage B: the provider challenge court** (`crate::palw_evidence_court_v1`). Past it a claim may be made accountable to its evidence
+    /// PROVIDERS instead of its producer: providers file storage receipts from their own bonds, anyone may challenge one chunk with a deadline, and
+    /// silence past it charges that provider once (a claim every provider has defaulted on lapses, which is not the miner's fraud). A bare height;
+    /// the response window is a companion value hashed with it ([`crate::palw_evidence_court_v1::palw_evidence_court_value_v1`]). `None` on every
+    /// preset, and **no fold reads it yet** — the machine is pure and tested, the chain integration is the next step. Hashed Some-only in every
+    /// writer with the `never()` collapse. Refused by [`Self::validate_palw_evidence_court_v1`] off ConsensusV2 or without `palw_da_court` at or
+    /// below it.
+    pub palw_evidence_court_v1: Option<ForkActivation>,
+
     /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
     /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
     /// jobs, promotion and rewards (spec 17). The value carries the scoring library's and the sign
@@ -4986,7 +4995,8 @@ impl Params {
             self.validate_palw_capacity_liability_v1()?;
             // ADR-0170's window: last on this path too (see the ConsensusV2 tail below); a ruleset with no V2 bundle refuses it by name.
             self.validate_palw_anchor_window_v1()?;
-            return self.validate_palw_receipt_spend_v4();
+            self.validate_palw_receipt_spend_v4()?;
+            return self.validate_palw_evidence_court_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -5861,7 +5871,9 @@ impl Params {
         // named by that fence's own refusal first.
         self.validate_palw_anchor_window_v1()?;
         // **RFC-0009: the receipt redemption's refusals** (`crate::palw_receipt_v4`) — after the audit fences it names.
-        self.validate_palw_receipt_spend_v4()
+        self.validate_palw_receipt_spend_v4()?;
+        // **RFC-0009 stage B: the provider court's refusals** — after the fences it names.
+        self.validate_palw_evidence_court_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -6448,6 +6460,9 @@ impl Params {
         // RFC-0009's receipt redemption: Some-only hashed, so the same collapse.
         if self.palw_receipt_spend_v4 == Some(ForkActivation::never()) {
             self.palw_receipt_spend_v4 = None;
+        }
+        if self.palw_evidence_court_v1 == Some(ForkActivation::never()) {
+            self.palw_evidence_court_v1 = None;
         }
         // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -10073,6 +10088,7 @@ impl Params {
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
             palw_receipt_spend_v4,
+            palw_evidence_court_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -10335,6 +10351,7 @@ impl Params {
             ("palw_real_clock_tick_v1", *palw_real_clock_tick_v1),
             ("palw_anchor_window_v1", *palw_anchor_window_v1),
             ("palw_receipt_spend_v4", *palw_receipt_spend_v4),
+            ("palw_evidence_court_v1", *palw_evidence_court_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
@@ -10659,6 +10676,14 @@ impl Params {
             h.write(b"palw_receipt_spend_v4");
             h.write(activation.daa_score().to_le_bytes());
             for v in crate::palw_receipt_v4::palw_receipt_spend_v4_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // RFC-0009 stage B's provider court, NAMED likewise, its response window hashed with it.
+        if let Some(activation) = self.palw_evidence_court_v1 {
+            h.write(b"palw_evidence_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_evidence_court_v1::palw_evidence_court_value_v1() {
                 h.write(v.to_le_bytes());
             }
         }
@@ -11255,6 +11280,7 @@ impl Params {
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
             palw_receipt_spend_v4,
+            palw_evidence_court_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -12022,6 +12048,10 @@ impl Params {
         if let Some(activation) = palw_receipt_spend_v4.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0009 stage B's provider court: Some-only, a bare height.
+        if let Some(activation) = palw_evidence_court_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
         if let Some(fence) = palw_improvement_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -12504,6 +12534,7 @@ impl Params {
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
             palw_receipt_spend_v4,
+            palw_evidence_court_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -13342,6 +13373,14 @@ impl Params {
                 h.write(v.to_le_bytes());
             }
         }
+        // RFC-0009 stage B's provider court, Some-only.
+        if let Some(activation) = palw_evidence_court_v1 {
+            h.write(b"palw_evidence_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_evidence_court_v1::palw_evidence_court_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
         // RFC-0004, Some-only: every shipped preset leaves it `None` and fingerprints
         // byte-identically to a build without the field. Armed, the ruleset states its scoring
         // library, its sign-test table, the protocol version and its ceilings.
@@ -14052,6 +14091,7 @@ impl Params {
             palw_real_clock_tick_v1: self.palw_real_clock_tick_v1,
             palw_anchor_window_v1: self.palw_anchor_window_v1,
             palw_receipt_spend_v4: self.palw_receipt_spend_v4,
+            palw_evidence_court_v1: self.palw_evidence_court_v1,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
@@ -15138,6 +15178,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
     palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15420,6 +15461,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
     palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15684,6 +15726,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
     palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -23204,6 +23247,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
     palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
