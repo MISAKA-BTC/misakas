@@ -293,7 +293,7 @@ up to ≈8× it.
 
 **The rule (from the fence `F`).**
 
-1. **`B_d = calc_block_subsidy(d)`**, the existing Kaspa schedule (`SUBSIDY_BY_MONTH_TABLE` at `target_time_per_block` = 120 s, ≈0.1 B a month). The accepting block's own
+1. **`B_d = calc_block_subsidy(d)`** — **one DAA's budget, set ONCE per DAA, never summed over the chain blocks that share the DAA** (the open row's `budget` is written by the first claim of the DAA and every later chain block of the same DAA must agree; a disagreeing budget enters no claim — `several_chain_blocks_of_one_daa_share_one_budget`), the existing Kaspa schedule (`SUBSIDY_BY_MONTH_TABLE` at `target_time_per_block` = 120 s, ≈0.1 B a month). The accepting block's own
    subsidy is `B_d` (every block of DAA `d` has the same one); it is carried in the fold as `ctx.subsidy`.
 2. **The DAA's cuts come from that one budget, in the accepting block's rooted state, not per merged block**: the PALW claims' pool `P_d = 0.72·B_d`, the validators `0.20·B_d`,
    inclusion `0.08·B_d` (each floored: `palw_emission_budget_split_v2`, `Σ ≤ B_d`, the remainder is not minted).
@@ -330,6 +330,33 @@ up to ≈8× it.
 | 6 | the panel reserve stays unminted | the reserve is paid out of a claim's *reward* (≤ the capped escrow); capping first means it can only shrink |
 | 7 | heartbeat-only DAAs mint nothing | a DAA with no eligible claim has no row and no allocation; FALLBACK is fee-only; the carrier hook is constant 0 |
 | 8 | the existing 34.5 M MSK of vesting rows | **not changed retroactively**: claims accepted below `F` are not registered, their payout and vesting are as they were; they vest to their expiry (last DAA 7,705 in the audit's data) |
+
+### 6c. The coinbase and the FALLBACK envelope, as built (stage 4)
+
+* **Every block declares zero subsidy from `F`** (body rule, template, validator): a block mints nothing of its own. The merged blocks' `mergeset_rewards` then carry subsidy 0, so the per-block
+  worker, validator and inclusion carves are 0 by construction and block miners are paid fees only.
+* **The tick mints the DAA's other 28 %**: the chain block whose DAA advanced pays, from `Σ calc_block_subsidy(d)` over the DAAs it advanced (one budget each; none for a block that did not
+  advance; never from the merged blocks' declared values), the validator share into `coinbase_validator_pool` and the §D inclusion share into the includer's bounty
+  (`CoinbaseManager::palw_accounting_v2_tick_subsidy`, one reading for the template, the validator and the check). The claims' 72 % is **not** minted here: it is vested at `Final` from the closed row.
+  Test: `a_tick_mints_the_daas_validator_and_inclusion_shares_once_and_blocks_mint_nothing`.
+* **Escrow is a ceiling, not a withholding.** The fold still records `escrowed_reward` = the carve of `B_d` at acceptance (it sizes the bond's exposure and caps the payout), but the coinbase has
+  nothing to withhold (declared 0), so no MSK exists until a `Final` vests `min(escrow, share)`. A pre-fence claim finalising after `F` is paid from the escrow its own block withheld, as before.
+* **The envelope** (`palw_fallback_v1`): `PFB1 ‖ borsh { version, network_domain, bond, ML-DSA-87 key, signature }` ≈ 7.3 KB, signed over `H("MISAKA-FALLBACK-V1" ‖ network ‖ pre-PoW hash ‖ timestamp ‖ nonce ‖ bond)`
+  with the attempt envelope's ML-DSA context. **Carriage decision (Q1's open detail):** `palw_commitment` is hash-visible on algo 8 **when non-empty** — a content-keyed gate in `write_header_preimage`, so every
+  heartbeat there ever was (empty) hashes byte for byte as before and no fence height enters the hash. The fence decides *validity*: at or past `F` an algo-8 header must carry a well-formed envelope
+  (header shape gate; the signature on the relay path; the proof path; and the chain-candidate admission, which skips the attempt rule for it), below `F` it must carry nothing.
+* **FALLBACK credit is wired** (fold step 1g): the block's own header and its mergeset's algo-8 headers (selected parent excluded) at or past `F`, in consensus order; credited iff the bond is registered with the
+  carried key, may take work, is not frozen, the floor machine is **Idle**, once a bond a DAA — `w_fb` each. The comparator reads `fallback_weight`. Pipeline test: `accounting_v2_the_fence_crosses_…`.
+* **`w_fb` — Q11, compared.** ADR-0165 quotes two numbers; they are **one quantity at two maturities**, not two derivations. A floor claim's `pwu` is 6,042,506,110 (`class_row(FLOOR)` in the capacity tests);
+  its `β·pwu` with β = 100 ‰ is FCW = 604,250,611 (ADR-0160 App. A, `PALW_CAPACITY_FCW_V1`) — the weight a claim carries while *provisional*. The full `pwu` enters `safe_weight` only at `Final`, after a panel and a window.
+  **Recommendation: `w_fb = FCW` (604,250,611)**, implemented as `PALW_ACCOUNTING_V2_W_FB_V1` and hashed with the fence: a FALLBACK has no panel, court or `Final`, so it earns what an unverified floor claim carries.
+  Idle-stretch security against today's floors (3 claims a slot at the full 6.04 e9 once Final = 18.1 e9 a slot): with the 8 genesis bonds each credited once a DAA, at most 8 × 0.60 e9 = 4.8 e9 a slot (≈ 27 %);
+  with `w_fb = pwu` it would be 8 × 6.04 e9 = 48 e9 (≈ 2.7×). The user decides; the value is one constant.
+* **Anchor duty, as built:** an **operator-keyed FALLBACK** (the bond in lane A's genesis operator set, the key equal to the set's) is an operator block for lane A: it may bind the claims waiting for an operator. Its seed is its
+  header-derived key `H("MISAKA-FALLBACK-EXEC-V1" ‖ network ‖ pre-PoW hash ‖ bond ‖ nonce)` — never the block identity or the signature — whose re-roll costs one `2^-24` puzzle, more than the ~279 junk draws a BASE-0
+  operator binder cost. **Seed anchor (ADR-0170):** a FALLBACK never records one (it is not an attempt), and a base-class attempt (a pre-fence floor merged late) records none past `F`. **Not built:** the *producer* of the
+  anchor duty (a node policy that mines one operator FALLBACK when a claim has waited 30 slots — the old floor-binder rule, re-pointed); the kaspad FALLBACK miner signs the envelope for any bond it is given and is the
+  vehicle for it.
 
 **What it does to the economy, stated (E1 is the user's, closed).** At the measured ≈3.5 claims a DAA the pool is `P_d` (3,200.8 MSK) shared by `W`: ≈1,270 MSK each at equal weights,
 ≈4.4 k MSK a DAA of schedule against ≈11 k now. A large model is paid for its compute by `W_claim` (§6a), not by a larger schedule; the schedule does not grow. The user has
@@ -436,12 +463,12 @@ Identity does not move (peering continues until F), the params id and schedule i
 
 **Taken at this ADR's recommended default** (reported in the milestone message; reversible before arming)
 
-* **Q6** Operator FALLBACK carries the anchor duty, with BASE-0's execution commitment as the seed; REAL attempts alone feed the anchor window; the all-idle Candidate gap is accepted (§5.7).
+* **Q6** Operator FALLBACK carries the anchor duty (built: header-derived seed key, §6c); REAL attempts alone feed the anchor window; the all-idle Candidate gap is accepted (§5.7).
 * **Q7** Fake-REAL griefing is *not* closed here (measure first; options: the `2^-24` puzzle on the attempt lane, merge-admission stage B).
 * **Q8** Slow-REAL carrier: accept the limit (REAL carries when its stamp is fresh).
 * **Q9** E-BLUE is carried through the mergeset (parent edges); ADR-0168's trailer and closure are not used and `palw_exec_class_v1` stays unarmed.
 * **Q10** E-BLUE reward is ADR-0125's rule unchanged; the `E_BLUE / E_VOID / RED` verdict is derived and shown through the audit index record (`block_accounting`).
-* **Q11** Reconcile `w_fb` (604,250,611 vs 6,042,506,112) before sizing; a rooted `fallback_weight` field (delta 130, carriage tail `0xF3`) is the default, ε-only FALLBACK the fallback position.
+* **Q11** `w_fb`: reconciled in §6c (one quantity at two maturities); **recommended FCW = 604,250,611**, built; the user decides the value. `fallback_weight` is a row of the rooted ledger (tail `0xF3`).
 * **Q12** F's height is chosen after the 5,300 release has settled and the drill has run, at a height no other fence uses.
 * **Q13** Confirm by test that algo 10 and algo 8 at or past F derive no block level (extend `algo_id_derives_no_block_level` only if needed) and that the E-BLUE verdict near the pruning point behaves as F1's.
 * **Q14** Audit every predicate that lists algo 8 (difficulty rows, level, blue work, lead cap, relay) for the re-meant lane — ADR-0105's lesson of a stale id list.

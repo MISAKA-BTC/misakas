@@ -137,9 +137,9 @@ pruned join, the pruning proof across F, a reorg across F, dormancy byte-identit
 | 3 | clock (§4): **grant unchanged** (equivalence test, simulation extended); carrier is attribution | **done (dormant)** |
 | 4a | state mirror, the rooted ledger (root block, tail `0xF3`, one delta kind, carriage), pure emission rule | **done (dormant)** |
 | 4b | fold: row follows the claim, closure step, capped `Final`, F-EM off from F, FALLBACK / round credit methods, comparator term | **done (dormant)**; the credits are not yet called by the block fold |
-| 4c | coinbase: validator and inclusion cuts from the per-DAA budget; anchor duty; the block-pipeline test | not built |
-| 5 | stateless checks, RPC, audit index, producers (FALLBACK miner replaces the heartbeat miner and the floor producer), drill scripts | not built |
-| 6 | drill (ADR-0172 §8), then the lead decides F | after the 5,300 release |
+| 4c | coinbase: zero declared subsidy, the tick's validator and inclusion shares (template, validator pool, check, body rule); the FALLBACK envelope (hash gate, shape, signature, proof, admission); the fold's FALLBACK credit; operator-FALLBACK anchor duty (lane A + seed key); base-class attempts no seed anchor; pipeline test; kaspad FALLBACK miner | **done (dormant)**; a `Final` through a real panel is not covered (that harness runs no panel) |
+| 5 | stateless checks (done in 4c), `blockKind`/`blockClass` labels (pure, `block_kind_v2`/`block_class_v2`; RPC wiring belongs to the audit-rpc lane), the kaspad FALLBACK miner (done), the anchor-duty producer policy (not built), the predicate audit Q14 (see below) | partly done |
+| 6 | drill plan [`consensus-accounting-v2-drill-plan.md`](consensus-accounting-v2-drill-plan.md), the drill flag `--palw-drill-accounting-v2-at`, and a dry-run script; **not run** | plan, flag and script written; the run is after the 5,300 drill |
 
 **As-built note (stage 1, 2026-10-04; revised after the user's decisions Q1–Q5: no algo 12, no consensus grace, σ = 0 / subsidy 0 constants):** `consensus/core/src/palw_accounting_v2.rs` holds `lane_v2`, `colour_rule_v2`, `peer_effect_v2`,
 `exec_verdict_v2`, `scoring_delta_v2`, `palw_clock_carrier_v2`, `claim_weight_split_v2` / `claim_weight_bound_holds_v2` / `credit_round_v2`, the

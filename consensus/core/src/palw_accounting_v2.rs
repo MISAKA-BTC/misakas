@@ -548,6 +548,49 @@ pub enum PalwAccountingRowV2 {
     Daa(DaaWeightRowV2),
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// What an explorer / RPC names a block (stage 5): a pure label over facts the node already has
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **`blockKind`**: the lane a header proves, named for a reader. Algo 8 is `HEARTBEAT` below the fence and `FALLBACK` from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockKindV2 {
+    Real,
+    Fallback,
+    Heartbeat,
+    Round,
+    Other,
+}
+
+pub fn block_kind_v2(algo_id: u8, daa_score: u64, fence: Option<ForkActivation>) -> BlockKindV2 {
+    match lane_v2(algo_id, daa_score, fence) {
+        LaneV2::Attempt => BlockKindV2::Real,
+        LaneV2::Fallback => BlockKindV2::Fallback,
+        LaneV2::LegacyHeartbeat => BlockKindV2::Heartbeat,
+        LaneV2::Exec => BlockKindV2::Round,
+        LaneV2::Other => BlockKindV2::Other,
+    }
+}
+
+/// **`blockClass`** as a merging block sees a member: `blue` is its place in the mergeset (blue or not); `credited` is whether the fold accepted it (a REAL attempt's claim, a
+/// FALLBACK's weight, a round's credit); `verdict` the recomputed E-BLUE verdict of an Exec member. Names: `C_BLUE`/`C_RED` (REAL), `FALLBACK`/`FALLBACK_RED`, `E_BLUE` (credited) /
+/// `E_VOID` (structurally canonical, refused by the fold) / `RED`, and `HEARTBEAT`/`OTHER` for a legacy heartbeat and anything else.
+pub fn block_class_v2(kind: BlockKindV2, blue: bool, credited: bool, verdict: Option<ExecVerdictV2>) -> &'static str {
+    match (kind, blue) {
+        (BlockKindV2::Real, true) => "C_BLUE",
+        (BlockKindV2::Real, false) => "C_RED",
+        (BlockKindV2::Fallback, true) => "FALLBACK",
+        (BlockKindV2::Fallback, false) => "FALLBACK_RED",
+        (BlockKindV2::Round, _) => match verdict {
+            Some(ExecVerdictV2::EBlue) if credited => "E_BLUE",
+            Some(ExecVerdictV2::EBlue) => "E_VOID",
+            _ => "RED",
+        },
+        (BlockKindV2::Heartbeat, _) => "HEARTBEAT",
+        (BlockKindV2::Other, _) => "OTHER",
+    }
+}
+
 /// **One FALLBACK block a fold is told about** — the processor decodes each algo-8 header at or past the fence in the block's own header and its mergeset (blues then reds,
 /// the selected parent excluded: it credited itself) and hands the fold the facts the envelope states. The fold decides credit (E3); the facts are E0/E1.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -560,6 +603,19 @@ pub struct PalwFallbackFactV1 {
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The fence
 // ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **The fence's entry** (`set` writes the field and the bundle's mirror; in no network's release — the next fence after DAA 5,300).
+pub const PALW_ACCOUNTING_V2_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
+    name: "palw_accounting_v2",
+    set: |params, at| {
+        params.palw_accounting_v2 = at;
+        params.sync_palw_accounting_v2();
+    },
+};
+
+/// The drill's list (`--palw-drill-accounting-v2-at`): this fence alone. Its prerequisites (the Useful Work Transition, the anchor window, F1, the canonical-work and weight-cap
+/// fences, lane A's) must be in force at or below the drill's height — arm them first with `--palw-drill-int11-at` and the post-launch flags.
+pub const PALW_DRILL_ACCOUNTING_V2_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] = &[PALW_ACCOUNTING_V2_ENTRY];
 
 impl Params {
     /// `palw_accounting_v2`, resolved: `Some` only on a `ConsensusV2` network that armed it.
@@ -1168,6 +1224,23 @@ mod tests {
                 assert_eq!(only_claims, row, "E-BLUE rounds, FALLBACK blocks and floors added to the allocation");
             }
         }
+    }
+
+    #[test]
+    fn an_explorer_names_a_block_by_its_lane_its_place_and_the_folds_verdict() {
+        assert_eq!(block_kind_v2(POW_ALGO_ID_HEARTBEAT_V1, F - 1, fence()), BlockKindV2::Heartbeat);
+        assert_eq!(block_kind_v2(POW_ALGO_ID_HEARTBEAT_V1, F, fence()), BlockKindV2::Fallback);
+        assert_eq!(block_kind_v2(POW_ALGO_ID_PALW_COMMITTED_V2, F, fence()), BlockKindV2::Real);
+        assert_eq!(block_kind_v2(POW_ALGO_ID_PALW_ROUND_V1, F, fence()), BlockKindV2::Round);
+        let class = |k, blue, credited, v| block_class_v2(k, blue, credited, v);
+        assert_eq!(class(BlockKindV2::Real, true, true, None), "C_BLUE");
+        assert_eq!(class(BlockKindV2::Real, false, true, None), "C_RED");
+        assert_eq!(class(BlockKindV2::Fallback, true, false, None), "FALLBACK");
+        assert_eq!(class(BlockKindV2::Fallback, false, false, None), "FALLBACK_RED");
+        assert_eq!(class(BlockKindV2::Round, false, true, Some(ExecVerdictV2::EBlue)), "E_BLUE", "a round is never in the blues, yet it is E-BLUE when canonical and credited");
+        assert_eq!(class(BlockKindV2::Round, false, false, Some(ExecVerdictV2::EBlue)), "E_VOID");
+        assert_eq!(class(BlockKindV2::Round, false, true, Some(ExecVerdictV2::Red)), "RED");
+        assert_eq!(class(BlockKindV2::Heartbeat, true, false, None), "HEARTBEAT");
     }
 
     #[test]
