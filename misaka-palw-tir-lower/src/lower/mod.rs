@@ -459,6 +459,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         carry_keys: BTreeMap::new(),
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
+        out_major_rows: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -615,6 +616,11 @@ struct Cx<'h> {
     table_chunk: i64,
     /// [`LowerOpts::conv_weight_bits`] (8 or 16).
     conv_weight_bits: u8,
+    /// **Encoder rows' projections stored OUT-major** (`[out, in]`, as the decoder's): `linear_rows` computes `(W · Xᵀ)ᵀ` instead
+    /// of `X · Wᵀ` — the same integers — so a commit tile of `T` output channels reads `T` contiguous weight rows (`T` inventory
+    /// pieces) rather than a column slice through every input row (`in` pieces). Off by default (the programs every existing
+    /// class and golden holds); a tower declared for a pipeline class turns it on (`vision::lower_vision_with`).
+    out_major_rows: bool,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics

@@ -52,7 +52,7 @@ pub fn vlm_stages_v1(config: &Value, max_context: u32, size: (u32, u32)) -> Resu
     // 1. The tower.
     let vspec = vision::parse_vision(&text, Some(size), None).map_err(|e| format!("tower: {e}"))?;
     let (vhl, _) = vision::hl_program(&vspec).map_err(|e| format!("tower hl: {e}"))?;
-    let vlw = vision::lower_vision(&vhl, &vspec).map_err(|e| format!("tower lower: {e}"))?;
+    let vlw = vision::lower_vision_with(&vhl, &vspec, true).map_err(|e| format!("tower lower: {e}"))?;
     let tower = encoder::vision_v2(&vlw).map_err(|e| format!("tower v2: {e}"))?;
     let out = &tower.blocks[tower.schedule.post as usize].nodes[tower.output.node() as usize].out.shape;
     let (rows, width) = match out.as_slice() {
@@ -215,9 +215,9 @@ fn admit_at_size(
         // A short fixed sequence of layouts (the commit tile, the output tile, the history tile, the checkpoint interval), the
         // way the IR search narrows: the first refusal is kept when none admits.
         const LAYOUTS: [(u32, Option<u32>, u32, u32); 6] = [
-            (64, Some(4096), 32, 64),
-            (16, Some(4096), 32, 64),
-            (4, Some(4096), 32, 64),
+            (64, Some(256), 32, 64),
+            (16, Some(256), 32, 64),
+            (256, Some(256), 32, 64),
             (64, Some(1024), 32, 8),
             (256, Some(4096), 16, 8),
             (64, Some(256), 16, 1),
@@ -256,7 +256,7 @@ fn admit_at_size(
                         eprintln!(
                             "vlm-trace: ctx {max_context} size {size:?} layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint}): {why}"
                         );
-                        if why.contains("close bytes as carried") && range_twin {
+                        if (why.contains("close bytes as carried") || why.contains("sizing work")) && range_twin {
                             worst_closes_trace(&stages, &choice, checkpoint, max_context);
                         }
                     }
@@ -292,6 +292,8 @@ fn worst_closes_trace(stages: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoi
                 .flat_map(|(s, st)| st.iter().map(move |b| (b.close_bytes, s, b.block, b.node, b.checkpoint)))
                 .collect();
             all.sort_unstable_by(|a, b| b.cmp(a));
+            let tables =
+                kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1::new(&class, &stages.pipeline, &programs).ok();
             for (bytes, s, b, n, ck) in all.iter().take(8) {
                 let p = &programs[*s];
                 let node = &p.blocks[*b as usize].nodes[*n as usize];
@@ -299,6 +301,42 @@ fn worst_closes_trace(stages: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoi
                     "vlm-close: {bytes} B stage {s} block {b} node {n} {:?} out {:?} checkpoint {ck:?}",
                     node.prim, node.out.shape
                 );
+                // The first tile's reads at position 0, by kind.
+                let Some(z) = tables.as_ref().and_then(|t| t.stage(&class, &stages.pipeline, &programs, *s).ok()) else { continue };
+                let occ = z.space.occurrences().iter().position(|(blk, _)| *blk == *b).unwrap_or(0) as u16;
+                let tile = z.space.commit_tile_len(*b, *n).unwrap_or(64) as usize;
+                let ranges = kaspa_consensus_core::palw_tir_close_range_v1::PalwTirRangesV1::single(0, tile);
+                let req = kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseRangeRequestV1 {
+                    ctx: misaka_palw_tir::demand::DemandContext { pos: 0, occurrence: occ },
+                    target: *n,
+                    ranges: &ranges,
+                    supplied: &[],
+                    range: None,
+                    both: false,
+                };
+                let mut cache = kaspa_consensus_core::palw_tir_close_range_v1::PalwTirRangeCacheV1::default();
+                if let Ok(split) = kaspa_consensus_core::palw_tir_close_range_v1::palw_tir_close_reads_range_split_gen_v1(
+                    &z.space,
+                    &z.job,
+                    &z.inventory,
+                    &mut cache,
+                    &req,
+                    u64::MAX / 4,
+                    false,
+                    false,
+                    Some(&z.model),
+                ) {
+                    let r = &split.reads;
+                    eprintln!(
+                        "vlm-close:   tile 0 reads {} step leaves ({} values), {} param leaves, {} wild rows, {} edges, {} image tiles",
+                        r.steps.len(),
+                        r.steps.values().map(|v| *v as u64).sum::<u64>(),
+                        r.params.len(),
+                        r.wild_rows.len(),
+                        r.edges.len(),
+                        r.images.len()
+                    );
+                }
             }
             eprintln!("vlm-close: work {work}");
         }

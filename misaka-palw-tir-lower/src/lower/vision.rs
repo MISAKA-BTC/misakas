@@ -32,7 +32,10 @@
 //! binding see them per occurrence). The float reference [`float_forward`] uses the same site
 //! names, and it calibrates.
 
-use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, resid_commit_needed, rows_val, site_key, softmax_rows};
+use super::bidir::{
+    add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, resid_commit_needed, rows_val, site_key,
+    softmax_rows,
+};
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Pick, Src};
@@ -162,7 +165,15 @@ impl VisionSpec {
                 return Err(bad(format!("{what} {v} outside [1, 2^24]")));
             }
         }
-        if self.patch == 0 || self.downscale == 0 || self.merge == 0 || self.temporal == 0 || self.h == 0 || self.w == 0 || self.h > 1 << 14 || self.w > 1 << 14 {
+        if self.patch == 0
+            || self.downscale == 0
+            || self.merge == 0
+            || self.temporal == 0
+            || self.h == 0
+            || self.w == 0
+            || self.h > 1 << 14
+            || self.w > 1 << 14
+        {
             return Err(bad("a zero or oversized patch, downscale, merge, temporal size or input".into()));
         }
         if self.run > self.layers {
@@ -172,7 +183,11 @@ impl VisionSpec {
             return Err(bad("a normalisation mean or std that is not finite and positive".into()));
         }
         let (gh, gw) = self.grid();
-        if self.h % (self.downscale * self.patch) != 0 || self.w % (self.downscale * self.patch) != 0 || gh % self.merge != 0 || gw % self.merge != 0 {
+        if self.h % (self.downscale * self.patch) != 0
+            || self.w % (self.downscale * self.patch) != 0
+            || gh % self.merge != 0
+            || gw % self.merge != 0
+        {
             return Err(LowerError::not_lowerable(format!(
                 "{}: a {}×{} input does not tile into {}-pixel patches (merge {})",
                 self.architecture, self.h, self.w, self.patch, self.merge
@@ -264,7 +279,14 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
             let l = format!("{p}encoder.layers.{{L}}.");
             put("norm1", format!("{l}layer_norm1"));
             put("norm2", format!("{l}layer_norm2"));
-            for (k, h) in [("attn.q", "self_attn.q_proj"), ("attn.k", "self_attn.k_proj"), ("attn.v", "self_attn.v_proj"), ("attn.o", "self_attn.out_proj"), ("mlp.up", "mlp.fc1"), ("mlp.down", "mlp.fc2")] {
+            for (k, h) in [
+                ("attn.q", "self_attn.q_proj"),
+                ("attn.k", "self_attn.k_proj"),
+                ("attn.v", "self_attn.v_proj"),
+                ("attn.o", "self_attn.out_proj"),
+                ("mlp.up", "mlp.fc1"),
+                ("mlp.down", "mlp.fc2"),
+            ] {
                 put(k, format!("{l}{h}"));
             }
             if let VisionOut::ClipPooled { proj: Some(_) } = out {
@@ -319,7 +341,14 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
             let l = "encoder.layers.{L}.".to_string();
             put("norm1", format!("{l}layer_norm1"));
             put("norm2", format!("{l}layer_norm2"));
-            for (k, h) in [("attn.q", "self_attn.q_proj"), ("attn.k", "self_attn.k_proj"), ("attn.v", "self_attn.v_proj"), ("attn.o", "self_attn.out_proj"), ("mlp.up", "mlp.fc1"), ("mlp.down", "mlp.fc2")] {
+            for (k, h) in [
+                ("attn.q", "self_attn.q_proj"),
+                ("attn.k", "self_attn.k_proj"),
+                ("attn.v", "self_attn.v_proj"),
+                ("attn.o", "self_attn.out_proj"),
+                ("mlp.up", "mlp.fc1"),
+                ("mlp.down", "mlp.fc2"),
+            ] {
                 put(k, format!("{l}{h}"));
             }
             put("head.probe", "head.probe".into());
@@ -441,8 +470,15 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
         other => return Err(LowerError::not_lowerable(format!("`{other}` is not a vision tower this lowering models"))),
     };
     let (gh, gw) = spec.grid();
-    if spec.h % (spec.downscale * spec.patch) != 0 || spec.w % (spec.downscale * spec.patch) != 0 || gh % spec.merge != 0 || gw % spec.merge != 0 {
-        return Err(LowerError::not_lowerable(format!("{}: a {}×{} input does not tile into {}-pixel patches (merge {})", spec.architecture, spec.h, spec.w, spec.patch, spec.merge)));
+    if spec.h % (spec.downscale * spec.patch) != 0
+        || spec.w % (spec.downscale * spec.patch) != 0
+        || gh % spec.merge != 0
+        || gw % spec.merge != 0
+    {
+        return Err(LowerError::not_lowerable(format!(
+            "{}: a {}×{} input does not tile into {}-pixel patches (merge {})",
+            spec.architecture, spec.h, spec.w, spec.patch, spec.merge
+        )));
     }
     if spec.d % spec.heads != 0 {
         return Err(LowerError::bad(format!("{}: hidden {} not divisible by {} heads", spec.architecture, spec.d, spec.heads)));
@@ -454,11 +490,20 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
 
 /// The tower's params: `(HL name, shape, per layer, source)`.
 fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
-    let n = |k: &str| -> Result<String> { s.names.get(k).cloned().ok_or_else(|| LowerError::eval(format!("internal: no name for `{k}`"))) };
+    let n = |k: &str| -> Result<String> {
+        s.names.get(k).cloned().ok_or_else(|| LowerError::eval(format!("internal: no name for `{k}`")))
+    };
     let d = s.d;
     let raw = 3 * (s.temporal * s.patch * s.patch) as usize;
     let mut v: Vec<(String, Vec<usize>, bool, Src)> = Vec::new();
-    let lin = |v: &mut Vec<(String, Vec<usize>, bool, Src)>, name: &str, role: &str, out: usize, inp: usize, bias: bool, pl: bool| -> Result<()> {
+    let lin = |v: &mut Vec<(String, Vec<usize>, bool, Src)>,
+               name: &str,
+               role: &str,
+               out: usize,
+               inp: usize,
+               bias: bool,
+               pl: bool|
+     -> Result<()> {
         let r = n(role)?;
         v.push((format!("{name}.w"), vec![out, inp], pl, Src::t(format!("{r}.weight"))));
         if bias {
@@ -466,14 +511,15 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
         }
         Ok(())
     };
-    let norm = |v: &mut Vec<(String, Vec<usize>, bool, Src)>, name: &str, role: &str, width: usize, bias: bool, pl: bool| -> Result<()> {
-        let r = n(role)?;
-        v.push((format!("{name}.gain"), vec![width], pl, Src::t(format!("{r}.weight"))));
-        if bias {
-            v.push((format!("{name}.bias"), vec![width], pl, Src::t(format!("{r}.bias"))));
-        }
-        Ok(())
-    };
+    let norm =
+        |v: &mut Vec<(String, Vec<usize>, bool, Src)>, name: &str, role: &str, width: usize, bias: bool, pl: bool| -> Result<()> {
+            let r = n(role)?;
+            v.push((format!("{name}.gain"), vec![width], pl, Src::t(format!("{r}.weight"))));
+            if bias {
+                v.push((format!("{name}.bias"), vec![width], pl, Src::t(format!("{r}.bias"))));
+            }
+            Ok(())
+        };
     // pre
     v.push(("patch.w".into(), vec![d, raw], false, Src::t(n("patch.w")?).reshape(vec![d, raw])));
     if s.patch_bias {
@@ -552,11 +598,24 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
 pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
     use crate::hl::{Block, BlockRole, CarryDecl, HlType, Init, Node, ParamDecl, Ref};
     let table = param_table(s)?;
-    let params: Vec<ParamDecl> =
-        table.iter().map(|(n, sh, pl, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: *pl, init: Init::Normal(0.1) }).collect();
+    let params: Vec<ParamDecl> = table
+        .iter()
+        .map(|(n, sh, pl, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: *pl, init: Init::Normal(0.1) })
+        .collect();
     let post_names: std::collections::BTreeSet<&str> = [
-        "post_norm.gain", "post_norm.bias", "proj.w", "proj.up.w", "proj.up.b", "proj.down.w", "proj.down.b",
-        "merger.norm.gain", "merger.norm.bias", "merger.up.w", "merger.up.b", "merger.down.w", "merger.down.b",
+        "post_norm.gain",
+        "post_norm.bias",
+        "proj.w",
+        "proj.up.w",
+        "proj.up.b",
+        "proj.down.w",
+        "proj.down.b",
+        "merger.norm.gain",
+        "merger.norm.bias",
+        "merger.up.w",
+        "merger.up.b",
+        "merger.down.w",
+        "merger.down.b",
     ]
     .into_iter()
     .collect();
@@ -580,7 +639,8 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         writes: vec![],
     };
     let full_kinds: Vec<bool> = (0..s.run).map(|l| s.window.as_ref().is_none_or(|(_, full)| full.contains(&l))).collect();
-    let mut blocks = vec![Block { name: "pre".into(), role: BlockRole::Pre, nodes: vec![anchor(pre)], outputs: vec![Ref::Node(0, 0)] }];
+    let mut blocks =
+        vec![Block { name: "pre".into(), role: BlockRole::Pre, nodes: vec![anchor(pre)], outputs: vec![Ref::Node(0, 0)] }];
     // One block kind per attention kind (Qwen2.5-VL: windowed and full).
     let mut kind_of = BTreeMap::new();
     let mut schedule = Vec::new();
@@ -764,7 +824,11 @@ pub fn float_forward(
                     }
                 }
                 e.absmax = e.absmax.max(row);
-                if i == 0 { e.pos0_absmax = e.pos0_absmax.max(row) } else { e.rest_absmax = e.rest_absmax.max(row) }
+                if i == 0 {
+                    e.pos0_absmax = e.pos0_absmax.max(row)
+                } else {
+                    e.rest_absmax = e.rest_absmax.max(row)
+                }
                 e.count += r.len() as u64;
             }
         }
@@ -900,7 +964,8 @@ pub fn float_forward(
         for hh in 0..heads {
             for i in 0..l_rows {
                 let keys: Vec<usize> = (0..l_rows).filter(|j| !windowed || wins.as_ref().is_none_or(|w| w[*j] == w[i])).collect();
-                let sc: Vec<f64> = keys.iter().map(|j| (0..dh).map(|t| q[i][hh * dh + t] * k[*j][hh * dh + t]).sum::<f64>() * scale).collect();
+                let sc: Vec<f64> =
+                    keys.iter().map(|j| (0..dh).map(|t| q[i][hh * dh + t] * k[*j][hh * dh + t]).sum::<f64>() * scale).collect();
                 let mx = sc.iter().cloned().fold(f64::MIN, f64::max);
                 let e: Vec<f64> = sc.iter().map(|z| (z - mx).exp()).collect();
                 let z: f64 = e.iter().sum();
@@ -973,7 +1038,8 @@ pub fn float_forward(
             observe("post.head.v".into(), &v);
             let mut ctx = vec![0f64; d];
             for hh in 0..heads {
-                let sc: Vec<f64> = (0..l_rows).map(|j| (0..dh).map(|t| q[hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * scale).collect();
+                let sc: Vec<f64> =
+                    (0..l_rows).map(|j| (0..dh).map(|t| q[hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * scale).collect();
                 let mx = sc.iter().cloned().fold(f64::MIN, f64::max);
                 let e: Vec<f64> = sc.iter().map(|z| (z - mx).exp()).collect();
                 let z: f64 = e.iter().sum();
@@ -1002,7 +1068,8 @@ pub fn float_forward(
             let mu = (s.merge * s.merge) as usize;
             let grouped: Vec<Vec<f64>> = xn.chunks(mu).map(|c| c.concat()).collect();
             let m4 = d * mu;
-            let up: Vec<Vec<f64>> = grouped.iter().map(|r| lin(r, &p("merger.up.w", None).unwrap(), Some(&p("merger.up.b", None).unwrap()), m4)).collect();
+            let up: Vec<Vec<f64>> =
+                grouped.iter().map(|r| lin(r, &p("merger.up.w", None).unwrap(), Some(&p("merger.up.b", None).unwrap()), m4)).collect();
             observe("post.merger.up".into(), &up);
             let a: Vec<Vec<f64>> = up.iter().map(|r| r.iter().map(|z| gelu(Act::Gelu, *z)).collect()).collect();
             observe("post.merger.act".into(), &a);
@@ -1016,7 +1083,8 @@ pub fn float_forward(
         VisionOut::Projector { out, act } => {
             let rows = &x[usize::from(s.cls)..];
             observe("post.proj.in".into(), rows);
-            let up: Vec<Vec<f64>> = rows.iter().map(|r| lin(r, &p("proj.up.w", None).unwrap(), Some(&p("proj.up.b", None).unwrap()), *out)).collect();
+            let up: Vec<Vec<f64>> =
+                rows.iter().map(|r| lin(r, &p("proj.up.w", None).unwrap(), Some(&p("proj.up.b", None).unwrap()), *out)).collect();
             observe("post.proj.up".into(), &up);
             let a: Vec<Vec<f64>> = up.iter().map(|r| r.iter().map(|z| gelu(*act, *z)).collect()).collect();
             observe("post.proj.act".into(), &a);
@@ -1033,6 +1101,13 @@ pub fn float_forward(
 /// one block per layer kind, `post` (the output). The program's "logits" node is the output rows
 /// `[R, width]` in a power-of-two fixed point.
 pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
+    lower_vision_with(hl, s, false)
+}
+
+/// [`lower_vision`] with the rows' projections stored out-major (`out_major`: `[out, in]`, so a commit tile of output channels
+/// reads contiguous weight rows — the layout a tower declared as a pipeline class's stage needs for its closes to be carriable;
+/// the same integers either way).
+pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Result<Lowered> {
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let mut pb = ProgramBuilder::new(1, hb);
     let mut cx = Cx {
@@ -1056,6 +1131,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
+        out_major_rows: out_major,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -1076,10 +1152,20 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
     let out_node = out_node.ok_or_else(|| LowerError::eval("internal: no output node"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], out_node);
-    tir::validate::validate(&program).map_err(|e| LowerError::eval(format!("internal: the tower's program is not in normal form: {e}")))?;
+    tir::validate::validate(&program)
+        .map_err(|e| LowerError::eval(format!("internal: the tower's program is not in normal form: {e}")))?;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered {
+        program,
+        fills: cx.fills,
+        row_params: cx.row_params,
+        resid_sites,
+        logits_key,
+        block_map,
+        site_nodes: cx.site_nodes,
+        budget_fallbacks: vec![],
+    })
 }
 
 pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
@@ -1088,9 +1174,15 @@ pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
     let prefixes: Vec<String> = match blk.role {
         BlockRole::Pre => vec!["pre.".into()],
         BlockRole::Post => vec!["post.".into()],
-        BlockRole::Layer => hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect(),
+        BlockRole::Layer => {
+            hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect()
+        }
     };
-    let suffix = if blk.role == BlockRole::Layer && hl.schedule.first().map(|k| *k as usize) != Some(hbk) { format!("#{hbk}") } else { String::new() };
+    let suffix = if blk.role == BlockRole::Layer && hl.schedule.first().map(|k| *k as usize) != Some(hbk) {
+        format!("#{hbk}")
+    } else {
+        String::new()
+    };
     Lb {
         hb: hbk,
         role: blk.role,
@@ -1149,7 +1241,16 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
     match role {
         BlockRole::Pre => {
             let (h, w) = (s.h, s.w);
-            let img = decl(&mut b, cx, &lb, IMAGE_PARAM, DType::I16, &[h as usize, w as usize, 3], false, input_fill(DType::I16, vec![h as usize, w as usize, 3]))?;
+            let img = decl(
+                &mut b,
+                cx,
+                &lb,
+                IMAGE_PARAM,
+                DType::I16,
+                &[h as usize, w as usize, 3],
+                false,
+                input_fill(DType::I16, vec![h as usize, w as usize, 3]),
+            )?;
             // Fixed-ratio downscale: a box filter of ratio r (two MatMuls with pinned 0/1
             // matrices, then an exact rounded Div by r²).
             let r = s.downscale;
@@ -1157,8 +1258,26 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let img = if r > 1 {
                 let rows: Vec<i8> = (0..hh).flat_map(|i| (0..h).map(move |k| i8::from(k / r == i))).collect();
                 let cols: Vec<i8> = (0..w).flat_map(|k| (0..ww).map(move |j| i8::from(k / r == j))).collect();
-                let bh = decl(&mut b, cx, &lb, "pre.box_rows", DType::I8, &[hh as usize, h as usize], false, Arc::new(move |_| Ok(IntTensor::i8(vec![hh as usize, h as usize], rows.clone()))))?;
-                let bw = decl(&mut b, cx, &lb, "pre.box_cols", DType::I8, &[w as usize, ww as usize], false, Arc::new(move |_| Ok(IntTensor::i8(vec![w as usize, ww as usize], cols.clone()))))?;
+                let bh = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "pre.box_rows",
+                    DType::I8,
+                    &[hh as usize, h as usize],
+                    false,
+                    Arc::new(move |_| Ok(IntTensor::i8(vec![hh as usize, h as usize], rows.clone()))),
+                )?;
+                let bw = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "pre.box_cols",
+                    DType::I8,
+                    &[w as usize, ww as usize],
+                    false,
+                    Arc::new(move |_| Ok(IntTensor::i8(vec![w as usize, ww as usize], cols.clone()))),
+                )?;
                 // The 0/1 matrices are data: their range is stated for the analysis (never fires).
                 let bh = b.clamp(bh, 0, 1, DType::I8);
                 let bw = b.clamp(bw, 0, 1, DType::I8);
@@ -1335,7 +1454,8 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             Ok((b.finish(&[e.r]), None))
         }
         BlockRole::Layer => {
-            let li = lb.prefixes.first().and_then(|p| p.trim_start_matches('L').trim_end_matches('.').parse::<usize>().ok()).unwrap_or(0);
+            let li =
+                lb.prefixes.first().and_then(|p| p.trim_start_matches('L').trim_end_matches('.').parse::<usize>().ok()).unwrap_or(0);
             let windowed = s.window.as_ref().is_some_and(|(_, full)| !full.contains(&li));
             let x = rows_val(tir::Ref::CarryIn(0), DType::I32, resid.clone(), d, "carry0");
             let kind = if s.rms { NormKind::Rms } else { NormKind::Layer };
@@ -1344,7 +1464,8 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let rope = rope_2d(s);
             let mut qkv = Vec::new();
             for name in ["attn.q", "attn.k", "attn.v"] {
-                let v = linear_rows(&mut b, cx, &mut lb, &n1, &format!("{name}.w"), Some(&format!("{name}.b")), name, &codes_want(name))?;
+                let v =
+                    linear_rows(&mut b, cx, &mut lb, &n1, &format!("{name}.w"), Some(&format!("{name}.b")), name, &codes_want(name))?;
                 let r = b.reshape_fixed(v.r, &[l as u32, h, dh]);
                 let r = b.transpose(r, &[1, 0, 2]);
                 qkv.push(Val { r, ..v });
@@ -1355,8 +1476,26 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 let dhu = dh as usize;
                 let q24 = |v: &Vec<f64>| -> Vec<i32> { v.iter().map(|x| (x * (1u64 << 24) as f64).round() as i32).collect() };
                 let (cv, sv) = (q24(cs), q24(sn));
-                let cos = decl(&mut b, cx, &lb, "rope.cos", DType::I32, &[1, ln, dhu], false, Arc::new(move |_| Ok(IntTensor::i32(vec![1, ln, dhu], cv.clone()))))?;
-                let sin = decl(&mut b, cx, &lb, "rope.sin", DType::I32, &[1, ln, dhu], false, Arc::new(move |_| Ok(IntTensor::i32(vec![1, ln, dhu], sv.clone()))))?;
+                let cos = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "rope.cos",
+                    DType::I32,
+                    &[1, ln, dhu],
+                    false,
+                    Arc::new(move |_| Ok(IntTensor::i32(vec![1, ln, dhu], cv.clone()))),
+                )?;
+                let sin = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "rope.sin",
+                    DType::I32,
+                    &[1, ln, dhu],
+                    false,
+                    Arc::new(move |_| Ok(IntTensor::i32(vec![1, ln, dhu], sv.clone()))),
+                )?;
                 for v in qkv.iter_mut().take(2) {
                     let x1 = b.slice(v.r, 2, 0, dh / 2);
                     let x2 = b.slice(v.r, 2, dh / 2, dh / 2);
@@ -1376,7 +1515,14 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let kt = b.transpose(k.r, &[0, 2, 1]);
             let sc = b.matmul(q.r, kt, DType::I64);
             let (kq, kk, scale) = (q.key.clone(), k.key.clone(), 1.0 / (dh as f64).sqrt());
-            let (m, sh) = decl_ms(&mut b, cx, &lb, "attn.score", 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])))?;
+            let (m, sh) = decl_ms(
+                &mut b,
+                cx,
+                &lb,
+                "attn.score",
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+            )?;
             let mut logits = narrow(&mut b, sc, m, sh, None, DType::I32);
             if windowed {
                 let (_, wins, _) = window_tables(s).ok_or_else(|| LowerError::eval("internal: windowed without windows"))?;
@@ -1392,7 +1538,14 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let o = b.matmul(pmat, v.r, DType::I64);
             let ck = site_key("attn.ctx");
             let (kv, kc) = (v.key.clone(), ck.clone());
-            let (m, sh) = decl_ms(&mut b, cx, &lb, "attn.ctx", 1, Arc::new(move |c| Ok(vec![c.scale(&kv)? / (1u64 << 24) as f64 / c.scale(&kc)?])))?;
+            let (m, sh) = decl_ms(
+                &mut b,
+                cx,
+                &lb,
+                "attn.ctx",
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kv)? / (1u64 << 24) as f64 / c.scale(&kc)?])),
+            )?;
             let ctx = narrow(&mut b, o, m, sh, None, DType::I16);
             b.commit(ctx);
             let ctx = b.transpose(ctx, &[1, 0, 2]);
@@ -1403,13 +1556,21 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             b.commit(r1.r);
             let n2 = norm_rows_kind(&mut b, cx, &mut lb, &r1, kind, s.eps, "norm2", !s.rms, &codes_want("norm2"))?;
             let hidden = if s.swiglu {
-                let gate = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.gate.w", Some("mlp.gate.b"), "mlp.gate", &codes_want("mlp.gate"))?;
+                let gate =
+                    linear_rows(&mut b, cx, &mut lb, &n2, "mlp.gate.w", Some("mlp.gate.b"), "mlp.gate", &codes_want("mlp.gate"))?;
                 let ga = lower_table_named(&mut b, cx, &mut lb, &gate, TableFn::Act(s.act), "mlp.gate_act")?;
                 let up = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", Some("mlp.up.b"), "mlp.up", &codes_want("mlp.up"))?;
                 let prod = b.mul(ga.r, up.r, DType::I32);
                 let pk = site_key("mlp.prod");
                 let (ka, ku, kp) = (ga.key.clone(), up.key.clone(), pk.clone());
-                let (m, sh) = decl_ms(&mut b, cx, &lb, "mlp.prod", 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kp)?])))?;
+                let (m, sh) = decl_ms(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "mlp.prod",
+                    1,
+                    Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kp)?])),
+                )?;
                 let r = narrow(&mut b, prod, m, sh, None, DType::I16);
                 b.commit(r);
                 rows_val(r, DType::I16, pk, s.inter, "mlp.prod")
@@ -1426,20 +1587,51 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let x = rows_val(tir::Ref::CarryIn(0), DType::I32, resid.clone(), d, "carry0");
             let ok = out_key();
             let out = match &s.out {
-                VisionOut::Rows => norm_rows_kind(&mut b, cx, &mut lb, &x, NormKind::Layer, s.eps, "post_norm", true, &Want { dt: DType::I32, key: ok.clone() })?,
+                VisionOut::Rows => norm_rows_kind(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &x,
+                    NormKind::Layer,
+                    s.eps,
+                    "post_norm",
+                    true,
+                    &Want { dt: DType::I32, key: ok.clone() },
+                )?,
                 VisionOut::ClipPooled { proj } => {
                     let row = b.slice(x.r, 0, 0, 1);
                     let row = Val { r: row, ..x.clone() };
                     match proj {
                         Some(_) => {
-                            let n = norm_rows_kind(&mut b, cx, &mut lb, &row, NormKind::Layer, s.eps, "post_norm", true, &codes_want("post_norm"))?;
+                            let n = norm_rows_kind(
+                                &mut b,
+                                cx,
+                                &mut lb,
+                                &row,
+                                NormKind::Layer,
+                                s.eps,
+                                "post_norm",
+                                true,
+                                &codes_want("post_norm"),
+                            )?;
                             linear_rows(&mut b, cx, &mut lb, &n, "proj.w", None, "out", &Want { dt: DType::I32, key: ok.clone() })?
                         }
-                        None => norm_rows_kind(&mut b, cx, &mut lb, &row, NormKind::Layer, s.eps, "post_norm", true, &Want { dt: DType::I32, key: ok.clone() })?,
+                        None => norm_rows_kind(
+                            &mut b,
+                            cx,
+                            &mut lb,
+                            &row,
+                            NormKind::Layer,
+                            s.eps,
+                            "post_norm",
+                            true,
+                            &Want { dt: DType::I32, key: ok.clone() },
+                        )?,
                     }
                 }
                 VisionOut::SiglipHead => {
-                    let xn = norm_rows_kind(&mut b, cx, &mut lb, &x, NormKind::Layer, s.eps, "post_norm", true, &codes_want("post_norm"))?;
+                    let xn =
+                        norm_rows_kind(&mut b, cx, &mut lb, &x, NormKind::Layer, s.eps, "post_norm", true, &codes_want("post_norm"))?;
                     let (h, dh) = (s.heads as u32, s.head_dim() as u32);
                     // The query is the probe through W_q: data, so one param of codes.
                     let (qw, qb, pr) = (hl_param(hl, "head.q.w")?, hl_param(hl, "head.q.b")?, hl_param(hl, "head.probe")?);
@@ -1475,20 +1667,35 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     let v3 = b.transpose(v3, &[1, 0, 2]);
                     let sc = b.matmul(q3, k3, DType::I64);
                     let (kq, kk, scale) = (qk, kv.key.clone(), 1.0 / (dh as f64).sqrt());
-                    let (m, sh) = decl_ms(&mut b, cx, &lb, "head.score", 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])))?;
+                    let (m, sh) = decl_ms(
+                        &mut b,
+                        cx,
+                        &lb,
+                        "head.score",
+                        1,
+                        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+                    )?;
                     let logits = narrow(&mut b, sc, m, sh, None, DType::I32);
                     let pm = b.softmax_shifted(logits, 24 - LOGIT_Q);
                     let o = b.matmul(pm, v3, DType::I64);
                     let ck = site_key("head.ctx");
                     let (kv2, kc) = (vv.key.clone(), ck.clone());
-                    let (m, sh) = decl_ms(&mut b, cx, &lb, "head.ctx", 1, Arc::new(move |c| Ok(vec![c.scale(&kv2)? / (1u64 << 24) as f64 / c.scale(&kc)?])))?;
+                    let (m, sh) = decl_ms(
+                        &mut b,
+                        cx,
+                        &lb,
+                        "head.ctx",
+                        1,
+                        Arc::new(move |c| Ok(vec![c.scale(&kv2)? / (1u64 << 24) as f64 / c.scale(&kc)?])),
+                    )?;
                     let ctx = narrow(&mut b, o, m, sh, None, DType::I16);
                     b.commit(ctx);
                     let ctx = b.transpose(ctx, &[1, 0, 2]);
                     let ctx = b.reshape_fixed(ctx, &[1, h * dh]);
                     let ctxv = rows_val(ctx, DType::I16, ck, d, "head.ctx");
                     let o = linear_rows(&mut b, cx, &mut lb, &ctxv, "head.o.w", Some("head.o.b"), "head.o", &resid_want())?;
-                    let hn = norm_rows_kind(&mut b, cx, &mut lb, &o, NormKind::Layer, s.eps, "head.norm", true, &codes_want("head.norm"))?;
+                    let hn =
+                        norm_rows_kind(&mut b, cx, &mut lb, &o, NormKind::Layer, s.eps, "head.norm", true, &codes_want("head.norm"))?;
                     let up = linear_rows(&mut b, cx, &mut lb, &hn, "head.up.w", Some("head.up.b"), "head.up", &codes_want("head.up"))?;
                     let a = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(s.act), "head.act")?;
                     let down = linear_rows(&mut b, cx, &mut lb, &a, "head.down.w", Some("head.down.b"), "head.down", &resid_want())?;
@@ -1502,9 +1709,27 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     let groups = (l / mu) as u32;
                     let g = b.reshape_fixed(xn.r, &[groups, (d * mu) as u32]);
                     let g = Val { r: g, len: d * mu, ..xn };
-                    let up = linear_rows(&mut b, cx, &mut lb, &g, "merger.up.w", Some("merger.up.b"), "merger.up", &codes_want("merger.up"))?;
+                    let up = linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &g,
+                        "merger.up.w",
+                        Some("merger.up.b"),
+                        "merger.up",
+                        &codes_want("merger.up"),
+                    )?;
                     let a = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(Act::Gelu), "merger.act")?;
-                    let down = linear_rows(&mut b, cx, &mut lb, &a, "merger.down.w", Some("merger.down.b"), "out", &Want { dt: DType::I32, key: ok.clone() })?;
+                    let down = linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &a,
+                        "merger.down.w",
+                        Some("merger.down.b"),
+                        "out",
+                        &Want { dt: DType::I32, key: ok.clone() },
+                    )?;
                     let _ = out;
                     match window_tables(s) {
                         Some((_, _, inv)) => {
@@ -1522,7 +1747,16 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     let rc = codes_rows(&mut b, cx, &mut lb, &Val { site: "proj.in".into(), ..rows })?;
                     let up = linear_rows(&mut b, cx, &mut lb, &rc, "proj.up.w", Some("proj.up.b"), "proj.up", &codes_want("proj.up"))?;
                     let a = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(*act), "proj.act")?;
-                    linear_rows(&mut b, cx, &mut lb, &a, "proj.down.w", Some("proj.down.b"), "out", &Want { dt: DType::I32, key: ok.clone() })?
+                    linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &a,
+                        "proj.down.w",
+                        Some("proj.down.b"),
+                        "out",
+                        &Want { dt: DType::I32, key: ok.clone() },
+                    )?
                 }
             };
             let out = ensure_node(&mut b, &out);
