@@ -730,7 +730,17 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                             && cs.source.config.as_ref().is_some_and(|c| c.get("vision_config").is_some_and(|v| v.is_object()));
                         let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
                         if probe_image && let Some(cfg) = cs.source.config.as_ref() {
-                            let mut v = image_stage_probe_v1(cfg);
+                            let primary = cx.as_ref().map(|c| c.primary).unwrap_or(2_048);
+                            let mut v = match crate::preflight::chain::PreflightNetwork::parse(&ctx.ruleset.network) {
+                                Ok(net) => {
+                                    let height = ctx
+                                        .options
+                                        .height
+                                        .unwrap_or_else(|| net.params.fence_schedule_v1().last().copied().unwrap_or(0));
+                                    super::vlm::vlm_text_class_admission_v1(cfg, &net, height, primary)
+                                }
+                                Err(e) => serde_json::json!({"ok": false, "error": e}),
+                            };
                             if let Ok(r) = &r {
                                 let a = admit_of(r);
                                 v["text_stage"] = serde_json::json!({"status": a.status, "blocking": a.blocking});

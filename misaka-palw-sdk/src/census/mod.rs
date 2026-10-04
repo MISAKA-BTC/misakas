@@ -20,6 +20,7 @@ pub mod listing;
 pub mod rights;
 pub mod store;
 pub mod tasks;
+pub mod vlm;
 
 pub use codes::{Gate, GateStatus};
 pub use gates::{CensusContext, CensusRowV1, ROW_SCHEMA_V1, evaluate};
