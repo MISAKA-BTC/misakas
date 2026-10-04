@@ -140,6 +140,15 @@ fn main() {
     // RFC-0009 stage A: relay the locally signed carrier through several nodes (no staging, no kaspad of our own).
     let mut relay_endpoints: Vec<String> = Vec::new();
     let mut relay_min_accept: usize = 2;
+    // RFC-0009 stage A/D phase 1: the checkpoint a `--relay` view is pinned to (`<daa>:<128hex block hash>`), and the network it is for. With it the
+    // relay first asks the nodes for a QUORUM view (distinct nodes, all on the checkpoint, same network and pruning point, clocks within a skew)
+    // and stops on any disagreement; without it the relay still works and says plainly that no view was checked.
+    let mut view_checkpoint: Option<String> = None;
+    // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
+    // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
+    let mut redeem_auth_out: Option<PathBuf> = None;
+    let mut redeem_fee_bps: u16 = 500;
+    let mut redeem_expiry_daa: u64 = u64::MAX;
     let mut rpc_endpoint: Option<String> = None;
     let mut retention_dir: Option<PathBuf> = None;
     let mut capture_path: Option<PathBuf> = None;
@@ -173,6 +182,12 @@ fn main() {
             "--relay" => {
                 relay_endpoints = value("--relay").split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect()
             }
+            "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
+            "--redeem-fee-bps" => redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}"))),
+            "--redeem-expiry-daa" => {
+                redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
+            }
+            "--checkpoint" => view_checkpoint = Some(value("--checkpoint")),
             "--relay-min-accept" => {
                 relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
             }
@@ -505,7 +520,7 @@ fn main() {
     let relayed = if relay_endpoints.is_empty() {
         None
     } else {
-        Some(relay_through_many(&relay_endpoints, &tx, &funding_entry, relay_min_accept))
+        Some(relay_through_many(&relay_endpoints, &tx, &funding_entry, relay_min_accept, view_checkpoint.as_deref()))
     };
     let submitted = if submit {
         let endpoint = rpc_endpoint.unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
@@ -543,6 +558,31 @@ fn main() {
             .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
             .expect("the builder already refused a sub-quantum job"),
     };
+    // **RFC-0009: the redemption authorization**, signed once, for every quantum of this claim (`[0, quanta)`). A builder holding the file
+    // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
+    // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
+    let redeemed = redeem_auth_out.as_ref().map(|path| {
+        let bundle = key
+            .build_redemption_bundle_v4(
+                commitment.job.network_domain,
+                claim_id,
+                commitment.job.executor_bond,
+                0,
+                quanta,
+                redeem_fee_bps,
+                redeem_expiry_daa,
+            )
+            .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
+        std::fs::write(path, bundle.encode()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
+        serde_json::json!({
+            "file": path.display().to_string(),
+            "claim_id": hex(claim_id),
+            "quantum_range": [0, quanta],
+            "builder_fee_bps": redeem_fee_bps,
+            "expiry_daa": if redeem_expiry_daa == u64::MAX { serde_json::Value::Null } else { serde_json::json!(redeem_expiry_daa) },
+            "note": "dormant: no network accepts a V4 receipt until palw_receipt_spend_v4 is armed; hand this file to a block builder",
+        })
+    });
     // **What this carrier leaves behind for the next one.** The commitment spends the one funding
     // input and pays its change back to the same script, so the change is a spendable outpoint the
     // moment the node accepts the transaction — the mempool resolves a child against its pending
@@ -574,6 +614,8 @@ fn main() {
         // RFC-0009: the per-node outcome of a `--relay`. An accept is NOT inclusion — track the claim (misaka-palw-remote's
         // ClaimTracker) and keep serving the material until stage B moves it.
         "relayed": relayed,
+        // RFC-0009 stage C: the authorization file a builder redeems with (None unless `--redeem-auth-out`).
+        "redemption_authorization": redeemed,
         // The change output, spendable by the next submission once this one is accepted: pass it
         // as `--funding-outpoint`/`--funding-amount`. Null when the carrier left no change.
         "next_funding": next_funding,
@@ -711,6 +753,48 @@ impl misaka_palw_remote::relay::RelayNode for WrpcRelayNode<'_> {
     }
 }
 
+/// A wRPC node as a [`misaka_palw_remote::view::ChainView`] — `getBlockDagInfo` for its facts, `getBlock` for a checkpoint's standing.
+struct WrpcViewNode<'a> {
+    node: &'a WrpcRelayNode<'a>,
+}
+
+impl misaka_palw_remote::view::ChainView for WrpcViewNode<'_> {
+    fn node_id(&self) -> &str {
+        &self.node.endpoint
+    }
+    fn facts(&self) -> Result<misaka_palw_remote::view::NodeFacts, misaka_palw_remote::view::ViewError> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let info = self
+            .node
+            .runtime
+            .block_on(self.node.client.get_block_dag_info())
+            .map_err(|e| misaka_palw_remote::view::ViewError(e.to_string()))?;
+        Ok(misaka_palw_remote::view::NodeFacts {
+            network_id: info.network.to_string(),
+            sink: info.sink,
+            virtual_daa: info.virtual_daa_score,
+            pruning_point: info.pruning_point_hash,
+        })
+    }
+    fn checkpoint_status(
+        &self,
+        checkpoint: &misaka_palw_remote::checkpoint::Checkpoint,
+    ) -> Result<misaka_palw_remote::view::CheckpointStatus, misaka_palw_remote::view::ViewError> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        use misaka_palw_remote::view::CheckpointStatus;
+        match self.node.runtime.block_on(self.node.client.get_block(checkpoint.block_hash, false)) {
+            // The node knows the block. A selected-chain block is the pin; one it holds OFF its selected chain is a fork against it.
+            Ok(block) => Ok(match block.verbose_data {
+                Some(v) if v.is_chain_block => CheckpointStatus::OnChain,
+                Some(_) => CheckpointStatus::Conflicts,
+                None => CheckpointStatus::Unknown,
+            }),
+            // Not found: this node has not synced that far (or the checkpoint is not its block) — silence, not a vote.
+            Err(_) => Ok(CheckpointStatus::Unknown),
+        }
+    }
+}
+
 /// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
 /// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
 fn relay_through_many(
@@ -718,6 +802,7 @@ fn relay_through_many(
     tx: &kaspa_consensus_core::tx::Transaction,
     funding: &UtxoEntry,
     min_accept: usize,
+    checkpoint: Option<&str>,
 ) -> serde_json::Value {
     let runtime = rpc_runtime();
     let mut nodes: Vec<WrpcRelayNode<'_>> = Vec::new();
@@ -728,6 +813,39 @@ fn relay_through_many(
             Err(e) => unreachable.push(format!("{endpoint}: {e}")),
         }
     }
+    // **The view, before the bytes leave** (stage D phase 1). Pinned to a checkpoint the miner supplied; every node must agree or nothing is sent.
+    let view = match checkpoint {
+        None => serde_json::json!("not checked: no --checkpoint <daa>:<hash> was given, so these nodes were taken at their word"),
+        Some(spec) => {
+            let (daa, hash) = spec.split_once(':').unwrap_or_else(|| die("--checkpoint is <daa>:<128hex block hash>".into()));
+            let daa: u64 = daa.parse().unwrap_or_else(|e| die(format!("--checkpoint daa: {e}")));
+            let mut out = [0u8; 64];
+            if hash.len() != 128 || faster_hex::hex_decode(hash.as_bytes(), &mut out).is_err() {
+                die("--checkpoint hash is not 128 hex chars".into());
+            }
+            let views: Vec<WrpcViewNode<'_>> = nodes.iter().map(|n| WrpcViewNode { node: n }).collect();
+            let view_refs: Vec<&dyn misaka_palw_remote::view::ChainView> =
+                views.iter().map(|v| v as &dyn misaka_palw_remote::view::ChainView).collect();
+            // The network the nodes report is the network the checkpoint is for: the pin is only meaningful against it.
+            let network = views
+                .first()
+                .and_then(|v| misaka_palw_remote::view::ChainView::facts(v).ok())
+                .map(|f| f.network_id)
+                .unwrap_or_else(|| die("no node answered getBlockDagInfo: there is no view to check".into()));
+            let policy = misaka_palw_remote::view::QuorumPolicy::new(misaka_palw_remote::checkpoint::Checkpoint {
+                network_id: network,
+                daa_score: daa,
+                block_hash: Hash64::from_bytes(out),
+            });
+            match misaka_palw_remote::view::agree(&view_refs, &policy) {
+                Ok(agreed) => serde_json::json!({
+                    "agreed": true, "nodes": agreed.nodes, "virtual_daa": agreed.virtual_daa, "network": agreed.network_id,
+                    "pruning_point": agreed.pruning_point.to_string(),
+                }),
+                Err(halt) => die(format!("the nodes do not agree, nothing was sent: {halt}")),
+            }
+        }
+    };
     let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> = nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
     let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
     for node in &nodes {
@@ -741,6 +859,7 @@ fn relay_through_many(
             "per_node": report.per_node.iter().map(|(n, o)| format!("{n}: {o:?}")).collect::<Vec<_>>(),
             "tampered": report.tampered(),
             "unreachable": unreachable,
+            "view": view,
             "note": "accepted is not included; track it, and keep serving the claim's material (stage B moves that)",
         }),
         Err(e) => die(format!("the carrier was not relayed: {e} (unreachable: {unreachable:?})")),

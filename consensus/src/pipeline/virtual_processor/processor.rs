@@ -613,6 +613,9 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
     /// the fold's extras and the registration gate read it there.
     pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0009: `Params::palw_receipt_spend_v4`**, resolved off a `ConsensusV2` ruleset. `None` on every shipped preset — a `PFS4` header is
+    /// then refused by name and no coinbase is ever split.
+    pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -1181,6 +1184,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
+            palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -2238,6 +2242,19 @@ impl VirtualStateProcessor {
                                 subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                             };
                             self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa, &point)
+                        })
+                        .unwrap_or_default();
+                    // RFC-0009: and how each merged V4 receipt block is split — the same state, mergeset and non-DAA set. Empty (and
+                    // unread) while `palw_receipt_spend_v4` is dormant.
+                    ctx.palw_v2_receipt_v4_payouts = palw_state
+                        .as_ref()
+                        .map(|s| {
+                            use crate::model::stores::daa::DaaStoreReader;
+                            let non_daa = self
+                                .daa_excluded_store
+                                .get_mergeset_non_daa(current)
+                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            self.palw_v2_receipt_v4_payouts(s, &ctx.ghostdag_data, &non_daa, &ctx.palw_v2_unentitled_blues)
                         })
                         .unwrap_or_default();
                     // B-1 (deep fence): and how much of each OTHER merged block's carve is withheld
@@ -6681,6 +6698,54 @@ impl VirtualStateProcessor {
             }
         }
         unentitled
+    }
+
+    /// **RFC-0009: how each merged V4 receipt block is paid** — `{ block → (the executor bond's payout script, the authorization's fee
+    /// bps) }` for every entitled in-DAA-window blue or red (the selected parent included) whose header carries a valid `PFS4` spend.
+    ///
+    /// Read from headers and the SAME selected-parent `state` the entitlement and the escrow read, so the template and every validating
+    /// node compute one map. The miner leg goes to `bond.payout_payload` of the CLAIM's executor bond (the admission proved the spend names
+    /// it), derived to a script exactly as every PALW payout is. A block whose claim or bond the state no longer holds gets no entry and is
+    /// paid in full to its own script as before — deterministic on both paths, never an extra mint (the split only moves value between two
+    /// payees of one block). Empty (and nothing read) while `palw_receipt_spend_v4` is dormant, which is every shipped preset.
+    pub(super) fn palw_v2_receipt_v4_payouts(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        mergeset_non_daa: &BlockHashSet,
+        unentitled: &BlockHashSet,
+    ) -> BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout> {
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PalwReceiptSpendEnvelopeV4, PalwReceiptV4Payout, palw_receipt_v4_carriage_is_v4,
+            palw_receipt_v4_miner_script,
+        };
+        let mut payouts = BlockHashMap::default();
+        let Some(fence) = self.palw_receipt_spend_v4 else {
+            return payouts;
+        };
+        for block in ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()) {
+            if mergeset_non_daa.contains(block) || unentitled.contains(block) {
+                continue;
+            }
+            let Ok(header) = self.headers_store.get_header(*block) else { continue };
+            if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
+                || !fence.is_active(header.daa_score)
+                || !palw_receipt_v4_carriage_is_v4(&header.palw_commitment)
+            {
+                continue;
+            }
+            let Ok(envelope) = PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment) else { continue };
+            let Some(claim) = state.claim(&envelope.spend.claim_id) else { continue };
+            let Some(bond) = state.bond(&claim.bond) else { continue };
+            payouts.insert(
+                *block,
+                PalwReceiptV4Payout {
+                    miner_script: palw_receipt_v4_miner_script(&bond.payout_payload),
+                    fee_bps: envelope.spend.authorization.builder_fee_bps.min(PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS),
+                },
+            );
+        }
+        payouts
     }
 
     /// **Audit C-08's third part: what a RELEASED bond's collateral still owes the burn.**
@@ -15380,7 +15445,24 @@ impl VirtualStateProcessor {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Err("a receipt-lane block on a network with no free-prompt bundle".to_string());
         };
-        let envelope = PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).map_err(|e| e.to_string())?;
+        // **RFC-0009: which receipt carriage is this?** The magic says. A `PFS4` header is a V4 (public redemption) spend and is valid
+        // only past `palw_receipt_spend_v4`; a `PFS3` one is the V3 spend exactly as it always was. Both reach the fold through the
+        // same V3-shaped view (`(claim, quantum, executor bond)` is all the fold reads), so everything downstream is shared.
+        let v4 = if kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment) {
+            if !self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score)) {
+                return Err(kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Error::BelowFence.to_string());
+            }
+            Some(
+                kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        let envelope = match &v4 {
+            Some(v4) => v4.to_fold_envelope(),
+            None => PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).map_err(|e| e.to_string())?,
+        };
         let claim = state
             .claim(&envelope.spend.claim_id)
             .ok_or_else(|| format!("claim {} does not exist at this chain point", envelope.spend.claim_id))?;
@@ -15429,6 +15511,25 @@ impl VirtualStateProcessor {
         // hold and spend that producer's certified quantum. `_full_v3` — documented as "the composed
         // admission a wiring layer should call" and covered by three tests — had no non-test caller.
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        if let Some(v4) = &v4 {
+            kaspa_consensus_core::palw_receipt_v4::check_palw_receipt_spend_admission_full_v5(
+                state,
+                point,
+                network_domain,
+                pre_pow_hash,
+                header.timestamp,
+                header.nonce,
+                freeprompt.receipt_maturity_daa(),
+                freeprompt.receipt_use_window_daa(),
+                &beacon,
+                v4,
+                |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+                self.palw_fp_pricing().as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let _ = state_params;
+            return Ok(Some(envelope));
+        }
         kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v4(
             state,
             point,
@@ -19476,6 +19577,13 @@ impl VirtualStateProcessor {
         // Same selected-parent state, same virtual ghostdag/non-DAA and same template point as the
         // validating walk resolves for the block this template becomes — so the withheld map, and
         // thus the coinbase, are byte-identical on both paths. Empty below the fence.
+        // RFC-0009, construction side: how each merged V4 receipt block is split — same state, same virtual mergeset, same entitlement.
+        let palw_receipt_v4_payouts = palw_at_selected_parent
+            .as_ref()
+            .map(|(_, state)| {
+                self.palw_v2_receipt_v4_payouts(state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa, &palw_unentitled_blues)
+            })
+            .unwrap_or_default();
         let palw_merged_escrow_withheld = palw_at_selected_parent
             .as_ref()
             .map(|(_, state)| {
@@ -19508,6 +19616,8 @@ impl VirtualStateProcessor {
                 &palw_merged_escrow_withheld,
                 // ADR-0125: the merged round blocks, whose fees go to their payouts.
                 &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
+                // RFC-0009: the merged V4 receipt blocks' split payouts.
+                &palw_receipt_v4_payouts,
             )
             .unwrap();
         // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan

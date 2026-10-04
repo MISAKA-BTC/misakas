@@ -89,6 +89,9 @@ pub enum PalwFpAdmissionV3Error {
     ClassMissing(Hash64),
     #[error("class {0} is frozen and admits no new blocks")]
     ClassFrozen(Hash64),
+    /// RFC-0009 (`palw_receipt_spend_v4`): a refusal specific to a V4 spend — see [`crate::palw_receipt_v4::PalwReceiptV4Error`].
+    #[error("receipt spend V4: {0}")]
+    ReceiptV4(#[from] crate::palw_receipt_v4::PalwReceiptV4Error),
 }
 
 /// The stateful admission verdict for one receipt spend against one candidate chain point.
@@ -127,7 +130,54 @@ pub fn check_palw_receipt_spend_admission_v4(
     pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
 ) -> Result<Hash64, PalwFpAdmissionV3Error> {
     let spend = &envelope.spend;
+    let facts = ReceiptSpendFacts {
+        network_domain: spend.network_domain,
+        claim_id: spend.claim_id,
+        quantum_index: spend.quantum_index,
+        beacon_block: spend.beacon_block,
+    };
+    // Items 1-5 are shared with the V4 (RFC-0009) admission; the order is unchanged.
+    let claim = receipt_items_1_to_5(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, &facts, pricing)?;
 
+    // 6. Receipts do not transfer: the producer IS the executor, and the bond still stands.
+    let producer_key = PalwBondKeyV2(spend.producer_bond);
+    if producer_key != claim.bond {
+        return Err(PalwFpAdmissionV3Error::ProducerNotExecutor);
+    }
+    let bond = state.bond(&producer_key).ok_or(PalwFpAdmissionV3Error::BondMissing(producer_key))?;
+    if let PalwBondStatusV2::Retiring { .. } = bond.status {
+        return Err(PalwFpAdmissionV3Error::BondRetiring(producer_key));
+    }
+
+    // 7. The carried key is the bond's key — what turns the stateless signature into authority.
+    if bond.pubkey != spend.producer_pubkey {
+        return Err(PalwFpAdmissionV3Error::BondKeyMismatch);
+    }
+
+    // 8. The class still stands.
+    receipt_item_8(state, claim)?;
+
+    Ok(fp_spend_id_v3(spend))
+}
+
+/// The four facts of a spend that items 1-5 read — the same four whether the spend is a V3 envelope or an RFC-0009 V4 one.
+pub(crate) struct ReceiptSpendFacts {
+    pub network_domain: Hash64,
+    pub claim_id: Hash64,
+    pub quantum_index: u32,
+    pub beacon_block: Hash64,
+}
+
+/// Items 1-5 of ADR-0044 Decision 6: the claim, the quantum, the beacon, the use window and the lottery. Returns the claim.
+pub(crate) fn receipt_items_1_to_5<'a>(
+    state: &'a PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    receipt_maturity_daa: u64,
+    receipt_use_window_daa: u64,
+    beacon: &PalwBeaconFactV3,
+    spend: &ReceiptSpendFacts,
+    pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
+) -> Result<&'a crate::palw_state_v2::PalwClaimStateV2, PalwFpAdmissionV3Error> {
     // 1. The claim: exists, free-prompt, certified.
     let claim = state.claim(&spend.claim_id).ok_or(PalwFpAdmissionV3Error::ClaimMissing(spend.claim_id))?;
     let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {
@@ -176,28 +226,20 @@ pub fn check_palw_receipt_spend_admission_v4(
         return Err(PalwFpAdmissionV3Error::TicketRejected { ticket, target });
     }
 
-    // 6. Receipts do not transfer: the producer IS the executor, and the bond still stands.
-    let producer_key = PalwBondKeyV2(spend.producer_bond);
-    if producer_key != claim.bond {
-        return Err(PalwFpAdmissionV3Error::ProducerNotExecutor);
-    }
-    let bond = state.bond(&producer_key).ok_or(PalwFpAdmissionV3Error::BondMissing(producer_key))?;
-    if let PalwBondStatusV2::Retiring { .. } = bond.status {
-        return Err(PalwFpAdmissionV3Error::BondRetiring(producer_key));
-    }
+    Ok(claim)
+}
 
-    // 7. The carried key is the bond's key — what turns the stateless signature into authority.
-    if bond.pubkey != spend.producer_pubkey {
-        return Err(PalwFpAdmissionV3Error::BondKeyMismatch);
-    }
-
+/// Item 8: the class still stands (exists, not frozen).
+pub(crate) fn receipt_item_8(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+) -> Result<(), PalwFpAdmissionV3Error> {
     // 8. The class still stands.
     let class = state.class(&claim.class_id).ok_or(PalwFpAdmissionV3Error::ClassMissing(claim.class_id))?;
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwFpAdmissionV3Error::ClassFrozen(claim.class_id));
     }
-
-    Ok(fp_spend_id_v3(spend))
+    Ok(())
 }
 
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
@@ -639,5 +681,233 @@ mod tests {
             |_, _, _, _| true,
         );
         assert_eq!(admitted.unwrap(), fp_spend_id_v3(&honest.spend));
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // RFC-0009 stage C: the V4 (public redemption) admission, over the same certified fixture.
+    // -----------------------------------------------------------------------------------------------
+
+    use crate::palw_receipt_v4::{
+        PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_VERSION, PalwReceiptSpendEnvelopeV4, PalwReceiptSpendUnsignedV4,
+        PalwReceiptV4Error, PalwRedemptionAuthV4, check_palw_receipt_spend_admission_v5, fp_spend_id_v4, spend_challenge_v4,
+    };
+
+    /// The certified fixture plus a SECOND, unrelated bond (bond 2, key `[8; 4]`) — the builder.
+    fn certified_with_builder() -> PalwChainStateV2 {
+        let p = params();
+        let state = certified_state(u128::MAX);
+        let builder = PalwConsensusObjectV2::BondRegistered {
+            bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(2)),
+            pubkey: vec![8; 4],
+            operator_pubkey: vec![22; 8],
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        };
+        let (with_builder, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 125, 6), &[builder], None).unwrap();
+        with_builder
+    }
+
+    fn spend_v4(quantum_index: u32) -> PalwReceiptSpendEnvelopeV4 {
+        PalwReceiptSpendEnvelopeV4 {
+            spend: PalwReceiptSpendUnsignedV4 {
+                version: PALW_RECEIPT_V4_VERSION,
+                network_domain: h64(999),
+                challenge: spend_challenge_v4(h64(999), h64(SPEND_PPH), SPEND_TS, SPEND_NONCE, h64(0xFC), quantum_index, &bond_op(1), &bond_op(2)),
+                claim_id: h64(0xFC),
+                quantum_index,
+                beacon_block: h64(0xBEAC),
+                executor_bond: bond_op(1),
+                builder_bond: bond_op(2),
+                builder_pubkey: vec![8; 4],
+                authorization: PalwRedemptionAuthV4 {
+                    version: PALW_RECEIPT_V4_VERSION,
+                    network_domain: h64(999),
+                    claim_id: h64(0xFC),
+                    executor_bond: bond_op(1),
+                    quantum_lo: 0,
+                    quantum_hi: 3,
+                    beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+                    builder_fee_bps: 500,
+                    expiry_daa: u64::MAX,
+                },
+                executor_pubkey: vec![7; 4],
+                authorization_signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            },
+            builder_signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        }
+    }
+
+    fn admit_v4(state: &PalwChainStateV2, c: &PalwBlockContextV2, env: &PalwReceiptSpendEnvelopeV4) -> Result<Hash64, PalwFpAdmissionV3Error> {
+        check_palw_receipt_spend_admission_v5(state, c, MATURITY, USE_WINDOW, &beacon(), env, None)
+    }
+
+    fn v4_refusal(e: PalwFpAdmissionV3Error) -> PalwReceiptV4Error {
+        match e {
+            PalwFpAdmissionV3Error::ReceiptV4(inner) => inner,
+            other => panic!("expected a V4 refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v4_an_honest_redemption_by_another_party_admits_and_returns_its_id() {
+        let state = certified_with_builder();
+        let env = spend_v4(1);
+        let id = admit_v4(&state, &ctx(7, 135, 7), &env).expect("a bonded builder redeems the executor's quantum");
+        assert_eq!(id, fp_spend_id_v4(&env.spend));
+        // The very same quantum is NOT redeemable under V3 by that builder: V3's rule is untouched.
+        let mut v3 = spend(1);
+        v3.spend.producer_bond = bond_op(2);
+        v3.spend.producer_pubkey = vec![8; 4];
+        assert_eq!(admit(&state, &ctx(7, 135, 7), &beacon(), &v3).unwrap_err(), PalwFpAdmissionV3Error::ProducerNotExecutor);
+    }
+
+    #[test]
+    fn v4_items_one_to_five_and_eight_are_the_v3_ones() {
+        let state = certified_with_builder();
+        // item 2 range, item 4 window edges, item 3 beacon naming, item 5 ticket: the same helper, the same refusals.
+        assert!(matches!(
+            admit_v4(&state, &ctx(7, 135, 7), &spend_v4(3)).unwrap_err(),
+            PalwFpAdmissionV3Error::QuantumOutOfRange { index: 3, quanta: 3, .. }
+        ));
+        assert!(matches!(admit_v4(&state, &ctx(7, 181, 7), &spend_v4(0)).unwrap_err(), PalwFpAdmissionV3Error::OutsideUseWindow { .. }));
+        let mut wrong_beacon = spend_v4(0);
+        wrong_beacon.spend.beacon_block = h64(0xBAD);
+        assert!(matches!(admit_v4(&state, &ctx(7, 135, 7), &wrong_beacon).unwrap_err(), PalwFpAdmissionV3Error::BeaconMismatch { .. }));
+        let mut stingy = certified_with_builder();
+        stingy.set_receipt_target_for_tests(h64(1), 1);
+        assert!(matches!(admit_v4(&stingy, &ctx(7, 135, 7), &spend_v4(0)).unwrap_err(), PalwFpAdmissionV3Error::TicketRejected { .. }));
+        // A claim that is not Final licenses no redemption either.
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (registered, _) = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &registrations(u128::MAX), None).unwrap();
+        assert_eq!(admit_v4(&registered, &ctx(7, 135, 7), &spend_v4(0)).unwrap_err(), PalwFpAdmissionV3Error::ClaimMissing(h64(0xFC)));
+    }
+
+    #[test]
+    fn v4_the_executor_must_be_the_claims_executor_standing_and_holding_its_key() {
+        let p = params();
+        let state = certified_with_builder();
+        // The spend (and its authorization) name a real bond that is not the claim's executor.
+        let mut foreign = spend_v4(0);
+        foreign.spend.executor_bond = bond_op(2);
+        foreign.spend.authorization.executor_bond = bond_op(2);
+        assert_eq!(v4_refusal(admit_v4(&state, &ctx(7, 135, 7), &foreign).unwrap_err()), PalwReceiptV4Error::ExecutorBondMismatch);
+        // The carried executor key is not the bond's registered key.
+        let mut wrong_key = spend_v4(0);
+        wrong_key.spend.executor_pubkey = vec![9; 4];
+        assert_eq!(v4_refusal(admit_v4(&state, &ctx(7, 135, 7), &wrong_key).unwrap_err()), PalwReceiptV4Error::ExecutorKeyMismatch);
+        // A retiring executor backs no new blocks (default for RFC §8: spend before you retire, as V3).
+        let retire = PalwConsensusObjectV2::BondRetireRequested {
+            bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),
+            signature: vec![0xEE; 8],
+        };
+        let (retiring, _) = apply_palw_transition_v2(&state, &p, &ctx(7, 130, 7), &[retire], None).unwrap();
+        assert!(matches!(
+            v4_refusal(admit_v4(&retiring, &ctx(8, 135, 8), &spend_v4(0)).unwrap_err()),
+            PalwReceiptV4Error::ExecutorBondRetiring(_)
+        ));
+    }
+
+    #[test]
+    fn v4_the_authorization_expires_on_its_own_daa_and_the_boundary_is_inclusive() {
+        let state = certified_with_builder();
+        let mut env = spend_v4(0);
+        env.spend.authorization.expiry_daa = 135;
+        assert!(admit_v4(&state, &ctx(7, 135, 7), &env).is_ok(), "the expiry score itself is inside");
+        assert_eq!(
+            v4_refusal(admit_v4(&state, &ctx(7, 136, 7), &env).unwrap_err()),
+            PalwReceiptV4Error::AuthorizationExpired { block_daa: 136, expiry: 135 }
+        );
+    }
+
+    #[test]
+    fn v4_the_builder_must_be_a_standing_bond_holding_the_key_that_signed() {
+        let p = params();
+        let state = certified_with_builder();
+        let mut missing = spend_v4(0);
+        missing.spend.builder_bond = bond_op(3);
+        assert!(matches!(
+            v4_refusal(admit_v4(&state, &ctx(7, 135, 7), &missing).unwrap_err()),
+            PalwReceiptV4Error::BuilderBondMissing(_)
+        ));
+        let mut wrong_key = spend_v4(0);
+        wrong_key.spend.builder_pubkey = vec![1; 4];
+        assert_eq!(v4_refusal(admit_v4(&state, &ctx(7, 135, 7), &wrong_key).unwrap_err()), PalwReceiptV4Error::BuilderKeyMismatch);
+        let retire = PalwConsensusObjectV2::BondRetireRequested {
+            bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(2)),
+            signature: vec![0xEE; 8],
+        };
+        let (retiring, _) = apply_palw_transition_v2(&state, &p, &ctx(7, 130, 7), &[retire], None).unwrap();
+        assert!(matches!(
+            v4_refusal(admit_v4(&retiring, &ctx(8, 135, 8), &spend_v4(0)).unwrap_err()),
+            PalwReceiptV4Error::BuilderBondRetiring(_)
+        ));
+        // The executor may also be its own builder: a V4 spend by the claim's own bond is a valid (if pointless) redemption.
+        let mut itself = spend_v4(0);
+        itself.spend.builder_bond = bond_op(1);
+        itself.spend.builder_pubkey = vec![7; 4];
+        assert!(admit_v4(&state, &ctx(7, 135, 7), &itself).is_ok());
+    }
+
+    #[test]
+    fn v4_the_composed_entry_point_orders_stateless_then_signatures_then_state() {
+        use crate::palw_receipt_v4::check_palw_receipt_spend_admission_full_v5;
+        let state = certified_with_builder();
+        // Shape-valid keys/signatures are 2592/4627 bytes; the fixture's stateful keys are short, so this exercises the ORDER only.
+        let env = spend_v4(0);
+        let short_keys = check_palw_receipt_spend_admission_full_v5(
+            &state,
+            &ctx(7, 135, 7),
+            h64(999),
+            h64(SPEND_PPH),
+            SPEND_TS,
+            SPEND_NONCE,
+            MATURITY,
+            USE_WINDOW,
+            &beacon(),
+            &env,
+            |_, _, _, _| true,
+            None,
+        );
+        assert!(matches!(
+            short_keys.unwrap_err(),
+            PalwFpAdmissionV3Error::ReceiptV4(PalwReceiptV4Error::PublicKeyLength { .. })
+        ), "stateless shape comes first");
+    }
+
+    /// The point of the whole lane: another party's block spends the executor's winning quantum, ONCE, and the chain's accounting is
+    /// exactly what a V3 spend of the same quantum would have produced — weight, census, spent set, and the reorg revert.
+    #[test]
+    fn v4_spend_by_another_party_folds_identically_to_v3_once_and_reverts() {
+        use crate::palw_state_v2::{PalwBlockWorkV3, PalwStateV2Error, apply_palw_transition_v3, revert_delta_v2};
+        let p = params();
+        let state = certified_with_builder();
+        let v4 = spend_v4(1);
+        let fold_view = v4.to_fold_envelope();
+        let (after_v4, delta) =
+            apply_palw_transition_v3(&state, &p, &ctx(8, 135, 8), &[], PalwBlockWorkV3::ReceiptSpend(&fold_view.spend)).unwrap();
+        // The same quantum spent by the executor's own V3 block gives the SAME state: nothing in the accounting moved.
+        let v3 = spend(1);
+        let (after_v3, _) = apply_palw_transition_v3(&state, &p, &ctx(8, 135, 8), &[], PalwBlockWorkV3::ReceiptSpend(&v3.spend)).unwrap();
+        assert_eq!(after_v4, after_v3, "V4 and V3 fold to one state: weight, receipt census and the spent set are shared");
+        assert!(after_v4.safe_weight() > state.safe_weight(), "the redemption adds the claim's per-quantum weight");
+        // Spent once: the same quantum cannot be redeemed again, by anyone, on this chain…
+        assert!(matches!(
+            admit_v4(&after_v4, &ctx(9, 136, 9), &spend_v4(1)).unwrap_err(),
+            PalwFpAdmissionV3Error::QuantumAlreadySpent { index: 1, .. }
+        ));
+        assert!(matches!(
+            apply_palw_transition_v3(&after_v4, &p, &ctx(9, 136, 9), &[], PalwBlockWorkV3::ReceiptSpend(&fold_view.spend)),
+            Err(PalwStateV2Error::QuantumAlreadySpent { index: 1, .. })
+        ));
+        // …while another quantum of the same claim is still redeemable.
+        // (The fixture's receipt target retargets at the epoch boundary the spend crossed; pin it open so only the spent set is under test.)
+        let mut open = after_v4.clone();
+        open.set_receipt_target_for_tests(h64(1), u128::MAX);
+        assert_eq!(admit_v4(&open, &ctx(9, 136, 9), &spend_v4(2)).map(|_| ()), Ok(()));
+        // Reorg: the delta reverts the spend bit-for-bit.
+        assert_eq!(revert_delta_v2(&after_v4, &delta, &p).unwrap(), state);
     }
 }

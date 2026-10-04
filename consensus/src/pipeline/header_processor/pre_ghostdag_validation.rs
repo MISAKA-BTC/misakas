@@ -271,9 +271,43 @@ impl HeaderProcessor {
             .as_ref()
             .filter(|(fence, _)| fence.is_active(header.daa_score))
             .map(|(_, state_params)| state_params);
-        palw_carriage_stateless_v1(header, attempt_lane, network_domain, header_pins, self.genesis.timestamp)
+        let receipt_v4_active = self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score));
+        palw_carriage_stateless_v2(header, attempt_lane, network_domain, header_pins, self.genesis.timestamp, receipt_v4_active)
             .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
     }
+}
+
+/// **RFC-0009: [`palw_carriage_stateless_v1`] plus the receipt lane's `PFS4` carriage.** A `PFS4` header is refused by name below
+/// `palw_receipt_spend_v4` (`receipt_v4_active == false`, which is every height of every shipped preset); past it, the carriage's shape,
+/// its challenge (recomputed from the header position) and BOTH ML-DSA-87 signatures are checked here, on the relay path — the carriage is
+/// inside the block identity and outside the PoW pre-image, so an unverified signature would be free bytes (one solve, unbounded blocks).
+/// Whether the carried keys are the named bonds' keys is the chain walk's stateful question. Every other header takes the V1 function
+/// untouched.
+pub(crate) fn palw_carriage_stateless_v2(
+    header: &Header,
+    attempt_lane: kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1,
+    network_domain: kaspa_hashes::Hash64,
+    header_pins: Option<&kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
+    genesis_timestamp_ms: u64,
+    receipt_v4_active: bool,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_receipt_v4::{PalwReceiptSpendEnvelopeV4, PalwReceiptV4Error, palw_receipt_v4_carriage_is_v4};
+    if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
+        && palw_receipt_v4_carriage_is_v4(&header.palw_commitment)
+    {
+        if !receipt_v4_active {
+            return Err(PalwReceiptV4Error::BelowFence.to_string());
+        }
+        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let envelope = PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment).map_err(|e| e.to_string())?;
+        envelope.validate_stateless_v4(network_domain, pre_pow_hash, header.timestamp, header.nonce).map_err(|e| e.to_string())?;
+        return envelope
+            .validate_signatures_v4(|key, message, sig, context| {
+                kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+            })
+            .map_err(|e| e.to_string());
+    }
+    palw_carriage_stateless_v1(header, attempt_lane, network_domain, header_pins, genesis_timestamp_ms)
 }
 
 /// [`HeaderProcessor::check_palw_carriage_stateless`]'s rule, as a function of the header, the lane

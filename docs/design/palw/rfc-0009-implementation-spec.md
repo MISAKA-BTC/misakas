@@ -163,6 +163,16 @@ maturity change). A missing claim/bond at the accepting state ⇒ the block is p
 Output order: the miner-leg output is placed immediately before its block's builder output, in mergeset iteration order. A zero
 output is dropped (as V3 does).
 
+### 3.4a Plumbing (what reads the fence)
+* `Params::palw_receipt_spend_v4_fence()` feeds three readers, each resolved once at construction: the header processor (`PFS4` refused by
+  name below the fence; past it, shape + challenge + both signatures on the relay path), the virtual processor
+  (`palw_v2_check_receipt_spend` admits through `check_palw_receipt_spend_admission_full_v5`; `palw_v2_receipt_v4_payouts` builds the
+  per-block payout map for the template AND the validating walk from the same selected-parent state), and the transaction validator
+  (isolation's coinbase output cap widens by one output per mergeset block where the fence is declared — height-free, like the round lane).
+* The PoW arm for algo 7 expands `Expand(spend_id_v4)` for a `PFS4` carriage and is unchanged for `PFS3`; the shape gate takes the V4 cap
+  only for a `PFS4` payload on algo 7.
+* No state-delta, object-tag, tail or DB change: the spent-quantum set, weight, census and reorg revert are the V3 fold's own.
+
 ### 3.5 Producer / template
 `kaspa_consensus_core::palw_receipt_v4` also exposes the builder-side constructor so a producer and the verifier call one function. The
 shipped producer (`kaspad/src/palw_producer.rs`) keeps building V3 for its own claims; a V4 *builder* mode (take authorizations from the

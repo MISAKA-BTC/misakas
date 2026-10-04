@@ -1570,6 +1570,8 @@ Do you confirm? (y/n)";
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         attempt_retention: std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
                         riders: args.palw_riders,
+                        // RFC-0009: builder mode's authorization directory (unread while `palw_receipt_spend_v4` is dormant).
+                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(std::path::PathBuf::from),
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,

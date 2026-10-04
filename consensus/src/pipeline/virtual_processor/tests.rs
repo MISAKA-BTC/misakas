@@ -1828,6 +1828,71 @@ async fn palw_v3_a_receipt_carriage_with_a_junk_signature_is_refused_at_the_head
     }
 }
 
+/// **RFC-0009: a `PFS4` receipt header is a block only past `palw_receipt_spend_v4`, and past it both ML-DSA-87 signatures are checked at
+/// the header stage.** Below the fence (every shipped preset) the carriage is refused BY NAME — the set of valid blocks is exactly what it was.
+/// Past it a junk signature is refused for the signature (one solve, unbounded distinct blocks otherwise), and the same header with real
+/// signatures gets past this stage.
+#[tokio::test]
+async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_checked_past_it() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    for armed in [false, true] {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+                *p = p.clone().with_palw_v2_cadence();
+                if armed {
+                    // The fence's prerequisites (`validate_palw_v2` refuses it without them), then the fence.
+                    p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                    p.palw_audit_2026_09_23 = Some(ForkActivation::always());
+                    p.sync_palw_escrow_backed_exposure();
+                    p.palw_receipt_spend_v4 = Some(ForkActivation::always());
+                }
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        // The audit fences the armed ruleset needs change what the fixture's first block must carry, and this test is about the HEADER stage
+        // alone — so the armed run builds its candidates straight on genesis rather than mining a row first.
+        if !armed {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        let honest = ctx.build_block_template(7, ctx.simulated_time + 1);
+
+        let mut signed = honest.block.clone();
+        signed.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+        signed.header.palw_commitment = ctx.consensus.palw_v4_test_receipt_carriage(&signed.header, true);
+        signed.header.finalize();
+        let mut junk = honest.block.clone();
+        junk.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+        junk.header.palw_commitment = ctx.consensus.palw_v4_test_receipt_carriage(&junk.header, false);
+        junk.header.finalize();
+
+        let verdict = |r: Result<_, RuleError>| match r {
+            Err(RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => Some(reason.to_lowercase()),
+            _ => None,
+        };
+        let signed_verdict = verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
+        let junk_verdict = verdict(ctx.consensus.validate_and_insert_block(junk.to_immutable()).virtual_state_task.await.map(|_| ()));
+        if !armed {
+            // Both refused, and for the fence — not for a signature and not for a size.
+            for reason in [signed_verdict, junk_verdict] {
+                let reason = reason.expect("a PFS4 header below the fence is refused");
+                assert!(reason.contains("below") && reason.contains("palw_receipt_spend_v4"), "refused for the fence by name, got: {reason}");
+            }
+        } else {
+            let reason = junk_verdict.expect("a junk-signed PFS4 header is refused past the fence");
+            assert!(reason.contains("signature"), "refused for its signature, got: {reason}");
+            if let Some(reason) = signed_verdict {
+                assert!(!reason.contains("signature") && !reason.contains("below"), "real signatures get past this stage; got: {reason}");
+            }
+        }
+    }
+}
+
 ///    file's existing disqualification tests assert it — the sink does not move — because "did
 ///    not become the selected chain" is the property, and a status code is only its shadow.
 #[tokio::test]
