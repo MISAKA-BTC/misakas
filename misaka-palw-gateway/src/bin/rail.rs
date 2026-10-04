@@ -137,6 +137,9 @@ fn main() {
     let mut bond_flag: Option<String> = None;
     // ADR-0077 Decision 4: the handoff continues through `misaka-palw-fp-submit`.
     let mut submit = false;
+    // RFC-0009 stage A: relay the locally signed carrier through several nodes (no staging, no kaspad of our own).
+    let mut relay_endpoints: Vec<String> = Vec::new();
+    let mut relay_min_accept: usize = 2;
     let mut rpc_endpoint: Option<String> = None;
     let mut retention_dir: Option<PathBuf> = None;
     let mut capture_path: Option<PathBuf> = None;
@@ -167,6 +170,12 @@ fn main() {
             "--bond" => bond_flag = Some(value("--bond")),
             "--print-claim" => print_claim = true,
             "--submit" => submit = true,
+            "--relay" => {
+                relay_endpoints = value("--relay").split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect()
+            }
+            "--relay-min-accept" => {
+                relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
+            }
             "--rpc" => rpc_endpoint = Some(value("--rpc")),
             "--retention-dir" => retention_dir = Some(PathBuf::from(value("--retention-dir"))),
             "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
@@ -189,7 +198,9 @@ fn main() {
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
                  [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>] \
                  [--submit --rpc <host:port> [--retention-dir <dir>] [--capture <material.bin>] [--dsl <fpd1>] \
-                 [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
+                 [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --artifact <stem> --bond-key-seed <file> --funding-outpoint <txid:index> \
+                 --funding-amount <sompi> --relay <host:port,host:port,...> [--relay-min-accept <n>] [--fee <sompi>] \
+                 (RFC-0009: sign here, relay raw bytes through several nodes, stage nothing — the claim's material is still yours to serve)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
                  [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
@@ -488,6 +499,14 @@ fn main() {
     // the one library; not two commands an operator has to remember to run in order, and not a
     // shell-out. Every refusal below is named by `FpSubmitError`, including the SA-1(b) one that
     // fires when the node's DAA has passed this commitment's anchor deadline.
+    if submit && !relay_endpoints.is_empty() {
+        die("--submit (one node, stages the material beside it) and --relay (many nodes, stages nothing) are different handoffs: pick one".into());
+    }
+    let relayed = if relay_endpoints.is_empty() {
+        None
+    } else {
+        Some(relay_through_many(&relay_endpoints, &tx, &funding_entry, relay_min_accept))
+    };
     let submitted = if submit {
         let endpoint = rpc_endpoint.unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
         let capture = capture_path.as_ref().map(|path| {
@@ -552,6 +571,9 @@ fn main() {
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
         "submitted": submitted.as_ref().map(|s| s.txid.clone()),
+        // RFC-0009: the per-node outcome of a `--relay`. An accept is NOT inclusion — track the claim (misaka-palw-remote's
+        // ClaimTracker) and keep serving the material until stage B moves it.
+        "relayed": relayed,
         // The change output, spendable by the next submission once this one is accepted: pass it
         // as `--funding-outpoint`/`--funding-amount`. Null when the carrier left no change.
         "next_funding": next_funding,
@@ -656,6 +678,73 @@ fn submit_through_the_one_path(
             retention_source,
         }
     })
+}
+
+/// One wRPC node as a [`misaka_palw_remote::relay::RelayNode`].
+struct WrpcRelayNode<'a> {
+    endpoint: String,
+    runtime: &'a tokio::runtime::Runtime,
+    client: kaspa_wrpc_client::KaspaRpcClient,
+}
+
+impl misaka_palw_remote::relay::RelayNode for WrpcRelayNode<'_> {
+    fn node_id(&self) -> &str {
+        &self.endpoint
+    }
+    fn submit_raw_tx(&self, tx: &kaspa_consensus_core::tx::Transaction) -> misaka_palw_remote::relay::Reply {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        use misaka_palw_remote::relay::Reply;
+        let expected = misaka_palw_remote::relay::tx_id_of_bytes(tx);
+        match self.runtime.block_on(self.client.submit_transaction(kaspa_rpc_core::RpcTransaction::from(tx), false)) {
+            Ok(id) => Reply::Accepted(id),
+            // A node answers "already known" as an error naming the id. Believed only when it names OUR id: a node cannot make us
+            // count a success for bytes it did not hold by saying a sentence.
+            Err(e) => {
+                let text = e.to_string();
+                if text.to_lowercase().contains("already") && text.contains(&expected.to_string()) {
+                    Reply::AlreadyKnown(expected)
+                } else {
+                    Reply::Refused(text)
+                }
+            }
+        }
+    }
+}
+
+/// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
+/// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
+fn relay_through_many(
+    endpoints: &[String],
+    tx: &kaspa_consensus_core::tx::Transaction,
+    funding: &UtxoEntry,
+    min_accept: usize,
+) -> serde_json::Value {
+    let runtime = rpc_runtime();
+    let mut nodes: Vec<WrpcRelayNode<'_>> = Vec::new();
+    let mut unreachable: Vec<String> = Vec::new();
+    for endpoint in endpoints {
+        match try_rpc_connect(&runtime, endpoint) {
+            Ok(client) => nodes.push(WrpcRelayNode { endpoint: endpoint.clone(), runtime: &runtime, client }),
+            Err(e) => unreachable.push(format!("{endpoint}: {e}")),
+        }
+    }
+    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> = nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
+    let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
+    for node in &nodes {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let _ = runtime.block_on(node.client.disconnect());
+    }
+    match verdict {
+        Ok(report) => serde_json::json!({
+            "tx_id": report.id.to_string(),
+            "accepted_by": report.successes,
+            "per_node": report.per_node.iter().map(|(n, o)| format!("{n}: {o:?}")).collect::<Vec<_>>(),
+            "tampered": report.tampered(),
+            "unreachable": unreachable,
+            "note": "accepted is not included; track it, and keep serving the claim's material (stage B moves that)",
+        }),
+        Err(e) => die(format!("the carrier was not relayed: {e} (unreachable: {unreachable:?})")),
+    }
 }
 
 /// What `--submit` produced, for the summary: the transaction, and where the node will serve
