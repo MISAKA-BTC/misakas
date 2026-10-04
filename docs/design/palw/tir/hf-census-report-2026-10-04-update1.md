@@ -207,3 +207,28 @@ Not probed: 69 (no `vision_config`: 32 configurations not fetched or absent, 17 
 image-text-to-text — their declared task needs an image stage they do not have — and a tail of custom wrappers). Lowering changes
 made for this (no golden change): flat Qwen2/2.5-VL configurations dispatch to their decoder (`decoder_optional`), a wrapper's
 root keys that shadow its decoder's are inert (`root_shadows_decoder`), the decoder's image token ids are inert.
+
+## 6. Update 4: the vision-chat class admitted under the dormant fences (stages 1–2)
+
+**Stage 1 — `palw_gen_range_twin_v1` (consensus, DORMANT, `76bc8736e`).** The pipeline admission's close sizing by the range
+twin, extended to a pipeline stage's inputs (edge rows, job-image tiles), its `post`-written states and its checkpoint leaves;
+the same bounds as the element twin byte for byte on every toy pipeline, fewer steps. `None` on every preset; the shipped
+rulesets' three ids unchanged.
+
+**Stage 2 — the tower's lowering (off-chain; `524e69dcd`..`8e33b2d7d`).**
+
+| Change | Effect on Qwen2/2.5-VL at 196 px |
+| --- | --- |
+| Out-major tower projections (`[1,out,in]·[L,in,1]`, no transpose; `lower_vision_with(.., true)`) — byte-identical integers on 5 tower fixtures, three implementations and the court | the worst tower close 34 MB → 2.4 MB (a tile reads contiguous weight rows) |
+| A pinned window permutation as static slices (Qwen2.5-VL) instead of a gather by a param index | the window rows read exactly (the gather read the whole axis: 7.1 MB closes, 1.9 G sizing steps) |
+| Per-commit-point tower tiles: the widest of 1,024/512/…/64 lanes whose cone's terminal MACs (2^24) and close (3.2 MB less 5 %) fit; the text stage's history tile 16/8 | sizing work 45–70 M steps (cap 2^26) |
+
+**Measured (PARTIAL_TASK_ONLY cohort, N = 52,091, n = 150, `palw_gen_v1` + `palw_gen_range_twin_v1` armed hypothetically):
+every one of the 12 Qwen2-VL / Qwen2.5-VL members admits** — at 196×196, at 8,192 (1), 4,096 (3) or 2,048 (8) positions
+(7B/32B text stages pass `max_job_macs` only at the narrower contexts). Expanded: ≈ 4,170 vision-chat repositories (N/n × 12),
+**counted nowhere as shape-ready**: both fences are dormant and FP Job V5 is too. Still refused: 67 members with no tower adapter
+(stage 3), 69 with no `vision_config`, 2 key/placeholder gaps.
+
+Not done in stage 2: the tower expanded across positions (layer × position) for slots ≥ 224 px — the tower is ONE position of
+169 G MACs at 224 px against 2^37. At 196 px every probed tower fits, so the expansion buys image size, not admitted models;
+it is the next lowering change if a larger slot is wanted.
