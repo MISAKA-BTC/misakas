@@ -106,6 +106,8 @@ pub enum PalwGenClaimErrorV1 {
     ZeroRoot(&'static str),
     #[error("a tensor claim of no leaves")]
     ZeroWorkLeaves,
+    #[error("a tensor job binds {what} of {tokens} tokens, past the {max} a claim may pad or carry (palw_audit_1004_v1)")]
+    TokenBindingAboveCap { what: &'static str, tokens: u64, max: u64 },
     #[error("{got} work leaves is above the cap {max}")]
     WorkLeavesAboveCap { got: u64, max: u64 },
     #[error("the commitment's execution_root is not the tensor execution root of its own parts")]
@@ -568,6 +570,33 @@ pub fn palw_gen_payload_v1(
 // ---------------------------------------------------------------------------------------------
 // What the chain derives from the class (the fold's)
 // ---------------------------------------------------------------------------------------------
+
+/// **Lane PA, G-2 (`palw_audit_1004_v1`): the token bindings a tensor claim's step count would allocate, bounded first.** Counting the
+/// step space builds every `JobTokens` input padded to its template's `to_len` (up to 2^24 × 16 bytes) and a zero id list of the
+/// job's declared length; a class that declares a long pad, or an offer of long prompts, made every claim of it an allocation of
+/// hundreds of megabytes. Past the fence a claim over a class whose pad, or whose job's id count, is above
+/// [`crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_BOUND_TOKENS_V1`] is refused before anything is allocated.
+pub fn palw_gen_job_bound_v1(row: &PalwGenClassRecordV1, accepted: &PalwGenAcceptedJobV1) -> Result<(), PalwGenClaimErrorV1> {
+    use PalwGenClaimErrorV1 as E;
+    let max = crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_BOUND_TOKENS_V1;
+    for (what, tokens) in [("prompt", accepted.prompt_tokens), ("negative prompt", accepted.negative_tokens)] {
+        if u64::from(tokens) > max {
+            return Err(E::TokenBindingAboveCap { what, tokens: u64::from(tokens), max });
+        }
+    }
+    let (_, pipeline) = row.class.decode().map_err(|e| E::Class(e.to_string()))?;
+    for stage in &pipeline.stages {
+        for binding in &stage.bind {
+            if let misaka_palw_tir::pipeline::Binding::JobTokens { rule } | misaka_palw_tir::pipeline::Binding::JobTokenCount { rule } = binding
+                && let Some(pad) = rule.pad
+                && u64::from(pad.to_len) > max
+            {
+                return Err(E::TokenBindingAboveCap { what: "template pad", tokens: u64::from(pad.to_len), max });
+            }
+        }
+    }
+    Ok(())
+}
 
 /// **A job's step leaves, as the chain counts them** (§I.4.5, step 4): the class's pipeline, programs and
 /// layouts and the job's facts — the court's own count (`StepLeafCountNotCanonical`) in closed form, so

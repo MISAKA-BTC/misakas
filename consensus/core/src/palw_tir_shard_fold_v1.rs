@@ -60,8 +60,18 @@ pub(super) fn apply_plan_declared_v1(
     let program =
         misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| refused(format!("the class's program: {e}")))?;
     let max_context = tir.facts.max_context;
+    // **Lane PA, S-1 / B-F5 (`palw_audit_1004_v1`)**: the shape that needs no derivation first, then the linear minimum — the old
+    // quadratic search ran before any refusal, on a signature with no nonce, so a refused plan was a free replayable CPU burn.
+    let audit_1004 = builder.params.audit_1004_active_at(ctx.daa_score);
+    if audit_1004 {
+        rules::palw_tir_shard_plan_prelim_v1(s_l, s_p, program.schedule.layers.len()).map_err(|e| refused(e.to_string()))?;
+    }
     let weights = rules::palw_tir_shard_weights_v1(&program, max_context);
-    let min = rules::palw_tir_shard_min_shards_v1(&weights, rules::PALW_TIR_SHARD_SEAT_BUDGET_BYTES_V1);
+    let min = if audit_1004 {
+        rules::palw_tir_shard_min_shards_fast_v1(&weights, rules::PALW_TIR_SHARD_SEAT_BUDGET_BYTES_V1)
+    } else {
+        rules::palw_tir_shard_min_shards_v1(&weights, rules::PALW_TIR_SHARD_SEAT_BUDGET_BYTES_V1)
+    };
     rules::palw_tir_shard_plan_shape_v1(s_l, s_p, weights.layer_bytes.len(), min).map_err(|e| refused(e.to_string()))?;
     let (_, cell_permille) =
         rules::palw_tir_shard_cell_permille_v1(&program, max_context, s_l, s_p, builder.params.tir_fence2_active_at(ctx.daa_score))

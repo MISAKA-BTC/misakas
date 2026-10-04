@@ -412,6 +412,62 @@ pub fn palw_tir_shard_min_shards_v1(w: &PalwTirShardWeightsV1, budget: u128) -> 
     l.max(1) as u16
 }
 
+/// **Lane PA, S-1 / B-F5 (`palw_audit_1004_v1`): the same answer as [`palw_tir_shard_min_shards_v1`] in `O(L)`.** The fewest shards whose
+/// widest fits `budget` is the greedy-left shard count under `budget` (the optimal partition's widest is the least cap the greedy
+/// count meets), and `L` where one layer alone is over budget. The old search ran the whole partition for every `s = 1 … L` —
+/// `O(L²·128)` per `TirShardPlanDeclared`, before the shape was looked at, with no nonce in the signature to make a repeat cost
+/// anything. Prefix sums make a range's weight `O(1)`.
+pub fn palw_tir_shard_min_shards_fast_v1(w: &PalwTirShardWeightsV1, budget: u128) -> u16 {
+    let l = w.layer_bytes.len();
+    let cap_l = l.min(usize::from(u16::MAX));
+    if l == 0 {
+        return 1;
+    }
+    let mut prefix = Vec::with_capacity(l + 1);
+    prefix.push(0u128);
+    for bytes in &w.layer_bytes {
+        prefix.push(prefix[prefix.len() - 1].saturating_add(*bytes));
+    }
+    let range = |first: usize, end: usize| -> u128 {
+        let mut weight = (prefix[end] - prefix[first]).saturating_add(w.layers_global_bytes);
+        if first == 0 {
+            weight = weight.saturating_add(w.pre_extra_bytes);
+        }
+        if end == l {
+            weight = weight.saturating_add(w.post_extra_bytes);
+        }
+        weight
+    };
+    let (mut shards, mut first) = (0usize, 0usize);
+    while first < l {
+        if range(first, first + 1) > budget {
+            return cap_l.max(1) as u16;
+        }
+        let mut end = first + 1;
+        while end < l && range(first, end + 1) <= budget {
+            end += 1;
+        }
+        shards += 1;
+        first = end;
+    }
+    shards.min(cap_l).max(1) as u16
+}
+
+/// **Lane PA, S-1: the part of [`palw_tir_shard_plan_shape_v1`] that needs no derived minimum** — the shard count's range, the
+/// position segments, and no more shards than layers. Asked before the weights are derived.
+pub fn palw_tir_shard_plan_prelim_v1(s_l: u16, s_p: u16, layers: usize) -> Result<(), PalwTirShardError> {
+    if !(2..=PALW_TIR_SHARD_MAX_SHARDS_V1).contains(&s_l) {
+        return Err(PalwTirShardError::ShardCountOutOfRange(s_l));
+    }
+    if s_p != PALW_TIR_SHARD_POSITION_SEGMENTS_LAYERS_ONLY_V1 && s_p != PALW_TIR_SHARD_POSITION_SEGMENTS_S1_V1 {
+        return Err(PalwTirShardError::PositionSegmentsNotOffered(s_p));
+    }
+    if usize::from(s_l) > layers {
+        return Err(PalwTirShardError::MoreShardsThanLayers { shards: s_l, layers });
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Cell shares (RFC §6.1)
 // ---------------------------------------------------------------------------------------------

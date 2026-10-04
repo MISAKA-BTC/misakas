@@ -457,6 +457,30 @@ pub fn palw_improvement_policy_example_v1() -> PalwImprovementPolicyV1 {
     }
 }
 
+/// **Lane PA, RF-3 / RF-4 (`palw_audit_1004_v1`): the policy rules past the fence** — `beacon_delay` at least twice the beacon's depth
+/// (so the draw's beacon block is later than the pool's close), and every fee and bond at or above its floor (a free epoch, a free
+/// registration, a free evaluation job are free channels into the evaluation lane).
+pub fn palw_improvement_policy_audit_1004_check_v1(policy: &PalwImprovementPolicyV1) -> Result<(), &'static str> {
+    use crate::palw_audit_1004_v1 as a;
+    if policy.windows.beacon_delay < a::PALW_AUDIT_1004_MIN_BEACON_DELAY_V1 {
+        return Err("beacon_delay is under twice the beacon's depth: the draw's beacon would precede the pool's close");
+    }
+    let f = &policy.fees;
+    if f.registration_fee < a::PALW_AUDIT_1004_MIN_REGISTRATION_FEE_V1 {
+        return Err("registration_fee is under the network's floor");
+    }
+    if f.eval_fee_per_job < a::PALW_AUDIT_1004_MIN_EVAL_FEE_PER_JOB_V1 {
+        return Err("eval_fee_per_job is under the network's floor");
+    }
+    if f.hard_case_fee < a::PALW_AUDIT_1004_MIN_HARD_CASE_FEE_V1 {
+        return Err("hard_case_fee is under the network's floor");
+    }
+    if [f.candidate_bond, f.artifact_bond, f.setter_bond, f.dataset_bond].iter().any(|bond| *bond < a::PALW_AUDIT_1004_MIN_BOND_V1) {
+        return Err("a bond (candidate, artifact, setter or dataset) is under the network's floor");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

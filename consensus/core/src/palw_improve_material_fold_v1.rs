@@ -520,7 +520,13 @@ pub(super) fn apply_dataset_registered_v1(
     registrant: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     let daa = ctx.daa_score;
-    palw_dataset_form_v1(dataset).map_err(refused)?;
+    if builder.params.audit_1004_active_at(daa) {
+        // **Lane PA, RF-1 (`palw_audit_1004_v1`): the dataset's id names its registrant**, so a copy of a published dataset cannot be
+        // registered first under another bond to take its S2 contributor share. The form is judged with the registrant-bound id.
+        crate::palw_improve_material_v1::palw_dataset_form_bound_v1(dataset, registrant).map_err(refused)?;
+    } else {
+        palw_dataset_form_v1(dataset).map_err(refused)?;
+    }
     let (_, policy) = builder.material_line_policy_v1(&dataset.line_id, daa)?;
     if builder.state.improvement_dataset(&dataset.line_id, &dataset.dataset_id).is_some() {
         return Err(refused("the line already holds this dataset"));
@@ -711,6 +717,13 @@ pub(super) fn apply_teacher_licence_v1(
     if licence.expiry_daa <= daa {
         return Err(refused("a licence already expired"));
     }
+    // **Lane PA, RF-4 (`palw_audit_1004_v1`)**: a licence's life is bounded (the sweep removes it at its expiry, so the table is
+    // bounded by the registration rate times this life; a table CAP would itself be a griefing channel and is not added).
+    if builder.params.audit_1004_active_at(daa) {
+        if licence.expiry_daa > daa.saturating_add(crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1) {
+            return Err(refused("a licence's expiry is past the longest life a licence may be registered for"));
+        }
+    }
     if builder.state.improvement_licence(&licence.licence_id).is_some() {
         return Err(refused("the licence is already registered"));
     }
@@ -749,6 +762,13 @@ pub(super) fn apply_candidate_submitted_v1(
 ) -> Result<(), PalwStateV2Error> {
     let daa = ctx.daa_score;
     let (line, policy) = builder.material_line_policy_v1(&candidate.line_id, daa)?;
+    // **Lane PA, RF-1 (`palw_audit_1004_v1`): the S2 trainer reward goes to the candidate's submitter, so the submitter must be the
+    // candidate class's own registrant** — nobody else's class can be entered for the reward it earns.
+    if builder.params.audit_1004_active_at(daa)
+        && builder.state.classes.get(&candidate.class_id).and_then(|record| record.registrant_bond) != Some(*submitter)
+    {
+        return Err(refused("a candidate submitted by a bond that is not its class's registrant"));
+    }
     palw_candidate_declarations_form_v1(&candidate.declarations, policy.provenance.teacher_classes).map_err(refused)?;
     let classes = improvement_line_classes_v1(&builder.state, &line);
     PalwCandidateAcceptanceV1::parent_of(&line.head, &classes, &candidate.artifact).map_err(refused)?;

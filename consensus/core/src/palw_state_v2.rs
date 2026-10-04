@@ -1697,6 +1697,10 @@ pub struct PalwStateParamsV2 {
     /// recorder and its two readers — the admission jury and the schedule seeding — read it). `None` on every shipped preset.
     #[borsh(skip)]
     anchor_window_from_daa: Option<u64>,
+    /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
+    /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    audit_1004_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1930,6 +1934,7 @@ impl PalwStateParamsV2 {
             tir_only_from_daa: None,
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
+            audit_1004_from_daa: None,
         })
     }
 
@@ -2278,6 +2283,22 @@ impl PalwStateParamsV2 {
     pub fn with_anchor_window_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.anchor_window_from_daa = from_daa;
         self
+    }
+
+    /// **Lane PA: the audit-1004 fence's mirror** — written by `Params::sync_palw_audit_1004_v1` and by nothing else (and by fixtures).
+    pub fn with_audit_1004_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.audit_1004_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_audit_1004_v1`'s height, if the network arms it (the mirror).
+    pub fn audit_1004_from_daa(&self) -> Option<u64> {
+        self.audit_1004_from_daa
+    }
+
+    /// **Are the audit-1004 rules in force at `daa_score`?** `false` on every shipped preset.
+    pub fn audit_1004_active_at(&self, daa_score: u64) -> bool {
+        self.audit_1004_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_anchor_window_v1`'s height, if the network arms it (the mirror).
@@ -34666,6 +34687,17 @@ fn apply_object(
             activation_daa,
             admission,
         } => {
+            // **Lane PA, G-3 (`palw_audit_1004_v1`)**: a generative registration is sized like an IR one — one such registration a block
+            // (the counter is shared: the acceptance walk drops a second by name first, this is the second lock).
+            if builder.params.audit_1004_active_at(ctx.daa_score) {
+                if builder.tir_registrations >= PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1 {
+                    return Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded {
+                        class: *class_id,
+                        max: PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1,
+                    });
+                }
+                builder.tir_registrations += 1;
+            }
             let record = crate::palw_gen_class_v1::palw_gen_class_record_v1(&admission.class, artifact_root)
                 .map_err(|_| PalwStateV2Error::GenObjectRefused("the carried pipeline does not decode"))?;
             if record.class_id != *class_id {
@@ -37376,6 +37408,11 @@ pub struct PalwTransitionExtrasV1 {
     /// (and the block's own attempt) is BLUE. Empty by `Default`: nothing is red, so a caller that merges no work (the
     /// rehearsals, genesis) needs no mergeset.
     pub merged_reds: std::collections::BTreeSet<BlockHash>,
+    /// **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** — the hash of the selected-chain block
+    /// [`crate::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1`] below the accepting block's selected parent, set by the processor
+    /// past the fence (as `merged_reds` is) where it folds a chain block. `None` by `Default` (below the fence, rehearsals); a fenced
+    /// draw with no beacon keeps the seed it had.
+    pub audit_1004_beacon: Option<Hash64>,
     /// ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every class's
     /// work — where the node computes the shadow; `None` folds no shadow.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
@@ -38945,7 +38982,13 @@ fn apply_pending_riders_v1(
         builder.write_capacity_ledger_v1(key, None);
     }
     let pending = std::mem::take(&mut builder.pending_riders);
+    let cheap_first = builder.params.audit_1004_active_at(ctx.daa_score);
     for (lead_id, riders) in pending {
+        // **Lane PA, C-F1 (`palw_audit_1004_v1`)**: the cheap refusals first — a batch the lead cannot take costs no full-state clone.
+        if cheap_first && let Err(why) = riders_cheap_refusal_v1(&builder.state, ctx, &lead_id, &riders) {
+            skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
+            continue;
+        }
         let checkpoint = builder.checkpoint();
         let seen = builder.seen_exec.clone();
         if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
@@ -38954,6 +38997,41 @@ fn apply_pending_riders_v1(
             skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
         }
     }
+}
+
+/// **C-F1: the tests of [`attach_riders_v1`] that read only the lead, its marks and the batch's own bond** — run before the checkpoint.
+/// The same refusals, in the same words, so a refused batch is a skip either way.
+fn riders_cheap_refusal_v1(
+    state: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    lead_id: &Hash64,
+    riders: &[PalwAttemptEnvelopeV2],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_capacity_s567_v1 as m;
+    let refuse = |why: &str| Err(PalwStateV2Error::CapacityRiders(why.to_owned()));
+    let n = riders.len();
+    if n == 0 || n > m::PALW_RIDERS_MAX_V1 {
+        return refuse("a batch holds between one and 64 riders");
+    }
+    let lead = state.claims.get(lead_id).ok_or_else(|| PalwStateV2Error::CapacityRiders(format!("lead {lead_id} is not held")))?;
+    if !matches!(lead.source, PalwClaimSourceV2::Attempt) || !matches!(lead.phase, PalwClaimPhaseV2::Provisional) {
+        return refuse("the lead is not a Provisional attempt claim");
+    }
+    if lead.accepted_daa.saturating_add(m::PALW_RIDERS_WINDOW_DAA_V1) < ctx.daa_score {
+        return refuse("the lead was accepted more than the riders' window ago");
+    }
+    if state.rider_mark_of_v1(lead_id).is_some() {
+        return refuse("the lead has taken its riders already");
+    }
+    if riders.iter().any(|rider| rider.attempt.executor_bond != lead.bond.0) {
+        return refuse("a rider is not of the lead's bond");
+    }
+    // The bond's key: a rider's admission refuses a key that is not the bond's; so does this, before the clone.
+    let Some(record) = state.bonds.get(&lead.bond) else { return refuse("the lead's bond is not registered") };
+    if riders.iter().any(|rider| rider.attempt.executor_pubkey != record.pubkey) {
+        return refuse("a rider is not signed by its bond's registered key");
+    }
+    Ok(())
 }
 
 /// **One riders batch** — the lead's escrow is split `1 + n` ways and each rider is a claim at its share. Everything below runs on the live
@@ -39009,7 +39087,12 @@ fn attach_riders_v1(
     kept.escrowed_reward = remainder;
     builder.release_for_claim(&lead, ctx.daa_score)?;
     builder.reserve_for_claim(&kept)?;
+    let kept_escrow = kept.escrowed_reward;
     builder.write_claim(*lead_id, Some(kept));
+    // **Lane PA, C-F4 (`palw_audit_1004_v1`)**: the lead's audit pay follows the escrow it kept (each rider draws its own at its share).
+    if builder.params.audit_1004_active_at(ctx.daa_score) {
+        palw_mesh_fold_v1::resnapshot_audit_pay_v1(builder, lead_id, kept_escrow);
+    }
     builder.write_capacity_ledger_v1(
         m::PalwCapacityLedgerKeyV1::RiderLead(*lead_id),
         Some(m::PalwCapacityLedgerRowV1::Riders { riders: n as u16, daa: lead.accepted_daa }),
