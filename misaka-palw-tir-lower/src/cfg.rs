@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 pub const GLOBAL_INERT: &[&str] = &[
     // bookkeeping
     "_name_or_path",
+    "_name_or_path ",
     "_commit_hash",
+    "is_llama_config",
     "architectures",
     "model_type",
     "transformers_version",
