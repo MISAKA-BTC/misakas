@@ -2125,7 +2125,7 @@ mod tests {
             .unwrap();
             let s = try_at_p(&s, &p, &none, 1_400, |_, _| Ok(())).unwrap();
             // The draw block: a block of a given hash and an extras beacon.
-            let extras = PalwTransitionExtrasV1 { audit_1004_beacon: beacon.map(h), ..Default::default() };
+            let extras = PalwTransitionExtrasV1 { audit_1004_draw_seed_source: beacon.map(h), ..Default::default() };
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
             let c = PalwBlockContextV2 { block: h(block_byte), ..ctx(1_510) };
             advance_improvement_v1(&mut builder, &c).unwrap();

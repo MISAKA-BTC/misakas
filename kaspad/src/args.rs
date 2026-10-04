@@ -562,6 +562,10 @@ pub struct Args {
     /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
     /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
     pub palw_improve_artifact_dir: Option<String>,
+    /// **ADR-0173 §4**: the external command that fetches a bundle for a root the node holds none of (`--palw-root-fetch-cmd`).
+    pub palw_root_fetch_cmd: Option<String>,
+    /// **ADR-0173 §4**: where a fetched bundle is dropped (`--palw-root-drop-dir`; default `--palw-improve-artifact-dir`).
+    pub palw_root_drop_dir: Option<String>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** — the executor writes the capture of
     /// every evaluation claim it carries here, a challenger (`--palw-challenge`) reads the accused's from here.
     /// The evidence transport of a drill on one machine; default beside the node's other retention.
@@ -907,6 +911,8 @@ impl Default for Args {
             palw_tir_shard_gpu_mirror: false,
             palw_tir_shard_shadow: false,
             palw_improve_artifact_dir: None,
+            palw_root_fetch_cmd: None,
+            palw_root_drop_dir: None,
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
@@ -2398,6 +2404,25 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-root-fetch-cmd")
+                .long("palw-root-fetch-cmd")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (ADR-0173): a command run (not through a shell) when a class has a root in force, or is a Candidate, that this \
+                     node holds no bundle for. It gets `<class_id> <root>`, then `btv2_infohash=<hex>` and `bundle_commitment=<hex>` when \
+                     declared, then `drop_dir=<path>`; on exit 0 the drop directory is scanned and a bundle for the wanted root is held and \
+                     proved. A failure is a ROOT_BUNDLE_MISSING log line, never a ground for any penalty.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-root-drop-dir")
+                .long("palw-root-drop-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW (ADR-0173): where `--palw-root-fetch-cmd` drops bundles (default: --palw-improve-artifact-dir)."),
+        )
+        .arg(
             Arg::new("palw-improve-artifact-dir")
                 .long("palw-improve-artifact-dir")
                 .require_equals(true)
@@ -3604,6 +3629,8 @@ impl Args {
             palw_tir_shard_shadow: m.get_one::<bool>("palw-tir-shard-shadow").copied().unwrap_or(false),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
+            palw_root_fetch_cmd: m.get_one::<String>("palw-root-fetch-cmd").cloned(),
+            palw_root_drop_dir: m.get_one::<String>("palw-root-drop-dir").cloned(),
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),

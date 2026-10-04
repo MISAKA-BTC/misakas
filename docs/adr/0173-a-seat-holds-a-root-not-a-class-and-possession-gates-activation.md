@@ -81,10 +81,14 @@ registry's lifecycle, or not seated (possession floor with no executor excluded,
 * **The readiness duty proves `(class, root)` for every root in force the seat holds the bundle of**: a held artifact resolves by its digest, the proof
   is the V2 multiproof over that root, and the superseded root keeps being proved during its grace (so R1 claims stay live). The duty's memo is keyed by
   slot `(class, root)`. Conformance, memory capacity and the proof lane are per `(class, root)` as they were per class.
-* **Prefetch** of a new version's or a new candidate class's bundle goes through the node's existing artifact path (the holdings it loads and
-  `--palw-chain-classes`, plus the improvement watcher's drop directory for candidate classes); the model transport (`bundle_commitment` /
-  `ModelDistributionDeclared`, lane MN, ADR-0171) is **not in this branch**, so the fetch it would make is a named note —
-  `ROOT_BUNDLE_MISSING` — until it merges, and a seat proves nothing for a root it does not hold. A seat never proves a root it cannot replay.
+* **Prefetch is a node hook** (`kaspad/src/palw_root_fetch.rs`). When the readiness duty finds a root in force (not the registered one) or a
+  `Candidate` class it holds no bundle for, it runs the operator's `--palw-root-fetch-cmd` (no shell; arguments `<class_id> <root>`, then
+  `btv2_infohash=` / `bundle_commitment=` when declared, then `drop_dir=<path>`), at most one command per tick and one run per want per
+  5 minutes. On exit 0 — or whenever a bundle is dropped by hand — `--palw-root-drop-dir` (default `--palw-improve-artifact-dir`) is
+  scanned; a bundle that declares the wanted class and roots to the wanted root joins the holdings and the next tick's duty proves it. A
+  failed fetch is a `ROOT_BUNDLE_MISSING` log line and nothing else: it is never a ground for a slash, a void or an `Unavailable`.
+  **TODO: integrate `misaka-model-transport` (`bundle_commitment`, btv2 infohash declarations of ADR-0171, lane MN) as the default
+  fetcher** — it is not in this branch; until then the declared values are not passed (no caller supplies them).
 * Panel binary updates stay on fences; weights follow through the transport once it is in.
 
 ## 5. Tests

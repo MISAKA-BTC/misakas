@@ -1432,7 +1432,7 @@ fn draw_epoch_v1(
     // **Lane PA, RF-3 (`palw_audit_1004_v1`)**: past the fence the seed reads the beacon — a selected-chain block below the drawing
     // block's selected parent, later than the pool's close under the fenced `beacon_delay` floor — not the drawing block's own hash,
     // which its producer can grind after the pool has closed.
-    let seed_block = match builder.extras.audit_1004_beacon.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
+    let seed_block = match builder.extras.audit_1004_draw_seed_source.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
         Some(beacon) => beacon,
         None => ctx.block,
     };

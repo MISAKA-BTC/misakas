@@ -2006,6 +2006,8 @@ Do you confirm? (y/n)";
                         tir_shard_run_leaves: args.palw_tir_shard_run_leaves.unwrap_or(0),
                         tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
+                        root_fetch_cmd: args.palw_root_fetch_cmd.clone(),
+                        root_drop_dir: args.palw_root_drop_dir.as_ref().or(args.palw_improve_artifact_dir.as_ref()).map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
                         improve_tamper: match args.palw_drill_tamper_eval.as_deref() {
                             None => None,

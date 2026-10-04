@@ -46,6 +46,7 @@ pub mod palw_rider_outbox;
 pub mod palw_producer_backpressure;
 /// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
 pub mod palw_readiness_escalation;
+pub mod palw_root_fetch;
 #[cfg(test)]
 mod palw_producer_t12_tests;
 pub mod palw_receipt_pool;

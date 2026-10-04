@@ -3792,6 +3792,9 @@ pub struct PalwPanelConfig {
     pub tir_shard_run_leaves: u32,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
+    /// **ADR-0173 §4**: the fetch command and the drop directory for roots this node holds no bundle of.
+    pub root_fetch_cmd: Option<String>,
+    pub root_drop_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
     /// drill's evidence transport on one machine; default beside the node's other retention.
     pub improve_capture_dir: Option<PathBuf>,
@@ -3904,6 +3907,8 @@ pub struct PalwPanelService {
     /// **RFC-0004 (A10): the classes prefetched since the node started** (`improve`), which
     /// [`Self::backends`] serves beside `class_holdings`.
     improve_holdings: std::sync::Mutex<Vec<misaka_palw_sdk::PalwLoadedArtifactV1>>,
+    /// ADR-0173 §4: the root-fetch hook's memory.
+    root_fetch: std::sync::Mutex<crate::palw_root_fetch::PalwRootFetchStateV1>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -4329,6 +4334,7 @@ impl PalwPanelService {
             bond,
             class_holdings,
             improve_holdings: std::sync::Mutex::new(Vec::new()),
+            root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
@@ -4659,22 +4665,9 @@ impl PalwPanelService {
         // class's read with `artifact_root` set to the root; everything below (capacity, conformance, the backend resolved by the
         // digest, the proof) is per `(class, root)`.
         let root_keyed = self.consensus_config.params.palw_audit_1004_active_at(current_daa);
-        let targets: Vec<(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryClassReadV1, bool)> = read
-            .classes
-            .iter()
-            .filter(|c| !c.is_base_class)
-            .flat_map(|class| {
-                let mut one = vec![(class.clone(), false)];
-                if root_keyed {
-                    for root in class.roots_in_force.iter().filter(|root| **root != class.artifact_root) {
-                        let mut other = class.clone();
-                        other.artifact_root = *root;
-                        one.push((other, true));
-                    }
-                }
-                one
-            })
-            .collect();
+        let targets = crate::palw_root_fetch::palw_readiness_targets_v1(&read, root_keyed);
+        // ADR-0173 §4: the roots this tick found no bundle for — the fetch hook's wants.
+        let mut missing: Vec<crate::palw_root_fetch::PalwRootWantV1> = Vec::new();
         for (class, extra_root) in targets.iter().map(|(class, extra)| (class, *extra)) {
             let slot = if extra_root {
                 crate::palw_readiness_escalation::palw_readiness_slot_v1(&class.class_id, &class.artifact_root)
@@ -4816,6 +4809,17 @@ impl PalwPanelService {
             let backend = match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(backend) => backend,
                 Err(e) => {
+                    if extra_root || class.row.as_ref().is_some_and(|l| matches!(l.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)) {
+                        missing.push(crate::palw_root_fetch::PalwRootWantV1 {
+                            class_id: class.class_id,
+                            root: class.artifact_root,
+                            kind: if extra_root {
+                                crate::palw_root_fetch::PalwRootWantKindV1::InForceRoot
+                            } else {
+                                crate::palw_root_fetch::PalwRootWantKindV1::Candidate
+                            },
+                        });
+                    }
                     if extra_root {
                         self.readiness_note(
                             class.class_id,
@@ -5108,6 +5112,7 @@ impl PalwPanelService {
                 slot,
             });
         }
+        self.root_fetch_hook_v1(&missing);
         // P3: a Candidate's proofs take the Own site behind every other proof, in their rank's order —
         // save a hand-off its row needs, behind every proof M1 hurries (`palw_candidate_own_order_v1`).
         crate::palw_candidate_proof_timing::palw_candidate_own_order_v1(
@@ -5120,6 +5125,53 @@ impl PalwPanelService {
     /// **This tick's possession proofs** ([`Self::readiness_duties`]): a proof left waiting last tick
     /// is asked for again at once (the thirty-second read throttle would otherwise hand the freed slot
     /// to a receipt).
+    /// **ADR-0173 §4: the root-fetch hook** — reap and start fetch commands for the roots this tick found no bundle for, and take a
+    /// bundle that arrived in the drop directory into the holdings (the next tick proves it). Node policy only: a failure is a log line.
+    fn root_fetch_hook_v1(&self, missing: &[crate::palw_root_fetch::PalwRootWantV1]) {
+        use crate::palw_root_fetch::PalwRootFetchEventV1 as Ev;
+        let mut state = self.root_fetch.lock().unwrap();
+        let events = state.tick(self.config.root_fetch_cmd.as_deref(), self.config.root_drop_dir.as_deref(), missing, std::time::Instant::now());
+        let mut scan = false;
+        for event in events {
+            match event {
+                Ev::Started(w) => info!("[{PALW_PANEL}] root fetch started for class {} root {}", w.class_id, w.root),
+                Ev::Finished(w) => {
+                    info!("[{PALW_PANEL}] root fetch finished for class {} root {}", w.class_id, w.root);
+                    scan = true;
+                }
+                Ev::Failed(w, why) => warn!(
+                    "[{PALW_PANEL}] ROOT_BUNDLE_MISSING: the fetch for class {} root {} failed ({why}); not a seat for it (no penalty follows)",
+                    w.class_id, w.root
+                ),
+            }
+        }
+        // A bundle may also be dropped by hand: scan whenever something is wanted.
+        let Some(dir) = self.config.root_drop_dir.as_deref() else { return };
+        if missing.is_empty() && !scan {
+            return;
+        }
+        let backends = self.backends();
+        let sdk = backends.sdk();
+        let taken = state.ingest(dir, missing, &mut |path| {
+            let loaded = crate::palw_backends::load_class_holdings_v1("root-fetch", sdk, std::slice::from_ref(&path.to_path_buf()), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache);
+            loaded
+                .into_iter()
+                .flat_map(|holding| {
+                    misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&holding))
+                        .into_iter()
+                        .map(|entry| (entry.class_id(), entry.artifact_root))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(move |(class, root)| (class, root, holding.clone()))
+                })
+                .collect()
+        });
+        for holding in taken {
+            info!("[{PALW_PANEL}] root fetch: took a bundle into the holdings — the seat proves it next tick");
+            self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").push(holding);
+        }
+    }
+
     async fn readiness_duties_for_tick(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,

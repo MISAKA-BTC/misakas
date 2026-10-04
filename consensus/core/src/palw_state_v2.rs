@@ -37570,7 +37570,7 @@ pub struct PalwTransitionExtrasV1 {
     /// [`crate::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1`] below the accepting block's selected parent, set by the processor
     /// past the fence (as `merged_reds` is) where it folds a chain block. `None` by `Default` (below the fence, rehearsals); a fenced
     /// draw with no beacon keeps the seed it had.
-    pub audit_1004_beacon: Option<Hash64>,
+    pub audit_1004_draw_seed_source: Option<Hash64>,
     /// ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every class's
     /// work — where the node computes the shadow; `None` folds no shadow.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
@@ -69880,7 +69880,7 @@ pub(crate) mod tests {
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
-                audit_1004_beacon: None,
+                audit_1004_draw_seed_source: None,
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,
@@ -70137,7 +70137,7 @@ pub(crate) mod tests {
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
-                audit_1004_beacon: None,
+                audit_1004_draw_seed_source: None,
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,

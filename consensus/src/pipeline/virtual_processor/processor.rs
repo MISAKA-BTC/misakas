@@ -2605,7 +2605,7 @@ impl VirtualStateProcessor {
                                         // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
                                         extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
                                         // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
-                                        extras.audit_1004_beacon = self.palw_audit_1004_beacon(ctx.ghostdag_data.selected_parent, point.daa_score);
+                                        extras.audit_1004_draw_seed_source = self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                         extras
                                     },
                                 ) {
@@ -13913,7 +13913,7 @@ impl VirtualStateProcessor {
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
             merged_reds: Default::default(),
-            audit_1004_beacon: None,
+            audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
@@ -14458,7 +14458,7 @@ impl VirtualStateProcessor {
     /// [`kaspa_consensus_core::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1`] below (and including) `selected_parent` — fixed by the
     /// parents the accepting block builds on, so its producer cannot grind it. `None` below the fence and when the chain is shorter
     /// than the depth (the first blocks after genesis keep the seed they had).
-    fn palw_audit_1004_beacon(&self, selected_parent: BlockHash, daa_score: u64) -> Option<kaspa_hashes::Hash64> {
+    fn palw_audit_1004_draw_seed_source(&self, selected_parent: BlockHash, daa_score: u64) -> Option<kaspa_hashes::Hash64> {
         if !self.palw_state_params_v2.as_ref().is_some_and(|params| params.audit_1004_active_at(daa_score)) {
             return None;
         }

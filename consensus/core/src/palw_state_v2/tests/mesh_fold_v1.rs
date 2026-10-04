@@ -504,7 +504,7 @@ fn audit_1004_the_draw_reads_the_beacon_and_not_the_blocks_own_hash() {
         let p = fenced(on);
         let s0 = registry(&p);
         let c = PalwBlockContextV2 { subsidy: SUBSIDY, ..ctx(block_word, 101, block_word) };
-        let extras = PalwTransitionExtrasV1 { audit_1004_beacon: beacon.map(h64), ..mx() };
+        let extras = PalwTransitionExtrasV1 { audit_1004_draw_seed_source: beacon.map(h64), ..mx() };
         let (s, _) = apply_palw_transition_v2_with_extras(&s0, &p, &c, &[], Some(&env), true, false, false, false, &extras).expect("accepted");
         s.mesh_audit_row_v1(&claim).unwrap().assignments.iter().map(|a| (a.auditor, a.ticket)).collect::<Vec<_>>()
     };

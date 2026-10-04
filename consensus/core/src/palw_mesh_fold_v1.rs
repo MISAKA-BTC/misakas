@@ -314,7 +314,7 @@ pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         })
         .collect();
     // **Lane PA, P-F5**: past the fence the seed reads the beacon, not the carrying block's own (grindable) hash.
-    let seed = match builder.extras.audit_1004_beacon.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
+    let seed = match builder.extras.audit_1004_draw_seed_source.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
         Some(beacon) => crate::palw_mesh_v1::palw_mesh_audit_seed_beacon_v1(claim_id, &beacon, &claim.execution_root, ctx.daa_score),
         None => palw_mesh_audit_seed_v1(claim_id, &claim.accepted_block, &claim.execution_root, ctx.daa_score),
     };
