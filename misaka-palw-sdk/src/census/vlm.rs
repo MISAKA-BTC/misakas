@@ -202,7 +202,7 @@ fn admit_at_size(config: &Value, net: &PreflightNetwork, height: u64, max_contex
         // A short fixed sequence of layouts (the commit tile, the output tile, the history tile, the checkpoint interval), the
         // way the IR search narrows: the first refusal is kept when none admits.
         const LAYOUTS: [(u32, Option<u32>, u32, u32); 4] =
-            [(64, None, 32, 64), (64, Some(256), 32, 8), (256, Some(256), 16, 8), (64, Some(64), 16, 1)];
+            [(64, Some(4096), 32, 64), (64, Some(1024), 32, 8), (256, Some(4096), 16, 8), (64, Some(256), 16, 1)];
         let mut first: Option<String> = None;
         for (tile_len, output_tile, h_chunk, checkpoint) in LAYOUTS {
             let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
