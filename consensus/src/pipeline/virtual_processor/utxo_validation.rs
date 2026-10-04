@@ -1021,6 +1021,7 @@ impl VirtualStateProcessor {
                 fs,
                 &ctx.palw_v2_unentitled_blues,
                 &self.palw_round_blocks_of(&ctx.ghostdag_data),
+                self.palw_accounting_v2_tick_subsidy_of(ctx.selected_parent(), header.daa_score),
             )
         });
         let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
@@ -1073,8 +1074,10 @@ impl VirtualStateProcessor {
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
         // expected coinbase must expect the same bytes the body rule already enforced.
-        let own_subsidy = if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
+        let own_subsidy = if (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
+            // ADR-0172: past `palw_accounting_v2` every block declares zero (blocks create no MSK).
+            || self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
         {
             0
         } else {
@@ -1094,6 +1097,7 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_unentitled_blues,
             &ctx.palw_v2_merged_escrow_withheld,
             &self.palw_round_blocks_of(&ctx.ghostdag_data),
+            self.palw_accounting_v2_tick_subsidy_of(ctx.selected_parent(), header.daa_score),
         )?;
 
         // Verify the header pruning point
@@ -1159,6 +1163,8 @@ impl VirtualStateProcessor {
         // ADR-0125: the merged round blocks, threaded to `expected_coinbase_transaction`. Empty
         // where the lane is not open.
         palw_round_blocks: &BlockHashSet,
+        // ADR-0172: the schedule budget of the DAAs this block advanced (0 below `palw_accounting_v2`), threaded to `expected_coinbase_transaction`.
+        palw_tick_subsidy: u64,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -1179,6 +1185,7 @@ impl VirtualStateProcessor {
                 self.palw_state_params_v2.is_some(),
                 palw_merged_escrow_withheld,
                 palw_round_blocks,
+                palw_tick_subsidy,
             )
             .unwrap()
             .tx;
