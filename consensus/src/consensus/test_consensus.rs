@@ -304,6 +304,28 @@ impl TestConsensus {
     /// and only the signature check refuses. The header stage is all this is for: the claim named does not exist on the chain.
     #[allow(dead_code)]
     pub(crate) fn palw_v4_test_receipt_carriage(&self, header: &Header, signed: bool) -> Vec<u8> {
+        self.palw_v4_test_receipt_carriage_for(
+            header,
+            signed,
+            kaspa_hashes::Hash64::from_u64_word(0xFC),
+            0,
+            kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+            500,
+        )
+    }
+
+    /// [`Self::palw_v4_test_receipt_carriage`] for a claim, quantum, beacon and builder fee a TEST supplies — the V4 twin of
+    /// `palw_v3_test_receipt_carriage_for`, so a `PFS4` block can name a claim the chain actually holds.
+    #[allow(dead_code)]
+    pub(crate) fn palw_v4_test_receipt_carriage_for(
+        &self,
+        header: &Header,
+        signed: bool,
+        claim_id: kaspa_hashes::Hash64,
+        quantum_index: u32,
+        beacon_block: kaspa_hashes::Hash64,
+        builder_fee_bps: u16,
+    ) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
         use kaspa_consensus_core::palw_receipt_v4::{
             PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT,
@@ -321,7 +343,6 @@ impl TestConsensus {
                 vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
             }
         };
-        let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
         let executor_bond =
             kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0);
         let builder_bond =
@@ -334,7 +355,7 @@ impl TestConsensus {
             quantum_lo: 0,
             quantum_hi: 4,
             beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
-            builder_fee_bps: 500,
+            builder_fee_bps,
             expiry_daa: u64::MAX,
         };
         let authorization_signature = sign(redeem_auth_id_v4(&authorization).as_byte_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT);
@@ -347,13 +368,13 @@ impl TestConsensus {
                 header.timestamp,
                 header.nonce,
                 claim_id,
-                0,
+                quantum_index,
                 &executor_bond,
                 &builder_bond,
             ),
             claim_id,
-            quantum_index: 0,
-            beacon_block: kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+            quantum_index,
+            beacon_block,
             executor_bond,
             builder_bond,
             builder_pubkey: Self::palw_v2_harness_pubkey(),
