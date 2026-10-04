@@ -356,7 +356,10 @@ fn text_stage(name: &str, stream_key: &str) {
             let fl = sess.run(&stream).expect("float LM, 1-D positions");
             let r1 = rel(&fl.concat().iter().map(|x| *x as f64).collect::<Vec<_>>(), &rows_of(&rec[stream_key]).concat());
             eprintln!("{name} control: the float LM with 1-D positions vs HF: rel {r1:.2e}");
-            assert!(r1 > 0.05, "{name}: the fixture barely exercises M-RoPE (rel {r1} with 1-D positions)");
+            // Qwen3.5 rotates a quarter of a head in its one attention layer (the other is Gated DeltaNet): M-RoPE moves
+            // its logits less, still 10^5 times the float LM's own error against HF.
+            let floor = if name == "qwen3_5" { 0.02 } else { 0.05 };
+            assert!(r1 > floor, "{name}: the fixture barely exercises M-RoPE (rel {r1} with 1-D positions)");
         }
     }
     // 2. Calibration: the prompt with the float tower's rows for random images and a random
@@ -461,7 +464,10 @@ fn text_stage(name: &str, stream_key: &str) {
         let r = rel(&all, &hf.concat());
         eprintln!("{name} integer text stage vs HF, teacher-forced: logits rel {r:.2e}");
         // Well inside the 1-D-position control's error: the integer positions are HF's.
-        assert!(r < 0.03, "{name}: integer logits rel {r}");
+        // Qwen3.5's Gated DeltaNet layer carries its recurrent state through the integer path's own rounding: the logits' rel
+        // error is the hybrid's (its text-only fidelity class), still below the 1-D-position control's (≈ 4–6 % here).
+        let ceiling = if name == "qwen3_5" { 0.04 } else { 0.03 };
+        assert!(r < ceiling, "{name}: integer logits rel {r}");
         for (row, want_row) in tf.output.data.chunks(v).zip(&hf) {
             let got_row: Vec<f64> = row.iter().map(|c| *c as f64 * mat.logits_scale).collect();
             kl_sum += kl(want_row, &got_row);
@@ -689,4 +695,14 @@ fn the_out_major_tower_computes_the_default_tower_s_integers() {
         assert_eq!(outs[0].0, outs[1].0, "{name}: the out-major tower's integers are the default tower's");
         eprintln!("{name}: out-major tower = default tower on {} images", fx.images.len());
     }
+}
+
+#[test]
+fn qwen3_5_tower_with_its_resampled_position_table_matches_its_hf_fixture() {
+    check_tower("qwen3_5", "image_rows");
+}
+
+#[test]
+fn qwen3_5_generates_hf_s_greedy_ids_through_the_text_pipeline() {
+    text_stage("qwen3_5", "logits");
 }

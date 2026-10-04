@@ -43,6 +43,8 @@ pack!(
     "qwen2-vl-vision-in-vlm",
     "qwen2-5-vl-vision",
     "qwen2-5-vl-vision-in-vlm",
+    "qwen3-5-vision",
+    "qwen3-5-vision-in-vlm",
     "llava-vision",
     "resnet",
     "convnext",

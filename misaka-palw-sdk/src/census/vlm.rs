@@ -66,7 +66,7 @@ pub fn vlm_stages_v1(config: &Value, max_context: u32, size: (u32, u32)) -> Resu
         .and_then(Value::as_u64)
         .ok_or("the configuration names no image placeholder id (image_token_id / image_token_index)")? as u32;
     let mt = config.get("model_type").and_then(Value::as_str).unwrap_or("");
-    let mrope = if matches!(mt, "qwen2_vl" | "qwen2_5_vl") {
+    let mrope = if matches!(mt, "qwen2_vl" | "qwen2_5_vl" | "qwen3_5" | "qwen3_5_moe") {
         let vc = &config["vision_config"];
         let patch = vc.get("patch_size").and_then(Value::as_u64).unwrap_or(14) as u32;
         let merge = vc.get("spatial_merge_size").and_then(Value::as_u64).unwrap_or(2) as u32;
