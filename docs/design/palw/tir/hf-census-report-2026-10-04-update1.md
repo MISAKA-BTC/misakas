@@ -185,4 +185,4 @@ declared pipeline class judged by the pipeline admission at the profile's ceilin
 **The int-12 candidate has the same preflight bugs.** `0b1c11b87` (rcore/int-12) still lays out at the flag day's height and lowers
 at the history bound. Branch `fix/int12-preflight-height` (3 commits on `0b1c11b87`, SDK only: `misaka-palw-sdk/src/preflight/
 {chain,model}.rs`, `tir_layout.rs`) builds `palw-class` and `misaka-cli`, its `tir_layout` tests pass, and its `palw-class preflight`
-admits Qwen/Qwen3-4B at 8,192 on testnet-12 (`admission v10: admitted`, logits tile 256, history tile 32) where `0b1c11b87` refuses.
+admits Qwen/Qwen3-4B at 8,192 on testnet-12 (`admission v10: admitted`, logits tile 256, history tile 32); the same code path at this branch's base refused it in the census (`ADMISSION_EXCEEDS(max_state_bytes)`).
