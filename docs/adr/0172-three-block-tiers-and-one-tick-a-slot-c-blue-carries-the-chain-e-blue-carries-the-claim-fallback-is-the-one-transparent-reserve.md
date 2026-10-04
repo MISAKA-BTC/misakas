@@ -347,7 +347,7 @@ Identity does not move (peering continues until F), the params id and schedule i
 
 ## 11. Allocations (lane AC, appended to `lanes/COMMON.md`)
 
-ADR 0172; pow algo id 12; state deltas 130–133; carriage tail `0xC8`; `DatabaseStorePrefixes` 130–131 (reserved); no object tags. Fence
+ADR 0172; pow algo id 12; state deltas 130–133; carriage tail `0xF1`; `DatabaseStorePrefixes` 130–131 (reserved); no object tags. Fence
 `palw_accounting_v2`. Spec: [`docs/design/palw/consensus-accounting-v2-spec.md`](../design/palw/consensus-accounting-v2-spec.md).
 
 ## 12. What is built (dormant) and what is not
