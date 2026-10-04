@@ -127,9 +127,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
             Position::None => None,
             Position::Rope(r) => {
                 if r.style != crate::rope::RopeStyle::Half || r.rotary_dim != at.head_dim || r.offset != 0 {
-                    return bad(
-                        "a rotary position other than rotate_half over the whole head (partial or interleaved rope in a bidirectional encoder is not lowered)",
-                    );
+                    return bad("a rotary position other than rotate_half over the whole head (partial or interleaved rope in a bidirectional encoder is not lowered)");
                 }
                 Some(r.clone())
             }
@@ -151,9 +149,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
             || at.sparse.is_some()
             || at.param_prefix.is_some()
         {
-            return bad(
-                "an attention feature (soft-cap, q/k/v clipping, chunks, temperature, v-norm, gate, KV sharing, sparse blocks) this lowering does not read",
-            );
+            return bad("an attention feature (soft-cap, q/k/v clipping, chunks, temperature, v-norm, gate, KV sharing, sparse blocks) this lowering does not read");
         }
         let Ffn::Mlp(mlp) = &first.ffn else { return bad("an FFN other than a dense MLP") };
         let place = match &first.residual {
@@ -198,9 +194,7 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
     // A factorised embedding is read only as ALBERT's: projection after the norm.
     let factorised = e.proj_in && e.proj_after_norm && e.dim != spec.hidden_size && e.norm.is_some();
     if (e.proj_in != factorised) || (e.dim != spec.hidden_size && !factorised) || e.scale != 1.0 {
-        return bad(
-            "an embedding of another width than the hidden size without a projection after its norm (OPT's project_in first), or an embedding scale: this lowering reads the plain BERT embedding and ALBERT's factorised one",
-        );
+        return bad("an embedding of another width than the hidden size without a projection after its norm (OPT's project_in first), or an embedding scale: this lowering reads the plain BERT embedding and ALBERT's factorised one");
     }
     if e.positions.is_none() && e.disentangled.is_none() && layers.iter().all(|l| l.rope.is_none()) {
         return bad("no positions: neither a learned position table, a rotary position nor relative-position embeddings");
@@ -343,16 +337,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
     let fills = cx.fills;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered {
-        program,
-        fills,
-        row_params: cx.row_params,
-        resid_sites,
-        logits_key,
-        block_map,
-        site_nodes: cx.site_nodes,
-        budget_fallbacks: vec![],
-    })
+    Ok(Lowered { program, fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
 }
 
 /// A value of this lowering: `[L, n]` (or `[1, n]`) rows.
@@ -447,8 +432,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let word = narrow(&mut b, row, mt, st, None, DType::I32);
             // Position rows `offset + i` plus the token-type row 0, one param at the residual scale (a rotary encoder
             // has no position table: its rows are the token-type row alone, or nothing).
-            let (pp, tp2) =
-                (if a.has_positions { Some(hl_param(hl, "embed.pos_table")?) } else { None }, hl_param(hl, "embed.type_table").ok());
+            let (pp, tp2) = (if a.has_positions { Some(hl_param(hl, "embed.pos_table")?) } else { None }, hl_param(hl, "embed.type_table").ok());
             let off = a.pos_offset;
             let lr = l as usize;
             let sum = if pp.is_none() && tp2.is_none() {
@@ -475,8 +459,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                         let mut v = Vec::with_capacity(lr * cols);
                         for i in 0..lr {
                             for j in 0..cols {
-                                let x = p.as_ref().map_or(0.0, |p| p.data[(off + i) * cols + j] as f64)
-                                    + t.as_ref().map_or(0.0, |t| t.data[j] as f64);
+                                let x = p.as_ref().map_or(0.0, |p| p.data[(off + i) * cols + j] as f64) + t.as_ref().map_or(0.0, |t| t.data[j] as f64);
                                 v.push((x / sr).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32);
                             }
                         }
@@ -491,40 +474,11 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let normed = match (a.embed_norm, a.proj_in) {
                 (Some(n), Some(pb)) => {
                     // ALBERT: the normed row at the table's width, as codes, lifted by the projection.
-                    let c = norm_rows_kind(
-                        &mut b,
-                        cx,
-                        &mut lb,
-                        &sum,
-                        n.kind,
-                        n.eps,
-                        "embed.norm",
-                        n.bias,
-                        &Want { dt: DType::I16, key: site_key("embed.norm") },
-                    )?;
+                    let c = norm_rows_kind(&mut b, cx, &mut lb, &sum, n.kind, n.eps, "embed.norm", n.bias, &Want { dt: DType::I16, key: site_key("embed.norm") })?;
                     note_site(cx, tb, &c);
-                    linear_rows(
-                        &mut b,
-                        cx,
-                        &mut lb,
-                        &c,
-                        "embed.proj_in.w",
-                        pb.then_some("embed.proj_in.b"),
-                        "embed.proj_in",
-                        &Want { dt: DType::I32, key: resid.clone() },
-                    )?
+                    linear_rows(&mut b, cx, &mut lb, &c, "embed.proj_in.w", pb.then_some("embed.proj_in.b"), "embed.proj_in", &Want { dt: DType::I32, key: resid.clone() })?
                 }
-                (Some(n), None) => norm_rows_kind(
-                    &mut b,
-                    cx,
-                    &mut lb,
-                    &sum,
-                    n.kind,
-                    n.eps,
-                    "embed.norm",
-                    n.bias,
-                    &Want { dt: DType::I32, key: resid.clone() },
-                )?,
+                (Some(n), None) => norm_rows_kind(&mut b, cx, &mut lb, &sum, n.kind, n.eps, "embed.norm", n.bias, &Want { dt: DType::I32, key: resid.clone() })?,
                 (None, _) => sum,
             };
             b.commit(normed.r);
@@ -539,9 +493,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let (h, dh) = (la.heads, la.head_dim);
             // The attention's input codes: the pre-norm's output, or the residual stream's own codes (post-LN).
             let xc = match la.place {
-                Place::Pre { mix: Some(n), .. } => {
-                    norm_rows_kind(&mut b, cx, &mut lb, &x, n.kind, n.eps, "norm.mix", n.bias, &codes_want("norm.mix"))?
-                }
+                Place::Pre { mix: Some(n), .. } => norm_rows_kind(&mut b, cx, &mut lb, &x, n.kind, n.eps, "norm.mix", n.bias, &codes_want("norm.mix"))?,
                 _ => codes_rows(&mut b, cx, &mut lb, &x)?,
             };
             // The rotary tables: cos and sin per position, Q24, `[1, L, dh]` (the half repeated), one pair per layer kind.
@@ -570,26 +522,9 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 None => None,
             };
             // q, k, v: codes [L, d], committed head-major [h, L, dh] (one head's K/V is whole leaves), q and k rotated.
-            let heads_of = |b: &mut BlockBuilder<'_>,
-                            cx: &mut Cx<'_>,
-                            lb: &mut Lb,
-                            name: &str,
-                            bias: bool,
-                            rotate: bool,
-                            slot: &mut Option<tir::Ref>|
-             -> Result<Val> {
+            let heads_of = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, name: &str, bias: bool, rotate: bool, slot: &mut Option<tir::Ref>| -> Result<Val> {
                 let bn = format!("{name}.b");
-                let v = linear_rows_shared(
-                    b,
-                    cx,
-                    lb,
-                    &xc,
-                    &format!("{name}.w"),
-                    if bias { Some(bn.as_str()) } else { None },
-                    name,
-                    &Want { dt: DType::I16, key: site_key(name) },
-                    slot,
-                )?;
+                let v = linear_rows_shared(b, cx, lb, &xc, &format!("{name}.w"), if bias { Some(bn.as_str()) } else { None }, name, &Want { dt: DType::I16, key: site_key(name) }, slot)?;
                 let r = b.reshape_fixed(v.r, &[l, h, dh]);
                 let mut r = b.transpose(r, &[1, 0, 2]);
                 if let (true, Some((cos, sin))) = (rotate, rope_tabs) {
@@ -631,11 +566,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // products with q (content to position) and k (position to content) are read at the bucket of (i − j).
             if let Some(dis) = a.dis {
                 let (span2, lu) = (2 * dis.span, l as usize);
-                let (tp, gp, bp) = (
-                    hl_param(hl, "rel.table")?,
-                    dis.norm.map(|_| hl_param(hl, "rel.norm.gain")).transpose()?,
-                    if dis.norm.is_some_and(|n| n.bias) { Some(hl_param(hl, "rel.norm.bias")?) } else { None },
-                );
+                let (tp, gp, bp) = (hl_param(hl, "rel.table")?, dis.norm.map(|_| hl_param(hl, "rel.norm.gain")).transpose()?, if dis.norm.is_some_and(|n| n.bias) { Some(hl_param(hl, "rel.norm.bias")?) } else { None });
                 let rel_key = site_key("rel.rows");
                 let rk = rel_key.clone();
                 let rel_rows = decl(
@@ -670,38 +601,16 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                     }),
                 )?;
                 let relv = rows_val(rel_rows, DType::I16, rel_key, d, "rel.rows");
-                let ids: Vec<u32> =
-                    (0..lu).flat_map(|i| (0..lu).map(move |j| deberta_index(i, j, dis.span, dis.max_position) as u32)).collect();
-                let idx = decl(
-                    &mut b,
-                    cx,
-                    &lb,
-                    "attn.rel_index",
-                    DType::Idx,
-                    &[lu, lu],
-                    false,
-                    Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))),
-                )?;
+                let ids: Vec<u32> = (0..lu).flat_map(|i| (0..lu).map(move |j| deberta_index(i, j, dis.span, dis.max_position) as u32)).collect();
+                let idx = decl(&mut b, cx, &lb, "attn.rel_index", DType::Idx, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))))?;
                 let idx = b.clamp(idx, 0, span2 as i64 - 1, DType::Idx); // admission proves the gather's range from the clamp
                 let mut terms: Vec<tir::Ref> = Vec::new();
-                for (c2p, name, slot, bias, side) in
-                    [(true, "attn.pos_k", &mut kslot, la.bias[1], &q), (false, "attn.pos_q", &mut qslot, la.bias[0], &k)]
-                {
+                for (c2p, name, slot, bias, side) in [(true, "attn.pos_k", &mut kslot, la.bias[1], &q), (false, "attn.pos_q", &mut qslot, la.bias[0], &k)] {
                     if (c2p && !dis.c2p) || (!c2p && !dis.p2c) {
                         continue;
                     }
                     let (wname, bname) = if c2p { ("attn.k.w", "attn.k.b") } else { ("attn.q.w", "attn.q.b") };
-                    let pos = linear_rows_shared(
-                        &mut b,
-                        cx,
-                        &mut lb,
-                        &relv,
-                        wname,
-                        bias.then_some(bname),
-                        name,
-                        &Want { dt: DType::I16, key: site_key(name) },
-                        slot,
-                    )?;
+                    let pos = linear_rows_shared(&mut b, cx, &mut lb, &relv, wname, bias.then_some(bname), name, &Want { dt: DType::I16, key: site_key(name) }, slot)?;
                     let pr = b.reshape_fixed(pos.r, &[span2 as u32, h, dh]);
                     let pt = b.transpose(pr, &[1, 2, 0]); // [h, dh, 2s]
                     // c2p: q [h, L, dh] · pos_k; p2c: k [h, L, dh] · pos_q — both [h, L, 2s].
@@ -709,14 +618,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                     let acc = b.matmul(operand, pt, DType::I64);
                     let (ko, kp, scl) = (side.key.clone(), pos.key.clone(), la.scale);
                     let site = if c2p { "attn.c2p" } else { "attn.p2c" };
-                    let (m, sh) = decl_ms(
-                        &mut b,
-                        cx,
-                        &lb,
-                        site,
-                        1,
-                        Arc::new(move |cc| Ok(vec![cc.scale(&ko)? * cc.scale(&kp)? * scl * (1u64 << LOGIT_Q) as f64])),
-                    )?;
+                    let (m, sh) = decl_ms(&mut b, cx, &lb, site, 1, Arc::new(move |cc| Ok(vec![cc.scale(&ko)? * cc.scale(&kp)? * scl * (1u64 << LOGIT_Q) as f64])))?;
                     let prod = narrow(&mut b, acc, m, sh, None, DType::I32);
                     b.commit(prod);
                     let by_row = b.transpose(prod, &[1, 0, 2]); // [L, h, 2s], the rows (i for c2p, j for p2c) the gather is batched over
@@ -752,29 +654,15 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                         let t = c.f(tp)?;
                         Ok(IntTensor::i32(
                             vec![nb, hh],
-                            t.data
-                                .iter()
-                                .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
-                                .collect(),
+                            t.data.iter().map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect(),
                         ))
                     }),
                 )?;
                 let lu = l as usize;
                 let ids: Vec<u32> = (0..lu)
-                    .flat_map(|i| {
-                        (0..lu).map(move |j| super::encdec::t5_bucket(j as i64 - i as i64, true, rb.buckets, rb.max_distance) as u32)
-                    })
+                    .flat_map(|i| (0..lu).map(move |j| super::encdec::t5_bucket(j as i64 - i as i64, true, rb.buckets, rb.max_distance) as u32))
                     .collect();
-                let bk = decl(
-                    &mut b,
-                    cx,
-                    &lb,
-                    "attn.buckets",
-                    DType::Idx,
-                    &[lu, lu],
-                    false,
-                    Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))),
-                )?;
+                let bk = decl(&mut b, cx, &lb, "attn.buckets", DType::Idx, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::idx(vec![lu, lu], ids.clone()))))?;
                 let bk = b.clamp(bk, 0, nb as i64 - 1, DType::Idx);
                 let bias = b.gather(table, bk, 0, 0); // [L, L, h]
                 let bias = b.transpose(bias, &[2, 0, 1]);
@@ -794,14 +682,8 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // A sliding window of a bidirectional encoder: the band `|i − j| < w` (`i < j + w` and `j < i + w`).
             if let Some(w) = la.band {
                 let w = w as i64;
-                let (ri, rj) = (
-                    b.iota(DType::Idx, &[Dim::Fixed(l), Dim::Fixed(1)], 0, 0, 1),
-                    b.iota(DType::Idx, &[Dim::Fixed(1), Dim::Fixed(l)], 1, 0, 1),
-                );
-                let (riw, rjw) = (
-                    b.iota(DType::Idx, &[Dim::Fixed(l), Dim::Fixed(1)], 0, w, 1),
-                    b.iota(DType::Idx, &[Dim::Fixed(1), Dim::Fixed(l)], 1, w, 1),
-                );
+                let (ri, rj) = (b.iota(DType::Idx, &[Dim::Fixed(l), Dim::Fixed(1)], 0, 0, 1), b.iota(DType::Idx, &[Dim::Fixed(1), Dim::Fixed(l)], 1, 0, 1));
+                let (riw, rjw) = (b.iota(DType::Idx, &[Dim::Fixed(l), Dim::Fixed(1)], 0, w, 1), b.iota(DType::Idx, &[Dim::Fixed(1), Dim::Fixed(l)], 1, w, 1));
                 let near_hi = b.compare(ri, rjw, tir::Cmp::Lt);
                 let near_lo = b.compare(rj, riw, tir::Cmp::Lt);
                 masked = b.select(near_hi, masked, neg, DType::I32);
@@ -837,17 +719,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             // Post-LN normalises the sum; pre-norm keeps the stream and normalises the FFN's input.
             let (x1, n2) = match la.place {
                 Place::Post { mix, .. } => {
-                    let x1 = norm_rows_kind(
-                        &mut b,
-                        cx,
-                        &mut lb,
-                        &r1,
-                        mix.kind,
-                        mix.eps,
-                        "norm.mix",
-                        mix.bias,
-                        &Want { dt: DType::I32, key: resid.clone() },
-                    )?;
+                    let x1 = norm_rows_kind(&mut b, cx, &mut lb, &r1, mix.kind, mix.eps, "norm.mix", mix.bias, &Want { dt: DType::I32, key: resid.clone() })?;
                     b.commit(x1.r);
                     note_resid(cx, &lb, &x1);
                     note_site(cx, tb, &x1);
@@ -859,9 +731,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                         b.commit(r1.r);
                     }
                     let c = match ffn {
-                        Some(n) => {
-                            norm_rows_kind(&mut b, cx, &mut lb, &r1, n.kind, n.eps, "norm.ffn", n.bias, &codes_want("norm.ffn"))?
-                        }
+                        Some(n) => norm_rows_kind(&mut b, cx, &mut lb, &r1, n.kind, n.eps, "norm.ffn", n.bias, &codes_want("norm.ffn"))?,
                         None => codes_rows(&mut b, cx, &mut lb, &r1)?,
                     };
                     (r1.clone(), c)
@@ -870,29 +740,13 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let ub = la.up_bias.then_some("mlp.up.b");
             let inter = hl.params[hl_param(hl, "mlp.down.w")? as usize].shape[1];
             let hidden = if la.gated {
-                let gate = linear_rows(
-                    &mut b,
-                    cx,
-                    &mut lb,
-                    &n2,
-                    "mlp.gate.w",
-                    ub.map(|_| "mlp.gate.b"),
-                    "mlp.gate",
-                    &codes_want("mlp.gate"),
-                )?;
+                let gate = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.gate.w", ub.map(|_| "mlp.gate.b"), "mlp.gate", &codes_want("mlp.gate"))?;
                 let ga = lower_table_named(&mut b, cx, &mut lb, &gate, TableFn::Act(la.act), "mlp.gate_act")?;
                 let up = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", ub, "mlp.up", &codes_want("mlp.up"))?;
                 let prod = b.mul(ga.r, up.r, DType::I32);
                 let pk = site_key("mlp.prod");
                 let (ka, ku, kp) = (ga.key.clone(), up.key.clone(), pk.clone());
-                let (m, sh) = decl_ms(
-                    &mut b,
-                    cx,
-                    &lb,
-                    "mlp.prod",
-                    1,
-                    Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kp)?])),
-                )?;
+                let (m, sh) = decl_ms(&mut b, cx, &lb, "mlp.prod", 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kp)?])))?;
                 let r = narrow(&mut b, prod, m, sh, None, DType::I16);
                 b.commit(r);
                 let pv = rows_val(r, DType::I16, pk, inter, "mlp.prod");
@@ -905,24 +759,13 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 act
             };
             let db = la.down_bias.then_some("mlp.down.b");
-            let down =
-                linear_rows(&mut b, cx, &mut lb, &hidden, "mlp.down.w", db, "mlp.down", &Want { dt: DType::I32, key: resid.clone() })?;
+            let down = linear_rows(&mut b, cx, &mut lb, &hidden, "mlp.down.w", db, "mlp.down", &Want { dt: DType::I32, key: resid.clone() })?;
             let r2 = add_rows(&mut b, cx, &lb, &x1, &down, "resid.ffn")?;
             if resid_commit_needed(l, d, inter) {
                 b.commit(r2.r);
             }
             let out = match la.place {
-                Place::Post { ffn, .. } => norm_rows_kind(
-                    &mut b,
-                    cx,
-                    &mut lb,
-                    &r2,
-                    ffn.kind,
-                    ffn.eps,
-                    "norm.ffn",
-                    ffn.bias,
-                    &Want { dt: DType::I32, key: resid.clone() },
-                )?,
+                Place::Post { ffn, .. } => norm_rows_kind(&mut b, cx, &mut lb, &r2, ffn.kind, ffn.eps, "norm.ffn", ffn.bias, &Want { dt: DType::I32, key: resid.clone() })?,
                 Place::Pre { .. } => r2,
             };
             note_resid(cx, &lb, &out);
@@ -933,17 +776,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let x = rows_val(tir::Ref::CarryIn(0), DType::I32, resid.clone(), d, "carry0");
             let x = match a.final_norm {
                 Some(n) => {
-                    let v = norm_rows_kind(
-                        &mut b,
-                        cx,
-                        &mut lb,
-                        &x,
-                        n.kind,
-                        n.eps,
-                        "final_norm",
-                        n.bias,
-                        &Want { dt: DType::I32, key: resid.clone() },
-                    )?;
+                    let v = norm_rows_kind(&mut b, cx, &mut lb, &x, n.kind, n.eps, "final_norm", n.bias, &Want { dt: DType::I32, key: resid.clone() })?;
                     b.commit(v.r);
                     note_resid(cx, &lb, &v);
                     note_site(cx, tb, &v);
@@ -1396,11 +1229,7 @@ pub fn float_forward(
     let mut x: Vec<Vec<f64>> = (0..l)
         .map(|i| {
             (0..ed)
-                .map(|j| {
-                    word[seq.ids[i] * ed + j]
-                        + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * ed + j])
-                        + typ.as_ref().map_or(0.0, |t| t[j])
-                })
+                .map(|j| word[seq.ids[i] * ed + j] + pos.as_ref().map_or(0.0, |p| p[(a.pos_offset + i) * ed + j]) + typ.as_ref().map_or(0.0, |t| t[j]))
                 .collect()
         })
         .collect();
@@ -1434,11 +1263,7 @@ pub fn float_forward(
             }
             _ => x.clone(),
         };
-        let (mut q, mut k, v) = (
-            proj("attn.q", &xin, h * dh, la.bias[0])?,
-            proj("attn.k", &xin, h * dh, la.bias[1])?,
-            proj("attn.v", &xin, h * dh, la.bias[2])?,
-        );
+        let (mut q, mut k, v) = (proj("attn.q", &xin, h * dh, la.bias[0])?, proj("attn.k", &xin, h * dh, la.bias[1])?, proj("attn.v", &xin, h * dh, la.bias[2])?);
         // The site's scale covers the values before and after the rotation.
         observe(format!("{pre}attn.q"), &q[..n_real]);
         observe(format!("{pre}attn.k"), &k[..n_real]);
@@ -1549,8 +1374,7 @@ pub fn float_forward(
         let hidden: Vec<Vec<f64>> = if la.gated {
             let gate = proj("mlp.gate", &ffn_in, inter, la.up_bias)?;
             observe(format!("{pre}mlp.gate"), &gate[..n_real]);
-            let ga: Vec<Vec<f64>> =
-                gate.iter().map(|r| r.iter().map(|v| crate::float_ref::act(la.act, *v as f32) as f64).collect()).collect();
+            let ga: Vec<Vec<f64>> = gate.iter().map(|r| r.iter().map(|v| crate::float_ref::act(la.act, *v as f32) as f64).collect()).collect();
             observe(format!("{pre}mlp.gate_act"), &ga[..n_real]);
             let up = proj("mlp.up", &ffn_in, inter, la.up_bias)?;
             observe(format!("{pre}mlp.up"), &up[..n_real]);
@@ -1560,8 +1384,7 @@ pub fn float_forward(
         } else {
             let up = proj("mlp.up", &ffn_in, inter, la.up_bias)?;
             observe(format!("{pre}mlp.up"), &up[..n_real]);
-            let act: Vec<Vec<f64>> =
-                up.iter().map(|r| r.iter().map(|v| crate::float_ref::act(la.act, *v as f32) as f64).collect()).collect();
+            let act: Vec<Vec<f64>> = up.iter().map(|r| r.iter().map(|v| crate::float_ref::act(la.act, *v as f32) as f64).collect()).collect();
             observe(format!("{pre}mlp.act"), &act[..n_real]);
             act
         };
