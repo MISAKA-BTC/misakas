@@ -675,7 +675,8 @@ fn tir_sizing_work_probe_v1(class: &PalwTirClassV1, program: &TirProgramV1) {
     };
     let sizing = z::PalwTirCloseSizingV1 { form: z::PalwTirParamFormV1::Multiproof, court: true, cap: u64::MAX / 4, stop_above: None };
     let t = std::time::Instant::now();
-    let range = kaspa_consensus_core::palw_tir_close_range_v1::palw_tir_worst_closes_range_work_v1(&space, &inventory, &deepest, &sizing);
+    let range =
+        kaspa_consensus_core::palw_tir_close_range_v1::palw_tir_worst_closes_range_work_v1(&space, &inventory, &deepest, &sizing);
     eprintln!(
         "sizing-probe: range twin work {:?} in {:?}; worst close {:?}",
         range.as_ref().map(|(_, w)| *w),
