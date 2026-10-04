@@ -3119,6 +3119,12 @@ mod rfc9_sighash_audit {
         kaspa_txscript::verify_mldsa87_with_context(&pubkey, h.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT).unwrap_or(false)
     }
 
+    fn fresh_id(tx: &Transaction) -> Hash64 {
+        let mut c = tx.clone();
+        c.finalize();
+        c.id()
+    }
+
     fn built() -> (Transaction, UtxoEntry, ValidatorKey) {
         let k = key();
         let (op, entry) = funding(&k);
@@ -3185,7 +3191,7 @@ mod rfc9_sighash_audit {
     #[test]
     fn the_transaction_id_does_not_depend_on_the_signature_script_so_resending_is_idempotent() {
         let (tx, entry, k) = built();
-        let id = tx.id();
+        let id = fresh_id(&tx);
         // A different (equally valid) signature over the same sighash: ML-DSA signing is hedged, so the bytes differ.
         let h = sighash(&tx, &entry);
         let mut other_sig = k.sign_with_context(h.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
@@ -3199,11 +3205,11 @@ mod rfc9_sighash_audit {
             .drain();
         assert_ne!(resigned.inputs[0].signature_script, tx.inputs[0].signature_script);
         assert!(verifies(&resigned, &entry));
-        assert_eq!(resigned.id(), id, "the id is the same: a relay re-signing or re-encoding cannot mint another identity");
+        assert_eq!(fresh_id(&resigned), id, "the id is the same: a relay re-signing or re-encoding cannot mint another identity");
         // And what a relay CAN change without touching the signed fields — the script bytes — is exactly what the id ignores.
         let mut garbage = tx.clone();
         garbage.inputs[0].signature_script[10] ^= 0xFF;
-        assert_eq!(garbage.id(), id);
+        assert_eq!(fresh_id(&garbage), id);
         assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
     }
 }
