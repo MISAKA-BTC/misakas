@@ -155,6 +155,12 @@ pub struct CensusRowV1 {
     /// The content identity of the selected weights (the inventory's LFS ids).
     pub weights_identity: Option<String>,
     pub weights_bytes: Option<u64>,
+    /// **A chat model's other stages under the dormant RFC-0003 fences** (`palw_gen_v1`'s `Text` profile with an image slot, FP Job
+    /// V5's `palw_fp_job_v5`): the vision tower of `vision_config`, read, lowered shape-only and admitted stage-alone
+    /// (`probe_data_route`, `tir_admit_program_v2` at default inputs). Not the pipeline admission and not the job lane, which are
+    /// dormant: a measurement of what the fences would have to carry, never counted as shape-ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_stage_probe: Option<serde_json::Value>,
     pub ruleset: RulesetV1,
 }
 
@@ -670,6 +676,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     let mut lower_evidence: Vec<String> = Vec::new();
     let mut route_needs_weights = false;
     let mut needs_tensor_data: Option<String> = None;
+    let mut image_stage_probe: Option<serde_json::Value> = None;
     let mut context: Option<ContextV1> = None;
     let mut admit_retry: Option<GateResultV1> = None;
     if let Some(fx) = fetched
@@ -684,6 +691,11 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         needs_tensor_data = cs.needs_tensor_data.clone();
                     }
                     Ok(cs) => {
+                        if task.profile == Profile::PartialTextStage
+                            && let Some(vc) = cs.source.config.as_ref().and_then(|c| c.get("vision_config")).filter(|v| v.is_object())
+                        {
+                            image_stage_probe = Some(misaka_palw_tir_lower::model::route::probe_data_route(vc, None, None));
+                        }
                         let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
                         match r {
                             Ok(r) => report = Some(r),
@@ -957,6 +969,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         shape_ready_at_retry,
         weights_identity,
         weights_bytes,
+        image_stage_probe,
         ruleset: ctx.ruleset.clone(),
     }
 }
