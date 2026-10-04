@@ -971,21 +971,30 @@ impl VirtualStateProcessor {
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
             self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
         );
-        kaspa_pow::palw_admission::check_palw_block_admission_v1(
-            header,
-            selected_parent_bond_view,
-            |class_id| self.palw_class_facts_for_block(class_id, header),
-            // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
-            self.genesis.hash.as_bytes().as_slice(),
-            commitment_bound,
-            attempt_lane,
-            // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
-            // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
-            |key, message, signature, context| {
-                kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
-            },
-        )
-        .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
+        // ADR-0172: at or past `palw_accounting_v2` an algo-8 header is a FALLBACK — its commitment is an envelope (shape and signature were the header stage's), and it is no
+        // attempt, so the attempt admission below has nothing to say about it. Below the fence this is the call it always was.
+        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
+        {
+            kaspa_consensus_core::palw_fallback_v1::check_algo8_commitment_shape_v1(true, &header.palw_commitment)
+                .map_err(BadPalwCommitmentShape)?;
+        } else {
+            kaspa_pow::palw_admission::check_palw_block_admission_v1(
+                header,
+                selected_parent_bond_view,
+                |class_id| self.palw_class_facts_for_block(class_id, header),
+                // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
+                self.genesis.hash.as_bytes().as_slice(),
+                commitment_bound,
+                attempt_lane,
+                // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
+                // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
+                |key, message, signature, context| {
+                    kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+                },
+            )
+            .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
+        }
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a

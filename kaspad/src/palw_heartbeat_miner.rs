@@ -244,6 +244,11 @@ pub struct PalwHeartbeatMinerConfig {
     pub pay_address: String,
     pub address_prefix: kaspa_addresses::Prefix,
     pub network_id: NetworkId,
+    /// **ADR-0172: the FALLBACK identity** — the operator's bond key file and `<txid>:<index>` (the same `--palw-producer-key` / `--palw-producer-bond`). At or past `palw_accounting_v2`
+    /// an algo-8 block is a FALLBACK and must carry an envelope signed by this key; a miner without one holds there rather than mine blocks every peer refuses. `None` below the
+    /// fence changes nothing.
+    pub fallback_key_path: Option<String>,
+    pub fallback_bond: Option<String>,
     // `enable_unsynced_mining` used to live here, "honoured exactly as the producer honours it" —
     // which was the defect: the sink-age clause it waived should never have applied to the clock
     // at all (see the worker's gate comment, ADR-0068 launch audit). The lane needs no waiver
@@ -256,6 +261,8 @@ pub struct PalwHeartbeatMinerService {
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
     miner_data: Option<MinerData>,
+    /// ADR-0172: the loaded FALLBACK identity (bond, ML-DSA-87 key pair), if the operator gave one.
+    fallback: Option<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>)>,
     /// Fired by `signal_exit` so `start` can finish — the panel's fix, copied here for the same
     /// reason it went into the producer: the ADR-0068 drill's H node hung in `pthread_join` on
     /// SIGTERM with every server already stopped (finding F1).
@@ -272,6 +279,15 @@ pub struct PalwHeartbeatMinerService {
     /// reason, then at most every five minutes, so an unchanging cause cannot bury the line that
     /// explains it.
     last_hold: std::sync::Mutex<Option<(String, std::time::Instant)>>,
+}
+
+/// The 32 bytes ML-DSA-87 signing is randomised with. The envelope's signature is a witness, never identity (the signature is outside the block id's preimage only through the nonce
+/// the message already binds), so any value is valid; a time-seeded one keeps two signatures of one position distinct without reaching for a global RNG.
+fn rand_core_free_randomness() -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    out[..16].copy_from_slice(&now.to_le_bytes());
+    out
 }
 
 impl PalwHeartbeatMinerService {
@@ -301,12 +317,31 @@ impl PalwHeartbeatMinerService {
                 None
             }
         };
+        // ADR-0172: the FALLBACK identity, read once. Both halves or none; a bad half is said and the miner runs without one (it then holds past the fence).
+        let fallback = match (config.fallback_key_path.as_deref(), config.fallback_bond.as_deref()) {
+            (Some(key_path), Some(bond)) => match (kaspa_pq_validator_core::load_validator_seed(key_path), crate::palw_producer::parse_outpoint(bond)) {
+                (Ok(seed), Ok(outpoint)) => Some((
+                    kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                    Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed)),
+                )),
+                (key, bond) => {
+                    warn!(
+                        "[{PALW_HEARTBEAT}] the FALLBACK identity is unusable (key: {:?}, bond: {:?}) — this miner will hold at or past palw_accounting_v2",
+                        key.err().map(|e| e.to_string()),
+                        bond.err()
+                    );
+                    None
+                }
+            },
+            _ => None,
+        };
         Self {
             config,
             consensus_manager,
             mining_manager,
             flow_context,
             miner_data,
+            fallback,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
             yield_budget: std::sync::Mutex::new(HeartbeatYieldBudget::new()),
             last_hold: std::sync::Mutex::new(None),
@@ -570,6 +605,17 @@ impl PalwHeartbeatMinerService {
         // still has the parents this template was built on. A rival beat for the same slot, or the
         // step that opens the next one, moves the virtual — and a beat finished against the old
         // parents would be one that loses the race, gets relayed and ticks nothing.
+        // **ADR-0172: at or past `palw_accounting_v2` this beat is a FALLBACK** — it needs the operator's identity to sign its envelope, and holds without one.
+        let fallback_active = self.flow_context.config.params.palw_accounting_v2_active_at(template.block.header.daa_score);
+        if fallback_active && self.fallback.is_none() {
+            self.say_hold(Some(
+                "palw_accounting_v2 is in force: an algo-8 block is a FALLBACK and carries an envelope signed by a bond — give this node --palw-producer-key and \
+                 --palw-producer-bond (the miner holds rather than mine blocks every peer refuses)"
+                    .to_string(),
+            ));
+            self.tick(std::time::Duration::from_millis(MAX_WAIT_MS)).await;
+            return Ok(PassOutcomeV1::Waited);
+        }
         let header0 = template.block.header.clone();
         let network_id = self.config.network_id;
         let parents: kaspa_consensus_core::BlockHashSet = header0.direct_parents().iter().copied().collect();
@@ -600,6 +646,36 @@ impl PalwHeartbeatMinerService {
             GrindOutcomeV1::Shutdown => return Ok(PassOutcomeV1::Idle),
         };
         template.block.header.nonce = nonce;
+        // The envelope signs the SOLVED header position (pre-PoW hash, timestamp, nonce, bond) and rides outside the PoW pre-image, so it is attached after the grind.
+        if let (true, Some((bond, keypair))) = (fallback_active, self.fallback.as_ref()) {
+            let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.config.network_id.to_string().as_bytes(),
+                Some(self.flow_context.config.genesis.hash),
+            );
+            let header = &mut template.block.header;
+            let message = kaspa_consensus_core::palw_fallback_v1::palw_fallback_signing_message_v1(
+                domain,
+                kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
+                header.timestamp,
+                header.nonce,
+                bond,
+            );
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &keypair.signing_key,
+                message.as_byte_slice(),
+                kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+                rand_core_free_randomness(),
+            )
+            .map_err(|e| format!("the FALLBACK envelope could not be signed: {e:?}"))?;
+            header.palw_commitment = kaspa_consensus_core::palw_fallback_v1::PalwFallbackEnvelopeV1 {
+                version: kaspa_consensus_core::palw_fallback_v1::PALW_FALLBACK_ENVELOPE_VERSION_V1,
+                network_domain: domain,
+                bond: *bond,
+                pubkey: keypair.verification_key.as_ref().to_vec(),
+                signature: signature.as_ref().to_vec(),
+            }
+            .encode();
+        }
         template.block.header.finalize();
         let role = HeartbeatRoleV1::of(
             template.block.header.daa_score,

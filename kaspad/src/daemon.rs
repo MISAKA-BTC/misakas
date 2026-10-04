@@ -1711,6 +1711,9 @@ Do you confirm? (y/n)";
                     pay_address: pay_address.clone(),
                     address_prefix: config.prefix(),
                     network_id: config.params.net,
+                    // ADR-0172: the FALLBACK identity is the operator's producer bond.
+                    fallback_key_path: args.palw_producer_key.clone(),
+                    fallback_bond: args.palw_producer_bond.clone(),
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),

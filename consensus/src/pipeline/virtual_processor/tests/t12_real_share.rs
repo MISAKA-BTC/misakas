@@ -1303,3 +1303,6 @@ async fn real_share_control_without_the_window_most_spans_have_no_anchor_against
     assert!(fa * 10 >= fs * 9, "with floors mined every slot almost every span is anchored: {fa} of {fs}");
     assert!(ra * 2 < rs, "without the window, with the floor held and REAL work merged beside the chain, most spans end with no anchor: {ra} of {rs}");
 }
+
+// ADR-0172 (`palw_accounting_v2`) through testnet-12's own pipeline.
+mod accounting_v2;

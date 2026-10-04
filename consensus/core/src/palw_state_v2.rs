@@ -13299,6 +13299,11 @@ impl PalwChainStateV2 {
         }
     }
 
+    /// **ADR-0172: one row of the accounting v2 ledger**, for the pipeline tests and the RPC. `None` where there is none.
+    pub fn accounting_v2_for_tests(&self, key: &crate::palw_accounting_v2::PalwAccountingKeyV2) -> Option<crate::palw_accounting_v2::PalwAccountingRowV2> {
+        self.accounting_v2.get(key).copied()
+    }
+
     /// **ADR-0172: the closed allocation of DAA `daa`**, if it is closed and still held — what a `Final` of that DAA reads.
     pub fn daa_allocation_v2(&self, daa: u64) -> Option<crate::palw_accounting_v2::DaaWeightRowV2> {
         match self.accounting_v2.get(&crate::palw_accounting_v2::PalwAccountingKeyV2::DaaClosed(daa)) {
