@@ -13288,6 +13288,22 @@ impl PalwChainStateV2 {
         self.safe_weight
     }
 
+    /// **ADR-0172: the FALLBACK weight credited on this chain** (`Σ w_fb`), the comparator's second term beside `safe_weight` (spec §5); `0` below the fence.
+    pub fn fallback_weight_v2(&self) -> u128 {
+        match self.accounting_v2.get(&crate::palw_accounting_v2::PalwAccountingKeyV2::FallbackWeight) {
+            Some(crate::palw_accounting_v2::PalwAccountingRowV2::Weight(w)) => *w,
+            _ => 0,
+        }
+    }
+
+    /// **ADR-0172: the closed allocation of DAA `daa`**, if it is closed and still held — what a `Final` of that DAA reads.
+    pub fn daa_allocation_v2(&self, daa: u64) -> Option<crate::palw_accounting_v2::DaaWeightRowV2> {
+        match self.accounting_v2.get(&crate::palw_accounting_v2::PalwAccountingKeyV2::DaaClosed(daa)) {
+            Some(crate::palw_accounting_v2::PalwAccountingRowV2::Daa(row)) => Some(*row),
+            _ => None,
+        }
+    }
+
     pub fn bounded_immature(&self) -> u128 {
         self.bounded_immature
     }
@@ -13757,7 +13773,7 @@ impl PalwChainStateV2 {
     /// `live_total` is constructed by [`PalwCandidateOrderV1::new`], never stored here, so a
     /// maturing claim cannot lower it.
     pub fn candidate_order(&self, candidate: Hash64) -> PalwCandidateOrderV1 {
-        PalwCandidateOrderV1::new(self.safe_frontier_blue_score, self.safe_weight, self.bounded_immature, candidate)
+        PalwCandidateOrderV1::new(self.safe_frontier_blue_score, self.safe_weight.saturating_add(self.fallback_weight_v2()), self.bounded_immature, candidate)
     }
 
     // ---- the root ----
@@ -18599,6 +18615,9 @@ struct TransitionBuilder<'a> {
     /// per block (the recompute is remembered), so a failing Whole on a claim does not cost an
     /// honest one on the same claim the slot (the Phase 3 review's heavy-budget finding).
     heavy_prompt_claims: BTreeSet<Hash64>,
+    /// **ADR-0172: the accepting block's own subsidy `B_d`** — the DAA's schedule budget, set by the fold's entry from `ctx.subsidy` (all claims accepted in this fold share
+    /// the block's DAA, hence its budget). Read only by the accounting v2 ledger; `0` where a builder is made without a block (the unit tests' direct builders).
+    accounting_budget: u64,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -19054,6 +19073,7 @@ impl<'a> TransitionBuilder<'a> {
             tir_registrations: 0,
             heavy_prompt_ids_charged: 0,
             heavy_prompt_claims: BTreeSet::new(),
+            accounting_budget: 0,
         }
     }
 
@@ -19070,6 +19090,128 @@ impl<'a> TransitionBuilder<'a> {
         };
         self.weight_cap_retotal(before, self.weight_cap_term(&key));
         self.entries.push(PalwDeltaEntryV2::Bond { key, old, new });
+    }
+
+    // ---- ADR-0172 (lane AC): the accounting v2 ledger ----
+
+    /// The one journaled writer of the ledger: a row written or dropped is ONE delta entry, so a reorg reverts it exactly.
+    fn write_accounting_v2(&mut self, key: crate::palw_accounting_v2::PalwAccountingKeyV2, new: Option<crate::palw_accounting_v2::PalwAccountingRowV2>) {
+        let old = match new {
+            Some(row) => self.state.accounting_v2.insert(key, row),
+            None => self.state.accounting_v2.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::AccountingV2 { key, old, new });
+        }
+    }
+
+    /// **Does this claim take part in the DAA's allocation?** Accepted at or past the fence, an attempt's, and not the retired base class (a floor earns no subsidy:
+    /// FALLBACK is fee-only). E-BLUE rounds, merged reds' *blocks*, riders' leads and FALLBACK blocks are not claims here and make no budget; a merged red's
+    /// CLAIM, and a rider's own claim, are claims and enter the pool they cannot enlarge.
+    fn accounting_v2_registers(&self, claim: &PalwClaimStateV2) -> bool {
+        self.params.accounting_v2_active_at(claim.accepted_daa)
+            && matches!(claim.source, PalwClaimSourceV2::Attempt)
+            && claim.class_id != self.params.base_class_id()
+    }
+
+    /// A claim's `W` for the allocation: its canonical weight (ADR-0149: the derived pwu), the same number at acceptance and at `Final`.
+    fn accounting_v2_weight(&self, claim: &PalwClaimStateV2) -> u128 {
+        self.canonical_claim_weight(claim).unwrap_or(claim.pwu as u128)
+    }
+
+    /// **A NEW eligible claim enters its DAA's open row** — called by `write_claim` where no record existed.
+    fn accounting_v2_accept(&mut self, id: &Hash64, claim: &PalwClaimStateV2) {
+        use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
+        if !self.accounting_v2_registers(claim) {
+            return;
+        }
+        let key = K::DaaOpen(claim.accepted_daa);
+        let row = match self.state.accounting_v2.get(&key) {
+            Some(R::Daa(row)) => Some(*row),
+            _ => None,
+        };
+        if let Some(next) = crate::palw_accounting_v2::palw_daa_weight_accept_v2(row, self.accounting_budget, id, self.accounting_v2_weight(claim)) {
+            self.write_accounting_v2(key, Some(R::Daa(next)));
+        }
+    }
+
+    /// **A registered claim left its non-terminal phase** (`Final`, `Voided`, or dropped) — `open − 1` on whichever row holds it; a closed row is dropped with its last claim.
+    fn accounting_v2_release(&mut self, claim: &PalwClaimStateV2) {
+        use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
+        if !self.accounting_v2_registers(claim) {
+            return;
+        }
+        for (key, closed) in [(K::DaaClosed(claim.accepted_daa), true), (K::DaaOpen(claim.accepted_daa), false)] {
+            let Some(R::Daa(row)) = self.state.accounting_v2.get(&key).copied() else { continue };
+            if let Some(next) = crate::palw_accounting_v2::palw_daa_weight_release_v2(row, closed) {
+                self.write_accounting_v2(key, next.map(R::Daa));
+            }
+            return;
+        }
+    }
+
+    /// **Step 1f: close every DAA below `daa`.** A chain's DAA never falls, so no later block of this chain can accept a claim into an earlier DAA: its allocation is
+    /// fixed here, deterministically, from the open row. The row moves to `DaaClosed` (dropped at once if no claim is open). Reorg-safe: each move is two exact deltas.
+    fn close_daa_rows_v2(&mut self, daa: u64) {
+        use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
+        if !self.params.accounting_v2_active_at(daa) {
+            return;
+        }
+        let open: Vec<(u64, crate::palw_accounting_v2::DaaWeightRowV2)> = self
+            .state
+            .accounting_v2
+            .range(K::DaaOpen(0)..K::DaaOpen(daa))
+            .filter_map(|(key, row)| match (key, row) {
+                (K::DaaOpen(d), R::Daa(row)) => Some((*d, *row)),
+                _ => None,
+            })
+            .collect();
+        for (d, row) in open {
+            self.write_accounting_v2(K::DaaOpen(d), None);
+            if row.open > 0 {
+                self.write_accounting_v2(K::DaaClosed(d), Some(R::Daa(row)));
+            }
+        }
+    }
+
+    /// **`Final`: the escrow a claim is actually paid under the closed allocation** — `min(escrow, ⌊P_d · W / ΣW⌋)`; the rest is not minted. A claim outside the allocation
+    /// (a floor accepted at or past the fence) is paid nothing; a claim whose DAA is not closed (unreachable: `Final` is a challenge window after acceptance) is paid nothing.
+    /// Below the fence, and for a free-prompt claim, the escrow whole.
+    fn accounting_v2_final_escrow(&self, claim: &PalwClaimStateV2, escrow: u64) -> u64 {
+        if !self.params.accounting_v2_active_at(claim.accepted_daa) || !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            return escrow;
+        }
+        if !self.accounting_v2_registers(claim) {
+            return 0;
+        }
+        match self.state.daa_allocation_v2(claim.accepted_daa) {
+            Some(row) => crate::palw_accounting_v2::palw_emission_final_payout_v2(&row, self.accounting_v2_weight(claim), escrow).unwrap_or(0),
+            None => 0,
+        }
+    }
+
+    /// **A FALLBACK credited** (spec §5; wired by stage 5 once the envelope's carriage is fixed): `w_fb` joins `fallback_weight` iff the bond was not already credited in
+    /// this DAA. Returns whether it credited. The CALLER decides eligibility (bond, Idle floor) from rooted state.
+    fn accounting_v2_credit_fallback(&mut self, bond: PalwBondKeyV2, daa: u64, w_fb: u128) -> bool {
+        use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
+        if matches!(self.state.accounting_v2.get(&K::FallbackBondSlot(bond)), Some(R::Slot(last)) if *last >= daa) {
+            return false;
+        }
+        let total = self.state.fallback_weight_v2().saturating_add(w_fb);
+        self.write_accounting_v2(K::FallbackBondSlot(bond), Some(R::Slot(daa)));
+        self.write_accounting_v2(K::FallbackWeight, Some(R::Weight(total)));
+        true
+    }
+
+    /// **A round credited** (σ-weighted, once per `(claim, round_index)`): returns the share added to `safe_weight`'s side (0 at σ = 0 — nothing is written then).
+    fn accounting_v2_credit_round(&mut self, claim: Hash64, round: u32, share: u128) -> u128 {
+        use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
+        let key = K::ExecCredit(claim, round);
+        if share == 0 || self.state.accounting_v2.contains_key(&key) {
+            return 0;
+        }
+        self.write_accounting_v2(key, Some(R::Weight(share)));
+        share
     }
 
     // ---- ADR-0160 F-W (lane cap-weight): the per-bond weight cap's two maintenance moves ----
@@ -19378,6 +19520,16 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        // ADR-0172: the allocation's row follows the claim — a NEW eligible claim enters its DAA's row, and one that leaves a non-terminal phase (Final, Voided, dropped)
+        // leaves it. Read before the write, so the old record is the live one. A funnel like every other here: no door can miss it.
+        if self.params.accounting_v2_from_daa().is_some() {
+            let old = self.state.claims.get(&key).cloned();
+            match (&old, &new) {
+                (None, Some(claim)) => self.accounting_v2_accept(&key, claim),
+                (Some(old), after) if !old.phase.is_terminal() && after.as_ref().is_none_or(|c| c.phase.is_terminal()) => self.accounting_v2_release(old),
+                _ => {}
+            }
+        }
         // ADR-0088 Decision 3: the claim's root goes with the claim.
         if new.is_none() && self.state.claim_roots.contains_key(&key) {
             self.write_claim_root(key, None);
@@ -27217,6 +27369,8 @@ impl<'a> TransitionBuilder<'a> {
                 None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim),
                 None => claim.escrowed_reward,
             };
+            // **ADR-0172: the DAA's closed allocation caps what is paid** (`min(escrow, ⌊P_d · W / ΣW⌋)`); identity below `palw_accounting_v2`. The rest is never named.
+            let escrow = self.accounting_v2_final_escrow(claim, escrow);
             let slice = self.model_buyback_at_final(&id, claim, escrow);
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
@@ -28314,6 +28468,7 @@ pub fn palw_v2_pre_object_base_v1(
     }
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    builder.accounting_budget = ctx.subsidy;
 
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
@@ -28328,6 +28483,8 @@ pub fn palw_v2_pre_object_base_v1(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
+    // 1f. ADR-0172: a DAA below this block's is CLOSED on this chain (a chain's DAA never falls), so its allocation is fixed here. A no-op below `palw_accounting_v2`.
+    builder.close_daa_rows_v2(ctx.daa_score);
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -28379,6 +28536,7 @@ pub fn palw_v2_apply_one_object_v1(
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let mut builder =
         TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    builder.accounting_budget = ctx.subsidy;
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
@@ -28662,6 +28820,7 @@ pub fn apply_palw_transition_v7(
 
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    builder.accounting_budget = ctx.subsidy;
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -28704,6 +28863,8 @@ pub fn apply_palw_transition_v7(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
+    // 1f. ADR-0172: a DAA below this block's is CLOSED on this chain (a chain's DAA never falls), so its allocation is fixed here. A no-op below `palw_accounting_v2`.
+    builder.close_daa_rows_v2(ctx.daa_score);
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -71838,6 +71999,8 @@ pub(crate) mod tests {
     mod real_work_reserve_v1;
     // ADR-0170 (`palw_anchor_window_v1`): the execution lane's seed anchor as a window — merged attempts anchor, the anchor survives span boundaries, the schedule seeding reads it.
     mod anchor_window_v1;
+    // ADR-0172 (`palw_accounting_v2`): the per-DAA allocation ledger, the FALLBACK and round credits, the comparator term.
+    mod accounting_v2;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
