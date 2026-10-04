@@ -126,14 +126,46 @@ pub fn vlm_stages_v1(config: &Value, max_context: u32, size: (u32, u32)) -> Resu
 }
 
 /// The class of `stages` under one layout choice.
+/// The tower stage's commit tile (`PALW_VLM_TOWER_TILE`, a census experiment knob; `None`: the class's `tile_len`).
+fn tower_tile() -> Option<u32> {
+    std::env::var("PALW_VLM_TOWER_TILE").ok().and_then(|v| v.parse().ok())
+}
+
 fn class_of(s: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoint: u32, max_context: u32) -> PalwGenClassV1 {
+    class_with_tower_tiles(s, choice, checkpoint, max_context, None)
+}
+
+/// [`class_of`] with the tower stage's commit tiles given one by one (`tower_tiles`, in commit-point order), else
+/// `PALW_VLM_TOWER_TILE`, else the class's `tile_len`.
+fn class_with_tower_tiles(
+    s: &VlmStagesV1,
+    choice: &GenLayoutChoiceV1,
+    checkpoint: u32,
+    max_context: u32,
+    tower_tiles: Option<&[u32]>,
+) -> PalwGenClassV1 {
     let programs = [s.tower.clone(), s.text.clone()];
     PalwGenClassV1 {
         version: PALW_GEN_CLASS_VERSION_V1,
         profile: PalwGenProfileV1::Text as u8,
         pipeline: s.pipeline.encode(),
         programs: programs.iter().map(|p| p.encode()).collect(),
-        layouts: gen_default_layouts_v1(&s.pipeline, &programs, choice, checkpoint),
+        layouts: {
+            // The tower stage's commit tiles are its own (`tower_tile`, when set): a tower reads its weights per output channel, so a
+            // wider tile there prices a close of more channels and sizes fewer tiles.
+            let mut l = gen_default_layouts_v1(&s.pipeline, &programs, choice, checkpoint);
+            if let Some(tt) = tower_tiles.filter(|tt| tt.len() == l[0].commit_tiles.len()) {
+                l[0].commit_tiles = tt.to_vec();
+            } else if let Some(t) = tower_tile() {
+                for c in l[0].commit_tiles.iter_mut() {
+                    *c = t;
+                }
+                for c in l[0].state_tiles.iter_mut() {
+                    *c = t;
+                }
+            }
+            l
+        },
         output: OutputSpecV1::tokens(max_context),
         offers: PalwGenOffersV1 {
             steps: vec![],
@@ -223,9 +255,41 @@ fn admit_at_size(
             (64, Some(256), 16, 1),
         ];
         let mut first: Option<String> = None;
-        for (tile_len, output_tile, h_chunk, checkpoint) in LAYOUTS {
+        // With the range twin, the tower's tiles are fitted per commit point (512 lanes, halved where a close passes the carrier
+        // less a 5 % margin), and the text stage's history tile is 16 (its dissection root claim within one carrier).
+        // A refusal no tile choice changes (the tower's one position past `max_position_macs`) is found before any fitting.
+        {
+            let choice = GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 16, checkpoint_interval: 64 };
+            let class = class_of(&stages, &choice, 64, max_context);
+            let quick = kaspa_consensus_core::palw_gen_class_v1::palw_gen_class_preflight_v1(
+                &class,
+                &armed.palw_gen_v1.expect("armed above"),
+            );
+            if let Err(e) = quick {
+                let why = e.to_string();
+                if why.contains("max_position_macs") || why.contains("max_job_macs") {
+                    return Err(format!("GEN_CLASS_REFUSED ({why})"));
+                }
+            }
+        }
+        let fitted: Option<Vec<u32>> = if range_twin {
+            let base = GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 16, checkpoint_interval: 64 };
+            let carrier = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&net.bundle.court);
+            match fit_tower_tiles(&stages, &base, 64, max_context, carrier - carrier / 20, (512, 64)) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    first.get_or_insert(e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let layouts: Vec<(u32, Option<u32>, u32, u32)> =
+            if fitted.is_some() { vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(1024), 16, 8)] } else { LAYOUTS.to_vec() };
+        for (tile_len, output_tile, h_chunk, checkpoint) in layouts {
             let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
-            let class = class_of(&stages, &choice, checkpoint, max_context);
+            let class = class_with_tower_tiles(&stages, &choice, checkpoint, max_context, fitted.as_deref());
             let object = palw_gen_post_genesis_registration_v1(
                 class,
                 Hash64::from_bytes([0; 64]),
@@ -245,6 +309,7 @@ fn admit_at_size(
                     return Ok(json!({
                         "ok": true,
                         "tile_len": tile_len, "output_tile": output_tile, "h_tile": h_chunk, "checkpoint": checkpoint,
+                        "tower_tiles": fitted.as_ref().map(|t| { let mut c = std::collections::BTreeMap::new(); for x in t { *c.entry(*x).or_insert(0u32) += 1; } c }),
                         "max_step_leaves": a.entry.max_step_leaf_count,
                         "tower_rows": stages.rows,
                         "image": [stages.size.0, stages.size.1],
@@ -342,4 +407,62 @@ fn worst_closes_trace(stages: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoi
         }
         Err(e) => eprintln!("vlm-close: sizing refused: {e}"),
     }
+}
+
+/// The tower stage's commit points in commit order, `(block, node)`.
+fn tower_commits(stages: &VlmStagesV1) -> Vec<(u8, u16)> {
+    let p = &stages.tower;
+    p.blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| b.nodes.iter().enumerate().filter(|(_, n)| n.commit).map(move |(ni, _)| (bi as u8, ni as u16)))
+        .collect()
+}
+
+/// **The tower's commit tiles, each the widest that keeps its close carriable** (a registrant's layout choice, per commit point):
+/// every point at `widest`, then each point whose worst close (the range twin, uncapped) passes `carrier` halved, until every
+/// close fits or a point reaches `narrowest`. Wider tiles mean fewer tiles for the sizing to walk. Shape-only, offline.
+fn fit_tower_tiles(
+    stages: &VlmStagesV1,
+    choice: &GenLayoutChoiceV1,
+    checkpoint: u32,
+    max_context: u32,
+    carrier: u64,
+    (widest, narrowest): (u32, u32),
+) -> Result<Vec<u32>, String> {
+    let commits = tower_commits(stages);
+    let mut tiles = vec![widest; commits.len()];
+    let programs = [stages.tower.clone(), stages.text.clone()];
+    let inv = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&programs).ok_or("no pipeline inventory")?;
+    for _round in 0..6 {
+        let class = class_with_tower_tiles(stages, choice, checkpoint, max_context, Some(&tiles));
+        // Size the tower stage alone: the pipeline's first stage (the sizing stops at nothing: every bound is wanted).
+        let pipeline = &stages.pipeline;
+        let sized = kaspa_consensus_core::palw_gen_close_price_v1::palw_gen_worst_closes_of_class_v1(
+            &class,
+            pipeline,
+            &programs,
+            inv.leaf_count(),
+            true,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX / 4,
+            kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range,
+        )
+        .map_err(|e| format!("fitting the tower's tiles: {e}"))?;
+        let bounds = sized.0.first().cloned().unwrap_or_default();
+        let mut changed = false;
+        for b in bounds.iter().filter(|b| b.checkpoint.is_none() && b.close_bytes > carrier) {
+            if let Some(k) = commits.iter().position(|c| *c == (b.block, b.node))
+                && tiles[k] > narrowest
+            {
+                tiles[k] /= 2;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(tiles)
 }
