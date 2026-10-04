@@ -7,6 +7,9 @@
   descriptor, no fold reads one, no fence exists.
 * **ADR-0144 alignment (2026-09-21).** Unimplemented D4 / D6 / D7 steps 2–4 (anyone-serves
   discovery and public serving) are withdrawn as PALW-reward work. See the end section.
+* **2026-10-04 (the operator):** `PRIORITY_INFERENCE` and `INFERENCE_QUOTA` are retired (ADR-0095's amendment):
+  every job is self-ordered and nobody serves inference to holders, so Decision 2's "any provider" row no longer
+  includes them; a descriptor offering them describes nothing MISAKA has.
 * Builds on: [0095](0095-a-position-is-a-membership-not-an-income.md) (a Position is a
   membership: the line declares, the chain computes the tier, a gateway reads it; §8's "a bond
   behind the promise" rejected; the reference check of §7 step 6),

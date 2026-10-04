@@ -5,6 +5,19 @@
   "grants nothing but the right to sell it back" — it now also grants what its LINE declares;
   [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) Decision 2 (a version's
   entry and promotion are constrained by the line's declaration) and Decision 12 (rows to read).
+* **Amended 2026-10-04 (the operator): no served inference — every job is self-ordered.** MISAKA has no
+  hosted or third-party inference service: a user submits their OWN job, the network's seats verify it, and
+  nobody rents GPUs to run other people's jobs or offers an API on the chain's behalf
+  ([ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1: third-party serving is a
+  non-goal). So the grants that describe a serving queue — bit 2 `PRIORITY_INFERENCE` ("the line's gateways
+  serve holders' jobs ahead of others'") and bit 5 `INFERENCE_QUOTA` ("served capacity") — promise something
+  that does not exist and are **retired**: no surface may present them as a benefit and a line should not
+  declare them. (The consensus-inert code in `palw_model_benefits_v1` / `palw_service_descriptor_v1` still
+  accepts the bits; refusing them at the fold is a later fence.) Likewise "gateway" below means the holder's
+  OWN entrance (ADR-0096) or a service the line's owner runs off-chain — not a protocol service. What a Position
+  can protocol-natively unlock in future is **holder-only job classes** (job admission reading the holding —
+  e.g. a class whose jobs require `PositionRequired`); today no job admission path reads a Position, so a
+  Position is an on-chain membership card whose other benefits are the owner's to provide.
 * Builds on: 0087 (no transfer, the curve), 0088 (lines, versions, previews, evaluations,
   proposals, roles), 0090 (the seeded pair), 0091 (the reward buys the pair — income was already
   refused).
@@ -12,7 +25,7 @@
 ## 0. The sentence this ADR is
 
 A position buys no income and no vote; it buys **what the line's developer owes its holders** — the
-new version first, the private beta, the front of the queue, the experimental modes, a voice in what
+new version first, the private beta, the experimental modes, a voice in what
 ships next — and the chain's job is to make the holding provable, the promise readable, **the
 exclusivity window a rule the fold enforces**, and the abandoned promise lapse on its own.
 
@@ -98,10 +111,10 @@ line:
 |---|---|---|
 | 0 | `EARLY_VERSION` | the artifact of a new version, `lead_daa` before the line may make it current — **and §4.4 makes that window a rule** |
 | 1 | `PRIVATE_BETA` | versions published as previews are served to holders and to nobody else |
-| 2 | `PRIORITY_INFERENCE` | the line's gateways serve holders' jobs ahead of others' |
+| 2 | `PRIORITY_INFERENCE` | **RETIRED 2026-10-04** — there is no serving queue: every job is self-ordered (see the amendment above) |
 | 3 | `EXPERIMENTAL` | modes the line runs but has not made default: longer context, a thinking mode, tools, a new quantisation |
 | 4 | `DEVELOPER_ACCESS` | the line's own room — proposals, research previews, where the next version is argued about |
-| 5 | `INFERENCE_QUOTA` | served capacity: a request allowance the gateway honours, stated in the tier's note |
+| 5 | `INFERENCE_QUOTA` | **RETIRED 2026-10-04** — no one serves capacity to holders; every job is self-ordered |
 | 6 | `HOLDER_VOICE` | evaluations and proposals from holders carry the holder mark and the tier they held at (§4.9) |
 | 7 | `SUPPORT` | the line answers holders' reports first |
 
@@ -180,7 +193,7 @@ current block.
 
 ### 4.8 A holder proves the holding without spending anything
 
-A gateway needs "this caller holds ≥ N of line L, and has held since H".
+A verifier — the owner's own off-chain service today, a holder-only job class should one exist — needs "this caller holds ≥ N of line L, and has held since H".
 `palw_model_benefit_challenge_v1(line, holder, nonce, daa)` is a message the holder signs with the
 key their position is held under — the ML-DSA-87 payout key on the carrier lane, the secp256k1
 account on the EVM lane. The gateway verifies the signature and reads the tier at `daa`. Nothing is
@@ -285,8 +298,8 @@ a decision someone took.
    refusals in the version paths (N7, N8). **(done — 6 tests, and the fence of §4.11)**
 4. RPC (`benefits` on the line), CLI (`line-benefits`, and the card on `line-show`). **(done)**
 5. The site: the benefits card on the line and trade pages, the next tier's distance, the lapse.
-6. A reference gateway check — verify the signature, read the tier, choose a queue — so the serving
-   side has something to copy rather than invent.
+6. A reference membership check — verify the signature, read the tier — for an owner's off-chain service.
+   (There is no serving queue to choose: every job is self-ordered, 2026-10-04.)
 
 ## 8. What is deliberately not decided
 
@@ -297,8 +310,7 @@ a decision someone took.
   it until a gateway exists.
 * Whether the chain should carry a gateway endpoint for a line. It is a URL, it rots, and the
   registry is not a directory.
-* The units of `INFERENCE_QUOTA`. The tier's note states it and the gateway honours it; putting a
-  number in consensus would freeze a serving decision that has nothing to do with consensus.
+* ~~The units of `INFERENCE_QUOTA`.~~ Moot: the grant is retired (2026-10-04) — nothing serves a quota.
 
 ## 9. Number hygiene
 

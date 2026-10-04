@@ -11,7 +11,7 @@ curve and sold back to it, and that is the whole of what it is.
 
 > **Amended a fifth time (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence Decision 2's virtual reserve returns, recorded in each row — the curve is over `X = V + reserve` with `V` = 10,000,000 MSK that no object ever pays out (a sell is refused beyond the real reserve above the locked seed) — and a line's market exists from the line's creation, trading only while its class is `Active` (approved). A market a seed opened before the fence keeps `V = 0` and quotes as it always did. §0 below holds unchanged (ADR-0162 §7).
 
-> **Amended a fourth time (2026-09-07, design).** [0095](0095-a-position-is-a-membership-not-an-income.md): a position stops granting nothing. It still buys no income, no weight and no vote — ADR-0091 settled that — but it now carries whatever its LINE has declared for its holders: a new version's artifact before the promotion, the private beta, priority in the queue, experimental modes, the developer's room. The grant set is closed and contains nothing that pays; the chain proves the holding and publishes the promise, and the serving stays with whoever serves. **§0 below is the canonical statement of what a position is and is not, and is the section to quote when anyone reads this market as shares.**
+> **Amended a fourth time (2026-09-07, design).** [0095](0095-a-position-is-a-membership-not-an-income.md): a position stops granting nothing. It still buys no income, no weight and no vote — ADR-0091 settled that — but it now carries whatever its LINE has declared for its holders: a new version's artifact before the promotion, the private beta, experimental modes, the developer's room. The grant set is closed and contains nothing that pays; the chain proves the holding and publishes the promise, and the serving stays with whoever serves. **§0 below is the canonical statement of what a position is and is not, and is the section to quote when anyone reads this market as shares.**
 
 > **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.
 >
@@ -28,6 +28,9 @@ curve and sold back to it, and that is the whole of what it is.
 > Decision 8; §1's "an optional, non-default feature" is stale — the lane is a default build since
 > 2026-08-21. Map: [`README.md`](README.md).
 
+> **2026-10-04 (the operator):** no served inference exists — every job is self-ordered (ADR-0144 P1);
+> "priority in the queue" and "a served quota" were removed from the benefit list (ADR-0095's amendment).
+
 ## 0. A position is not a share — it is how a model's usefulness is held
 
 **A Model Position is not stock, not equity, not a share of an enterprise, not a security by
@@ -36,8 +39,7 @@ no capital raised, no profit, and no person who owes a holder anything. What a p
 **a fixed, non-transferable place in one model line's pair, the only thing the protocol itself
 ever does to its price being to buy the pair with the reward the model's own use earned, and
 which buys its holder a service from that model's developer** — the
-new version's artifact before it may be promoted, the private beta, the front of the inference
-queue, experimental modes, the developer's room ([0095](0095-a-position-is-a-membership-not-an-income.md)).
+new version's artifact before it may be promoted, the private beta, experimental modes, the developer's room ([0095](0095-a-position-is-a-membership-not-an-income.md)).
 It is the way to hold *the added value of an LLM*: not a claim on someone's earnings, but a
 position in the usefulness of a specific model, priced by how much that model is actually asked
 to do.
@@ -77,8 +79,7 @@ supports: usage is the input, the pair is the meter, and the price is the readin
 
 [ADR-0095](0095-a-position-is-a-membership-not-an-income.md) makes the position a **membership in
 the line**: the artifact of a new version ahead of its promotion — a window the fold *enforces*,
-refusing an early promotion rather than trusting a promise — the private beta, priority in the
-queue, experimental modes, the developer's own room, a served quota, a voice in what ships next,
+refusing an early promotion rather than trusting a promise — the private beta, experimental modes, the developer's own room, a voice in what ships next,
 and support. The set is closed at the fold and contains **nothing that pays**: no share, no
 rebate, no discount in MSK, no claim on the reserve, and an unknown grant bit is *refused*, not
 stored and ignored. **A grant is a service or it is not a grant.** What is bought is access to
