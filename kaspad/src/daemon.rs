@@ -1714,6 +1714,11 @@ Do you confirm? (y/n)";
                     // ADR-0172: the FALLBACK identity is the operator's producer bond.
                     fallback_key_path: args.palw_producer_key.clone(),
                     fallback_bond: args.palw_producer_bond.clone(),
+                    // ADR-0172 §5.7: the release's 30 slots; a salted drill's own wait where it asked for one (the producer's flag).
+                    anchor_duty_after_slots: args
+                        .palw_drill_anchor_duty_after_slots
+                        .filter(|_| palw_private_drill && config.palw_drill_genesis_salt.is_some())
+                        .unwrap_or(crate::palw_producer::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1),
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),

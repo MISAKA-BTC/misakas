@@ -591,6 +591,13 @@ pub fn block_class_v2(kind: BlockKindV2, blue: bool, credited: bool, verdict: Op
     }
 }
 
+/// **The anchor duty of an operator's FALLBACK miner** (ADR-0172 §5.7; ADR-0165 §00.9 re-pointed): the operator mines its beat — standing aside from nobody — once a claim has waited
+/// `after_slots` slots plus the bond's stagger for an operator block to bind it. `binder_due` is the producer facts' (lane A's operator bond, a claim `Provisional` past its anchor
+/// slot); `due_slots` is [`crate::palw_real_share_v1::PalwFloorAnchorDutyWaitV1::observe`]'s. Pure, so the node policy and the tests keep it one way.
+pub fn palw_fallback_anchor_duty_v1(binder_due: bool, due_slots: u64, after_slots: u64, stagger: u64) -> bool {
+    binder_due && due_slots >= after_slots.saturating_add(stagger)
+}
+
 /// **One FALLBACK block a fold is told about** — the processor decodes each algo-8 header at or past the fence in the block's own header and its mergeset (blues then reds,
 /// the selected parent excluded: it credited itself) and hands the fold the facts the envelope states. The fold decides credit (E3); the facts are E0/E1.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1241,6 +1248,30 @@ mod tests {
         assert_eq!(class(BlockKindV2::Round, false, false, Some(ExecVerdictV2::EBlue)), "E_VOID");
         assert_eq!(class(BlockKindV2::Round, false, true, Some(ExecVerdictV2::Red)), "RED");
         assert_eq!(class(BlockKindV2::Heartbeat, true, false, None), "HEARTBEAT");
+    }
+
+    #[test]
+    fn the_fallback_anchor_duty_fires_only_for_a_due_claim_after_the_wait_plus_the_stagger() {
+        use crate::palw_real_share_v1::{PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as AFTER, PalwFloorAnchorDutyWaitV1};
+        let mut wait = PalwFloorAnchorDutyWaitV1::default();
+        for stagger in [0u64, 3, 7] {
+            wait = PalwFloorAnchorDutyWaitV1::default();
+            let mut fired_at = None;
+            for daa in 100..300u64 {
+                let due = wait.observe(true, daa);
+                if palw_fallback_anchor_duty_v1(true, due, AFTER, stagger) {
+                    fired_at = Some(daa);
+                    break;
+                }
+            }
+            assert_eq!(fired_at, Some(100 + AFTER + stagger), "the wait ({AFTER} slots) plus the stagger {stagger}");
+        }
+        assert!(!palw_fallback_anchor_duty_v1(false, 10_000, AFTER, 0), "no claim due, no duty");
+        // One binder, then the wait starts again; a claim that stops being due breaks the wait.
+        wait.fired(500);
+        assert_eq!(wait.observe(true, 501), 1);
+        assert_eq!(wait.observe(false, 502), 0);
+        assert_eq!(wait.since(), None);
     }
 
     #[test]

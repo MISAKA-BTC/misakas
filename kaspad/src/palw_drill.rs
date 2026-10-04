@@ -1402,6 +1402,42 @@ mod tests {
         }
     }
 
+    /// **`--palw-drill-accounting-v2-at` is a drill node's flag and nobody else's** (ADR-0172): refused without the salt, by name, on public testnet-12 too; a salted drill node takes it; off by
+    /// default; and its move arms `palw_accounting_v2` ALONE at the height through the entry's own `set` (the bundle's mirror included), refusing a chain whose prerequisites are not in force.
+    #[test]
+    fn the_accounting_v2_flag_is_refused_off_a_salted_chain_and_arms_the_fence_alone() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
+        let why = refusal(&with(&["--palw-drill-accounting-v2-at=9999"]));
+        assert!(why.contains("--palw-drill-accounting-v2-at=9999") && why.contains("needs --palw-drill-genesis-salt"), "{why}");
+        let public = parse(&["--testnet", "--netsuffix=12", "--palw-drill-accounting-v2-at=9999"]);
+        assert!(refusal(&public).contains("needs --palw-drill-genesis-salt"), "public testnet-12 refuses it");
+        let salted = with(&[&salt_flag, "--palw-drill-accounting-v2-at=9999"]);
+        assert_eq!(salted.palw_drill_accounting_v2_at, Some(9_999));
+        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes it");
+        assert_eq!(with(&[&salt_flag]).palw_drill_accounting_v2_at, None, "off by default");
+        // The move, on testnet-12 as shipped (every prerequisite armed at or below the 5,300 flag day): the fence and its mirror, nothing else.
+        let extra = PalwDrillExtraFencesV1 { accounting_v2_at: Some(9_999), ..Default::default() };
+        let salted_argv: Vec<&str> = base.iter().copied().chain([salt_flag.as_str()]).collect();
+        let mut params = config_of(&parse(&salted_argv)).params.clone();
+        let before = params.palw_fences_v1();
+        let moves = extra.apply(&mut params).expect("the drill arms it");
+        assert_eq!(moves.len(), 1);
+        assert_eq!(params.palw_accounting_v2.map(|f| f.daa_score()), Some(9_999));
+        params.validate_palw_v2().expect("the mirror follows the fence");
+        let after = params.palw_fences_v1();
+        let moved: Vec<&str> = before.iter().zip(&after).filter(|(b, a)| b.1 != a.1).map(|(_, a)| a.0).collect();
+        assert_eq!(moved, ["palw_accounting_v2"], "no other fence moved");
+        // On public testnet-12's genesis the move is refused (the post-launch fences move on a salted drill chain only).
+        let mut public = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        assert!(extra.apply(&mut public).unwrap_err().contains("salted drill chain only"));
+    }
+
     /// **`--palw-drill-floor-ignore-policy` is a drill node's flag and nobody else's** (ADR-0165): refused without the salt, by
     /// name, on public testnet-12 too; a salted drill node takes it; off by default.
     #[test]
