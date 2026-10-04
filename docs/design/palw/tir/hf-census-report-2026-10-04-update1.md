@@ -186,3 +186,24 @@ declared pipeline class judged by the pipeline admission at the profile's ceilin
 at the history bound. Branch `fix/int12-preflight-height` (3 commits on `0b1c11b87`, SDK only: `misaka-palw-sdk/src/preflight/
 {chain,model}.rs`, `tir_layout.rs`) builds `palw-class` and `misaka-cli`, its `tir_layout` tests pass, and its `palw-class preflight`
 admits Qwen/Qwen3-4B at 8,192 on testnet-12 (`admission v10: admitted`, logits tile 256, history tile 32); the same code path at this branch's base refused it in the census (`ADMISSION_EXCEEDS(max_state_bytes)`).
+
+## 5. Update 3: vision chat as a declared RFC-0003 `Text` class (census::vlm, `47d1afc9d`)
+
+Each `PARTIAL_TASK_ONLY` cohort member (N = 52,091, n = 150) with a `vision_config` is built shape-only as the class a registrant
+would declare — the tower's version-2 program, the language model lowered with `ImageRows` (M-RoPE for Qwen2/2.5-VL) as the text
+stage over `TextStream`, the two-stage pipeline, one image slot, layouts with a wide logits output tile — and judged by the
+pipeline admission a node runs, `palw_gen_v1` armed hypothetically with its testnet-12 ceilings (dormant on every network, as is FP
+Job V5), at contexts 8,192/4,096/2,048 and image slots 448/224/196 px:
+
+| Outcome (81 probed of 150) | Members | What it needs |
+| --- | ---: | --- |
+| admitted | **0** | |
+| no tower adapter (Qwen3.5 16, Gemma 3/3n/4 18, Qwen3-VL 8, LLaVA-NeXT 4, Florence-2 4, Mistral3 2, Mllama 2, others 9) | 63 | tower adapters (lowering, off-chain) — useless until the next two rows are solved |
+| Qwen2/2.5-VL: the tower stage's close sizing past `PALW_GEN_CLOSE_SIZING_WORK_CAP_V1` (2^26) at every slot | 11 | the "tile CLASS" sizing the code records as its follow-up (the generative twin walks every tile): a gen range twin, consensus, behind a new dormant fence |
+| Qwen2/2.5-VL at ≥ 224 px: the tower is ONE position, 169 G MACs > `max_position_macs` 2^37 | (same 11) | the tower lowered across positions (layer × position, RFC-0006's cell) or a per-profile ceiling — consensus, dormant |
+| tower keys / features unread, no placeholder id | 3 | adapters |
+
+Not probed: 69 (no `vision_config`: 32 configurations not fetched or absent, 17 text-only Llama checkpoints the card tags
+image-text-to-text — their declared task needs an image stage they do not have — and a tail of custom wrappers). Lowering changes
+made for this (no golden change): flat Qwen2/2.5-VL configurations dispatch to their decoder (`decoder_optional`), a wrapper's
+root keys that shadow its decoder's are inert (`root_shadows_decoder`), the decoder's image token ids are inert.
