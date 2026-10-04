@@ -175,3 +175,33 @@ fn f_em_is_abolished_past_the_fence_and_untouched_below_it() {
     assert!(both.capacity_emission_active_at(99), "below the new fence F-EM is as it was");
     assert!(!both.capacity_emission_active_at(100) && !both.capacity_emission_active_at(5_000), "from the fence the per-DAA allocation replaces it");
 }
+
+/// **`B_d` is one DAA's budget, set once** — several chain blocks that share a DAA each accept claims into the same open row, and the row's budget stays `B_d`, never their
+/// sum (a second chain block's `ctx.subsidy` is the same number and is not added). The payout pool is `P_d` of ONE budget however many chain blocks the DAA had.
+#[test]
+fn several_chain_blocks_of_one_daa_share_one_budget() {
+    let (p, extras) = (armed(), PalwTransitionExtrasV1::default());
+    let s0 = PalwChainStateV2::genesis();
+    let mut b1 = builder(&s0, &p, &extras);
+    b1.write_claim(h64(1), Some(claim(5, 10, 100)));
+    // The next chain block of the SAME DAA, built on the first's state.
+    let s1 = b1.state.clone();
+    let mut b2 = builder(&s1, &p, &extras);
+    b2.write_claim(h64(2), Some(claim(7, 10, 100)));
+    b2.write_claim(h64(3), Some(claim(9, 10, 101)));
+    let Some(R::Daa(row)) = b2.state.accounting_v2.get(&K::DaaOpen(10)).copied() else { panic!("the open row") };
+    assert_eq!(row.budget, BUDGET, "one budget, not two or three");
+    assert_eq!((row.count, row.sum_w), (3, 21));
+    // A chain block that disagrees about the DAA's budget (it cannot: subsidy is a function of the DAA) enters no claim rather than overwriting it.
+    let mut odd = builder(&b2.state, &p, &extras);
+    odd.accounting_budget = BUDGET + 1;
+    odd.write_claim(h64(4), Some(claim(1, 10, 100)));
+    let Some(R::Daa(after)) = odd.state.accounting_v2.get(&K::DaaOpen(10)).copied() else { panic!("the open row") };
+    assert_eq!(after, row, "the row is untouched by a disagreeing budget");
+    // Closed, the pool is P_d of that one budget.
+    let mut c = builder(&b2.state, &p, &extras);
+    c.close_daa_rows_v2(11);
+    let closed = c.state.daa_allocation_v2(10).unwrap();
+    let total: u128 = [5u128, 7, 9].iter().map(|w| crate::palw_accounting_v2::palw_emission_final_payout_v2(&closed, *w, u64::MAX).unwrap() as u128).sum();
+    assert!(total <= palw_emission_pool_v2(BUDGET) as u128);
+}
