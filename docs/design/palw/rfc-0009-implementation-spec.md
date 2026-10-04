@@ -37,9 +37,12 @@ file or the `kaspa-pq-signer` sidecar) and `misaka-palw-fp-submit` submits. Stag
   recorded as `TamperedOrRefused` and never counted). Success = at least `policy.min_accept` nodes accept. **ACK is not inclusion.**
   Re-sending is idempotent: "already in mempool/accepted" counts as accept, and the tx id does not depend on the signature script
   (the kaspa id excludes it), so a relay cannot change the id by re-encoding.
-* rail `--relay <rpc1,rpc2,...>` with `--bond-key-seed` and `--funding-outpoint/--funding-amount`: sign, write the raw tx, relay to
-  all, **stage no material** (the node-less miner has no retention dir; Stage B owns that) and print the tx id, claim id and the
-  tracking record. `--submit` (single node + staging) is unchanged.
+* rail `--relay <rpc1,rpc2,...>` with `--bond-key-seed` and `--funding-outpoint/--funding-amount`: sign, write the raw tx, pre-flight
+  the funding signature, relay to all, **stage no material** (the node-less miner has no retention dir; Stage B owns that) and print the
+  per-node outcome. `--checkpoint <daa>:<hash>` first asks the nodes for a quorum view pinned to that checkpoint and sends nothing on any
+  disagreement. `--submit` (single node + staging) is unchanged and is refused together with `--relay`.
+* rail `--track <claim-id> --bond <txid:index> [--tx-id <hex>] (--relay a,b | --rpc a)` polls each node once through `getBlockDagInfo`,
+  `getMempoolEntry` and `getPalwFreePromptClaim` and prints the tracker state per node and whether the nodes agree.
 
 ### 2.2 Sighash audit (result, with tests in `kaspa-pq-validator-core`)
 `calc_mldsa87_signature_hash` (SIG_HASH_ALL) commits to: tx version; the hash of **all** input outpoints, **all** sequences, **all**
@@ -240,3 +243,13 @@ state.
 C-1 V4 builder mode in the shipped producer and authorization discovery (relay of authorizations); A-1 extract the attempt loop from the
 node producer so a node-less miner can run attempts end to end; B-1 panel-side fetch wiring inside `kaspad` (library only here);
 B-2 the court; D-2 state proofs.
+
+## 8. Status at the end of the lane (what is built, what is not, what was run)
+
+| Stage | Built | Tests run (this branch, `rfc9-target`) | NOT done / NOT guaranteed |
+| --- | --- | --- | --- |
+| Spec | this file; allocation line in `lanes/COMMON.md` | — | — |
+| A | `misaka-palw-remote` (view/quorum, signed checkpoint, relay, template digest, tracker); sighash audit tests; rail `--relay`, `--checkpoint`, `--track` | remote 34, validator-core 47 (incl. 3 sighash + 1 real-signature V4), gateway bins check | no node-less **attempt** miner (the inference loop stays in `kaspad/src/palw_producer.rs`; only template checks + block relay are here); no wRPC adapter for templates; a colluding majority defeats the quorum; material still served by the miner's PC |
+| C | `palw_receipt_spend_v4` fence + `palw_receipt_v4` + header gate + PoW tag + coinbase split + isolation cap + processor payouts + builder mode (`--palw-redemption-auth-dir`) + rail `--redeem-auth-out` | core lib 85 (V4 + V3 admission), fence integration 3, consensus `rfc9_` 3 (coinbase conservation, header dormant/armed, processor entitlement/payout/once-across-V3/V4/fold-once), kaspad producer-source tests 6, `t12-repin.sh --drift-only` clean | dormant (None everywhere, not in 5,300); no full-chain drill of a V4 block being merged and its coinbase validated (processor-level and unit-level only); builder profitability untested; a retiring executor cannot redeem; the authorization is not discoverable by builders except by file |
+| B | `EvidenceManifestV1`, preclaim id, chunk verification, claim binding, any-provider fetch, storage receipt, challenge/court skeleton, single-responsibility rule | in the 34 remote tests | no panel wiring inside `kaspad`; no consensus rule; storage receipts are promises; **no provider court, so no slash moves**; "PC can be off after claiming" is NOT true |
+| D | phase-1 safeguards (quorum view, signed checkpoint, freshness, halt); requirements in section 5 | in the 34 remote tests | no state commitment/proof; facts about bond/registry/fence/class are not cryptographically verified |

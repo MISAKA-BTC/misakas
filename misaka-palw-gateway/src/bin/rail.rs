@@ -144,6 +144,11 @@ fn main() {
     // relay first asks the nodes for a QUORUM view (distinct nodes, all on the checkpoint, same network and pruning point, clocks within a skew)
     // and stops on any disagreement; without it the relay still works and says plainly that no view was checked.
     let mut view_checkpoint: Option<String> = None;
+    // RFC-0009 stage A: `--track <claim-id> --bond <txid:index> [--tx-id <hex>] (--relay a,b | --rpc a) [--finality-depth N]` polls each node once and
+    // reports where the claim stands (built → relayed → included → licensed → final/void), per node, and whether the nodes agree.
+    let mut track_claim: Option<String> = None;
+    let mut track_tx_id: Option<String> = None;
+    let mut finality_depth: u64 = 60;
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
@@ -188,6 +193,9 @@ fn main() {
                 redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
             }
             "--checkpoint" => view_checkpoint = Some(value("--checkpoint")),
+            "--track" => track_claim = Some(value("--track")),
+            "--tx-id" => track_tx_id = Some(value("--tx-id")),
+            "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
             "--relay-min-accept" => {
                 relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
             }
@@ -223,6 +231,16 @@ fn main() {
                  \n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
+    }
+    if let Some(claim_hex) = track_claim {
+        let endpoints: Vec<String> = if relay_endpoints.is_empty() {
+            vec![rpc_endpoint.clone().unwrap_or_else(|| die("--track needs --relay <a,b,...> or --rpc <host:port>".into()))]
+        } else {
+            relay_endpoints.clone()
+        };
+        let bond = parse_outpoint(bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())));
+        track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth);
+        return;
     }
     // **The gateway's identity, from the node and the key** — five fields an operator used to
     // gather from five places, one of which (`operator_id`) no command printed at all, and any of
@@ -751,6 +769,94 @@ impl misaka_palw_remote::relay::RelayNode for WrpcRelayNode<'_> {
             }
         }
     }
+}
+
+/// **RFC-0009 stage A: where does this claim stand, according to each node?** One poll per node, folded through
+/// [`misaka_palw_remote::track::ClaimTracker`]. Tx id, claim id, inclusion and phase are separate facts; `Final`/void are reported settled only
+/// `finality_depth` DAA deep; and a claim row naming another executor bond is `Misattributed`, never ours. The nodes are compared, and a
+/// disagreement is printed as one rather than averaged away.
+fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, our_bond: TransactionOutpoint, finality_depth: u64) {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs, ClaimTracker};
+    let parse_hash = |what: &str, text: &str| -> Hash64 {
+        let mut out = [0u8; 64];
+        if text.len() != 128 || faster_hex::hex_decode(text.as_bytes(), &mut out).is_err() {
+            die(format!("{what} is not 128 hex chars"));
+        }
+        Hash64::from_bytes(out)
+    };
+    let claim_id = parse_hash("--track", claim_hex);
+    let tx_id = tx_id_hex.map(|t| parse_hash("--tx-id", t));
+    let runtime = rpc_runtime();
+    let mut per_node = Vec::new();
+    let mut states = Vec::new();
+    for endpoint in endpoints {
+        let client = match try_rpc_connect(&runtime, endpoint) {
+            Ok(c) => c,
+            Err(e) => {
+                per_node.push(serde_json::json!({ "node": endpoint, "error": e }));
+                continue;
+            }
+        };
+        let observation = runtime.block_on(async {
+            let info = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
+            let tx_in_mempool = match tx_id {
+                Some(id) => client.get_mempool_entry(id, true, true).await.is_ok(),
+                None => false,
+            };
+            let claim = client.get_palw_free_prompt_claim(claim_hex.to_string()).await.map_err(|e| e.to_string())?;
+            let claim_obs = if !claim.found {
+                None
+            } else {
+                let (txid, index) = claim.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
+                let mut raw = [0u8; 64];
+                if txid.len() != 128 || faster_hex::hex_decode(txid.as_bytes(), &mut raw).is_err() {
+                    return Err("the node's executor_bond is not a 128-hex id".to_string());
+                }
+                let bond = TransactionOutpoint::new(Hash64::from_bytes(raw), index.parse::<u32>().map_err(|e| e.to_string())?);
+                let phase = match claim.phase.as_str() {
+                    "provisional" => ClaimPhaseObs::Provisional,
+                    "panel_bound" => ClaimPhaseObs::PanelBound,
+                    "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: claim.phase_daa },
+                    "final" => ClaimPhaseObs::Final { final_daa: claim.phase_daa },
+                    "voided" => ClaimPhaseObs::Voided { voided_daa: claim.phase_daa },
+                    other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
+                };
+                let mut accepted = [0u8; 64];
+                let accepted_block = if claim.accepted_block.len() == 128 && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok() {
+                    Hash64::from_bytes(accepted)
+                } else {
+                    Hash64::default()
+                };
+                Some(ClaimObs { executor_bond: bond, accepted_block, accepted_daa: claim.accepted_daa, phase })
+            };
+            Ok::<_, String>(ChainObservation { sink: info.sink, virtual_daa: info.virtual_daa_score, tx_in_mempool, claim: claim_obs })
+        });
+        let _ = runtime.block_on(client.disconnect());
+        match observation {
+            Ok(obs) => {
+                let mut tracker = ClaimTracker::new(tx_id.unwrap_or_default(), claim_id, our_bond, finality_depth);
+                let state = tracker.observe(&obs).clone();
+                per_node.push(serde_json::json!({ "node": endpoint, "virtual_daa": obs.virtual_daa, "sink": obs.sink.to_string(), "state": format!("{state:?}") }));
+                states.push(state);
+            }
+            Err(e) => per_node.push(serde_json::json!({ "node": endpoint, "error": e })),
+        }
+    }
+    let agree = !states.is_empty() && states.windows(2).all(|w| w[0] == w[1]);
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.fp-rail-track.v1",
+            "claim_id": claim_hex,
+            "per_node": per_node,
+            "nodes_answered": states.len(),
+            "agree": agree,
+            "state": if agree { Some(format!("{:?}", states[0])) } else { None },
+            "settled": agree && states[0].is_settled(),
+            "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
+        })
+    );
 }
 
 /// A wRPC node as a [`misaka_palw_remote::view::ChainView`] — `getBlockDagInfo` for its facts, `getBlock` for a checkpoint's standing.
