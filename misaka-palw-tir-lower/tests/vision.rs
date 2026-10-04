@@ -642,3 +642,51 @@ fn the_vision_adapters_agree_with_the_rust_reader() {
         assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name} defaults");
     }
 }
+
+/// **The out-major tower computes the same integers** (`lower_vision_with(.., true)`: `[out, in]` weights, `[1,out,in]·[L,in,1]`):
+/// on every tower fixture, both lowerings materialised from the same calibration give byte-identical outputs on the fixture images,
+/// and the out-major program passes the three implementations and the court.
+#[test]
+fn the_out_major_tower_computes_the_default_tower_s_integers() {
+    for name in ["clip_vision", "siglip_vision", "qwen2_vl", "qwen2_5_vl", "llava"] {
+        let fx = load(name);
+        let s = &fx.spec;
+        let dir = fixture_dir(name);
+        let (hl, binding) = vision::hl_program(s).expect("hl");
+        let ck = Checkpoint::open(&dir).expect("checkpoint");
+        let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+        let mut stats = std::collections::BTreeMap::new();
+        for img in calib_images(s, 4) {
+            vision::float_forward(&hl, s, &params_f, &img, Some(&mut stats)).expect("calibration");
+        }
+        let loader = Resident(Arc::new(params_f));
+        let quiet = |_: usize, _: usize| {};
+        let mut outs = Vec::new();
+        for out_major in [false, true] {
+            let lw = vision::lower_vision_with(&hl, s, out_major).expect("lower");
+            let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+            let p2 = encoder::vision_v2(&lw).expect("v2");
+            let params2 = encoder::lifted_params(&lw.program, &[vision::IMAGE_PARAM], &mat.params);
+            let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+            let mut per_image = Vec::new();
+            for (img, _) in &fx.images {
+                let mut inputs = tir::interp_v2::MapInputs::default();
+                let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+                inputs.constant.insert(0, t);
+                per_image.push(interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output);
+            }
+            if out_major {
+                let img = &fx.images[0].0;
+                let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+                let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
+                common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name} out-major: three implementations: {e}"));
+                let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name} out-major: court: {e}"));
+                assert!(c.commits > 0);
+            }
+            outs.push((per_image, mat.logits_scale));
+        }
+        assert_eq!(outs[0].1, outs[1].1, "{name}: the same output scale");
+        assert_eq!(outs[0].0, outs[1].0, "{name}: the out-major tower's integers are the default tower's");
+        eprintln!("{name}: out-major tower = default tower on {} images", fx.images.len());
+    }
+}
