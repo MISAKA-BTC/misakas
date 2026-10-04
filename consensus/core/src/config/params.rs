@@ -22912,6 +22912,7 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_floor_reserve_v1();
     // ADR-0170's seed anchor window, likewise.
     params.sync_palw_anchor_window_v1();
+    params.sync_palw_accounting_v2();
     // RFC-0004's improvement fence, likewise.
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.

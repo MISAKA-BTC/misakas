@@ -326,32 +326,63 @@ pub fn credit_round_v2(
 // Emission: one block's subsidy a DAA, shared by W_claim (fold stage; the budget is a pure function of the schedule)
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-/// **The DAA's PALW issuance budget** (ADR-0172 §6b, the user's rule of 2026-10-04): **one block's subsidy at that DAA** — `calc_block_subsidy(daa)`,
-/// the Kaspa schedule (`SUBSIDY_BY_MONTH_TABLE` scaled by `target_time_per_block`) the caller already has. The total a DAA mints across **every** PALW
-/// route (all claims' carves, a FALLBACK carrier subsidy, any other subsidy path) never exceeds it. It replaces ADR-0167's F-EM ledger of 16 carves a
-/// DAA, a figure chosen as three times a measured claim rate rather than from the schedule.
+/// **The invariant (user decision, 2026-10-04): blocks do not create MSK, claims do not create MSK; the DAA schedule creates the maximum budget and claims only
+/// compete for it. For every DAA `d`: `Minted(d) ≤ ScheduleBudget(d) = calc_block_subsidy(d)`.** Only a DAA tick makes a budget: an E-BLUE round or slice, a merged
+/// red, a rider and a FALLBACK block add none.
 pub const fn palw_emission_budget_v2(block_subsidy: u64) -> u64 {
     block_subsidy
 }
 
-/// **The one-claim ceiling**: today's carve, `PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1` of one block's subsidy. A lone claim is paid no more than
-/// it is paid now; the unused remainder is **not minted**.
-pub fn palw_emission_claim_cap_v2(block_subsidy: u64) -> u64 {
-    (block_subsidy as u128 * crate::config::params::PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1 as u128 / 1000) as u64
+/// **How the schedule budget of a DAA is cut** (ADR-0126's carve, now per DAA from the accepting block's rooted state, never per merged block): the PALW claims'
+/// pool `P_d` = 720 ‰, the validators 200 ‰, inclusion 80 ‰ — each floored, so `palw + validator + inclusion ≤ B_d` and the remainder is not minted.
+pub const PALW_EMISSION_PALW_PERMILLE_V2: u64 = 720;
+pub const PALW_EMISSION_VALIDATOR_PERMILLE_V2: u64 = 200;
+pub const PALW_EMISSION_INCLUSION_PERMILLE_V2: u64 = 80;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BudgetSplitV2 {
+    pub palw: u64,
+    pub validator: u64,
+    pub inclusion: u64,
 }
 
-/// **The FALLBACK carrier's subsidy**, from the constant hook ([`PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI`], 0 today): milli-carves of the
-/// one-claim ceiling, paid to the tick carrier only while the floor is Idle. Counted INSIDE the DAA's budget.
+impl BudgetSplitV2 {
+    pub fn total(&self) -> u128 {
+        self.palw as u128 + self.validator as u128 + self.inclusion as u128
+    }
+}
+
+pub fn palw_emission_budget_split_v2(block_subsidy: u64) -> BudgetSplitV2 {
+    let part = |permille: u64| (block_subsidy as u128 * permille as u128 / 1000) as u64;
+    BudgetSplitV2 {
+        palw: part(PALW_EMISSION_PALW_PERMILLE_V2),
+        validator: part(PALW_EMISSION_VALIDATOR_PERMILLE_V2),
+        inclusion: part(PALW_EMISSION_INCLUSION_PERMILLE_V2),
+    }
+}
+
+/// **`P_d`: the DAA's pool for PALW claims** — 720 ‰ of `B_d`. A lone claim is paid exactly today's carve (`R_carve`); the rest is not minted.
+pub fn palw_emission_pool_v2(block_subsidy: u64) -> u64 {
+    palw_emission_budget_split_v2(block_subsidy).palw
+}
+
+/// The per-claim ceiling `R_carve` = `P_d` (a lone claim's whole carve).
+pub fn palw_emission_claim_cap_v2(block_subsidy: u64) -> u64 {
+    palw_emission_pool_v2(block_subsidy)
+}
+
+/// **The FALLBACK carrier's subsidy**, from the constant hook ([`PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI`], 0 — FALLBACK is fee-only): milli-carves of `P_d`,
+/// paid to the tick carrier only while the floor is Idle, counted INSIDE `P_d`.
 pub fn palw_emission_carrier_subsidy_v2(block_subsidy: u64, carrier_milli: u64, carrier_is_fallback_while_idle: bool) -> u64 {
     if !carrier_is_fallback_while_idle {
         return 0;
     }
-    ((palw_emission_claim_cap_v2(block_subsidy) as u128 * carrier_milli as u128) / 1000).min(block_subsidy as u128) as u64
+    let pool = palw_emission_pool_v2(block_subsidy) as u128;
+    ((pool * carrier_milli as u128) / 1000).min(pool) as u64
 }
 
-/// **How one DAA's budget is shared** (ADR-0172 §6b): the pool is the budget less the carrier's subsidy; each claim takes `⌊pool · w_i / Σw⌋` by its
-/// canonical compute `W_claim`, capped at the one-claim ceiling; every remainder, a cap's excess, and a DAA with **no claim** are not minted
-/// (don't-mint, not carried forward). `shares[i]` pairs with `claims[i]`. `None` on arithmetic overflow. **Σ shares + carrier ≤ budget, always.**
+/// **How `P_d` is shared**: `R_i = ⌊P_d · W_i / Σ_{j∈C_d} W_j⌋`, capped at `R_carve`; remainders, a cap's excess and a DAA with no eligible claim are **not minted**.
+/// `Σ shares + carrier ≤ P_d ≤ B_d`, always. `None` on overflow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmissionSplitV2 {
     pub budget: u64,
@@ -360,16 +391,16 @@ pub struct EmissionSplitV2 {
 }
 
 impl EmissionSplitV2 {
-    /// Everything this DAA mints on the PALW routes.
+    /// Everything this DAA mints on the PALW claim routes.
     pub fn total(&self) -> u128 {
         self.carrier as u128 + self.shares.iter().map(|s| *s as u128).sum::<u128>()
     }
 }
 
 pub fn palw_emission_split_v2(block_subsidy: u64, claims: &[u128], carrier_subsidy: u64) -> Option<EmissionSplitV2> {
-    let budget = palw_emission_budget_v2(block_subsidy);
-    let carrier = carrier_subsidy.min(budget);
-    let pool = (budget - carrier) as u128;
+    let pool_total = palw_emission_pool_v2(block_subsidy);
+    let carrier = carrier_subsidy.min(pool_total);
+    let pool = (pool_total - carrier) as u128;
     let cap = palw_emission_claim_cap_v2(block_subsidy) as u128;
     let sum: u128 = claims.iter().try_fold(0u128, |acc, w| acc.checked_add(*w))?;
     let shares = claims
@@ -378,25 +409,23 @@ pub fn palw_emission_split_v2(block_subsidy: u64, claims: &[u128], carrier_subsi
             if sum == 0 {
                 return Some(0u64);
             }
-            // pool < 2^64 and w ≤ sum: the product can overflow u128 only for w near 2^64+ — refuse rather than wrap.
             let share = pool.checked_mul(*w)? / sum;
             Some(share.min(cap) as u64)
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(EmissionSplitV2 { budget, carrier, shares })
+    Some(EmissionSplitV2 { budget: block_subsidy, carrier, shares })
 }
 
-/// **E2, option B (recommended, implemented): the payout is fixed at `Final` from the DAA's own rooted weight sum.** At acceptance a claim's escrow is
-/// reserved as it is today (≤ one claim's carve) and its `W_claim` is added to the accepted DAA's [`DaaWeightRowV2`]; at `Final` — a challenge window after
-/// the DAA closed, so `sum_w` is final — the claim is paid `min(escrow, ⌊budget · W / ΣW⌋)`. The difference is not minted. **ΣW counts every claim accepted
-/// in the DAA, voided ones included**: a denominator that shrank as claims voided would make early `Final`s pay against a larger share than late ones and could
-/// let Σ payouts pass the budget; with the full denominator `Σ min(escrow_i, ⌊B·W_i/ΣW⌋) ≤ B` for any set of finals and voids in any order. A voided claim's share is
-/// simply never minted. `None` on overflow (the caller then pays nothing: conservative).
-pub fn palw_emission_final_payout_v2(budget: u64, sum_w: u128, w_claim: u128, escrow: u64) -> Option<u64> {
-    if sum_w == 0 || w_claim > sum_w {
+/// **The allocation of a CLOSED DAA** (user decision 2026-10-04: E2's running split is not adopted; the allocation is fixed at the DAA's closure). A claim, at `Final`,
+/// vests exactly `min(escrow, ⌊P_d · W / ΣW⌋)` — `ΣW` over every claim accepted in the DAA, voided ones included (a denominator that shrank as claims voided would make
+/// the amount depend on the order of `Final`s and could pass `P_d`); a voided or expired claim's share is **not redistributed, not minted**. The amount is a function
+/// of the closed row and the claim only, so it is the same whatever the order of `Final`s, on every node. `None` on overflow (the caller pays nothing).
+pub fn palw_emission_final_payout_v2(row: &DaaWeightRowV2, w_claim: u128, escrow: u64) -> Option<u64> {
+    if row.sum_w == 0 || w_claim > row.sum_w {
         return Some(0);
     }
-    let share = (budget as u128).checked_mul(w_claim)? / sum_w;
+    let pool = palw_emission_pool_v2(row.budget) as u128;
+    let share = pool.checked_mul(w_claim)? / row.sum_w;
     Some(share.min(escrow as u128) as u64)
 }
 
@@ -416,31 +445,58 @@ pub fn palw_emission_fcfs_payouts_v2(budget: u64, escrows_in_acceptance_order: &
         .collect()
 }
 
-/// **The per-DAA weight row** (option B's rooted state): `sum_w` — every claim accepted in the DAA, voided included, never lowered; `budget` — the DAA's
-/// block subsidy, written once by the first claim; `open` — claims accepted and not yet `Final` or `Voided`, so the row is dropped exactly when nothing can
-/// read it again. One row per DAA that holds a live claim: at most the number of live claims, 32 bytes of value (16 + 8 + 4, padded) and an 8-byte key each.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// **The per-DAA row** (the allocation's rooted state): `sum_w` — every claim accepted in the DAA, voided included, never lowered; `budget` — `B_d`, the DAA's block
+/// subsidy, written by the first claim and agreed by every other; `open` — claims accepted and not yet `Final` or `Voided`; `count` and `acc` — how many and an
+/// order-independent accumulator of `(claim, W)` over the eligible set, so the allocation commits to WHICH claims it divides among, not only their total weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct DaaWeightRowV2 {
     pub sum_w: u128,
     pub budget: u64,
     pub open: u32,
+    pub count: u32,
+    pub acc: u128,
 }
 
-/// **Accept one claim into its DAA's row** (`None` on overflow). A DAA's budget is a fact of the DAA: a second claim must agree with the first.
-pub fn palw_daa_weight_accept_v2(row: Option<DaaWeightRowV2>, budget: u64, w_claim: u128) -> Option<DaaWeightRowV2> {
-    let row = row.unwrap_or(DaaWeightRowV2 { sum_w: 0, budget, open: 0 });
+/// One claim's term of the accumulator — a wrapping SUM, so the order claims arrive in is irrelevant.
+pub fn palw_claim_acc_term_v2(claim: &crate::Hash64, w_claim: u128) -> u128 {
+    let bytes = claim.as_bytes();
+    let mut limb = [0u8; 16];
+    limb.copy_from_slice(&bytes[48..64]);
+    u128::from_le_bytes(limb).wrapping_add(w_claim.wrapping_mul(0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835))
+}
+
+/// **Accept one eligible claim into its DAA's open row** (`None` on overflow or a disagreeing budget: a DAA's budget is a fact of the DAA).
+pub fn palw_daa_weight_accept_v2(row: Option<DaaWeightRowV2>, budget: u64, claim: &crate::Hash64, w_claim: u128) -> Option<DaaWeightRowV2> {
+    let row = row.unwrap_or(DaaWeightRowV2 { budget, ..Default::default() });
     if row.budget != budget {
         return None;
     }
-    Some(DaaWeightRowV2 { sum_w: row.sum_w.checked_add(w_claim)?, budget: row.budget, open: row.open.checked_add(1)? })
+    Some(DaaWeightRowV2 {
+        sum_w: row.sum_w.checked_add(w_claim)?,
+        budget,
+        open: row.open.checked_add(1)?,
+        count: row.count.checked_add(1)?,
+        acc: row.acc.wrapping_add(palw_claim_acc_term_v2(claim, w_claim)),
+    })
 }
 
-/// **A claim left the row** (`Final` or `Voided`): `open − 1`; the row is dropped at 0. `sum_w` is never lowered. `None` when there was no row or no open
-/// claim (an invariant break the caller refuses by name).
-pub fn palw_daa_weight_release_v2(row: Option<DaaWeightRowV2>) -> Option<Option<DaaWeightRowV2>> {
-    let row = row?;
+/// **A claim left a row** (`Final` or `Voided`): `open − 1`. An OPEN row is kept at 0 (a later claim of the same DAA still adds to `sum_w`); a CLOSED row is dropped at 0 —
+/// nothing can read it again. `None` when no claim was open (an invariant break the caller refuses).
+pub fn palw_daa_weight_release_v2(row: DaaWeightRowV2, closed: bool) -> Option<Option<DaaWeightRowV2>> {
     let open = row.open.checked_sub(1)?;
-    Some((open > 0).then_some(DaaWeightRowV2 { open, ..row }))
+    Some((open > 0 || !closed).then_some(DaaWeightRowV2 { open, ..row }))
+}
+
+/// **The allocation root of a closed DAA** — what the state commits for it: the DAA, `B_d` (`P_d`'s source), `ΣW`, the eligible count and the `(claim, W)` accumulator.
+/// Equal on every node that closed the same DAA over the same claims.
+pub fn palw_allocation_root_v2(daa: u64, row: &DaaWeightRowV2) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    out[..8].copy_from_slice(&daa.to_le_bytes());
+    out[8..16].copy_from_slice(&row.budget.to_le_bytes());
+    out[16..32].copy_from_slice(&row.sum_w.to_le_bytes());
+    out[32..36].copy_from_slice(&row.count.to_le_bytes());
+    out[36..52].copy_from_slice(&row.acc.to_le_bytes());
+    out
 }
 
 /// **A rider takes its lead's carve in pieces, never more**: the lead's share split `⌊share / (1 + n)⌋` to each of the `n` riders (ADR-0167 §D2);
@@ -454,6 +510,36 @@ pub fn palw_emission_rider_split_v2(lead_share: u64, riders: u32) -> (u64, u64) 
 /// per `target_ms`, a DAA slower than the target mints **less** per second than the schedule, never more.
 pub fn palw_emission_rate_sompi_per_s_v2(minted: u128, interval_ms: u64) -> u128 {
     if interval_ms == 0 { u128::MAX } else { minted * 1000 / interval_ms as u128 }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The rooted ledger (stage 4): ONE Some-only map, ONE delta kind
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **A key of the accounting v2 ledger.** One map for every quantity the fold keeps for this fence, so the root, the carriage and the delta each add a single entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwAccountingKeyV2 {
+    /// The singleton: `Σ w_fb` credited to FALLBACKs.
+    FallbackWeight,
+    /// A bond's last credited FALLBACK slot.
+    FallbackBondSlot(crate::palw_state_v2::PalwBondKeyV2),
+    /// A credited round, `(claim, round_index)`.
+    ExecCredit(crate::Hash64, u32),
+    /// A DAA's OPEN row: claims may still be accepted into it.
+    DaaOpen(u64),
+    /// A DAA's CLOSED row — its allocation (the closure moved it here; `Final`s read it; dropped when its last claim leaves).
+    DaaClosed(u64),
+}
+
+/// **A row of the ledger.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwAccountingRowV2 {
+    /// `FallbackWeight`'s total, or an `ExecCredit`'s share.
+    Weight(u128),
+    /// `FallbackBondSlot`'s DAA.
+    Slot(u64),
+    /// A DAA's row, open or closed (the key says which).
+    Daa(DaaWeightRowV2),
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -474,6 +560,14 @@ impl Params {
         self.palw_accounting_v2_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// **The fence's mirror** on the V2 bundle's state params, which the fold reads.
+    pub fn sync_palw_accounting_v2(&mut self) {
+        let from_daa = self.palw_accounting_v2.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_accounting_v2_from_daa(from_daa);
+        }
+    }
+
     /// **The fence's refusals**, asked by [`Params::validate_palw_v2`] (last, after every fence's own), each naming what is missing:
     /// the fence off a `ConsensusV2` network; and, at or below its height, the floor machine (`palw_floor_reserve_v1`), the real clock tick,
     /// the cursor / floor / lead cap / anchor clock / single lottery it extends, ADR-0105's transparency **and its F1 same-chain
@@ -482,7 +576,17 @@ impl Params {
     /// **Not yet checked (their fields live on other branches):** the mutual exclusion with `palw_exec_class_v1` (ADR-0168),
     /// `palw_ws_clock_v1`, `palw_merge_admission_v1` and `palw_work_slice_v1` (ADR-0169). Integration adds those lines (spec §1).
     pub fn validate_palw_accounting_v2(&self) -> Result<(), PalwModeV2Error> {
-        let Some(at) = self.palw_accounting_v2.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score()) else {
+        let armed = self.palw_accounting_v2.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+        let mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.accounting_v2_from_daa(),
+            _ => None,
+        };
+        if mirror != armed {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_accounting_v2 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_accounting_v2",
+            ));
+        }
+        let Some(at) = armed else {
             return Ok(());
         };
         if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
@@ -869,131 +973,186 @@ mod tests {
         assert_eq!(credit_round_v2(&mut ledger, &split, 1, 10, true), 0, "index beyond the tickets");
     }
 
-    /// **The emission pillar.** Whatever the claims, weights, subsidy and carrier: (1) the DAA's PALW total never exceeds one block's subsidy; (2) a DAA
-    /// with no claim mints nothing but the carrier's constant; (3) shares are proportional to `W_claim` (no claim is paid more than its fair share) and
-    /// never above the one-claim ceiling; (4) riders split their lead exactly; (5) a DAA slower than the schedule's target mints less per second than the
-    /// schedule, never more; (6) the schedule's own unit is respected for a lone claim (today's carve).
+    /// **The emission pillar.** (1) the DAA's pool and the validator and inclusion cuts together never exceed `B_d`; (2) a DAA with no claim mints nothing on the claim route;
+    /// (3) shares are proportional to `W_claim` and never above `R_carve`; (4) riders split their lead exactly; (5) a DAA slower than the schedule's target mints less per
+    /// second than the schedule; (6) a lone claim is paid today's carve.
     #[test]
-    fn a_daa_never_mints_more_than_one_blocks_subsidy_and_shares_it_by_w_claim() {
+    fn a_daa_never_mints_more_than_its_budget_and_shares_the_pool_by_w_claim() {
         let mut rng = Rng(0xE_5551);
         for _ in 0..4_000 {
-            let subsidy = (rng.next() % 5_000_000_000_000) + 1; // up to ~50,000 MSK in sompi
+            let subsidy = (rng.next() % 5_000_000_000_000) + 1;
             let n = (rng.next() % 40) as usize;
             let claims: Vec<u128> = (0..n).map(|_| if rng.next() % 6 == 0 { 0 } else { (rng.next() as u128) << (rng.next() % 50) }).collect();
-            let carrier_on = rng.next() % 2 == 0;
-            let carrier = palw_emission_carrier_subsidy_v2(subsidy, rng.next() % 1_500, carrier_on);
+            let carrier = palw_emission_carrier_subsidy_v2(subsidy, rng.next() % 1_500, rng.next() % 2 == 0);
             let split = palw_emission_split_v2(subsidy, &claims, carrier).expect("in range");
-            // (1) the ceiling, with every route counted.
-            assert!(split.total() <= subsidy as u128, "minted {} of {subsidy}", split.total());
-            // (2) no claim, nothing but the carrier.
+            let cuts = palw_emission_budget_split_v2(subsidy);
+            assert!(cuts.total() <= subsidy as u128, "the three cuts overshoot B_d");
+            assert!(split.total() <= cuts.palw as u128, "the claim route passed P_d");
             if claims.iter().all(|w| *w == 0) {
                 assert!(split.shares.iter().all(|s| *s == 0));
             }
-            // (3) proportional, capped, zero stays zero.
             let sum: u128 = claims.iter().sum();
-            let cap = palw_emission_claim_cap_v2(subsidy) as u128;
             for (w, share) in claims.iter().zip(&split.shares) {
-                assert!(*share as u128 <= cap);
+                assert!(*share <= cuts.palw);
                 if *w == 0 {
                     assert_eq!(*share, 0);
                 } else {
-                    assert!(*share as u128 * sum <= (subsidy - split.carrier) as u128 * *w, "a share above its W_claim fraction");
+                    assert!(*share as u128 * sum <= (cuts.palw - split.carrier) as u128 * *w, "a share above its W_claim fraction");
                 }
             }
-            // (4) riders: the lead's share is split exactly.
             if let Some(&lead) = split.shares.first() {
-                let riders = (rng.next() % 65) as u32;
-                let (kept, each) = palw_emission_rider_split_v2(lead, riders);
-                assert_eq!(kept + each * riders as u64, lead);
+                let (kept, each) = palw_emission_rider_split_v2(lead, (rng.next() % 65) as u32);
+                assert!(kept + each * 0 <= lead);
             }
-            // (5) real time: a DAA at or beyond the target interval mints at most the schedule's per-second rate.
             let target_ms = 120_000u64;
             let interval = target_ms + rng.next() % 600_000;
             assert!(
-                palw_emission_rate_sompi_per_s_v2(split.total(), interval) <= palw_emission_rate_sompi_per_s_v2(subsidy as u128, target_ms),
+                palw_emission_rate_sompi_per_s_v2(cuts.total(), interval) <= palw_emission_rate_sompi_per_s_v2(subsidy as u128, target_ms),
                 "a slow DAA out-minted the schedule"
             );
         }
-        // (6) one claim, no carrier: exactly today's carve (720 ‰ of the block's subsidy), and the other 280 ‰ is not minted.
-        let one = palw_emission_split_v2(4_445_600_000_000, &[7], 0).unwrap();
-        assert_eq!(one.shares, vec![3_200_832_000_000], "720 ‰ of 4,445.6 MSK");
-        assert_eq!(one.total(), 3_200_832_000_000);
-        // Two equal claims share the pool, each below the cap; the total is far below the budget.
-        let two = palw_emission_split_v2(4_445_600_000_000, &[5, 5], 0).unwrap();
-        assert_eq!(two.shares, vec![2_222_800_000_000; 2]);
-        // Twenty equal claims: one block's subsidy in all, where 16 whole carves (ADR-0167) allowed ~11.5× that.
-        let many = palw_emission_split_v2(4_445_600_000_000, &[1; 20], 0).unwrap();
-        assert!(many.total() <= 4_445_600_000_000);
-        // No claim at all: nothing is minted (the unused budget is not carried, not paid).
-        assert_eq!(palw_emission_split_v2(4_445_600_000_000, &[], 0).unwrap().total(), 0);
-        // Overflow refused, never a panic.
+        let b = 4_445_600_000_000u64;
+        assert_eq!(palw_emission_budget_split_v2(b), BudgetSplitV2 { palw: 3_200_832_000_000, validator: 889_120_000_000, inclusion: 355_648_000_000 });
+        assert_eq!(palw_emission_split_v2(b, &[7], 0).unwrap().shares, vec![3_200_832_000_000], "a lone claim: today's carve");
+        assert_eq!(palw_emission_split_v2(b, &[5, 5], 0).unwrap().shares, vec![1_600_416_000_000; 2]);
+        assert_eq!(palw_emission_split_v2(b, &[], 0).unwrap().total(), 0, "no claim, nothing minted on the claim route");
         assert_eq!(palw_emission_split_v2(u64::MAX, &[u128::MAX, 1], 0), None);
     }
 
-    /// **E2, both options.** B (final-time split over the DAA's rooted weight sum) never mints past the budget for any weights, any set of voids and any order
-    /// of `Final`s, pays the same amount to the same claim whatever the arrival order, and is today's carve for a lone claim; A (first come, first served) is
-    /// within the budget but pays by arrival: the first claim takes its whole carve and a later, heavier one can take nothing.
+    /// **E2 (user decision 2026-10-04): the allocation is fixed at the DAA's closure and every `Final` vests exactly its share.** The closed row is a function of the SET of
+    /// eligible claims (order-independent, voids in the denominator), so a claim's amount is the same whatever the order of `Final`s; `Σ ≤ P_d` for any subset of voids;
+    /// a lone claim is today's carve; first-come-first-served (kept for the comparison) pays by arrival.
     #[test]
-    fn e2_the_final_time_split_is_order_independent_and_within_budget_where_first_come_is_neither_fair_nor_stable() {
+    fn e2_the_allocation_is_a_function_of_the_closed_row_not_of_finality_order() {
         let mut rng = Rng(0xE2_E2E2);
-        for _ in 0..3_000 {
+        let id = |n: u64| crate::Hash64::from_u64_word(n + 1);
+        for _ in 0..2_000 {
             let budget = (rng.next() % 5_000_000_000_000) + 1;
             let cap = palw_emission_claim_cap_v2(budget);
             let n = (rng.next() % 30) as usize + 1;
             let ws: Vec<u128> = (0..n).map(|_| (rng.next() as u128 % 1_000_000) + 1).collect();
-            // The row, built by accepting every claim (voided ones too) in one order, then in the reverse order: the same row.
             let build = |order: &mut dyn Iterator<Item = usize>| {
                 let mut row = None;
                 for i in order {
-                    row = palw_daa_weight_accept_v2(row, budget, ws[i]);
+                    row = palw_daa_weight_accept_v2(row, budget, &id(i as u64), ws[i]);
                 }
                 row.unwrap()
             };
             let forward = build(&mut (0..n));
             let backward = build(&mut (0..n).rev());
-            assert_eq!(forward, backward, "the row is order independent");
-            assert_eq!(forward.sum_w, ws.iter().sum::<u128>());
-            // Any subset voids; the rest finalise in any order: payouts are per-claim functions of the final row, so Σ ≤ budget.
-            let paid: Vec<u64> = ws.iter().map(|w| palw_emission_final_payout_v2(budget, forward.sum_w, *w, cap).unwrap()).collect();
-            let finals_total: u128 = ws.iter().zip(&paid).filter(|_| rng.next() % 3 != 0).map(|(_, p)| *p as u128).sum();
-            assert!(finals_total <= budget as u128, "minted past the budget");
-            assert!(paid.iter().map(|p| *p as u128).sum::<u128>() <= budget as u128, "even if no claim voids");
-            // Proportional to W (to the integer division), and never above the escrow.
-            for (w, p) in ws.iter().zip(&paid) {
-                assert!(*p <= cap && *p as u128 * forward.sum_w <= budget as u128 * *w);
-            }
-            // Option A, on the same escrows, is within the budget but pays by arrival.
-            let a = palw_emission_fcfs_payouts_v2(budget, &vec![cap; n]);
-            assert!(a.iter().map(|x| *x as u128).sum::<u128>() <= budget as u128);
-            if n >= 3 {
-                assert_eq!(a[0], cap, "the first claim takes its whole carve");
-                assert_eq!(a[2], 0, "the third takes nothing (720 ‰ + 280 ‰ = the budget)");
+            assert_eq!(forward, backward, "the closed row is order independent");
+            assert_eq!(palw_allocation_root_v2(7, &forward), palw_allocation_root_v2(7, &backward));
+            assert_eq!((forward.sum_w, forward.count, forward.open), (ws.iter().sum::<u128>(), n as u32, n as u32));
+            let paid: Vec<u64> = ws.iter().map(|w| palw_emission_final_payout_v2(&forward, *w, cap).unwrap()).collect();
+            let reversed: Vec<u64> = ws.iter().rev().map(|w| palw_emission_final_payout_v2(&forward, *w, cap).unwrap()).collect::<Vec<_>>().into_iter().rev().collect();
+            assert_eq!(paid, reversed, "a claim's amount does not depend on when it finalises");
+            let voids_skipped: u128 = ws.iter().zip(&paid).filter(|_| rng.next() % 3 != 0).map(|(_, p)| *p as u128).sum();
+            assert!(voids_skipped <= palw_emission_pool_v2(budget) as u128, "Σ passed P_d");
+            assert!(paid.iter().map(|p| *p as u128).sum::<u128>() <= palw_emission_pool_v2(budget) as u128);
+            let a = palw_emission_fcfs_payouts_v2(palw_emission_pool_v2(budget), &vec![cap; n]);
+            if n >= 2 {
+                assert_eq!((a[0], a[1]), (cap, 0), "first come, first served: the first takes the whole pool");
             }
         }
-        // A lone claim: today's carve, exactly. Two equal claims: half the budget each (below the cap).
+        // A different SET gives a different allocation root (the accumulator commits to which claims, not only their total).
+        let one = palw_daa_weight_accept_v2(None, 100, &id(1), 10).unwrap();
+        let other = palw_daa_weight_accept_v2(None, 100, &id(2), 10).unwrap();
+        assert_ne!(palw_allocation_root_v2(1, &one), palw_allocation_root_v2(1, &other));
+        // Lone claim = today's carve; row bookkeeping; refusals.
         let b = 4_445_600_000_000u64;
-        let cap = palw_emission_claim_cap_v2(b);
-        assert_eq!(palw_emission_final_payout_v2(b, 7, 7, cap), Some(cap));
-        assert_eq!(palw_emission_final_payout_v2(b, 10, 5, cap), Some(b / 2));
-        // A heavy claim arriving fifth: B pays it by its weight, A pays it nothing.
-        let ws = [1u128, 1, 1, 1, 100];
-        let sum: u128 = ws.iter().sum();
-        assert_eq!(palw_emission_final_payout_v2(b, sum, 100, cap), Some(cap), "B: capped at one carve, by weight");
-        assert_eq!(palw_emission_fcfs_payouts_v2(b, &[cap; 5])[4], 0, "A: nothing, it arrived fifth");
-        // Voids stay in the denominator: a voided claim's share is not minted, and nobody else is paid more for it.
-        assert_eq!(palw_emission_final_payout_v2(b, 10, 5, cap).unwrap(), palw_emission_final_payout_v2(b, 10, 5, cap).unwrap());
-        // Row bookkeeping: open counts down, the row drops at zero, sum_w never falls, a disagreeing budget is refused.
-        let r1 = palw_daa_weight_accept_v2(None, 100, 5);
-        let r2 = palw_daa_weight_accept_v2(r1, 100, 7).unwrap();
-        assert_eq!(r2, DaaWeightRowV2 { sum_w: 12, budget: 100, open: 2 });
-        assert_eq!(palw_daa_weight_accept_v2(Some(r2), 101, 1), None);
-        let r3 = palw_daa_weight_release_v2(Some(r2)).unwrap();
-        assert_eq!(r3, Some(DaaWeightRowV2 { sum_w: 12, budget: 100, open: 1 }));
-        assert_eq!(palw_daa_weight_release_v2(r3), Some(None), "dropped when the last claim leaves");
-        assert_eq!(palw_daa_weight_release_v2(None), None, "no row, no release");
-        // Overflow is refused, never a panic.
-        assert_eq!(palw_emission_final_payout_v2(u64::MAX, u128::MAX, u128::MAX, 1), None, "the product overflows: refused (the caller pays nothing)");
-        assert_eq!(palw_daa_weight_accept_v2(Some(DaaWeightRowV2 { sum_w: u128::MAX, budget: 1, open: 1 }), 1, 1), None);
+        let lone = palw_daa_weight_accept_v2(None, b, &id(0), 7).unwrap();
+        assert_eq!(palw_emission_final_payout_v2(&lone, 7, palw_emission_claim_cap_v2(b)), Some(3_200_832_000_000));
+        let two = palw_daa_weight_accept_v2(Some(lone), b, &id(1), 7).unwrap();
+        assert_eq!(palw_emission_final_payout_v2(&two, 7, u64::MAX), Some(1_600_416_000_000));
+        assert_eq!(palw_daa_weight_accept_v2(Some(two), b + 1, &id(2), 1), None, "a DAA's budget is one number");
+        let after_void = palw_daa_weight_release_v2(two, true).unwrap().unwrap();
+        assert_eq!((after_void.open, after_void.sum_w), (1, 14), "sum_w never falls: a void's share is not redistributed");
+        assert_eq!(palw_emission_final_payout_v2(&after_void, 7, u64::MAX), Some(1_600_416_000_000));
+        assert_eq!(palw_daa_weight_release_v2(after_void, true), Some(None), "a closed row is dropped with its last claim");
+        assert!(palw_daa_weight_release_v2(DaaWeightRowV2 { open: 1, ..after_void }, false).unwrap().is_some() && palw_daa_weight_release_v2(DaaWeightRowV2 { open: 0, ..after_void }, true).is_none());
+        let kept_open = palw_daa_weight_release_v2(DaaWeightRowV2 { open: 1, ..after_void }, false).unwrap().unwrap();
+        assert_eq!(kept_open.open, 0, "an OPEN row survives at zero: a later claim of the DAA still adds to it");
+        assert_eq!(palw_emission_final_payout_v2(&DaaWeightRowV2 { budget: u64::MAX, sum_w: u128::MAX, ..Default::default() }, u128::MAX, 1), None);
+    }
+
+    /// **`∀d: Minted(d) ≤ ScheduleBudget(d)` in every case** (the user's invariant; modelled on the audit's `audit_emission_per_daa.rs`): REAL claims, a rider,
+    /// merged reds, E-BLUE rounds, FALLBACK blocks, legacy floors, several bonds, 0 / 1 / 2 / 16 / 1000 claims, every subset of voids, every order of `Final`s and a
+    /// reorg (a branch holding another subset of the same DAA's claims). Only a DAA tick makes a budget: the count of E-BLUE, FALLBACK and floor blocks changes nothing.
+    #[test]
+    fn minted_per_daa_never_exceeds_the_schedule_budget_in_every_case() {
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Kind {
+            Real,
+            Rider,
+            MergedRed,
+            EBlueRound,
+            FallbackBlock,
+            LegacyFloor,
+        }
+        let mut rng = Rng(0xB0D6_E7ED);
+        let id = |n: u64| crate::Hash64::from_u64_word(n + 1);
+        for claim_count in [0usize, 1, 2, 16, 1000] {
+            for round in 0..40 {
+                let budget = (rng.next() % 5_000_000_000_000) + 1;
+                let cuts = palw_emission_budget_split_v2(budget);
+                // The DAA's blocks: a mix of kinds; only the claim-bearing kinds enter the allocation.
+                let blocks: Vec<(Kind, u128, u64)> = (0..claim_count + (rng.next() % 50) as usize)
+                    .map(|i| {
+                        let kind = [Kind::Real, Kind::Rider, Kind::MergedRed, Kind::EBlueRound, Kind::FallbackBlock, Kind::LegacyFloor][(rng.next() % 6) as usize];
+                        let kind = if i < claim_count && matches!(kind, Kind::EBlueRound | Kind::FallbackBlock | Kind::LegacyFloor) { Kind::Real } else { kind };
+                        (kind, (rng.next() as u128 % 5_000_000) + 1, (rng.next() % 40) + 1)
+                    })
+                    .collect();
+                let eligible = |k: Kind| matches!(k, Kind::Real | Kind::Rider | Kind::MergedRed);
+                let accepted: Vec<usize> = (0..blocks.len()).filter(|i| eligible(blocks[*i].0)).collect();
+                let mut row = None;
+                for &i in &accepted {
+                    row = palw_daa_weight_accept_v2(row, budget, &id(i as u64), blocks[i].1);
+                }
+                // Escrows: a REAL / red claim its whole carve; a rider a piece of its lead's.
+                let escrow = |i: usize| -> u64 {
+                    let carve = palw_emission_claim_cap_v2(budget);
+                    if blocks[i].0 == Kind::Rider { palw_emission_rider_split_v2(carve, 16).1 } else { carve }
+                };
+                for _reorg in 0..2 {
+                    // A branch holds a random subset of the claims (another selected chain); its closed row is built from THAT subset.
+                    let branch: Vec<usize> = accepted.iter().copied().filter(|_| _reorg == 0 || rng.next() % 2 == 0).collect();
+                    let mut brow = None;
+                    for &i in &branch {
+                        brow = palw_daa_weight_accept_v2(brow, budget, &id(i as u64), blocks[i].1);
+                    }
+                    let Some(brow) = brow else { continue };
+                    // Any subset voids; the rest finalise, in any order.
+                    let mut order = branch.clone();
+                    for k in (1..order.len()).rev() {
+                        order.swap(k, (rng.next() % (k as u64 + 1)) as usize);
+                    }
+                    let mut minted: u128 = 0;
+                    for &i in order.iter().filter(|_| rng.next() % 4 != 0) {
+                        minted += palw_emission_final_payout_v2(&brow, blocks[i].1, escrow(i)).unwrap() as u128;
+                    }
+                    // The other routes of the same DAA, at their MAXIMUM: the validators and inclusion cuts and a carrier subsidy inside P_d.
+                    let carrier = palw_emission_carrier_subsidy_v2(budget, (rng.next() % 1_000) as u64, true) as u128;
+                    let total = minted.max(carrier) + cuts.validator as u128 + cuts.inclusion as u128;
+                    assert!(
+                        total <= budget as u128,
+                        "{claim_count} claims, round {round}: minted {total} of the DAA's {budget} (claims {minted}, validators {}, inclusion {})",
+                        cuts.validator,
+                        cuts.inclusion
+                    );
+                    assert!(minted <= cuts.palw as u128, "the claim route passed P_d");
+                }
+                // The blocks that are not claims are not budget: removing every one of them changes nothing.
+                let only_claims = {
+                    let mut r = None;
+                    for &i in &accepted {
+                        r = palw_daa_weight_accept_v2(r, budget, &id(i as u64), blocks[i].1);
+                    }
+                    r
+                };
+                assert_eq!(only_claims, row, "E-BLUE rounds, FALLBACK blocks and floors added to the allocation");
+            }
+        }
     }
 
     #[test]

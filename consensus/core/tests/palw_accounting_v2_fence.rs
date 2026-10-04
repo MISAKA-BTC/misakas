@@ -21,6 +21,7 @@ fn ids(p: &Params) -> (String, String, String) {
 fn armed(at: ForkActivation) -> Params {
     let mut p = palw_t12_shipped_params();
     p.palw_accounting_v2 = Some(at);
+    p.sync_palw_accounting_v2();
     p
 }
 
@@ -65,6 +66,7 @@ fn armed_it_moves_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_i
     // Set back: the shipped ruleset, to the id; `never()` collapses out of the identity.
     let mut back = p.clone();
     back.palw_accounting_v2 = None;
+    back.sync_palw_accounting_v2();
     assert_eq!(ids(&back), b, "None is the shipped ruleset");
     let never = armed(ForkActivation::never());
     never.validate_palw_v2().expect("dormant");
@@ -99,4 +101,8 @@ fn it_is_refused_without_its_prerequisites() {
     let mut v1 = TESTNET11_PARAMS;
     v1.palw_accounting_v2 = Some(ForkActivation::new(AT));
     assert!(v1.validate_palw_accounting_v2().is_err(), "a ruleset with no V2 bundle");
+    // And with the mirror unsynced it is refused by name.
+    let mut unsynced = palw_t12_shipped_params();
+    unsynced.palw_accounting_v2 = Some(ForkActivation::new(AT));
+    assert!(unsynced.validate_palw_accounting_v2().err().is_some_and(|e| format!("{e:?}").contains("mirror")));
 }

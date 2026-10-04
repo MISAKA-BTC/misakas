@@ -1697,6 +1697,10 @@ pub struct PalwStateParamsV2 {
     /// recorder and its two readers — the admission jury and the schedule seeding — read it). `None` on every shipped preset.
     #[borsh(skip)]
     anchor_window_from_daa: Option<u64>,
+    /// **ADR-0172: `Params::palw_accounting_v2`'s height**, mirrored by `Params::sync_palw_accounting_v2` (the fold's emission split and the FALLBACK and
+    /// round credits read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    accounting_v2_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1930,6 +1934,7 @@ impl PalwStateParamsV2 {
             tir_only_from_daa: None,
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
+            accounting_v2_from_daa: None,
         })
     }
 
@@ -2278,6 +2283,22 @@ impl PalwStateParamsV2 {
     pub fn with_anchor_window_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.anchor_window_from_daa = from_daa;
         self
+    }
+
+    /// **ADR-0172: the accounting v2 mirror** — written by `Params::sync_palw_accounting_v2` and by nothing else (and by fixtures).
+    pub fn with_accounting_v2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.accounting_v2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_accounting_v2`'s height, if the network arms it (the mirror).
+    pub fn accounting_v2_from_daa(&self) -> Option<u64> {
+        self.accounting_v2_from_daa
+    }
+
+    /// **Is consensus accounting v2 in force at `daa_score`?** `false` on every shipped preset.
+    pub fn accounting_v2_active_at(&self, daa_score: u64) -> bool {
+        self.accounting_v2_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// `Params::palw_anchor_window_v1`'s height, if the network arms it (the mirror).
@@ -11337,6 +11358,9 @@ pub struct PalwChainStateV2 {
     /// the job's first claim (`palw_improve_eval_fold_v1`). Its own Some-only root block
     /// (`improvement-eval/v1`) and carriage tail (`0xCC`): empty below the fence.
     improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
+    /// **ADR-0172: the accounting v2 ledger** — the FALLBACK weight total and per-bond slots, credited rounds, and each DAA's weight row (the emission
+    /// split's denominator). ONE map, its own Some-only root block (`accounting_v2/v1`), carriage tail (`0xF3`) and delta kind; empty below the fence.
+    accounting_v2: BTreeMap<crate::palw_accounting_v2::PalwAccountingKeyV2, crate::palw_accounting_v2::PalwAccountingRowV2>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -11557,6 +11581,7 @@ impl PalwChainStateV2 {
             improvement_licences: BTreeMap::new(),
             improvement_composite_classes: BTreeMap::new(),
             improvement_eval_jobs: BTreeMap::new(),
+            accounting_v2: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -14079,6 +14104,12 @@ impl PalwChainStateV2 {
             state.update(b"improvement-eval/v1");
             state.update(collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs).as_byte_slice());
         }
+        // **ADR-0172: the accounting v2 ledger, ONE Some-only block** — empty until the first claim past `palw_accounting_v2`, which nothing below it
+        // can make, so a network that never armed it roots as before.
+        if !self.accounting_v2.is_empty() {
+            state.update(b"accounting_v2/v1");
+            state.update(collection_root(b"accounting_v2", &self.accounting_v2).as_byte_slice());
+        }
         // **RFC-0007 Part I: the verification vertex's tables, ONE Some-only block** after `improvement-eval/v1` — empty until
         // a vertex is accepted, which nothing below `palw_verification_vertex_v1` can do.
         if !self.vertex.is_empty() {
@@ -15981,6 +16012,13 @@ pub enum PalwDeltaEntryV2 {
         key: PalwBondKeyV2,
         old: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
         new: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
+    },
+    /// A row of the accounting v2 ledger was written or dropped (**lane AC, ADR-0172**; declared last — its number is assigned by the integration order,
+    /// 130 in the lane's allocation). Dormant below `palw_accounting_v2`.
+    AccountingV2 {
+        key: crate::palw_accounting_v2::PalwAccountingKeyV2,
+        old: Option<crate::palw_accounting_v2::PalwAccountingRowV2>,
+        new: Option<crate::palw_accounting_v2::PalwAccountingRowV2>,
     },
 }
 
@@ -39555,6 +39593,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
     }
     match entry {
         PalwDeltaEntryV2::Bond { key, old, new } => swap_write!(state.bonds, key, old, new),
+        PalwDeltaEntryV2::AccountingV2 { key, old, new } => swap_write!(state.accounting_v2, key, old, new),
         PalwDeltaEntryV2::Exposure { key, old, new } => swap_write!(state.reserved_exposure, key, old, new),
         PalwDeltaEntryV2::RegistrationExposure { key, old, new } => swap_write!(state.registration_exposure, key, old, new),
         PalwDeltaEntryV2::ClassWalk { key, old, new } => swap_write!(state.class_walks, key, old, new),
@@ -40270,6 +40309,8 @@ pub struct PalwStateCarriageV2 {
     pub improvement_composite_classes: BTreeMap<Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>,
     /// **RFC-0004 A6: the evaluation jobs.** A tagged tail (`0xCC`), encoded only when non-empty; rooted.
     pub improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
+    /// **ADR-0172: the accounting v2 ledger.** A tagged tail (`0xF3`), encoded only when non-empty; rooted.
+    pub accounting_v2: BTreeMap<crate::palw_accounting_v2::PalwAccountingKeyV2, crate::palw_accounting_v2::PalwAccountingRowV2>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -40423,6 +40464,8 @@ const PALW_CARRIAGE_IMPROVEMENT_LICENCES_TAIL_V1: u8 = 0xCA;
 const PALW_CARRIAGE_IMPROVEMENT_COMPOSITE_CLASSES_TAIL_V1: u8 = 0xCB;
 /// RFC-0004 A6: the evaluation jobs' tail (the evaluation lane's `0xCC`–`0xCF`).
 const PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1: u8 = 0xCC;
+/// ADR-0172: the accounting v2 ledger's tail (lane AC; `0xC8` is RFC-0004's, `0xF1` lane EX's, `0xF2` VM-B's).
+const PALW_CARRIAGE_ACCOUNTING_V2_TAIL_V1: u8 = 0xF3;
 
 /// **RFC-0004: the improvement tables' consistency** (spec 17 §17.3): every row under its own key,
 /// every governed line with exactly its policy, usage and pool, every detail row under an existing
@@ -40813,6 +40856,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_IMPROVEMENT_EVAL_JOBS_TAIL_V1.serialize(writer)?;
             self.improvement_eval_jobs.serialize(writer)?;
         }
+        if !self.accounting_v2.is_empty() {
+            PALW_CARRIAGE_ACCOUNTING_V2_TAIL_V1.serialize(writer)?;
+            self.accounting_v2.serialize(writer)?;
+        }
         if !self.class_court_windows.is_empty() {
             PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1.serialize(writer)?;
             self.class_court_windows.serialize(writer)?;
@@ -41007,6 +41054,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_improvement_composite_classes = false;
         let mut improvement_eval_jobs = BTreeMap::new();
         let mut seen_improvement_eval_jobs = false;
+        let mut accounting_v2 = BTreeMap::new();
+        let mut seen_accounting_v2 = false;
         let mut class_court_windows = BTreeMap::new();
         let mut seen_class_court_windows = false;
         let mut vertex = crate::palw_vertex_v1::PalwVertexStateV1::default();
@@ -41256,6 +41305,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_improvement_eval_jobs = true;
                     improvement_eval_jobs = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_ACCOUNTING_V2_TAIL_V1 if !seen_accounting_v2 => {
+                    seen_accounting_v2 = true;
+                    accounting_v2 = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1 if !seen_class_court_windows => {
                     seen_class_court_windows = true;
                     class_court_windows = BTreeMap::deserialize_reader(reader)?;
@@ -41407,6 +41460,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             improvement_licences,
             improvement_composite_classes,
             improvement_eval_jobs,
+            accounting_v2,
             class_court_windows,
             vertex,
             tir_shard_plans,
@@ -41521,6 +41575,7 @@ impl PalwStateCarriageV2 {
             improvement_licences: state.improvement_licences.clone(),
             improvement_composite_classes: state.improvement_composite_classes.clone(),
             improvement_eval_jobs: state.improvement_eval_jobs.clone(),
+            accounting_v2: state.accounting_v2.clone(),
             class_court_windows: state.class_court_windows.clone(),
             vertex: state.vertex.clone(),
             tir_shard_plans: state.tir_shard_plans.clone(),
@@ -41726,6 +41781,7 @@ impl PalwStateCarriageV2 {
             improvement_licences: self.improvement_licences,
             improvement_composite_classes: self.improvement_composite_classes,
             improvement_eval_jobs: self.improvement_eval_jobs,
+            accounting_v2: self.accounting_v2,
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -58871,6 +58927,7 @@ pub(crate) mod tests {
                     // ADR-0164: its round trip is the stage-5–7 suite's.
                     PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
                     PalwDeltaEntryV2::SeatAvailability { .. } => "seat_availability",
+                    PalwDeltaEntryV2::AccountingV2 { .. } => "accounting_v2",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -59923,6 +59980,7 @@ pub(crate) mod tests {
             improvement_licences: _,
             improvement_composite_classes: _,
             improvement_eval_jobs: _,
+            accounting_v2: _,
             class_court_windows: _,
             // RFC-0007 Part I: one Some-only block of three, empty here.
             vertex: _,
@@ -60128,6 +60186,12 @@ pub(crate) mod tests {
                     mode: crate::palw_improve_eval_v1::PalwEvalModeV1::Generate { seed: Hash64::default(), max_new: 4, stop_ids: vec![] },
                 };
                 s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: None });
+            })),
+            ("accounting_v2", Box::new(|s| {
+                s.accounting_v2.insert(
+                    crate::palw_accounting_v2::PalwAccountingKeyV2::FallbackWeight,
+                    crate::palw_accounting_v2::PalwAccountingRowV2::Weight(1),
+                );
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
