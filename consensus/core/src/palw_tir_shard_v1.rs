@@ -1204,6 +1204,36 @@ mod tests {
         assert!(palw_tir_shard_plan_shape_v1(3, 1, 8, 1).is_err());
     }
 
+    /// **Lane PA, S-1 / B-F5**: the linear minimum is the quadratic one's answer on every shape (a sweep of small weights, with and without the
+    /// constant terms and a layer over budget), and it answers a 65,535-layer class at once where the old search would not finish.
+    #[test]
+    fn audit_1004_the_linear_minimum_is_the_quadratic_ones_answer() {
+        let mut seed = 0x9E37_79B9u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u128
+        };
+        for layers in 0..=14usize {
+            for _ in 0..40 {
+                let w = PalwTirShardWeightsV1 {
+                    layer_bytes: (0..layers).map(|_| next() % 90).collect(),
+                    layers_global_bytes: next() % 30,
+                    pre_extra_bytes: next() % 60,
+                    post_extra_bytes: next() % 60,
+                };
+                for budget in [0u128, 1, 25, 80, 130, 200, 500, 5_000] {
+                    assert_eq!(palw_tir_shard_min_shards_fast_v1(&w, budget), palw_tir_shard_min_shards_v1(&w, budget), "{w:?} budget {budget}");
+                }
+            }
+        }
+        let big = PalwTirShardWeightsV1 { layer_bytes: vec![3; 65_535], layers_global_bytes: 1, pre_extra_bytes: 5, post_extra_bytes: 7 };
+        assert_eq!(palw_tir_shard_min_shards_fast_v1(&big, 1_000), 197, "197 shards of at most 1,000 bytes, derived in one pass");
+        assert_eq!(palw_tir_shard_plan_prelim_v1(1, 1, 8), Err(PalwTirShardError::ShardCountOutOfRange(1)));
+        assert_eq!(palw_tir_shard_plan_prelim_v1(9, 1, 8), Err(PalwTirShardError::MoreShardsThanLayers { shards: 9, layers: 8 }));
+        assert_eq!(palw_tir_shard_plan_prelim_v1(4, 3, 8), Err(PalwTirShardError::PositionSegmentsNotOffered(3)));
+        assert_eq!(palw_tir_shard_plan_prelim_v1(4, 2, 8), Ok(()));
+    }
+
     #[test]
     fn occurrences_and_segment_positions_follow_the_rfc_cuts() {
         // 8 layers: shard 0 holds layers 0..3 (pre with it), shard 1 3..8 (post with it).

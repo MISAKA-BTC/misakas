@@ -5826,6 +5826,39 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
+        // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
+        if state_params.capacity_riders_active_at(candidate_daa)
+            && budget_fences.canonical_work_daa.is_some_and(|height| candidate_daa >= height)
+        {
+            let lead_escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let state_work = state.work_target().map(|target| target.work).unwrap_or(0);
+            for n in 1..=kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
+                let Some(subsidy) =
+                    kaspa_consensus_core::palw_state_v2::palw_rider_floor_subsidy_v1(state_params, lead_escrow, n, budget_fences.escrow_carve)
+                else {
+                    break;
+                };
+                // The floor the fold hands the admission for a rider (`TransitionBuilder::work_target_floor` at the share's subsidy).
+                let floor = self
+                    .palw_work_target_floor_for(candidate_daa, subsidy)
+                    .map(|floor| if budget_fences.single_lottery { floor.max(state_work) } else { floor });
+                let fences = kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+                    work_target_floor: floor,
+                    canonical_work_daa: budget_fences.canonical_work_daa,
+                    base_known_draw: budget_fences.base_known_draw,
+                    ..Default::default()
+                };
+                match kaspa_consensus_core::palw_admission_v2::palw_attempt_canonical_pwu_v1(&state, state_params, &class_id, candidate_daa, fences) {
+                    Ok(pwu) => facts.rider_pwu.push(pwu),
+                    Err(_) => break,
+                }
+            }
+        }
         // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for the named bond**, the fold's
         // seating door asked before an inference is spent (`Ok` below the fence).
         if facts.class_admission_refusal.is_none()
@@ -13880,6 +13913,7 @@ impl VirtualStateProcessor {
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
             merged_reds: Default::default(),
+            audit_1004_beacon: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),

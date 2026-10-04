@@ -1276,13 +1276,23 @@ impl PalwProducerService {
                             if self.exiting() {
                                 break;
                             }
+                            // **Lane PA, C-F2**: a rider's pwu is what the fold derives at ITS share of the lead's subsidy for a batch of
+                            // `self.config.riders` — not the lead's `facts.pwu`, which a model class whose floor at the share prices it
+                            // otherwise has refused `PwuClaimNotDerived` (the batch never landed).
+                            let rider_facts = rider_facts_v1(&facts, self.config.riders as usize);
                             if let Err(e) = self
-                                .produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
+                                .produce_one(&session, &rider_facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
                                 .await
                             {
                                 warn!("[{PALW_PRODUCER}] rider {index} of {claim} not built: {e}");
                                 break;
                             }
+                        }
+                        // **Lane PA, C-F2**: where the fold's per-share pwu is known, a batch short of its size was derived for a share it
+                        // will not have — queue only a whole batch (the lead keeps its carve whole otherwise).
+                        if !built.is_empty() && built.len() < self.config.riders as usize && !facts.rider_pwu.is_empty() {
+                            warn!("[{PALW_PRODUCER}] only {} of {} riders of lead {claim} were built: not queued (their pwu is derived for the whole batch)", built.len(), self.config.riders);
+                            built.clear();
                         }
                         if !built.is_empty() {
                             info!("[{PALW_PRODUCER}] queues {} rider(s) of lead {claim} (ADR-0164 F-M1, tag 95)", built.len());
@@ -2062,6 +2072,17 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// that only knows algo-6 stops producing everywhere at the same height, with no configuration that
 /// could bring it back (`PalwRulesetV2::validate` pins the bundle's `algorithm_id` at 6, so
 /// `palw_required_algo_id` is never 9).
+/// **Lane PA, C-F2: the facts a rider of a batch of `riders` is built under** — the lead's facts with `pwu` the chain's demand of a rider at
+/// its share (`PalwProducerFactsV2::rider_pwu`, derived by the one function the fold's admission uses). Without the table (riders not
+/// armed, below the canonical-work height) the lead's `pwu` stands, as before.
+fn rider_facts_v1(facts: &PalwProducerFactsV2, riders: usize) -> PalwProducerFactsV2 {
+    let mut out = facts.clone();
+    if let Some(pwu) = riders.checked_sub(1).and_then(|index| facts.rider_pwu.get(index)) {
+        out.pwu = *pwu;
+    }
+    out
+}
+
 fn template_declares_an_attempt_lane(pow_algo_id: u8) -> bool {
     kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
 }

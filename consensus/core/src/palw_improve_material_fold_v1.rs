@@ -1961,4 +1961,182 @@ mod tests {
         let dormant = PalwChainStateV2::genesis();
         assert!(!dormant.has_improvement_material_rows_v1());
     }
+
+    // -----------------------------------------------------------------------------------------
+    // Lane PA (`palw_audit_1004_v1`): RF-1, RF-3, RF-4.
+    // -----------------------------------------------------------------------------------------
+
+    fn fenced_params(on: bool) -> PalwStateParamsV2 {
+        if on { params().with_audit_1004_from_daa(Some(0)) } else { params() }
+    }
+
+    fn try_at_p(
+        state: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        daa: u64,
+        f: impl FnOnce(&mut TransitionBuilder<'_>, &PalwBlockContextV2) -> Result<(), PalwStateV2Error>,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        let mut builder = TransitionBuilder::new(state, p, false, false, false, false, extras);
+        advance_improvement_v1(&mut builder, &ctx(daa))?;
+        settle_improvement_material_v1(&mut builder, &ctx(daa))?;
+        f(&mut builder, &ctx(daa))?;
+        Ok(builder.checkpoint().0)
+    }
+
+    fn opted_in_p(p: &PalwStateParamsV2, daa: u64) -> PalwChainStateV2 {
+        // (The fenced policy rules want a setter cap of at most 500 ‰.)
+        let mut pol = policy();
+        pol.eval.setter_cap_permille = 500;
+        let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(pol) };
+        try_at_p(&genesis(), p, &PalwTransitionExtrasV1::default(), daa, |b, x| apply_improvement_policy_set_v1(b, x, &set)).expect("opt in")
+    }
+
+    fn class_row(registrant: u8) -> PalwClassStateV2 {
+        PalwClassStateV2 {
+            artifact_root: h(0x70),
+            slash_value_per_pwu: 3,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(100),
+            status: PalwClassStatusV2::Active,
+            registered_daa: 0,
+            registrant_bond: Some(bond(registrant)),
+            fused_attention: false,
+        }
+    }
+
+    /// **RF-1**: the S2 trainer reward goes to a candidate's submitter, so past the fence the submitter must be its class's registrant.
+    #[test]
+    fn audit_1004_a_candidate_is_accepted_only_from_its_classs_registrant() {
+        let submission = |class: u8| PalwCandidateSubmissionV1 {
+            line_id: h(LINE),
+            epoch: 1,
+            class_id: h(class),
+            artifact: PalwTirArtifactRefV1::Composite { parent_class: h(LINE), parent_root: h(0x21), adapter_root: h(0x22), p: 4 },
+            layout: crate::palw_tir_class_v1::PalwTirLayoutV1 {
+                version: 1,
+                max_context: 8,
+                checkpoint_interval: 1,
+                h_tile: 1,
+                commit_tiles: vec![],
+                state_tiles: vec![],
+            },
+            declarations: PalwCandidateDeclarationsV1 { datasets: vec![], licences: vec![], teacher_classes: PalwTeacherClassV1::PublicData.bit() },
+        };
+        for on in [false, true] {
+            let p = fenced_params(on);
+            let mut s = opted_in_p(&p, 500);
+            s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+            let s = try_at_p(&s, &p, &PalwTransitionExtrasV1::default(), 1_000, |_, _| Ok(())).unwrap();
+            // BOB registered the class; ALICE submits it.
+            let mut s = s;
+            s.classes.insert(h(CAND_A), class_row(BOB));
+            let extras = PalwTransitionExtrasV1::default();
+            let by = |who: u8| try_at_p(&s, &p, &extras, 1_200, |b, x| apply_candidate_submitted_v1(b, x, &submission(CAND_A), &bond(who), ));
+            let (alice, bob) = (by(ALICE), by(BOB));
+            assert_eq!(alice.is_err(), on, "fence {on}: a copycat submitting another bond's class is refused past the fence only: {:?}", alice.as_ref().err());
+            assert!(bob.is_ok(), "fence {on}: the registrant's own submission stands: {:?}", bob.err());
+        }
+    }
+
+    /// **RF-1**: a dataset's id names its registrant past the fence, so a copy of a published dataset registered first under another bond
+    /// does not stand: the plain id is refused and the id bound to the registrant is the one accepted.
+    #[test]
+    fn audit_1004_a_datasets_id_names_its_registrant() {
+        let plain = dataset(vec![allowed_licence()], PalwTeacherClassV1::PublicData.bit());
+        let mut mine = plain.clone();
+        mine.dataset_id = palw_dataset_id_bound_v1(&mine, &bond(CAROL));
+        for on in [false, true] {
+            let p = fenced_params(on);
+            let s = opted_in_p(&p, 500);
+            let extras = PalwTransitionExtrasV1::default();
+            let register = |d: &PalwDatasetV1, who: u8| try_at_p(&s, &p, &extras, 600, |b, x| apply_dataset_registered_v1(b, x, d, &bond(who)));
+            assert_eq!(register(&plain, CAROL).is_ok(), !on, "fence {on}: the plain id stands below the fence only");
+            assert_eq!(register(&mine, CAROL).is_ok(), on, "fence {on}: the registrant-bound id stands past the fence only");
+            if on {
+                assert!(register(&mine, BOB).is_err(), "another bond cannot register carol's bound id");
+            }
+        }
+    }
+
+    /// **RF-4**: a licence's expiry is bounded past the fence; below it any future expiry stands.
+    #[test]
+    fn audit_1004_a_teacher_licence_has_a_bounded_life() {
+        let far = licence(600 + crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1 + 1);
+        let near = licence(600 + crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1);
+        for on in [false, true] {
+            let p = fenced_params(on);
+            let s = opted_in_p(&p, 500);
+            let extras = PalwTransitionExtrasV1::default();
+            let reg = |l: &PalwTeacherLicenceV1| try_at_p(&s, &p, &extras, 600, |b, x| apply_teacher_licence_v1(b, x, l));
+            assert_eq!(reg(&far).is_err(), on, "fence {on}: an expiry past the longest life is refused past the fence only");
+            assert!(reg(&near).is_ok(), "fence {on}: the longest life is allowed");
+        }
+    }
+
+    /// **RF-4 / RF-3**: a fenced policy may not carry a free fee, a free bond, or a beacon delay the beacon would precede the pool's close under.
+    #[test]
+    fn audit_1004_a_policy_with_a_free_fee_or_a_short_beacon_delay_is_refused_past_the_fence() {
+        let edits: [(&str, fn(&mut PalwImprovementPolicyV1)); 6] = [
+            ("a free registration", |p| p.fees.registration_fee = 0),
+            ("a free evaluation job", |p| p.fees.eval_fee_per_job = 0),
+            ("a free hard case", |p| p.fees.hard_case_fee = 0),
+            ("a free dataset bond", |p| p.fees.dataset_bond = 0),
+            ("a beacon delay under twice the beacon's depth", |p| p.windows.beacon_delay = 7),
+            ("a setter cap over 500 ‰", |p| p.eval.setter_cap_permille = 501),
+        ];
+        for on in [false, true] {
+            let p = fenced_params(on);
+            for (what, edit) in edits {
+                let mut pol = policy();
+                edit(&mut pol);
+                let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(pol) };
+                let r = try_at_p(&genesis(), &p, &PalwTransitionExtrasV1::default(), 500, |b, x| apply_improvement_policy_set_v1(b, x, &set));
+                assert_eq!(r.is_err(), on, "{what}, fence {on}: {:?}", r.as_ref().err());
+            }
+        }
+        let mut sane = policy();
+        sane.eval.setter_cap_permille = 500;
+        assert_eq!(crate::palw_improve_policy_v1::palw_improvement_policy_audit_1004_check_v1(&sane), Ok(()), "the core's own test policy passes at 500 ‰");
+    }
+
+    /// **RF-3**: the epoch draw's seed is the beacon's, not the drawing block's own hash, past the fence.
+    #[test]
+    fn audit_1004_the_epoch_draw_reads_the_beacon() {
+        // Drive an epoch to its draw (the same steps as `drawn_epoch`), at the draw block under a beacon.
+        let seed_at = |on: bool, block_byte: u8, beacon: Option<u8>| {
+            let p = fenced_params(on);
+            let mut s = opted_in_p(&p, 500);
+            s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
+            let none = PalwTransitionExtrasV1::default();
+            let s = try_at_p(&s, &p, &none, 1_000, |_, _| Ok(())).unwrap();
+            let s = try_at_p(&s, &p, &none, 1_200, |b, x| {
+                b.admit_improvement_candidate_v1(
+                    &h(LINE),
+                    1,
+                    &h(CAND_A),
+                    &bond(ALICE),
+                    PalwTirArtifactRefV1::Composite { parent_class: h(LINE), parent_root: h(0x21), adapter_root: h(0x22), p: 4 },
+                    h(0x50),
+                    Vec::new(),
+                    x.daa_score,
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+            let s = try_at_p(&s, &p, &none, 1_400, |_, _| Ok(())).unwrap();
+            // The draw block: a block of a given hash and an extras beacon.
+            let extras = PalwTransitionExtrasV1 { audit_1004_beacon: beacon.map(h), ..Default::default() };
+            let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+            let c = PalwBlockContextV2 { block: h(block_byte), ..ctx(1_510) };
+            advance_improvement_v1(&mut builder, &c).unwrap();
+            let next = builder.checkpoint().0;
+            next.improvement_epoch(&h(LINE), 1).and_then(|e| e.seed)
+        };
+        let a = seed_at(true, 1, Some(9));
+        assert!(a.is_some(), "the draw ran and recorded its seed");
+        assert_eq!(a, seed_at(true, 2, Some(9)), "past the fence the drawing block's own hash does not matter");
+        assert_ne!(a, seed_at(true, 1, Some(10)), "the beacon does");
+        assert_ne!(seed_at(false, 1, Some(9)), seed_at(false, 2, Some(9)), "below the fence the block's hash is the seed, and the beacon is not read");
+        assert_eq!(seed_at(false, 1, Some(9)), seed_at(false, 1, None));
+    }
 }

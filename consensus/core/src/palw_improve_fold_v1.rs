@@ -1453,7 +1453,23 @@ fn draw_epoch_v1(
             }
         }
     }
-    let drawn = palw_improve_draw_v1(&seed, &entries, policy.eval.n, policy.eval.setter_cap_permille);
+    // **Lane PA, RF-2 (`palw_audit_1004_v1`)**: past the fence the draw excludes the candidates' own submitters' entries and needs
+    // `PALW_AUDIT_1004_MIN_SUPPLIERS_V1` independent suppliers; a draw that does not is a short one (`TooFewItems` below).
+    let drawn = if builder.params.audit_1004_active_at(ctx.daa_score) {
+        let submitters: Vec<PalwBondKeyV2> =
+            builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(_, row)| row.submitter).collect();
+        palw_improve_draw_independent_v1(
+            &seed,
+            &entries,
+            policy.eval.n,
+            policy.eval.setter_cap_permille,
+            &submitters,
+            crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_SUPPLIERS_V1,
+        )
+        .unwrap_or_default()
+    } else {
+        palw_improve_draw_v1(&seed, &entries, policy.eval.n, policy.eval.setter_cap_permille)
+    };
     if (drawn.len() as u32) < policy.eval.n_min {
         header.seed = Some(seed);
         builder.write_improvement_epoch((line_id, epoch), Some(header));

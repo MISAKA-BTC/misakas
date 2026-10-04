@@ -189,6 +189,27 @@ pub fn palw_improve_draw_v1(seed: &Hash64, pool: &[PalwDrawEntryV1], n: u32, set
     drawn
 }
 
+/// **Lane PA, RF-2 (`palw_audit_1004_v1`): the draw over a pool of independent suppliers.** The entries a candidate's own submitter
+/// supplied are not drawn (a submitter does not set or hold out the items its own candidate is scored on), and a draw that does not
+/// reach `min_suppliers` distinct suppliers is no draw (`None`: the epoch ends `TooFewItems`, as a short pool does) — a hold-out pool made
+/// of one party's Sybils is one supplier, whatever `setter_cap_permille` says. Returns indices into `pool`, as [`palw_improve_draw_v1`].
+pub fn palw_improve_draw_independent_v1(
+    seed: &Hash64,
+    pool: &[PalwDrawEntryV1],
+    n: u32,
+    setter_cap_permille: u16,
+    excluded: &[PalwBondKeyV2],
+    min_suppliers: usize,
+) -> Option<Vec<usize>> {
+    let kept: Vec<usize> = (0..pool.len()).filter(|i| !excluded.contains(&pool[*i].supplier)).collect();
+    let sub: Vec<PalwDrawEntryV1> = kept.iter().map(|i| pool[*i].clone()).collect();
+    let drawn: Vec<usize> = palw_improve_draw_v1(seed, &sub, n, setter_cap_permille).into_iter().map(|j| kept[j]).collect();
+    let mut suppliers: Vec<PalwBondKeyV2> = drawn.iter().map(|i| pool[*i].supplier).collect();
+    suppliers.sort();
+    suppliers.dedup();
+    (suppliers.len() >= min_suppliers).then_some(drawn)
+}
+
 /// **The judge of a drawn item**: `judge_set[LE u64(H("…/judge/v1", seed ‖ LE u32 i)[0..8]) mod |set|]`.
 /// `None` for an empty set.
 pub fn palw_improve_judge_index_v1(seed: &Hash64, item: u32, set_len: usize) -> Option<usize> {
@@ -316,5 +337,31 @@ mod tests {
         assert_eq!(palw_improve_judge_index_v1(&seed, 0, 0), None);
         let spread: std::collections::BTreeSet<usize> = (0..64).filter_map(|i| palw_improve_judge_index_v1(&seed, i, 4)).collect();
         assert_eq!(spread.len(), 4, "every judge is drawn somewhere in 64 items");
+    }
+
+    /// **Lane PA, RF-2**: the independent draw leaves out the candidates' own submitters' entries and refuses a draw resting on fewer than the
+    /// least suppliers — a pool of one party's Sybils is one supplier whatever the per-supplier cap says.
+    #[test]
+    fn audit_1004_the_independent_draw_excludes_the_submitter_and_wants_two_suppliers() {
+        let bond = |n: u8| PalwBondKeyV2(TransactionOutpoint { transaction_id: h(n), index: 0 });
+        let (submitter, a, b) = (bond(1), bond(2), bond(3));
+        let seed = h(0x77);
+        let pool: Vec<PalwDrawEntryV1> = (0..12u8)
+            .map(|i| PalwDrawEntryV1 { id: h(0x40 + i), supplier: if i < 6 { submitter } else if i < 9 { a } else { b } })
+            .collect();
+        // Without the rule the submitter's six entries are drawn from.
+        let plain = palw_improve_draw_v1(&seed, &pool, 8, 1_000);
+        assert!(plain.iter().any(|i| pool[*i].supplier == submitter), "the old draw takes the submitter's own items");
+        // With it they are not, and what is left (a: 3, b: 3) is two suppliers.
+        let independent = palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[submitter], 2).expect("two independent suppliers");
+        assert!(independent.iter().all(|i| pool[*i].supplier != submitter), "the submitter's items are never drawn");
+        assert_eq!(independent.len(), 6, "all that remains");
+        // One supplier left is no draw.
+        let sybils: Vec<PalwDrawEntryV1> = (0..12u8).map(|i| PalwDrawEntryV1 { id: h(0x40 + i), supplier: if i < 6 { submitter } else { a } }).collect();
+        assert_eq!(palw_improve_draw_independent_v1(&seed, &sybils, 8, 1_000, &[submitter], 2), None, "a pool of one supplier");
+        assert_eq!(palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[a, b], 2), None, "excluding all but the submitter leaves one");
+        // The per-supplier cap still applies inside it: 250 ‰ of 8 = 2 each.
+        let capped = palw_improve_draw_independent_v1(&seed, &pool, 8, 250, &[submitter], 2).expect("two suppliers at two each");
+        assert_eq!(capped.len(), 4);
     }
 }

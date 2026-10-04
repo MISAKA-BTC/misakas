@@ -428,10 +428,15 @@ fn audit_1004_a_trap_reveal_never_voids_a_claim_with_a_court_open() {
         let (s1, _) = step(&s0, &p, 10, commit_daa, &[commit_object(setter, &claim, 0, 2, salt)]).unwrap();
         let (mut s2, _) = accept(&s1, &p, 11, commit_daa + 1, &env);
         s2.panel_reserve_sompi = 1_000_000_000;
-        let row = s2.mesh_audit_row_v1(&claim).unwrap().clone();
+        // The claim must still be live at the reveal (its bind deadline would void it long before a real audit window ends), so the audit
+        // window is shortened in the fixture: the reveal below is the first block past it.
+        let mut row = s2.mesh_audit_row_v1(&claim).unwrap().clone();
+        row.audit_end_daa = commit_daa + 3;
+        s2.vertex.mesh.audits.insert(claim, row);
+        assert!(!s2.claim(&claim).unwrap().phase.is_terminal(), "the trap claim is live");
         // A challenger's court session is open on the claim (the index the fold's neutral close reads).
         s2.open_courts_by_claim.insert(claim, 1);
-        let reveal_daa = row.audit_end_daa + 5;
+        let reveal_daa = commit_daa + 4;
         let (s3, _) = apply_palw_transition_v2_with_extras(
             &s2,
             &p,
@@ -446,9 +451,11 @@ fn audit_1004_a_trap_reveal_never_voids_a_claim_with_a_court_open() {
         )
         .expect("the reveal is admissible either way");
         let voided = matches!(s3.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Voided { .. });
-        assert_eq!(voided, !on, "fence {on}: the claim is voided below the fence and left to its court past it");
+        assert_eq!(voided, !on, "fence {on}: the claim is voided below the fence and left to its court past it: before {:?}, after {:?}", s2.claim(&claim).unwrap().phase, s3.claim(&claim).unwrap().phase);
         assert!(s3.mesh_audit_row_v1(&claim).unwrap().trap_settled, "the auditors are settled either way");
-        assert_eq!(s3.reserved_exposure(&setter), 0, "and the setter's deposit comes back");
+        // The setter's deposit comes back either way; what is left on its bond is the live claim's own reservation (none once voided).
+        let claim_reserved = if on { s3.claim(&claim).unwrap().reserved } else { 0 };
+        assert_eq!(s3.reserved_exposure(&setter), claim_reserved, "the deposit is returned; only a live claim's own reservation remains");
     }
 }
 
@@ -493,7 +500,7 @@ fn audit_1004_a_one_tile_trap_or_one_committed_after_the_draw_is_refused() {
 fn audit_1004_the_draw_reads_the_beacon_and_not_the_blocks_own_hash() {
     let env = attempt(160, 1);
     let claim = attempt_id_v2(&env.attempt);
-    let drawn = |on: bool, block_word: u64, beacon: Option<u8>| {
+    let drawn = |on: bool, block_word: u64, beacon: Option<u64>| {
         let p = fenced(on);
         let s0 = registry(&p);
         let c = PalwBlockContextV2 { subsidy: SUBSIDY, ..ctx(block_word, 101, block_word) };

@@ -47,11 +47,15 @@ pub const PALW_AUDIT_1004_MIN_BOND_V1: u64 = 1_000_000;
 pub const PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1: u64 = 1 << 21;
 /// P-F4: a trap has at least two tiles past the fence — with one, every audit ticket lands on the planted tile.
 pub const PALW_AUDIT_1004_MIN_TRAP_TILES_V1: u64 = 2;
+/// RF-2: the least distinct suppliers an improvement epoch's drawn pool may rest on, and the most of the pool one supplier may hold
+/// (`setter_cap_permille` of a fenced policy).
+pub const PALW_AUDIT_1004_MIN_SUPPLIERS_V1: usize = 2;
+pub const PALW_AUDIT_1004_MAX_SETTER_CAP_PERMILLE_V1: u16 = 500;
 /// G-2: the most prompt tokens a tensor claim's token binding may be padded over.
 pub const PALW_AUDIT_1004_MAX_BOUND_TOKENS_V1: u64 = 1 << 16;
 
 /// **The values the fingerprint hashes beside the fence's height.**
-pub const fn palw_audit_1004_value_v1() -> [u64; 8] {
+pub const fn palw_audit_1004_value_v1() -> [u64; 10] {
     [
         PALW_AUDIT_1004_BEACON_DEPTH_V1,
         PALW_AUDIT_1004_MIN_REGISTRATION_FEE_V1,
@@ -61,6 +65,8 @@ pub const fn palw_audit_1004_value_v1() -> [u64; 8] {
         PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1,
         PALW_AUDIT_1004_MAX_BOUND_TOKENS_V1,
         PALW_AUDIT_1004_MIN_TRAP_TILES_V1,
+        PALW_AUDIT_1004_MIN_SUPPLIERS_V1 as u64,
+        PALW_AUDIT_1004_MAX_SETTER_CAP_PERMILLE_V1 as u64,
     ]
 }
 

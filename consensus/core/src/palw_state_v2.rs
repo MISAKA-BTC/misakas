@@ -38999,6 +38999,40 @@ fn apply_pending_riders_v1(
     }
 }
 
+/// **A rider's share of its lead's escrow, and the subsidy that carves exactly that share** — `(e_r, s_r)` with `e_r = ⌊E_lead / (1 + n)⌋`
+/// and `s_r` the least subsidy whose carve is `e_r`. The fold's [`attach_riders_v1`] admits each rider at `s_r`; a producer building a
+/// rider asks it too ([`palw_rider_floor_subsidy_v1`] names the use), so both read the one arithmetic.
+pub fn palw_rider_share_v1(
+    params: &PalwStateParamsV2,
+    lead_escrow: u64,
+    n: usize,
+    escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+) -> Result<(u64, u64), PalwStateV2Error> {
+    let refuse = |why: &str| Err(PalwStateV2Error::CapacityRiders(why.to_owned()));
+    let permille = worker_carve_v2(params, 1_000, escrow_carve);
+    let e_r = lead_escrow / (n as u64 + 1);
+    if permille == 0 || e_r == 0 {
+        return refuse("the lead's carve is too small to share");
+    }
+    let s_r = u64::try_from((u128::from(e_r) * 1_000).div_ceil(u128::from(permille))).map_err(|_| PalwStateV2Error::Overflow("rider subsidy"))?;
+    if worker_carve_v2(params, s_r, escrow_carve) != e_r {
+        return refuse("a rider's share does not carve exactly");
+    }
+    Ok((e_r, s_r))
+}
+
+/// **The subsidy a rider of a lead with `lead_escrow` is admitted at when the batch holds `n` riders** (C-F2): what the fold hands the
+/// admission as the rider's block subsidy, from which its work floor — and so the class's effective target and the pwu the chain demands —
+/// derive. `None` where the batch cannot be shared (the fold refuses it).
+pub fn palw_rider_floor_subsidy_v1(
+    params: &PalwStateParamsV2,
+    lead_escrow: u64,
+    n: usize,
+    escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+) -> Option<u64> {
+    palw_rider_share_v1(params, lead_escrow, n, escrow_carve).ok().map(|(_, s_r)| s_r)
+}
+
 /// **C-F1: the tests of [`attach_riders_v1`] that read only the lead, its marks and the batch's own bond** — run before the checkpoint.
 /// The same refusals, in the same words, so a refused batch is a skip either way.
 fn riders_cheap_refusal_v1(
@@ -39067,16 +39101,8 @@ fn attach_riders_v1(
     // The shares, in carve terms: a rider's subsidy `s` is the least that carves exactly `⌊E_lead / (1 + n)⌋`, so the whole admission (work
     // floor, reservation, escrow) runs at that size and the Σ escrow is the lead's carve to the sompi.
     let escrow_carve = builder.extras.escrow_carve;
-    let permille = worker_carve_v2(params, 1_000, escrow_carve);
     let e0 = lead.escrowed_reward;
-    let e_r = e0 / (n as u64 + 1);
-    if permille == 0 || e_r == 0 {
-        return refuse("the lead's carve is too small to share");
-    }
-    let s_r = u64::try_from((u128::from(e_r) * 1_000).div_ceil(u128::from(permille))).map_err(|_| PalwStateV2Error::Overflow("rider subsidy"))?;
-    if worker_carve_v2(params, s_r, escrow_carve) != e_r {
-        return refuse("a rider's share does not carve exactly");
-    }
+    let (e_r, s_r) = palw_rider_share_v1(params, e0, n, escrow_carve)?;
     let remainder = e0.checked_sub(e_r.checked_mul(n as u64).ok_or(PalwStateV2Error::Overflow("riders' escrow"))?).ok_or(PalwStateV2Error::Overflow("riders' escrow"))?;
     if remainder < e_r {
         return refuse("the lead's remainder is below a rider's share");
@@ -69662,6 +69688,7 @@ pub(crate) mod tests {
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
+                audit_1004_beacon: None,
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,
@@ -69918,6 +69945,7 @@ pub(crate) mod tests {
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
+                audit_1004_beacon: None,
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,

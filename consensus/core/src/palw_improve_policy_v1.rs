@@ -466,6 +466,9 @@ pub fn palw_improvement_policy_audit_1004_check_v1(policy: &PalwImprovementPolic
         return Err("beacon_delay is under twice the beacon's depth: the draw's beacon would precede the pool's close");
     }
     let f = &policy.fees;
+    if policy.eval.setter_cap_permille > a::PALW_AUDIT_1004_MAX_SETTER_CAP_PERMILLE_V1 {
+        return Err("setter_cap_permille is over the network's 500 ‰: one supplier could hold the whole drawn pool (RF-2)");
+    }
     if f.registration_fee < a::PALW_AUDIT_1004_MIN_REGISTRATION_FEE_V1 {
         return Err("registration_fee is under the network's floor");
     }
