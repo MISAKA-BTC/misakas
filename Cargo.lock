@@ -6116,6 +6116,7 @@ dependencies = [
  "misaka-palw-derive",
  "misaka-palw-fp-submit",
  "misaka-palw-gen",
+ "misaka-palw-remote",
  "misaka-palw-tir",
  "rand 0.8.6",
  "serde",

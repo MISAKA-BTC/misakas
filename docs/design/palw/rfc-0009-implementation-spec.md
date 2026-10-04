@@ -9,7 +9,7 @@ numbers, defaults for RFC §8, the test plan, and — per stage — **what is NO
 | Stage | What lands | Consensus? | What it does NOT guarantee |
 | --- | --- | --- | --- |
 | A remote claim | `misaka-palw-remote` client library (quorum view, idempotent relay, attempt-template digest, claim tracker, signed checkpoint); sighash audit tests; rail `--relay` mode (sign, no staging, many nodes) | none (no new wRPC op, tag, delta, tail, fence) | The miner PC must still serve the claim's material until B; an **attempt** block still needs the inference loop that lives in `kaspad/src/palw_producer.rs` (not extracted: A ships the template/relay/tracking half only); a majority of colluding nodes defeats the quorum (it is an operational defence, RFC §6) |
-| C public redemption | `palw_receipt_spend_v4` (DORMANT): `PalwReceiptSpendEnvelopeV4`, admission, header carriage `PFS4`, coinbase split | yes, dormant | Nothing at runtime on any shipped preset (fence `None`); builder liveness depends on the fee cap being worth taking (activation gate: market test); a retiring executor bond cannot redeem; claims minted before the fence have no V4 path unless they carry the authorization (they do: the authorization rides the redemption, see 3.2) |
+| C public redemption | `palw_receipt_spend_v4` (DORMANT): `PalwReceiptSpendEnvelopeV4`, admission, header carriage `PFS4`, coinbase split | yes, dormant | Nothing at runtime on any shipped preset (fence `None`); builder liveness depends on the fee cap being worth taking (activation gate: market test); a retiring executor bond cannot redeem; a claim is V4-redeemable only if its executor signed a redemption authorization (3.2) — the authorization rides the redemption, so any `Final` free-prompt claim can be redeemed once the miner has signed one |
 | B independent DA | `EvidenceManifestV1`, provider storage receipt, any-provider fetch with root/claim verification (client + panel-side library); provider challenge/court as dormant design + types | none in this lane (court fence reserved, not added) | A storage receipt is a promise, not proof of future availability; nobody but the producer is slashed for withholding until the (unbuilt) court exists; **do not say "the PC can be off after claiming"** |
 | D verified light client | requirements doc (6.) + Phase 1 safeguards (shared with A: multi-node, signed checkpoint, freshness, halt) | none | No state commitment / proof: bond, registry, fence and class facts are NOT cryptographically verified |
 
@@ -60,10 +60,10 @@ min_trace_retention_daa, bond pubkey), node_id, observed_at_ms }.
 
 **Template digest** (what nodes must agree on; excludes timestamp, nonce, transactions, coinbase, merkle roots, which legitimately
 differ per node):
-`template_digest_v1 = BLAKE3-512( "misaka-palw/remote/attempt-template/v1" ‖ network_id_len ‖ network_id ‖ pruning_point ‖
+`template_digest_v1 = keyed-BLAKE2b-512[key = domain]( "misaka-palw/remote/attempt-template/v1" ‖ network_id_len ‖ network_id ‖ pruning_point ‖
 version(u16 LE) ‖ pow_algo_id ‖ bits(u32 LE) ‖ daa_score(u64 LE) ‖ palw_state_root ‖ n_parents(u32) ‖ sorted_parents ‖
 chain_point ‖ class_id ‖ artifact_root ‖ class_target(u128 LE) ‖ pwu(u64 LE) ‖ min_trace_retention_daa(u64 LE) )`
-(uses the repo's keyed-domain Blake3 helper; `Hash64`).
+(the repo's keyed-domain BLAKE2b-512 helper; `Hash64`). Unanimity, not majority: any dissenting node is `Disagreement` and stops the miner.
 
 Miner-side checks (all must pass, else **stop**, no inference is started):
 1. ≥ `min_agree` (default 2, never 1) independent nodes (distinct endpoints; the library cannot prove distinct operators, the policy
