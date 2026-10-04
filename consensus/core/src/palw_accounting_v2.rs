@@ -386,6 +386,63 @@ pub fn palw_emission_split_v2(block_subsidy: u64, claims: &[u128], carrier_subsi
     Some(EmissionSplitV2 { budget, carrier, shares })
 }
 
+/// **E2, option B (recommended, implemented): the payout is fixed at `Final` from the DAA's own rooted weight sum.** At acceptance a claim's escrow is
+/// reserved as it is today (≤ one claim's carve) and its `W_claim` is added to the accepted DAA's [`DaaWeightRowV2`]; at `Final` — a challenge window after
+/// the DAA closed, so `sum_w` is final — the claim is paid `min(escrow, ⌊budget · W / ΣW⌋)`. The difference is not minted. **ΣW counts every claim accepted
+/// in the DAA, voided ones included**: a denominator that shrank as claims voided would make early `Final`s pay against a larger share than late ones and could
+/// let Σ payouts pass the budget; with the full denominator `Σ min(escrow_i, ⌊B·W_i/ΣW⌋) ≤ B` for any set of finals and voids in any order. A voided claim's share is
+/// simply never minted. `None` on overflow (the caller then pays nothing: conservative).
+pub fn palw_emission_final_payout_v2(budget: u64, sum_w: u128, w_claim: u128, escrow: u64) -> Option<u64> {
+    if sum_w == 0 || w_claim > sum_w {
+        return Some(0);
+    }
+    let share = (budget as u128).checked_mul(w_claim)? / sum_w;
+    Some(share.min(escrow as u128) as u64)
+}
+
+/// **E2, option A (the alternative, for the comparison): first come, first served up to the budget.** Each claim, in acceptance order, takes
+/// `min(escrow, what is left of the DAA's budget)`. Never above the budget and needs no per-DAA weight sum — but it pays by arrival, not by work: the first
+/// claim of a DAA takes its whole carve (720 ‰ of the budget) and a heavy claim that arrives fifth takes nothing, so a producer that can place its claim first
+/// (or a parent set that orders the mergeset in its favour) is paid at the expense of the others. Held as a test; not recommended.
+pub fn palw_emission_fcfs_payouts_v2(budget: u64, escrows_in_acceptance_order: &[u64]) -> Vec<u64> {
+    let mut left = budget as u128;
+    escrows_in_acceptance_order
+        .iter()
+        .map(|e| {
+            let take = (*e as u128).min(left);
+            left -= take;
+            take as u64
+        })
+        .collect()
+}
+
+/// **The per-DAA weight row** (option B's rooted state): `sum_w` — every claim accepted in the DAA, voided included, never lowered; `budget` — the DAA's
+/// block subsidy, written once by the first claim; `open` — claims accepted and not yet `Final` or `Voided`, so the row is dropped exactly when nothing can
+/// read it again. One row per DAA that holds a live claim: at most the number of live claims, 32 bytes of value (16 + 8 + 4, padded) and an 8-byte key each.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DaaWeightRowV2 {
+    pub sum_w: u128,
+    pub budget: u64,
+    pub open: u32,
+}
+
+/// **Accept one claim into its DAA's row** (`None` on overflow). A DAA's budget is a fact of the DAA: a second claim must agree with the first.
+pub fn palw_daa_weight_accept_v2(row: Option<DaaWeightRowV2>, budget: u64, w_claim: u128) -> Option<DaaWeightRowV2> {
+    let row = row.unwrap_or(DaaWeightRowV2 { sum_w: 0, budget, open: 0 });
+    if row.budget != budget {
+        return None;
+    }
+    Some(DaaWeightRowV2 { sum_w: row.sum_w.checked_add(w_claim)?, budget: row.budget, open: row.open.checked_add(1)? })
+}
+
+/// **A claim left the row** (`Final` or `Voided`): `open − 1`; the row is dropped at 0. `sum_w` is never lowered. `None` when there was no row or no open
+/// claim (an invariant break the caller refuses by name).
+pub fn palw_daa_weight_release_v2(row: Option<DaaWeightRowV2>) -> Option<Option<DaaWeightRowV2>> {
+    let row = row?;
+    let open = row.open.checked_sub(1)?;
+    Some((open > 0).then_some(DaaWeightRowV2 { open, ..row }))
+}
+
 /// **A rider takes its lead's carve in pieces, never more**: the lead's share split `⌊share / (1 + n)⌋` to each of the `n` riders (ADR-0167 §D2);
 /// the lead keeps the rest. Σ = the lead's share exactly.
 pub fn palw_emission_rider_split_v2(lead_share: u64, riders: u32) -> (u64, u64) {
@@ -871,6 +928,72 @@ mod tests {
         assert_eq!(palw_emission_split_v2(4_445_600_000_000, &[], 0).unwrap().total(), 0);
         // Overflow refused, never a panic.
         assert_eq!(palw_emission_split_v2(u64::MAX, &[u128::MAX, 1], 0), None);
+    }
+
+    /// **E2, both options.** B (final-time split over the DAA's rooted weight sum) never mints past the budget for any weights, any set of voids and any order
+    /// of `Final`s, pays the same amount to the same claim whatever the arrival order, and is today's carve for a lone claim; A (first come, first served) is
+    /// within the budget but pays by arrival: the first claim takes its whole carve and a later, heavier one can take nothing.
+    #[test]
+    fn e2_the_final_time_split_is_order_independent_and_within_budget_where_first_come_is_neither_fair_nor_stable() {
+        let mut rng = Rng(0xE2_E2E2);
+        for _ in 0..3_000 {
+            let budget = (rng.next() % 5_000_000_000_000) + 1;
+            let cap = palw_emission_claim_cap_v2(budget);
+            let n = (rng.next() % 30) as usize + 1;
+            let ws: Vec<u128> = (0..n).map(|_| (rng.next() as u128 % 1_000_000) + 1).collect();
+            // The row, built by accepting every claim (voided ones too) in one order, then in the reverse order: the same row.
+            let build = |order: &mut dyn Iterator<Item = usize>| {
+                let mut row = None;
+                for i in order {
+                    row = palw_daa_weight_accept_v2(row, budget, ws[i]);
+                }
+                row.unwrap()
+            };
+            let forward = build(&mut (0..n));
+            let backward = build(&mut (0..n).rev());
+            assert_eq!(forward, backward, "the row is order independent");
+            assert_eq!(forward.sum_w, ws.iter().sum::<u128>());
+            // Any subset voids; the rest finalise in any order: payouts are per-claim functions of the final row, so Σ ≤ budget.
+            let paid: Vec<u64> = ws.iter().map(|w| palw_emission_final_payout_v2(budget, forward.sum_w, *w, cap).unwrap()).collect();
+            let finals_total: u128 = ws.iter().zip(&paid).filter(|_| rng.next() % 3 != 0).map(|(_, p)| *p as u128).sum();
+            assert!(finals_total <= budget as u128, "minted past the budget");
+            assert!(paid.iter().map(|p| *p as u128).sum::<u128>() <= budget as u128, "even if no claim voids");
+            // Proportional to W (to the integer division), and never above the escrow.
+            for (w, p) in ws.iter().zip(&paid) {
+                assert!(*p <= cap && *p as u128 * forward.sum_w <= budget as u128 * *w);
+            }
+            // Option A, on the same escrows, is within the budget but pays by arrival.
+            let a = palw_emission_fcfs_payouts_v2(budget, &vec![cap; n]);
+            assert!(a.iter().map(|x| *x as u128).sum::<u128>() <= budget as u128);
+            if n >= 3 {
+                assert_eq!(a[0], cap, "the first claim takes its whole carve");
+                assert_eq!(a[2], 0, "the third takes nothing (720 ‰ + 280 ‰ = the budget)");
+            }
+        }
+        // A lone claim: today's carve, exactly. Two equal claims: half the budget each (below the cap).
+        let b = 4_445_600_000_000u64;
+        let cap = palw_emission_claim_cap_v2(b);
+        assert_eq!(palw_emission_final_payout_v2(b, 7, 7, cap), Some(cap));
+        assert_eq!(palw_emission_final_payout_v2(b, 10, 5, cap), Some(b / 2));
+        // A heavy claim arriving fifth: B pays it by its weight, A pays it nothing.
+        let ws = [1u128, 1, 1, 1, 100];
+        let sum: u128 = ws.iter().sum();
+        assert_eq!(palw_emission_final_payout_v2(b, sum, 100, cap), Some(cap), "B: capped at one carve, by weight");
+        assert_eq!(palw_emission_fcfs_payouts_v2(b, &[cap; 5])[4], 0, "A: nothing, it arrived fifth");
+        // Voids stay in the denominator: a voided claim's share is not minted, and nobody else is paid more for it.
+        assert_eq!(palw_emission_final_payout_v2(b, 10, 5, cap).unwrap(), palw_emission_final_payout_v2(b, 10, 5, cap).unwrap());
+        // Row bookkeeping: open counts down, the row drops at zero, sum_w never falls, a disagreeing budget is refused.
+        let r1 = palw_daa_weight_accept_v2(None, 100, 5);
+        let r2 = palw_daa_weight_accept_v2(r1, 100, 7).unwrap();
+        assert_eq!(r2, DaaWeightRowV2 { sum_w: 12, budget: 100, open: 2 });
+        assert_eq!(palw_daa_weight_accept_v2(Some(r2), 101, 1), None);
+        let r3 = palw_daa_weight_release_v2(Some(r2)).unwrap();
+        assert_eq!(r3, Some(DaaWeightRowV2 { sum_w: 12, budget: 100, open: 1 }));
+        assert_eq!(palw_daa_weight_release_v2(r3), Some(None), "dropped when the last claim leaves");
+        assert_eq!(palw_daa_weight_release_v2(None), None, "no row, no release");
+        // Overflow is refused, never a panic.
+        assert_eq!(palw_emission_final_payout_v2(u64::MAX, u128::MAX, u128::MAX, 1), None, "the product overflows: refused (the caller pays nothing)");
+        assert_eq!(palw_daa_weight_accept_v2(Some(DaaWeightRowV2 { sum_w: u128::MAX, budget: 1, open: 1 }), 1, 1), None);
     }
 
     #[test]

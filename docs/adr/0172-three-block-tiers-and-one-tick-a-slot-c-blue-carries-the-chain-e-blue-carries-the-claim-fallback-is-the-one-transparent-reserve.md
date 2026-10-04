@@ -299,6 +299,24 @@ permits up to ≈8× it.
    never looser than one block's subsidy). The ledger's removal and the coinbase/fold change (the carve entitlement read from the DAA's split rather than the block's
    own subsidy) are stage 4; until then nothing reads these functions.
 
+**E2 — when the DAA's budget is divided (coordinator's question; both options built and tested).**
+
+| | **A. first come, first served** (a running split in acceptance order) | **B. final-time split (recommended, built into the fold)** |
+|---|---|---|
+| reserved at acceptance | the escrow, ≤ one claim's carve (today's) | the same |
+| paid | `min(escrow, what is left of the DAA's budget)` at acceptance order | `min(escrow, ⌊budget · W / ΣW⌋)` at `Final` |
+| fairness | pays by arrival: the first claim takes 720 ‰ of the budget, the third nothing; a producer that orders its claim first, or a parent set that orders the mergeset in its favour, is paid at the others' expense | pays by `W_claim` (canonical active compute, §6a); arrival order is irrelevant |
+| `Σ ≤ budget` | yes | yes — proven for any weights, any voids, any order of `Final`s (test) |
+| state | none | one rooted row per DAA that holds a live claim: `{ ΣW: u128, budget: u64, open: u32 }` — at most one per live claim, ≈ 8 B key + 28 B value; dropped when `open` reaches 0 |
+| reorg / IBD / pruning | order-dependent state | the row is a function of the claims accepted in that DAA on the chain; written and dropped by exact deltas; carried in the pruning carriage against the root, so a pruned join holds the same row. The *payout* reads only the row and the claim |
+| `Final` before the DAA closes? | n/a | impossible: `Final` is at least a challenge window after acceptance, and a chain's DAA never falls; the fold refuses to pay from an open row (it pays nothing) |
+
+**ΣW counts every claim accepted in the DAA, voided ones included.** A denominator that excluded voids would shrink as claims void, so an early `Final` would be paid
+against a larger share than a late one and the DAA could mint past its budget (a second, order-dependent identity to maintain); with the full denominator the sum is
+bounded for every outcome, and a voided claim's share is simply never minted — nobody else is paid more because a rival failed. **Riders** enter ΣW as the claims they are, each
+bounded by its own (split) escrow, so a lead's carve is still never exceeded. **Recommendation: B**, implemented in the fold (`finalize_claim`: the payout is capped, the claim's
+`W` registered at acceptance, the row released at `Final` or `Voided`); A is kept as a tested function for the comparison. Rows of a pre-fence claim do not exist and its payout is unchanged.
+
 **What this does to the economy, stated.** At the measured 3.5 claims a DAA the pool is one block's 4,445.6 MSK shared by ≈3.5 claims (≈1,270 MSK each, against 3,200.85
 now): PALW issuance falls to ≈4.4 k MSK a DAA, ≈2.4 M MSK a day at 157 s — about 0.75× the schedule's rate (the 157 s DAA is slower than the 120 s target). A claim's
 reward falls as claims per DAA rise; *capacity* (ρ, the claim count) no longer buys issuance, which is what F-EM was for. Whether the resulting per-claim reward still pays
@@ -411,7 +429,7 @@ Identity does not move (peering continues until F), the params id and schedule i
 
 * **Emission rule (user, 2026-10-04 ~14:30)** — §6b; implemented as pure functions with property tests, dormant. **E1 (open):** whether ≈1,270 MSK a claim at today's claim rate still pays for the compute; the rule is a ceiling, the per-claim ceiling (720 ‰ of a block) and the share-by-`W_claim` are the knobs, and a later fence can move either.
 
-* **E2 (open, design):** the carve of a DAA's claims is settled over a set that grows block by block within the DAA; whether the chain block that closes the DAA settles it, or claims accepted so far take their share and later claims the remainder (a monotone, never-above-budget order), is the stage-4 design decision. The recommended default is the second (running split, accepting-order, budget never exceeded), because the first delays every payout by a DAA.
+* **E2 (decided in design, 2026-10-04):** option B, the final-time split over a rooted per-DAA weight row (§6b), ΣW over every accepted claim; option A kept as a tested alternative.
 
 **Still genuinely open:** the σ value (after the drill); the `w_fb` number; the envelope's carriage (§5); how much of Q7 to close before arming.
 
