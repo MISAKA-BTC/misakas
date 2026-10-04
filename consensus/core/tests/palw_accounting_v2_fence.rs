@@ -69,7 +69,7 @@ fn armed_it_moves_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_i
     let never = armed(ForkActivation::never());
     never.validate_palw_v2().expect("dormant");
     assert_eq!(ids(&never).1, b.1, "a never() value collapses out of the identity");
-    assert_eq!(palw_accounting_v2_value_v1(), [20_000, 0, 1]);
+    assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1]);
 }
 
 #[test]
@@ -86,6 +86,8 @@ fn it_is_refused_without_its_prerequisites() {
         ("palw_execution_lane", |p| p.palw_execution_lane = None),
         ("palw_anchor_window_v1", |p| p.palw_anchor_window_v1 = None),
         ("palw_model_registry", |p| p.palw_model_registry = None),
+        ("palw_canonical_work", |p| p.palw_canonical_work = None),
+        ("palw_capacity_weight_cap", |p| p.palw_capacity_weight_cap = None),
         ("palw_floor_reserve_v1 later than the fence", |p| p.palw_floor_reserve_v1 = Some(ForkActivation::new(AT + 1))),
     ] {
         let mut p = armed(ForkActivation::new(AT));

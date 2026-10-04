@@ -9,7 +9,7 @@
 //! * **I2** `fallback_count↑` never reddens real work — a REAL candidate that hangs from the merging chain does not count FALLBACK peers
 //!   ([`peer_effect_v2`]); one that does not hang is classic (F1: no borrowing across forks, unconditional here).
 //! * **I3** per claim, `attempt_weight + Σ round_weight ≤ W_claim` ([`claim_weight_split_v2`], [`claim_weight_bound_holds_v2`]).
-//! * **I4** one tick a slot — REAL first, FALLBACK a reserve behind a grace, REAL + FALLBACK in one mergeset is +1 never +2
+//! * **I4** one tick a slot — REAL first, FALLBACK the reserve, REAL + FALLBACK in one mergeset is +1 never +2
 //!   ([`palw_clock_carrier_v2`]).
 //!
 //! **R-NoClass.** Nothing here takes a class id. A lane is the PoW algorithm a header satisfies (proved by that PoW, not declared); a class
@@ -21,23 +21,25 @@ use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, PALW_ATTEMPT_BLUE_WORK_LOG2, is_palw_attempt_algo_id};
 
-/// **The FALLBACK lane's algorithm id** (ADR-0172 Q1, recommended; 8 is the retired heartbeat, 10 the round lane, 11 RFC-0008's slice).
-pub const POW_ALGO_ID_PALW_FALLBACK_V1: u8 = 12;
-
-/// **G — the grace** a FALLBACK waits behind the slot's opening before it may carry the tick (ADR-0172 §7, Q4): the REAL-first window.
-/// The same 20 s the heartbeat miner's node policy has used since ADR-0165 (`PALW_REAL_TICK_GRACE_MS_V1`).
-pub const PALW_ACCOUNTING_V2_GRACE_MS: u64 = 20_000;
-
-/// **σ — the rounds' share of a claim's weight, in permille** (ADR-0172 §6, Q3). `0` makes rounds weightless: the recommended initial value,
-/// with the budget machinery built so a later fence can raise it.
+/// **σ — the rounds' share of a claim's weight, in permille** (ADR-0172 §6, Q3). Carried in `PALW_SAFE_WEIGHT` only, never in blue work.
+/// `0` makes rounds weightless: the user's initial value (the user decides σ after an explanation); the allocation code exists
+/// ([`claim_weight_split_v2`]) and a later value is a new network id (it is hashed with the fence).
 pub const PALW_ACCOUNTING_V2_SIGMA_PERMILLE: u64 = 0;
+
+/// **The carrier-only FALLBACK subsidy, in milli-carves** (ADR-0172 §5.6, Q5): FALLBACK is fee-only. A tiny subsidy for the tick carrier alone
+/// can be added later by changing this constant (a new network id); today it is 0 and nothing reads a non-zero value.
+pub const PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI: u64 = 0;
+
+/// The FALLBACK reserve's **producer-side wait** behind the slot's opening, in ms — node POLICY, never a consensus rule (Q4): the heartbeat/FALLBACK
+/// miner waits this long for a REAL attempt before it mints. The consensus carrier rule does not read it. (ADR-0165's `PALW_REAL_TICK_GRACE_MS_V1`.)
+pub const PALW_ACCOUNTING_V2_PRODUCER_WAIT_MS: u64 = 20_000;
 
 /// The rule's own version, hashed with the fence so a change to any value here is a new network id.
 pub const PALW_ACCOUNTING_V2_VERSION: u64 = 1;
 
-/// **The values the fingerprint hashes beside the fence's height** — `[G_ms, σ_permille, version]`.
+/// **The values the fingerprint hashes beside the fence's height** — `[σ_permille, carrier_subsidy_milli, version]`.
 pub const fn palw_accounting_v2_value_v1() -> [u64; 3] {
-    [PALW_ACCOUNTING_V2_GRACE_MS, PALW_ACCOUNTING_V2_SIGMA_PERMILLE, PALW_ACCOUNTING_V2_VERSION]
+    [PALW_ACCOUNTING_V2_SIGMA_PERMILLE, PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI, PALW_ACCOUNTING_V2_VERSION]
 }
 
 /// **ε** — a FALLBACK's (and a legacy heartbeat's) blue work, the lane's one unit (ADR-0060 Decision 1.2).
@@ -54,12 +56,11 @@ pub enum LaneV2 {
     Attempt,
     /// The round lane (algo 10): E-BLUE candidates.
     Exec,
-    /// The FALLBACK lane (algo 12), only where the fence is in force at the header's own DAA score.
+    /// **FALLBACK: algo 8 made AT OR PAST the fence** — the heartbeat lane, re-meant (Q1). Below the fence algo 8 is a heartbeat and the BASE-0
+    /// floor is an attempt; from it algo 8 is the one bonded reserve (a signed envelope, credit only with an eligible bond) and BASE-0 is retired.
     Fallback,
-    /// A heartbeat (algo 8) made BELOW the fence: valid for ever, a yielding peer and a tick source with no grace.
+    /// A heartbeat (algo 8) made BELOW the fence: valid for ever, a yielding peer and a tick source, no bond envelope required.
     LegacyHeartbeat,
-    /// A heartbeat made AT OR PAST the fence: the lane is retired (invalid; named so a caller refuses it by name).
-    Retired,
     /// Any other lane (hash lanes, the receipt lane, an algo-12 header below the fence, unknown ids).
     Other,
 }
@@ -74,10 +75,7 @@ fn armed_at(fence: Option<ForkActivation>, daa_score: u64) -> bool {
 pub fn lane_v2(algo_id: u8, daa_score: u64, fence: Option<ForkActivation>) -> LaneV2 {
     let armed = armed_at(fence, daa_score);
     if algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
-        return if armed { LaneV2::Retired } else { LaneV2::LegacyHeartbeat };
-    }
-    if algo_id == POW_ALGO_ID_PALW_FALLBACK_V1 {
-        return if armed { LaneV2::Fallback } else { LaneV2::Other };
+        return if armed { LaneV2::Fallback } else { LaneV2::LegacyHeartbeat };
     }
     if algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
         return LaneV2::Exec;
@@ -115,7 +113,7 @@ pub fn colour_rule_v2(lane: LaneV2, candidate_daa: u64, fence: Option<ForkActiva
         LaneV2::Attempt if hangs_from_merging_chain => ColourRuleV2::Weighted,
         // An attempt that hangs from another branch is classic; so is anything the lane map could not place (it is invalid anyway,
         // and the conservative rule is the one that counts it).
-        LaneV2::Attempt | LaneV2::LegacyHeartbeat | LaneV2::Retired | LaneV2::Other => ColourRuleV2::Classic,
+        LaneV2::Attempt | LaneV2::LegacyHeartbeat | LaneV2::Other => ColourRuleV2::Classic,
     }
 }
 
@@ -193,8 +191,8 @@ pub fn scoring_delta_v2(members: &[(LaneV2, bool)]) -> ScoringDeltaV2 {
         let work = match lane {
             LaneV2::Attempt => 1u128 << PALW_ATTEMPT_BLUE_WORK_LOG2,
             LaneV2::Fallback | LaneV2::LegacyHeartbeat => FALLBACK_BLUE_WORK,
-            // E-BLUE adds nothing; a retired or foreign lane never reaches a valid mergeset.
-            LaneV2::Exec | LaneV2::Retired | LaneV2::Other => continue,
+            // E-BLUE adds nothing; a foreign lane never reaches a valid mergeset.
+            LaneV2::Exec | LaneV2::Other => continue,
         };
         delta.blue_score += 1;
         delta.blue_work += work;
@@ -215,12 +213,9 @@ pub struct ClockFactsV2 {
     /// Attempt-lane sources, and the newest stamp among them.
     pub real: u64,
     pub newest_real_ms: Option<u64>,
-    /// FALLBACK sources (algo 12), and the newest stamp.
+    /// FALLBACK-kind sources (algo 8, before or after the fence), and the newest stamp among them.
     pub fallback: u64,
     pub newest_fallback_ms: Option<u64>,
-    /// Legacy heartbeats (algo 8 made below the fence): a FALLBACK-kind source with no grace.
-    pub legacy_beats: u64,
-    pub newest_legacy_ms: Option<u64>,
 }
 
 /// **Who carries the slot's tick.**
@@ -245,31 +240,25 @@ impl CarrierV2 {
 ///
 /// ```text
 /// real_ok     = priced == 0 ∧ real > 0     ∧ newest_real     ≥ slot
-/// fallback_ok = priced == 0 ∧ fallback > 0 ∧ newest_fallback ≥ slot + G     (a legacy heartbeat: ≥ slot, G = 0)
+/// fallback_ok = priced == 0 ∧ fallback > 0 ∧ newest_fallback ≥ slot
 /// carrier     = Real if real_ok, else Fallback if fallback_ok, else None
 /// ```
 ///
-/// A function of header facts, so it can be computed when the header's DAA score is fixed (ADR-0142). Both kinds stay valid blocks: nothing
-/// is refused because the other exists. With `grace_ms = 0` and no legacy distinction this is ADR-0165's `palw_clock_tick_source_v1`
-/// followed by the slot test, byte for byte (tested).
-pub fn palw_clock_carrier_v2(facts: &ClockFactsV2, slot_ms: Option<u64>, grace_ms: u64) -> CarrierV2 {
+/// A function of header facts, so it can be computed when the header's DAA score is fixed (ADR-0142). **No grace is in the consensus rule** (Q4:
+/// waiting for a REAL is the producer's policy): `granted` is exactly ADR-0165's `palw_clock_tick_source_v1` followed by the slot test — the two
+/// kinds are told apart only for attribution (REAL wins a mergeset that holds both). Both kinds stay valid blocks.
+pub fn palw_clock_carrier_v2(facts: &ClockFactsV2, slot_ms: Option<u64>) -> CarrierV2 {
     if facts.priced != 0 {
         return CarrierV2::None;
     }
-    let at_or_past = |newest: Option<u64>, floor: u64| newest.is_some_and(|ms| slot_ms.is_none_or(|slot| ms >= slot.saturating_add(floor)));
-    let real_ok = facts.real > 0 && at_or_past(facts.newest_real_ms, 0);
-    if real_ok {
-        return CarrierV2::Real;
+    let at_or_past = |newest: Option<u64>| newest.is_some_and(|ms| slot_ms.is_none_or(|slot| ms >= slot));
+    if facts.real > 0 && at_or_past(facts.newest_real_ms) {
+        CarrierV2::Real
+    } else if facts.fallback > 0 && at_or_past(facts.newest_fallback_ms) {
+        CarrierV2::Fallback
+    } else {
+        CarrierV2::None
     }
-    let fallback_ok = (facts.fallback > 0 && at_or_past(facts.newest_fallback_ms, grace_ms))
-        || (facts.legacy_beats > 0 && at_or_past(facts.newest_legacy_ms, 0));
-    if fallback_ok { CarrierV2::Fallback } else { CarrierV2::None }
-}
-
-/// **The header-stage stamp rule of a FALLBACK** (the H3 analogue): below `slot + G` it can never carry, so it is refused — a time rule
-/// on the header's own parents' cursor, **not** a rule about whether a REAL block exists.
-pub fn fallback_stamp_admits_v2(stamp_ms: u64, slot_ms: Option<u64>, grace_ms: u64) -> bool {
-    slot_ms.is_none_or(|slot| stamp_ms >= slot.saturating_add(grace_ms))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -313,6 +302,103 @@ pub fn claim_weight_bound_holds_v2(split: &ClaimSplitV2, rounds_credited: u32) -
     }
 }
 
+/// **A round's credit, once per `(claim, round_index)`** (ADR-0172 §6, Q3). `verified` is the fold's branch-local verdict (E-BLUE structure, a
+/// `Final` claim, a granted permit, inside the window) — the caller's, never read from the header. `credited` is the chain's ledger of what was
+/// already credited. Returns the weight added to `safe_weight` (0 when refused: unverified, a repeat, out of range, or σ = 0). The ledger is a
+/// set so a reorg reverts exactly (the fold's delta removes the entry) and IBD, a pruned join and the pruning proof replay the same credit.
+pub fn credit_round_v2(
+    credited: &mut std::collections::BTreeSet<(u64, u32)>,
+    split: &ClaimSplitV2,
+    claim: u64,
+    round_index: u32,
+    verified: bool,
+) -> u128 {
+    if !verified || round_index >= split.n_tickets || split.per_round == 0 {
+        return 0;
+    }
+    if !credited.insert((claim, round_index)) {
+        return 0;
+    }
+    split.per_round
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Emission: one block's subsidy a DAA, shared by W_claim (fold stage; the budget is a pure function of the schedule)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// **The DAA's PALW issuance budget** (ADR-0172 §6b, the user's rule of 2026-10-04): **one block's subsidy at that DAA** — `calc_block_subsidy(daa)`,
+/// the Kaspa schedule (`SUBSIDY_BY_MONTH_TABLE` scaled by `target_time_per_block`) the caller already has. The total a DAA mints across **every** PALW
+/// route (all claims' carves, a FALLBACK carrier subsidy, any other subsidy path) never exceeds it. It replaces ADR-0167's F-EM ledger of 16 carves a
+/// DAA, a figure chosen as three times a measured claim rate rather than from the schedule.
+pub const fn palw_emission_budget_v2(block_subsidy: u64) -> u64 {
+    block_subsidy
+}
+
+/// **The one-claim ceiling**: today's carve, `PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1` of one block's subsidy. A lone claim is paid no more than
+/// it is paid now; the unused remainder is **not minted**.
+pub fn palw_emission_claim_cap_v2(block_subsidy: u64) -> u64 {
+    (block_subsidy as u128 * crate::config::params::PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1 as u128 / 1000) as u64
+}
+
+/// **The FALLBACK carrier's subsidy**, from the constant hook ([`PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI`], 0 today): milli-carves of the
+/// one-claim ceiling, paid to the tick carrier only while the floor is Idle. Counted INSIDE the DAA's budget.
+pub fn palw_emission_carrier_subsidy_v2(block_subsidy: u64, carrier_milli: u64, carrier_is_fallback_while_idle: bool) -> u64 {
+    if !carrier_is_fallback_while_idle {
+        return 0;
+    }
+    ((palw_emission_claim_cap_v2(block_subsidy) as u128 * carrier_milli as u128) / 1000).min(block_subsidy as u128) as u64
+}
+
+/// **How one DAA's budget is shared** (ADR-0172 §6b): the pool is the budget less the carrier's subsidy; each claim takes `⌊pool · w_i / Σw⌋` by its
+/// canonical compute `W_claim`, capped at the one-claim ceiling; every remainder, a cap's excess, and a DAA with **no claim** are not minted
+/// (don't-mint, not carried forward). `shares[i]` pairs with `claims[i]`. `None` on arithmetic overflow. **Σ shares + carrier ≤ budget, always.**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmissionSplitV2 {
+    pub budget: u64,
+    pub carrier: u64,
+    pub shares: Vec<u64>,
+}
+
+impl EmissionSplitV2 {
+    /// Everything this DAA mints on the PALW routes.
+    pub fn total(&self) -> u128 {
+        self.carrier as u128 + self.shares.iter().map(|s| *s as u128).sum::<u128>()
+    }
+}
+
+pub fn palw_emission_split_v2(block_subsidy: u64, claims: &[u128], carrier_subsidy: u64) -> Option<EmissionSplitV2> {
+    let budget = palw_emission_budget_v2(block_subsidy);
+    let carrier = carrier_subsidy.min(budget);
+    let pool = (budget - carrier) as u128;
+    let cap = palw_emission_claim_cap_v2(block_subsidy) as u128;
+    let sum: u128 = claims.iter().try_fold(0u128, |acc, w| acc.checked_add(*w))?;
+    let shares = claims
+        .iter()
+        .map(|w| {
+            if sum == 0 {
+                return Some(0u64);
+            }
+            // pool < 2^64 and w ≤ sum: the product can overflow u128 only for w near 2^64+ — refuse rather than wrap.
+            let share = pool.checked_mul(*w)? / sum;
+            Some(share.min(cap) as u64)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(EmissionSplitV2 { budget, carrier, shares })
+}
+
+/// **A rider takes its lead's carve in pieces, never more**: the lead's share split `⌊share / (1 + n)⌋` to each of the `n` riders (ADR-0167 §D2);
+/// the lead keeps the rest. Σ = the lead's share exactly.
+pub fn palw_emission_rider_split_v2(lead_share: u64, riders: u32) -> (u64, u64) {
+    let each = lead_share / (1 + riders as u64);
+    (lead_share - each * riders as u64, each)
+}
+
+/// **Real-time emission of a DAA**, in sompi per second, when the DAA took `interval_ms` of wall clock. Because the budget is per DAA and the schedule is
+/// per `target_ms`, a DAA slower than the target mints **less** per second than the schedule, never more.
+pub fn palw_emission_rate_sompi_per_s_v2(minted: u128, interval_ms: u64) -> u128 {
+    if interval_ms == 0 { u128::MAX } else { minted * 1000 / interval_ms as u128 }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The fence
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -346,7 +432,7 @@ impl Params {
             return Err(PalwModeV2Error::Invalid("palw_accounting_v2 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
         }
         let below = |fence: Option<ForkActivation>| fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
-        let needs: [(bool, &'static str); 11] = [
+        let needs: [(bool, &'static str); 13] = [
             (below(self.palw_floor_reserve_v1), "palw_accounting_v2 needs palw_floor_reserve_v1 at or below it: the floor machine is FALLBACK's Idle gate"),
             (below(self.palw_real_clock_tick_v1), "palw_accounting_v2 needs palw_real_clock_tick_v1 at or below it: it replaces that tick-source rule"),
             (below(self.palw_clock_cursor), "palw_accounting_v2 needs palw_clock_cursor at or below it: the carrier rule is asked of the cursor's slot"),
@@ -361,6 +447,14 @@ impl Params {
             (below(self.palw_execution_lane.map(|lane| lane.activation)), "palw_accounting_v2 needs palw_execution_lane at or below it: rounds are its blocks"),
             (below(self.palw_anchor_window_v1), "palw_accounting_v2 needs palw_anchor_window_v1 at or below it: only REAL attempts feed the window past the fence"),
             (below(self.palw_model_registry), "palw_accounting_v2 needs palw_model_registry at or below it: a REAL attempt is a registry class's"),
+            (
+                below(self.palw_canonical_work),
+                "palw_accounting_v2 needs palw_canonical_work at or below it: W_claim is the derived pwu (ADR-0149), canonical active compute, not a declared number",
+            ),
+            (
+                below(self.palw_capacity_weight_cap),
+                "palw_accounting_v2 needs palw_capacity_weight_cap at or below it: a large claim's unfinished weight is bounded by its bond (J-1)",
+            ),
         ];
         for (ok, message) in needs {
             if !ok {
@@ -380,7 +474,6 @@ mod tests {
 
     const F: u64 = 1_000;
     const I: u64 = crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
-    const G: u64 = PALW_ACCOUNTING_V2_GRACE_MS;
 
     fn fence() -> Option<ForkActivation> {
         Some(ForkActivation::new(F))
@@ -403,24 +496,61 @@ mod tests {
             assert_eq!(lane_v2(algo, F, None), LaneV2::Attempt, "the lane exists whether or not the fence does");
         }
         assert_eq!(lane_v2(POW_ALGO_ID_PALW_ROUND_V1, 5, fence()), LaneV2::Exec);
-        // The heartbeat is legacy below the fence and retired from it; FALLBACK exists only from it.
+        // Algo 8: a heartbeat below the fence, FALLBACK from it (Q1: the same lane id, re-meant); dormant it is the heartbeat for ever.
         assert_eq!(lane_v2(POW_ALGO_ID_HEARTBEAT_V1, F - 1, fence()), LaneV2::LegacyHeartbeat);
-        assert_eq!(lane_v2(POW_ALGO_ID_HEARTBEAT_V1, F, fence()), LaneV2::Retired);
+        assert_eq!(lane_v2(POW_ALGO_ID_HEARTBEAT_V1, F, fence()), LaneV2::Fallback);
         assert_eq!(lane_v2(POW_ALGO_ID_HEARTBEAT_V1, u64::MAX, None), LaneV2::LegacyHeartbeat, "dormant: the heartbeat is the heartbeat");
-        assert_eq!(lane_v2(POW_ALGO_ID_PALW_FALLBACK_V1, F - 1, fence()), LaneV2::Other, "an algo-12 header below the fence is nothing");
-        assert_eq!(lane_v2(POW_ALGO_ID_PALW_FALLBACK_V1, F, fence()), LaneV2::Fallback);
-        assert_eq!(lane_v2(POW_ALGO_ID_PALW_FALLBACK_V1, F, None), LaneV2::Other);
-        assert_eq!(lane_v2(POW_ALGO_ID_PALW_FALLBACK_V1, F, Some(ForkActivation::never())), LaneV2::Other, "never() is dormant");
+        assert_eq!(lane_v2(POW_ALGO_ID_HEARTBEAT_V1, F, Some(ForkActivation::never())), LaneV2::LegacyHeartbeat, "never() is dormant");
+        assert_eq!(lane_v2(12, F, fence()), LaneV2::Other, "no new lane id was allocated");
         assert_eq!(lane_v2(1, F, fence()), LaneV2::Other);
     }
 
     #[test]
     fn below_the_fence_every_lane_defers_to_the_legacy_rule() {
-        for lane in [LaneV2::Attempt, LaneV2::Exec, LaneV2::Fallback, LaneV2::LegacyHeartbeat, LaneV2::Retired, LaneV2::Other] {
+        for lane in [LaneV2::Attempt, LaneV2::Exec, LaneV2::Fallback, LaneV2::LegacyHeartbeat, LaneV2::Other] {
             for hangs in [false, true] {
                 assert_eq!(colour_rule_v2(lane, F - 1, fence(), hangs), ColourRuleV2::Legacy);
                 assert_eq!(colour_rule_v2(lane, u64::MAX, None, hangs), ColourRuleV2::Legacy, "no fence, no rule");
                 assert_eq!(exec_verdict_v2(lane, F - 1, fence(), hangs), None);
+            }
+        }
+    }
+
+    /// **Stage 2's finding, held as a test.** With algo 8 re-meant as FALLBACK (Q1) and ADR-0105 F1 a prerequisite of the fence, v2's colour of every
+    /// lane is the colouring the code already has: FALLBACK is `Heartbeat` (yields, never enlarges), a REAL that hangs is `Weighted`, one that does
+    /// not is `Classic`, a round block is recorded non-scoring without a walk. So `ghostdag()` needs no change; this table is what it computes today.
+    #[test]
+    fn v2_colouring_is_the_existing_adr_0105_colouring_given_its_prerequisites() {
+        // (algo, own DAA, hangs) -> the existing rule's name
+        let existing = |algo: u8, daa: u64, hangs: bool| -> &'static str {
+            // ADR-0105 `lane_coloring` with the transparency and same-chain fences in force, and the round lane open (ADR-0125).
+            if algo == POW_ALGO_ID_PALW_ROUND_V1 {
+                "round: add_red, no walk"
+            } else if algo == POW_ALGO_ID_HEARTBEAT_V1 {
+                "Heartbeat"
+            } else if is_palw_attempt_algo_id(algo) {
+                if hangs { "Weighted" } else { "Classic" }
+            } else {
+                let _ = daa;
+                "Classic"
+            }
+        };
+        let v2 = |algo: u8, daa: u64, hangs: bool| -> &'static str {
+            let lane = lane_v2(algo, daa, fence());
+            match colour_rule_v2(lane, daa, fence(), hangs) {
+                // Below the fence v2 defers to this very table.
+                ColourRuleV2::Legacy => existing(algo, daa, hangs),
+                ColourRuleV2::ExecNonScoring => "round: add_red, no walk",
+                ColourRuleV2::Yielding => "Heartbeat",
+                ColourRuleV2::Weighted => "Weighted",
+                ColourRuleV2::Classic => "Classic",
+            }
+        };
+        for algo in [POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3, 1, 7] {
+            for daa in [0, F - 1, F, F + 1, 1_000_000] {
+                for hangs in [false, true] {
+                    assert_eq!(v2(algo, daa, hangs), existing(algo, daa, hangs), "algo {algo} daa {daa} hangs {hangs}");
+                }
             }
         }
     }
@@ -437,7 +567,6 @@ mod tests {
         assert_eq!(exec_verdict_v2(LaneV2::Exec, F, fence(), true), Some(ExecVerdictV2::EBlue));
         assert_eq!(exec_verdict_v2(LaneV2::Exec, F, fence(), false), Some(ExecVerdictV2::Red), "another branch or outside the window: RED, not E-BLUE");
         assert_eq!(exec_verdict_v2(LaneV2::Attempt, F, fence(), true), None, "only an Exec block has an E verdict");
-        assert_eq!(colour_rule_v2(LaneV2::Retired, F, fence(), true), Classic, "invalid anyway; the conservative rule counts it");
         assert_eq!(colour_rule_v2(LaneV2::Other, F, fence(), true), Classic);
     }
 
@@ -509,42 +638,31 @@ mod tests {
     }
 
     fn facts(real: u64, nr: Option<u64>, fb: u64, nf: Option<u64>) -> ClockFactsV2 {
-        ClockFactsV2 { priced: 0, real, newest_real_ms: nr, fallback: fb, newest_fallback_ms: nf, legacy_beats: 0, newest_legacy_ms: None }
+        ClockFactsV2 { priced: 0, real, newest_real_ms: nr, fallback: fb, newest_fallback_ms: nf }
     }
 
     #[test]
-    fn real_carries_first_and_fallback_is_a_reserve_behind_the_grace() {
+    fn real_carries_first_and_fallback_is_the_reserve_with_no_grace_in_the_rule() {
         let slot = Some(1_000_000);
-        // Nothing at the slot: no tick.
-        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 0, None), slot, G), CarrierV2::None);
-        // A REAL stamped at the slot carries immediately.
-        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(1_000_000), 0, None), slot, G), CarrierV2::Real);
-        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(999_999), 0, None), slot, G), CarrierV2::None, "a REAL stamped before the slot ticks nothing");
-        // A FALLBACK at the slot is not yet a carrier; behind the grace it is.
-        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 1, Some(1_000_000)), slot, G), CarrierV2::None);
-        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 1, Some(1_000_000 + G - 1)), slot, G), CarrierV2::None);
-        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 1, Some(1_000_000 + G)), slot, G), CarrierV2::Fallback);
-        // Both qualify: REAL carries, and the tick is +1.
-        let both = facts(2, Some(1_000_005), 3, Some(1_000_000 + G + 7));
-        assert_eq!(palw_clock_carrier_v2(&both, slot, G), CarrierV2::Real);
+        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 0, None), slot), CarrierV2::None);
+        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(1_000_000), 0, None), slot), CarrierV2::Real);
+        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(999_999), 0, None), slot), CarrierV2::None);
+        // A FALLBACK at the slot carries at once: the producer's wait (policy) is not the rule's.
+        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 1, Some(1_000_000)), slot), CarrierV2::Fallback);
+        assert_eq!(palw_clock_carrier_v2(&facts(0, None, 1, Some(999_999)), slot), CarrierV2::None);
+        // Both qualify: REAL carries, and the tick is +1 (one exemption, whatever the mix).
+        assert_eq!(palw_clock_carrier_v2(&facts(2, Some(1_000_005), 3, Some(1_000_007)), slot), CarrierV2::Real);
         assert!(CarrierV2::Real.granted() && CarrierV2::Fallback.granted() && !CarrierV2::None.granted());
-        // A stale REAL (the slow class: stamped with its template's time) leaves the reserve to carry.
-        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(10), 1, Some(1_000_000 + G)), slot, G), CarrierV2::Fallback);
-        // An open slot (no cursor) admits any source; a priced block is the clock and nothing stands in.
-        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(0), 0, None), None, G), CarrierV2::Real);
-        assert_eq!(palw_clock_carrier_v2(&ClockFactsV2 { priced: 1, ..facts(1, Some(u64::MAX), 1, Some(u64::MAX)) }, slot, G), CarrierV2::None);
-        // A legacy heartbeat (made below the fence) is a FALLBACK-kind source with no grace.
-        let legacy = ClockFactsV2 { legacy_beats: 1, newest_legacy_ms: Some(1_000_000), ..Default::default() };
-        assert_eq!(palw_clock_carrier_v2(&legacy, slot, G), CarrierV2::Fallback);
-        // The header-stage stamp rule of a FALLBACK.
-        assert!(fallback_stamp_admits_v2(1_000_000 + G, slot, G) && !fallback_stamp_admits_v2(1_000_000 + G - 1, slot, G));
-        assert!(fallback_stamp_admits_v2(0, None, G), "no cursor, no wait");
-        assert!(fallback_stamp_admits_v2(u64::MAX, Some(u64::MAX), G), "saturating, never a panic");
+        // A stale REAL (a slow class: stamped with its template's time) leaves the reserve to carry.
+        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(10), 1, Some(1_000_000)), slot), CarrierV2::Fallback);
+        // An open slot admits any source; a priced block is the clock and nothing stands in.
+        assert_eq!(palw_clock_carrier_v2(&facts(1, Some(0), 0, None), None), CarrierV2::Real);
+        assert_eq!(palw_clock_carrier_v2(&ClockFactsV2 { priced: 1, ..facts(1, Some(u64::MAX), 1, Some(u64::MAX)) }, slot), CarrierV2::None);
     }
 
-    /// With the grace at zero and the kinds not told apart, the carrier rule IS ADR-0165's tick-source rule followed by the slot test.
+    /// The carrier rule's `granted` IS ADR-0165's tick-source rule followed by the slot test, for every facts shape (the kinds differ only in attribution).
     #[test]
-    fn with_no_grace_it_is_adr_0165s_rule_byte_for_byte() {
+    fn granted_is_adr_0165s_rule_byte_for_byte() {
         let mut rng = Rng(0xC0DE_0165);
         for _ in 0..5_000 {
             let slot_ms = (rng.next() % 4 != 0).then(|| rng.next() % 2_000);
@@ -558,7 +676,7 @@ mod tests {
             let old_granted = stand_in
                 && slot_ms.map(|s| PalwClockCursorV1 { next_slot_ms: s, slots_consumed: 0 }).is_none_or(|c| palw_clock_slot_admits_v1(&c, beat_ms).is_ok());
             let new = ClockFactsV2 { priced, real: nr, newest_real_ms: ms_r, fallback: nf, newest_fallback_ms: ms_f, ..Default::default() };
-            assert_eq!(palw_clock_carrier_v2(&new, slot_ms, 0).granted(), old_granted, "{old_facts:?} slot {slot_ms:?}");
+            assert_eq!(palw_clock_carrier_v2(&new, slot_ms).granted(), old_granted, "{old_facts:?} slot {slot_ms:?}");
         }
     }
 
@@ -570,7 +688,7 @@ mod tests {
     #[test]
     fn a_producer_of_any_mix_of_real_and_fallback_cannot_run_the_clock_faster_than_one_a_slot() {
         let mut rng = Rng(0xA11_CA11);
-        for grace in [0, G] {
+        {
             for _round in 0..300 {
                 let start = 10_000_000u64;
                 let mut now = start;
@@ -586,7 +704,7 @@ mod tests {
                     let (nf, nr) = (newest(n_fb, &mut rng), newest(n_real, &mut rng));
                     let f = facts(n_real, nr, n_fb, nf);
                     let slot = crate::palw_clock_cursor_v1::palw_clock_cursor_from_reference_v1(reference, I).next_slot_ms;
-                    let carrier = palw_clock_carrier_v2(&f, Some(slot), grace);
+                    let carrier = palw_clock_carrier_v2(&f, Some(slot));
                     if carrier.granted() {
                         let step_stamp = now.max(slot);
                         if step_stamp > now + 132_000 {
@@ -603,7 +721,7 @@ mod tests {
                     }
                 }
                 let horizon = (now - start).max(1);
-                assert!(daa <= horizon / I + 2, "grace {grace}: {daa} ticks over {horizon} ms (≤ {})", horizon / I + 2);
+                assert!(daa <= horizon / I + 2, "{daa} ticks over {horizon} ms (≤ {})", horizon / I + 2);
                 let _ = both_in_one_step;
             }
         }
@@ -642,9 +760,122 @@ mod tests {
         assert_eq!(claim_weight_split_v2(u128::MAX, 0, 5).map(|s| s.attempt), Some(u128::MAX));
     }
 
+    /// **Q3, both σ.** Conservation (`attempt + Σ credited ≤ W_claim`), no double count (a round index credits once, however often it is
+    /// merged or replayed, in any order), unverified rounds credit nothing, and at σ = 0 the claim weighs exactly what it weighs today.
+    #[test]
+    fn round_credit_conserves_never_double_counts_and_is_todays_weight_at_sigma_zero() {
+        use std::collections::BTreeSet;
+        let mut rng = Rng(0x5160_0001);
+        for sigma in [0u16, 1, 100, 300, 1000] {
+            for _ in 0..400 {
+                let w = (rng.next() as u128) << (rng.next() % 30);
+                let n = (rng.next() % 121) as u32;
+                let split = claim_weight_split_v2(w, sigma, n).unwrap();
+                // A hostile stream: repeats, out-of-range indices, unverified rounds, shuffled order.
+                let stream: Vec<(u32, bool)> = (0..300).map(|_| ((rng.next() % 150) as u32, rng.next() % 5 != 0)).collect();
+                let (mut a, mut b) = (BTreeSet::new(), BTreeSet::new());
+                let mut total_a = 0u128;
+                for &(i, ok) in &stream {
+                    total_a += credit_round_v2(&mut a, &split, 7, i, ok);
+                }
+                // The same stream replayed in reverse (another arrival order / a second node) credits the same SET of rounds when all are
+                // verified; with the same verdicts per index the total is the same.
+                let mut total_b = 0u128;
+                let mut verdict = std::collections::BTreeMap::new();
+                for &(i, ok) in &stream {
+                    *verdict.entry(i).or_insert(false) |= ok;
+                }
+                for (&i, &ok) in verdict.iter().rev() {
+                    total_b += credit_round_v2(&mut b, &split, 7, i, ok);
+                }
+                assert!(split.attempt + total_a <= w, "σ={sigma}: conservation");
+                assert!(a.len() as u32 <= n, "never more credited rounds than tickets");
+                assert_eq!(total_a, a.len() as u128 * split.per_round, "σ={sigma}: each credited round counted once");
+                if stream.iter().all(|&(_, ok)| ok) || true {
+                    // Total depends only on WHICH indices were verified at least once, not on order or repetition.
+                    let set_a: BTreeSet<u32> = stream.iter().filter(|&&(i, ok)| ok && i < n).map(|&(i, _)| i).collect();
+                    assert_eq!(total_a, set_a.len() as u128 * split.per_round, "σ={sigma}");
+                    assert_eq!(total_a, total_b, "σ={sigma}: order-independent");
+                }
+                if sigma == 0 {
+                    assert_eq!((split.attempt, total_a), (w, 0), "σ = 0: the claim weighs W_claim, rounds weigh nothing — today's rule");
+                }
+            }
+        }
+        // Another claim's round with the same index is a different ledger row.
+        let split = claim_weight_split_v2(1_000, 100, 10).unwrap();
+        let mut ledger = BTreeSet::new();
+        assert_eq!(credit_round_v2(&mut ledger, &split, 1, 3, true), 10);
+        assert_eq!(credit_round_v2(&mut ledger, &split, 1, 3, true), 0, "once per (claim, round)");
+        assert_eq!(credit_round_v2(&mut ledger, &split, 2, 3, true), 10);
+        assert_eq!(credit_round_v2(&mut ledger, &split, 1, 4, false), 0, "unverified");
+        assert_eq!(credit_round_v2(&mut ledger, &split, 1, 10, true), 0, "index beyond the tickets");
+    }
+
+    /// **The emission pillar.** Whatever the claims, weights, subsidy and carrier: (1) the DAA's PALW total never exceeds one block's subsidy; (2) a DAA
+    /// with no claim mints nothing but the carrier's constant; (3) shares are proportional to `W_claim` (no claim is paid more than its fair share) and
+    /// never above the one-claim ceiling; (4) riders split their lead exactly; (5) a DAA slower than the schedule's target mints less per second than the
+    /// schedule, never more; (6) the schedule's own unit is respected for a lone claim (today's carve).
+    #[test]
+    fn a_daa_never_mints_more_than_one_blocks_subsidy_and_shares_it_by_w_claim() {
+        let mut rng = Rng(0xE_5551);
+        for _ in 0..4_000 {
+            let subsidy = (rng.next() % 5_000_000_000_000) + 1; // up to ~50,000 MSK in sompi
+            let n = (rng.next() % 40) as usize;
+            let claims: Vec<u128> = (0..n).map(|_| if rng.next() % 6 == 0 { 0 } else { (rng.next() as u128) << (rng.next() % 50) }).collect();
+            let carrier_on = rng.next() % 2 == 0;
+            let carrier = palw_emission_carrier_subsidy_v2(subsidy, rng.next() % 1_500, carrier_on);
+            let split = palw_emission_split_v2(subsidy, &claims, carrier).expect("in range");
+            // (1) the ceiling, with every route counted.
+            assert!(split.total() <= subsidy as u128, "minted {} of {subsidy}", split.total());
+            // (2) no claim, nothing but the carrier.
+            if claims.iter().all(|w| *w == 0) {
+                assert!(split.shares.iter().all(|s| *s == 0));
+            }
+            // (3) proportional, capped, zero stays zero.
+            let sum: u128 = claims.iter().sum();
+            let cap = palw_emission_claim_cap_v2(subsidy) as u128;
+            for (w, share) in claims.iter().zip(&split.shares) {
+                assert!(*share as u128 <= cap);
+                if *w == 0 {
+                    assert_eq!(*share, 0);
+                } else {
+                    assert!(*share as u128 * sum <= (subsidy - split.carrier) as u128 * *w, "a share above its W_claim fraction");
+                }
+            }
+            // (4) riders: the lead's share is split exactly.
+            if let Some(&lead) = split.shares.first() {
+                let riders = (rng.next() % 65) as u32;
+                let (kept, each) = palw_emission_rider_split_v2(lead, riders);
+                assert_eq!(kept + each * riders as u64, lead);
+            }
+            // (5) real time: a DAA at or beyond the target interval mints at most the schedule's per-second rate.
+            let target_ms = 120_000u64;
+            let interval = target_ms + rng.next() % 600_000;
+            assert!(
+                palw_emission_rate_sompi_per_s_v2(split.total(), interval) <= palw_emission_rate_sompi_per_s_v2(subsidy as u128, target_ms),
+                "a slow DAA out-minted the schedule"
+            );
+        }
+        // (6) one claim, no carrier: exactly today's carve (720 ‰ of the block's subsidy), and the other 280 ‰ is not minted.
+        let one = palw_emission_split_v2(4_445_600_000_000, &[7], 0).unwrap();
+        assert_eq!(one.shares, vec![3_200_832_000_000], "720 ‰ of 4,445.6 MSK");
+        assert_eq!(one.total(), 3_200_832_000_000);
+        // Two equal claims share the pool, each below the cap; the total is far below the budget.
+        let two = palw_emission_split_v2(4_445_600_000_000, &[5, 5], 0).unwrap();
+        assert_eq!(two.shares, vec![2_222_800_000_000; 2]);
+        // Twenty equal claims: one block's subsidy in all, where 16 whole carves (ADR-0167) allowed ~11.5× that.
+        let many = palw_emission_split_v2(4_445_600_000_000, &[1; 20], 0).unwrap();
+        assert!(many.total() <= 4_445_600_000_000);
+        // No claim at all: nothing is minted (the unused budget is not carried, not paid).
+        assert_eq!(palw_emission_split_v2(4_445_600_000_000, &[], 0).unwrap().total(), 0);
+        // Overflow refused, never a panic.
+        assert_eq!(palw_emission_split_v2(u64::MAX, &[u128::MAX, 1], 0), None);
+    }
+
     #[test]
     fn the_fence_values_are_the_recommended_defaults_and_hashed_with_it() {
-        assert_eq!(palw_accounting_v2_value_v1(), [20_000, 0, 1]);
-        assert_eq!(G, crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1, "the consensus grace is the grace node policy has used since ADR-0165");
+        assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1], "σ = 0, no carrier subsidy, version 1");
+        assert_eq!(PALW_ACCOUNTING_V2_PRODUCER_WAIT_MS, crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1, "the producer's wait is the policy ADR-0165 already ships");
     }
 }

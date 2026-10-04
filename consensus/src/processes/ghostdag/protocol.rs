@@ -282,6 +282,35 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         })
     }
 
+    /// **ADR-0172 §4.3: the E-BLUE structural verdict of `candidate` as merged by a block whose selected parent is
+    /// `merging_selected_parent`** — `Some(EBlue)` iff the candidate is a round-lane block under `accounting_v2` that hangs from the merging
+    /// block's own selected chain within the merge-depth window (the ADR-0105 §11 walk on the GHOSTDAG store), `Some(Red)` if it does not,
+    /// `None` for any other block, below the fence, or where the transparency rule this verdict reuses is not configured.
+    ///
+    /// **Recomputed, never stored.** GHOSTDAG already records a round block as a non-scoring member without walking it (`ghostdag()` above),
+    /// so E-BLUE needs no stored-format change: this is a pure function of stored selected-parent pointers and the candidate's header,
+    /// and answers alike on the header path, the virtual, a reorg, IBD, a pruned node and the pruning proof's sites. **Nothing calls it yet**
+    /// (dormant; the fold, the RPC and the audit index are spec stages 4–5).
+    pub fn exec_verdict_v2(
+        &self,
+        candidate: BlockHash,
+        merging_selected_parent: BlockHash,
+        accounting_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    ) -> Option<kaspa_consensus_core::palw_accounting_v2::ExecVerdictV2> {
+        use kaspa_consensus_core::palw_accounting_v2::{LaneV2, exec_verdict_v2, lane_v2};
+        let transparency = self.heartbeat_transparent?;
+        if candidate.is_origin() {
+            return None;
+        }
+        let header = self.headers_store.get_header(candidate).ok()?;
+        let lane = lane_v2(header.pow_algo_id, header.daa_score, accounting_v2);
+        if lane != LaneV2::Exec {
+            return None;
+        }
+        let hangs = self.hangs_from_the_merging_chain(candidate, merging_selected_parent, transparency.merge_depth);
+        exec_verdict_v2(lane, header.daa_score, accounting_v2, hangs)
+    }
+
     /// Runs the GHOSTDAG protocol and calculates the block GhostdagData by the given parents.
     /// The function calculates mergeset blues by iterating over the blocks in
     /// the anticone of the new block selected parent (which is the parent with the
