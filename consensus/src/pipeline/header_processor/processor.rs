@@ -130,6 +130,8 @@ pub struct HeaderProcessor {
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0172: `Params::palw_accounting_v2_fence` — from it an algo-8 header is a FALLBACK and must carry its envelope (checked at the shape gate and, with the signature, at the stateless carriage check).
+    pub(super) palw_accounting_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0138: `Params::palw_anchor_clock`. The heartbeat's slot rule reads it, because past the
     /// fence the interval follows whether the parent advances the DAA rather than whether it is
     /// bonded (`heartbeat_interval_ms_v2`).
@@ -263,6 +265,7 @@ impl HeaderProcessor {
             palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_accounting_v2: params.palw_accounting_v2_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
             palw_clock_floor: params.palw_clock_floor,

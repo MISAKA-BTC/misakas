@@ -203,13 +203,22 @@ impl HeaderProcessor {
         // ADR-0072 SA-3: the admissible envelope version travels with the lane, so pre-fence
         // history validates under the old version and post-fence blocks under the new, in one
         // binary. `Unfenced` supplies the compiled-in version, which is every shipped preset.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
-            header.pow_algo_id,
-            &header.palw_commitment,
-            commitment_bound,
-            attempt_lane,
-        )
-        .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
+        // ADR-0172: algo 8 at or past `palw_accounting_v2` is a FALLBACK: its commitment is a FALLBACK envelope. Below the fence it is the heartbeat and carries nothing — the
+        // generic rule below, byte for byte.
+        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
+        {
+            kaspa_consensus_core::palw_fallback_v1::check_algo8_commitment_shape_v1(true, &header.palw_commitment)
+                .map_err(RuleError::BadPalwCommitmentShape)?;
+        } else {
+            kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+                header.pow_algo_id,
+                &header.palw_commitment,
+                commitment_bound,
+                attempt_lane,
+            )
+            .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
+        }
         // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is
         // hash-visible exactly on the lanes that commit state — the V2 lineage (6/7), and, since
         // ADR-0060, a heartbeat (algo-3) header on a `ConsensusV2` network. Everywhere else it is
@@ -377,6 +386,18 @@ pub(crate) fn palw_carriage_stateless_v1(
                     }
                     Ok(())
                 })
+        }
+        // **ADR-0172: a FALLBACK's envelope, on the relay path.** An algo-8 header with a commitment (only possible at or past `palw_accounting_v2`: the shape gate refuses one below it)
+        // must carry a signature that verifies under its own key over its position — nonce included — or the envelope is free bytes and one solve mints unbounded distinct blocks
+        // (the attempt lane's lesson). An empty commitment is a pre-fence heartbeat.
+        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 if !header.palw_commitment.is_empty() => {
+            kaspa_consensus_core::palw_fallback_v1::PalwFallbackEnvelopeV1::decode(&header.palw_commitment)
+                .and_then(|envelope| {
+                    envelope.validate_stateless(network_domain, pre_pow_hash, header.timestamp, header.nonce, |key, message, sig, context| {
+                        kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                    })
+                })
+                .map_err(|e| e.to_string())
         }
         POW_ALGO_ID_PALW_RECEIPT_V3 => {
             kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)

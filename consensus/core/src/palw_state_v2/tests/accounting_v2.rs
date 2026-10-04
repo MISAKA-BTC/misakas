@@ -205,3 +205,43 @@ fn several_chain_blocks_of_one_daa_share_one_budget() {
     let total: u128 = [5u128, 7, 9].iter().map(|w| crate::palw_accounting_v2::palw_emission_final_payout_v2(&closed, *w, u64::MAX).unwrap() as u128).sum();
     assert!(total <= palw_emission_pool_v2(BUDGET) as u128);
 }
+
+/// **The block fold credits the FALLBACKs it is told about** — eligible bond with the right key, floor Idle, once a bond a DAA; an unbonded key, a wrong key, a frozen or retiring bond,
+/// and a floor that is not Idle credit nothing. A no-op below the fence.
+#[test]
+fn the_fold_credits_only_eligible_fallbacks_while_the_floor_is_idle() {
+    use crate::palw_accounting_v2::PalwFallbackFactV1;
+    let (p, extras) = (armed(), PalwTransitionExtrasV1::default());
+    let mut state = PalwChainStateV2::genesis();
+    let good = bond_key(1);
+    let key = vec![0xAB; 2592];
+    state.bonds.insert(
+        good,
+        PalwBondStateV2 {
+            pubkey: key.clone(),
+            operator_id: h64(0x0A),
+            collateral: 100 * 100_000_000,
+            slashed: 0,
+            status: PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: h64(0xA1),
+            capable_classes: Default::default(),
+        },
+    );
+    let fact = |bond: PalwBondKeyV2, pubkey: Vec<u8>| PalwFallbackFactV1 { carrying_block: Default::default(), bond, pubkey };
+    let mut b = builder(&state, &p, &extras);
+    b.credit_fallbacks_v2(7, &[fact(good, key.clone()), fact(good, key.clone()), fact(bond_key(2), key.clone()), fact(good, vec![1; 2592])]);
+    assert_eq!(b.state.fallback_weight_v2(), crate::palw_accounting_v2::PALW_ACCOUNTING_V2_W_FB_V1 as u128, "once for the eligible bond; the unbonded and the wrong key credit nothing");
+    b.credit_fallbacks_v2(8, &[fact(good, key.clone())]);
+    assert_eq!(b.state.fallback_weight_v2(), 2 * crate::palw_accounting_v2::PALW_ACCOUNTING_V2_W_FB_V1 as u128, "the next DAA");
+    // A floor that is not Idle credits nothing.
+    let mut busy = builder(&state, &p, &extras);
+    busy.state.floor_state = Some(crate::palw_real_share_v1::PalwFloorStateV1 { mode: crate::palw_real_share_v1::PalwFloorModeV1::Normal { last_blue: 5 }, last_probe_end: None });
+    busy.credit_fallbacks_v2(7, &[fact(good, key.clone())]);
+    assert_eq!(busy.state.fallback_weight_v2(), 0, "REAL work is flowing: the reserve earns no weight");
+    // Below the fence: nothing.
+    let dormant = params();
+    let mut off = builder(&state, &dormant, &extras);
+    off.credit_fallbacks_v2(7, &[fact(good, key)]);
+    assert_eq!(off.state.fallback_weight_v2(), 0);
+}

@@ -781,6 +781,17 @@ pub fn palw_panel_draw_seed_v1(anchor_execution: &Hash64, claim_id: &Hash64) -> 
 /// the timestamp and the nonce inside its bucket (outside the pre-PoW hash and the bucket index), and
 /// the challenge (blanked). Moved by anything it does price.
 pub fn palw_panel_anchor_execution_v1(network_domain: Hash64, header: &crate::header::Header) -> Option<Hash64> {
+    // ADR-0172 (the anchor duty): an OPERATOR-keyed FALLBACK (algo 8 carrying its envelope) is a binder whose seed is its header-derived execution key — never its own
+    // block identity, never its signature. Algo 8 below `palw_accounting_v2` carries no commitment, so this answers `None` there exactly as before.
+    if header.pow_algo_id == crate::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+        let envelope = crate::palw_fallback_v1::PalwFallbackEnvelopeV1::decode(&header.palw_commitment).ok()?;
+        return Some(crate::palw_fallback_v1::palw_fallback_execution_key_v1(
+            network_domain,
+            crate::hashing::header::pre_pow_hash_64(header),
+            &envelope.bond,
+            header.nonce,
+        ));
+    }
     if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
         return None;
     }

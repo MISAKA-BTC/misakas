@@ -37,9 +37,15 @@ pub const PALW_ACCOUNTING_V2_PRODUCER_WAIT_MS: u64 = 20_000;
 /// The rule's own version, hashed with the fence so a change to any value here is a new network id.
 pub const PALW_ACCOUNTING_V2_VERSION: u64 = 1;
 
-/// **The values the fingerprint hashes beside the fence's height** — `[σ_permille, carrier_subsidy_milli, version]`.
-pub const fn palw_accounting_v2_value_v1() -> [u64; 3] {
-    [PALW_ACCOUNTING_V2_SIGMA_PERMILLE, PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI, PALW_ACCOUNTING_V2_VERSION]
+/// **`w_fb` — the weight one credited FALLBACK adds to `fallback_weight`** (ADR-0172 §5.5; the user decides the value, this is the recommendation). It is `FCW`, ADR-0160 App. A's
+/// one floor claim's PROVISIONAL weight (`⌊β·pwu⌋`, β = 100 ‰) = 604,250,611 — the figure ADR-0165 §6 quotes. The 6,042,506,112 ADR-0165 §00.4 quotes is the same floor claim's
+/// FULL `pwu` (what `safe_weight` takes at its `Final`): the two are one quantity at two maturities, not two derivations. A FALLBACK has no panel, court or `Final`, so it
+/// is credited at once at the weight a floor claim carries while still unverified.
+pub const PALW_ACCOUNTING_V2_W_FB_V1: u64 = 604_250_611;
+
+/// **The values the fingerprint hashes beside the fence's height** — `[σ_permille, carrier_subsidy_milli, version, w_fb]`.
+pub const fn palw_accounting_v2_value_v1() -> [u64; 4] {
+    [PALW_ACCOUNTING_V2_SIGMA_PERMILLE, PALW_ACCOUNTING_V2_FALLBACK_CARRIER_SUBSIDY_MILLI, PALW_ACCOUNTING_V2_VERSION, PALW_ACCOUNTING_V2_W_FB_V1]
 }
 
 /// **ε** — a FALLBACK's (and a legacy heartbeat's) blue work, the lane's one unit (ADR-0060 Decision 1.2).
@@ -540,6 +546,15 @@ pub enum PalwAccountingRowV2 {
     Slot(u64),
     /// A DAA's row, open or closed (the key says which).
     Daa(DaaWeightRowV2),
+}
+
+/// **One FALLBACK block a fold is told about** — the processor decodes each algo-8 header at or past the fence in the block's own header and its mergeset (blues then reds,
+/// the selected parent excluded: it credited itself) and hands the fold the facts the envelope states. The fold decides credit (E3); the facts are E0/E1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFallbackFactV1 {
+    pub carrying_block: crate::BlockHash,
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub pubkey: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1157,7 +1172,8 @@ mod tests {
 
     #[test]
     fn the_fence_values_are_the_recommended_defaults_and_hashed_with_it() {
-        assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1], "σ = 0, no carrier subsidy, version 1");
+        assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1, 604_250_611], "σ = 0, no carrier subsidy, version 1, w_fb = FCW");
+        assert_eq!(PALW_ACCOUNTING_V2_W_FB_V1 as u128, crate::palw_weight_cap_v1::PALW_CAPACITY_FCW_V1, "w_fb is the floor claim's provisional weight");
         assert_eq!(PALW_ACCOUNTING_V2_PRODUCER_WAIT_MS, crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1, "the producer's wait is the policy ADR-0165 already ships");
     }
 }

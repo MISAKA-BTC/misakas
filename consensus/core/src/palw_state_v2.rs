@@ -19206,6 +19206,29 @@ impl<'a> TransitionBuilder<'a> {
         true
     }
 
+    /// **Step 1g: the FALLBACK blocks of this block's own header and mergeset, credited** (ADR-0172 §5). A FALLBACK is credited iff its bond is registered, the key it carried is the bond's,
+    /// the bond may take work and is not frozen, and the floor machine is **Idle**; once per bond per DAA. Anything else is a skip: the block still carried its ε, its blue-score step
+    /// and its tick source (header-derived), only the weight is withheld.
+    fn credit_fallbacks_v2(&mut self, daa: u64, facts: &[crate::palw_accounting_v2::PalwFallbackFactV1]) {
+        if !self.params.accounting_v2_active_at(daa) || facts.is_empty() {
+            return;
+        }
+        if self.state.floor_state_v1().mode != crate::palw_real_share_v1::PalwFloorModeV1::Idle {
+            return;
+        }
+        let floor = self.params.min_collateral_sompi();
+        for fact in facts {
+            let eligible = self.state.bonds.get(&fact.bond).is_some_and(|bond| {
+                bond.pubkey == fact.pubkey
+                    && palw_bond_may_take_work_v2(bond, floor)
+                    && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, &fact.bond)
+            });
+            if eligible {
+                self.accounting_v2_credit_fallback(fact.bond, daa, crate::palw_accounting_v2::PALW_ACCOUNTING_V2_W_FB_V1 as u128);
+            }
+        }
+    }
+
     /// **A round credited** (σ-weighted, once per `(claim, round_index)`): returns the share added to `safe_weight`'s side (0 at σ = 0 — nothing is written then).
     fn accounting_v2_credit_round(&mut self, claim: Hash64, round: u32, share: u128) -> u128 {
         use crate::palw_accounting_v2::{PalwAccountingKeyV2 as K, PalwAccountingRowV2 as R};
@@ -28488,6 +28511,8 @@ pub fn palw_v2_pre_object_base_v1(
     builder.advance_floor_state(ctx.daa_score);
     // 1f. ADR-0172: a DAA below this block's is CLOSED on this chain (a chain's DAA never falls), so its allocation is fixed here. A no-op below `palw_accounting_v2`.
     builder.close_daa_rows_v2(ctx.daa_score);
+    // 1g. ADR-0172: the FALLBACK blocks this block carries or merges are credited (once a bond a DAA, floor Idle). A no-op below `palw_accounting_v2`.
+    builder.credit_fallbacks_v2(ctx.daa_score, &extras.fallback_facts);
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -28868,6 +28893,8 @@ pub fn apply_palw_transition_v7(
     builder.advance_floor_state(ctx.daa_score);
     // 1f. ADR-0172: a DAA below this block's is CLOSED on this chain (a chain's DAA never falls), so its allocation is fixed here. A no-op below `palw_accounting_v2`.
     builder.close_daa_rows_v2(ctx.daa_score);
+    // 1g. ADR-0172: the FALLBACK blocks this block carries or merges are credited (once a bond a DAA, floor Idle). A no-op below `palw_accounting_v2`.
+    builder.credit_fallbacks_v2(ctx.daa_score, &extras.fallback_facts);
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -29088,7 +29115,10 @@ pub fn apply_palw_transition_v7(
                     // ADR-0130: the attempt was admitted, so this chain block is the open span's seed
                     // anchor — after step 1d's rotation, so a block that opens a span anchors the next
                     // target.
-                    if let Some(lane) = extras.round_lane {
+                    // ADR-0172: past `palw_accounting_v2` a base-class attempt (a pre-fence floor) is no seed anchor — the seed is a REAL attempt's, and a FALLBACK never records one.
+                    if let Some(lane) = extras.round_lane
+                        && !(builder.params.accounting_v2_active_at(ctx.daa_score) && envelope.attempt.class_id == builder.params.base_class_id())
+                    {
                         builder.record_round_seed_anchor(ctx, lane.schedule_span_daa, own_execution_key);
                     }
                 }
@@ -29230,6 +29260,9 @@ pub fn apply_palw_transition_v7(
                                     // a span always did. Past the fence only, and only where the execution lane records anchors.
                                     if let Some(lane) = extras.round_lane
                                         && builder.params.anchor_window_records_merged_at(ctx.daa_score)
+                                        // ADR-0172: and not a base-class attempt past `palw_accounting_v2` (a pre-fence floor merged late).
+                                        && !(builder.params.accounting_v2_active_at(ctx.daa_score)
+                                            && envelope.attempt.class_id == builder.params.base_class_id())
                                     {
                                         builder.record_round_seed_anchor_of(ctx, lane.schedule_span_daa, merged.carrying_block, merged.execution_key);
                                     }
@@ -37578,6 +37611,8 @@ pub struct PalwTransitionExtrasV1 {
     /// (and the block's own attempt) is BLUE. Empty by `Default`: nothing is red, so a caller that merges no work (the
     /// rehearsals, genesis) needs no mergeset.
     pub merged_reds: std::collections::BTreeSet<BlockHash>,
+    /// **ADR-0172: the FALLBACK blocks this block's fold may credit** — its own header's and its mergeset's, in consensus order, decoded by the processor. Empty below `palw_accounting_v2`.
+    pub fallback_facts: Vec<crate::palw_accounting_v2::PalwFallbackFactV1>,
     /// ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every class's
     /// work — where the node computes the shadow; `None` folds no shadow.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
@@ -69807,6 +69842,7 @@ pub(crate) mod tests {
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
+                fallback_facts: Default::default(),
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,
@@ -70063,6 +70099,7 @@ pub(crate) mod tests {
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
                 merged_reds: Default::default(),
+                fallback_facts: Default::default(),
                 economic_safety: None,
                 work_target: None,
                 work_target_active: false,

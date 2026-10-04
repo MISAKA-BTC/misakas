@@ -2607,6 +2607,8 @@ impl VirtualStateProcessor {
                                         // **ADR-0165: the reds of this block's mergeset** — the floor state machine reads a merged
                                         // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
                                         extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
+                                        // **ADR-0172: the FALLBACK blocks this block carries or merges** (own header first, then the mergeset, blues then reds, the selected parent excluded).
+                                        extras.fallback_facts = self.palw_fallback_facts_v1(current, &ctx.ghostdag_data);
                                         extras
                                     },
                                 ) {
@@ -13528,6 +13530,31 @@ impl VirtualStateProcessor {
         self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
     }
 
+    /// **ADR-0172: the FALLBACK facts of block `block`'s own header and its mergeset** — each algo-8 header at or past `palw_accounting_v2` (at the HEADER's own DAA), its envelope
+    /// decoded (the header stage already verified shape and signature), in consensus order: the block itself, then the mergeset's blues and reds without the selected parent (it credited
+    /// itself in its own fold). Empty below the fence.
+    pub(super) fn palw_fallback_facts_v1(&self, block: BlockHash, ghostdag_data: &GhostdagData) -> Vec<kaspa_consensus_core::palw_accounting_v2::PalwFallbackFactV1> {
+        let Some(fence) = self.palw_accounting_v2 else { return Vec::new() };
+        let members = std::iter::once(block).chain(
+            ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()).copied().filter(|hash| *hash != ghostdag_data.selected_parent),
+        );
+        let mut facts = Vec::new();
+        for hash in members {
+            let Ok(header) = self.headers_store.get_header(hash) else { continue };
+            if header.pow_algo_id != kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID || !fence.is_active(header.daa_score) {
+                continue;
+            }
+            if let Ok(envelope) = kaspa_consensus_core::palw_fallback_v1::PalwFallbackEnvelopeV1::decode(&header.palw_commitment) {
+                facts.push(kaspa_consensus_core::palw_accounting_v2::PalwFallbackFactV1 {
+                    carrying_block: hash,
+                    bond: envelope.bond,
+                    pubkey: envelope.pubkey,
+                });
+            }
+        }
+        facts
+    }
+
     /// **ADR-0172: the schedule budget of the DAAs the block `daa_score` advanced past its selected parent** — `0` below `palw_accounting_v2` and for a block that did not advance
     /// the DAA. One reading for the template, the validator pool and the coinbase check, so they cannot disagree.
     pub(super) fn palw_accounting_v2_tick_subsidy_of(&self, selected_parent: BlockHash, daa_score: u64) -> u64 {
@@ -13850,6 +13877,7 @@ impl VirtualStateProcessor {
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
             merged_reds: Default::default(),
+            fallback_facts: Default::default(),
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),

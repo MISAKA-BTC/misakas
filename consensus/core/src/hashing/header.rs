@@ -142,7 +142,9 @@ fn write_header_preimage<H: HasherBase>(
     // at all, so genesis hashes never moved while every post-genesis PALW header
     // identity did. That is a mid-chain fork, not a re-genesis.
     if palw_rule == PalwCommitmentDigestRule::Include
-        && crate::pow_layer0::is_palw_algo_id(header.pow_algo_id)
+        // ADR-0172: algo 8 joins the hashed lanes WHEN IT CARRIES A COMMITMENT (a FALLBACK envelope). An empty one — every heartbeat there ever was — hashes exactly as before, so
+        // no existing header's identity moves; the fence (not this gate) decides whether an algo-8 header may carry one (`palw_fallback_v1::check_algo8_commitment_shape_v1`).
+        && (crate::pow_layer0::is_palw_algo_id(header.pow_algo_id) || header.pow_algo_id == crate::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1)
         && !header.palw_commitment.is_empty()
     {
         hasher.write_len(header.palw_commitment.len());

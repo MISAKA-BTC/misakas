@@ -71,7 +71,7 @@ fn armed_it_moves_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_i
     let never = armed(ForkActivation::never());
     never.validate_palw_v2().expect("dormant");
     assert_eq!(ids(&never).1, b.1, "a never() value collapses out of the identity");
-    assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1]);
+    assert_eq!(palw_accounting_v2_value_v1(), [0, 0, 1, 604_250_611]);
 }
 
 #[test]
