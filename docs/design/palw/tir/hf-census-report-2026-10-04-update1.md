@@ -160,3 +160,29 @@ TIR `Final`: **0 measured**. TIR shape-ready over `L_files`: **57.22 %** (one-si
 | `NOT_RUN_NEEDS_TENSOR_DATA` (`rope_freqs`, 128–256 B) | 2.5 % | read ≤ 4 KiB of tensor data | **policy question (pending)** |
 | `COURT_BUDGET` / `ADMISSION_EXCEEDS` (≥ 100 B) | 1.4 % | RFC-0006 layer×position cells | consensus, dormant fence |
 | `FEATURE_C` → `GVM_FALLBACK` queue | 0.9 % | RFC-0005 §II.10.1 fallback class | NOT_RUN (no class exists) |
+
+## 4. Update 2 (same day): base pinning, the Llama/GPT-2 key tail, and the vision-chat stage measured
+
+Judged at `8713242bd` (main sample: 1,773 headers / 847 shape rows; cohorts re-run):
+
+| | Update 1 | Update 2 |
+| --- | ---: | ---: |
+| `D_all` technical shape-ready | 17.60 % (LB 16.23 %) | **17.96 % (LB 16.58 %)** |
+| `D_files` technical shape-ready | 24.79 % (LB 22.85 %) | 25.30 % (LB 23.34 %) |
+| local-LLM frame, TIR shape-ready of `L_files` | 57.22 % (LB 55.18 %) | **58.43 % (LB 56.29 %)** |
+| `BASE_UNPINNED` cohort (N = 270,091, n = 150) | 0 / 150 | 4 / 150 shape-ready (`not_in_snapshot` 29.5 k → 10.8 k: the adapter's own `base_model_name_or_path`, through renames) |
+
+**Vision chat (`PARTIAL_TASK_ONLY`, cohort N = 52,091, n = 150), under the dormant RFC-0003 fences.** The consensus side exists
+dormant (`palw_gen_v1`'s `Text` profile with image slots, FP Job V5 `palw_fp_job_v5`); what the census can probe from headers is
+the vision tower, read from the wrapper configuration, lowered shape-only and admitted stage-alone (tiles 64/512/4,096):
+**0 of 81 probed towers admit** — 44 have no tower adapter (Qwen3.5, Gemma 3/4, Qwen3-VL, LLaVA-NeXT, Florence-2 wrappers), and
+every Qwen2/2.5-VL tower at 448×448 is refused stage-alone (`max_step_leaves` at narrow tiles, `max_tile_transcendentals` at
+4,096) under the legacy-court defaults the probe uses — not the `Text` profile's own ceilings, which only the pipeline admission
+(`gen_class_admission_offline_v1`, needs a declared pipeline class) applies. The text stage alone passes for 18. **No vision-chat
+unit is counted as covered**; closing this bucket is a lane of its own: tower adapters for the current wrappers, and a shape-only
+declared pipeline class judged by the pipeline admission at the profile's ceilings.
+
+**The int-12 candidate has the same preflight bugs.** `0b1c11b87` (rcore/int-12) still lays out at the flag day's height and lowers
+at the history bound. Branch `fix/int12-preflight-height` (3 commits on `0b1c11b87`, SDK only: `misaka-palw-sdk/src/preflight/
+{chain,model}.rs`, `tir_layout.rs`) builds `palw-class` and `misaka-cli`, its `tir_layout` tests pass, and its `palw-class preflight`
+admits Qwen/Qwen3-4B at 8,192 on testnet-12 (`admission v10: admitted`, logits tile 256, history tile 32) where `0b1c11b87` refuses.
