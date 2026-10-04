@@ -1138,6 +1138,25 @@ fn out_key() -> ScaleKey {
 
 /// A pinned `idx` table as a global param, clamped to `[0, bound)` so the range analysis sees the
 /// index range its reader needs (the clamp never fires: the table is data the lowering wrote).
+/// **A pinned row permutation as static slices** (a pipeline-class tower, `out_major_rows`): row `i` of the result is row `perm[i]`
+/// of `x`, as `Gather(x, perm)` computes it, built from the permutation's contiguous runs (`Slice` along axis 0, one `Concat`) so
+/// every read of it maps to the rows it names — a court reads exactly them, where a gather by a param index reads the whole axis.
+fn permute_rows_static(b: &mut BlockBuilder<'_>, x: tir::Ref, perm: &[u32]) -> tir::Ref {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for &p in perm {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len == p => *len += 1,
+            _ => runs.push((p, 1)),
+        }
+    }
+    let mut parts: Vec<tir::Ref> = runs.iter().map(|&(start, len)| b.slice(x, 0, start, len)).collect();
+    // `Concat` takes at most 8 operands: a tree of them, in order.
+    while parts.len() > 1 {
+        parts = parts.chunks(8).map(|c| if c.len() == 1 { c[0] } else { b.concat(c, 0) }).collect();
+    }
+    parts[0]
+}
+
 fn idx_param(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, name: &str, v: Vec<u32>, bound: usize) -> Result<tir::Ref> {
     let n = v.len();
     let p = decl(b, cx, lb, name, DType::Idx, &[n], false, Arc::new(move |_| Ok(IntTensor::idx(vec![n], v.clone()))))?;
@@ -1285,8 +1304,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             // Window order (Qwen2.5-VL): a pinned row permutation.
             if let Some((perm, _, _)) = window_tables(s) {
                 let np = perm.len();
-                let pi = idx_param(&mut b, cx, &lb, "pre.window_order", perm, np)?;
-                let r = b.gather(e.r, pi, 0, 0);
+                let r = if cx.out_major_rows {
+                    permute_rows_static(&mut b, e.r, &perm)
+                } else {
+                    let pi = idx_param(&mut b, cx, &lb, "pre.window_order", perm, np)?;
+                    b.gather(e.r, pi, 0, 0)
+                };
                 e = Val { r, ..e };
             }
             // CLS (a param row at the residual scale) and the learned positions.
@@ -1517,8 +1540,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     match window_tables(s) {
                         Some((_, _, inv)) => {
                             let ni = inv.len();
-                            let ii = idx_param(&mut b, cx, &lb, "post.window_restore", inv, ni)?;
-                            let r = b.gather(down.r, ii, 0, 0);
+                            let r = if cx.out_major_rows {
+                                permute_rows_static(&mut b, down.r, &inv)
+                            } else {
+                                let ii = idx_param(&mut b, cx, &lb, "post.window_restore", inv, ni)?;
+                                b.gather(down.r, ii, 0, 0)
+                            };
                             Val { r, ..down }
                         }
                         None => down,

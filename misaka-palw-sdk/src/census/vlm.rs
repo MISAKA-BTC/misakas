@@ -255,16 +255,14 @@ fn admit_at_size(
             (64, Some(256), 16, 1),
         ];
         let mut first: Option<String> = None;
-        // With the range twin, the tower's tiles are fitted per commit point (512 lanes, halved where a close passes the carrier
+        // With the range twin, the tower's tiles are fitted per commit point (1,024 lanes, halved where a close passes the carrier
         // less a 5 % margin), and the text stage's history tile is 16 (its dissection root claim within one carrier).
         // A refusal no tile choice changes (the tower's one position past `max_position_macs`) is found before any fitting.
         {
             let choice = GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 16, checkpoint_interval: 64 };
             let class = class_of(&stages, &choice, 64, max_context);
-            let quick = kaspa_consensus_core::palw_gen_class_v1::palw_gen_class_preflight_v1(
-                &class,
-                &armed.palw_gen_v1.expect("armed above"),
-            );
+            let quick =
+                kaspa_consensus_core::palw_gen_class_v1::palw_gen_class_preflight_v1(&class, &armed.palw_gen_v1.expect("armed above"));
             if let Err(e) = quick {
                 let why = e.to_string();
                 if why.contains("max_position_macs") || why.contains("max_job_macs") {
@@ -275,7 +273,7 @@ fn admit_at_size(
         let fitted: Option<Vec<u32>> = if range_twin {
             let base = GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 16, checkpoint_interval: 64 };
             let carrier = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&net.bundle.court);
-            match fit_tower_tiles(&stages, &base, 64, max_context, carrier - carrier / 20, (512, 64)) {
+            match fit_tower_tiles(&stages, &base, 64, max_context, carrier - carrier / 20, (1024, 64)) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     first.get_or_insert(e);
@@ -285,8 +283,11 @@ fn admit_at_size(
         } else {
             None
         };
-        let layouts: Vec<(u32, Option<u32>, u32, u32)> =
-            if fitted.is_some() { vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(1024), 16, 8)] } else { LAYOUTS.to_vec() };
+        let layouts: Vec<(u32, Option<u32>, u32, u32)> = if fitted.is_some() {
+            vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(1024), 16, 8)]
+        } else {
+            LAYOUTS.to_vec()
+        };
         for (tile_len, output_tile, h_chunk, checkpoint) in layouts {
             let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
             let class = class_with_tower_tiles(&stages, &choice, checkpoint, max_context, fitted.as_deref());
@@ -432,9 +433,39 @@ fn fit_tower_tiles(
 ) -> Result<Vec<u32>, String> {
     let commits = tower_commits(stages);
     let mut tiles = vec![widest; commits.len()];
+    // Each point's tile no wider than one whose terminal multiply-accumulates fit the court's (the tower's program admitted
+    // stage-alone at each candidate width: the cones' tiles, by commit point).
+    let mut t = widest;
+    let mut fits_at: std::collections::BTreeMap<(u8, u16), u32> = std::collections::BTreeMap::new();
+    while t >= narrowest {
+        // Every tile ceiling opened: this asks only what each cone's tile costs at width `t`.
+        let mut inputs =
+            misaka_palw_tir::admit::TirAdmitInputsV1 { tile_len: t, ..misaka_palw_tir_lower::admission::default_inputs() };
+        inputs.ceilings.max_tile_macs = u64::MAX;
+        inputs.ceilings.max_tile_transcendentals = u64::MAX;
+        inputs.ceilings.max_tile_opened_bytes = u64::MAX;
+        inputs.ceilings.max_tile_operands = u64::MAX;
+        inputs.ceilings.max_position_macs = u64::MAX;
+        inputs.ceilings.max_step_leaves = u64::MAX;
+        inputs.ceilings.max_state_bytes = u64::MAX;
+        inputs.ceilings.max_cone_work = u64::MAX;
+        if let Ok(a) = misaka_palw_tir::admit_v2::tir_admit_program_v2(&stages.tower, &inputs) {
+            for c in &a.view.cones {
+                if c.terminal().macs <= mac_cap_of_tile() {
+                    fits_at.entry((c.block, c.node)).or_insert(t);
+                }
+            }
+        }
+        t /= 2;
+    }
+    for (k, c) in commits.iter().enumerate() {
+        if let Some(w) = fits_at.get(c) {
+            tiles[k] = tiles[k].min(*w);
+        }
+    }
     let programs = [stages.tower.clone(), stages.text.clone()];
     let inv = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&programs).ok_or("no pipeline inventory")?;
-    for _round in 0..6 {
+    for _round in 0..8 {
         let class = class_with_tower_tiles(stages, choice, checkpoint, max_context, Some(&tiles));
         // Size the tower stage alone: the pipeline's first stage (the sizing stops at nothing: every bound is wanted).
         let pipeline = &stages.pipeline;
@@ -451,6 +482,20 @@ fn fit_tower_tiles(
         )
         .map_err(|e| format!("fitting the tower's tiles: {e}"))?;
         let bounds = sized.0.first().cloned().unwrap_or_default();
+        if std::env::var_os("PALW_VLM_TRACE").is_some() {
+            let mut hist = std::collections::BTreeMap::new();
+            for t in &tiles {
+                *hist.entry(*t).or_insert(0u32) += 1;
+            }
+            let worst = bounds.iter().map(|b| b.close_bytes).max().unwrap_or(0);
+            eprintln!("vlm-fit: round {_round}: tiles {hist:?}, sizing work {} (every stage), worst tower close {worst} B", sized.1);
+            let mut by: Vec<_> = bounds.iter().zip(commits.iter()).map(|(b, c)| (b.close_bytes, *c)).collect();
+            by.sort_unstable_by(|a, b| b.cmp(a));
+            let tile_of = |c: &(u8, u16)| commits.iter().position(|x| x == c).map(|k| tiles[k]).unwrap_or(0);
+            for (bytes, c) in by.iter().take(4) {
+                eprintln!("vlm-fit:   {bytes} B at {c:?} tile {}", tile_of(c));
+            }
+        }
         let mut changed = false;
         for b in bounds.iter().filter(|b| b.checkpoint.is_none() && b.close_bytes > carrier) {
             if let Some(k) = commits.iter().position(|c| *c == (b.block, b.node))
@@ -465,4 +510,9 @@ fn fit_tower_tiles(
         }
     }
     Ok(tiles)
+}
+
+/// The court's terminal multiply-accumulates per tile (testnet-12's court: 2^24).
+fn mac_cap_of_tile() -> u64 {
+    1 << 24
 }
