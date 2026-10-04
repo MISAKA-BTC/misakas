@@ -2927,6 +2927,15 @@ pub struct Params {
     /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
     pub palw_fp_job_v5: Option<ForkActivation>,
 
+    /// **RFC-0003 PALW-GEN-20 by the range twin** ([`crate::palw_gen_range_twin_v1`]): past this height the pipeline admission sizes a
+    /// generative class's closes with the range twin (`palw_tir_close_range_v1`, `palw_tir_fence2`'s twin) instead of the element
+    /// twin — the same bounds, far fewer steps of the same work cap — so a real-size image stage (a vision tower) is sized rather than
+    /// refused at the cap. Below it, and on every network that leaves it `None`, the element twin sizes exactly as before.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both fingerprints, the whole option
+    /// collapsed from `Some(never())`. Requires `palw_gen_v1` in force at or below it ([`Self::validate_palw_gen_range_twin_v1`]).
+    pub palw_gen_range_twin_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -4088,6 +4097,8 @@ impl Params {
         self.validate_palw_gen_v1()?;
         // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
         self.validate_palw_fp_job_v5_v1()?;
+        // **The generative range twin** (`crate::palw_gen_range_twin_v1`): over the generative fence.
+        self.validate_palw_gen_range_twin_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
@@ -6396,6 +6407,10 @@ impl Params {
         // FP Job V5, likewise.
         if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
             self.palw_fp_job_v5 = None;
+        }
+        // The generative range twin, likewise.
+        if self.palw_gen_range_twin_v1 == Some(ForkActivation::never()) {
+            self.palw_gen_range_twin_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10044,6 +10059,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10305,6 +10321,7 @@ impl Params {
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
+            ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10574,6 +10591,11 @@ impl Params {
         if let Some(v5) = self.palw_fp_job_v5 {
             h.write(b"palw_fp_job_v5");
             h.write(v5.daa_score().to_le_bytes());
+        }
+        // The generative range twin, NAMED likewise.
+        if let Some(at) = self.palw_gen_range_twin_v1 {
+            h.write(b"palw_gen_range_twin_v1");
+            h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -11215,6 +11237,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -11949,6 +11972,10 @@ impl Params {
         if let Some(activation) = palw_fp_job_v5.as_mut() {
             fork(activation, visit);
         }
+        // The generative range twin. Some-only.
+        if let Some(activation) = palw_gen_range_twin_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12459,6 +12486,7 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13243,6 +13271,11 @@ impl Params {
             h.write(b"palw_fp_job_v5");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The generative range twin, Some-only for the same reason.
+        if let Some(activation) = palw_gen_range_twin_v1 {
+            h.write(b"palw_gen_range_twin_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -13998,6 +14031,7 @@ impl Params {
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
+            palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15083,6 +15117,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15364,6 +15399,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15627,6 +15663,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -22869,6 +22906,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
     params.sync_palw_held_close_chunks_v1();
+    // RFC-0003's generative range twin, likewise.
+    params.sync_palw_gen_range_twin_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
     // RFC-0007 Parts II and IV, likewise.
@@ -23146,6 +23185,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

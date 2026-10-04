@@ -432,6 +432,7 @@ pub fn palw_gen_worst_closes_of_class_v1(
     carriable: u64,
     root_cap: u64,
     work_cap: u64,
+    twin: crate::palw_tir_close_range_v1::PalwTirCloseTwinV1,
 ) -> Result<(Vec<Vec<PalwTirCloseBoundV1>>, u64), PalwClassAdmissionError> {
     let tables = PalwGenClassSizingV1::new(class, pipeline, programs)?;
     let mut remaining = work_cap;
@@ -439,8 +440,24 @@ pub fn palw_gen_worst_closes_of_class_v1(
     for s in 0..pipeline.stages.len() {
         let z = tables.stage(class, pipeline, programs, s)?;
         let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court, cap: remaining, stop_above: Some((carriable, root_cap)) };
+        // The twin at the block: the element twin, or the range twin past `palw_gen_range_twin_v1` (the same bounds, fewer steps).
+        let sized = match twin {
+            crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element => {
+                palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, class_inventory_leaves, &z.model, z.pricing)
+            }
+            crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range => crate::palw_tir_close_range_v1::palw_gen_worst_closes_range_v1(
+                &z.space,
+                &z.inventory,
+                &z.job,
+                &sizing,
+                s,
+                class_inventory_leaves,
+                &z.model,
+                z.pricing,
+            ),
+        };
         let (bounds, work) =
-            palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, class_inventory_leaves, &z.model, z.pricing).map_err(|e| {
+            sized.map_err(|e| {
                 if e == crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
                     PalwClassAdmissionError::TirExceeds {
                         limit: "generative close sizing work",

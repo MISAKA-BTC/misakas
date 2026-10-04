@@ -737,7 +737,13 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                                         .options
                                         .height
                                         .unwrap_or_else(|| net.params.fence_schedule_v1().last().copied().unwrap_or(0));
-                                    super::vlm::vlm_text_class_admission_v1(cfg, &net, height, primary)
+                                    super::vlm::vlm_text_class_admission_v1(
+                                        cfg,
+                                        &net,
+                                        height,
+                                        primary,
+                                        std::env::var_os("PALW_CENSUS_GEN_RANGE_TWIN").is_some(),
+                                    )
                                 }
                                 Err(e) => serde_json::json!({"ok": false, "error": e}),
                             };

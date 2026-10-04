@@ -153,7 +153,7 @@ fn class_of(s: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoint: u32, max_co
 /// **The pipeline admission of a vision-chat model's `Text` class**, `palw_gen_v1` armed hypothetically at `height` with its
 /// testnet-12 ceilings: the first layout admitted (tiles 64/256/1,024, history tiles 64/32/16, checkpoint 64/8/1), else the
 /// refusal at the first layout tried.
-pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, height: u64, max_context: u32) -> Value {
+pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, height: u64, max_context: u32, range_twin: bool) -> Value {
     let run = || -> Result<Value, String> {
         // The declared context first, then the census's narrower ones (a class admitted only at a narrower context is its own
         // stratum, as for the IR classes).
@@ -162,7 +162,7 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
         contexts.extend([4_096u32, 2_048].into_iter().filter(|c| *c < max_context));
         for ctx in contexts {
             for size in VLM_PROBE_IMAGE_SIZES_V1 {
-                match admit_at_size(config, net, height, ctx, size) {
+                match admit_at_size(config, net, height, ctx, size, range_twin) {
                     Ok(v) => return Ok(v),
                     Err(e) => refusals.push(format!("{ctx}@{}x{}: {}", size.0, size.1, e.chars().take(160).collect::<String>())),
                 }
@@ -182,10 +182,18 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
         "palw_gen_v1 (testnet12_v1 ceilings) armed hypothetically, judged at DAA {height}; FP Job V5 dormant; shape-only (image 448x448, 224x224, 196x196 when the config declares none, unit 1.0, placeholder root)"
     ));
     v["max_context"] = json!(max_context);
+    v["range_twin"] = json!(range_twin);
     v
 }
 
-fn admit_at_size(config: &Value, net: &PreflightNetwork, height: u64, max_context: u32, size: (u32, u32)) -> Result<Value, String> {
+fn admit_at_size(
+    config: &Value,
+    net: &PreflightNetwork,
+    height: u64,
+    max_context: u32,
+    size: (u32, u32),
+    range_twin: bool,
+) -> Result<Value, String> {
     {
         let stages = vlm_stages_v1(config, max_context, size)?;
         let mut armed = net.params.clone();
@@ -194,6 +202,11 @@ fn admit_at_size(config: &Value, net: &PreflightNetwork, height: u64, max_contex
         let at = net.params.palw_tir_v1_fence().map(|f| f.activation.daa_score()).unwrap_or(1).max(1).min(height.max(1));
         armed.palw_gen_v1 = Some(PalwGenFenceV1::testnet12_v1(ForkActivation::new(at)));
         armed.sync_palw_gen_v1();
+        // The generative range twin (dormant), armed with it when the census asks for it: the same bounds, fewer sizing steps.
+        if range_twin {
+            armed.palw_gen_range_twin_v1 = Some(ForkActivation::new(at));
+            armed.sync_palw_gen_range_twin_v1();
+        }
         armed.validate_palw_v2().map_err(|e| format!("palw_gen_v1 cannot be armed hypothetically at DAA {height}: {e}"))?;
         let bond = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
             kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
@@ -201,8 +214,14 @@ fn admit_at_size(config: &Value, net: &PreflightNetwork, height: u64, max_contex
         ));
         // A short fixed sequence of layouts (the commit tile, the output tile, the history tile, the checkpoint interval), the
         // way the IR search narrows: the first refusal is kept when none admits.
-        const LAYOUTS: [(u32, Option<u32>, u32, u32); 4] =
-            [(64, Some(4096), 32, 64), (64, Some(1024), 32, 8), (256, Some(4096), 16, 8), (64, Some(256), 16, 1)];
+        const LAYOUTS: [(u32, Option<u32>, u32, u32); 6] = [
+            (64, Some(4096), 32, 64),
+            (16, Some(4096), 32, 64),
+            (4, Some(4096), 32, 64),
+            (64, Some(1024), 32, 8),
+            (256, Some(4096), 16, 8),
+            (64, Some(256), 16, 1),
+        ];
         let mut first: Option<String> = None;
         for (tile_len, output_tile, h_chunk, checkpoint) in LAYOUTS {
             let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
@@ -237,11 +256,52 @@ fn admit_at_size(config: &Value, net: &PreflightNetwork, height: u64, max_contex
                         eprintln!(
                             "vlm-trace: ctx {max_context} size {size:?} layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint}): {why}"
                         );
+                        if why.contains("close bytes as carried") && range_twin {
+                            worst_closes_trace(&stages, &choice, checkpoint, max_context);
+                        }
                     }
                     first.get_or_insert(why);
                 }
             }
         }
         Err(first.unwrap_or_default())
+    }
+}
+
+/// Diagnostics (`PALW_VLM_TRACE`): the heaviest closes of a class, by stage and commit point, sized by the range twin uncapped.
+fn worst_closes_trace(stages: &VlmStagesV1, choice: &GenLayoutChoiceV1, checkpoint: u32, max_context: u32) {
+    let class = class_of(stages, choice, checkpoint, max_context);
+    let programs = [stages.tower.clone(), stages.text.clone()];
+    let Some(inv) = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&programs) else { return };
+    let sized = kaspa_consensus_core::palw_gen_close_price_v1::palw_gen_worst_closes_of_class_v1(
+        &class,
+        &stages.pipeline,
+        &programs,
+        inv.leaf_count(),
+        true,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX / 4,
+        kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range,
+    );
+    match sized {
+        Ok((bounds, work)) => {
+            let mut all: Vec<(u64, usize, u8, u16, Option<u16>)> = bounds
+                .iter()
+                .enumerate()
+                .flat_map(|(s, st)| st.iter().map(move |b| (b.close_bytes, s, b.block, b.node, b.checkpoint)))
+                .collect();
+            all.sort_unstable_by(|a, b| b.cmp(a));
+            for (bytes, s, b, n, ck) in all.iter().take(8) {
+                let p = &programs[*s];
+                let node = &p.blocks[*b as usize].nodes[*n as usize];
+                eprintln!(
+                    "vlm-close: {bytes} B stage {s} block {b} node {n} {:?} out {:?} checkpoint {ck:?}",
+                    node.prim, node.out.shape
+                );
+            }
+            eprintln!("vlm-close: work {work}");
+        }
+        Err(e) => eprintln!("vlm-close: sizing refused: {e}"),
     }
 }

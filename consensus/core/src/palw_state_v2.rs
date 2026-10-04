@@ -1652,6 +1652,10 @@ pub struct PalwStateParamsV2 {
     /// challenge arm reads it). `None` on every shipped preset.
     #[borsh(skip)]
     held_close_chunks_from_daa: Option<u64>,
+    /// **`Params::palw_gen_range_twin_v1`'s height**, mirrored by `Params::sync_palw_gen_range_twin_v1` for
+    /// `held_close_chunks_from_daa`'s reason (the acceptance path reads the bundle). `None` on every shipped preset.
+    #[borsh(skip)]
+    gen_range_twin_from_daa: Option<u64>,
     /// **RFC-0007 Part I: `Params::palw_verification_vertex_v1`'s height**, mirrored by
     /// `Params::sync_palw_verification_vertex_v1` for `held_close_chunks_from_daa`'s reason (the fold's vertex arms and the
     /// tally read it). `None` on every shipped preset.
@@ -1919,6 +1923,7 @@ impl PalwStateParamsV2 {
             improve_ceilings: None,
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
+            gen_range_twin_from_daa: None,
             vertex_from_daa: None,
             witness_manifest_from_daa: None,
             audit_mesh_from_daa: None,
@@ -2300,6 +2305,23 @@ impl PalwStateParamsV2 {
     /// keeps M1 ([`crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_MERGED_V1`]).
     pub fn anchor_window_records_merged_at(&self, daa_score: u64) -> bool {
         self.anchor_window_active_at(daa_score) && crate::palw_anchor_window_v1::PALW_ANCHOR_WINDOW_MERGED_V1
+    }
+
+    /// **The generative range twin's mirror** — written by `Params::sync_palw_gen_range_twin_v1` and by nothing else (and by
+    /// fixtures); `None` where the fence is not armed.
+    pub fn with_gen_range_twin_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.gen_range_twin_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_gen_range_twin_v1`'s height, if the network arms it (the mirror).
+    pub fn gen_range_twin_from_daa(&self) -> Option<u64> {
+        self.gen_range_twin_from_daa
+    }
+
+    /// **Does the generative range twin size closes at `daa_score`?** `false` on every shipped preset.
+    pub fn gen_range_twin_active_at(&self, daa_score: u64) -> bool {
+        self.gen_range_twin_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     pub fn with_held_close_chunks_from_daa(mut self, from_daa: Option<u64>) -> Self {
