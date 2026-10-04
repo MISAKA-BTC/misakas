@@ -47,6 +47,7 @@ TEXT_GROUPS = {"text-generation", "multimodal-text"}
 #   (§II.12.3), with their first blocker.
 UNSUPPORTED_CODES = {"MODALITY_PROFILE_MISSING", "PARTIAL_TASK_ONLY"}
 GVM_CODES = {"FEATURE_C"}
+RFC6_CODES = {"COURT_BUDGET", "ADMISSION_EXCEEDS", "CLOSE_TOO_LARGE"}
 
 
 def route_of(stop: tuple[str, str, str]) -> str:
@@ -55,6 +56,10 @@ def route_of(stop: tuple[str, str, str]) -> str:
         return "UNSUPPORTED"
     if code in GVM_CODES:
         return "GVM_FALLBACK"
+    if g == "admit" and code in RFC6_CODES:
+        # Real-size admission past the court's per-claim ceilings: still RFC-0002's route, through RFC-0006's layer×position cells
+        # (a seat carries a shard of the court's work). NOT_RUN: no sharded admission exists; never counted as covered.
+        return "TIR/RFC-0006"
     return "TIR"
 
 
