@@ -25,11 +25,12 @@ ap.add_argument("--n", type=int, default=150)
 ap.add_argument("--palw-class", required=True)
 ap.add_argument("--name", required=True)
 ap.add_argument("--tree", default="unstated")
+ap.add_argument("--listing", default="dall.listing.jsonl.gz", help="the listing the cohort is re-planned from (same order as v1; e.g. dall.listing-v2.jsonl.gz)")
 a = ap.parse_args()
 snap = Path(a.snapshot).expanduser()
 key = lambda repo: hashlib.blake2b(f"{a.seed}\0cohort\0{a.name}\0{repo}".encode(), digest_size=8).hexdigest()  # noqa: E731
 pop = []
-with gzip.open(snap / "classified.jsonl.gz", "rt") as fc, gzip.open(snap / "dall.listing.jsonl.gz", "rt") as fl:
+with gzip.open(snap / "classified.jsonl.gz", "rt") as fc, gzip.open(snap / a.listing, "rt") as fl:
     for lc, ll in zip(fc, fl):
         c = json.loads(lc)
         if "error" in c or not c["decided"]:

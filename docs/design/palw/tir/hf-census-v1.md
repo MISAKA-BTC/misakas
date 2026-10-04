@@ -129,12 +129,39 @@ each, backs off on 429/5xx, sends no token (a token on this machine is not read:
   dropped). One-sided 95 % lower bounds by Korn–Graubard (Clopper–Pearson at the effective sample size p̂(1−p̂)/v̂).
   Download-weighted shares use the denominator's exact download total and a normal-approximation bound, said so.
 
+## 4b. Two-phase shape estimates, bucket cohorts and re-classification (added 2026-10-04)
+
+- **Phase 2** is a random-order prefix of the eligible sampled repositories (`select_shape.py`, BLAKE2b-64(seed ‖ 0 ‖ "shape" ‖ 0 ‖
+  repo)); `estimate.TwoPhase` gives the double-sampling estimate and variance, so any judged prefix is an unbiased estimate.
+- **A generic change is measured on the bucket it targets** (§II.10.4.5): `sample_cohort.py` draws a seeded SRS (n = 150) of the
+  repositories the baseline stopped at one listing-depth code, re-plans them with the build under test (from `dall.listing-v2` when
+  the change is in base resolution), fetches them (metadata and headers only) and judges them at the shape depth. `report.py
+  --cohort NAME:ROWS` replaces the bucket's exact baseline count by the cohort's expansion (N/n per member, a stratum of its own).
+- **`--classified-new`**: every other listing-decided repository takes the build under test's listing verdict; one the new build
+  leaves undecided outside every cohort is counted as not passing (`UNDECIDED_UNMEASURED`), never estimated.
+- **Base resolution v2** (`resolve_renames.py`, `apply_renames.py`): a base reference the snapshot does not hold is asked of the
+  Hub once (no redirect followed); a renamed one is resolved to the repository it redirects to, at that repository's snapshot sha.
+- **Task inference v2** (`census::listing::task_of`): a missing task is taken from a transformers head class
+  (`…ForSequenceClassification` → text-classification, `T5ForConditionalGeneration` → text2text, the vision-chat
+  `…ForConditionalGeneration` list → image-text-to-text, sentence encoders `BertModel`… → feature-extraction) or a GGUF
+  `general.architecture` (llama.cpp's decoder names → text-generation). Never the code, the name or the card text. Its version
+  enters the task table's digest.
+
+## 4c. Preflight corrections found by the census (2026-10-04)
+
+1. **The layout search judged at the IR flag day's height**, not at the preflight's: on testnet-12 it ran without
+   `palw_tir_fence2` (DAA 3,600), sized closes with the element twin (2^26-step cap hit by every hidden-4096 decoder) and reported the
+   widest layout's refusal. The H4 report's `COURT_BUDGET` bucket (3.9 % of `D_all`, 20.9 % of the frame) was this artefact.
+2. **The lowered history window** was the program's history bound; a class declared at C positions is now lowered with
+   `max_window = C` (`ADMISSION_EXCEEDS(max_state_bytes|max_position_macs)` was this).
+3. **The DA-answerability twin** read the flag day's height too. All three are off-chain (SDK) changes; no consensus rule changed.
+
 ## 5. Feasibility of the RFC's "header preflight for every `D_all` entry"
 
 §II.10.2 asks for the header-only preflight of **every** `D_all` entry with readable metadata. Measured on 2026-10-03: the
 listing of all 3,117,871 repositories took 3,118 API requests (64 minutes at half the anonymous quota). A header fetch costs one
 API request (the inventory at the pinned commit) and ~2–10 resolver requests per repository; the anonymous quotas (500 API, 3,000
-resolver per 300 s) bound that at ~4–6 k repositories an hour, about 1.5 days for the ~200 k undecided repositories — feasible as a
+resolver per 300 s) bound that at ~4–6 k repositories an hour, about 4–5 days for the 561,568 undecided repositories — feasible as a
 background job, not as an evening's run. The preflight itself is the binding cost: the shape-depth judgment runs admission v10
 many times per class (the layout search) — 1.5 CPU-seconds for a 0.5B at 2,048 positions, 44.5 s at 8,192, and minutes for a 7B
 refused at 2,048 — so the full undecided population is days of CPU even with the judgment shared among identical programs. The

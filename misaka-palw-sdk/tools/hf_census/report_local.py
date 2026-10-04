@@ -36,11 +36,24 @@ from report import Inputs, gate, stop_key, weight_of  # noqa: E402
 TEXT_GROUPS = {"text-generation", "multimodal-text"}
 
 
+# RFC-0005 §II.10.1's routing of a checkpoint whose TIR path stops (the first TIR blocker is kept either way):
+# * UNSUPPORTED — the source fails (not in L_files), or the full advertised task has no canonical job (`MODALITY_PROFILE_MISSING`;
+#   `PARTIAL_TASK_ONLY`, a chat model whose image/audio input needs an RFC-0003 profile: NEEDS_JOB_PROFILE). "A missing source
+#   converter or canonical task must be fixed in RFC-0002/0003 even if its numerical core runs in GVM."
+# * GVM_FALLBACK — source-eligible, a canonical task, and the TIR blocker is a missing semantic (`FEATURE_C`: a feature or primitive
+#   TIR does not have) — the residual a `Gvm(1)`/`GvmTextFallbackV1` class would carry. NOT_RUN: no such class exists and no real-size
+#   canonical job has been exercised; never counted as covered.
+# * TIR — everything else: importer, format, quantisation, configuration and real-size admission blockers stay RFC-0002's to close
+#   (§II.12.3), with their first blocker.
+UNSUPPORTED_CODES = {"MODALITY_PROFILE_MISSING", "PARTIAL_TASK_ONLY"}
+GVM_CODES = {"FEATURE_C"}
+
+
 def route_of(stop: tuple[str, str, str]) -> str:
     g, code, _ = stop
-    if g == "source" or code == "MODALITY_PROFILE_MISSING":
+    if g == "source" or code in UNSUPPORTED_CODES:
         return "UNSUPPORTED"
-    if code == "FEATURE_C":
+    if code in GVM_CODES:
         return "GVM_FALLBACK"
     return "TIR"
 
@@ -54,6 +67,8 @@ def main() -> int:
     ap.add_argument("--frame-headers-rows", nargs="*", default=[], help="the untasked-GGUF supplement's headers rows")
     ap.add_argument("--frame-shape-rows", nargs="*", default=[], help="the untasked-GGUF supplement's shape rows")
     ap.add_argument("--out")
+    ap.add_argument("--classified-new", help="the listing depth re-classified by the build under test (same order)")
+    ap.add_argument("--cohort", action="append", default=[], help="NAME:ROWS, as report.py")
     a = ap.parse_args()
     snap = Path(a.snapshot).expanduser()
     out = Path(a.out).expanduser() if a.out else snap / "report"
@@ -73,6 +88,16 @@ def main() -> int:
     from report import eligible as _eligible, judged_shape as _judged_shape, load_rows as _load_rows
     from estimate import shape_key as _shape_key
 
+    cohorts = {}
+    for spec_ in a.cohort:
+        name, rows_path = spec_.split(":", 1)
+        cd = json.loads((snap / "sample" / f"cohort_{name}_design.json").read_text())
+        members = [json.loads(x)["id"] for x in open(snap / "sample" / f"cohort_{name}.jsonl")]
+        cohorts[(cd["bucket"]["gate"], cd["bucket"]["code"])] = (name, cd, members, _load_rows([rows_path]))
+        design["strata"][f"cohort-{name}"] = {"N": cd["N"], "n": cd["n"]}
+    cohort_member = {m: k for k, v in cohorts.items() for m in v[2]}
+    fs_population_members: set[str] = set()
+    undecided_unmeasured = 0
     f1 = _load_rows(a.frame_headers_rows) if fsample else {}
     f2 = _load_rows(a.frame_shape_rows) if fsample else {}
     forder = [r for _, r in sorted((_shape_key(a.seed, repo), repo) for repo, row in f1.items() if repo in fsample and (_eligible(row) or _judged_shape(row)))]
@@ -101,9 +126,11 @@ def main() -> int:
         if k[2]:
             queue_args[(rt,) + k[:2]][k[2]] += wt
 
+    fnew = gzip.open(Path(a.classified_new).expanduser(), "rt") if a.classified_new else None
     with gzip.open(snap / "classified.jsonl.gz", "rt") as fc, gzip.open(snap / "dall.listing.jsonl.gz", "rt") as fl:
         for lc, ll in zip(fc, fl):
             c = json.loads(lc)
+            cn = json.loads(fnew.readline()) if fnew else None
             if "error" in c:
                 continue
             r = c["row"]
@@ -112,6 +139,36 @@ def main() -> int:
             untasked = False
             if not in_frame and r["strata"]["format"] == "gguf" and r["task"]["task"] == "unknown" and json.loads(ll).get("gguf_ctx"):
                 in_frame = untasked = True
+            if untasked and r["repo"] in cohort_member:
+                # The frame's untasked GGUFs are counted by the path below (exactly, or by the supplement): never by a cohort too.
+                fs_population_members.add(r["repo"])
+            if c["decided"] and not untasked and (cohorts or cn is not None):
+                rn = cn["row"] if cn is not None and "row" in cn else r
+                in_frame_new = rn["strata"]["task_group"] in TEXT_GROUPS
+                if stop_key(r)[:2] in cohorts:
+                    # Estimated from the bucket's cohort below; listed by the new build's task.
+                    if in_frame_new:
+                        listed += 1
+                        listed_by[(rn["strata"]["task_group"], rn["strata"]["format"])] += 1
+                        if gate(rn, "technical", "source")["status"] == "PASS":
+                            files += 1
+                            files_w += rn["downloads"]
+                    continue
+                if cn is not None and "row" in cn:
+                    if not in_frame_new:
+                        continue
+                    listed += 1
+                    listed_by[(rn["strata"]["task_group"], rn["strata"]["format"])] += 1
+                    if gate(rn, "technical", "source")["status"] == "PASS":
+                        files += 1
+                        files_w += rn["downloads"]
+                    if cn["decided"]:
+                        k = stop_key(rn)
+                        credit(route_of(k), k, 1)
+                    else:
+                        undecided_unmeasured += 1
+                        credit("TIR", ("listing", "UNDECIDED_UNMEASURED", ""), 1)
+                    continue
             sampled = (not c["decided"]) and r["repo"] in I.sample
             if sampled and not in_frame:
                 # Outside the frame, inside the sample: a zero of the domain estimate, in its place in the two phases.
@@ -192,6 +249,37 @@ def main() -> int:
             e_shape.add_unit(h, ys, eligible=True, judged=True)
             k = ("admit", "SHAPE_READY", "") if ys else stop_key(r2)
             credit(route_of(k), k, wt * L[h] / M[h])
+    if fnew:
+        fnew.close()
+    # The bucket cohorts (members of the untasked-GGUF supplement's population are that sample's, not the cohort's: a domain zero).
+    cohort_summary = {}
+    for (bg, bc), (name, cd, members, rows) in cohorts.items():
+        h = f"cohort-{name}"
+        wt = cd["N"] / cd["n"]
+        got = Counter()
+        for repo in members:
+            r1 = rows.get(repo)
+            in_dom = repo not in fs_population_members and r1 is not None and r1["strata"]["task_group"] in TEXT_GROUPS
+            if r1 is None:
+                e_shape.add_unit(h, 0.0)
+                e_lower.add_unit(h, 0.0)
+                got["no_row"] += 1
+                continue
+            if not in_dom:
+                e_shape.add_unit(h, 0.0)
+                e_lower.add_unit(h, 0.0)
+                got["outside_frame"] += 1
+                continue
+            in_frame_sampled += 1
+            src = gate(r1, "technical", "source")["status"] == "PASS"
+            yl = 1.0 if src and gate(r1, "technical", "lower")["status"] == "PASS" else 0.0
+            ys = 1.0 if r1.get("shape_ready") else 0.0
+            e_lower.add_unit(h, yl)
+            e_shape.add_unit(h, ys)
+            k = ("admit", "SHAPE_READY", "") if ys else stop_key(r1)
+            credit(route_of(k), k, wt)
+            got["shape_ready" if ys else "in_frame_stopped"] += 1
+        cohort_summary[name] = {"bucket": cd["bucket"], "N": cd["N"], "n": cd["n"], "outcomes": dict(got)}
     for h, cnt in L.items():
         if M[h] == 0:
             credit("TIR", ("admit", "NOT_YET_JUDGED", ""), weight_of(design, h) * cnt)
@@ -243,9 +331,19 @@ def main() -> int:
             "unjudged_eligible": sh["unjudged_eligible"],
             "lower_pass_est": round(e_lower.total()["total"], 1),
         },
+        "gvm": {
+            "status": "NOT_RUN",
+            "why": "no GvmTextFallbackV1 class exists and no real-size canonical job has been exercised (RFC-0005 §II.10.1); the "
+            "GVM_FALLBACK units are the queue, not coverage",
+            "final_measured": 0,
+            "queue_units_est": round(routes.get("GVM_FALLBACK", 0.0), 1),
+        },
+        "combined_tir_or_gvm_final_measured": 0,
+        "cohorts": cohort_summary,
+        "undecided_unmeasured": undecided_unmeasured,
         "routes_est_hf": {k: round(v, 1) for k, v in routes.most_common()},
         "routes_ollama": {
-            "TIR, PARTIAL_TASK_ONLY (vision chat: the image stage is not computed by the class the preflight produces)": ol_vision,
+            "UNSUPPORTED, PARTIAL_TASK_ONLY / NEEDS_JOB_PROFILE (vision chat: the image stage needs an RFC-0003 profile)": ol_vision,
             "TIR, not judged (the weights' header is inside a registry blob; this census reads no blob)": len(ol_files) - ol_vision,
             "UNSUPPORTED (no manifest naming the weights)": len(ol) - len(ol_files),
         },

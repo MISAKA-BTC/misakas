@@ -142,6 +142,14 @@ def main() -> int:
     ap.add_argument("--shape-rows", nargs="*", default=[])
     ap.add_argument("--seed", required=True)
     ap.add_argument("--out")
+    ap.add_argument("--classified-new", help="the listing depth re-classified by the build under test (same order as classified.jsonl.gz)")
+    ap.add_argument(
+        "--cohort",
+        action="append",
+        default=[],
+        help="NAME:ROWS — a bucket cohort (sample/cohort_NAME_design.json) judged by the build under test: the bucket's repositories "
+        "are estimated from it (N/n each) instead of counted at their baseline stop",
+    )
     a = ap.parse_args()
     snap = Path(a.snapshot).expanduser()
     out = Path(a.out).expanduser() if a.out else snap / "report"
@@ -149,6 +157,13 @@ def main() -> int:
     man = json.loads((snap / "MANIFEST.json").read_text())
     I = Inputs(snap, a.headers_rows, a.shape_rows, a.seed)
     design = I.design
+    cohorts = {}
+    for spec_ in a.cohort:
+        name, rows_path = spec_.split(":", 1)
+        cd = json.loads((snap / "sample" / f"cohort_{name}_design.json").read_text())
+        members = [json.loads(x)["id"] for x in open(snap / "sample" / f"cohort_{name}.jsonl")]
+        cohorts[(cd["bucket"]["gate"], cd["bucket"]["code"])] = (name, cd, members, load_rows([rows_path]))
+        design["strata"][f"cohort-{name}"] = {"N": cd["N"], "n": cd["n"]}
 
     N = W = 0
     d_files = d_files_w = d_rights_p = d_rights_p_w = 0
@@ -169,13 +184,48 @@ def main() -> int:
         if k[2]:
             bucket_args[k[:2]][k[2]] += weight
 
+    fnew = gzip.open(Path(a.classified_new).expanduser(), "rt") if a.classified_new else None
+    undecided_unmeasured = 0
+    cohort_rp: dict[str, bool] = {}
     with gzip.open(snap / "classified.jsonl.gz", "rt") as f:
         for line in f:
             c = json.loads(line)
+            cn = json.loads(fnew.readline()) if fnew else None
             N += 1
             if "error" in c:
                 credit(("source", "LISTING_UNREADABLE", ""), 1, 0)
                 continue
+            if c["decided"] and (cohorts or cn is not None):
+                k1 = stop_key(c["row"])
+                if k1[:2] in cohorts:
+                    # Estimated from the bucket's cohort below; its listing facts are the new build's.
+                    r = (cn or c)["row"] if "row" in (cn or c) else c["row"]
+                    cohort_rp[r["repo"]] = bool((cn or c).get("rights_by_policy", {}).get("permissive-card-v0"))
+                    W += r["downloads"]
+                    if gate(r, "technical", "source")["status"] == "PASS":
+                        d_files += 1
+                        d_files_w += r["downloads"]
+                        if bool((cn or c)["rights_by_policy"].get("permissive-card-v0")):
+                            d_rights_p += 1
+                            d_rights_p_w += r["downloads"]
+                    continue
+                if cn is not None and "row" in cn:
+                    if not cn["decided"]:
+                        # Decided by the baseline, not by the build under test, and outside every cohort: not measured here, so
+                        # counted as not passing (conservative).
+                        undecided_unmeasured += 1
+                        c = dict(cn)
+                        c["decided"] = True
+                        c["row"] = dict(cn["row"])
+                        r = c["row"]
+                        w = r["downloads"]
+                        W += w
+                        if gate(r, "technical", "source")["status"] == "PASS":
+                            d_files += 1
+                            d_files_w += w
+                        credit(("listing", "UNDECIDED_UNMEASURED", ""), 1, w)
+                        continue
+                    c = cn
             r = c["row"]
             w = r["downloads"]
             W += w
@@ -236,6 +286,42 @@ def main() -> int:
             est_w["shape_retry"].add_unit(h, yr * w, eligible=True, judged=True)
             est_rp["shape"].add_unit(h, ys * rp, eligible=True, judged=True)
             est_rp_w.add_unit(h, ys * w * rp, eligible=True, judged=True)
+    if fnew:
+        fnew.close()
+    # The bucket cohorts: each member stands for N/n repositories of its bucket; a member without a row is a failure.
+    cohort_summary = {}
+    for (bg, bc), (name, cd, members, rows) in cohorts.items():
+        h = f"cohort-{name}"
+        wt = cd["N"] / cd["n"]
+        got = Counter()
+        for repo in members:
+            r1 = rows.get(repo)
+            if r1 is None:
+                for e in list(est.values()) + list(est_w.values()) + list(est_rp.values()) + [est_rp_w]:
+                    e.add_unit(h, 0.0)
+                credit(("lower", "NOT_FETCHED", ""), wt, 0)
+                got["no_row"] += 1
+                continue
+            w = r1.get("downloads") or 0
+            rp = 1.0 if cohort_rp.get(repo) else 0.0
+            y_src = 1.0 if gate(r1, "technical", "source")["status"] == "PASS" else 0.0
+            y_lower = 1.0 if (y_src and gate(r1, "technical", "lower")["status"] == "PASS") else 0.0
+            ys = 1.0 if r1.get("shape_ready") else 0.0
+            yr = 1.0 if r1.get("shape_ready_at_retry") else 0.0
+            est["source_h"].add_unit(h, y_src)
+            est["lower"].add_unit(h, y_lower)
+            est_w["lower"].add_unit(h, y_lower * w)
+            est_rp["lower"].add_unit(h, y_lower * rp)
+            est["shape"].add_unit(h, ys)
+            est["shape_retry"].add_unit(h, yr)
+            est_w["shape"].add_unit(h, ys * w)
+            est_w["shape_retry"].add_unit(h, yr * w)
+            est_rp["shape"].add_unit(h, ys * rp)
+            est_rp_w.add_unit(h, ys * w * rp)
+            k = ("admit", "SHAPE_READY", "") if ys else ("admit", "SHAPE_READY_AT_2048_ONLY", "") if yr else stop_key(r1)
+            credit(k, wt, w)
+            got["shape_ready" if ys else "lower_pass" if y_lower else "stopped"] += 1
+        cohort_summary[name] = {"bucket": cd["bucket"], "N": cd["N"], "n": cd["n"], "outcomes": dict(got)}
     # The judged prefix's stops stand for every eligible repository of their stratum: weight (N_h/n_h)(L_h/m_h).
     L, M = Counter(), Counter()
     for repo in I.order:
@@ -267,6 +353,8 @@ def main() -> int:
         "d_rights": {"none": 0, "permissive-card-v0 (PROPOSED, not adopted)": d_rights_p},
         "downloads": {"d_all": W, "d_files": d_files_w, "d_rights_proposed": d_rights_p_w},
         "decided": design["decided"],
+        "cohorts": cohort_summary,
+        "undecided_unmeasured": undecided_unmeasured,
         "undecided": design["undecided"],
         "sample": {
             "n": design["n"],
