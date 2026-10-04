@@ -1,12 +1,12 @@
-# RFC-0005: PALW ML VM — optional Layer-2 automation over the Model Improvement Protocol: bounded improvement workflows (Phase B, PALW-BVM) and permissionless research programs on a Turing-complete VM (Phase C, PALW-GVM)
+# RFC-0005: PALW ML VM — bounded improvement workflows (Phase B, PALW-BVM), permissionless research programs and the local-LLM model fallback on a Turing-complete VM (Phase C, PALW-GVM)
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-09-29 — design only. **Nothing here starts before RFC-0004 (Phase A) is fully implemented** (the user's order of 2026-09-29). Part I is built only if its gate (§I.1.4) opens. Part II's rung A is built when contracts ask for model calls; its rung B only after PALW-TIR is mainnet-safe and workflow demand (M4, §I.1.2) is measured. **Revised 2026-10-02** (the user's direction): Part II is built on VMs that already run on mainnets rather than designed from first principles (§*Design principle*, §II.2.4) |
+| Status | Draft — design only. **Implementation starts after RFC-0004 (Phase A) is fully implemented** (the user's order of 2026-09-29; RFC-0004 is implemented on the int-11 release layer, so rung B's reference implementation proceeds, dormant). Part I is built only if its gate (§I.1.4) opens. Part II's rung A follows contract demand; its rung B follows PALW-TIR mainnet safety and measured workflow demand **or** RFC-0002 §II.12's eligible local-LLM residual. **Revised 2026-10-02** (the user's direction): Part II is built on VMs that already run on mainnets rather than designed from first principles (§*Design principle*, §II.2.4). **Amended 2026-10-03** (the user's direction): §II.10.1 adds the local-LLM text fallback as a new syscall set, v2 — kind `Gvm(3)`; `Gvm(2)` stays reserved for the later Linux profile (§II.9) — on the same PALW-RV64 profile; PALW-GVM v1 (`Gvm(1)`, syscall set v1) is unchanged |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-28 (as RFC-0004 and RFC-0005); merged 2026-09-29 |
-| Normative dependencies | **RFC-0004** (the Model Improvement Protocol, which this RFC automates and extends), RFC-0002, RFC-0003 |
-| Affects | spec/palw 03 (registry: the program kinds `Bvm` and `Gvm`), new chapters 04d (bounded control) and 04e (the general VM), 05 (canonical work: credited per executed call), 07/08/09 (claims, verification, court: control traces, the bisection game, one-step proofs), 11 (free-prompt lane: workflow jobs), 16 (fences), 17 (RFC-0004's chapter: the EXEC, CRITIC and PROOF verification types); spec/evm (a job precompile and a settlement op) · all networks (dormant until armed) · `consensus/core`, new crates `misaka-palw-bvm` and `misaka-palw-gvm`, `kaspa-evm` (rung A), `misaka-palw-sdk`, a guest toolchain |
+| Normative dependencies | RFC-0002 and RFC-0003 for the model fallback; RFC-0001 for the free-prompt decode rules (D10, D11, `DecodeConfigV4`) that the fallback's `FP_SELECT` applies; **RFC-0004** (the Model Improvement Protocol, which this RFC automates and extends) for the improvement and verification features. The previously decided RFC-0004-first implementation order applies to the whole RFC |
+| Affects | spec/palw 03 (registry: the program kinds `Bvm` and `Gvm`), new chapters 04d (bounded control) and 04e (the general VM), 05 (canonical work: credited per executed call), 07/08/09 (claims, verification, court: control traces, the bisection game, one-step proofs), 11 (free-prompt lane: workflow and fallback model jobs), 16 (fences: the value of `palw_gvm_v1` names the syscall set and the court version), 17 (RFC-0004's chapter: the EXEC, CRITIC and PROOF verification types); spec/evm (a job precompile and a settlement op) · all networks (dormant until armed) · `consensus/core`, new crates `misaka-palw-bvm` and `misaka-palw-gvm`, `kaspa-evm` (rung A), `misaka-palw-sdk`, a guest toolchain |
 | Branch | `rfc/0004-0005-vm` (text only) |
 | Related | ADR-0135 D7 (a new operation is a protocol upgrade), ADR-0020 (the selected-parent EVM lane), ADR-0089 (the fold is the truth, the EVM is its window and its hand), ADR-0139 (the lanes' gas budget), ADR-0023 (the three-lane proposal), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0082 and ADR-0103 (dissection, the held regime), ADR-0072 · external precedents (§*Design principle*): Nervos CKB-VM, the Cartesi Machine and its PRT dispute protocol, the EVM, FuelVM, the RISC-V Sail model |
 
@@ -61,20 +61,24 @@
   Phase F step tree。外側の食い違いは 1 命令の one-step 証明で、call の中身は既存の TIR court で裁く。
 - **測定の gate は残す。** 2026-09-28 の hub の数で、RFC-0002 だけで登録できるのは text-generation リポジトリの約 64 %
   (約 27 万 / 41.6 万、HF 全 310 万件の約 9 %)。未登録の約 36 % は GGUF・事前量子化・parser 未実装などの形式と lowerer の穴で、
-  制御フローを要するものは 0。よって VM に帰属する差は今日 0。約 91 % という数は safetensors の decoder checkpoint に対する
-  アーキテクチャの被覆率で、64 % の因子の一つにすぎない。
+  制御フローを要するものは 0。よって **BVM に帰属する制御フロー差**はこの旧調査では 0。約 91 % という数は safetensors の
+  decoder checkpoint に対するアーキテクチャの被覆率で、64 % の因子の一つにすぎない。RFC-0002 §II.12 の新しい
+  ローカル LLM cohort の 90/10 目標や、GVM による残余の実走率を示す数字ではない。
 
 **Part II — Phase C:Turing 完全 VM(PALW-GVM)と permissionless な研究プログラム**
 
 - **用途。** agent、router、tool planner、探索、複数モデルのワークフロー、そして RFC-0004 のための EXEC 検証(コードを
   テストで評価する、実行した反例、証明 checker)。誰でも研究プログラムを登録して走らせ、その成果物を RFC-0004 に候補や
-  dataset として出せる。
+  dataset として出せる。加えて、RFC-0002 で実走できないローカル LLM の残余には、既存 TIR 演算を `TIR_CALL`、
+  不足した整数演算・制御を GVM guest で処理する fallback を設ける(§II.10.1)。fallback の追加 system call
+  (`ARTIFACT_TENSOR_OPEN`・`TENSOR_CONCAT`・`FP_SELECT`)は v1 に足さず、新しい syscall set v2(kind `Gvm(3)`)にする。
 - **二つの段。** rung A = 既存 EVM レーンを非同期の呼び出し役に使う(PALW job を依頼し、`Final` の後に callback。fee-only)。
   rung B = off-chain の **RISC-V VM(RV64IM + Zba・Zbb・Zbs、CKB-VM の ISA の部分集合)** と TIR precompile。Cartesi 型の
   checkpoint + k-ary 二分探索 + 1 命令の one-step 証明に、呼び出し先の TIR court への下降を足した 4 段で裁く。
   EVM レーンに同期の TIR precompile を足す案は不可能(全ノードが推論を再実行することになる)。WASM は次点。
 - **gas と報酬。** gas は状態の一部で、one-step 証明が毎命令検査する。報酬は実行された TIR 呼び出しの仕事量だけで、VM 命令は
-  0。外部の応答は oracle transcript として入力になり、真偽は裁かない(P2)。
+  0。外部の応答は oracle transcript として入力になり、真偽は裁かない(P2)。VM fallback の実行負荷と報酬を混同せず、
+  まず free-prompt の `Final` を対象とする。attempt lane や VM 演算への work credit は別途規則が必要(§II.10.1)。
 
 **工数と推奨**
 
@@ -84,20 +88,26 @@
   既存 VM を土台にした分、仕様・参照実装・第二実装・形式検証は軽くなる(旧見積もり 36〜52 EM、24〜30 か月)。監査・soak・
   bounty は縮まない。one-step prover が真偽を決めることは、ISA を誰が設計したかに関係ないから。
 - **推奨。** まず RFC-0004 を完成させる。その後、Part I は gate が開いたときだけ(Part II と両方は作らない)。rung A は
-  コントラクト側の需要が出たら。rung B は PALW-TIR が mainnet-safe になり、M4 がワークフロー需要を示してから。
+  コントラクト側の需要が出たら。rung B は PALW-TIR が mainnet-safe になり、RFC-0002 §II.12 のローカル LLM 残余または
+  M4 のワークフロー需要を実測してから。
 
 ## Summary
 
-This RFC is **Layer 2** of the improvement roadmap: optional automation over RFC-0004's Model
-Improvement Protocol, in two parts. **Part I (Phase B)** is a bounded control-flow VM that runs bounded
+This RFC supplies **Layer 2** of the improvement roadmap and the measured local-LLM fallback of
+RFC-0002 §II.12, in two parts. **Part I (Phase B)** is a bounded control-flow VM that runs bounded
 improvement workflows — `FOR generation IN 0..8 { generate a dataset; train; evaluate; keep the best }`
 — with every tensor computation delegated to PALW-TIR. **Part II (Phase C)** is a Turing-complete VM
 for permissionless research programs: agents, planners, search and multi-model workflows. It also
-brings the verification types that need execution (EXEC, CRITIC and PROOF) into RFC-0004's evaluation.
+provides a metered integer guest fallback for local LLMs that RFC-0002 TIR cannot admit at real size
+(RFC-0002 §II.12; §II.10.1 here), and brings the verification types that need execution (EXEC, CRITIC
+and PROOF) into RFC-0004's evaluation. The intended division is at least 90 % of the measured
+local-LLM cohort through TIR and the eligible residual through GVM; neither percentage is established
+by the old corpus.
 
 Neither part changes RFC-0004. A candidate produced by a VM program is evaluated and promoted exactly as
 any other, and a candidate produced without one is never disadvantaged (RFC-0004 PALW-MIP-1). The VM
-only adds producers of candidates and datasets, and scoring kinds.
+adds producers of candidates and datasets and scoring kinds to RFC-0004; the GVM model fallback
+is a separate class-execution route under RFC-0002's coverage target.
 
 - **Part I** keeps the bounded VM's design: structured control, a register file and no memory; a
   consensus-enforced ladder (TIR, then the AOT expansion, then the VM); a one-step control court with a
@@ -112,10 +122,19 @@ only adds producers of candidates and datasets, and scoring kinds.
   semantics, its metering lessons and its dispute shape come from VMs that already run on mainnets.
   MISAKA writes only the deterministic profile, the resource accounting, the commitments, the
   `TIR_CALL` ABI, the court objects and the PALW integration.
+- **The local-LLM fallback is a new syscall set, not a change to v1** (amended 2026-10-03, §II.10.1).
+  Three calls — `ARTIFACT_TENSOR_OPEN`, `TENSOR_CONCAT` and `FP_SELECT` — form syscall set v2, which
+  is used by kind `Gvm(3)` on the same PALW-RV64 profile (kind numbers and syscall-set ids are independent, and
+  `Gvm(2)` stays reserved for the later Linux profile); kind `Gvm(1)` keeps syscall set v1, its state, its class
+  record and its court exactly as they are. The fallback is dormant behind the same fence, whose value names the
+  set and the court version it runs.
 
-Both parts are optional and expensive. Part I costs 17–25 engineer-months and 9–12 months to
-mainnet-safe use. Part II's rung B costs 32–45 engineer-months and 22–28 months. **None of it starts
-before RFC-0004 is fully implemented.**
+Part I remains optional. Part II's rung B is the intended residual-model fallback **if** the RFC-0002
+§II.12 cohort demonstrates models that its metered guest can bring to `Final`; it is not justified by
+the old architecture percentage. Part I costs 17–25 engineer-months and 9–12 months to mainnet-safe
+use. Part II's rung B costs 32–45 engineer-months and 22–28 months. **The previously decided order
+still places implementation after RFC-0004 is fully implemented; measurement and specification can
+proceed earlier.**
 
 ## How this RFC relates to RFC-0004
 
@@ -125,6 +144,9 @@ before RFC-0004 is fully implemented.**
 | verification types EXACT, LIKELIHOOD, JUDGED, HUMAN | nothing new (control over the same TIR stages) | EXEC (tests and checkers), CRITIC (executed counterexamples), PROOF (a proof checker) — §II.11 |
 | artifact kinds Answer, PreferencePair, SyntheticProblem, HardCaseVariant, RewardSignal, Critique | — | TestCase, Counterexample, VerifiedCode, ToolTrace, FormalProof |
 | training outside consensus; a possible future IR training profile | a loop may call that profile once it exists (RFC-0004 §12); until then training stays off chain | the same |
+
+The local-LLM fallback of §II.10.1 is separate from the improvement and promotion table: it admits a GVM
+model class for inference and applies the ordinary registration, seat and `Final` lifecycle.
 
 Rules that hold throughout:
 
@@ -380,7 +402,7 @@ Each is reported by checkpoint count and by downloads, over hf-coverage's decode
 - `cov_AOT = cov_TIR + EXPANDABLE`;
 - `cov_BVM = cov_AOT + NEEDS_VM`;
 - `gap_lowerer` (`NOT_LOWERABLE`) and `gap_primitive` (`NEEDS_PRIMITIVE`), reported separately —
-  **neither counts for the VM**;
+  **neither counts for this BVM metric** (the GVM fallback is measured separately in §II.10.1);
 - `ρ_w` and `ρ_a` for every `EXPANDABLE` family with at least 1 % usage.
 
 ### I.1.4 The gate
@@ -414,11 +436,12 @@ a family with data-dependent control reaches 1 % of new checkpoints in a quarter
 | the rest of text-generation, ≈ 36 % | GGUF-only and pre-quantised repositories (an importer and the lowerer's quantisation path), weights in other formats, and architectures without a parser — ≈ 7 % of safetensors checkpoints (GLM, hybrids of existing ops, the long tail) | hub counts; hf-coverage §4 |
 | `gap_primitive` candidates | a few, each to be confirmed: Llama-4's chunked attention (a window shape; a masked window in v1 today), Gemma-3n's activation sparsity (a top-k-by-value gate; `TopK` exists), xLSTM's exponential gating, BitNet's ternary weights (codes fit `i8`; an artifact question) | hf-coverage §4 |
 | `NEEDS_CONTROL` | **0**: no covered or refused decoder needs data-dependent control | this part's reading of hf-coverage §3–4 |
-| VM-attributable gap `cov_BVM − cov_AOT` | **0 points** | — |
+| BVM-control-attributable gap `cov_BVM − cov_AOT` | **0 points** | — |
 
-**Verdict today: the gate is closed.** The roughly 36 % of text-generation repositories that RFC-0002
-does not register yet are format, importer, lowerer and primitive gaps, and a VM closes none of them
-(GB2).
+**Verdict for Part I's old corpus: the BVM gate is closed.** The roughly 36 % of text-generation repositories that RFC-0002
+does not register yet are format, importer, lowerer and primitive gaps, and the BVM closes none of them
+(GB2). This result does not test the GVM guest path or the distinct local-LLM 90/10 cohort of
+RFC-0002 §II.12; the BVM cannot close those gaps, while the GVM may close a bounded residual.
 
 ### I.1.6 Plausible future architectures and their expected verdicts
 
@@ -939,6 +962,12 @@ transition (§*Effort*).
 - **Rung B is borrowed, not invented** (2026-10-02): CKB-VM's RISC-V subset as the machine, Cartesi's
   shape as the dispute game, the EVM's and FuelVM's lessons as the metering, PALW-TIR behind `TIR_CALL`
   (§*Design principle*). Every departure from those sources is in §II.2.4's register.
+- **The local-LLM fallback** (amended 2026-10-03, §II.10.1). For a local-LLM checkpoint that RFC-0002's TIR
+  cannot admit at real size, a class may run its bulk layers as `TIR_CALL`s and its missing integer
+  operations and dynamic control as guest code, read class-bound weights through `ARTIFACT_TENSOR_OPEN`,
+  assemble a logits row from tiles with `TENSOR_CONCAT`, and select each token with the host's
+  `FP_SELECT` — RFC-0001's D11 rule, exactly. These three calls are syscall set v2, used by kind `Gvm(3)`; a
+  model counts as covered by the fallback only where a real-size job reached `Final`.
 
 Section numbers in Part II carry the prefix `II.`.
 
@@ -1003,10 +1032,13 @@ reads is the one the chain rewards. So:
 **Goals.**
 
 - GC1. General control — `while`, recursion, memory — metered by gas.
-- GC2. Every tensor computation is a TIR precompile: the fast path stays PALW-TIR, adjudicated by the
-  TIR court, which never learns that a VM exists.
-- GC3. One claim per workflow, whose whole trace is adjudicable: by bisection to one instruction and a
-  one-step proof, or by descent into the TIR court at a model call.
+- GC2. Bulk tensor computation uses TIR precompiles — the fast path, adjudicated by the TIR court, which
+  never learns that a VM exists. A missing integer operation may instead run as gas-metered guest
+  instructions (the slow path of §II.10), adjudicated by the GVM court within the residual-model limits
+  of §II.10.1.
+- GC3. One claim per workflow or fallback model job, whose whole trace is adjudicable: by bisection to
+  one instruction and a one-step proof, by descent into the TIR court at a model call, or — for a
+  fallback model job's token selection — by the `FP_SELECT` arm (§II.6.3).
 - GC4. Determinism: no floating point, no clock, no thread, no IO except committed oracles.
 - GC5. Gas soundness: gas bounds the trace, the memory, the executor's work and the dispute game.
 - GC6. Composition with the EVM lane, asynchronously, with results delivered only after `Final`.
@@ -1055,7 +1087,8 @@ principle:
 2. **Determinism by construction**, with no implementation-defined corner to pin down.
 3. **An independent reference** for the second implementation and for differential testing.
 4. **Precedent** in production fault-proof systems.
-5. **Fit with TIR**: tensors live outside the VM, behind handles; the VM needs only integer glue.
+5. **Fit with TIR**: tensors live outside the VM, behind handles; TIR remains the bulk compute path,
+   while a fallback guest may do bounded integer lane work when TIR cannot express an operation.
 6. **Toolchains**: workflows are written in Rust, C or anything that compiles to the target —
    including interpreters for other languages, run as guests.
 7. **A path to validity proofs** for the control part later, since ML itself will stay optimistic.
@@ -1235,7 +1268,8 @@ grows — stands. Rung A on mainnet waits for both.
 - **Numbering follows CKB-VM's convention** (§II.2.4): the number in `a7`, arguments in `a0`–`a5`, the
   result in `a0`, and `HALT` at 93, the `exit` of Linux and of CKB. MISAKA's own calls sit at 4,096 and
   above. Any other number ends the job in `Faulted(Illegal)`: the set is fixed by `syscall_set_id`, and
-  nothing is registered at run time.
+  nothing is registered at run time. The table above is syscall set v1; set v2 adds three calls at 4,107–4,109
+  (§II.4.2.1), which under set v1 are numbers like any other and end the job in `Faulted(Illegal)`.
 - **The oracle transcript** is how agents use tools without IO. Everything an agent learns from outside
   — a web page, a tool's answer, a user's reply — is appended by the executor to a transcript, committed
   in the claim as `oracle_root`, and read by offset. The court never judges whether a transcript is
@@ -1243,9 +1277,57 @@ grows — stands. Rung A on mainnet waits for both.
   transcript is allowed only in a job the user runs for themselves (the free-prompt lane). It is refused
   in a requested job (§II.3.2), where it would let the executor steer the answer.
 - **Handles.** `HandleV1 { root, dtype, shape (rank ≤ 4), origin: Input | Call { ordinal, output } |
-  Memory { instret } }`. The table is append-only, holds at most 2^16 entries, and is committed as a
-  Merkle tree whose root is in the state. Tensor data never enters VM memory except through
+  Memory { instret } }` — and, under syscall set v2 only, `Artifact { tensor_id }` and
+  `Concat { left, right, depth }` (§II.4.2.1). The table is append-only, holds at most 2^16 entries, and is
+  committed as a Merkle tree whose root is in the state. Tensor data never enters VM memory except through
   `TENSOR_READ`, one lane at a time, or leaves it except through `TENSOR_FROM_MEM`.
+
+### II.4.2.1 Syscall set v2: the local-LLM fallback calls (kind `Gvm(3)`)
+
+*Amended 2026-10-03. The three calls the local-LLM fallback needs are not added to v1.* `syscall_set_id` is
+the keyed hash of the set's descriptor, as `isa_id` is of the ISA's, so a set that gains a call is another set
+with another id, and a class never changes the set it runs under (PALW-GVM-20). Set v2 is used by kind `Gvm(3)`;
+the two numbers are independent (a kind number counts class kinds, a set id names a table of calls). **Set v2 is
+the eleven calls of set v1, with their numbers, gas and evidence unchanged, plus:**
+
+| # | Call | Effect | Gas | One-step evidence |
+| --- | --- | --- | --- | --- |
+| 4,107 | `ARTIFACT_TENSOR_OPEN(id)` | appends a read-only handle for entry `id` of the class's parameter table; `a0` = its index | 128 | the entry and its path under the class's `params_root` (at most 16 siblings, about 1.2 KB); no memory access |
+| 4,108 | `TENSOR_CONCAT(left, right)` | appends an immutable rank-1 handle over two rank-1 handles of one dtype, in that order; total length at most 2^20 lanes, composition depth at most 6; `a0` = its index | 64 | the two child entries under the handle table's root; no memory access |
+| 4,109 | `FP_SELECT(logits, position)` | on a class with a text profile only: selects the next token from the Q24 logits row `logits` by the host's exact RFC-0001 rule, appends it to the decode stream and advances the decode state; `a0` = the token (all ones when no lane is admissible), `a1` = 0 while the decode goes on, else 1 (budget), 2 (stop sequence) or 3 (no admissible lane) | `128 + 16 · vocab` | an executable call, as `TIR_CALL` is: the logits entry under the table's root. The claimed token is an outer leaf (§II.5), judged by the `FP_SELECT` arm (§II.6.3) |
+
+- **Faults.** As in set v1: a handle that does not exist, a table entry that does not exist (`id ≥ params_count`),
+  a full handle table, a child that is not rank 1 or is of another dtype or origin than the call allows, a total
+  length or depth over the limit, and — for `FP_SELECT` — a class with no text profile (the *missing profile*), a
+  `position` other than `decode_len`, a decode that has already stopped, or a handle that is not a rank-1 `i32`
+  row of exactly `vocab` lanes, all end the job in `Faulted(Illegal)`. None of the three reads or writes VM
+  memory, so none charges a page.
+- **`ARTIFACT_TENSOR_OPEN` — class-bound parameters.** The class commits `params_root`, the root of a Merkle tree
+  of depth 16 over entries `ArtifactTensorRefV1 { tensor_id, dtype, shape, byte_offset, byte_len, tensor_root }`
+  (`tensor_id` is the entry's index; at most 2^16 entries). The handle `HandleV1 { root: tensor_root, dtype,
+  shape, origin: Artifact { tensor_id } }` is read-only, and this call is the only way to make one. A lane of it
+  opens under `tensor_root` — a Merkle tree of depth 27 over 32-byte chunks of the tensor's bytes, bound to its
+  dtype, shape and byte length — through `TENSOR_READ`: one chunk and at most 27 siblings, about 1.8 KB. No
+  registrant code executes; the court computes nothing but hashes. The weights stay in the artifact: the 4 GiB
+  address space never holds them.
+- **Binding to the artifact inventory.** The table is bound to the class's artifact by definition, not by a proof
+  on every call: for a `Gvm(3)` class `artifact_root = gvm_artifact_root_v3(image_root, params_root,
+  params_count)` (§II.4.5), so the artifact whose possession the seats prove is exactly the image and the tensors
+  the table names, and the class id, which commits `artifact_root`, cannot name a table the artifact does not
+  hold. `byte_offset` and `byte_len` place each tensor in the artifact's parameter section; `tensor_root` is
+  recomputable from those bytes (`gvm_check_params_table_v1`). The one-step evidence stays one table path, far
+  under 8 KiB.
+- **`TENSOR_CONCAT` — a row from tiles.** A guest computes a vocabulary row in tiles of at most 64 KiB (16,384
+  `i32` lanes) with `TENSOR_FROM_MEM` and joins them pairwise. A child is a memory-made tile, an artifact tensor or
+  an earlier concatenation; a job input or a call output is already one tensor with its own commitment and is not
+  a child. The new handle's root is `H64(key "misaka-palw/gvm/concat-root/v1", dtype ‖ le64(n_left) ‖ le64(n_right)
+  ‖ root_left ‖ root_right)`, so it commits to order, dtype and lengths; its shape is `[n_left + n_right]` and
+  its origin records the two child indices and the depth (`1 + max` of the children's, tiles at 0). A lane opens
+  by descending the links — at most 6, each 144 bytes — and then opening the tile as `TENSOR_READ` does: a
+  151,936-lane vocabulary is 10 tiles at depth 4, a lane's proof about 1.3 KB (at most 1.6 KB at the depth cap),
+  never the whole row.
+- **`FP_SELECT` — the one sampler.** The guest cannot invent a sampling rule and still be a free-prompt job
+  (RFC-0001 §A): the selection is the host's, and the guest only receives its result (§II.10.1).
 
 ### II.4.3 `TIR_CALL`: the precompile
 
@@ -1280,6 +1362,24 @@ called as a one-node segment.
   gvm_state_root_v1(s) = H64(key "misaka-palw/gvm/state/v1", borsh(s))
   ```
 
+- **The decode block** (set v2, on a class with a text profile; §II.10.1). `GvmStateV1` gains a trailing
+  optional block, absent for every job under set v1 and for a `Gvm(3)` class without a text profile:
+
+  ```
+  DecodeStateV1 { decode_acc: Hash64, decode_len: u32, decode_stop: Option<DecodeStopV1>,
+                  decode_hist: [u32; 0..=256],       // the last min(decode_len, 256) selected tokens, oldest first
+                  constraint_state_root: Hash64 }    // reserved: zero (§II.10.1)
+  DecodeStopV1 = Budget | StopSequence { index } | NoAdmissibleLane
+  decode_acc' = H64(key "misaka-palw/gvm/decode-acc/v1", decode_acc ‖ le32(token))
+  gvm_state_root_v2(s) = H64(key "misaka-palw/gvm/state/v2", borsh(s without the block) ‖ borsh(block))
+  ```
+
+  A state without the block has `gvm_state_root_v1` exactly as before, so a set-v1 job, its vectors and its
+  proofs do not change. The block adds about 1.2 KB (its history is at most 1,024 bytes): a text job's state is
+  about 1.7 KB, and a one-step proof still opens it whole. Everything the RFC-0001 processor reads from the
+  past is in it: a penalty window is at most 256 tokens, a stop sequence at most 16, and the sampler's position
+  is `decode_len`.
+
 ### II.4.5 The image, the class and admission
 
 - **The image** `GvmImageV1 { entry, stack_top, segments: [(vaddr, bytes)] }` is canonical (sorted,
@@ -1297,11 +1397,32 @@ called as a one-node segment.
   gvm_class_id_v1 = H64(key "misaka-palw/gvm/class-id/v1", borsh(class) ‖ artifact_root)
   ```
 
+- **A `Gvm(3)` class** (§II.4.2.1, §II.10.1) is the same header with `version = 3`, and an extension:
+
+  ```
+  PalwGvmClassV3 { header: PalwGvmClassV1 { version: 3, … },   // every field above, unchanged
+                   params_root, params_count,                    // the parameter table; the empty table is params_count = 0
+                   text_fallback: Option<GvmTextFallbackV1> }    // §II.10.1: vocabulary, Q24 convention, bounds, controls
+  gvm_artifact_root_v3 = H64(key "misaka-palw/gvm/artifact-root/v3", image_root ‖ params_root ‖ le32(params_count))
+  gvm_class_id_v3      = H64(key "misaka-palw/gvm/class-id/v3", borsh(header) ‖ borsh(extension) ‖ artifact_root)
+  ```
+
+  with `artifact_root = gvm_artifact_root_v3(…)`. The kind is in the id's domain key (§I.2.1), so a `Gvm(1)` id
+  and a `Gvm(3)` id never collide, and a `Gvm(1)` class's bytes and id are what they were.
+
 - **Admission** (`gvm_admit_v1`) is short, because a Turing-complete program cannot be bounded
   statically and is not asked to be: canonical decoding; header sanity (the entry and the stack inside
   the image's range, `image_len` within the cap); every carried segment through `tir_admit_v1` or pipeline
   admission; every registered segment existing; `gas_limit_max` and `tir_limit_max` within the network's
   ceilings; `c_vm` in `[2^10, 2^24]`; and the court window (§II.6.6). Gas bounds everything else at run time.
+- **Admission for `Gvm(3)`** (`gvm_admit_v3`) is v1's on the header, and adds: the fence value naming syscall set
+  v2 and court version 2; `params_count ≤ 2^16` and `params_root` the root of that many entries (the empty root
+  at 0); `artifact_root` equal to its derivation; a text profile, when present, whose vocabulary, token bound,
+  stop bounds, controls and tokenizer fit RFC-0001's caps and the header's `tokenizer_id` (§II.10.1); and the
+  court window with a text job's extra outer leaves (§II.6.6). A table whose tensors the artifact does not hold
+  is not caught by the chain; it is caught by the seats' possession proofs over `artifact_root`, which cover
+  exactly the image and the table's tensors, and `gvm_check_params_table_v1` is the offline check that
+  registrant tooling and a node's admission probe run over the bytes.
 
 ### II.4.6 The gas schedule (v1, calibrated before the fence)
 
@@ -1338,6 +1459,16 @@ checkpointed rather than recorded at every step.
   bisection move by re-executing at most `c_vm` instructions.
 - **Size.** At the v1 ceilings the outer tree has at most `2^32 / 2^20 + 3 · 2^14 + 1 ≈ 53,000` leaves.
   The inner trees cost exactly the executed calls' TIR commitments.
+- **Set v2 adds one leaf kind.** `FP_SELECT` is an executable call, as `TIR_CALL` is: checkpoints sit
+  immediately before it (whether or not it will execute) and immediately after an executable one, and between
+  them sits `FpSelectRecord { position, logits, outcome }` — `logits` the leaf hash of the handle's table
+  entry, `outcome` the claimed token or `NoAdmissibleLane`. A bisection interval therefore never contains an
+  `FP_SELECT` that executes, the ladder reaches the record directly, and no one-step proof has to recompute an
+  argmax over a vocabulary-sized row. A text job's outer tree has at most `2^32 / 2^20 + 3 · 2^14 +
+  3 · max_new + 2` leaves, with `max_new ≤ 2^16`: about 250,000.
+- **A text job's output is its decode stream.** `OUTPUT_WRITE`, `OUTPUT_TENSOR` and `ORACLE_READ` end such a job
+  in `Faulted(Illegal)`, and `End.output_root` is `H64(key "misaka-palw/gvm/text-output-root/v1", decode_acc ‖
+  le32(decode_len))` (§II.10.1).
 - **The invariant is Phase F's, again.** Every outer leaf is a function of the outer leaves before it,
   the job, the oracle transcript and the inner trees of earlier calls. Every inner leaf is a function of
   the inner leaves before it and of its inputs. So the first divergent leaf is always adjudicable.
@@ -1373,7 +1504,16 @@ all of whose predecessors agree with the challenger's honest trace.
   (the descriptor, read from memory under its proof; the input handles, from the table). A mismatch
   convicts. If only `callee_root` or `callee_leaf_count` differs → level 4.
 - `j` is `End`, or one trace ends where the other continues → `GvmEnd`: the status, `output_root` (the
-  canonical digest of the output stream and emitted tensors) and `oracle_root`.
+  canonical digest of the output stream and emitted tensors) and `oracle_root`. For a text job (§II.10.1) the
+  `output_root` an `End` must carry is the text output root of the final state — a pure function of
+  `decode_acc` and `decode_len` — so no guest output stream can replace the selected tokens. The job is a
+  *result* only if it ended `Halted(0)` with its decode stopped by the stop, budget or no-admissible-lane rule;
+  every other end is an honest `End` that yields no answer — a named refusal (§II.10.1), not a verdict
+  against the executor.
+- (set v2) `j` is an `FpSelectRecord` → `GvmFpSelect` recomputes its deterministic fields from the checkpoint
+  before it, and the `FP_SELECT` arm judges the token itself (§II.6.3). `j` is the `Checkpoint` right after an
+  `FpSelectRecord` → `GvmFpSelectReturn`: the state after the call is the state before it with the claimed
+  token appended, `a0` and the meters — one step.
 
 ### II.6.2 Level 2: the interactive VM bisection
 
@@ -1411,8 +1551,32 @@ GvmOneStepV1 { binding, s,
 4. `gvm_state_root_v1(post)` is compared with the claimed `S_{s+1}`: different → `ExecutorGuilty`; equal →
    `ChallengerDefeated`.
 
-- **Size.** About 530 bytes of state, two proofs of about 1.8 KB, and at most about 70 KB of evidence
-  (`TENSOR_FROM_MEM`'s 64 KiB range): always one carrier (PALW-TIR-38).
+- **The `FP_SELECT` arm** (set v2; §II.10.1). A selected token is a function of a whole logits row, which no
+  one-step proof can carry — a vocabulary is 10^5 lanes. ADR-0082 D11's key, however, is a *per-lane* function
+  (RFC-0001 §A.3: the penalties and the bias read one lane and the committed history; the Gumbel term is R's
+  domain 0 at one position and lane), so the selection is refuted as the tiled logits pin is: by two lanes. The
+  executor's token is committed in an `FpSelectRecord` (§II.5), and three closes speak about it:
+  - `GvmFpSelect` — the record's deterministic fields (its position, and the leaf hash of the logits entry in
+    the handle table) against the checkpoint before it: the one-step evidence of an executable call.
+  - `GvmFpSelectReturn` — the checkpoint after the record against the state before it with the claimed token
+    applied: `decode_acc`, the history window, the stop state, `a0`, the gas (`1 + 128 + 16 · vocab`) and the
+    advance. A pure function of the pre-state, the token and the job's stop rules.
+  - `GvmFpSelectRefuted { record, pre, refutation }` — the arm proper. The refutation names a lane `c` and
+    carries lane openings for the claimed token `t` and for `c` under the logits handle's root (through its
+    concat links and tile, or under a call output's own commitment), at most about 2 × 1.6 KB. The verifier
+    computes both lanes' processed keys by RFC-0001's pipeline from the job's controls in the binding and the
+    history window in `pre` — the Gumbel term at position `decode_len` under the job's sampling seed — and
+    decides: a claimed `t` outside the vocabulary or banned by `logit_bias` → `ExecutorGuilty`; `c ≠ t`, `c`
+    eligible and `c` beats `t` (a strictly greater key, or an equal key at a lower index) → `ExecutorGuilty`;
+    anything else (the same lane, a banned `c`, a worse `c`, an equal key at a higher index) →
+    `ChallengerDefeated`. A claimed `NoAdmissibleLane` is `ExecutorGuilty` unless the bans cover the vocabulary.
+
+  An honest executor's token is the argmax of the processed keys over the eligible lanes with ties to the
+  lowest index, so no `c` beats it: every close acquits it, and a wrong token always has the true argmax lane
+  as its refutation. The arm adds no round: it is one move, like the other whole closes.
+- **Size.** About 530 bytes of state (about 1.7 KB with a text job's decode block), two proofs of about
+  1.8 KB, and at most about 70 KB of evidence (`TENSOR_FROM_MEM`'s 64 KiB range): always one carrier
+  (PALW-TIR-38).
 - **Either party may file it.** The root `S_s` is agreed, so the challenger can supply the preimage and
   the proofs from its own honest memory.
 - **One step function.** The emulator and the prover are one Rust function over a memory trait (full
@@ -1449,7 +1613,9 @@ Admission checks the extended O-5 inequality:
 ```
 
 where `R_vm = ⌈log_k c_vm⌉`. At `k = 8`: `B_outer ≤ 6` (about 53,000 leaves), `R_vm = 7`, and `B_inner ≤ 11`
-for a `2^32`-leaf callee, plus any dissection rounds — inside the 48-round cap.
+for a `2^32`-leaf callee, plus any dissection rounds — inside the 48-round cap. A text job adds `3 · max_new`
+leaves to the ladder's width — at `k = 8` still `B_outer ≤ 6` (about 250,000 leaves against `8^6 = 262,144`) — and
+its `FP_SELECT` arm is one move, so the inequality gains no round.
 
 ### II.6.7 Malformed statements
 
@@ -1474,7 +1640,8 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
 
 ### II.6.9 What the court adds, as objects
 
-- Close proofs appended to `PalwCourtVerdictProofV2`: `GvmOneStep`, `GvmCall`, `GvmCallReturn`, `GvmEnd`.
+- Close proofs appended to `PalwCourtVerdictProofV2`: `GvmOneStep`, `GvmCall`, `GvmCallReturn`, `GvmEnd` —
+  and, under set v2, `GvmFpSelect`, `GvmFpSelectReturn` and `GvmFpSelectRefuted` (§II.6.3).
 - Ladder phases: `CourtGvmBisected`, `CourtGvmChildChosen`, `CourtGvmDescended`.
 - A one-move accusation, `GvmShardCourtAccused`.
 - A step fault, `GvmMalformedState`.
@@ -1490,14 +1657,19 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
    increment and the limit. A trace that runs past its limit has a first step whose honest post-state is
    `OutOfGas` and whose claimed one is not, and that step convicts.
 3. **Memory is bounded.** First-touch gas limits a job to `gas_limit / 4,096` pages.
-4. **The game is bounded.** At most `gas_limit / c_vm + 3 · tcalls + 1` outer leaves, at most
-   `⌈log_k c_vm⌉` VM rounds, and one-step proofs of bounded size (every system call's evidence is capped).
+4. **The game is bounded.** At most `gas_limit / c_vm + 3 · tcalls + 1` outer leaves (a text job adds
+   `3 · max_new`), at most `⌈log_k c_vm⌉` VM rounds, and one-step proofs of bounded size (every system call's
+   evidence is capped; the `FP_SELECT` arm is one move over two lane openings).
 5. **TIR work is bounded separately.** The TIR budget is debited at the segment's static cost before the
    call runs. Inside the call, the callee's own admission bounds hold.
 6. **No refunds.** Gas only grows, which keeps 1–4 simple. EVM gas refunds are a known source of
    complexity and bugs, and this VM has no reason to copy them.
 7. **What gas does not claim.** It is not the price of inference (TIR work is), not a reward unit, and not a
    bound on a JIT's wall-clock time — only on the reference emulator's work, up to a constant.
+8. **`FP_SELECT` is priced by its work.** The host's selection reads every lane of the row once, so its gas is
+   `128 + 16 · vocab` — linear in the vocabulary, which the class bounds (`vocab ≤ 2^20`) — and a job's selections
+   are bounded by `max_new ≤ 2^16`. The constants are provisional and calibrated before the fence (open
+   question 28).
 
 ### II.7.2 Denial of service
 
@@ -1530,6 +1702,11 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
   Turing-complete program has no static work to price.
 - **Gas pays nobody** in the free-prompt lane. It is a declared limit that bounds the trace, the game and
   the seats' verification work.
+- **Model fallback needs a seat-cost rule.** A `Gvm(3)` text-fallback class may use substantial RV64IM gas —
+  and `FP_SELECT`'s `16 · vocab` per token — for genuine inference without adding credited TIR work. Before
+  live enablement, show how its fee or separately capped seat compensation funds independent re-execution at
+  the intended job rate; gas alone is not a reward and padded guest instructions cannot mint structural work
+  (§II.10.1).
 - **Rung A is fee-only** (§II.3.2).
 - **Calls into other registrants' classes are verified use of those classes.** Whether that use counts
   toward the called class's weight or share (ADR-0137) is open question 17.
@@ -1537,6 +1714,12 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
 ## II.9 Program kinds, and Part I
 
 - `Gvm(1)` joins the program kinds of §I.2.1. No other kind's class changes.
+- **`Gvm(3)` is the local-LLM text fallback** (§II.4.2.1, §II.10.1): the PALW-RV64 profile under syscall set
+  v2, with class record v3, the decode block and the `FP_SELECT` arm. A kind is never reinterpreted (§I.2.1),
+  so the fallback's three calls could not join `Gvm(1)`: `Gvm(1)` classes keep set v1, state v1, class id v1
+  and the court they were admitted under, byte for byte, and `palw_gvm_v1`'s value names the highest syscall
+  set and court version the network runs. **Kind numbers and syscall-set ids are independent**: `Gvm(3)` runs
+  set v2, and the number 2 stays reserved for the Linux profile below, which this RFC announced first.
 - **A Linux profile later** (§II.2.4) would be `Gvm(2)`, a new version of the kind beside `Gvm(1)`: the
   privileged architecture, an MMU and Cartesi-style deterministic floating point, so that unmodified
   Linux software runs as a guest. No `Gvm(1)` class changes meaning, and it is built only on measured
@@ -1553,18 +1736,126 @@ An honest executor's every root and leaf is an evaluation, so every close acquit
 
 - **Control: anything computable, within gas.** Agents, planners, search, tool use, program execution,
   routers and cascades are all programs.
-- **Missing tensor arithmetic gets a slow path, not a fast one.** A guest can read lanes with
-  `TENSOR_READ`, compute in RV64IM and write back with `TENSOR_FROM_MEM` (64 KiB per call). That serves
-  small operations: a new activation over a 4,096-wide row costs on the order of 10^5 instructions per
-  token. It does not serve heavy ones: a new attention variant over 10^4 positions and 32 heads is
-  10^9 instructions or more per token. **Heavy new operations still need a TIR prim-set revision.**
+- **Missing tensor arithmetic gets a slow path, not a fast one.** A guest can open artifact-bound weight
+  handles (set v2), read lanes with `TENSOR_READ`, compute in RV64IM and write back with `TENSOR_FROM_MEM`
+  (64 KiB per call). That serves small operations: a new activation over a 4,096-wide row costs on the order
+  of 10^5 instructions per token. It does not serve heavy ones: a new attention variant over 10^4 positions
+  and 32 heads is 10^9 instructions or more per token. **A heavy residual that exceeds the armed GVM ceilings
+  is not covered**: it needs a general TIR prim-set revision, a separately versioned higher-throughput VM
+  compute facility, or a bounded ceiling change backed by court and panel evidence (§II.10.1).
 - **Data-dependent control inside a model** is expressible, but per-token control through calls pays a
   trace per position. Guarded TIR (*Alternatives*) remains the better tool for it.
-- **Future proof systems.** The RISC-V choice leaves open proving the control part with a zkVM later,
-  while the ML stays under the optimistic TIR court.
+- **Future proof systems.** The RISC-V choice leaves open proving guest instructions with a zkVM later.
+  TIR calls remain under the optimistic TIR court; fallback arithmetic written in RV64IM is judged by the GVM
+  one-step court.
 - **Unmodified software.** v1 runs what compiles to a small bare-metal RISC-V userspace: Rust, C, Zig,
   and interpreters built for it. Cartesi shows that a reproducible RISC-V machine can boot Linux and run
   Python, Rust and C++ unchanged; that is the later, optional `Gvm(2)` profile (§II.9), not v1.
+
+### II.10.1 RFC-0002's local-LLM residual: an actual model fallback
+
+*Added 2026-10-03. This amendment was first drafted against the earlier RV32IM text and is reconciled here onto
+PALW-GVM on the PALW-RV64 profile. It is a new syscall set, v2, used by a new kind, `Gvm(3)` (the number 2 stays
+reserved for the later Linux profile, §II.9); PALW-GVM v1 is not changed (§II.4.2.1).*
+
+RFC-0002 §II.12 sets the target: at least 90 % of a dated, publicly runnable local-LLM cohort should register,
+obtain independent seats and reach `Final` through TIR. GVM is the planned route for the **measured eligible
+residual**, not an automatic label for the last 10 %. The old §I.1.5 estimate is about BVM-attributable bounded
+control in a decoder corpus; it does not measure this GVM fallback.
+
+**The route.** For a residual model, the registrant pins its source checkpoint and complete local
+text-generation task, converts the weights to the canonical artifact, and registers a `Gvm(3)` class (§II.4.5)
+with a text profile. Existing heavy matmuls, attention and other admitted segments are `TIR_CALL`s; only the
+missing integer operations and the dynamic control execute as RV64IM. `ARTIFACT_TENSOR_OPEN` exposes a
+class-bound, read-only parameter handle to a novel operation: its one-step proof is the entry's path under the
+class's `params_root`, and the lanes that follow open under the tensor's own root (§II.4.2.1). The guest writes
+bounded output tiles to memory and commits them with `TENSOR_FROM_MEM`. Nothing runs remote Python on a node or
+a seat. A weight importer and the comparison to the publisher's model stay off-chain, reproducible onboarding
+work, as in RFC-0002.
+
+**The text profile.** A guest cannot invent its own sampling rule and still claim an RFC-0001 free-prompt job. A
+class's `text_fallback` therefore commits the tokenizer, the vocabulary, the logit convention, the token and stop
+bounds and the controls it accepts:
+
+```
+GvmTextFallbackV1 { tokenizer_id,          // equal to the header's
+                    vocab_size,            // lanes of the logits row: 2..=2^20
+                    logit_unit,            // Q24 — natural-log × 2^24, RFC-0003 §I.3.5; the only value
+                    max_new_tokens,        // the class's bound on a job's decode budget: 1..=2^16
+                    max_penalty_window, max_bias_entries, max_stop_sequences, max_stop_tokens,
+                                           // each at most RFC-0001's 256, 300, 4 and 16
+                    controls }             // which FP controls it accepts: temperature, repeat penalty,
+                                           // frequency/presence penalty, logit bias, stop sequences
+```
+
+A job of such a class is a free-prompt job whose controls — its `DecodeConfigV4`, its sampling seed and
+temperature, its decode budget — ride in the job context (hashed into the execution root, so a challenger cannot
+swap them) and must fit the profile: a control the class does not accept, or a bound it exceeds, is a named
+refusal of the job. The job has **no oracle transcript**: its prompt, controls and seed are the complete
+external inputs, since a transcript the executor chooses would make the model's output non-canonical
+(`ORACLE_READ` ends the job in `Faulted(Illegal)`, and a binding whose transcript is not empty is refused).
+
+**The sampler.** The guest assembles each full logits row from immutable tiles of at most 64 KiB with
+`TENSOR_CONCAT` (or receives it from one `TIR_CALL`) and calls `FP_SELECT(logits, position)` for each generated
+position. The host applies RFC-0001's exact §A.3 pipeline — repeat, frequency and presence penalties over the
+committed history window, logit bias, saturation, the admission mask, then ADR-0082 D11's seeded argmax with ties
+to the lowest index. The Gumbel term is R's domain 0 (`TEXT_GUMBEL_V1`, RFC-0003 §I.1.4: D11's sampler,
+unchanged) keyed by the job's sampling seed at position `decode_len`. The host appends the token to
+`decode_acc`, pushes it onto the bounded 256-token history, checks the stop rule (a stop sequence completed, the
+budget `max_new` reached, or no admissible lane) and returns the token to the guest for the next position — with the decode's state in `a1`, so a guest needs no copy of the stop rule to know when to halt.
+`constraint_state_root` is reserved and zero: no job version carries a response-format constraint yet (RFC-0001's
+constraint job is named and unbuilt), so the profile admits none, and a constraint-bearing text fallback is a
+later kind version.
+
+**The output is the decode stream.** `OUTPUT_WRITE` and `OUTPUT_TENSOR` end a text job in `Faulted(Illegal)`; the
+job's `output_root` is the text output root of the final decode block, so `GvmEnd` can only carry the selected
+tokens, and a guest cannot substitute arbitrary token bytes. A job is a *result* only if it ended `Halted(0)`
+with the decode stopped by its rule. Every other end — `OutOfGas`, `OutOfTirBudget`, a fault, an unavailable
+artifact, a missing profile, a `Halted` with the decode unfinished — is an honest End and a **named refusal**,
+never VM coverage, and never a verdict against the executor, who ran the registrant's guest faithfully.
+
+**The court.** `FP_SELECT` is judged by an arm of its own (§II.6.3). The executor's claimed token is committed in
+an outer leaf; a challenger who holds a better eligible candidate opens two lanes under the same immutable logits
+root and wins if its post-processor D11 key beats the claimed one's, with the fixed tie rule: a strictly greater
+key, or an equal key at a lower index. An ineligible, equal-or-worse or same-lane candidate loses. The arm reuses
+RFC-0001's processor and D11 key as they are, with the committed history, penalties and bias as witnesses, under
+the same one-carrier bound as the other arms. The arm and the `End` and append checks must be reviewed and
+drilled before any fallback class counts as RFC-0002's `Final`.
+
+**What it costs.** `FP_SELECT` alone costs `128 + 16 · vocab` gas a token before the guest's own work: 2.4 M for
+a 151,936-lane vocabulary — about 1,700 tokens at the `2^32` ceiling and about 110 at testnet-12's provisional
+`2^28`. The constants are provisional and calibrated before the fence (open question 28); a residual whose
+budget does not fit is a gas refusal, not coverage.
+
+**Counting a model as `GVM_FALLBACK`.** Before a model is counted, exercise a **real-size, full-task canonical
+job** and record:
+
+1. source, format and rights, HF-reference fidelity, the class and artifact roots, and any RFC-0003 job profile
+   the advertised inputs and output need;
+2. total VM instructions and first-touched pages, `gas_limit` (at most `2^32`), the TIR budget, the image and
+   parameter inventory and DA sizes, the worst-case court rounds and window (§II.6.6) and the largest one-step
+   proof; `OutOfGas`, an unavailable artifact or a missing profile is a refusal, not VM coverage;
+3. independent seats that can hold or stream the class weights, re-execute the **same** job inside the receipt
+   window at the proposed issuance rate, answer planted faults — guest arithmetic, a bad artifact handle, a
+   wrong `FP_SELECT`, a TIR fault — and produce an on-chain `Final` without a rising panel queue.
+
+**Lanes and credit.** The fallback belongs to the free-prompt job lane first. The attempt lane has no static
+price for a Turing-complete job (§II.8), and no `Gvm` class may take attempt-lane tickets. VM gas bounds
+verification; a fee or an explicit seat-cost rule that covers the work is a deployment gate, not an assumed
+feature. **Gas is not inference work credit**: only verified TIR calls receive structural work credit under
+PALW-GVM-18, and neither a guest instruction nor an `FP_SELECT` credits anything. A class that runs all its
+inference in guest code may reach `Final` in the free-prompt lane once its seat-cost rule is funded, but cannot be
+advertised as an attempt-lane mining class under this RFC. A later attempt-lane or VM-work-credit rule needs its
+own anti-padding economics, metering and fence; it is not inferred from successful guest execution.
+
+**Where the present GVM stops.** The fallback target is the remainder of RFC-0002's local-LLM cohort. If a
+sampled residual needs more than `2^32` gas, 4 GiB of guest memory, more than 2^16 parameter tensors or 2^20
+logits lanes, more than the carried artifact or DA cap, or more than the court and receipt window, the present
+GVM does **not** satisfy that target: publish the count and the cause. Choose between a general TIR primitive
+and a **versioned** VM compute extension only after measuring those residuals; any extension needs an
+independent evaluator and prover, bounded evidence and a fence. Neither raising a declared limit nor labelling a
+model `Gvm(3)` makes it admissible. A missing source converter or canonical task must be fixed in RFC-0002 or
+RFC-0003 even if the numerical core runs in GVM.
 
 ---
 
@@ -1680,23 +1971,31 @@ TIR programs.
   instruction, a misaligned access and an access at or above `2^32` MUST end the job in
   `Faulted(class)`.
 - **PALW-GVM-3 (system calls).** Only the system calls of §II.4.2, under `syscall_set_id`, MAY exist. Any
-  other number in `a7` MUST end the job in `Faulted(Illegal)`.
-- **PALW-GVM-4 (tensor arithmetic is TIR).** The VM MUST NOT compute on a tensor except through
-  `TENSOR_READ` and `TENSOR_FROM_MEM`. Every `TIR_CALL` MUST be a Phase F execution under its `seg_ctx`.
+  other number in `a7` MUST end the job in `Faulted(Illegal)`. A `Gvm(1)` class runs set v1; a `Gvm(3)` class
+  runs set v2 (§II.4.2.1); a call of set v2 that is not in set v1 MUST fault under set v1.
+- **PALW-GVM-4 (tensor arithmetic and the fallback).** Bulk tensor segments SHOULD use TIR. A GVM guest MAY
+  compute integer tensor lanes with RV64IM after `TENSOR_READ` from an input, a TIR call or (set v2) an
+  artifact-bound parameter handle, and MAY commit bounded result tiles with `TENSOR_FROM_MEM`.
+  `ARTIFACT_TENSOR_OPEN` MUST resolve only a canonical entry committed by the class's `params_root`. Every
+  `TIR_CALL` MUST be a Phase F execution under its `seg_ctx`.
 - **PALW-GVM-5 (gas).** Every instruction MUST cost at least 1 gas under `gas_schedule_id`. There MUST be
   no refund. A step that would pass `gas_limit` MUST produce `OutOfGas`.
 - **PALW-GVM-6 (the TIR budget).** A `TIR_CALL` MUST debit its segment's static cost at its trip before
   the segment runs, and MUST produce `OutOfTirBudget` if the budget cannot cover it.
-- **PALW-GVM-7 (state and memory).** The state MUST be `GvmStateV1`, and memory MUST be committed by
-  §II.4.4's tree.
+- **PALW-GVM-7 (state and memory).** The state MUST be `GvmStateV1`, carrying the decode block exactly when the
+  class has a text profile, and memory MUST be committed by §II.4.4's tree.
 - **PALW-GVM-8 (the image).** `image_root` MUST be the initial memory root. The image's bytes MUST be in
   the class's artifact.
 - **PALW-GVM-9 (canonical form and identity).** Admission MUST refuse bytes that are not a canonical
-  encoding. The class id MUST be `gvm_class_id_v1`.
-- **PALW-GVM-10 (admission).** Admission MUST check the header, admit every carried segment as TIR,
-  resolve every registered segment, apply the network's ceilings and check §II.6.6's inequality.
-- **PALW-GVM-11 (the trace).** A claim MUST commit a `Checkpoint` at every multiple of `c_vm` instructions
-  and around every `TIR_CALL`, a `CallRecord` for every call, `End` last, and one inner tree per call.
+  encoding. The class id MUST be `gvm_class_id_v1` for a `Gvm(1)` class and `gvm_class_id_v3` for a `Gvm(3)`
+  class, whose `artifact_root` MUST be `gvm_artifact_root_v3`.
+- **PALW-GVM-10 (admission).** Admission MUST check the header and, for a `Gvm(3)` class, its parameter table
+  and text profile (§II.4.5), admit every carried segment as TIR, resolve every registered segment, apply the
+  network's ceilings and check §II.6.6's inequality. A fallback claim cannot be counted as local-LLM coverage
+  without the real-size job, seat and `Final` evidence of §II.10.1.
+- **PALW-GVM-11 (the trace).** A claim MUST commit a `Checkpoint` at every multiple of `c_vm` instructions and
+  around every `TIR_CALL` (and, under set v2, every `FP_SELECT`), a `CallRecord` for every call (an
+  `FpSelectRecord` for every executable `FP_SELECT`), `End` last, and one inner tree per call.
 - **PALW-GVM-12 (bisection).** A disputed checkpoint interval MUST be bisected by §II.6.2's game: the pinned
   cut, a responder's roots, a challenger's choice, a clock per move, and silence losing.
 - **PALW-GVM-13 (one step).** The bottom MUST be decided by recomputing one instruction or one system call
@@ -1707,14 +2006,38 @@ TIR programs.
 - **PALW-GVM-15 (malformed statements).** A malformed checkpoint preimage or `CallRecord` MUST convict the
   executor.
 - **PALW-GVM-16 (oracle transcripts).** A transcript MUST be committed by `oracle_root` and read only by
-  offset. No rule MAY judge its truth. It MUST be refused in a requested job (PALW-EVJ-3).
-- **PALW-GVM-17 (randomness).** Randomness MUST be R under the per-call seed or the domain
-  `GVM_UNIFORM_V1`. Nothing else MAY enter.
+  offset. No rule MAY judge its truth. It MUST be refused in a requested job (PALW-EVJ-3) and in every
+  text-fallback job (PALW-GVM-22).
+- **PALW-GVM-17 (randomness).** Randomness MUST be R under the per-call seed, the domain `GVM_UNIFORM_V1`, or
+  RFC-0001's domain 0 inside the host `FP_SELECT` of a text-fallback class. Nothing else MAY enter.
 - **PALW-GVM-18 (credited work).** A claim's credited work MUST be `Σ` over its calls of the callee's
   structural work at the executed trip. VM steps MUST credit nothing.
 - **PALW-GVM-19 (implementations).** Any implementation MUST equal the reference step function at every
   checkpoint.
-- **PALW-GVM-20 (versioned kinds).** As PALW-BVM-18.
+- **PALW-GVM-20 (versioned kinds).** As PALW-BVM-18. A syscall set is fixed by its id: a call added to a set is
+  a new set and a new kind version (syscall set v2 is the set of `Gvm(3)`), and no class changes the set it runs under.
+- **PALW-GVM-21 (artifact parameters and concatenation).** `ARTIFACT_TENSOR_OPEN` MUST bind the opened
+  read-only handle to an entry of the class's `params_root` (the entry's index equal to its `tensor_id`), and a
+  lane of it MUST open under the entry's `tensor_root`. `TENSOR_CONCAT` MUST commit to its ordered children,
+  their dtype and their lengths, MUST accept only rank-1 children of one dtype whose origin is memory, artifact
+  or concat, and MUST enforce §II.4.2.1's length and depth limits. A `Gvm(3)` class's `artifact_root` MUST be
+  `gvm_artifact_root_v3(image_root, params_root, params_count)`.
+- **PALW-GVM-22 (text fallback).** A class with a text profile MUST select every generated token with
+  `FP_SELECT` under RFC-0001's exact D11 rule and the job's accepted FP controls, and MUST refuse an oracle
+  transcript. The selected tokens MUST append to `decode_acc` and update the committed history window and stop
+  state. `OUTPUT_WRITE`, `OUTPUT_TENSOR` and `ORACLE_READ` MUST end the job in `Faulted(Illegal)`. `GvmEnd` MUST
+  carry the text output root of the final state, and a job that did not end `Halted(0)` with its decode stopped
+  by its rule MUST yield a named refusal, not an answer. The `FP_SELECT` arm MUST decide a claimed token against
+  any better eligible candidate under the same immutable logits root, by RFC-0001's key and the fixed tie
+  rule. A class without the profile MUST NOT use the call: it faults.
+- **PALW-GVM-23 (lanes and credit).** A `Gvm` class MUST NOT take attempt-lane tickets; its jobs run in the
+  free-prompt job lane. Gas, a guest instruction and an `FP_SELECT` MUST credit no work (PALW-GVM-18), and a
+  seat-cost rule that funds a fallback class's re-execution MUST be stated before the class is enabled (§II.8).
+- **PALW-GVM-24 (the network's set).** A network's `palw_gvm_v1` value MUST name the highest syscall set and the
+  court version it runs — set v1 with court version 1, or set v2 with court version 2 — and MUST be refused if
+  this build implements neither. A class whose kind needs a syscall set or a court version the value does not
+  name MUST be refused at admission (a `Gvm(3)` class under a value naming set v1 is), and a GVM accusation whose
+  binding names such a class MUST be refused at acceptance.
 
 ### Part II — additions to `spec/evm` (applies past `palw_evm_jobs_v1`)
 
@@ -1782,18 +2105,20 @@ active at or below it.
 
 `Option<PalwGvmFenceV1 { activation, isa_id, syscall_set_id, gas_schedule_id, court_version, ceilings,
 bvm_admission_closed_at }>`, refused unless `palw_tir_v1`, `palw_gen_v1` and `palw_kary_court` are active
-at or below it and the ruleset has the A-2 tolerance.
+at or below it and the ruleset has the A-2 tolerance. `syscall_set_id` and `court_version` name the highest set
+the network runs — set v1 with court version 1, or set v2 with court version 2 (`Gvm(3)`, the text fallback,
+§II.10.1). The fallback needs no fence of its own: a kind version is a value of this one.
 
 | Step | Work | Consensus change | Exit gate |
 | --- | --- | --- | --- |
-| 0 | M4 (§I.1.2): workflow demand | none | the decision to build, by the user |
-| A | Spec chapter 04e, with §II.2.4's departure register; a licence check of every repository reused | none | reviewed text |
-| B | Reference emulator with checkpointing (`misaka-palw-gvm`); the RISC-V suites and CKB-VM's test suite ported to the profile's subset; whether CKB-VM's pinned version takes the profile's memory unpatched | none | golden vectors `consensus-vectors/gvm-v1/`: every instruction on edge operands, every system call, gas, every fault; `riscv-tests`, `riscv-arch-test` and CKB-VM's suite pass on the profile's subset |
+| 0 | M4 (§I.1.2): workflow demand **or** RFC-0002 §II.12's pinned local-LLM residual and real-size GVM sizing | none | the decision to build, by the user, after the RFC-0004 order is met |
+| A | Spec chapter 04e, with §II.2.4's departure register and syscall set v2's calls, the decode block, canonical text sampling and the funded seat-cost rule; a licence check of every repository reused | none | reviewed text and a bounded `FP_SELECT` arm carrier budget |
+| B | Reference emulator with checkpointing (`misaka-palw-gvm`); the RISC-V suites and CKB-VM's test suite ported to the profile's subset; whether CKB-VM's pinned version takes the profile's memory unpatched | none | golden vectors `consensus-vectors/gvm-v1/`: every instruction on edge operands, every system call of sets v1 and v2, gas, every fault; `riscv-tests`, `riscv-arch-test` and CKB-VM's suite pass on the profile's subset |
 | C | Second implementation: CKB-VM's instruction core (pinned) under an independently written MISAKA layer (system calls, gas, commitments); differential three ways, against Sail and the reference | none | at least 10^9 instruction-level steps with no disagreement among the reference, CKB-VM and Sail; the vectors |
 | D | One-step prover and proof formats | none | the prover equals the emulator on every step of fuzzed programs; hostile proofs refused totally |
-| E | Admission, objects, the game, the descent | dormant fence | a court battery: a planted lie at every instruction class, every system call, every call field, every end case and inside callees; delay and silence cases; honest runs acquitted |
+| E | Admission, objects, the game, the descent | dormant fence | a court battery: a planted lie at every instruction class, every system call (including a bad parameter path or concat link, and `FP_SELECT`'s wrong winner, tie and ineligible candidate), every call field, every end case and inside callees; delay and silence cases; honest runs acquitted |
 | F | Node side and guest SDK | node release | executor equals the reference; the responder answers every move within its rung window |
-| G | Drills: D-G1 the court battery on a salted t12 chain; D-G2 the forged-output red-team on a GVM class; D-G3 the fence crossing on the shipping binary; D-G4 an agent (an LM, a tool model and a transcript) end to end; D-G5 a worst-case dispute at the gas ceiling inside the window | — | all pass |
+| G | Drills: D-G1 the court battery on a salted t12 chain; D-G2 the forged-output red-team on a GVM class; D-G3 the fence crossing on the shipping binary; D-G4 an agent (an LM, a tool model and a transcript) end to end; D-G5 a worst-case dispute at the gas ceiling inside the window; D-G6 a real residual local LLM with guest arithmetic, canonical FP selection, independent seats and `Final` at the intended rate | — | all pass; D-G6 is required before claiming RFC-0002 A8 |
 | H | The live testnet, staged: 0‰ weight; gas at most `2^28` and a small TIR budget at first; ceilings raised by fence values after each soak stage | fence | 6–9 months or more with no unresolved court defect |
 | I | Mainnet | fence | audits closed, the bounty run, the formal results in |
 
@@ -1917,13 +2242,13 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 
 | | TIR only (RFC-0002/0003, with RFC-0004) | TIR + Bounded VM (Part I) | TIR + EVM-class VM (Part II) |
 | --- | --- | --- | --- |
-| Coverage | RFC-0002 alone: ≈ 64 % of text-generation repositories, ≈ 9 % of all hub models (repository counts, 2026-09-28); 100 % of the 54 modelled architectures; the rest are format, lowerer and primitive gaps | + the `NEEDS_VM` share: **0 today**; in future, routing between whole models (C13) and very long loops | + everything computable within gas: agents, tool use, planners, search; a slow path for small missing operations |
+| Coverage | **Target**, RFC-0002 §II.12: ≥ 90 % of the pinned local-LLM cohort with real-size `Final`; the old ≈ 64 % of text-generation repositories was a different 2026-09-28 estimate, not this outcome | + the bounded-control `NEEDS_VM` share: **0 in the old corpus**; it is not the GVM residual | **Target**, the measured eligible residual from RFC-0002 via GVM guest arithmetic and control plus TIR calls, counting only real-size `Final`; the present gas, memory and seat ceilings may leave an explicit uncovered share (§II.10.1); beyond that, everything computable within gas: agents, tool use, planners, search |
 | Workflows | static pipelines (RFC-0003) | bounded and data-dependent, between whole model calls | unbounded under gas, with memory and recursion |
 | Consensus surface (index; TIR = 1.0 ≈ 14k lines of consensus-path code plus 04b's 1,800 lines) | 1.0 | ≈ 1.3 (+ 4–5k lines, chapter 04d) | ≈ 2.2–2.5 (+ 15–20k lines and a second dispute game) |
 | Court complexity | ladder → cone or H dissection (2 levels) | + an outer control trace of one-step transitions over ≤ 8 KiB states, and a descent (3 levels) | + interactive bisection inside checkpoints, one-step RV64IM proofs with memory proofs, syscall and precompile descent (4 levels), in Cartesi's shape |
 | Attack surface | interpreter, admission, dissection | + VM interpreter, the bounds program, the ladder's agreement, the step space | + prover ≡ emulator, memory proofs, the gas schedule, game liveness, oracles, EVM callbacks |
 | Effort to mainnet-safe, after TIR | TIR's own path; RFC-0004 then adds 8–11 months | + 9–12 months (agents: 2–4 weeks to drill-passing code) | + 22–28 months on a borrowed base (agents: 1–2 months); the asynchronous EVM rung alone ≈ 6–9 months |
-| Recommendation | build and ship (under way), then RFC-0004 in full | keep this design; build it only if the §I.1 gate opens; never build both BVM and GVM | the asynchronous EVM rung when contracts ask for it; the fraud-proven VM only after TIR is mainnet-safe and M4 shows the demand |
+| Recommendation | measure and close the local-LLM TIR blockers until the 90 % goal is evidenced; then RFC-0004 in full under the decided order | keep this design; build it only if the §I.1 gate opens; never build both BVM and GVM | the asynchronous EVM rung when contracts ask for it; size the fraud-proven GVM from the measured local-LLM residual **or** M4 workflow demand, after TIR is mainnet-safe and the RFC-0004 order is met |
 
 ## Alternatives
 
@@ -1946,7 +2271,9 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 
 | Alternative | Why not, or when |
 | --- | --- |
-| **Stop at pipelines and, if its gate opens, Part I** | Right if M4 shows no demand for agents and workflows. Nothing in this RFC should be built on speculation |
+| **Stop at pipelines and, if its gate opens, Part I** | Right only if M4 shows no workflow demand **and** RFC-0002 §II.12 finds no eligible local-LLM residual that GVM can close. Neither VM should be built on an unmeasured split |
+| **Add the fallback calls to syscall set v1** | A call added to a set is another set: v1's descriptor, its id and the faulting of numbers 4,107–4,109 are what every `Gvm(1)` class was admitted under (PALW-GVM-3, -20). Set v2 and `Gvm(3)` carry the calls instead |
+| **Verify `FP_SELECT` by recomputing the argmax in the one-step proof** | The proof would carry the whole logits row: 4 bytes a lane, about 600 KB at a 152 K-token vocabulary, far beyond the carrier bound of PALW-TIR-38. D11's key is per-lane, so two lane openings refute a wrong winner (§II.6.3) |
 | **Synchronous TIR precompiles in the L1 EVM** | Impossible: every node re-executes the lane, so every node would run every inference |
 | **Off-chain EVM with an EVM one-step prover** | The largest prover of all (256-bit stack, memory expansion, frames, the storage trie, precompiles), and a gas schedule built for L1 storage. Optimism abandoned this path |
 | **WASM** | The second choice (§II.2): as good a toolchain and production use (CosmWasm chains; Arbitrum's WASM-derived prover), but a larger machine state and heavier one-step proofs |
@@ -2022,8 +2349,18 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
   transcripts and dirty pages are the executor's to serve in a dispute, and silence loses, as today.
 - **Oracle transcripts** are inputs, never judged for truth (P2). They are confined to jobs the user runs
   for themselves and refused in requested jobs.
-- **Handles cannot be forged.** They come only from job inputs, `TIR_CALL` outputs and `TENSOR_FROM_MEM`,
-  and the table is committed.
+- **Handles cannot be forged.** They come only from job inputs, `TIR_CALL` outputs and `TENSOR_FROM_MEM` —
+  and, under set v2, from `TENSOR_CONCAT` of those and `ARTIFACT_TENSOR_OPEN` of the class's own committed
+  table — and the table is committed.
+- **The fallback's sampler.** A guest cannot choose its own tokens: `FP_SELECT` is the host's, `OUTPUT_WRITE`
+  faults in a text job, and the output root is a function of the decode stream. A wrong token has its true
+  argmax lane as a refutation, two lane openings under an immutable logits root; the processor and D11 are
+  RFC-0001's functions, shared and tested against one another. What stays unproven by the chain is the model:
+  that the artifact is the publisher's checkpoint is RFC-0002's off-chain fidelity evidence, and a class whose
+  guest computes the wrong logits is judged by what it computes, not by what it claims.
+- **Parameter tables.** A table that lies about the artifact cannot make an honest executor guilty: the class
+  id commits both the table and the artifact root, the possession proofs cover exactly the table's tensors, and
+  a lane is opened only under the entry's own root.
 - **Gas mispricing** could let jobs impose verification costs out of proportion to their declared limits.
   Mitigations: calibration before the fence, per-job ceilings, no refunds, and a cap on the VM's share of a
   job's verification work (open question 14).
@@ -2077,7 +2414,8 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 ### Part II (Phase C)
 
 11. **Build order and evidence**: rung A when contracts ask for it; rung B only after PALW-TIR is
-   mainnet-safe and M4 shows workflow demand (recommended).
+   mainnet-safe and either M4 shows workflow demand or RFC-0002 §II.12 measures an eligible
+   local-LLM residual. RFC-0004's prior implementation order still applies (recommended).
 12. **The ISA**: RV64IM + Zba, Zbb, Zbs (recommended since 2026-10-02: CKB-VM's ISA without C and Zbc,
    and the width of Cartesi and Asterisc), or RV32IM (the earlier recommendation) — a smaller state and
    the commonest zkVM width, but none of the borrowed sources runs at that width.
@@ -2105,6 +2443,16 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
 26. **PRT's tournaments**: keep the bisection inside MISAKA's existing session rules (recommended), and
    adopt Cartesi's tournament bracket only if many Sybil defenders are shown to delay a dispute beyond
    the window.
+27. **The seat-cost rule of a fallback class** (§II.8, §II.10.1): a fee, or separately capped seat compensation,
+   that funds independent re-execution at the intended job rate — to be stated before a `Gvm(3)` class is
+   enabled in the free-prompt lane. Gas is not a reward and a padded guest cannot mint work.
+28. **`FP_SELECT`'s gas** (`128 + 16 · vocab`, and 128 and 64 for the other two calls): provisional; calibrate
+   on the seats' real selection time at vocabularies of 32 K, 152 K and 256 K before the fence.
+29. **Constraint-bearing text jobs**: `constraint_state_root` is reserved and zero because no job version
+   carries a response-format constraint. When one does, a profile that admits it is a later kind version,
+   so that `Gvm(3)` is never reinterpreted.
+30. **Attempt lane and VM work credit for a fallback class**: no (recommended), until a separate rule with its
+   own anti-padding economics, metering and fence exists; the free-prompt lane first.
 
 ## Decision
 
@@ -2115,9 +2463,16 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
   needs no consensus work.
 - **Part II (Phase C), rung A**: build it when a contract use case asks for model calls. It is small,
   reuses ADR-0089's machinery, and adds no fraud proof.
-- **Part II (Phase C), rung B**: do not start it before PALW-TIR is mainnet-safe and M4 shows the demand.
-  When it starts, budget 22–28 months to mainnet-safe use, whatever the implementation speed. Then add
-  RFC-0004's EXEC checkers (§II.11).
+- **Part II (Phase C), rung B**: do not start it before PALW-TIR is mainnet-safe and either M4 shows
+  workflow demand **or** RFC-0002 §II.12's measured eligible local-LLM residual needs GVM. The previously
+  decided RFC-0004-before-RFC-0005 implementation order still applies. Size the gas, artifact handles, court
+  and seat economics against real residual checkpoints before setting the fence; do not assert that the
+  present `2^32`-gas profile covers every one. When it starts, budget 22–28 months to mainnet-safe use,
+  subject to revision if the fallback needs a new compute facility. Then add RFC-0004's EXEC checkers
+  (§II.11).
+- **The local-LLM fallback is syscall set v2, kind `Gvm(3)`** (2026-10-03): three calls, a decode block, one
+  court arm, on the same PALW-RV64 profile and the same fence. It does not touch `Gvm(1)`. It is counted
+  only where a real-size job reached `Final`, it is free-prompt-lane first, and gas is never work credit.
 - **Borrow, do not invent** (2026-10-02): rung B is CKB-VM's RISC-V subset as the machine, Cartesi's
   shape as the dispute game, the EVM's and FuelVM's lessons as the metering, and PALW-TIR behind
   `TIR_CALL`. Every departure from those sources is in §II.2.4's register, and code is reused only after
