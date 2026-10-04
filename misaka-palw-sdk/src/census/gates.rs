@@ -640,6 +640,32 @@ fn stopped_at(gates: &[GateResultV1]) -> String {
 }
 
 /// **The row of one repository**: the listing alone (`fetched` = `None`), or the listing and its header store.
+/// The class's declared image size for a tower whose configuration declares none (Qwen2-VL): a census convention, recorded.
+pub const IMAGE_STAGE_PROBE_SIZE_V1: (u32, u32) = (448, 448);
+
+/// **A chat model's vision tower, read from the whole wrapper configuration** (`parse_vision`: a tower adapter that claims the
+/// wrapper — `match.tower_of` — or the tower's own type), lowered shape-only and admitted stage-alone at the default inputs.
+pub fn image_stage_probe_v1(config: &serde_json::Value) -> serde_json::Value {
+    use misaka_palw_tir_lower::lower::vision;
+    let run = || -> Result<serde_json::Value, String> {
+        let spec =
+            vision::parse_vision(&config.to_string(), Some(IMAGE_STAGE_PROBE_SIZE_V1), None).map_err(|e| format!("read: {e}"))?;
+        let (hl, _) = vision::hl_program(&spec).map_err(|e| format!("hl: {e}"))?;
+        let lw = vision::lower_vision(&hl, &spec).map_err(|e| format!("lower: {e}"))?;
+        let p2 = misaka_palw_tir_lower::encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
+        let a = misaka_palw_tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs())
+            .map_err(|e| format!("tir_admit_program_v2 refuses: {e}"))?;
+        Ok(
+            serde_json::json!({"ok": true, "stage": "vision", "macs": a.view.position.cost.macs as f64, "size": [IMAGE_STAGE_PROBE_SIZE_V1.0, IMAGE_STAGE_PROBE_SIZE_V1.1]}),
+        )
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => serde_json::json!({"ok": false, "error": e.chars().take(300).collect::<String>()}),
+        Err(_) => serde_json::json!({"ok": false, "error": "the probe panicked"}),
+    }
+}
+
 pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -> CensusRowV1 {
     let mut task = task_of(l);
     if task.task == "unknown"
@@ -691,12 +717,17 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                         needs_tensor_data = cs.needs_tensor_data.clone();
                     }
                     Ok(cs) => {
-                        if task.profile == Profile::PartialTextStage
-                            && let Some(vc) = cs.source.config.as_ref().and_then(|c| c.get("vision_config")).filter(|v| v.is_object())
-                        {
-                            image_stage_probe = Some(misaka_palw_tir_lower::model::route::probe_data_route(vc, None, None));
-                        }
+                        let probe_image = task.profile == Profile::PartialTextStage
+                            && cs.source.config.as_ref().is_some_and(|c| c.get("vision_config").is_some_and(|v| v.is_object()));
                         let (r, cx, ar) = judge_at_contexts(&cs, ctx, &task);
+                        if probe_image && let Some(cfg) = cs.source.config.as_ref() {
+                            let mut v = image_stage_probe_v1(cfg);
+                            if let Ok(r) = &r {
+                                let a = admit_of(r);
+                                v["text_stage"] = serde_json::json!({"status": a.status, "blocking": a.blocking});
+                            }
+                            image_stage_probe = Some(v);
+                        }
                         match r {
                             Ok(r) => report = Some(r),
                             Err(f) => lower_extra.push(f),
