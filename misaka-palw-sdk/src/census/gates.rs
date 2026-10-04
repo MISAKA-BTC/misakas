@@ -653,11 +653,20 @@ pub fn image_stage_probe_v1(config: &serde_json::Value) -> serde_json::Value {
         let (hl, _) = vision::hl_program(&spec).map_err(|e| format!("hl: {e}"))?;
         let lw = vision::lower_vision(&hl, &spec).map_err(|e| format!("lower: {e}"))?;
         let p2 = misaka_palw_tir_lower::encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
-        let a = misaka_palw_tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs())
-            .map_err(|e| format!("tir_admit_program_v2 refuses: {e}"))?;
-        Ok(
-            serde_json::json!({"ok": true, "stage": "vision", "macs": a.view.position.cost.macs as f64, "size": [IMAGE_STAGE_PROBE_SIZE_V1.0, IMAGE_STAGE_PROBE_SIZE_V1.1]}),
-        )
+        // The stage's tile is the registrant's choice (`gen_declare_layout_v1`'s `tile_len`): the narrowest of these that the
+        // stage-alone admission accepts, the widest's refusal otherwise.
+        let mut last = String::new();
+        for tile_len in [64u32, 512, 4096] {
+            let inputs = misaka_palw_tir::admit::TirAdmitInputsV1 { tile_len, ..misaka_palw_tir_lower::admission::default_inputs() };
+            match misaka_palw_tir::admit_v2::tir_admit_program_v2(&p2, &inputs) {
+                Ok(a) => {
+                    return Ok(serde_json::json!({"ok": true, "stage": "vision", "tile_len": tile_len,
+                        "macs": a.view.position.cost.macs as f64, "size": [IMAGE_STAGE_PROBE_SIZE_V1.0, IMAGE_STAGE_PROBE_SIZE_V1.1]}));
+                }
+                Err(e) => last = format!("tir_admit_program_v2 refuses at tile {tile_len}: {e}"),
+            }
+        }
+        Err(last)
     };
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
         Ok(Ok(v)) => v,
