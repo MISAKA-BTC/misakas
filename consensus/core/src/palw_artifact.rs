@@ -561,6 +561,12 @@ impl PalwArtifactMultiproofStreamV1 {
 /// **Verify a multiproof against the registered root.** Every opened leaf is recomputed from its
 /// operand; the walk consumes the supplied siblings in the order the builder produced them.
 pub fn verify_artifact_multiproof_v1(proof: &PalwArtifactMultiproofV1, registered_root: Hash64) -> Result<(), PalwArtifactError> {
+    if reconstruct_artifact_multiproof_root_v1(proof)? == registered_root { Ok(()) } else { Err(PalwArtifactError::RootMismatch) }
+}
+
+/// **The root a multiproof reconstructs** (lane MU, ADR-0173): [`verify_artifact_multiproof_v1`]'s walk without the final
+/// comparison, so a reader that accepts one of several roots (a class's roots in force) reconstructs once and looks the root up.
+pub fn reconstruct_artifact_multiproof_root_v1(proof: &PalwArtifactMultiproofV1) -> Result<Hash64, PalwArtifactError> {
     if proof.leaf_count == 0 {
         return Err(PalwArtifactError::EmptyInventory(0));
     }
@@ -612,7 +618,7 @@ pub fn verify_artifact_multiproof_v1(proof: &PalwArtifactMultiproofV1, registere
         return Err(PalwArtifactError::RootMismatch);
     }
     match known.as_slice() {
-        [(0, root)] if *root == registered_root => Ok(()),
+        [(0, root)] => Ok(*root),
         _ => Err(PalwArtifactError::RootMismatch),
     }
 }

@@ -1644,6 +1644,14 @@ fn decide_epoch_v1(
     let line_id = line.line_id;
     let policy = builder.improvement_policy_of_v1(&line_id)?;
     let mut header = builder.improvement_epoch_of_v1(&line_id, epoch)?;
+    // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): a head moves only to a class that is Active AND seated** — the old head
+    // stays live until then (the epoch is decided as no change).
+    let outcome = match outcome {
+        PalwPromotionOutcomeV1::Promoted { class_id, .. } if !builder.read().class_ready_for_head_v1(&class_id, daa) => {
+            PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::HeadNotReady }
+        }
+        other => other,
+    };
     let aborted = matches!(outcome, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::Aborted });
     let winner = match outcome {
         PalwPromotionOutcomeV1::Promoted { class_id, .. } => Some(class_id),

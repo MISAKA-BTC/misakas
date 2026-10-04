@@ -1243,6 +1243,8 @@ fn palw_panel_bonds_judging_v1<'a>(
     population: PalwPanelPopulationV1,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let headroom = matches!(population, PalwPanelPopulationV1::Eligible { headroom: true });
+    // **Lane MU (ADR-0173)**: past `palw_audit_1004_v1` the draw judges the root the claim named (founding root when absent).
+    let claim_root = readiness.filter(|policy| policy.root_keyed).and_then(|_| state.claim_root(claim_id));
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
@@ -1321,7 +1323,8 @@ fn palw_panel_bonds_judging_v1<'a>(
         // or free-prompt claim on the class is the chain having seen this bond actually run it.
         // Silence stays unjudged — a bond that declared and never produced is simply not drawn,
         // never charged for the omission and never convicted of it (ADR-0065 D4).
-        if !crate::palw_state_v2::palw_bond_may_judge_class_v4(state, bond_key, bond, judged_class, capability_proof, readiness) {
+        let judge_root = if judged_class == &claim.class_id { claim_root.as_ref() } else { None };
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v5(state, bond_key, bond, judged_class, judge_root, capability_proof, readiness) {
             continue;
         }
         eligible.push((bond_key, bond));
@@ -2284,6 +2287,7 @@ struct PalwStakeCensusBondV1<'a> {
 /// What decides one claim's verdict on a census: claims that agree on it share it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PalwStakeCensusKeyV1 {
+    root: Option<Hash64>,
     class_id: Hash64,
     executor: PalwBondKeyV2,
     governed: bool,
@@ -2322,7 +2326,7 @@ pub struct PalwStakeDrawCensusV1<'a> {
     shard_licensing: bool,
     frame: Option<PalwPanelValidLockV1>,
     bonds: Vec<PalwStakeCensusBondV1<'a>>,
-    judges: std::collections::BTreeMap<Hash64, Vec<bool>>,
+    judges: std::collections::BTreeMap<(Hash64, Option<Hash64>), Vec<bool>>,
     verdicts: std::collections::BTreeMap<PalwStakeCensusKeyV1, bool>,
 }
 
@@ -2367,17 +2371,17 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
     }
 
     /// Each census bond's seat predicate for `class_id`, taken once.
-    fn ensure_judges(&mut self, class_id: &Hash64) {
-        if self.judges.contains_key(class_id) {
+    fn ensure_judges(&mut self, class_id: &Hash64, root: Option<&Hash64>) {
+        if self.judges.contains_key(&(*class_id, root.copied())) {
             return;
         }
         let (state, capability, readiness) = (self.state, self.capability_proof, self.policy.readiness);
         let judged = self
             .bonds
             .iter()
-            .map(|b| crate::palw_state_v2::palw_bond_may_judge_class_v4(state, b.key, b.bond, class_id, capability, readiness))
+            .map(|b| crate::palw_state_v2::palw_bond_may_judge_class_v5(state, b.key, b.bond, class_id, root, capability, readiness))
             .collect();
-        self.judges.insert(*class_id, judged);
+        self.judges.insert((*class_id, root.copied()), judged);
     }
 
     /// **Would `claim_id`'s stake draw refuse for ELIGIBILITY at every seed?** `lock` is the claim's own
@@ -2405,7 +2409,11 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
                 economy.seat_exposure(claim.reserved, claim.escrowed_reward, self.seat_count as usize),
             )
         });
+        // Lane MU (ADR-0173): the root the claim named, where the draw is root-keyed — claims of one class that name different roots
+        // do not share a verdict.
+        let claim_root = self.policy.readiness.filter(|policy| policy.root_keyed).and_then(|_| state.claim_root(claim_id));
         let key = PalwStakeCensusKeyV1 {
+            root: claim_root,
             class_id: claim.class_id,
             executor: claim.bond,
             governed: independence.is_some(),
@@ -2417,9 +2425,9 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
         }
         let outsider = independence
             .filter(|independence| crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, Some(independence.from_daa)));
-        self.ensure_judges(&claim.class_id);
+        self.ensure_judges(&claim.class_id, claim_root.as_ref());
         if let Some(independence) = outsider {
-            self.ensure_judges(&independence.base_class_id);
+            self.ensure_judges(&independence.base_class_id, None);
         }
         let registered_by = match independence {
             Some(independence) => Some(independence.registered_by_daa(self.maturity_floor)),
@@ -2467,7 +2475,7 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
         let sum = |weights: &std::collections::BTreeMap<Hash64, u64>| weights.values().copied().map(u128::from).sum::<u128>();
         let floor_holds =
             |eligible: u128, base: u128| palw_panel_stake_floor_v1(eligible, base, stake.eligible_floor_permille).is_ok();
-        let (eligible, base, executor_weight) = lists(&self.judges[&claim.class_id], &|_| true);
+        let (eligible, base, executor_weight) = lists(&self.judges[&(claim.class_id, claim_root)], &|_| true);
         let verdict = match outsider {
             // No outsider: the draw's own refusal, which reads no seed.
             None => {
@@ -2479,7 +2487,7 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
                 let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
                 let not_registrant =
                     |b: &PalwStakeCensusBondV1| Some(*b.key) != registrant && Some(b.bond.operator_id) != registrant_operator;
-                let (outsiders, outsider_base, outsider_executor) = lists(&self.judges[&independence.base_class_id], &not_registrant);
+                let (outsiders, outsider_base, outsider_executor) = lists(&self.judges[&(independence.base_class_id, None)], &not_registrant);
                 let needed = self.seat_count.saturating_sub(1) as usize;
                 let (eligible_weight, base_weight) = (sum(&eligible), sum(&base));
                 // No outsider (`NoOutsider`), or the outsider's own floor — whoever sits — refuses;

@@ -500,6 +500,8 @@ pub mod palw_real_share_v1;
 pub mod palw_anchor_window_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
 pub mod palw_audit_1004_v1;
+/// Lane MU (ADR-0173): the dormant Validation + Activation skeleton (no state, no object, no fence read).
+pub mod palw_root_activation_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).

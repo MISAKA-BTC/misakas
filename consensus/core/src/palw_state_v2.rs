@@ -629,12 +629,28 @@ pub fn palw_bond_may_judge_class_v4(
     require_production: bool,
     readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
 ) -> bool {
+    palw_bond_may_judge_class_v5(state, bond_key, bond, class_id, None, require_production, readiness)
+}
+
+/// **Lane MU (ADR-0173, past `palw_audit_1004_v1`): [`palw_bond_may_judge_class_v4`] for the seats that hold ONE ROOT of the class**
+/// — `root` is the root the claim names (`claim_roots`), `None` the registered root. The caller passes `Some` only where the
+/// readiness policy is root-keyed ([`crate::palw_model_registry_v1::PalwReadinessPolicyV1::root_keyed`]), so below the fence this is
+/// v4 byte for byte.
+pub fn palw_bond_may_judge_class_v5(
+    state: &PalwChainStateV2,
+    bond_key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    class_id: &Hash64,
+    root: Option<&Hash64>,
+    require_production: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+) -> bool {
     match readiness {
         // The readiness row's freshness under the draw's policy: below the 2026-09-23 audit fence the
         // old rule, byte for byte (any row, the V1 age); past it the registry's own rule
         // (`palw_readiness_row_is_fresh_v1`), so the draw seats exactly the rows the registry counts.
         Some(policy) if *class_id != policy.base_class_id => {
-            state.seat_readiness(bond_key, class_id).is_some_and(|row| policy.admits(row))
+            state.seat_readiness_for_root(bond_key, class_id, root).is_some_and(|row| policy.admits(row))
                 // RFC-0004 §6.7 (spec 17 §17.7.1): a seat is drawn onto a composite's panel only if its row for
                 // every ancestor of the composite is fresh too — it must hold the parent to replay the adapter.
                 && crate::palw_model_registry_v1::palw_composite_ancestry_v1(state, class_id).is_some_and(|ancestry| {
@@ -10652,6 +10668,11 @@ pub enum PalwStateV2Error {
     /// (`Independence`). Refused before any reservation is taken, so no `NoCapablePanel` void follows.
     #[error("class {class} is not seated for this executor: {floor:?} floor, {have} of {need} (RFC-0002 Part II Proposal A)")]
     ClassNotSeated { class: Hash64, floor: PalwSeatingFloorV1, have: u32, need: u32 },
+    // ---- Lane MU (ADR-0173, `palw_audit_1004_v1`) ----
+    /// **A claim (or a promotion) naming a root that fewer than `seat_count` operators besides the executor hold** — the root is
+    /// Preview / NotReady until its possession floor is met (ADR-0173 Possession). Refused before any reservation is taken.
+    #[error("root {root} of class {class} is not yet possessed: {have} of {need} operators besides the executor prove it (ADR-0173)")]
+    RootNotSeated { class: Hash64, root: Hash64, have: u32, need: u32 },
     // ---- RFC-0002 Phase F ----
     /// **An IR class registration (tag 61) the fold does not take**: below `Params::palw_tir_v1`, and
     /// until admission v10 lands above it. The acceptance walk drops it first; this is the second lock.
@@ -10984,6 +11005,11 @@ pub struct PalwChainStateV2 {
     /// read only by the stake-weighted draw's weight past `Params::palw_seat_availability`. Enters the root and the carriage
     /// (tail `0xE6`) only once written, which nothing below the fence can do.
     seat_availability: BTreeMap<PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
+    /// **Lane MU (ADR-0173, `palw_audit_1004_v1`): a seat's possession proof of a NON-founding root of a class** — keyed
+    /// `(bond, class, artifact_root)`. The founding root's rows stay in `seat_readiness` (that table IS the founding root's, so the
+    /// fence needs no migration); this table holds the roots a model line publishes later. Enters the root and the carriage
+    /// (tail `0xEB`) only once written, which nothing below the fence can do.
+    seat_root_readiness: BTreeMap<(PalwBondKeyV2, Hash64, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -11495,6 +11521,7 @@ impl PalwChainStateV2 {
             tir_shard_claims: BTreeMap::new(),
             floor_state: None,
             seat_availability: BTreeMap::new(),
+            seat_root_readiness: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -12556,6 +12583,56 @@ impl PalwChainStateV2 {
         class_id: &Hash64,
     ) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
         self.seat_readiness.get(&(*bond, *class_id))
+    }
+
+    /// **Lane MU (ADR-0173): a seat's possession proof of one ROOT of a class.** The class's registered (founding) root is the
+    /// legacy `(bond, class)` table's — which is what makes the fence need no migration — and any other root is the
+    /// `(bond, class, root)` table's. `None` for the root means the founding root.
+    pub fn seat_readiness_for_root(
+        &self,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+        root: Option<&Hash64>,
+    ) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
+        match root {
+            Some(root) if self.classes.get(class_id).is_some_and(|class| class.artifact_root != *root) => {
+                self.seat_root_readiness.get(&(*bond, *class_id, *root))
+            }
+            _ => self.seat_readiness.get(&(*bond, *class_id)),
+        }
+    }
+
+    /// **Lane MU (ADR-0173): the row a CLASS-level reader (the lifecycle's ready count, the jury, the room, the RPC) judges a seat
+    /// by** — below `palw_audit_1004_v1` the legacy row exactly; past it the freshest of the legacy row and the seat's rows for the
+    /// roots in force ("holds the class" means holds a version in force, so a class whose founding root left force after its grace
+    /// does not read as unseated while its current root is held).
+    pub fn seat_readiness_class_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+        daa: u64,
+    ) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
+        let legacy = self.seat_readiness.get(&(*bond, *class_id));
+        if self.seat_root_readiness.is_empty() || !params.audit_1004_active_at(daa) {
+            return legacy;
+        }
+        let lo = (*bond, *class_id, Hash64::from_bytes([0u8; 64]));
+        let hi = (*bond, *class_id, Hash64::from_bytes([0xffu8; 64]));
+        let in_force = self.class_roots_in_force(class_id, daa);
+        let mut best = legacy;
+        for ((_, _, root), row) in self.seat_root_readiness.range(lo..=hi) {
+            if in_force.contains(root) && best.is_none_or(|held| row.proved_daa > held.proved_daa) {
+                best = Some(row);
+            }
+        }
+        best
+    }
+
+    pub fn seat_root_readiness_iter(
+        &self,
+    ) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64, Hash64), &crate::palw_model_registry_v1::PalwSeatReadinessRowV1)> {
+        self.seat_root_readiness.iter()
     }
 
     pub fn seat_readiness_iter(
@@ -13879,6 +13956,9 @@ impl PalwChainStateV2 {
         }
         if !self.seat_availability.is_empty() {
             state.update(collection_root(b"seat_availability", &self.seat_availability).as_byte_slice());
+        }
+        if !self.seat_root_readiness.is_empty() {
+            state.update(collection_root(b"seat_root_readiness", &self.seat_root_readiness).as_byte_slice());
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
@@ -15371,6 +15451,8 @@ pub const PALW_MESH_TABLE_CAPPED_V1: u8 = 7;
 /// them newest-first from disk, so a delta that could not round-trip would be a reorg that
 /// silently did nothing.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PalwDeltaEntryV2 {
     Bond {
         key: PalwBondKeyV2,
@@ -16003,6 +16085,14 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
         new: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
     },
+    /// **A seat's possession proof of a non-founding root was written or dropped** (lane MU, ADR-0173; **delta number 150,
+    /// declared explicitly** — other lanes' numbers are theirs and an explicit number cannot be moved by the order the branches
+    /// merge in). Keyed `(bond, class, root)`. Dormant: `palw_audit_1004_v1` is armed on no network, so no stored delta carries it.
+    SeatRootReadiness {
+        key: (PalwBondKeyV2, Hash64, Hash64),
+        old: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    } = 150,
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -17259,7 +17349,8 @@ impl PalwFoldReadV1<'_> {
         // review of the 2026-09-24 DoS audit #12) — in the fold by THIS block's fence, as before.
         #[cfg(test)]
         tests::PALW_READY_PREDICATE_EVALS_FOR_TESTS.with(|count| count.set(count.get() + 1));
-        let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
+        // **Lane MU (ADR-0173)**: past `palw_audit_1004_v1` a seat holds the class if it holds a root in force (below it, the one row).
+        let Some(row) = self.state.seat_readiness_class_v1(self.params, bond_key, class_id, now_daa) else { return false };
         // **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): a composite class adds the parent clause** — the seat must be
         // ready for the composite's parent too. The class-blind predicate for every class without a record.
         crate::palw_model_registry_v1::palw_seat_class_not_ready_reason_net_v1(
@@ -19837,6 +19928,20 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TirShardClaim { key, old, new });
+        }
+    }
+
+    fn write_seat_root_readiness(
+        &mut self,
+        key: (PalwBondKeyV2, Hash64, Hash64),
+        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    ) {
+        let old = match new {
+            Some(row) => self.state.seat_root_readiness.insert(key, row),
+            None => self.state.seat_root_readiness.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::SeatRootReadiness { key, old, new });
         }
     }
 
@@ -24116,8 +24221,25 @@ impl<'a> TransitionBuilder<'a> {
             }
             _ => class.artifact_root,
         };
-        crate::palw_artifact::verify_artifact_multiproof_v1(proof, possession_root)
-            .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
+        // **Lane MU (ADR-0173, `palw_audit_1004_v1`): the proof is verified against the root it RECONSTRUCTS, and that root must be
+        // one the class has in force** — the registered root (the legacy `(bond, class)` row, as before) or a root a model line
+        // published (a `(bond, class, root)` row). Below the fence the proof opens the registered root alone, byte for byte.
+        let mut other_root: Option<Hash64> = None;
+        if self.params.audit_1004_active_at(ctx.daa_score) {
+            let reconstructed = crate::palw_artifact::reconstruct_artifact_multiproof_root_v1(proof)
+                .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
+            if reconstructed != possession_root {
+                if self.state.improvement_composite_class(class_id).is_some() || !self.state.class_roots_in_force(class_id, ctx.daa_score).contains(&reconstructed) {
+                    return Err(PalwStateV2Error::ReadinessProofRefused(
+                        "the proof reconstructs no root the class has in force".to_string(),
+                    ));
+                }
+                other_root = Some(reconstructed);
+            }
+        } else {
+            crate::palw_artifact::verify_artifact_multiproof_v1(proof, possession_root)
+                .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
+        }
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
         let landing = registry::palw_readiness_landing_spans_v1(span_daa);
         if span > span_now || span_now - span > landing {
@@ -24127,7 +24249,17 @@ impl<'a> TransitionBuilder<'a> {
         }
         // Past the readiness horizon's fence a proof no newer than the row is a replay: refused before
         // the row or the pool's landing record is touched.
-        self.refuse_readiness_proof_not_newer_v1(bond, class_id, span)?;
+        match &other_root {
+            None => self.refuse_readiness_proof_not_newer_v1(bond, class_id, span)?,
+            Some(root) => {
+                if self.params.readiness_v2_max_age_spans().is_some()
+                    && let Some(row) = self.state.seat_root_readiness.get(&(*bond, *class_id, *root))
+                    && span <= row.proved_span
+                {
+                    return Err(PalwStateV2Error::ReadinessProofNotNewer { bond: *bond, class_id: *class_id, span, row_span: row.proved_span });
+                }
+            }
+        }
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
         let seed = registry::palw_readiness_v2_challenge_seed_v1(class_id, &bond_bytes, span);
         // The first V2 producer opened all sixteen leaves under a 1 MiB ceiling. Preserve that
@@ -24153,16 +24285,33 @@ impl<'a> TransitionBuilder<'a> {
                 .map_err(PalwStateV2Error::ReadinessProofRefused)?;
             draw.first().copied().unwrap_or(0)
         };
-        self.write_seat_readiness(
-            (*bond, *class_id),
-            Some(registry::PalwSeatReadinessRowV1 {
-                proved_daa: span.saturating_mul(span_daa.max(1)),
-                proved_span: span,
-                leaf_index,
-                proof_version: 2,
-                chunks: proof.opened.len().min(u32::MAX as usize) as u32,
-            }),
-        );
+        let row = registry::PalwSeatReadinessRowV1 {
+            proved_daa: span.saturating_mul(span_daa.max(1)),
+            proved_span: span,
+            leaf_index,
+            proof_version: 2,
+            chunks: proof.opened.len().min(u32::MAX as usize) as u32,
+        };
+        if let Some(root) = other_root {
+            // A non-founding root: its own row, and this seat's rows for roots that have left force are dropped with it (the table
+            // is bounded by the roots in force, not by every version ever published).
+            let in_force = self.state.class_roots_in_force(class_id, ctx.daa_score);
+            let lo = (*bond, *class_id, Hash64::from_bytes([0u8; 64]));
+            let hi = (*bond, *class_id, Hash64::from_bytes([0xffu8; 64]));
+            let stale: Vec<(PalwBondKeyV2, Hash64, Hash64)> = self
+                .state
+                .seat_root_readiness
+                .range(lo..=hi)
+                .map(|(key, _)| *key)
+                .filter(|(_, _, held)| !in_force.contains(held))
+                .collect();
+            for key in stale {
+                self.write_seat_root_readiness(key, None);
+            }
+            self.write_seat_root_readiness((*bond, *class_id, root), Some(row));
+            return Ok(());
+        }
+        self.write_seat_readiness((*bond, *class_id), Some(row));
         self.note_activation_readiness_landing_v1(class_id, bond, span_now);
         Ok(())
     }
@@ -36575,7 +36724,16 @@ fn apply_object(
                 builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: 1 })?;
             }
             // **RFC-0002 Part II Proposal A (`palw_class_seating`), on this lane too**: the one seating function every door asks.
-            builder.read().check_class_seated_v1(class_id, bond, ctx.daa_score)?;
+            // Lane MU (ADR-0173): a free-prompt claim names no root and is attributed to the founding line's current one
+            // (`note_claim_usage` below), so past `palw_audit_1004_v1` the door asks the root the claim will be attributed to.
+            let fp_root = builder
+                .state
+                .model_line_or_founding(class_id)
+                .and_then(|line| builder.state.model_version(class_id, line.current).map(|version| version.root));
+            builder.read().check_class_seated_root_v1(class_id, fp_root.as_ref(), bond, ctx.daa_score)?;
+            if let Some(root) = fp_root.as_ref() {
+                builder.read().check_root_possession_v1(class_id, root, Some(bond), ctx.daa_score)?;
+            }
             // **ADR-0152 v3.1 T-2(a), on this lane too** (S-6): the executor's share of the class's
             // unlicensed claims, one per commitment whatever its quanta — a commitment draws a
             // panel of its own, as an attempt does. Past `Params::palw_rcore_plus` only; a
@@ -38571,6 +38729,11 @@ fn apply_model_version_published(
         proposal.adopted_in = Some(version);
         builder.write_model_proposal(proposal_id, Some(proposal));
     }
+    // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): Possession gates Activation** — a version cannot make itself current before
+    // `seat_count` operators prove its root, which for a new root means it enters as a preview and is promoted once they have.
+    if !preview {
+        builder.read().check_root_possession_v1(&line.class_id, &declared.root, None, ctx.daa_score)?;
+    }
     declared.published_by = Some(developer);
     declared.published_daa = ctx.daa_score;
     declared.status = if preview { PalwVersionStatusV1::Preview } else { PalwVersionStatusV1::Current };
@@ -38638,6 +38801,8 @@ fn apply_model_version_promoted(
             return Err(PalwStateV2Error::ModelBenefitLeadNotElapsed { line: *line_id, version, promotable_at });
         }
     }
+    // Lane MU (ADR-0173): the promotion is the activation, and the activation needs the root's possession floor.
+    builder.read().check_root_possession_v1(&line.class_id, &row.root, None, ctx.daa_score)?;
     builder.make_model_version_current(ctx, line_id, &mut line, version);
     row.status = PalwVersionStatusV1::Current;
     builder.write_model_version((*line_id, version), Some(row));
@@ -39243,7 +39408,10 @@ fn apply_attempt(
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
     // same every other door asks; before the reservation is taken, so a class no panel can be drawn for voids nothing.
-    builder.read().check_class_seated_v1(&attempt.class_id, &bond_key, ctx.daa_score)?;
+    // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): over the seats that hold the root the attempt names**, and that root's own
+    // possession floor — an R2 claim is refused until `seat_count` operators besides the executor prove R2.
+    builder.read().check_class_seated_root_v1(&attempt.class_id, Some(&attempt.artifact_root), &bond_key, ctx.daa_score)?;
+    builder.read().check_root_possession_v1(&attempt.class_id, &attempt.artifact_root, Some(&bond_key), ctx.daa_score)?;
     // **ADR-0152 v3.1 T-2(a): and no bond holds more than its share of the class's unlicensed
     // claims** (S-6), past `Params::palw_rcore_plus` only. Before any write in this function, so
     // step 4 may skip the own attempt on it (`BondClassShareExceeded` joins the finding-17 skip
@@ -39880,6 +40048,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         // ADR-0164: the capacity ledger, verify-then-install.
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
+        PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -40264,6 +40433,8 @@ pub struct PalwStateCarriageV2 {
     /// ADR-0165: the Useful Work Transition's floor state, in appended tail `0xEA`, present only when `Some`.
     pub floor_state: Option<crate::palw_real_share_v1::PalwFloorStateV1>,
     pub seat_availability: BTreeMap<PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
+    /// Lane MU (ADR-0173): non-founding-root possession rows, in appended tail `0xEB`, present only when non-empty.
+    pub seat_root_readiness: BTreeMap<(PalwBondKeyV2, Hash64, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -40612,6 +40783,8 @@ const PALW_CARRIAGE_TIR_SHARD_TAIL_V1: u8 = 0xE1;
 const PALW_CARRIAGE_FLOOR_STATE_TAIL_V1: u8 = 0xEA;
 /// **Lane PL part E (ADR-0166): the seat-availability table's carriage tail.** Written last, only when the table is non-empty.
 const PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1: u8 = 0xE6;
+/// **Lane MU (ADR-0173): the non-founding roots' possession rows' carriage tail.** `0xEB`, written last, only when non-empty.
+const PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1: u8 = 0xEB;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -40943,6 +41116,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1.serialize(writer)?;
             self.seat_availability.serialize(writer)?;
         }
+        if !self.seat_root_readiness.is_empty() {
+            PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1.serialize(writer)?;
+            self.seat_root_readiness.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -41127,6 +41304,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_floor_state = false;
         let mut seat_availability = BTreeMap::new();
         let mut seen_seat_availability = false;
+        let mut seat_root_readiness = BTreeMap::new();
+        let mut seen_seat_root_readiness = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -41382,6 +41561,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_floor_state = true;
                     floor_state = Some(crate::palw_real_share_v1::PalwFloorStateV1::deserialize_reader(reader)?);
                 }
+                PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1 if !seen_seat_root_readiness => {
+                    seen_seat_root_readiness = true;
+                    seat_root_readiness = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
                     seat_availability = BTreeMap::deserialize_reader(reader)?;
@@ -41522,6 +41705,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             tir_shard_claims,
             floor_state,
             seat_availability,
+            seat_root_readiness,
         })
     }
 }
@@ -41636,6 +41820,7 @@ impl PalwStateCarriageV2 {
             tir_shard_claims: state.tir_shard_claims.clone(),
             floor_state: state.floor_state,
             seat_availability: state.seat_availability.clone(),
+            seat_root_readiness: state.seat_root_readiness.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -41853,6 +42038,7 @@ impl PalwStateCarriageV2 {
             tir_shard_claims: self.tir_shard_claims,
             floor_state: self.floor_state,
             seat_availability: self.seat_availability,
+            seat_root_readiness: self.seat_root_readiness,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -43361,6 +43547,8 @@ pub(crate) mod tests {
         mod composite_readiness_v1;
         // RFC-0007 Part IV.2 (spec 18): capped onboarding through the registry's span step.
         mod capped_onboarding_v1;
+        // Lane MU (ADR-0173, `palw_audit_1004_v1`): possession is per root.
+        mod root_possession_v1;
 
         /// The registry's fixture params: the shared `params()` with a receipt window of four spans
         /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least
@@ -58980,6 +59168,7 @@ pub(crate) mod tests {
                     // ADR-0164: its round trip is the stage-5–7 suite's.
                     PalwDeltaEntryV2::CapacityLedger { .. } => "capacity_ledger",
                     PalwDeltaEntryV2::SeatAvailability { .. } => "seat_availability",
+                    PalwDeltaEntryV2::SeatRootReadiness { .. } => "seat_root_readiness",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -59385,6 +59574,8 @@ pub(crate) mod tests {
             // ADR-0164 (the capacity ledger), after ADR-0165's.
             (105, PalwDeltaEntryV2::CapacityLedger { key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1::Breaker, old: None, new: None }),
             (106, PalwDeltaEntryV2::SeatAvailability { key: PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0)), old: None, new: None }),
+            // Lane MU (ADR-0173), declared explicitly.
+            (150, PalwDeltaEntryV2::SeatRootReadiness { key: (PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0)), key, key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -60039,6 +60230,7 @@ pub(crate) mod tests {
             tir_shard_claims: _,
             floor_state: _,
             seat_availability: _,
+            seat_root_readiness: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
