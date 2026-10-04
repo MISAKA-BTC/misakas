@@ -3202,8 +3202,11 @@ impl PalwStateParamsV2 {
     }
 
     /// **ADR-0164 F-EM: does the per-DAA reward budget judge an attempt claim accepted at `daa_score`?** `false` on every shipped preset.
+    ///
+    /// **ADR-0172: past `palw_accounting_v2` F-EM is abolished** — the per-DAA allocation (a DAA's pool divided by `W_claim`) is the limiter, the number of claims a DAA is no
+    /// longer a budget, and a claim must not be refused by a count rule the new allocation makes redundant. At 5,300 F-EM is untouched.
     pub fn capacity_emission_active_at(&self, daa_score: u64) -> bool {
-        self.capacity_emission_from_daa.is_some_and(|from| daa_score >= from)
+        self.capacity_emission_from_daa.is_some_and(|from| daa_score >= from) && !self.accounting_v2_active_at(daa_score)
     }
 
     /// ADR-0164 F-M1's height, if armed (the mirror).

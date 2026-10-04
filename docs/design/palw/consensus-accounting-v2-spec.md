@@ -55,14 +55,14 @@ pub fn credit_round_v2(credited: &mut BTreeSet<(u64, u32)>, split: &ClaimSplitV2
 All arithmetic checked or saturating (release has overflow checks; a panic in block processing halts the network). All hostile inputs are refused
 by name or answered conservatively, never a panic.
 
-### 2a. Emission (ADR-0172 §6b)
+### 2a. Emission (ADR-0172 §6b) — the allocation is fixed at the DAA's closure
 
-`palw_emission_budget_v2(block_subsidy)` (= one block's subsidy), `palw_emission_claim_cap_v2` (720 ‰, `PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1`),
-`palw_emission_carrier_subsidy_v2` (constant-0 hook, inside the budget), `palw_emission_split_v2(block_subsidy, &[W_claim…], carrier)` → `EmissionSplitV2 { budget, carrier, shares }`
-with `total() ≤ budget`, `palw_emission_rider_split_v2`, `palw_emission_rate_sompi_per_s_v2`. The caller passes `calc_block_subsidy(daa)` (consensus crate, `CoinbaseManager`); nothing in
-core reads the schedule. **Wiring (stage 4):** the coinbase's PALW carve entitlement and the fold's `escrowed_reward` read the DAA's split (the set of claim-bearing blocks of a DAA,
-in acceptance order, is known to the accepting chain block only after the DAA's last claim — so the carve of a DAA's claims must be settled by the chain block that closes the DAA, or the
-split computed over the claims *accepted so far* with later claims taking the remainder; this is the one design point stage 4 must settle and is flagged in ADR §10 as E2). F-EM's ledger is not read past F.
+`palw_emission_budget_v2` (= `B_d`), `palw_emission_budget_split_v2` (`P_d` 720 ‰, validators 200 ‰, inclusion 80 ‰, each floored), `palw_emission_pool_v2`, `palw_emission_split_v2`,
+`palw_emission_carrier_subsidy_v2` (constant-0 hook, inside `P_d`), `DaaWeightRowV2 { sum_w, budget, open, count, acc }`, `palw_daa_weight_accept_v2` / `_release_v2`,
+`palw_allocation_root_v2`, `palw_emission_final_payout_v2(closed_row, W, escrow) = min(escrow, ⌊P_d·W/ΣW⌋)`, `palw_emission_fcfs_payouts_v2` (the rejected running split, kept for the
+comparison), `palw_emission_rate_sompi_per_s_v2`. Ledger: `PalwAccountingKeyV2 { FallbackWeight, FallbackBondSlot(bond), ExecCredit(claim, round), DaaOpen(d), DaaClosed(d) }` →
+`PalwAccountingRowV2 { Weight(u128), Slot(u64), Daa(DaaWeightRowV2) }` in the one rooted map `accounting_v2` (Some-only root block `accounting_v2/v1`, carriage tail `0xF3`, delta
+`AccountingV2`).
 
 ## 3. Colouring (GHOSTDAG) — stage 2 finding: no change is needed
 
@@ -88,18 +88,17 @@ field (a dozen struct literals and no consensus reader). The 20 s wait is node p
 Rate bound (I4): two ticks are ≥ one interval apart in stamp (H5 and the lead cap), so `ticks ≤ horizon/interval + 2` for any mix — the ADR-0165 simulation
 extended with the two-way carrier, in `palw_accounting_v2`'s tests.
 
-## 5. Fold (virtual processor / `palw_state_v2`) — E3 only
+## 5. Fold (virtual processor / `palw_state_v2`) — E3 only; **built in stage 4b (dormant)**
 
-* **FALLBACK credit** (step 4, after the clock): the block's own FALLBACK, then merged ones in consensus order; credited iff bond eligible
-  (`palw_bond_may_take_work_v2`), floor state Idle at the block's slot, `FallbackBondSlot[bond] < slot`; effect `fallback_weight += w_fb`, delta 130/131.
-  A refusal is a skip (merged) or a disqualification (own), as for an attempt.
-* **E-BLUE credit**: an Exec member with verdict `EBlue` is credited iff the permit's claim is `Final`, `(span, round, index)` granted by the
-  schedule, `(claim_id, round_index)` not in `ExecCredit`, the pool has a share; effect `safe_weight += per_round`, delta 132. `E_VOID` otherwise.
-* **Claim weight split** at `Final`: `W_attempt = W_claim − pool` instead of `W_claim`, only when `σ > 0`.
-* **Seed anchor** (ADR-0170 M1): admitted REAL attempts only past F; FALLBACK never records one.
-* **Anchor duty**: `operator_of_v1` extended to the algo-8 (FALLBACK) envelope; the binder's seed is the operator attempt's execution commitment (Q6).
-* **Comparator**: `PalwCandidateOrderV1::new(frontier, safe_weight + fallback_weight, immature, hash)` past F (Q11).
-* Reorg: every write is a delta entry with an exact revert; state Some-only so a chain that never saw the rules roots as one without them.
+* **The row follows the claim** (`write_claim`, the one funnel): a NEW eligible claim (attempt, accepted at or past F, not the base class) enters `DaaOpen(accepted_daa)`; a claim that leaves a
+  non-terminal phase (Final, Voided, dropped) leaves it (`open − 1`; a closed row is dropped with its last claim, an open row survives at 0). A Final→Voided or retirement releases nothing twice.
+  `B_d` is the fold's `ctx.subsidy` (`TransitionBuilder::accounting_budget`, set at the three fold entries).
+* **Step 1f, closure** (after the floor machine's time step): every `DaaOpen(d)` with `d <` this block's DAA moves to `DaaClosed(d)` (dropped if nothing is open). A chain's DAA never falls, so this is exact.
+* **`Final`** (`finalize_claim`): the escrow is capped by `min(escrow, ⌊P_d·W/ΣW⌋)` from the closed row **before** the buyback/panel split; a floor accepted at or past F, or a claim whose DAA is not closed
+  (unreachable), is paid nothing; below F and for free-prompt claims the escrow whole. F-EM is off from F (`capacity_emission_active_at`).
+* **FALLBACK credit** (`accounting_v2_credit_fallback`) and **round credit** (`accounting_v2_credit_round`): builder methods with tests (once per bond per slot, once per `(claim, round)`, exact reverts),
+  **not yet called by the block fold** — they need the algo-8 envelope's carriage and the mergeset's FALLBACK facts (stage 5). Comparator: `candidate_order` adds `fallback_weight` to `safe_weight` (0 while empty).
+* **Not built:** the validator (20 %) and inclusion (8 %) cuts in the coinbase manager; the seed anchor (REAL only) and anchor duty; the full-pipeline test (a chain block with attempts → panel → Final).
 
 ## 6. Header / body stateless checks
 
@@ -136,7 +135,9 @@ pruned join, the pruning proof across F, a reorg across F, dormancy byte-identit
 | 1 | fence in the four places + `palw_accounting_v2.rs` pure functions + property tests; `t12-repin --drift-only` clean | **skeleton: see the as-built note below** |
 | 2 | GHOSTDAG (§3): **no change needed** (equivalence test); `exec_verdict_v2` accessor added, uncalled; predicates audit (Q14) moves to stage 5; pipeline colouring tests | **done (dormant)**; pipeline tests not built |
 | 3 | clock (§4): **grant unchanged** (equivalence test, simulation extended); carrier is attribution | **done (dormant)** |
-| 4 | fold: FALLBACK credit, E-BLUE credit, weight split, anchor duty, comparator, state/delta/carriage | not built |
+| 4a | state mirror, the rooted ledger (root block, tail `0xF3`, one delta kind, carriage), pure emission rule | **done (dormant)** |
+| 4b | fold: row follows the claim, closure step, capped `Final`, F-EM off from F, FALLBACK / round credit methods, comparator term | **done (dormant)**; the credits are not yet called by the block fold |
+| 4c | coinbase: validator and inclusion cuts from the per-DAA budget; anchor duty; the block-pipeline test | not built |
 | 5 | stateless checks, RPC, audit index, producers (FALLBACK miner replaces the heartbeat miner and the floor producer), drill scripts | not built |
 | 6 | drill (ADR-0172 §8), then the lead decides F | after the 5,300 release |
 

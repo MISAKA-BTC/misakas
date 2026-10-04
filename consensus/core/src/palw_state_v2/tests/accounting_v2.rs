@@ -166,3 +166,12 @@ fn a_fallback_is_credited_once_a_slot_per_bond_and_a_round_once_per_claim_and_bo
     }
     assert_eq!(replay.state_root(), s0.state_root());
 }
+
+#[test]
+fn f_em_is_abolished_past_the_fence_and_untouched_below_it() {
+    let em = params().with_capacity_s567_mirror(Some(0), None, None);
+    assert!(em.capacity_emission_active_at(50), "5,300: F-EM judges claims, untouched");
+    let both = em.clone().with_accounting_v2_from_daa(Some(100));
+    assert!(both.capacity_emission_active_at(99), "below the new fence F-EM is as it was");
+    assert!(!both.capacity_emission_active_at(100) && !both.capacity_emission_active_at(5_000), "from the fence the per-DAA allocation replaces it");
+}

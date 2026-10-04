@@ -25,6 +25,9 @@ canonical *active* compute (§6a). Q6–Q14 follow this ADR's recommended defaul
 
 (日本語の要旨は §0.1)
 
+> **Top-level principle (user, 2026-10-04): blocks do not create MSK; claims do not create MSK; the DAA schedule creates the maximum budget; claims only compete for it.
+> ∀d: Minted(d) ≤ ScheduleBudget(d).** §6b.
+
 ## 0. The sentence this ADR is
 
 **The chain is carried by blocks that are (a) real-model attempts, or (b) a bonded reserve that is transparent to them; everything a
@@ -275,52 +278,68 @@ Fairness between models is carried by `W_claim`, not by σ. Checked in the tree 
 number and the cap is absent. Not verified here (stated, not hidden): that the shipped canonical-work vector prices a *real* model's attention and KV
 traffic like a measured device; the cost table is ADR-0131's and a calibration question, not a consensus-structure one.
 
-### 6b. Emission: one block's subsidy a DAA, shared by `W_claim` (the fifth pillar, user decision 2026-10-04)
+### 6b. Emission (the fifth pillar, and the ADR's top-level principle) — the DAA schedule creates the budget; claims only compete for it
 
-**The finding (the coordinator's scan of 21,979 chain blocks' coinbases on the local testnet-12 node; not re-measured here).** Today every claim-bearing block pays one
-carve — 3,200.85 MSK, 720 ‰ of the 4,445.6 MSK block subsidy. At ≈3.5 Final claims a DAA that is ≈11 k MSK a DAA and, at ≈157 s a DAA, ≈6.1 M MSK a day, about
-1.9× the schedule. ADR-0167's F-EM (`PALW_EMISSION_BLOCKS_PER_DAA_V1` = 16 carves a DAA) was set at three times a measured 5.3 claims, not from the schedule, and
-permits up to ≈8× it.
+> **Blocks do not create MSK. Claims do not create MSK. The DAA schedule creates the maximum budget; claims only compete for it.**
+> **∀d: Minted(d) ≤ ScheduleBudget(d) = calc_block_subsidy(d).** (user decision, 2026-10-04 ~15:45)
 
-**The rule.** The emission yardstick is the existing Kaspa schedule: `calc_block_subsidy(daa)` (`SUBSIDY_BY_MONTH_TABLE` scaled by `target_time_per_block` = 120 s,
-≈0.1 B a month). From the fence:
+Reward computation is **inverted**, from "claim × carve" to "DAA budget → eligible REAL claims". Only a DAA tick makes a budget; an E-BLUE round or slice, a merged red's *block*,
+a rider and a FALLBACK block make none.
 
-1. **The DAA's budget is one block's subsidy.** The total a DAA mints on every PALW route — all claims' carves, a FALLBACK carrier subsidy, any other subsidy path —
-   is ≤ `calc_block_subsidy(daa)` (`palw_emission_budget_v2`).
-2. **Shared by `W_claim`.** With several claims in the DAA the pool is split by canonical compute, `⌊pool · W_i / ΣW⌋` (§6a: `W_claim` is derived active compute), each
-   share capped at today's one-claim carve (`palw_emission_claim_cap_v2`, 720 ‰ of the subsidy), so a lone claim is paid exactly what it is paid now. A rider divides its
-   lead's share as before (ADR-0167 D2; `palw_emission_rider_split_v2`), never adding to it.
-3. **Don't mint the rest.** Remainders, a cap's excess and a DAA with no claim are **not minted** — not carried, not paid, not burned from a balance (nothing was minted).
-   This is consistent with FALLBACK's fee-only policy (§5.6): a claim-less DAA issues no PALW subsidy; the carrier hook is a constant 0 and, if raised, counts
-   **inside** the same budget (`palw_emission_carrier_subsidy_v2`).
-4. **Real time.** The budget is per DAA, the schedule per `target_time_per_block`; a DAA slower than 120 s therefore mints **less per second than the schedule, never
-   more** (`palw_emission_rate_sompi_per_s_v2`, tested for intervals from the target up).
-5. **Replaces F-EM** (ADR-0167 D1) from the fence: the 16-carve ledger row is no longer the limiter (this rule is tighter whenever more than one claim lands a DAA, and is
-   never looser than one block's subsidy). The ledger's removal and the coinbase/fold change (the carve entitlement read from the DAA's split rather than the block's
-   own subsidy) are stage 4; until then nothing reads these functions.
+**The finding that motivated it** (coordinator's scan of 21,979 chain blocks and the EM audit, `lanes/evidence/emission-1004/REPORT.md`; not re-measured here). PALW pays one
+carve per claim-bearing block (3,200.85 MSK = 720 ‰ of the 4,445.6 MSK block subsidy), the schedule assumes one per DAA tick, and a DAA is a slot clock: ≈3.68 attempt blocks per
+DAA, ≈1.9× the schedule in real time. ADR-0167's F-EM (16 carves a DAA = 51,213.5 MSK/DAA = 11.52 × `calc_block_subsidy`) was set at three times a measured claim rate and allows
+up to ≈8× it.
 
-**E2 — when the DAA's budget is divided (coordinator's question; both options built and tested).**
+**The rule (from the fence `F`).**
 
-| | **A. first come, first served** (a running split in acceptance order) | **B. final-time split (recommended, built into the fold)** |
+1. **`B_d = calc_block_subsidy(d)`**, the existing Kaspa schedule (`SUBSIDY_BY_MONTH_TABLE` at `target_time_per_block` = 120 s, ≈0.1 B a month). The accepting block's own
+   subsidy is `B_d` (every block of DAA `d` has the same one); it is carried in the fold as `ctx.subsidy`.
+2. **The DAA's cuts come from that one budget, in the accepting block's rooted state, not per merged block**: the PALW claims' pool `P_d = 0.72·B_d`, the validators `0.20·B_d`,
+   inclusion `0.08·B_d` (each floored: `palw_emission_budget_split_v2`, `Σ ≤ B_d`, the remainder is not minted).
+3. **`C_d` = the eligible claims accepted by chain blocks of DAA `d`** (keyed on the *accepting* block's DAA, never the merged block's). Each takes `R_i = ⌊P_d · W_i / Σ_{j∈C_d} W_j⌋`,
+   `R_i ≤ R_carve` (the claim's own escrow, = today's carve); the remainder is **not minted**. `W` is `W_claim` (§6a: canonical active compute). Eligible = an attempt claim, not
+   the retired base class (a floor earns nothing; FALLBACK is fee-only). A merged red's *claim* and a rider's own claim are eligible and enter the pool, which they cannot enlarge
+   (a rider's escrow is a piece of its lead's carve; the lead's is unchanged).
+4. **E2 — no running split, no first-come advantage.** The allocation is fixed at the **closure** of the DAA. **Closure** (deterministic): *DAA `d` is closed on a chain at the first
+   chain block whose DAA is greater than `d`* — step 1f of that block's fold. Claims are accepted only by chain blocks' folds (own and merged attempts alike, all at the chain
+   block's DAA) and a chain's DAA never falls, so after that block nothing can be accepted into `d`; no merge-depth argument is needed. At closure the open row
+   `{ΣW, B_d, open, count, acc}` — `acc` an order-independent sum over `(claim, W)` of the eligible set — moves to the closed row: **that row is `allocation_root(d)`** (the eligible
+   set, ΣW and `B_d`, from which every claim's fixed ceiling follows; `palw_allocation_root_v2`). A claim at `Final` vests **exactly `min(escrow, ⌊P_d·W/ΣW⌋)`** from the closed row.
+   The amount is a function of the closed row and the claim, so **it is the same whatever the order of `Final`s**. `ΣW` counts every claim accepted in the DAA, voided ones included:
+   a void's or an expiry's share is **not redistributed and not minted** (a shrinking denominator would make the amount depend on `Final` order and could pass `P_d`).
+5. **Reorg / IBD / pruning give the same root.** The closure is a pure function of the chain's own blocks (claims accepted per DAA, the first block of a later DAA); every write is one
+   delta entry that reverts exactly; the ledger rides the pruning carriage under tail `0xF3` and is checked against the committed state root, so a pruned join holds the same
+   closed rows. Tested at builder level with 1,000 claims, voids, deltas applied and reverted, and the carriage round trip.
+6. **Escrow is withheld at acceptance at the ceiling; collateral is sized on the maximum share.** Unchanged: the accepting fold withholds the carve (`P_d` for a lone claim) and the bond's
+   exposure is reserved on that escrow — which is ≥ every possible share — so the bond is never under-collateralised for what the claim may later vest. The unpaid difference was
+   never minted (the coinbase withheld it, as it does for every skipped attempt's carve).
+7. **Real time.** The budget is per DAA, the schedule per 120 s: a DAA slower than the target mints less per second than the schedule, never more.
+8. **F-EM is abolished from `F`** (`capacity_emission_active_at` is false past `palw_accounting_v2`): the per-DAA allocation replaces the 16-carve ledger, and a count rule must not refuse a
+   claim the allocation already bounds. **At DAA 5,300 F-EM is untouched.** **Mainnet does not take PALW emission without this per-DAA global cap.**
+
+**The audit's eight pitfalls, one by one** (`REPORT.md`, "next-fence pitfalls"):
+
+| # | pitfall | here |
 |---|---|---|
-| reserved at acceptance | the escrow, ≤ one claim's carve (today's) | the same |
-| paid | `min(escrow, what is left of the DAA's budget)` at acceptance order | `min(escrow, ⌊budget · W / ΣW⌋)` at `Final` |
-| fairness | pays by arrival: the first claim takes 720 ‰ of the budget, the third nothing; a producer that orders its claim first, or a parent set that orders the mergeset in its favour, is paid at the others' expense | pays by `W_claim` (canonical active compute, §6a); arrival order is irrelevant |
-| `Σ ≤ budget` | yes | yes — proven for any weights, any voids, any order of `Final`s (test) |
-| state | none | one rooted row per DAA that holds a live claim: `{ ΣW: u128, budget: u64, open: u32 }` — at most one per live claim, ≈ 8 B key + 28 B value; dropped when `open` reaches 0 |
-| reorg / IBD / pruning | order-dependent state | the row is a function of the claims accepted in that DAA on the chain; written and dropped by exact deltas; carried in the pruning carriage against the root, so a pruned join holds the same row. The *payout* reads only the row and the claim |
-| `Final` before the DAA closes? | n/a | impossible: `Final` is at least a challenge window after acceptance, and a chain's DAA never falls; the fold refuses to pay from an open row (it pays nothing) |
+| 1 | escrow is fixed at acceptance but ΣW is known only at the DAA's close | escrow withheld at the ceiling at acceptance; the allocation is fixed at closure; a `Final` vests the fixed amount; collateral on the maximum share (rule 6) |
+| 2 | ledger keyed by the accepting block's DAA | the row key is `claim.accepted_daa`, the chain block's (rule 3) |
+| 3 | apply to every subsidy carve (PALW 72 %, validator 20 %, inclusion 8 %) from the accepting block's rooted state | the three cuts are one function of `B_d` (`palw_emission_budget_split_v2`, `Σ ≤ B_d`); **the claim route is wired in the fold; the validator and inclusion routes are NOT yet — they live in the coinbase manager (stage 5)** |
+| 4 | in-window reds and riders inside the pool | merged reds' claims and riders' claims are in `C_d`; neither enlarges `P_d` (rule 3) |
+| 5 | tick rate stays ≤ 1/slot | unchanged: the grant is ADR-0165's rule, ≤ 1 tick a slot (§7); only a tick makes a budget |
+| 6 | the panel reserve stays unminted | the reserve is paid out of a claim's *reward* (≤ the capped escrow); capping first means it can only shrink |
+| 7 | heartbeat-only DAAs mint nothing | a DAA with no eligible claim has no row and no allocation; FALLBACK is fee-only; the carrier hook is constant 0 |
+| 8 | the existing 34.5 M MSK of vesting rows | **not changed retroactively**: claims accepted below `F` are not registered, their payout and vesting are as they were; they vest to their expiry (last DAA 7,705 in the audit's data) |
 
-**ΣW counts every claim accepted in the DAA, voided ones included.** A denominator that excluded voids would shrink as claims void, so an early `Final` would be paid
-against a larger share than a late one and the DAA could mint past its budget (a second, order-dependent identity to maintain); with the full denominator the sum is
-bounded for every outcome, and a voided claim's share is simply never minted — nobody else is paid more because a rival failed. **Riders** enter ΣW as the claims they are, each
-bounded by its own (split) escrow, so a lead's carve is still never exceeded. **Recommendation: B**, implemented in the fold (`finalize_claim`: the payout is capped, the claim's
-`W` registered at acceptance, the row released at `Final` or `Voided`); A is kept as a tested function for the comparison. Rows of a pre-fence claim do not exist and its payout is unchanged.
+**What it does to the economy, stated (E1 is the user's, closed).** At the measured ≈3.5 claims a DAA the pool is `P_d` (3,200.8 MSK) shared by `W`: ≈1,270 MSK each at equal weights,
+≈4.4 k MSK a DAA of schedule against ≈11 k now. A large model is paid for its compute by `W_claim` (§6a), not by a larger schedule; the schedule does not grow. The user has
+ruled that ≈1,270 MSK a claim is not a concern.
 
-**What this does to the economy, stated.** At the measured 3.5 claims a DAA the pool is one block's 4,445.6 MSK shared by ≈3.5 claims (≈1,270 MSK each, against 3,200.85
-now): PALW issuance falls to ≈4.4 k MSK a DAA, ≈2.4 M MSK a day at 157 s — about 0.75× the schedule's rate (the 157 s DAA is slower than the 120 s target). A claim's
-reward falls as claims per DAA rise; *capacity* (ρ, the claim count) no longer buys issuance, which is what F-EM was for. Whether the resulting per-claim reward still pays
-for a model's compute is **not verified here** and is the economic risk of the rule (§10, E1).
+**Tests.** Pure: `a_daa_never_mints_more_than_its_budget_and_shares_the_pool_by_w_claim`, `e2_the_allocation_is_a_function_of_the_closed_row_not_of_finality_order`, and
+**`minted_per_daa_never_exceeds_the_schedule_budget_in_every_case`** — `∀d: Minted(d) ≤ ScheduleBudget(d)` over REAL / rider / merged-red / E-BLUE / FALLBACK / floor blocks, several bonds,
+0 / 1 / 2 / 16 / 1,000 claims, every subset of voids, every order of `Final`s and a reorg (a branch holding another subset), with the validators' and inclusion's cuts at their maximum
+(modelled on the EM audit's `audit_emission_per_daa.rs`). Fold level (`palw_state_v2::tests::accounting_v2`): the ledger through the fold's own builder with 1,000 claims.
+*Not tested here:* the same property through a full block pipeline (a chain block carrying attempts, a panel, a `Final`), and the coinbase side.
 
 ## 7. The clock (answer to question (ii))
 
@@ -427,9 +446,9 @@ Identity does not move (peering continues until F), the params id and schedule i
 * **Q13** Confirm by test that algo 10 and algo 8 at or past F derive no block level (extend `algo_id_derives_no_block_level` only if needed) and that the E-BLUE verdict near the pruning point behaves as F1's.
 * **Q14** Audit every predicate that lists algo 8 (difficulty rows, level, blue work, lead cap, relay) for the re-meant lane — ADR-0105's lesson of a stale id list.
 
-* **Emission rule (user, 2026-10-04 ~14:30)** — §6b; implemented as pure functions with property tests, dormant. **E1 (open):** whether ≈1,270 MSK a claim at today's claim rate still pays for the compute; the rule is a ceiling, the per-claim ceiling (720 ‰ of a block) and the share-by-`W_claim` are the knobs, and a later fence can move either.
+* **Emission (user, 2026-10-04)** — §6b: the DAA schedule creates the budget, claims compete for it, allocation fixed at closure; **E1 closed by the user** (≈1,270 MSK a claim is not a concern; large models are paid by `W_claim`, the schedule does not grow); F-EM untouched at 5,300 and abolished from `F`; mainnet does not take PALW emission without this per-DAA cap.
 
-* **E2 (decided in design, 2026-10-04):** option B, the final-time split over a rooted per-DAA weight row (§6b), ΣW over every accepted claim; option A kept as a tested alternative.
+* **E2 (decided, 2026-10-04):** the allocation is fixed at the DAA's closure (the first chain block of a later DAA) and every `Final` vests exactly its share (§6b); the running split is not adopted.
 
 **Still genuinely open:** the σ value (after the drill); the `w_fb` number; the envelope's carriage (§5); how much of Q7 to close before arming.
 
