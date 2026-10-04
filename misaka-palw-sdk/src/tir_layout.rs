@@ -426,7 +426,14 @@ pub fn tir_da_answer_leaf_cap_v1(params: &Params) -> Option<u64> {
 /// class whose producers could only default (a larger `--tile-len` or a shorter `--max-context`
 /// commits fewer leaves).
 pub fn tir_canonical_job_answerable_v1(params: &Params, class: &PalwTirClassV1) -> Result<(), String> {
-    let Some(cap) = tir_da_answer_leaf_cap_v1(params) else { return Ok(()) };
+    let gate = TirOfflineGateV1::of(params);
+    tir_canonical_job_answerable_at_v1(&gate.params, class, gate.daa)
+}
+
+/// [`tir_canonical_job_answerable_v1`] under the rules at `daa` (the preflight's judged height).
+pub fn tir_canonical_job_answerable_at_v1(params: &Params, class: &PalwTirClassV1, daa: u64) -> Result<(), String> {
+    let cap = (!params.palw_tir_fence2_active_at(daa)).then_some(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
+    let Some(cap) = cap else { return Ok(()) };
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
     let class_id = class.class_id(&Hash64::from_bytes([0; 64]));

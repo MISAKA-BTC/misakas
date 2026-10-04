@@ -643,11 +643,16 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                 placeholder_root,
                 leaf_estimate.max(2),
                 &TirLayoutChoiceV1 { max_context: Some(ctx), ..base },
-                false,
-                &|class| match gate(params, bundle, class, placeholder_root, judge_daa) {
-                    Gate::Admitted(_) => Ok(()),
-                    Gate::Refused(e) => Err(format!("{} ({e})", e.code())),
-                    Gate::Unbuildable(why) => Err(why),
+                // `composite: true` skips the search's own DA-answerability twin, which reads the IR flag day's height: it is asked
+                // here, at the judged height, after the gate.
+                true,
+                &|class| {
+                    match gate(params, bundle, class, placeholder_root, judge_daa) {
+                        Gate::Admitted(_) => {}
+                        Gate::Refused(e) => return Err(format!("{} ({e})", e.code())),
+                        Gate::Unbuildable(why) => return Err(why),
+                    }
+                    crate::tir_layout::tir_canonical_job_answerable_at_v1(params, class, judge_daa)
                 },
             );
             memo.borrow_mut().insert(ctx, r.clone());
