@@ -9,7 +9,7 @@ first; this file is the how.
 | item | value |
 |---|---|
 | fence | `Params::palw_accounting_v2: Option<ForkActivation>` (bare height; companion values hashed with it) |
-| companion values (`palw_accounting_v2_value_v1()`) | `[G_ms = 20_000, σ_permille = 0, w_fb_milli = <Q11>, version = 1]` |
+| companion values (`palw_accounting_v2_value_v1()`) | `[G_ms = 20_000, σ_permille = 0, version = 1]` (a `w_fb` value joins when Q11 is decided) |
 | FALLBACK lane | `POW_ALGO_ID_PALW_FALLBACK_V1 = 12` (Q1) |
 | state | delta 130 `FallbackWeight`, 131 `FallbackBondSlot`, 132 `ExecCredit`, 133 `AccountingMeta`; carriage tail `0xC8`; root block `accounting_v2/v1` Some-only |
 | prerequisites (at or below F) | `palw_consensus_mode = ConsensusV2`, `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`, `palw_clock_cursor`, `palw_clock_floor`, `palw_clock_lead_cap`, `palw_anchor_clock`, `palw_single_lottery`, `palw_heartbeat_transparent`, `palw_heartbeat_transparent_same_chain` (F1), `palw_execution_lane`, `palw_anchor_window_v1`, `palw_model_registry`, the capacity budget (`W_claim`) |
@@ -130,7 +130,17 @@ pruned join, the pruning proof across F, a reorg across F, dormancy byte-identit
 | 5 | stateless checks, RPC, audit index, producers (FALLBACK miner replaces the heartbeat miner and the floor producer), drill scripts | not built |
 | 6 | drill (ADR-0172 §8), then the lead decides F | after the 5,300 release |
 
-**As-built note (skeleton):** filled in after the first milestone builds; see the git log of the branch.
+**As-built note (stage 1, 2026-10-04):** `consensus/core/src/palw_accounting_v2.rs` holds `lane_v2`, `colour_rule_v2`, `peer_effect_v2`,
+`exec_verdict_v2`, `scoring_delta_v2`, `palw_clock_carrier_v2`, `fallback_stamp_admits_v2`, `claim_weight_split_v2` / `claim_weight_bound_holds_v2`, the
+companion values, and `Params::{palw_accounting_v2_fence, palw_accounting_v2_active_at, validate_palw_accounting_v2}`. The fence is written in the
+places the repo's pattern asks (field; `palw_fences_v1`; Some-only in both ids; the `never()` collapse; the fork visit; the four preset literals;
+the fork-id probe arm; `validate_palw_v2`, last). No mirror in the V2 bundle (nothing folds it yet). **Nothing reads the fence except the
+validators.** The mutual-exclusion lines for `palw_exec_class_v1` and RFC-0008's three fences are not written: those fields live on other
+branches (`rcore/exec-class`, `rfc8/claim-backed-blocks`); integration adds them. Tests: 11 unit tests (lane map; dormancy; colour table; FALLBACK
+invisibility and its property over fallback counts; **I1** round count moves no scoring quantity; carrier priority; equivalence with ADR-0165's
+rule at G = 0 over 5,000 random facts; **I4** the three-way clock simulation, 300 rounds at G = 0 and G = 20 s; **I3** the weight split over 3,000
+random claims) and 3 integration tests (`palw_accounting_v2_fence`: dormant on every preset, armed moves params and schedule ids and never the identity,
+fork-id gated, refused without each prerequisite). `scripts/t12-repin.sh --drift-only`: no drift (params `5ee7fd8e…`, schedule `1678e073…`).
 
 ## 10. What this spec does not decide
 

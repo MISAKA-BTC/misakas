@@ -498,6 +498,8 @@ pub mod palw_tir_fence2_v1;
 pub mod palw_real_share_v1;
 /// ADR-0170, the seed anchor as a window: a merged admitted attempt anchors, the anchor survives span boundaries, and the admission jury and the schedule seeding read the latest anchor of `S − 24 … S − 1` (`palw_anchor_window_v1`).
 pub mod palw_anchor_window_v1;
+/// ADR-0172, consensus accounting v2 (C-BLUE / E-BLUE / FALLBACK and one tick a slot): the pure rules and the dormant fence `palw_accounting_v2`.
+pub mod palw_accounting_v2;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).
