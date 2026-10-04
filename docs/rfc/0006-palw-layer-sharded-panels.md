@@ -2,12 +2,12 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Adopted 2026-10-03 (every open question at its recommended default); implemented dormant under `palw_tir_shard_v1` on `rfc6/shard` |
+| Status | Draft, 2026-10-01 |
 | Author(s) | MISAKA core (drafted with Claude, lane M3) |
 | Created | 2026-10-01 |
 | Normative dependencies | RFC-0002 (PALW-TIR v1: commit points, cones, the step space of an IR class, the IR one-move court) |
 | Affects | spec/palw 04b (§10: a cell), 07 (licence by parts, Final), 08 (draw, receipts, quorum, recount, outsider), 10 (locks and pay per cell), 16 (fences) · IR classes only, all networks (dormant until armed) · `consensus/core` (`palw_shard_panel_v1`, `palw_panel_v2`, `palw_state_v2`, `palw_verification_v2`, `palw_receipt`, `palw_tir_class_v1`), kaspad's panel worker, `misaka-palw-tir-exec` (a cell verifier) |
-| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-gpu/tests/layer_shard.rs`), then `rfc6/shard` (the implementation) |
+| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-gpu/tests/layer_shard.rs`) |
 | Related | ADR-0098 (coverage is a number), **ADR-0099 / ADR-0100** (a seat holds a shard: the plan, the stratified draw, `ShardCourtAccused`, `ShardReceiptLicensed` — built for legacy classes, dormant), ADR-0103 (held context; D2 interval, D7 a seat holds a shard of the model and its state), ADR-0111 (leaf demand), ADR-0062 (DA court), ADR-0117 (a draw is one forward), ADR-0133 (verification is its own clock; segment-scoped receipts), **ADR-0147** (independence is drawn: the outsider seat), ADR-0152 (Q-1…Q-7, `basis_k`), ADR-0160 (claim capacity), RFC-0002 Phase F (`TirShardCourtAccused`, `TirStepLeaf`/`TirStepNode`), **RFC-0007** (lane M4: batched verification certificates and algebraic checks — receipt aggregation and cheaper per-shard checks are its subject, not this RFC's), `docs/design/palw/tir/gpu-integer-backend.md` |
 
 ## 概要(日本語)
@@ -810,83 +810,44 @@ decides.
 
 1. **One fence or two?** A plan-and-draw fence and a licensing fence would let a network draw stratified
    panels and attest cells before licensing by parts (shadow mode).
-   *Recommended default — adopted 2026-10-03:* **one fence**, `palw_tir_shard_v1`, armed only after a shadow period in which
+   *Recommended default:* **one fence**, `palw_tir_shard_v1`, armed only after a shadow period in which
    the node's cell verifier runs beside the whole-licence replay on IR claims and their verdicts are
    compared (node-only, no fence).
 2. **The attesters per cell and the detection point (§5).** Two (`s_shard = 3`, Verification V2's own
    rule, plus the outsider: 2.9 % per-lie miss at `h = 2/3`, `f = 0.26`) or four (`S_P = 1`,
    `s_shard = 4`: 0.32 %, testnet-12's de-facto five replays' detection at its work). The choice trades
    supply against detection per lie; the court window stays the backstop.
-   *Recommended default — adopted 2026-10-03:* **two attesters a cell (`s_shard = 3`) plus the shard's outsider** on
+   *Recommended default:* **two attesters a cell (`s_shard = 3`) plus the shard's outsider** on
    testnet-12, where supply binds. Mainnet's point is set by its own measured `h`.
 3. **The outsider's span.** The whole shard, or one cell (cheaper: `1/S_P` of the compute, weaker
    independence).
-   *Recommended default — adopted 2026-10-03:* **the whole shard**. The outsider fetches the shard's weights anyway, and a
+   *Recommended default:* **the whole shard**. The outsider fetches the shard's weights anyway, and a
    batched pass over all positions costs little more than one segment.
 4. **`TirStepRun`.** A new DA unit, or peer serving plus `TirStepNode` only.
-   *Recommended default — adopted 2026-10-03:* **the new unit**. A segment's carry-ins are runs, and one `TirStepLeaf` per
+   *Recommended default:* **the new unit**. A segment's carry-ins are runs, and one `TirStepLeaf` per
    position cannot be demanded within the session limits.
 5. **2-D at first, or layers only?**
-   *Recommended default — adopted 2026-10-03:* **layers only at first (`S_P = 1`; each seat attests its whole shard)**,
+   *Recommended default:* **layers only at first (`S_P = 1`; each seat attests its whole shard)**,
    with position segments switched on per class once batch verification is the node's common path.
    `S_P = s_shard − 1` (S1 inside the shard) is the target.
 6. **Locks and pay by `w_cell / w` (§6)**, or per seat as today with the floor doing the work.
-   *Recommended default — adopted 2026-10-03:* **by `w_cell / w`, with the floor**. It is what lets a bond seat more shard
+   *Recommended default:* **by `w_cell / w`, with the floor**. It is what lets a bond seat more shard
    duties; the slash term keeps the deterrent whole.
 7. **The class room (§6.2)** as the binding shard's `ready_eff`, and the readiness proof over a shard's
    rows. Both change ADR-0160's lane-verify arithmetic.
-   *Recommended default — adopted 2026-10-03:* **adopt both**, together with the licensing fence; until then the class room
+   *Recommended default:* **adopt both**, together with the licensing fence; until then the class room
    stays ADR-0160's.
 8. **Who declares `S_L`?** The registrant, once (ADR-0100), or derived from a network-wide seat budget
    (ADR-0099 Decision 2's `palw_shard_plan_for_seat_v1`), so that a class cannot be over-sharded to thin
    its panels.
-   *Recommended default — adopted 2026-10-03:* **derived from the network's seat budget** (the fewest shards whose widest
+   *Recommended default:* **derived from the network's seat budget** (the fewest shards whose widest
    shard fits it). The registrant may declare MORE shards only up to twice that number, so that a class
    cannot thin its own panels.
 9. **The measured-speed constant (§6.2).** Batch verification is faster than the replay the constant was
    measured on.
-   *Recommended default — adopted 2026-10-03:* **leave it**. Raise it under its own fence, after a drill measures the cell
+   *Recommended default:* **leave it**. Raise it under its own fence, after a drill measures the cell
    verifier on the network's hosts.
 
 ## Decision
 
-**Adopted 2026-10-03.** Every open question takes the recommended default recorded above:
-
-1. one fence, `palw_tir_shard_v1`, armed only after a node-only shadow period (the node's cell verifier beside the whole-licence
-   replay, verdicts compared and logged: `--palw-tir-shard-shadow`);
-2. two attesters a cell plus the shard's outsider on testnet-12 (`s_shard = 3`);
-3. the outsider spans the whole shard;
-4. a new DA unit, `TirStepRun`;
-5. layers only at first (`S_P = 1`), position segments switchable per class, `S_P = s_shard − 1` the target — both implemented, the
-   default layers-only;
-6. locks and pay by `w_cell / w`, with the floor (`PALW_TIR_SHARD_SEAT_FLOOR_PERMILLE_V1`, one eighth);
-7. the class room is the binding shard's `ready_eff`, and the readiness proof is over a shard's rows (object tag 93), under the same fence;
-8. `S_L` is derived from the network's seat budget (`PALW_TIR_SHARD_SEAT_BUDGET_BYTES_V1`, 3.5 GiB) and the registrant may declare up
-   to twice that;
-9. the measured-speed constant is left.
-
-**Implementation notes** (`rfc6/shard`; the code is the authority where it settles what the text left open):
-
-- Object tags 91 (`TirShardPlanDeclared`), 92 (`TirShardReceiptLicensed`), 93 (`TirSeatReadinessProved`); DA unit tag 7
-  (`TirStepRun`) and answer tag 10; delta entries 101 and 102; carriage tail `0xE1`.
-- A bond may sit in several shards (RFC §4.1): its seats are distinct duties with distinct masks, its lock accumulates the shards'
-  prices (`segments: 0`, the unscoped record), and it is paid shard by shard (the claim's counted `(bond, shard)` pairs).
-- The cell shares are derived once, at the plan's declaration, on the class's own canonical job (half prefill, half decode at
-  `max_context`), and stored; a claim's `(P, G)` is not in the fold.
-- The signing contexts (`palw_receipt_message_v4`, the plan's and the readiness proof's) are not in testnet-12's committed set (V5); like
-  the batch licence's they are covered by the Some-only fence and live in `PALW_TIR_SHARD_V1_ALL_DOMAINS`.
-- **The node** (spec 18 §18.12): a sharded duty is answered by the cell pass (`kaspad/src/palw_panel/tir_shard.rs`) — the cells over
-  the claim's dense capture through the CPU executor's `step_cell`, a V4 receipt or the accusation the finding builds (the same
-  `TirShardCourtAccused` the whole-job replay builds, from the leaf the cell found). The cell verifier is one function over a
-  *stepper* (`TirCellStepperV1`): the CPU executor's, or a device's through `TirDeviceV1`. The GPU executor implements it
-  (`misaka-palw-tir-gpu/src/cell.rs`; `tests/cell.rs` holds 22 cells and 109 positions byte-equal to the CPU on Metal); a device
-  runs only cells of a segment starting at position 0 and the node falls back to the CPU on any refusal. `misaka-palw-tir-gpu` is an
-  isolated workspace whose wgpu 30 (`js-sys ^0.3.104`) has no common lock with the consensus stack (`js-sys =0.3.77`), so a node
-  binary carries a device through a plug-in boundary, not a cargo dependency.
-- **Where the receipt pool lives.** A V4 receipt has its own queue, pool (one place per `(claim, shard, bond)`) and re-send; it is not a
-  member of the V2/V3 pools, whose per-bond caps and flat-panel assumptions it does not share.
-- **A part is assembled by consensus** (`palw_v2_tir_shard_part_assemble`): the next shard whose pooled receipts the acceptance
-  validator itself licenses.
-- **Drill faults.** `--palw-drill-tamper-boundary=<position>:<occurrence>` commits a CONSISTENT lie at the shard boundary (the
-  producer changes the first carry-out before that occurrence, commits it, and computes everything after it honestly from it): the
-  upstream shard's cells find it and the downstream shard's verify — the detection lemma's first consequence, on a live chain.
+<Open.>

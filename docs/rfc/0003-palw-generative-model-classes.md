@@ -164,8 +164,13 @@ gen_job_id_v1 = H64(key "misaka-palw/gen-v1/job-id/v1", borsh(job))
   by name, as RFC-0001 §A.2 and ADR-0096 do. It never rewrites a job. Canonicalisation (text to ids,
   a typed guidance value to its grid, an integer seed to 32 bytes) is the gateway's work.
 - **The body's kind MUST equal the class's profile** (`BodyKindMismatch`). The seed MUST be all zeros
-  exactly when the class declares no random input (`SeedNotUsed`), so a deterministic class never has
-  two job ids for one computation.
+  exactly when the class declares no random input: a seed on a deterministic class is `SeedNotUsed`, so
+  a deterministic class never has two job ids for one computation, and an all-zero seed on a class that
+  draws randomness is `SeedRequired` (the all-zero seed is the deterministic classes' encoding of "no
+  seed"). A gateway that maps an integer seed `n` to bytes therefore maps it to a non-zero seed
+  (`le64(n + 1) ‖ 0^24`, say); the mapping is the gateway's, not consensus's. *(Built 2026-10-01,
+  04b §15.13; the biconditional is this bullet's own wording, and the integer mapping in §II.1.1 follows
+  it.)*
 - **The class binds the tokenizer.** A pipeline class's id commits to its tokenizer (Phase F D4), so
   the job carries none. This closes the gap that FP V3's `tokenizer_id` documents for text.
 - **Canonical prompt mode** (ADR-0074 D1) carries over. The network's own job derives its prompt from
@@ -281,7 +286,10 @@ answer and never a better draw (the D11 argument). Grinding a seed costs a whole
 | 6 | `VIDEO_STEP_NOISE_V1` | `misaka-palw/rand/video-step-noise/v1` | 16 | 32 | step `p` | `clip_index` | latent `[C, F, H, W]` | §II.6 |
 | 7 | `CLASS_UNIFORM_V1` | `misaka-palw/rand/class-uniform/v1` | 32 | 16 | 0 or `p` (declared) | item index | declared shape | any class-defined use, through its own table |
 
-- A domain's key is never reused.
+- A domain's key is never reused **for another domain**: each `K_d` keys one domain's words. D11's
+  table pin is keyed with domain 0's own key over a different message (the 8,192 table entries, not
+  an `enc_0` word message), so two messages of different meaning never share a key, and nothing
+  collides (finding G11 of the independent second implementation).
 - A new domain is a protocol change: a row here and a new `rand_set_id` (§Activation). Domain 7
   exists so that a new *use* of randomness in a class does not need one.
 - A pipeline declares each domain **at most once** (PALW-RND-7). A stage that needs two streams sizes
@@ -296,18 +304,29 @@ answer and never a better draw (the D11 argument). Grinding a seed costs a whole
 
 | Transform | Value `v` from word `w` | dtype, interval | Where it runs |
 | --- | --- | --- | --- |
-| `Uniform{b}`, `b ∈ {1, 2, 4, 8, 16, 32}` | `v = w` | `idx`, `[0, 2^b − 1]` | job layer (input kind) |
+| `Uniform{b}`, `b` = the domain's word width: 16 (domains 1–6) or 32 (domain 7) | `v = w` | `idx`, `[0, 2^b − 1]` | job layer (input kind) |
 | `Normal` (`b = 16`) | `v = PALW_GAUSS_Q24_V1[w]` | `i32` Q24, `[G[0], G[65535]]` | job layer (input kind) |
 | `Gumbel` (domain 0 only) | `PALW_GUMBEL_Q24_V1[w]` (D11's table, `b = 13`) | `i32` Q24 | the FP decode rule, outside any program |
 | uniform below `n` (recipe) | `⌊w · n / 2^b⌋`, bias `< n / 2^b` | in-program: `Mul`, `Div(Floor)` | program |
 | Bernoulli(`p`) (recipe) | `Compare(w < ⌊p · 2^b⌋)` | in-program | program |
 | class-defined distribution | `Gather(table, w)` over the class's own table | in-program | program |
 
+**`b` is the domain's word width.** 04b NF-26 requires a `Uniform` input's `bits` to equal its domain's
+word width, and the registered widths of the input domains are 16 and 32; so `b ∈ {1, 2, 4, 8}` never
+occurs and nothing defines a read of fewer bits than a word. A program that wants fewer takes them
+from the word in-program (the "uniform below `n`" recipe above). Domain 0's 13-bit word is the decode
+rule's, not an input kind's (finding G6).
+
 **The Gaussian table.** `PALW_GAUSS_Q24_V1[i] = RHAZ(Φ⁻¹((i + ½) / 2^16) · 2^24)` for
 `i ∈ [0, 2^16)`, where RHAZ rounds half away from zero. It is evaluated at 60 or more significant
-digits by a pinned generator script, in the manner of `scripts/palw-gumbel-table.py`, and pinned by
-`BLAKE2b-512(key = "misaka-palw/rand/gauss-q24/v1", the 65,536 entries as LE i32)`. The digest is fixed
-when the generator lands, not in this draft. Properties:
+digits by a pinned generator script (`scripts/palw-gauss-table.py`), in the manner of
+`scripts/palw-gumbel-table.py`, and pinned by
+`BLAKE2b-512(key = "misaka-palw/rand/gauss-q24/v1", the 65,536 entries as LE i32)` =
+`0b3c29bd5d81b9db…5285aa4` (in full: `consensus-vectors/rand-v1/domains.json`,
+`misaka_palw_gen::rand::GAUSS_Q24_V1_DIGEST_HEX`). Neither the digit count nor the tie rule decides
+any entry: the closest scaled entry to a rounding tie is `1.0·10^−5` from it (Gaussian) and `1.3·10^−4`
+(D11's Gumbel table), so a double-double generator gives the same table, and RHAZ (here) against
+round-half-even (D11's script) is a difference of wording only (finding G10). Properties:
 
 - it is data rather than arithmetic, exactly as PALW-EX-5 treats "a transcendental evaluated at
   registration";
@@ -342,11 +361,20 @@ RFC-0001 §A is Implementation Frozen, and nothing here changes a byte of it.
   - `enc_0 = seed ‖ le32(position) ‖ le64(lane)`;
   - `b_0 = 13`, `W_0 = 1`.
 - **The value and its consumer.** The value is `PALW_GUMBEL_Q24_V1[w]`, pinned by
-  `PALW_GUMBEL_Q24_V1_DIGEST_HEX`. Its consumer is the lane key `value·2^24 + ((T_q·G) >> 24)` in the
-  §A pipeline's step 6.
+  `PALW_GUMBEL_Q24_V1_DIGEST_HEX`. Its consumer is the lane key `value·2^24 + T_q·G` in the §A
+  pipeline's step 6 (RFC-0001 §A.3). `value` is the class's Q24 logit (§I.3.5), so `value·2^24` is
+  Q48; `T_q` and `G` are Q24, so `T_q·G` is Q48 too, and the key is `2^48·(v + T·g)`: Gumbel-max, a
+  draw from `softmax(v / T)`. **Corrected 2026-10-01 (finding G1 of the independent second
+  implementation).** An earlier text of this section, and the shipped function, carried
+  `((T_q·G) >> 24)`, which put the noise in Q24 beside a Q48 logit term and made the temperature inert
+  (0 non-greedy draws in 3,600 at `T = 1` on fp-v4's rows). The function, RFC-0001 §A.3 and
+  `consensus-vectors/fp-v4/` now carry the unshifted key; `T_q = 0` is unchanged byte for byte.
 - **`position`** is the committed logits row: row 0 is the one the last prefill position produced.
 - **Vectors.** D11's pinned table digest and the FP V4 golden vectors that exercise seeded selection
-  (`consensus-vectors/fp-v4/`) stand as domain 0's vectors. `rand-v1` adds raw index vectors
+  (`consensus-vectors/fp-v4/`) stand as domain 0's vectors. Since the correction above they do exercise
+  it: about half of the sampled selections in them are a lane the greedy rule would not choose (finding
+  G2: before, every expected lane was the greedy one, so no vector could tell a working sampler from an
+  inert one). `rand-v1` adds raw index vectors
   computed by the shipped `gumbel_index_v1`, so the two can never drift apart.
 
 **Where domain 0 differs from the generic layout, and why it stays.**
@@ -495,16 +523,37 @@ TokenRule { prefix: [u32], source: Prompt | Negative, suffix: [u32], pad: Option
 Binding = JobScalar(field) | JobTokens(TokenRule, u32 len)
         | StageRows { stage, drop: u32, pad_to: u32 } | StageFinal { stage } | StageRowCount { stage, drop: u32 }
 tir_pipeline_class_id_v1 = H64(key "misaka-palw/tir/pipeline-class-id/v1",
-                               borsh(pipeline) ‖ artifact_root ‖ tokenizer_id)
+                               le16(version) ‖ u8(profile) ‖ pipeline_root ‖ terms_digest ‖ artifact_root ‖ tokenizer_id)
+pipeline_root = H64(key "misaka-palw/gen/pipeline-root/v1",
+                    le32(|pipeline|) ‖ pipeline ‖ le16(#programs) ‖ graph_ir_root(program_0) ‖ … ‖ graph_ir_root(program_(P−1)))
+terms_digest  = H64(key "misaka-palw/gen/class-terms/v1",
+                    borsh(layouts) ‖ borsh(OutputSpecV1) ‖ borsh(offers))
 ```
+
+The class id binds every fact a court or an admission reads (finding G16): the pipeline's bytes and every
+program (through its `graph_ir_root`, 04b §3.6), every stage's layout (`PalwTirLayoutV1`: `max_context`,
+`checkpoint_interval`, `h_tile`, `commit_tiles`, `state_tiles`), the output header, the offers (the step
+counts, the job scalars' intervals, the prompt and negative-prompt maxima, the image slots, the source
+maximum, the forced prefix, the source floor and, per profile, the sampler, guidance and steps scalars of an
+image class or the pooling and widths of an embedding class), the profile and the version, the weights'
+`artifact_root` and the tokenizer. `borsh` is the class record's own field-by-field encoding
+(`PalwGenClassV1`, `palw_gen_class_v1.rs`; the grammar of each part, the profile offers included, is
+04b §15.14). The class-id vector is `consensus-vectors/tir-v2/class-id.json` (eight classes and fifteen
+single-field changes), generated by the independent second implementation
+(`misaka-palw-gen-ref2/scripts/gen_proposed_vectors.sh`, branch `rfc3/ref2`) and held against the consensus
+layer by `consensus/core/tests/palw_gen_vectors_v1.rs`.
 
 - **Edges are structural.** Each input element maps to one committed element of an earlier stage's
   output, to a job value, or to a zero pad. There is no arithmetic in an edge, and an edge reads only
   earlier stages. Admission proves every edge's upstream proven interval (∪ {0} when padded) ⊆ the
   input's `[lo, hi]`, and the shapes agree.
 - **One step tree** (Phase F D7, generalised). Stage-major, then per stage Phase F §2.5's order:
-  commit points by slot, `Fixed` checkpoints every `C`, `Hist` tiles every `h_tile`. A `Rows`/`Final`
-  program's `post` commit points appear at every position. Stage outputs are commit points, so
+  commit points by slot, `Fixed` checkpoints every `C`. **There are no `Hist` tile leaves** (finding
+  G14): a history row is the committed value of its `HistAppend` operand at an earlier position, and a
+  cone that reduces over the history is dissected (RFC-0002 F7, §II.2.1) or must fit the court whole,
+  so no `Hist` leaf is needed for a leaf to be adjudicated from leaves that precede it; `h_tile` is a
+  layout field with no leaf of its own (it still enters the class id). A `Rows`/`Final` program's `post`
+  commit points appear at every position. Stage outputs are commit points, so
   Phase F's invariant holds: *every leaf is adjudicated from leaves that precede it*. The first
   divergent leaf of the ladder is therefore always adjudicable.
 - **Admission.** Admission checks:
@@ -535,32 +584,67 @@ the step tree. It also adds a two-opening consistency check.
 ### I.3.2 The digest
 
 ```
-OutputSpecV1 { kind: u8, shape: [u32], meta: [u8] }        // meta per kind: sample rate/channels, fps, q, ...
+OutputSpecV1 { kind: u8, shape: [u32], meta: [u8] }        // meta per kind (§I.3.3)
 canonical bytes B = the output node's elements, row-major, each in the kind's element encoding (below)
 tile t      = the bytes of the node's lanes [t·tile_len, min((t+1)·tile_len, E)) — the node's step tiles
 leaf_t      = H64(key "misaka-palw/output/tile/v1", le32(t) ‖ bytes of tile t)
-output_root = H64(key "misaka-palw/output/root/v1", borsh(OutputSpecV1) ‖ merkle_root(leaf_0 … leaf_(n−1)))
+node(l, r)  = H64(key "misaka-palw/output/node/v1", l ‖ r)
+merkle_root = the root over leaf_0 … leaf_(n−1): level by level, neighbours paired with node(l, r);
+              an odd last node of a level is promoted to the next level unchanged (never duplicated,
+              never hashed with itself); one leaf is its own root, with no further hash
+output_root = H64(key "misaka-palw/output/root/v1", borsh(OutputSpecV1) ‖ le32(tile_len) ‖ merkle_root)
 ```
 
+- **The preimage binds the tiling.** `le32(tile_len)` is part of `output_root` (04b §15.7), so a root
+  names its tiling: one output at two tile lengths has two roots (finding G3).
+- **A tile's proof** is its sibling path, bottom-up, one hash for every level at which the tile's node
+  has a sibling (a level at which it is the promoted odd node contributes none). Verification
+  recomputes the leaf from `t` and the bytes, folds the path with `node`, binds `borsh(spec)` and
+  `le32(tile_len)`, and compares with `output_root`; the tile's byte length must be the one the header
+  and `tile_len` imply, and the path must be consumed exactly (finding G4; the proofs of
+  `consensus-vectors/output-v1/digests.json` pin it).
+- **A header is bounded** (finding G7; 04b §2.2's tensor caps, which the output node inherits).
+  `tile_len ∈ [4, 65,536]` lanes; `kind ∈ 0 … 5` (§I.3.3's numbering); every dimension in `[1, 2^24]`
+  and at most `2^28` elements; rank 1 (`Tokens`), 3 (`ImageRgb8`), 2 (`PcmI16`, `EmbeddingI32`), 4
+  (`VideoRgb8`), 1 – 4 (`TensorLe`); `meta` as §I.3.3 gives it. **The element count is checked as it
+  grows and saturates**: a header whose count passes `2^28` — a video `[2^24, 2^24, 2^24, 3]`, a rank-4
+  `[2^24; 4]` — is a named `Shape` refusal at the class preflight, at the registration admission and at
+  the preflight a node asks before it signs, never an arithmetic fault (finding G9: the first
+  implementation multiplied the dimensions unchecked, and a registrant's header reached it).
+  The refusal names are `UnknownKind`, `Shape`, `Meta`, `Count`, `Domain`, `TileLen`. Which of several
+  applicable refusals a header with several faults gets is not specified (no verdict depends on it;
+  accept and refuse never differ).
 - **The value domain.** Admission proves that the output node's interval lies inside the kind's value
   domain (for example `[0, 255]` for pixels), so every honest lane has a canonical encoding.
 - **A malformed lane.** A lane outside that domain is already a PALW-TIR-33 violation.
 - **The fault.** An executor whose step tile and output tile disagree is convicted by the new
-  structural fault **`TirOutputDigestMismatch { tile }`**. It needs two openings and one move, in the
-  pattern of Phase F's `TirLogitsTraceMismatch`.
+  structural fault **`TirOutputDigestMismatch { value_index }`** (discriminant 21), `value_index` the
+  lane, within the opened tile, at which the output node's committed step tile and the output tile
+  differ — the shape of Phase F's `TirLogitsTraceMismatch { value_index }`, and hashed into the
+  evidence id (finding G17). A lane outside the output node's proven interval is
+  `TirValueOutsideProvenInterval { value_index }` (PALW-TIR-33). It needs two openings and one move
+  (the output close, `GenOutputTile`, court proof tag 16, 04b §15.13): the output tile under `output_root` and the output
+  node's step tile of the same lanes under its stage's root; evidence that does not hold convicts
+  nobody.
 - **The execution root.** A tensor-output pipeline's execution root binds `output_root` where an LM
-  binds `full_logits_trace_root`.
+  binds `full_logits_trace_root`:
+  `H64(key "misaka-palw/gen/tensor-execution-root/v1", gen_job_id_v1 ‖ class_id ‖ le64(step_leaf_count) ‖ step_root ‖ output_root)`.
 
 ### I.3.3 Per output kind
 
 | Kind | Consensus bytes (element encoding) | Header (`OutputSpecV1`) | Presentation, never consensus |
 | --- | --- | --- | --- |
-| **Text** | the committed generated token ids, `u32` LE, cut at the committed stop or end of generation (RFC-0001 §A.3 step 7, ADR-0096 D6) — as the FP commitment already carries them; **no new digest** | tokenizer (class), count | UTF-8 detokenisation, stop-string trimming, chat formatting |
-| **Image** `ImageRgb8` | raw `u8`, HWC row-major, RGB, top-left origin, no alpha, no padding; values as the program emits them (no gamma conversion, no ICC) | `H`, `W`, `C = 3` | PNG/WebP/JPEG, metadata, colour profiles, thumbnails |
-| **Audio** `PcmI16` | PCM `i16` LE, interleaved by channel, frames in time order | sample rate, channels, frames | WAV/FLAC/Opus/MP3 containers, resampling, loudness normalisation |
-| **Embedding** `EmbeddingI32` | `i32` LE `[n, d]` row-major in the class's fixed point (`q` fractional bits); normalisation, if any, done in the program | `n`, `d`, `q`, normalised flag | float conversion (`v / 2^q`), similarity search, vector-DB formats |
-| **Video** `VideoRgb8` | raw `u8` THWC (frames, then image rows) | `T`, `H`, `W`, fps as a rational | MP4/WebM/GIF |
-| **Tensor** `TensorLe` | the node's dtype (`i8`/`i16`/`i32`) LE row-major | dtype, shape, `q` | — (latent-only outputs, §II.1 alternatives) |
+| **Text** (`Tokens`, kind 0) | the committed generated token ids, `u32` LE, cut at the committed stop or end of generation (RFC-0001 §A.3 step 7, ADR-0096 D6) — as the FP commitment already carries them; **a text claim commits no `output_root`** (its answer is its generated ids, bound in its execution root) | tokenizer (class), count; shape `[n]`, no `meta` | UTF-8 detokenisation, stop-string trimming, chat formatting |
+| **Image** `ImageRgb8` (1) | raw `u8`, HWC row-major, RGB, top-left origin, no alpha, no padding; values as the program emits them (no gamma conversion, no ICC) | shape `[H, W, 3]`, no `meta` | PNG/WebP/JPEG, metadata, colour profiles, thumbnails |
+| **Audio** `PcmI16` (2) | PCM `i16` LE, interleaved by channel, frames in time order | shape `[frames, channels]`, `meta = le32(sample_rate)`, `sample_rate ≥ 1` | WAV/FLAC/Opus/MP3 containers, resampling, loudness normalisation |
+| **Embedding** `EmbeddingI32` (3) | `i32` LE `[n, d]` row-major in the class's fixed point (`q` fractional bits); normalisation, if any, done in the program | shape `[n, d]`, `meta = [q, normalised]`, `q ≤ 31`, `normalised ∈ {0, 1}` | float conversion (`v / 2^q`), similarity search, vector-DB formats |
+| **Video** `VideoRgb8` (4) | raw `u8` THWC (frames, then image rows) | shape `[T, H, W, 3]`, `meta = le32(fps_num) ‖ le32(fps_den)`, both `≥ 1` | MP4/WebM/GIF |
+| **Tensor** `TensorLe` (5) | the node's dtype (`i8`/`i16`/`i32`) LE row-major | shape of rank 1 – 4, `meta = [dtype, q]`, `dtype ∈ {0 (i8), 1 (i16), 2 (i32)}`, `q ≤ 62` | — (latent-only outputs, §II.1 alternatives) |
+
+**Kind 0 and the digest.** `Tokens` has the same tile-Merkle `output_root` as every other kind (the
+vector `tokens/7` of `consensus-vectors/output-v1/digests.json`). No RFC-0003 claim uses it: a text claim
+answers with its generated ids, which its execution root binds. It exists for outputs that are id lists
+which must be named by a portable digest, such as RFC-0004's finalized outputs (§II.2.3) (finding G8).
 
 ### I.3.4 Why raw tensors, not a canonical PNG, WAV or MP4
 
@@ -574,6 +658,371 @@ Lossy formats (JPEG, Opus, H.264) are non-canonical by nature.
 So raw bytes are consensus. A gateway MAY serve a *reproducible PNG* (filter 0 on every row, stored
 deflate) that anyone can derive from the raw bytes, without making it consensus. Output bytes never
 ride the chain: the user's own node holds them (P1), and the court opens tiles.
+
+### I.3.5 The logits unit of a text class
+
+**Decided 2026-10-01, on finding G1 of the independent second implementation.** A text class's
+committed logits — the `Logits` output of a version-1 program, or of a pipeline's text stage (§II.2.1)
+— are in **natural-log units × 2^24 (Q24)**: the committed `i32` `v` stands for the real logit
+`v / 2^24`. RFC-0001 §A.3 measures every decode control that reads the logits' unit —
+`temperature_q`, the frequency and presence penalties and the logit bias — in Q24, the legacy classes'
+own fixed point, and D11's key (`value·2^24 + T_q·G`, §I.1.6) reads the committed integer as Q24.
+
+- **A convention of the lowering, not a field of the class.** A program says no unit (`logits` and
+  `logits_scheme_id`: spec 04b §15.12), and tir-lower's calibrated logit scale is a real number of its
+  own choosing (5.3·10^-9 … 7.2·10^-8 on nine tiny fixtures: not even a power of two). The lowerer
+  guarantees Q24 by ending a text program's `post` in the rescale to it, as a versioned lowering
+  change. The chain cannot check a unit; a class whose lowerer does not guarantee it mis-scales only
+  its own sampling. A class-declared unit was considered and not taken.
+- **What is offered to whom.**
+  - Every legacy class commits Q24: every control is offered.
+  - An IR or generative text class registered **before** the later fence that opens the free-prompt
+    lane to IR and pipeline classes is offered greedy selection, the repeat penalty, stop sequences
+    and constraints only. A job asking it for the temperature, a frequency or presence penalty or a
+    logit bias is refused by name (`DecodeControlNeedsQ24Logits`: the V4 walk skips it, V5 acceptance
+    refuses it), dormant with `palw_fp_decode_rules`.
+  - That later fence offers temperature, penalties and bias to a class **registered past it**, Q24 by
+    construction of the lowering the fence names. A class registered earlier stays refused, the live
+    SmolLM2 class among them: nothing on chain says what its unit is.
+- **Checked off chain**: a runtime pack's verification compares the class's logit scale with the
+  float reference.
+
+## I.4 The generative claim: a tensor job on the free-prompt lane
+
+**Decided 2026-10-01 (coordinator: Option B).** A generative class that can register but never carry a
+claim is not complete. A tensor job (`PalwGenJobV1`, §I.0: an image, an embedding) therefore reaches the
+chain as a **free-prompt commitment of FP job version 10**, follows the lane's commitment → claim →
+licence → panel → court flow, and — in this release — **earns nothing**: it is a *weightless claim*, as
+RFC-0004's evaluation claim (FP job version 9, spec 17 §17.8.4) is. A tensor claim that reaches `Final`
+says that a panel replayed the job and reproduced its step tree and its canonical output, and that no
+court convicted the executor. This section fixes what is carried, what the chain checks and derives at
+acceptance, what a claim reserves, what the panel and the court read, and which fence opens it. It is the
+contract the build follows (spec 04b §15.15) and what a second implementation computes.
+
+### I.4.1 The job version and the wire
+
+| FP job version | Job |
+| --- | --- |
+| 5 | V3 |
+| 6 | ADR-0096 D8's constraint job (named, unbuilt) |
+| 7 | V4 (RFC-0001 §A) |
+| 8 | V5 — a V4 job with images or a source (§II.2.1, §II.2.2) |
+| 9 | evaluation job (RFC-0004 §7.2) |
+| **10** | **tensor job** (this section) |
+
+Version 10 is provisional as 8 is (RFC-0001 may renumber at freeze); it binds nothing a network runs
+until the fence arms. A version-10 commitment is the lane's commitment, in the lane's layout:
+`PalwFreePromptCommitmentV3` over a job of the lane's one job type (`PalwFreePromptJobV3`) at
+`version = 10`, in the lane's payload (`PalwFpCommitmentTxPayloadV3`), under the lane's signature (ML-DSA-87
+over the claim id) — so the claim id is the lane's `fp_claim_id_v3` and every wrapper carries the job with
+no layout change. The job's Borsh is the V3 fields, then the **tail**
+
+```
+PalwGenJobTailV1 { seed: [u8; 32], body: PalwGenBodyV1 }      // after the V3 fields; no decode config, no V5 tail
+```
+
+and nothing else. The V3 fields are the job's envelope (§I.0) where the envelope has them, and canonical
+zeros where it has not — **one encoding per behaviour**, so a second spelling of one job is refused, never
+read:
+
+| lane field | tensor job |
+| --- | --- |
+| `network_domain`, `class_id`, `executor_bond`, `executor_pubkey`, `operator_id`, `anchor_block`, `anchor_daa`, `job_nonce`, `privacy_mode`, `prompt_mode` | the `PalwJobEnvelopeV1`'s, with the same meanings |
+| `tokenizer_id`, `prompt_token_ids_hash`, `prompt_tokens`, `decode_token_limit`, `max_context_tokens`, `sampling_seed`, `temperature_q` | **zero** — the class binds the tokenizer (§I.0), the body carries the text commitments, the seed is the tail's; a non-zero value is refused (`ShellNotCanonical`) |
+| `decode` | absent |
+
+The job the chain reads is the lossless reconstruction `PalwGenJobV1 { version: 1, envelope, seed, body }`,
+and **the job's id is `gen_job_id_v1` of it** (the lane's `fp_job_id_v3` of a version-10 job returns it), so
+no field of the envelope, the seed or the body can change after the fact. The version word decides whether
+the tail is read: no V3, V4 or V5 byte string decodes as a version-10 job, and every validator of those
+versions refuses version 10 by name (`UnsupportedVersion`) — a build below the fence refuses a tensor claim
+at its door exactly as it refuses version 9 or 8.
+
+### I.4.2 What a commitment carries
+
+| commitment field | tensor claim |
+| --- | --- |
+| `trace_root` | the **step root**: the one step tree's root over the class's stages, stage-major (04b §15.14: `step_root`) |
+| `output_root` | the **canonical output root** (§I.3.2) over the output node's canonical bytes at the output node's step tiles |
+| `schedule_root` | zero |
+| `execution_root` | `H64(key "misaka-palw/gen/tensor-execution-root/v1", job_id ‖ class_id ‖ le64 work_leaves ‖ trace_root ‖ output_root)` — **a function of the commitment's own fields**, which acceptance recomputes (`ExecutionRootNotItsParts`) |
+| `decode_tokens_executed`, `stop_reason` | `0`, `ExactBudgetReached` (one encoding) |
+| `work_leaves` | the step tree's leaf count — and the chain's own count of it (§I.4.5), never the executor's word |
+| `trace_manifest_root`, `trace_chunk_count`, `trace_retention_daa` | zero, `1`, zero (as Phase F's pipeline claims: the units open step leaves and nodes under `trace_root`; the chain derives retention as `accepted_daa` plus the minimum) |
+
+Because `execution_root` is recomputed from the roots beside it, a commitment cannot name a root its own
+parts do not produce — the court's first test (the binding's parts produce the claim's execution root) can
+fail for an executor only by lying about what it ran, and that lie is convicted at its first divergent leaf
+(§II.1.5.3) or by the output close (§I.3.2, `TirOutputDigestMismatch`).
+
+### I.4.3 The payload and the material
+
+The payload is the lane's. Under `PublicDa`, `prompt_token_ids` is the job's **prompt ids followed by its
+negative ids** (`prompt_tokens + negative_tokens` of them; the body's two hashes are each over their own
+list, in the network's form); under `PanelDa` the list is empty and the ids ride the capture served to the
+panel (RFC-0003's decision 12: an image job defaults to `PanelDa`). **Images never ride the chain**: an
+embedding's or an edit's image bytes (§II.4) travel to the worker and, with the capture, to the panel,
+bound by the `ImageInputRefV1`'s `input_root` the body carries — as V5's do.
+
+The panel's **material** for a tensor claim is its request frame — the job, its prompt and negative ids,
+its images — served under the lane's material transport (opaque bytes pulled by claim id; the lane bounds
+and deduplicates them and the consumer checks them). Nothing in the transport reads it: what binds it to
+the claim is the job id inside the execution root, so a frame of another job reproduces another root and
+convicts nobody. A seat holds the frame, replays the job over its held class
+(`gen_tensor_seat_judge_v1`) and files `Valid` iff the replay's execution root is the claim's. **A seat that
+finds a difference files nothing** (the lane's rule, ADR-0077 W10): a sampled verdict never slashes, and the
+fault is the court's question.
+
+### I.4.4 The doors
+
+Nothing opens below its fence — three gates, as every lane fence has (and as RFC-0004's version 9 has):
+
+1. **The isolation door** (transaction validation, height-free): where the ruleset carries
+   `palw_fp_job_v5`, a payload whose job is version 10 is checked by the tensor door
+   (`validate_palw_fp_gen_commitment_tx_v1`): it decodes as a version-10 payload, its shell is canonical,
+   its job is canonical in itself (`PalwGenJobV1::decode_canonical`'s rules, the network-free ones; the
+   modes; the seed's shape), its commitment's fields are §I.4.2's, its `execution_root` is its parts', its
+   ids (where carried) are the body's, its signature has the lane's length, and `work_leaves` is within the
+   structural cap. Where the ruleset has no `palw_fp_job_v5` — every shipped preset — the lane's own door
+   refuses the bytes by name.
+2. **The header-context door** (the block's height): a version-10 payload at a containing block below
+   `palw_fp_job_v5` is refused, so a build that schedules the fence and one that does not agree on every
+   transaction below it (the one refuses it here, the other at its isolation door).
+3. **The acceptance walk**: past the fence only, a version-10 payload that passes the walk's own checks —
+   the same bounds an FP commitment meets at its class's ladder, and the signature under the key it
+   carries — becomes a **`GenTensorCommitted`** object (the walk's product, as `FreePromptCommitted` is the
+   lane's: never serialized to a peer, object tag 87 in spec 17 §17.0's allocation) whose tensor job the
+   fold reads. Total over whatever was accepted: a payload that fails is skipped with its reason, never
+   rejected, so a peer's payload cannot invalidate the block that carried it.
+
+### I.4.5 What the chain derives and refuses at acceptance (the fold)
+
+The lane's arm checks the bond exactly as for any claim (it exists, the key is its own, it is not retiring,
+frozen or below the producer floor) and hands a version-10 commitment to the tensor branch, which checks,
+in this order — every refusal by name, none clamps or corrects:
+
+1. **the fences**: `palw_gen_v1` and `palw_fp_job_v5` in force at the accepting block (the second lock);
+2. **the class**: a registry row whose status is **`Active`** (not `Frozen`, not awaiting its activation
+   height, not reclaimed); a `gen_classes` row of a **tensor profile** (Image or Embedding; a text class
+   takes V4/V5, and a profile with no body is not built); and the class's verification-deadline admission
+   (ADR-0152 §4-quater V2), as the lane asks it of any claim. **The model registry's lifecycle is not
+   asked.** A pipeline's graph derives no priced work, so its lifecycle row opens as `Registered` and stays
+   there — the registry's ramp is the attempt lane's probes, which a pipeline has none of — and a gate that
+   asked the row would refuse every claim of every generative class (measured: `ClassNotAdmitting`, the
+   first chain-level run of this carriage). The lane's own bounds do the gating instead: **readiness** (below),
+   step 5 and §I.4.8. **A claim flows only once seats can replay it** (the coordinator's decision of 2026-10-01):
+   at least a panel's worth (`seat_count`) of *distinct operators*, never the executor's, hold the class with a
+   fresh readiness V2 possession proof — the registry's own five-clause predicate (active, above the floor, a
+   fresh row, free collateral for the readiness multiple) — else `GenClassNotReady`. Without it the lane would
+   accept a claim no panel can be drawn for, holding its executor's reservation and a slot of the class for the
+   whole bind window. (The outsider seat of a bought class is drawn from the base population and must hold the
+   class too to file `Valid`; the count above is the class's own operators.) **The floor is one shared
+   function**: `class_seating_v1` (`palw_class_seating_v1`) returns, for a class and an executor, each ready
+   operator once with its ready bonds, the executor's bond and operator excluded, and the panel's size. Lane
+   F's staged-enablement proposal (RFC-0002 Part II §II.7.5 Proposal A, approved 2026-10-01) makes it the one
+   door every class kind asks — IR, generative and composite — under a dormant fence `palw_class_seating`, and
+   adds an independence floor over the same map (at least `⌊seat_count / 2⌋ + 1` base-population operators
+   that are neither the registrant nor the executor); the floor above is its condition 1 and does not change;
+3. **the job against the class**: `palw_gen_job_resolve_class_v1` — the body kind is the profile, the modes,
+   the seed rule, every parameter in the class's offers, one image reference per slot at its size — and,
+   where the ids are held, `palw_gen_job_ids_admitted_v1` (hashes, counts, the class's token bound);
+4. **the work**: `work_leaves` equals the leaf count of the job's step space as the chain derives it from
+   the class's pipeline, programs and layouts and the job's facts (the court's own count,
+   `StepLeafCountNotCanonical`); a commitment whose count differs is refused, not corrected;
+5. **the class's capacity**: the class's claims in flight on the lane are fewer than the fence's
+   per-profile `max_inflight_claims` (§I.4.8), and the executor holds fewer than `⌈cap / 2⌉` of them not yet
+   licensed (T-2(a)'s per-bond share, over the lane's cap: the registry's `c_class` is a lifecycle row's, which
+   a pipeline class never has) — a generative class has no panel-room budget, so the cap and the share are
+   the fence's;
+6. **the work identity**: `work_id = H64(key "misaka-palw/gen/work-id/v1", class_id ‖ borsh(tail) ‖
+   executor bond)`; a live claim of it refuses (`DuplicateWork`). One inference is one claim per bond: the
+   same job under another nonce or anchor is the same work, and another bond's run of the job is another;
+7. **the reservation and the exposure ceiling** (§I.4.6);
+8. **the claim**: `source = FreePrompt { quanta: 0 }`, `pwu = 0`, no weight, no receipt rights, no escrow;
+   the roots as committed; `trace_chunk_count = 1`, `trace_retention_daa = accepted_daa + the minimum
+   retention`; the job's pin as the lane records it; the work identity; phase `Provisional`, the bind
+   deadline armed. From here the claim is any claim of its class: panel at the bind, receipts, licence,
+   `Final`, the court — and the lane's slash on a conviction.
+
+### I.4.6 Pricing: leaves are the work
+
+The canonical-work rule of the lane (ADR-0074 Decision 5: "leaves are the work") carries over unchanged for
+the unit: **a tensor claim's work is its exact step leaves**, counted by the chain (§I.4.5 step 4). That fixes
+what a claim costs its executor and its panel:
+
+- **reservation** — the lane's stage-1 rule on the claim's leaves at the class's registered
+  `slash_value_per_pwu`: `⌈work_leaves × slash_value_per_pwu / ρ⌉` with `ρ = 1`, through the weight-cap
+  reservation of the lane (`palw_claim_weight_reservation_of_v1`), held against the executor's committed
+  ledger room under the lane's exposure ceiling. A false claim is slashed like any other.
+- **no input is priced separately.** An image slot's stage is in the step tree and its leaves are in
+  `work_leaves`; the slot's `token_equivalents` and the source's `source_token_floor` are the V5 text lane's
+  (OQ13, OQ15 — **still pending user confirmation**, their recommended values the placeholders they are) and
+  nothing in a tensor claim reads them. A tensor class declares `token_equivalents = 0`.
+- **weight is a later fence.** A tensor claim has no quanta and no tickets: the lane's certification
+  (ADR-0075's `fp_certified_classes`) guards weight only and no drilled family certificate covers a V2
+  pipeline yet (Security and economic analysis: "Weight"), and the compute-priced era's work vector — OQ7's
+  classification of activation-by-activation `MatMul`s as `attention_prefill`, decided 2026-09-28 —
+  matters only where claims are priced in compute. When a later fence prices tensor claims, the unit is
+  already fixed: `quanta = ⌊work_leaves / quantum⌋` against the class's own canonical job
+  (`pwu_per_inference` at registration is the count of the class's most expensive offered job) and the panel
+  economics of "Security and economic analysis" (`(1 + replicas) × MACs`) are its price. **The requester's
+  payment to an executor is the gateway's, outside consensus**, in this release.
+
+### I.4.7 The court
+
+**The closes are the generative ones, and they are built.** A tensor claim's `execution_root` is checked
+against the binding a close carries (`PalwGenTensorBindingV1`), the class is the registry row the binding's
+job names, and the closes are `GenCone` (10) at a divergent leaf, the root claim (tag 69) and dissection at a
+dissected leaf (RFC-0002 F7 composed), and `GenOutputTile` (**16**: spec 17 §17.0 reserves 13–15 for
+RFC-0004's evaluation proofs; the discriminant is explicit) for a canonical output that is not the step
+tree's — under the generative court version the fence carries. The capture (`GenTensorCaptureV1`) is the
+accused's data availability, served over the opening lane within the claim's retention.
+
+**How a session is reached depends on the regime, and the first draft of this section missed it (finding
+G23).** Where bisection is played, a challenger opens `CourtOpened`, the ladder narrows to a leaf, and the
+closes above end the dispute; nothing more is needed. **Under the held regime (ADR-0103 Decision 1;
+testnet-12 from genesis) `CourtOpened` is refused for every claim**: the court's entrance is a one-move
+accusation, and the one that exists (`TirShardCourtAccused`, tag 62) names claims of IR classes only. A
+tensor claim therefore had **no court at all** on testnet-12 — its reservation could never be slashed, and the
+lane's one deterrent against a false execution would have been absent exactly where the lane runs. It is
+closed before the fence can open:
+
+**Decision 20 — `GenShardCourtAccused`, the generative one-move accusation** (`palw_gen_one_move_v1`; object
+tag 88, approved 2026-10-01). Tag 62's twin with the registry turned to `gen_classes`:
+
+```
+PalwGenOneMoveAccusationV1 { version: u16 = 1, claim, execution_root, trace_root, executor_bond, accuser_bond,
+                             verdict, proof: GenCone | GenOutputTile | GenDecodeToken, signature }
+session_id = H64(key "misaka-palw/gen/one-move/session/v1", le32(|domain|) ‖ domain ‖ le16(version) ‖ claim
+                 ‖ execution_root ‖ trace_root ‖ borsh(executor_bond) ‖ borsh(accuser_bond) ‖ borsh(verdict)
+                 ‖ le64(|borsh(proof)|) ‖ borsh(proof))
+signature  = ML-DSA-87 over session_id, context "misaka-palw/gen/one-move/accuse/mldsa87/v1"
+```
+
+- **Shape** (stateless, where it rides and again at acceptance): the version, a signature, an admissible
+  proof (`GenDissection` is a session's bottom and has no session here), a proof whose binding commits the
+  accusation's `execution_root`, an executor that is not the accuser.
+- **Acceptance**: the fence; the shape; the accuser's registered key over the session id; a live claim of a
+  generative class whose executor and roots are the accusation's; and the **verdict re-derived** by
+  `adjudicate_close_proof_v2` — the court close's own function: its cost ceiling, the network's prompt form,
+  the claim's `gen_classes` row, the binding's job and roots against the claim's — at the block's court and
+  ladder, refused if it differs from the declared one in either direction.
+- **Fold**: the legacy one-move court's gates in their order (a live claim, the executor and the roots, an
+  accuser that is not the producer, the open-session rule, an Active accuser at or above the floor), then
+  `ExecutorGuilty` convicts (the claim voids as `CourtFraud` and its executor is charged),
+  `ChallengerDefeated` charges the accuser what a false accusation costs, and a cone accusation at a
+  **dissected** leaf declares `ExecutorGuilty` and opens the dissection at that leaf — the responder's
+  generative root claim (tag 69) is its first move.
+- It is a court opening: it spends the block's adjudication slot (its evaluation is bounded by the court's
+  limits, not its bytes), is dropped by name below `palw_gen_v1`, and rides at every height.
+
+**What a one-move accusation can carry (finding G24; decision 22, approved 2026-10-01).** The accusation is
+one object in one lifecycle carrier — about 100,000 bytes (`PALW_OBJECT_CHUNK_MAX_BYTES`) — and the chunk path
+for larger objects is the certification lane's allow-list (`palw_chunked_object_kind_admitted_v1`:
+`FamilyCertified` only); a close's own chunks (`CourtCloseDeclared`/`CourtCloseChunk`, up to 32 × 100,000 B,
+PALW-TIR-38) are keyed to a session's two bonds, and a chain that plays no bisection opens a session only by
+naming a dissected leaf (ADR-0103 Decision 5). So on a held-regime chain a lie is convictable in one move
+**only at a leaf whose close fits one carrier**. This binds RFC-0002's IR classes equally, **including the live
+ones on testnet-12, and is recorded as a known limitation there**: a lie at a leaf whose close exceeds one
+carrier is **refused its licence but not slashed** (the seats replay it and file no receipt, so the claim never
+reaches `Final` and its reservation is released when the receipt window lapses; the liar loses fees and time,
+no collateral). Tag 62's semantics below the fence are not changed.
+
+**Decision 22 — the held leaf challenge** (`HeldLeafChallengeDeclared`, object tag 90; fence
+`palw_held_close_chunks_v1`; spec 04b §15.15.6 is normative). One generic object, for IR and pipeline classes
+alike, **in place of a new chunk table keyed to (claim, accuser bond)**: a 60-site state surface (root, delta,
+carriage, sweeps) is avoided by reusing the one the court already has. The accuser signs a named-leaf
+challenge that carries the declaration of its close — the leaf, the claim and its roots, the two bonds, the
+chunk count and the digests of each chunk and of the whole. The fold opens a session at `Terminal` on that
+leaf exactly as ADR-0103 Decision 5 does for a dissected leaf (the session id derives from the claim, the
+roots, the two parties and the space, so it is **keyed to (claim, accuser) by construction**) and writes the
+**challenger-side close group** the existing `CourtCloseDeclared` would have written; the close then rides the
+court's own `CourtCloseChunk` objects (up to the carried cap, `min(max_close_chunks, 32) × 100,000` B), the
+completing chunk assembles it, the acceptance layer adjudicates it at the named leaf, and a conviction applies
+through the `CourtClosed` arm. Tag 62 and tag 88 are untouched, and below the fence nothing changes.
+
+*How it bounds griefing in the held regime.* **The accuser alone bears the assembly clock** (`4 · count` DAA,
+at most 128, inside the session's backstop) **and the deposit** (`count` carriers' carriage, a charge against
+its own bond when the session ends without the close it pinned); the object pays the declaration's grading
+rent. **If it never completes the close** — or completes one that does not decode or does not adjudicate to
+`ExecutorGuilty` — the deposit is forfeited, the accuser is charged what a lost held dissection costs, **the
+claim is not convicted, voided or slashed**, and its licence anchor moves to the close so the seats keep a whole
+challenge window (a decoy cannot carry a lie to `Final`). **Concurrency is capped per claim** (one challenge,
+then one per panel seat, at most `1 + seat_count`; a decoy of the producer's holds off no seat), per network
+(`palw_max_concurrent_court_sessions_v1`, each session holding the accuser's reservation) and per block (one
+close completion graded). The executor is not put on a clock for a close the accuser has pinned: while the
+challenger's declared close stands the session waits at `Terminal`.
+
+**Until the fence is armed**, PALW-GEN-21 refuses registration of a pipeline class on a held-regime network
+whose exact terminal close exceeds one carrier less the accusation's framing; once armed the bound is the carried
+cap. The reduced image profile (§II.1.6) is far inside one carrier (a few KB a cone); an Example-C-sized class
+(weights alone are `T · K` bytes a tile, §II.1.5.4a) needs the fence. The fence arms with the next flag day (the
+generative, decode or improvement one); the live IR classes on testnet-12 are unchanged now.
+
+**Evidence.** Through the real fold, over a real execution of the toy image class (its weights, worker, step
+tree and output digest): the worker's binding is the commitment's execution root and the chain's own count of
+the job's leaves; a planted output lie is convicted by the output close and a step-tile lie by the cone
+close; an honest claim accused is acquitted and its accuser charged; and every refusal above is named.
+
+### I.4.8 Capacity and denial of service
+
+A tensor claim costs a panel a full replay (§Security and economic analysis). Four limits bound what an
+attacker can ask of the seats: the lane's reservation by leaves against the executor's collateral
+(§I.4.6); **a per-class cap on claims in flight** — `max_inflight_claims` in the fence's per-profile
+ceilings (`PalwGenProfileCeilingsV1`), hashed into the fence's value as every ceiling is — because a
+generative class has no panel-room budget (its registry lifecycle row is `Registered` and never admits, and
+the fold does not ask it); **a per-bond share of that cap** — one bond holds at most `⌈cap / 2⌉` of the
+class's claims not yet licensed (T-2(a)'s rule over the lane's cap), so one executor cannot take every slot
+and refuse the others; and the class's **status** — a claim is taken only while it is `Active`. The drill's
+cap is 16 for every profile; **the network's value is provisional until the first profile's corpus is
+measured** (OQ5's discipline) and is the fence's to set.
+
+### I.4.9 Which fence opens it
+
+**`palw_fp_job_v5`, over `palw_gen_v1`.** The lane table (Activation plan) says it in one sentence: the
+free-prompt lane opens for a pipeline class at its own later fence, and "for a pipeline class that lane is
+FP Job V5's (`palw_fp_job_v5`)". A tensor job is a pipeline class's job, so it takes that lane's fence;
+the node already names the pair (`palw_gen_lane_open_v1`: `palw_gen_v1` and `palw_fp_job_v5` in force).
+
+- **One lane, one fence.** Every lane rule a pipeline class's claim depends on is shared between its text
+  and its tensor jobs — the class registry row (`palw_gen_v1`), the commitment door, the seat's readiness
+  and replay, the court — so a second fence would be a second flag day, a second drill and a second
+  Some-only fingerprint entry for one door, and would add no safety: nothing opens below either.
+- **The fence's prerequisites fit.** `validate_palw_fp_job_v5_v1` requires `palw_gen_v1` and
+  `palw_fp_decode_rules` at or below it. A tensor job reads no decode rules, but arming the decode rules
+  first is already the order, and the pair costs nothing.
+- **Which job versions the walk admits is a property of the build, not of the height.** This release's
+  walk admits version 10 past the fence and skips version 8 whatever the height; V5 joins it in the
+  release that also confirms OQ13 and OQ15's price. The tensor lane therefore does not wait for the V5
+  text lane's economics, and the fence's name stays the one the lane table gives it.
+- **The fallback.** Should the user want tensor jobs open while V5 must stay shut *by a fence value*
+  rather than by a release, a dedicated fence (`palw_gen_job_v1`, the same shape) replaces
+  `palw_fp_job_v5` in exactly one function (`palw_gen_lane_open_v1`), one validator and one Params field;
+  nothing else in the carriage moves.
+
+### I.4.10 What is not here
+
+Weight and rewards for tensor claims (§I.4.6); sampled seat verification of a pipeline claim (a seat
+replays the whole job, as §Security's panel economics assume — the lane's interval sampling is a later
+optimisation for long classes); V5's walk (version 8 stays skipped, §I.4.9; a text pipeline claim's
+one-move accusation is built but unreachable until it opens); several images in one claim (a job is one
+image: one inference, one claim); audio and video bodies; the requester's payment; and a one-move
+accusation larger than one carrier (G24: the held leaf challenge, §I.4.7, decision 22).
+
+### I.4.11 Allocations
+
+Every number the carriage takes, in the spaces spec 17 §17.0 allocates for every branch:
+
+| Space | Value | Note |
+| --- | --- | --- |
+| FP job version | **10** | the tensor job (§I.4.1) |
+| consensus object tag | **87** `GenTensorCommitted` | the walk's product, never serialized; approved 2026-10-01 |
+| consensus object tag | **88** `GenShardCourtAccused` | the generative one-move accusation (§I.4.7); approved 2026-10-01 |
+| consensus object tag | **90** `HeldLeafChallengeDeclared` | the held leaf challenge, generic for IR and pipelines (§I.4.7, decision 22); approved 2026-10-01 (89 is RFC-0004's `CourtEvalRootClaimed`) |
+| court proof tag | **16** `GenOutputTile` | explicit discriminant; 13–15 are RFC-0004's |
+| fence | `palw_fp_job_v5` over `palw_gen_v1` | the per-profile `max_inflight_claims` is in `palw_gen_v1`'s value (§I.4.8) |
+| fence | `palw_held_close_chunks_v1` | dormant, a bare height; requires `palw_tir_v1` and `palw_held_context` at or below it; arms with the next flag day (§I.4.7) |
+| keys and contexts | `"misaka-palw/gen/work-id/v1"`, `"misaka-palw/gen/one-move/session/v1"`, `"misaka-palw/gen/one-move/accuse/mldsa87/v1"`, `"misaka-palw/held-close/challenge/v1"`, `"misaka-palw/held-close/challenge/mldsa87/v1"` | |
 
 ---
 
@@ -614,7 +1063,7 @@ holds.
 | prompt | ids under the class tokenizer, **without** the class's template tokens (the class adds them, §3.4); the gateway pre-truncates and says so | `PromptTokenOutOfRange` (id ≥ `token_bound`), `PromptTooLong` (> the class maximum) |
 | negative prompt | ids, or empty; empty means "the class's unconditional prompt" | `NegativePromptNotOffered` (non-empty on a class without true CFG), `PromptTokenOutOfRange`, `PromptTooLong` |
 | guidance | one grid index `guidance_q = round(16 · g)`; a class declares `[g_min, g_max]`; a class with a fixed or distilled guidance declares a single value | `GuidanceOutOfRange`, `GuidanceNotOffered` |
-| seed | any 32 bytes (`PalwGenJobV1.seed`); gateways map an integer `n` to `le64(n) ‖ 0^24` | — |
+| seed | any non-zero 32 bytes (`PalwGenJobV1.seed`; the all-zero seed is the deterministic classes', §I.0); gateways map an integer `n` to `le64(n + 1) ‖ 0^24` | `SeedRequired` (all zeros on this class), `SeedNotUsed` (non-zero on a class that draws none) |
 | sampler/scheduler | the class's `sampler_id = H64(key "misaka-palw/image/sampler/v1", descriptor text)`; the math is in the program, and the descriptor is the registrant's label | `SamplerNotOffered` |
 | steps | an element of the class's offered set (at most 8 values, each ≤ 64) | `StepsNotOffered` |
 | resolution | exactly the class's `width × height` | `ResolutionNotOffered` |
@@ -854,7 +1303,8 @@ Example A (§*Compute*) has about 6.8·10^7 leaves (`≈ 2^26`), within a ladder
 #### 5.4 Tile cones against the court ceilings
 
 The terminal tile must stay within ≤ 16 Mi MACs, ≤ 8 committed operands and the close-byte ceiling
-(≈ 16.8 MB on testnet-12). Opened committed values cost 4 bytes a lane, and weights 1 byte (int8,
+(≈ 16.8 MB on testnet-12 — **but see §5.4a: what a close can actually carry is 3.2 MB**, and every
+"fits" in the table below that rests on the larger number is re-judged there). Opened committed values cost 4 bytes a lane, and weights 1 byte (int8,
 stored output-major, Phase F §2.10). Parameterised, with **example** numbers for `d = 3,072`,
 `d_head = 128`, MLP ratio 4 and `N_tot = N + L = 4,096 + 512`:
 
@@ -873,6 +1323,88 @@ image tokens, **opened bytes bind, not MACs**. One head's K and V cost `8 · N_t
 which stays under the ceiling up to about **15,600 tokens at `d_head = 128`** (about 31,000 at 64),
 leaving margin for queries and paths. With 16× total compression (8× VAE, 2×2 packing) that is about
 4 MP: 1024² and 1536² fit, while 2048² (16,896 tokens) does not.
+
+#### 5.4a Which demand model prices an image cone, and what a close carries (FR-22, resolved 2026-10-01)
+
+Lane H's corpus (FR-22) found that §5.4 and the code disagree: this section sizes cones with element-exact
+demand against a 16.8 MB close, while the code prices a tile by **box demand** (spec 04b §10.3) and bounds a
+carried close at **3.2 MB** (PALW-TIR-38). They are three different quantities with three different rules,
+and §5.4 conflated them:
+
+1. **The work a tile costs the court — box demand, kept.** The court's tile ceilings (16 Mi MACs, the
+   operand count, the evaluation-work limit) are checked against the box rule of spec 04b §10.3, and image
+   cones are admitted under it (the release's rules, or ref2's H7 row past `palw_tir_fence2`, which changes
+   only the `TopK` row; a diffusion transformer has no `TopK`, so the two coincide for it). The court itself
+   evaluates element-exactly, so box pricing is conservative: an attention-output tile of `T` lanes is
+   charged `T · N · (dh + 1)` MACs where the exact figure is `(⌈T / dh⌉ + 1) · N · dh + T · N`. An
+   element-exact (range-aware) admission price is a consensus-visible change — a registration it admits and
+   the box rule refuses — so it is a fence value in H7's style (lane H's **C2**), not a reinterpretation.
+   **The reduced profile and Example-C do not need it; it is needed from about 4,000 tokens** (table below).
+2. **The bytes a close carries — element-exact reads, never box.** PALW-TIR-38 prices a close from the
+   court's read set (`TirCloseDemandV1`: an abstract twin of the demand evaluator over element sets, each read
+   priced as the close carries it). The pipeline admission's check today (`generative close bytes as carried`)
+   is the cheaper **necessary** condition — the stage view's opened bytes plus a 16 KiB frame — and the
+   sufficient measure, the twin generalised to a pipeline's stages, is **PALW-GEN-20** (built with step 6;
+   a class registers on a network that arms it only when its worst close is measured by the twin).
+3. **The ceiling on that number is 3.2 MB, not 16.8 MB.** 16.8 MB is the testnet-12 ruleset's
+   `max_close_bytes` (202 chunks); what the fold assembles is `min(max_close_chunks, 32)` chunks — the state
+   row's bitmap — of at most 100,000 bytes (`palw_tir_carriable_close_bytes_v1`): **3,200,000 bytes**
+   (PALW-TIR-38, the decision of 2026-09-28). §5.4's table was computed against the first.
+
+**What a close opens, per cone** (a committed lane is four bytes in a leaf preimage, a weight one byte; the
+frame is 16 KiB; paths add about 3 KB a contiguous run):
+
+| cone (tile `T`) | opened bytes | binds on |
+| --- | --- | --- |
+| q/k/v, MLP-up, attention-output and any other projection (contraction `K`) | `4K + T · K` | the weights: `T · K` |
+| MLP-down (contraction `4d`) | `16d + T · 4d` | the weights |
+| attention-output (one head, `N` tokens, head dimension `dh`) | `8 · N · dh` (K and V of the head) + queries and statistics | **the head's K and V, whatever `T`** |
+| latent update, modulation, norms | a few tiles of the row | nothing |
+
+The largest tile under 3.2 MB (16 KiB frame, four runs of paths) and, beside it, the largest attention-output
+tile under 16 Mi MACs by each price:
+
+| class | tokens `N` | `dh` | K,V of a head | projection `T` (`K = d`) | MLP-down `T` | attn-out `T`, box | attn-out `T`, exact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| reduced profile (§II.1.6): `d = 64`, 4 heads | 24 | 16 | 3.1 KB | 49,548 | 12,384 | 41,120 | 349,514 |
+| Example-C-sized: `d = 1,536`, 24 heads | 1,024 | 64 | 0.52 MB | 2,060 | 512 | 252 | 8,128 |
+| SD3-medium at 1024² | 4,250 | 64 | 2.18 MB | 2,060 | 512 | **60** | 1,920 |
+| Flux at 1024² (`d = 3,072`, 24 heads) | 4,608 | 128 | **4.72 MB** | 1,028 | 254 | **28** | 1,720 |
+
+The numbers say, in the order of the coordinator's questions:
+
+- **Which model for image cones: box for work, element-exact for bytes.** The box rule's cost is leaf count,
+  not safety: at SD3-medium's 1024² a 60-lane attention-output tile is 109,000 leaves per block-step
+  (4.6 M per step against the 2^22 per-position cap); exact pricing allows 1,920 lanes (6,375 leaves). That
+  is C2's case, and it opens above ~4,000 tokens. Below it (Example-C: 252-lane tiles, 6,241 leaves per
+  block-step, ~0.59 M leaves a step, ~4.7 M a job of eight steps) box pricing admits the class.
+- **Close sizes at the sizes that matter.** The reduced profile's closes are a few kilobytes at most (a projection
+  tile of `T` lanes at `d = 64` opens `4K + T · K`: 4.4 KB at `T = 64`). At Example-C size the weights bind, not the attention: a
+  projection tile of 1,024 lanes opens 1.6 MB, an MLP-down tile of 512 lanes 3.1 MB, and a head's K and V
+  0.52 MB; at SD3-medium 2.18 MB; **Flux at 1024² does not fit** (4.72 MB of K and V alone).
+- **Tiling that fits the existing cap (decision).** The tile is a per-commit-point layout choice
+  (`commit_tiles`), so no cap change is needed for the first profile: **(a)** a projection or MLP tile is
+  chosen by its weights, `T · K ≤ 3.1 MB` — at `d = 1,536`: projections `T ≤ 2,060` (use 1,024), MLP-down
+  `T ≤ 512`; **(b)** an attention head's K and V are opened whole whatever the output tile (every output
+  element of a head reads all of them), so **tiling cannot shrink them**: they fit while `N · dh ≲ 390,000`
+  (`N ≤ 6,182` at `dh = 64`, `N ≤ 3,091` at `dh = 128`); past that the committed-partial lowering of §5.5 (key
+  chunks, committed row maxima and denominators) is the no-protocol-change route, and a dissection over a
+  declared axis (§5.6, C3) the protocol one; **(c)** the VAE's mid-block attention and GroupNorm statistics
+  follow §5.5 unchanged.
+- **A cap change only with numbers.** Widening the bitmap (32 → at most 64 chunks, 6.4 MB) is a consensus
+  change under a court version; it would admit Flux-class heads at `dh = 128` up to ~6,000 tokens (K,V
+  `8 · N · dh` ≤ 6.1 MB), at the price of every close carrier. **Not proposed**: nothing in scope needs it —
+  Example-C is at 0.52 MB, SD3-medium at 2.18 MB — and each chunk is a carrier-paid transaction. Revisit with
+  C2 and C3, when a class that needs it exists to be measured.
+- **The one-move limit is stricter than any of this** (§I.4.7, G24): on a held-regime chain a pipeline class is
+  convictable in one move only where a close fits one carrier (~100 KB), which a 1,024-lane weight tile
+  (`T · K = 1.6 MB`) does not. Until the held leaf challenge (decision 22, fence `palw_held_close_chunks_v1`) is
+  armed, PALW-GEN-21 bounds a class's closes by one carrier on such a chain; the reduced profile is inside it (a
+  few KB a cone), Example-C is not.
+
+**UNet families** need a per-occurrence carry signature (lane H's **C1**: NF-5's single carry signature,
+NF-4's eight carries and NF-21's re-committed skips block them); RFC §3.5 already defers it as "carry
+pass-through". The first profile is a transformer (MMDiT), so it is unaffected; C1 is not scheduled here.
 
 #### 5.5 What does not fit, and the fix that needs no protocol change: committed partial reductions
 
@@ -948,6 +1480,12 @@ is recomputed, never replayed.
 - **Job values** (guidance, steps, prompt ids) are checked at acceptance: they are refused by name and
   never convicted.
 - **The output digest.** `TirOutputDigestMismatch` convicts the executor.
+- **A lane outside its node's dtype** (finding G21, decided 2026-10-01). The step tree's leaf hash is over
+  the four-byte lanes as committed — a lane is the value's low 32 bits whatever the dtype — so an
+  executor that commits one (it hashes its own tree with its own code) has a leaf that opens and proves
+  under its stage's root, and PALW-TIR-33's interval check convicts it. A hash that refused such a lane
+  would make the leaf unprovable (`LeafNotProven` convicts nobody) and let the executor escape. The court
+  reads disclosed lanes without judging them and hashes them as committed (04b §15.14).
 - **A challenger cannot manufacture any of these.** The values are opened against the executor's
   roots.
 
@@ -1048,6 +1586,175 @@ the reference pipeline, and record the source:
 | 9 | reference pipeline: class and library version, default dtype, fp32 reproducibility, attention backend | *Fidelity* |
 | 10 | variants: distilled vs base checkpoints; editing and reference-image inputs (for a later body) | classes, §II.4 |
 
+### 6. The first image profile (activation step 6): design
+
+**Decided 2026-10-01 (coordinator, step 6 after the carriage).** The first image profile is the **SD3 / MMDiT
+family on a reduced fixture**, lowered by new reusable feature lowerers, held to a same-noise float
+reference, and registered as a pipeline class. It is a *lowering and fidelity* step: it changes no consensus
+rule, and it is judged by the freeze criteria of RFC-0002's manner (three-way bit identity, measured fidelity,
+every cone within the ceilings).
+
+**Scope and ownership.** Everything is new files in `misaka-palw-tir-lower` (`wt-rfc3-lower`, branch
+`rfc3/lower`, merged into `rfc3/fp-v5`); lane G owns the generic frontend (`spec.rs`, `hf_config/*`, branch
+`tir/generic`), which this step **does not refactor**. The lowerers take a typed `GenSpec` (FR-22's skeleton:
+a DiT or UNet denoiser, the sampler, the latent, the text taps, the VAE) built from the diffusers configs by the
+fixture harness; its reader for `model_index.json` plus each component's `config.json` (`_class_name`, not
+`architectures`) is the generic frontend's to adopt later, so the lowerer interface is **configuration in,
+`TirProgramV2` stages and a weight binder out**, and a real checkpoint changes numbers, not shape.
+
+**The fixture** (diffusers 0.40, `HF_HUB_OFFLINE=1`, never `from_pretrained` on a hub id; tiny seeded random
+configs; **parameter counts computed on the meta device first, one model per subprocess**, the host's
+watchdog kills a Python process over 12 GB):
+
+| component | diffusers class | reduced configuration |
+| --- | --- | --- |
+| denoiser | `SD3Transformer2DModel` | latent 8×8×4, `patch_size = 2` (16 image tokens), 2 joint blocks, 4 heads of 16 (inner dimension 64), `joint_attention_dim = 32`, `caption_projection_dim = 64`, `pooled_projection_dim = 32`, `qk_norm = None` |
+| text | `CLIPTextModelWithProjection` | hidden 32, 2 layers, vocabulary 64; **prompt ids are the job's** (no tokenizer: the harness feeds ids, and the pipeline's `prompt_embeds` path is the reference's) |
+| VAE | `AutoencoderKL` | `block_out_channels = (8, 16)`, `layers_per_block = 1`, 4 latent channels, 4 groups; the decoder is the program |
+| sampler | `FlowMatchEulerDiscreteScheduler` | `shift = 3.0`, offered step counts `[2, 4]` |
+
+**Stages** (`TirPipelineV1`): (0) the text encoder — an existing causal-rows lowering, its final rows and
+pooled vector committed; (1) the **denoise scan** — `TripRule::JobSteps`, the carry the concatenated
+text + image stream `[L + N, d]` (NF-5 holds), the latent a global `Fixed` state written in `post`
+(`StateWrite`, NF-29), the initial latent a `Random { Normal }` input, `σ` and the timestep coefficients
+pinned integer tables per `(steps index, position)`; (2) the **VAE decoder** — a chain of single-position
+stages, the last clamping and transposing to `ImageRgb8`. **CFG is the second iteration** (a batch axis of
+two, or two positions: lane H's C4): the first fixture is guidance-free, so the lowerers are validated one
+at a time.
+
+**The new feature lowerers** (each a library function over the existing builders, one file each; the
+vocabulary is FR-22's):
+
+| lowerer | recipe over the 25 primitives | lossy sites |
+| --- | --- | --- |
+| `CONV_DENSE_V1` | `Concat` zero row, `Gather` im2col by a pinned index table (a param, clamped for the interval proof), `Reshape`, `MatMul`, the narrowing | 1 |
+| `NORM_GROUP_SPATIAL_V1` | i64-wide `ReduceSum`s; **row partials `[H, G, 2]` committed** (§5.5) so no cone reads a whole tensor; `Log2Floor` + `IntRsqrt`; `γ`, `β` in the narrowing | 2 |
+| `ACT_TABLE_V1`, `EMBED_TIMESTEP_TABLE_V1` | SiLU/GELU as `Gather` of a pinned table; the timestep sinusoid evaluated at registration and gathered by the step index | 1–2 |
+| `MOD_ADALN_V1` | `MatMul(SiLU(c), W)` committed; `Slice` chunks; `layer_norm_exact`; `Mul(ONE + scale)`, `Add(shift)`; `x + gate · f(x)` | ~3 |
+| `ATTN_JOINT_STREAMS_V1` | per-stream q, k, v; `Concat`; one attention over the joint stream with committed row maxima and denominators; `Slice` back | ~4 |
+| `PATCH_EMBED_V1` | patchify as `Reshape`/`Transpose`, the embed as `MatMul`, the learned position table cropped to the grid | 1 |
+| `GEN_SAMPLER_AFFINE_V1` | `x' = StateWrite(x + HAFZ(dσ_i · v / 2^24))` | 1 |
+| `GEN_STAGE_VAE_V1` | resnet blocks with `NORM_GROUP_SPATIAL_V1`, nearest upsample, conv; the output stage `Clamp(Div_HAFZ((y + ONE) · 255, 2 · ONE), 0, 255)` | ~8 a block |
+
+**Fidelity** (RFC §Fidelity): the harness runs the integer pipeline and the diffusers float pipeline **fed the
+integer run's noise** (`PALW_GAUSS_Q24_V1` words divided by `2^24`) with the same prompt ids, the same sigma
+table and the same steps, and reports the latent trajectory error per step, the final image's maximum and
+RMS error and its PSNR, over a fixed set of seeds. **Thresholds are measured first and frozen after** (the
+RFC sets them in Phase A of the profile): nothing is written down as a target before the first measured run.
+A block-by-block float check (each lowerer against its diffusers module on the same weights) comes before
+the pipeline's, so a lossy site is attributed to its lowerer.
+
+**The court battery on the tiny pipeline** (the step-5 battery, over this class): a planted fault at every
+commit-point kind — projection, attention output and its statistics, MLP, modulation, norm partial, latent
+`StateWrite`, timestep embedding, convolution, VAE output — forged noise, a forged edge, a forged digest, an
+out-of-interval lane (G21: convicted by PALW-TIR-33), each convicted at its leaf by the cone or output close
+**and** through the carriage (a one-move accusation over the claim, §I.4.7). The close sizes are measured by
+the pipeline twin (PALW-GEN-20) and must sit under both ceilings: 3.2 MB carried, and the one-move carrier
+(PALW-GEN-21) — measured on the built fixture (§6.1): 3.6 KB to 73.7 KB, every cone-closable kind under one carrier.
+
+**The §II.1 checklist** is completed *for the fixture* (every item from the diffusers 0.40 classes and
+configs, sourced to the file) and for the real SD3-medium **only as far as the model cards and configs can be
+read offline** — the items that need a download (licences, redistribution, default resolutions) stay open
+and are named as such.
+
+**Deferred, and why.** UNet families (lane H's C1, per-occurrence carry signatures; RFC §3.5); the
+range-aware admission price (C2) and dissection over a declared axis (C3), needed from ~4,000 tokens
+(§5.4a); the profile ceilings for real sizes (C5); CFG as a batch axis (the second fixture); real-checkpoint
+conversion (the lowerer interface only); **audio** — five corpus entries are blocked on `JobAudio` and the
+audio ceiling set (RFC §II.5), which is scheduled **after step 8**.
+
+**Order**: the fixture generator and the float reference; each lowerer with its own float check; the pipeline
+assembly and class declaration (`gen_declare_layout_v1`: the layouts the gate admits); the integer run
+against the float run (the measured fidelity); the court battery; the record.
+
+### 6.1 As built — the first image profile, recorded 2026-10-01 (lane D)
+
+Everything below was built and measured on the reduced fixture; nothing in it changes a consensus rule, and the whole
+profile stays dormant behind `palw_gen_v1`. Sources: `misaka-palw-tir-lower/src/diffusion/*` (branch `rfc3/lower`, merged
+into `rfc3/gen-claim`), `tests/diffusers_sd3.rs`, `misaka-palw-sdk/tests/gen_sd3_class.rs`,
+`tools/gen_diffusers_sd3_fixture.py`. The fixture is diffusers 0.40.0 (`SD3Transformer2DModel` 284,304 parameters,
+`CLIPTextModelWithProjection` 20,736, `AutoencoderKL` 43,619; BF16; seeded; generated offline, one model per subprocess).
+
+**The pipeline** (`TirPipelineV1`, 13 stages; every edge's shape, dtype and interval proved by `validate_pipeline`):
+`text_rows` and `text_pool` (the HF frontend's causal CLIP lowering, `Rows` and `Final`), `denoise` (`JobSteps`; the
+`Random { IMAGE_INIT_NOISE_V1, Normal }` input, the latent a global `Fixed` state written in `post`), then ten `Fixed {1}`
+VAE stages (`vae.in`, `vae.mid.r0`, `vae.mid.at`, `vae.mid.r1`, `vae.up0.r0`, `vae.up0.r1`, `vae.up0.us`, `vae.up1.r0`,
+`vae.up1.r1`, `vae.out`), the last producing `i16 [H, W, 3]` in `[0, 255]`.
+
+**The lowerers as they ended up** (one file each, library functions over the builders; names are the checkpoint's
+module paths; `Calib` names every calibration site and the float reference notes the same names):
+
+| lowerer | as built | lossy sites | notes |
+| --- | --- | --- | --- |
+| `CONV_DENSE_V1` / linear | im2col `Gather` + one `MatMul` + one narrowing per channel; weights `i8` output-major `[out, in]`, transposed in the program | 1 | output-major so a cone of a tile of outputs reads whole rows (below) |
+| `NORM_GROUP_SPATIAL_V1` | `[H, G, 3]` row partials committed (`Σx`, `Σx²` split at bit 31), totals clamped to their lanes' true ranges | 2 | a slice carries one interval for three lanes: without the clamps the analysis refuses `thi · 2^31` |
+| activations | composed from the library's Q24 forms (`silu`, `gelu_tanh_q24`) between two narrowings; **not** the 65,536-entry table | 3 | a table costs ~11.7 KB per distinct lookup in a cone (a 64-lane leaf's close was 751 KB) |
+| `MOD_ADALN_V1` | `LayerNorm · (1 + scale) + shift` from `layer_norm_exact`, the gated residual `h + gate · f` into the `i32` stream | 3 | modulation codes at `2^-e` (power-of-two exponents from the calibration) so Q24 conversion is a multiply |
+| `ATTN_JOINT_STREAMS_V1` | per-stream q/k/v, one attention over `[image ‖ text]`, committed head-major q/k/v/ctx and committed row maxima and reciprocals | 4 | the last block's text stream is `context_pre_only` (no output projection, text carry passed through) |
+| `PATCH_EMBED_V1`, `EMBED_TIMESTEP_TABLE_V1` | strided conv as rows + cropped position table; sinusoid rows for every offered step count, gathered by `base[steps_index] + pos` | 1 | the job's steps scalar is the step count's POSITION among the offered counts (the class gate says so) |
+| `GEN_SAMPLER_AFFINE_V1` | `x' = StateWrite(x + HAFZ(Δσ_i · v · s_v / 2^24 / s_x))`, the latent at `2^-20`, `Select(pos == 0, noise, State)` | 1 | `Δσ` in Q24 per `(steps index, position)`; the sigma table equals the scheduler's own to 2e-8 |
+| `GEN_STAGE_VAE_V1` | resnet / mid attention / nearest ×2 (a pinned `Gather`) / head with `Clamp(HAFZ((y + 1) · 255 / 2), 0, 255)` | ~8 a resnet | one op group per stage; every lowerer's output a commit point |
+
+**What the first build taught** (each is a rule a later profile should start from):
+
+1. **The IR's rank limit is 4**, so diffusers' `nhwpqc → nchpwq` unpatchify is a pinned `Gather`, not `Reshape`/`Transpose`.
+2. **A table is not free in a cone.** An axis-0 row of a param is its own artifact leaf with its own Merkle path
+   (~1.1 KB); an activation table opens one leaf per distinct lookup. The first denoise `StateWrite` close was 159,714 B
+   because `post` had no commit points; the first `cond_a` close was 751,455 B because SiLU was a table.
+3. **Weights are opened by rows, so `tile_len` is a cone-size parameter.** A cone of a `T`-lane output tile opens `T` weight
+   rows; at `tile_len = 64` every linear tile cost ~70 KB whatever its width. The class is declared at `tile_len = 16`.
+4. **A program block holds 512 nodes.** A joint block as one block is ~530 nodes once the activations are composed; it is
+   two layer blocks (attention half, MLP half) with the modulation split between them (widest block 273 nodes).
+5. **Commit points make cones small, and cost leaves.** Committed: the modulations, the modulated streams, the embedders'
+   outputs, `norm_out`'s modulation and rows and `proj_out`'s rows, and every VAE lowerer's output (15,738 canonical step
+   leaves at `tile_len` 16).
+6. **A worker opening a cone rehashed the whole inventory per leaf** (`open_artifact_leaf_v1`: 60 s a close on a 1.5 MB class);
+   `open_artifact_leaves_v1` builds the tree once (byte-identical openings, tested across inventory sizes).
+
+**Fidelity** (`tests/diffusers_sd3.rs`; four evaluation cases the calibration did not see, steps 2 and 4, diffusers' own
+reference fed the integer run's noise words; thresholds are the measured values below, frozen by this record):
+
+| check | measured |
+| --- | --- |
+| Rust `f64` denoiser vs diffusers, velocity, on diffusers' own text tensors | 1.1e-6 … 7.0e-6 of the velocity's maximum |
+| each transformer half vs its float half (one carry in, one carry out) | 0.02 % … 0.06 % of the stream maximum |
+| each VAE stage vs its float tensor | 0.3 % … 10.1 % of the site maximum (`vae.up1.r1` the worst) |
+| integer pipeline latent vs the float trajectory, per step | 0.30 % … 1.4 % of the latent's maximum |
+| integer image vs diffusers' image | PSNR 43.8 … 45.7 dB, maximum pixel error 7 … 11 of 255 |
+
+**The close sizes (PALW-GEN-20, measured by the worker on the class's own run).** All commit-point kinds of the class, the
+cone close at the first leaf of each, against the one-move carrier (95,037 B). The table is `docs/evidence/rfc3-sd3-tiny-cone-closes-2026-10-01.md`; the summary: 61 kinds are cone-closable and every one fits one carrier, the largest 73,676 B (`vae.up0.us`,
+margin 21,361 B), the denoiser's largest 29,140 B, the CLIP text stages' largest 70,376 B (a `Gather`, frontend-lowered);
+two kinds are the CLIP stages' fused-attention outputs, DISSECTED commit points, which a lie convicts through the held
+dissection (ADR-0103), not a cone close.
+
+**The §II.1 checklist, completed for the fixture** (each item sourced to the file and line of diffusers 0.40.0 as installed
+in the harness venv; the real SD3-medium column says what could be read offline and what cannot):
+
+| # | Item | Fixture (diffusers 0.40.0) | SD3-medium, from configs/code only |
+| --- | --- | --- | --- |
+| 1 | repositories, licences, redistribution | seeded random weights generated locally; no hub, no licence | **open** — the model cards and licence text need a download; an integer artifact is a derived work |
+| 2 | transformer | `SD3Transformer2DModel` (`models/transformers/transformer_sd3.py` 79–170): two streams, `JointTransformerBlock` (`models/attention.py` 580–749) per block, `context_pre_only` on the last (`transformer_sd3.py` 160–167), `AdaLayerNormZero` (`models/normalization.py` 130) with chunk order shift/scale/gate/shift_mlp/scale_mlp/gate_mlp, `AdaLayerNormContinuous` (`normalization.py` 307, scale FIRST), LayerNorm `eps = 1e-6`, `FeedForward` GELU-tanh ×4, joint attention image tokens first (`attention_processor.py` 1422), no q/k norm, learned/sincos position table cropped to the grid (`embeddings.py` 459, 532); 2 blocks, 4 × 16, `pos_embed_max_size = 8` | the same classes; `num_layers`, widths and `pos_embed_max_size = 96` (`transformer_sd3.py` 132) are config values; SD3.5's `qk_norm` and `dual_attention_layers` are refused by name (`Sd3Config::from_json`) |
+| 3 | text conditioning | `CLIPTextModelWithProjection` through the HF frontend: `prompt_embeds` = the final-norm rows (`last_hidden_state`), pooled = `text_embeds` at the first `eos`; the template `bos ‖ prompt ‖ eos ‖ pad…` to 8 | SD3's pipeline takes the PENULTIMATE hidden states of two CLIPs and a T5 (`pipelines/stable_diffusion_3/pipeline_stable_diffusion_3.py` 289–330, 713); a truncated-depth `Rows` program and the T5 are later work — the fixture's difference is deliberate and documented (`tools/gen_diffusers_sd3_fixture.py`) |
+| 4 | guidance | none (guidance-free first fixture); the batch-axis CFG is the second iteration | true CFG, `guidance_scale` default from the pipeline (`pipeline_stable_diffusion_3.py` 382, 665–666): **open** as to the model card's recommended range |
+| 5 | sampler | `FlowMatchEulerDiscreteScheduler` (`schedulers/scheduling_flow_match_euler_discrete.py` 92–152, 283–420): static `shift = 3.0` applied to the training sigmas AND again in `set_timesteps`, terminal sigma 0, Euler `x + (σ_next − σ) · v`; offered counts 2 and 4 | the same code; the default step count and shift are scheduler config values |
+| 6 | latent space | 4 channels, ×2 compression (one upsample), patch 2, `scaling_factor 1.5305`, `shift_factor 0.0609` applied as `z / scaling + shift` (`pipeline_stable_diffusion_3.py` ~1136) | 16 channels, ×8 compression; the factors are VAE config values |
+| 7 | VAE decoder | `AutoencoderKL.decode` (`autoencoders/autoencoder_kl.py` 36, 199, 214), `Decoder` (`autoencoders/vae.py` 180–), `UNetMidBlock2D` (`unets/unet_2d_blocks.py` 589) with ONE-head attention over the pixels, `UpDecoderBlock2D` (2575), `ResnetBlock2D` (`resnet.py` 188), nearest ×2 + 3×3 (`upsampling.py` 74), GroupNorm `eps = 1e-6`, no quant convs | the same classes at 4 resolutions; GroupNorm groups and widths are config values |
+| 8 | resolutions | 8×8 latent → 16×16 image | 1024² default (4,096 tokens at patch 2): needs lane H's C2/C3 (§5.4a), **open** for the card's aspect buckets |
+| 9 | reference pipeline | diffusers 0.40.0, torch 2.14, transformers 5.17, fp32; the reference is the pipeline's own denoise loop fed the integer run's noise | the same; SDPA attention (`JointAttnProcessor2_0`) |
+| 10 | variants | base only | distilled/turbo variants and editing inputs: **open** |
+
+**Deferred, with the reasons recorded** (not built here, not forgotten):
+
+* **UNet families (lane H's C1).** A UNet denoiser carries skip tensors across resolution levels inside one step, and its
+  decoder re-reads encoder tensors: that needs a per-occurrence carry signature (the IR has ONE carry signature for every
+  layer block, ≤ 8 tensors, and re-committed pass-through carries). The first profile is a transformer and is unaffected.
+* **Audio.** Five corpus entries are blocked on `JobAudio` and the audio ceiling set (FR-23, class *protocol*):
+  `whisper` (audio input binding, log-mel front end, Conv1d stem, cross-attention), `wav2vec2` (raw-waveform input,
+  conv feature extractor, grouped positional conv), `speecht5` (speech pre/post-nets and a vocoder, an audio output
+  kind), `musicgen` (multi-codebook autoregressive decoder with a delay pattern, audio output), `encodec` (causal conv
+  codec with residual vector quantisation). Scheduled after step 8.
+
 ## II.2 Text generation
 
 **Job fields.** FP Job V4, exactly as RFC-0001 §A froze it: `PalwFreePromptJobV3` fields at version
@@ -1073,6 +1780,313 @@ embeds V4 unchanged plus image inputs.
 This RFC sits *under* RFC-0001 (its randomness is domain 0) and *beside* it (canonical outputs), and
 changes nothing in it.
 
+### II.2.1 Text pipelines and the vision-language job (the VLM path)
+
+Scheduled by the coordinator on 2026-09-29, after `JobImage` (§II.4). Everything here is dormant
+under `palw_gen_v1`. Items that belong to RFC-0001's live text lane are marked **[RFC-0001]**; none
+is built before that lane's owner agrees.
+
+**The text stage.** A TIR text class is a pipeline whose **output stage is its language model**. That
+stage is a `Logits` program, with RFC-0002's `TirProgramV1` meaning lifted as version 2
+(`Logits { node, scheme_id }`), and its trip rule is **`TextStream`** (04b §15.6, `TripRule` tag 3):
+
+- Its positions are the text job's stream, one position per id: the prompt ids, then the generated
+  ids. `T = |prompt| + |generated| − 1`, because the last generated id is never fed back.
+- Its `Input(0)` at position `p` is the stream's `p`-th id. It has no token rule; the stream is the
+  job's.
+- It reads earlier stages through the ordinary bindings (`StageFinal`, `StageRows`); a text-only
+  class has no earlier stage.
+- Its `max_trip` is the class's `max_context`, Phase F's `prefill + decode − 1` bound.
+- Only the output stage may be `TextStream`, and it must be a `Logits` program. A `Logits` program
+  may only be that stage (NF-P9′). Every other stage keeps PALW-GEN-1's trip count fixed at
+  acceptance. The text stage's trip count is the claim's committed stream length, within the job's
+  limits, exactly as a Phase F text class's is.
+
+Nothing else about text changes (PALW-GEN-10 stands):
+
+- the job of a class with no image slot is **FP Job V4** (RFC-0001 §A), unchanged;
+- selection, the decode controls and stop are RFC-0001 §A.3's. They are applied outside the program
+  to the committed logits, with `R`'s domain 0 (§I.1.6);
+- the court over the text stage is Phase F's: `TirCone`, H dissection, `TirLogits` and
+  `TirDecodeToken`;
+- a job whose `prompt_tokens + decode_token_limit − 1` exceeds `max_context` is refused at acceptance,
+  as Phase F refuses it.
+
+**The vision-language job: FP Job V5 (image inputs) [RFC-0001].** A class with image slots takes this
+job, which embeds V4 unchanged:
+
+```
+PalwFreePromptJobV5 = { v4: PalwFreePromptJobV4, images: Vec<ImageInputRefV1> }   // images: 1..=16, one per slot
+wire                = le16(8) ‖ (borsh(v4) without its version word) ‖ borsh(images)
+fp_job_id_v5        = H64(key "misaka-palw/fp-v5/job-id/v1", le64(|bytes|) ‖ bytes)   // the whole borsh
+```
+
+The embedded job *is* an FP Job V4 (version 7, its `DecodeConfigV4` present), and V4's own rules
+admit it verbatim. On the wire only its version word says 8. No V3/V4 rule admits version 8, no V4
+byte string decodes as V5, and V4's wire, ids, acceptance and fingerprints do not move. Built
+dormant on `rfc3/fp-v5` (2026-09-29), behind the fence `palw_fp_job_v5`, which requires
+`palw_gen_v1` and `palw_fp_decode_rules` at or below it.
+
+- **One encoding per behaviour** (open question 14, decided 2026-09-29). A class with image slots takes
+  V5 only, and a class without slots takes V4 only (`JobVersionNotOffered`). `images` is never empty,
+  so a text job has exactly one encoding.
+- `images` satisfies PALW-GEN-11: exactly one image per slot, at the slot's size.
+- **Where images travel.** Image bytes never ride a transaction, whatever `privacy_mode` says about the
+  prompt ids. They travel with the capture to the panel, and a dispute opens tiles against
+  `input_root`. `PublicDa` makes a V5 job's prompt ids public, not its images.
+- **Price [RFC-0001] — recommendation, pending user confirmation (open question 13).** RFC-0001's D10
+  pays decode leaves only (prefill is 0). A V5 job's image stages are real work, so they are priced as
+  **prefill-equivalent tokens**:
+  - each image slot of the class declares `token_equivalents`, a count of prompt tokens, in its
+    offer. The class id covers it;
+  - admission floors it at `⌈admitted per-image work / per-token work⌉`. Per-image work is every
+    non-text stage's admitted job work in MAC-equivalents (ADR-0131's table), split evenly over the
+    images the stage depends on. Per-token work is the text stage's admitted work for one position.
+    A non-text stage that depends on no image is refused, because it would be prefill no rule
+    prices;
+  - a V5 job is charged the sum of its slots' counts at the job's per-token price.
+
+  Built as pure functions (`palw_fp_v5_image_tokens_v1`, `palw_fp_v5_image_charge_v1`). Nothing in the
+  lane reads them until the user confirms.
+- **Numbering.** The version number and the name are RFC-0001's to assign at freeze. RFC-0001 §A.8
+  keeps "V5" for an emergency fence of V4; if that fence comes first, this job takes the next free
+  version. Nothing here binds a name.
+
+**Placement by placeholder ids (no job field).** This replaces §II.4's `start` job scalar.
+
+- The image rows enter the text stage through one `StageFinal` edge from the vision stage: rows
+  `[N_img, d_text]`, every slot's rows concatenated in slot order.
+- The LM program places them itself. A `Fixed` state `cursor` counts the image rows placed so far.
+  At a position whose token is the class's image placeholder id (a constant of the program) **while
+  `cursor < N_img`**, the input embedding is `Gather(image_rows, cursor)` and the cursor advances.
+  At any other position — including **a placeholder after the `N_img`-th, which is an ordinary token,
+  embedded as a token** — the input embedding is the token's embedding.
+- Placement is therefore a total, deterministic function of the prompt ids. It needs no job field
+  and no acceptance rule, and a court replays it like any other state. A prompt with fewer
+  placeholders than image rows uses fewer rows. A placeholder past the last row is embedded as a
+  token, as HF embeds a generated placeholder, and as the lowering does (`rfc3/lower` 4c25416a5,
+  hf-coverage §16). The two readings agree whenever a prompt has at most `N_img` placeholders, which
+  chat templates guarantee; the class's chat template (the gateway's) emits exactly `N_img`.
+
+**The step tree and the court.** One tree, stage-major (PALW-GEN-3): the image stages' leaves, then
+the text stage's.
+
+- A dispute over a text-stage leaf is Phase F's. Its cone may read image rows, which are the vision
+  stage's committed output, carried under PALW-TIR-33 (a `StageFinal` edge). A dispute over a row is
+  a dispute over the vision stage's leaf, adjudicated at the first divergent leaf.
+- The vision stage's own cones read image lanes from tiles proven under `input_root`
+  (PALW-TIR-48).
+- **As built** (`rfc3/fp-v5`, 2026-09-29, dormant; library level):
+  - the tree is structural, from the programs, the layouts and the trip counts. Per position: every
+    commit point in slot order, cut into its commit tile. The text stage's logits are leaves only
+    where the decode consumes them. After every `C`-th position, every `Fixed` state not written in
+    `post`. Keyed leaves, a Merkle root per stage bound with its count, and one step root over the
+    stage roots, as follows (finding G18; 04b §15.14 states it in full, and the vectors
+    `consensus-vectors/tir-v2/step-tree.json` — generated by `misaka-palw-gen-ref2/scripts/gen_proposed_vectors.sh`
+    and held against the consensus layer by `consensus/core/tests/palw_gen_vectors_v1.rs` — pin it):
+
+    ```
+    leaf       = H64(key "misaka-palw/gen/step-leaf/v1", borsh(coord) ‖ le32(value_count) ‖ lanes)
+    coord      = u8 stage ‖ le32 pos ‖ kind ‖ le32 tile
+    kind       = 0 ‖ le16 occurrence ‖ le16 node                       // a commit tile
+               | 1 ‖ le16 state ‖ option                               // a Fixed-state checkpoint tile; option = 0 | 1 ‖ le16 layer
+    lanes      = every value as four little-endian bytes (an `idx` as u32, every other dtype as i32; PALW-TIR-5)
+    node       = H64(key "misaka-palw/gen/step-node/v1", left ‖ right)  // an odd last node is promoted unchanged
+    stage_root = H64(key "misaka-palw/gen/stage-root/v1", u8 stage ‖ le64 leaf_count ‖ merkle_root)
+    step_root  = H64(key "misaka-palw/gen/step-root/v1", le16 stage_count ‖ stage_root_0 ‖ … ‖ stage_root_(n−1))
+    ```
+
+    A leaf binds neither its dtype nor its `first_element` (both follow from the coordinate and the
+    class's layout), and a stage root binds the stage index and the leaf count, so a stage's tree can be
+    neither relabelled nor cut;
+  - the worker runs the stages and then the text stage through FP Job V4's decoder. The panel
+    re-executes and names a changed answer, a changed stage root or an unbound root;
+  - the court adjudicates any leaf of any stage from the carried leaves before it (earlier stages
+    entirely), the class's params, `R`, the job's facts, edges read under PALW-TIR-33 and image
+    lanes from proven tiles. The decode door holds each generated id to the V4 selection over the
+    committed logits row;
+  - V5 rides the lane's job type as version 8, its images after the V4 tail (the same bytes as the
+    wrapper). The commitment, the payload, the claim id and the signed message carry it with no
+    layout change. The V4 validators refuse it, and the V5 validator applies V4's commitment rules
+    to its V4 view past `palw_fp_job_v5`.
+
+  - **the pipeline admission and the registry** (`palw_gen_admission_v1`, dormant under
+    `palw_gen_v1`): the preflight; the one step tree counted exactly in closed form — the widest job
+    within the court's ladder and `max_job_step_leaves`, and `pwu_per_inference` equal to the count
+    of the class's most expensive offered job; every commit point's cone at its own tile length
+    against the court (a cone that reduces over the history must fit whole — the generative court
+    dissects no history before court version 3); the class id; and 0‰, since no attempt lane
+    exists for pipelines. The registration is `ClassRegisteredGenV1`, object tag **68** (renumbered
+    from 67 on 2026-09-29: RFC-0002's second IR fence takes 67 for `DefaultAccusedTirLeaf` and
+    merges first). The fold writes the class's `gen_classes` row (rooted without the class's
+    bytes, delta entry 90, carriage tail `0xC2`). A V5 claim's class is the row its job names: a
+    text class, its tokenizer, its slots and its stream;
+  - **the params against the artifact root** (`palw_gen_artifact_v1`): the pipeline inventory is
+    Phase F's per program, in program order, in one tree, each leaf named `p<k>/<name>`. A close
+    carries the param leaves its cone reads with their paths; the court reads a weight only from a
+    leaf proven under the class's `artifact_root`, so an executor that ran other weights is convicted
+    at its first divergent leaf. **Nodes load a class from a `PALWTIR2` file**
+    (`misaka-palw-tir-artifact::v2`): the pipeline's and every program's canonical bytes, the class
+    as declared, the tokenizer id, and one tensor table in exactly this inventory's order (program
+    by program, each program's declared params in PALWTIR1's order), 64-byte aligned, so the root
+    streams from the file front to back. It is not a consensus object; the node holds a class from it
+    only when its pipeline, programs, class and tokenizer are the row's and its tensors hash to the
+    row's `artifact_root`. PALWTIR1 readers are unchanged and refuse it by its magic;
+
+  - **the closes as consensus objects** (`palw_gen_close_v1`): a V5 claim's execution root binds
+    the job id, the class, the step leaf count, the step root and the generated ids; `GenCone` (tag
+    10) opens the leaf the ladder narrowed to (the claim's one stage-major order), `GenDecodeToken`
+    (tag 11) holds an id to its committed logits row. The prompt rides only when the disputed stage
+    reads it. Below `palw_gen_v1` both are dropped by name;
+  - **the history dissection, composed** (RFC-0002 F7, spec 04b §9.5): a text stage's attention
+    cone is dissected, not closed whole. Admission asks F7's obligations, value bound, sizing and
+    window of the stage's view verbatim; `CourtGenRootClaimed` (tag **69**, renumbered from 68 with
+    the registration) opens F7's own phase, whose rounds and choices are F7's objects unchanged;
+    `GenDissection` (tag 12) is the bottom. Every stage is sized under the block's box-demand rules:
+    below `palw_tir_fence2` the DAA-2,000 release's, under which a dissected cone with a `TopK` is
+    refused by name; past it ref2's H7 row (RFC-0002's second IR fence), under which `V` covers a
+    TopK tile and such a cone is admitted dissected like any other. Admission targets: tir-lower's lowered tiny LLaVA, Qwen2-VL and Qwen2.5-VL (`rfc3/lower`
+    4c25416a5), each admitted with its attention dissected; LLaVA's attention leaf is argued end to
+    end (an honest responder acquitted, a lie in the totals convicted wherever it hides).
+
+  Built since: the node's worker, seat, capture and court halves (`misaka-palw-base0::gen_worker`,
+  re-exported by kaspad's `palw_gen_seat`), the source input and the forced prefix (§II.2.2), and
+  `PALWTIR2`. The kaspad panel wiring and the V5 lane itself (the walk admitting version 8) wait
+  for the V5 lane's fence, which the user decides, and open questions 13 and 15's prices.
+
+**Order of implementation for this path.**
+
+1. 04b: `TextStream` and NF-P9′, and the IR's text run (a selector supplies each generated id). IR
+   only, dormant.
+2. Consensus, dormant under `palw_gen_v1`:
+   - the class profile `Text` (a text pipeline, with or without image slots). Its canonical output is
+     the committed generated ids, with no output root (§I.3.3);
+   - its preflight (the output stage is the text stage, and `max_context`);
+   - the placement pattern's conformance vector.
+3. **[RFC-0001]** FP Job V5's wire type, id and acceptance; the image-stage price; the worker and the
+   panel executing a pipeline class; the court's composition. The V4 job type lives on
+   `rcore/fp-sampler`, so V5 is built on top of it, after that lane's owner agrees.
+
+### II.2.2 Encoder–decoder text classes: the source input and the forced prefix
+
+Scheduled by the coordinator on 2026-09-29, after the node's loops; dormant under `palw_gen_v1` and
+`palw_fp_job_v5`, marked **[RFC-0001]** where it touches the lane. tir-lower lowers T5, BART, mBART,
+Marian and Pegasus as two-stage pipelines (`rfc3/lower` 8addd5224, hf-coverage §17): an encoder stage
+over the source text (`Fixed { n: 1 }`, the source template bound through `JobTokens` and
+`JobTokenCount`), then the decoder as the text stage over `TextStream`, reading every layer's cross
+keys and values through `StageFinal`. Two things the lowering had to borrow are defined here.
+
+**(a) The source input.** A sequence-to-sequence job has two texts: the source the encoder reads and
+the decoder's stream. The lowering carried the source in the job's `negative` list, the only second
+list a `PipelineJob` has.
+
+- **The binding.** `TokenSource::Source` (tag 2; `Prompt` 0 and `Negative` 1 unchanged) is the job's
+  source ids. Any `TokenRule` reads it as it reads the prompt: a stage's token run, `JobTokens`,
+  `JobTokenCount`. `PipelineJob` gains `source`. A pipeline that names no source encodes as before.
+- **The class offer.** `max_source_tokens`: 0 exactly when no rule reads the source (a class that
+  reads one offers one), and only a text class offers one (the V5 job carries it). Every rule that
+  reads the source must hold the longest offered source and its template (the prompt's check). The
+  class id covers it, and `source_token_floor` (below).
+- **The V5 job field [RFC-0001].** `source: Option<{ token_ids_hash, tokens }>`, after `images`:
+  `le16(8) ‖ borsh(v4)[2..] ‖ borsh(images) ‖ borsh(source)`. **The ids travel as an image's bytes
+  do**, bound by `token_ids_hash` in the network's prompt-id form: to the worker and the panel, and in
+  a close whose stage reads them, never on the chain, under either privacy mode (a `PublicDa` job
+  publishes its prompt, not its source). A V5 payload's `prompt_token_ids` is therefore the prompt's
+  alone, and V4's payload rules and the fold's prompt accounting read it unchanged. **One
+  encoding per behaviour extends open question 14's rule:** a class that has image slots **or reads
+  a source** takes V5 only, and a class with neither takes V4 only. A V5 job carries one image per
+  slot (none for a class without slots) and its source exactly when the class reads one, never
+  neither. Acceptance holds `tokens` to `[1, max_source_tokens]`.
+- **The court.** A close carries the source ids whole exactly when the disputed stage reads them (the
+  prompt's carriage rule, §II.2.1); a dispute elsewhere reveals nothing of the source.
+- **Price — recommendation, pending user confirmation (open question 15, with open question 13).**
+  Source tokens are priced as prompt tokens, one per id, at the job's per-token price, **and never
+  below the class's `source_token_floor`**. The floor is there because the lowered encoders run one
+  position over the padded source axis: their work is the whole width whatever the source's length,
+  so a short source charged per id would carry most of the encoder free. The registrant declares the
+  floor and the preflight holds it at or above `⌈admitted source work / per-token work⌉`, the image
+  slot's rule (open question 13): every stage but the text stage is input work, split evenly over
+  the inputs it depends on, images and the source alike, and a text-class stage that depends on
+  neither is refused (prefill no rule prices). A job is charged `max(source.tokens,
+  source_token_floor)` prompt tokens for its source. Built as a pure function; nothing in the lane
+  reads it until the user confirms.
+
+**(b) The forced decoder prefix, declared per class.** A sequence-to-sequence decoder starts from
+fixed ids: `decoder_start_token_id`, and for mBART-50 the target language (`forced_bos_token_id`). The
+lowering carried them as the job's prompt. They are the class's, not the job's choice, so **the class
+declares them**: `forced_prompt_prefix` in its offers (the class id covers it). **They ride as the
+prompt's head, and the class fixes what that head is.** This is the hf-coverage option of checking
+the prompt's head, not a prefix inside `TextStream`, for one reason: the job is FP Job V4 underneath,
+and V4 refuses an empty prompt (`EmptyPrompt`) and hashes, prices and discloses the prompt as it
+stands. A seq2seq job's decoder prompt is otherwise empty, so a prefix the IR supplied would leave
+the V4 envelope a prompt it refuses, and V4 must not move. With the prefix at the prompt's head the
+stream is still `prompt ‖ generated`, and every V4 rule, the step tree and the court read it
+unchanged. The class fixes the head:
+
+- the preflight: the prefix only on a text class; every id below the text stage's `token_bound`; no
+  longer than `max_prompt_tokens`;
+- acceptance: where the prompt's ids ride (`PublicDa`), the prompt starts with the prefix
+  (`palw_fp_v5_accept_payload_v1`: the stateless V5 rules, the class resolved, then the head);
+- where they do not (`PanelDa`): the worker refuses a job whose prompt does not start with it, and a
+  seat judges such a job as not the class's (it files nothing, so the claim is never licensed). The
+  executor bears the consequence of running it.
+
+**Order of implementation for this path.** The IR's `TokenSource::Source`; the class offer and the
+preflight; the V5 field, its acceptance and the lane's version-8 tail; the prefix's checks; the
+carriage of source ids in a close; the worker, seat and capture; a conformance test on the lowered
+encoder–decoders once their vectors are exported. Built dormant on `rfc3/fp-v5` (2026-09-29) through
+the worker, seat and capture, with the golden toy encoder–decoder
+(`consensus-vectors/tir-v2/pipelines/toy-encdec.json`) as its vector; the conformance test on the
+lowered models waits for their vectors.
+
+### II.2.3 Evaluation pipelines: the `Decode` stage and finalized outputs (RFC-0004 §7.2)
+
+RFC-0004's open question 8 recommends that its two additions to the pipeline format live here. They
+are built dormant (`rfc4/eval`, 2026-09-29), appended to the format so that every earlier pipeline
+encodes as before:
+
+- **The `Decode` stage kind** (`TripRule` tag 4). It is the text stage's stream and trip count
+  (`prompt ‖ generated`, `T = |prompt| + max(|generated|, 1) − 1`) in a stage that is **not** the
+  output. An evaluation pipeline's subject stage decodes (Generate), or is given the ids
+  (teacher-forced: its `generated` list is the reference), and the scoring stages after it read:
+  - **what it decoded**, through the token source `Generated` (tag 3), which only a stage after the
+    `Decode` stage may name;
+  - **its consumed logits rows**, through `StageRows` / `StageRowCount`: position `|prompt| − 1` on,
+    row `r` the one `generated[r]` came from, which are exactly the stage's committed logits leaves.
+
+  NF-P9′ becomes: the `TextStream` stage is the output, the `Decode` stage never is, and a pipeline
+  has at most one of them. The court treats a `Decode` stage as the text stage: its consumed logits
+  are its leaves, and the decode door holds each id it selected (in Generate mode).
+- **`FinalizedOutput { claim, stage }`** (token source tag 5). It is the generated ids of the job's
+  `claim`-th finalized claim (`claim < 8`), from that claim's stream stage `stage`. It is a token
+  source rather than a new binding, so a template, its padding and its count are the existing
+  `JobTokens` / `JobTokenCount` bindings'. A pairwise judge reads two, and RFC-0005's `Tests` kind one.
+  The job carries the ids and the chain holds their commitment. Where that commitment lives and how a
+  close carries the ids is the evaluation job family's (RFC-0004 A6).
+- **The key** (token source `Key`, tag 4): an evaluation item's key ids, which an exact-match stage
+  compares an answer span with. RFC-0004 §7.2 names two additions and nothing else, but an exact
+  match needs the key as a list, so this is a third. It is flagged there.
+
+**Tags, widths and rules** (finding G12 of the independent second implementation; 04b §15.6 carries the
+grammar once the first of these is built at a base):
+
+> **[decision, 2026-10-01 — to be confirmed against `rfc4/eval`'s vectors, `pipelines/eval-*.json`, which
+> are not at the `rfc3/fp-v5` base]**
+> 1. **Tags.** `TripRule::Decode` is tag 4. `TokenSource::Generated` is tag 3, `TokenSource::Key` tag 4 and
+>    `TokenSource::FinalizedOutput { claim: u8, stage: u8 }` tag 5 (`claim < 8`; `stage` a stage index,
+>    as `StageRows`'s is).
+> 2. **Edges from a `Decode` stage.** NF-P7 and NF-P8's "reads a `Rows` stage" cover a `Decode` stage
+>    for its *consumed* rows: `StageRows { drop, pad_to }` reads rows `|prompt| − 1 + drop …` (the rows
+>    `generated[r]` came from, the stage's committed logits leaves), and `StageRowCount { drop }` counts
+>    `T − (|prompt| − 1) − drop`. NF-P8's declared bound `[0, max_trip − drop]` is loose by `|prompt| − 1`
+>    for such a stage, which is harmless: it is a bound, not the count.
+> 3. **NF-P9′.** A pipeline has at most one text-kind stage (`TextStream` or `Decode`) in all; the
+>    `TextStream` stage is the output and the `Decode` stage never is.
+
+The scoring stages themselves (ExactMatch, RefLogLik, Judge, Pairwise) are ordinary programs of the
+scoring library (`misaka_palw_tir::scoring`, vectors `consensus-vectors/tir-v2/scoring/` and
+`pipelines/eval-*.json`), adjudicated as any committed leaf (04b PALW-TIR-50).
+
 ## II.3 Embedding / encoder
 
 **Job fields.** The body is `EmbeddingBodyV1`:
@@ -1083,6 +2097,15 @@ changes nothing in it.
 - `output: EmbeddingI32`.
 
 The seed is all zeros (`SeedNotUsed` otherwise).
+
+**An embedding embeds at least one id** (finding G19, decided 2026-10-01): a text of 0 ids is refused
+(`InputNotOffered`: an empty text embeds nothing), which §I.0's zero-length encoding does not cover; an image
+job's empty prompt (the unconditional prompt, §II.1.1) is accepted. **The ids' bound** (finding G20) is the
+least of the `token_bound` of the stages whose token run reads the list and the `hi + 1` of the external
+inputs a `JobTokens` binding of that list feeds — an id the run would refuse is refused at acceptance; a
+class that reads its prompt only through such a binding (an embedding) is bounded by the second rule. The
+refusal names of an embedding job are `PoolingNotOffered`, `DimsNotOffered`, `InputNotOffered`,
+`OutputSpecNotOffered` and `Image(…)` (04b §15.13, decisions 8–10).
 
 **Canonical output.** `i32` LE `[n, d]` in the class's fixed point, L2-normalised in the program when
 the model does it (the library's `L2Norm`).
@@ -1106,16 +2129,34 @@ randomness. That makes it the smoke-test class for the drills.
 
 ## II.4 Multimodal input (vision canonicalisation)
 
-**Job fields.** `images: [ImageInputRefV1 { input_root, h, w }]`, at most the class's maximum.
+**Job fields.** `images: [ImageInputRefV1 { input_root, h, w }]`, exactly one per image slot of the
+class.
 
-- An image input is `u8` HWC RGB at one of the class's declared input sizes. `input_root` is §I.3.2's
-  construction applied to input bytes, over the class's input tiles.
+- **Image slots.** The class declares its image slots in its offers: slot `i` is `{ h, w, tile_len }`,
+  at most 16 slots, each input tile `tile_len ∈ [4, 2^16]` bytes. The class id covers the slots. A
+  job carries exactly one image per slot, at the slot's size (`ImageCount`, `ImageSizeNotOffered`).
+  Every slot is read (NF-P10), so no image is optional; a class that takes fewer images is another
+  class, as a class at another resolution is.
+- An image input is `u8` HWC RGB at its slot's size. `input_root` is §I.3.2's construction applied to
+  the image's bytes: header `ImageRgb8 [h, w, 3]`, the slot's `tile_len`, index-bound tile leaves,
+  keyed nodes. An input root and an output root of the same bytes are the same commitment.
 - Decoding, EXIF orientation, colour management, alpha and **arbitrary-size resampling** are outside
   consensus: the gateway resizes or letterboxes to a declared size and says so.
 - Image bytes are far larger than a transaction. They travel like `PanelDa` prompt ids (with the
   capture to the panel), the chain carries `input_root`, and a dispute opens tiles.
 
 **Canonical output.** Per the consuming profile: text through FP (§II.2), or an embedding (§II.3).
+
+**Binding** (04b §15.6, NF-P10). A stage reads image `i` through `JobImage { index: i }` (binding tag 6),
+into an `External` input `i16 [h, w, 3]` whose interval contains `[0, 255]`. `i16`, because program
+inputs have no `u8` and every pixel is exact in it. One image is bound at one size wherever it is
+bound, and the bound images are `0 … n − 1`.
+
+**Admission and court** (04b §15.4, §15.9, PALW-TIR-48). Admission opens an image input at **1 byte a
+lane**, and counts it as an operand of its own (it is opened by tiles with their paths). The court
+never holds an image. It reads an image lane only from an input tile that the parties carry, after
+verifying the tile against the job's `input_root`. A tile not proven under the root is refused
+evidence and convicts nobody. A lane whose tile nobody carried fails the evaluation (`Missing`).
 
 **Mapping onto the TIR scan.** A single-position **preprocessing stage** in integer TIR:
 
@@ -1126,10 +2167,10 @@ randomness. That makes it the smoke-test class for the drills.
 - patchify as `Reshape`/`Transpose`.
 
 A vision encoder over patches (attention over a `Fixed` patch axis) follows, with a `Rows`/`Final`
-output. The LM stage reads that output through an `External` input and places patch embeddings at
-placeholder positions: `Select(is_image_pos, Gather(img_emb, pos − start), Gather(tok_emb, token))`,
-with `start` a job scalar. Dynamic-resolution encoders become one class per resolution bucket, as
-images are.
+output. The LM stage (the text stage, §II.2.1) reads that output through a `StageFinal` edge. It
+places patch embeddings where the prompt's image placeholder ids are, counted by a `Fixed` cursor
+(§II.2.1), so no job scalar is needed. Dynamic-resolution encoders become one class per resolution
+bucket, as images are.
 
 **What the IR lacks.** Nothing beyond Part I.
 
@@ -1272,6 +2313,38 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
   network's ceilings for the profile.
 - **PALW-GEN-9 (image job).** An image job MUST satisfy §II.1.1's table.
 - **PALW-GEN-10 (text).** Text generation is RFC-0001 §A (FP Job V4). This chapter adds no text rule.
+- **PALW-GEN-11 (job images).** A job MUST carry exactly one `ImageInputRefV1` per image slot of its
+  class, at the slot's size. An image's `input_root` MUST be §I.3.2's construction over its bytes
+  (`ImageRgb8 [h, w, 3]`, the slot's `tile_len`). A court MUST read image lanes only from tiles
+  proven under `input_root` (PALW-TIR-48).
+- **PALW-GEN-12 (the text stage).** A text pipeline's output stage MUST be a `Logits` program whose trip
+  rule is `TextStream`, and no other stage may be either. Its positions MUST be the text job's stream.
+  Selection, the decode controls and stop MUST be RFC-0001 §A's.
+- **PALW-GEN-13 (the vision-language job).** A class with image slots MUST take FP Job V5 only, and a
+  class without slots FP Job V4 only. V5 MUST embed every V4 field unchanged.
+- **PALW-GEN-14 (the tensor job's carriage).** A tensor job (§I.0) MUST be carried as FP job version 10:
+  the lane's V3 fields (the envelope's, and zeros for every text field the envelope has not), then
+  `PalwGenJobTailV1 { seed, body }`, and nothing else. The job's id MUST be `gen_job_id_v1` of the
+  reconstructed `PalwGenJobV1`. Any other spelling MUST be refused by name.
+- **PALW-GEN-15 (the tensor commitment).** A version-10 commitment's `trace_root` MUST be the step root,
+  `output_root` the canonical output root and `execution_root` the tensor execution root of its own
+  fields; `decode_tokens_executed` MUST be 0, `stop_reason` `ExactBudgetReached`, `schedule_root` and
+  `trace_manifest_root` zero, `trace_chunk_count` 1 and `trace_retention_daa` 0. Acceptance MUST recompute
+  `execution_root`.
+- **PALW-GEN-16 (the work).** A tensor claim's `work_leaves` MUST equal the chain's count of the job's step
+  space over the class's pipeline, programs and layouts; a claim whose count differs MUST be refused, not
+  corrected.
+- **PALW-GEN-17 (weightless).** A tensor claim MUST carry no quanta, no pwu, no receipt rights, no weight
+  and no escrow in this release; it MUST reserve `⌈work_leaves × slash_value_per_pwu⌉` as the lane's
+  stage-1 rule prices it, and MUST hold the executor's collateral as any claim of that work does.
+- **PALW-GEN-18 (identity and capacity).** A tensor claim's work identity MUST be `H64(key
+  "misaka-palw/gen/work-id/v1", class_id ‖ borsh(tail) ‖ bond)`; a second live claim of it MUST be refused.
+  A class's claims in flight on the lane MUST be fewer than the fence's `max_inflight_claims` for its
+  profile.
+- **PALW-GEN-19 (the fence).** Nothing in PALW-GEN-14…18 MAY be reachable below `palw_fp_job_v5` over
+  `palw_gen_v1`: the isolation door MUST refuse a version-10 payload where the ruleset has no
+  `palw_fp_job_v5`, the header-context door MUST refuse it below the fence, and the fold MUST refuse it as
+  the second lock.
 
 ## Alternatives
 
@@ -1339,6 +2412,10 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
 - **`PalwGenJobV1` and the pipeline registration are appended object variants.** They are dropped by
   name before the fence and skipped by older builds under the A-2 tolerance, as Phase F's
   `ClassRegisteredTirV1` is.
+- **FP job version 10 is the lane's job type with a tail** (§I.4.1). No V3, V4 or V5 byte string decodes
+  as it and no earlier validator admits it, so the lane's wire, ids and acceptance below the fence are what
+  they were; a tensor claim's `FreePromptCommitted` carries its job in a Borsh-skipped field, so the
+  object's encoding does not move either.
 
 ## Open questions
 
@@ -1360,6 +2437,29 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
 11. **Multi-codebook audio tokens:** a later FP job version for several logits rows per position.
 12. **Privacy of reproducible outputs:** is the `PublicDa` or `PanelDa` choice enough, or should image
     jobs default to `PanelDa`?
+13. **The price of a V5 job's image stages** (§II.2.1) [RFC-0001]. Recommendation, **pending user
+    confirmation**: prefill-equivalent tokens. Each slot declares a count, floored at
+    `⌈admitted per-image work / per-token work⌉` and charged at the job's per-token price.
+14. **May a class with image slots also take text-only V4 jobs?** Decided 2026-09-29: no. A class with
+    slots takes V5 only, and the text-only use registers the text-only class (the same weights,
+    another pipeline), so each behaviour keeps one encoding. Extended 2026-09-29 (§II.2.2): a class
+    that reads a source takes V5 only as well.
+15. **The price of a V5 job's source tokens** (§II.2.2) [RFC-0001]. Recommendation, **pending user
+    confirmation** alongside 13: source tokens are priced as prompt tokens, at the job's per-token
+    price, never below the class's `source_token_floor` (at or above `⌈admitted source work /
+    per-token work⌉`: a padded encoder does its whole width for any source).
+16. **Weight for tensor claims** (§I.4.6). Recommendation, decided as built 2026-10-01: none in the first
+    release — a weightless claim, as RFC-0004's evaluation claim — and a later fence prices them by the lane's
+    quanta over leaves once a drilled family certificate covers a V2 pipeline. Confirm that the first
+    release carries no reward for executing a tensor job.
+17. **The per-class cap on claims in flight** (§I.4.8). The drill uses 16 for every profile; the network's
+    value is provisional until the first profile's corpus is measured.
+18. **Sampled seat verification for long classes** (§I.4.10). A seat replays a whole tensor job. For a class
+    whose replay is long, the lane's interval sampling (ADR-0077 Decision 8) over the one step tree is the
+    optimisation: when, and with which sample counts.
+19. **Which fence opens the tensor claim** (§I.4.9). Decided as the lane table implies: `palw_fp_job_v5` over
+    `palw_gen_v1`. The fallback is a dedicated `palw_gen_job_v1` if the user wants tensor jobs open while V5
+    must stay shut by a fence value rather than by a release.
 
 ## Activation plan and order of implementation
 
@@ -1371,8 +2471,25 @@ Option<PalwGenFenceV1 { activation, program_version: 2, court_version: 2, rand_s
 ```
 
 It is Some-only in both fingerprints, collapses to `never()`, and sits at an unused height.
-`rand_set_id` hashes the domain table (§I.1.4) and the table digests. `output_set_id` hashes the
-output kinds (§I.3.3).
+Both ids are keyed digests of an ASCII descriptor line, so a fence value is a consensus number any
+second implementation can compute from this text (finding G5):
+
+```
+rand_set_id   = H64(key "misaka-palw/rand-set-id/v1", rand_set_descriptor)
+rand_set_descriptor =
+  "palw-rand/v1/domains=" + join(",", [ "<id>:<NAME>:<key>:b<word bits>:<layout>:<step>"  for each §I.1.4 row, by id ])
+  + "/gumbel-q24-v1=<hex>/gauss-q24-v1=<hex>"
+  // <layout> ∈ {text, blocked}; <step> ∈ {none, zero, per-step, declared}; the two <hex> are the tables' BLAKE2b-512 pins
+
+output_set_id = H64(key "misaka-palw/output-set-id/v1", output_set_descriptor)
+output_set_descriptor =
+  "palw-output/v1/kinds=" + join(",", [ "<tag>:<Name>:<element>:<shape>:<meta>" for each §I.3.3 kind, by tag ])
+  + "/tile_len=[4,65536]/leaf=<key>(le32(t)|bytes)/node=<key>(left|right)/odd=promoted"
+  + "/root=<key>(borsh(spec)|le32(tile_len)|merkle)"
+```
+
+The descriptors and both ids are pinned by `consensus-vectors/rand-v1/domains.json` and
+`consensus-vectors/output-v1/kinds.json` (the table of kinds there is the grammar's example).
 
 | Order | Work | Consensus change | Exit gate | Estimate |
 | --- | --- | --- | --- | --- |
@@ -1381,14 +2498,24 @@ output kinds (§I.3.3).
 | 3 | **PALW-TIR program version 2** in tir/core: inputs, output kinds, `post` effects, range leaves, the `input` question in §9.4, replay; golden vectors; the second implementation | none (crate) | reference = second implementation on V2 vectors | 3–4 weeks |
 | 4 | **Pipeline class**: `TirPipelineV1`, edges, one step tree, class id, admission (per-stage v10, edges, offers, output spec, per-profile ceilings), carriage | dormant fence | first-divergent-leaf property over pipelines; mutation corpus refused by name | 3–4 weeks |
 | 5 | **Job and court**: `PalwGenJobV1`, acceptance refusals, random inputs in the court, `External` edges, `TirOutputDigestMismatch`, the canonical-work rule | dormant fence | court battery on tiny pipelines: planted faults at every commit-point kind, forged noise, forged edges, forged digests, out-of-interval values | 3–4 weeks |
+| 5b | **The claim's carriage** (§I.4): FP job version 10 on the free-prompt lane under `palw_fp_job_v5` — the doors, the walk, the fold's weightless claim (exact work, reservation, per-class cap), the node's worker, seat and court loops, and the executor's submit path | dormant fence | processor tests through the real extraction; every nothing-below-the-fence gate; a seat's replay and a court over a tensor claim on real nodes (step 8) | 3 weeks |
 | 6 | **Image profile**: lowerers for one transformer family, its text encoder and its VAE (reduced fixtures first); committed-partial patterns; the fidelity harness with same-noise float reference; the §II.1 checklist completed | none | freeze criteria in the RFC-0002 manner: three-way bit identity, fidelity thresholds, every cone within ceilings | 6–8 weeks (overlaps 3–5) |
 | 7 | **Embedding profile**, as the smoke-test class | none | same gates, trivial cost | 1–2 weeks |
 | 8 | **Drills**: devnet, then a salted t12 chain; register tiny image and embedding classes; jobs; replay; disputes (a partial-sum cone included); crossing the fence on the shipping binary | — | RFC-0002 Phase F's D-F1…D-F4 pattern | 3 weeks |
 | 9 | **testnet-12**: arm `palw_gen_v1` after `palw_tir_v1`; the first Example-C-sized image class | fence | registration → panel → `Final` | — |
 | 10 | **RFC-0002 Phase G**: GPU integer backend, exact two-pass attention, GPU leaf hashing; then a 4B-class distilled image class | node releases | F-4 gates per backend; the throughput report | — |
-| 11 | **Multimodal input** (§II.4), then image-editing bodies | fence value | — | — |
+| 11 | **Multimodal input** (§II.4), then image-editing bodies. Built on `rfc3/impl` (2026-09-29), dormant: `JobImage`, the slots, the image leaf, the court's tile reading. Then the **VLM path** (§II.2.1): the text stage in the IR and the `Text` profile, dormant; FP Job V5 in RFC-0001's lane after its owner agrees | fence value; **[RFC-0001]** for V5 | — | — |
 | 12 | **Audio** (§II.5) | fence value | — | — |
 | 13 | **Generalised dissection** (§II.1.5.6, court version 3), then **video** (§II.6), subject to open question 6 | fence | — | — |
+
+**Which lanes each fence opens.** RFC-0002 Phase F's decision 12 keeps the free-prompt lane closed
+to IR classes: testnet-12's DAA 2,000 (`palw_tir_v1`) opens registration, the attempt lane, panels
+and the court for IR classes, and nothing of the free-prompt lane. `palw_gen_v1` opens registration
+(the pipeline admission), panels and the court for generative classes; a pipeline has no attempt
+lane (it registers at 0‰). **Opening the free-prompt lane to IR and pipeline classes is its own later fence.** For a pipeline class
+that lane is `palw_fp_job_v5` over `palw_gen_v1` (§I.4.9). Past it the walk admits a **tensor job** — FP job
+version 10, a weightless claim (§I.4) — and, in the release that also confirms open question 13's price, a V5
+commitment (§II.2.1). Until then the walk skips every version-8 payload, whatever the height.
 
 **Order of implementation, in one line:** R and canonical outputs, then TIR V2, then pipelines and
 the court, then the image profile (with embedding as the smoke test), then drills and testnet, then
@@ -1414,5 +2541,20 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 | 10 | generalised dissection | **with video** (§II.6), not with the first image fence |
 | 11 | multi-codebook audio | **later** (a later FP job version) |
 | 12 | privacy | image jobs **default to `PanelDa`**; `PublicDa` stays available when the user chooses it |
+| 13 | V5 image price | **pending user confirmation** — recommendation: prefill-equivalent tokens per slot, floored at `⌈per-image work / per-token work⌉`, at the job's per-token price |
+| 14 | V4 jobs on a class with image slots | **no** (2026-09-29): a class with slots takes V5 only; likewise a class that reads a source (§II.2.2) |
+| 15 | V5 source-token price | **pending user confirmation** — recommendation: priced as prompt tokens, at the job's per-token price, never below the class's floor `⌈source work / per-token work⌉` |
+
+**2026-10-01 (coordinator): a generative class must be able to carry a claim.** The carriage of a tensor job is decided as §I.4 states it:
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 16 | tensor claims' weight | **none in the first release** — a weightless claim (FP job version 10); the unit is the exact step leaves, the weight a later fence (§I.4.6) |
+| 17 | class capacity | a per-class cap on claims in flight in the fence's per-profile ceilings (§I.4.8); the drill's value 16, the network's provisional |
+| 18 | seat verification | the seat **replays the whole job**; interval sampling for long classes is later (§I.4.10) |
+| 19 | the fence | **`palw_fp_job_v5` over `palw_gen_v1`** — the lane table's pipeline-class fence; a dedicated fence is the one-function fallback (§I.4.9) |
+| 20 | a tensor claim's court under the held regime | **`GenShardCourtAccused`** (object tag 88, **approved 2026-10-01**): tag 62's twin for pipelines (§I.4.7, finding G23). The RFC was silent and a claim with no court is unsafe to open; additive and dormant |
+| 21 | class gating of a tensor claim | the class's **status** (`Active`), **readiness** (a panel's worth of distinct operators, never the executor's, hold the class with a fresh possession proof — decided 2026-10-01; one shared function, `class_seating_v1`, which lane F's `palw_class_seating` extends with an independence floor for every class kind), the fence's cap on claims in flight and the per-bond share `⌈cap / 2⌉` — **not the registry lifecycle**, whose row for a pipeline never admits (§I.4.5, §I.4.8) |
+| 22 | closes larger than one carrier under the held regime | **approved 2026-10-01, generic (IR and pipelines) (G24, §I.4.7)**: the held leaf challenge — object tag 90, fence `palw_held_close_chunks_v1` — opens a `Terminal` session at the named leaf and rides the court's own close group (keyed to claim and accuser by construction) up to the carried cap; the accuser bears the clock and the deposit, an abandoned close forfeits the deposit and leaves the claim unaffected, challenges are capped per claim, network and block; tag 62's live semantics are unchanged, PALW-GEN-21 refuses a pipeline class whose close exceeds one carrier until the fence is armed, and the live IR classes' limitation is recorded |
 
 The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.

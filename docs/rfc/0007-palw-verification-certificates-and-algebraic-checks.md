@@ -2,12 +2,12 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-10-01 — design. **Parts I and III implemented under the dormant fence `palw_verification_vertex_v1`; Part II's chain half under `palw_witness_manifest_v1`, with the seat-local checker, its mirror and the per-row history sketches built; Part IV.1 under `palw_audit_mesh_v1`; Part IV.2 under `palw_capped_onboarding_v1` (branch `rfc7/vertex`, 2026-10-03; spec `docs/spec/palw/18-verification-certificates.md`).** Open questions 1–10 are settled (below) |
+| Status | Draft, 2026-10-01 — design. Part II prototyped and measured (crate `misaka-palw-tir-sketch`). Part IV.1's audit prototyped off-chain. Parts I, III and IV.2 are text only |
 | Author(s) | MISAKA core (drafted with Claude; lane M4) |
 | Created | 2026-10-01 |
 | Normative dependencies | **RFC-0002** (PALW-TIR v1 and its Phase F integration: commit points, the step tree, cones, the demand evaluator, the court) for Parts II and IV; the V2 panel (`palw_panel_v2`), ADR-0065 Decision 4, ADR-0098 and ADR-0111 for Parts I, III and IV |
 | Affects | spec/palw 07 (claims, panels, receipts, licensing), 08 (verification), 09 (court: availability requests only — the exact court is unchanged), 10 (rewards and slashing: equivocation, trap settlement, capped-mode vesting), 14 (node: the checker, the audit worker, the vertex pool), 16 (fences), and a new chapter `spec/palw/18-verification-certificates.md` · all networks (dormant until armed) · `consensus/core` (Part I objects and fold, Part IV objects and lifecycle) · node software (Part II checker, Part IV.1 auditor) |
-| Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text · `rfc7/vertex` (off `rfc4/int-release` @ `785d601b4`, with `rfc7/algebraic` merged, then `rfc4/int11-rel`): Parts I to IV |
+| Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
 ## 概要(日本語)
@@ -869,74 +869,22 @@ seat relies on it.
 
 ## Open questions
 
-1. ~~**`round_daa` and the leaf caps.**~~ **Settled (the lead, 2026-10-03):** `round_daa` = 1 DAA; one vertex per seat per round; a
-   per-vertex leaf cap (1,024 leaves, 80,000 bytes); no mid-round signing in v1. Implemented as `PALW_VERTEX_ROUND_DAA_V1`,
-   `PALW_VERTEX_MAX_LEAVES_V1`, `PALW_VERTEX_MAX_LEAF_BYTES_V1`; a seat whose round holds more leaves than a vertex carries the
-   excess into its next round.
-2. ~~**`Compact` references in v1**, or `Full` first and `Compact` behind a second fence?~~ **Settled:** `Compact` ships in v1 under the
-   same fence (it is what brings per-claim signature data from 14.4 KB to 66–330 B); `Full` is accepted too. An unknown or ambiguous
-   compact reference is ignored by the fold.
-3. ~~**The equivocation penalty.**~~ **Settled:** a new act in the ADR-0152 per-act slash table: 100 ‰ of the bond
-   (`PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1`) plus every lock the seat holds on a claim either vertex names, plus ejection (a forced
-   retirement: the bond backs its existing claims to resolution and takes no new work).
-4. ~~**Part I migration.**~~ **Settled:** receipts are accepted past the fence until every claim bound before the fence is licensed or
-   void (no stranding). The path rule is one predicate (`palw_vertex_claim_licenses_by_tally_v1`): a claim whose panel bound at or after
-   the fence licenses by tally and refuses a receipt licence by name; a claim bound before it licenses on the receipt path, and a leaf
-   naming it counts for nothing. The two paths never count one seat twice.
-5. ~~**Witness bytes in the class profile** (§II.10).~~ **Settled (the lead, adopted 2026-10-03):** the witness bytes enter the verification-window
-   derivation (`palw_class_verify_ccu_v1`: `verification_ccu` plus 320 MAC-eq a served byte), **not** seat pay (pay reads the registry row, which no
-   witness term touches).
-6. ~~**Seat pay for algebraic checks.**~~ **Settled (adopted 2026-10-03):** a receipt (or vertex leaf) filed by a sketching seat earns what a replay's earns.
-   The verdict is the same verdict; no rule reads how a seat checked.
-7. ~~**Audit-mesh parameters.**~~ **Settled (adopted 2026-10-03):** `trap_rate` 1 % (100 bp of setter slots); `trap_penalty` a reservation equal to 10 × the
-   audit pay; 2 audits per claim; audit pay 4 ‰ of the claim's escrowed reward per attested audit, out of the panel reserve (the RFC's "proportional to the
-   openings fetched" has no on-chain measure, so it is a fixed share); trap bounty 5 audit pays; trap deposit 100 MSK.
-8. ~~**`w_cap` for capped mode and `capped_admission_permille`.**~~ **Settled (adopted 2026-10-03):** `w_cap` = 1 % of fork-choice weight (10 ‰ of the share
-   table at entry, and of the immature weight at each admission); `capped_admission_permille` = 20; **re-verify all capped claims** on testnet-12.
-9. ~~**Per-row history sketches** (§II.3).~~ **Settled (adopted 2026-10-03): build them** — built (`misaka-palw-tir-sketch::history`).
-10. ~~**The canonical serving set** (§II.2).~~ **Settled (adopted 2026-10-03): pin it in the class profile** — the profile records, at registration, the
-    witness bytes and chunk count the canonical set implies (`palw_witness_profile_v1`), and an attempt commits exactly that many chunks.
+1. **`round_daa` and the leaf caps.** 1 DAA (today's licence latency) or longer (less header overhead at low load)? Should a seat be
+   allowed to sign mid-round when its leaves fill a vertex?
+2. **`Compact` references in v1**, or `Full` first and `Compact` behind a second fence?
+3. **The equivocation penalty.** 100 ‰ of the bond plus locks plus ejection, or the ADR-0152 per-act table?
+4. **Part I migration.** Receipts accepted for one receipt window past the fence, or until every claim bound before the fence is
+   licensed or void?
+5. **Witness bytes in the class profile** (§II.10). Should they enter the verification-window derivation, and seat pay?
+6. **Seat pay for algebraic checks.** Should a receipt filed by a sketching seat earn what a replay earns? It costs the network the same
+   licence, but costs the seat less compute and more bandwidth.
+7. **Audit-mesh parameters.** `trap_rate` (1 %?), `trap_penalty` (a reservation?), audits per claim, and audit pay.
+8. **`w_cap` for capped mode** (1 % of fork-choice weight?) and `capped_admission_permille`. Re-verify all capped claims, or a random
+   subset with a stated detection rate?
+9. **Per-row history sketches** (§II.3) are modelled, not built. Build them before any long-context class relies on Part II?
+10. **The canonical serving set** (§II.2). Keep it as node policy, or pin it in the class profile so that every producer serves the same
+    bytes?
 
 ## Decision
 
-**Part I and Part III: implemented under the dormant fence `palw_verification_vertex_v1`** (branch `rfc7/vertex`; the lead's decisions of
-2026-10-03 on questions 1–4 above). **Parts II and IV: implemented under `palw_witness_manifest_v1`, `palw_audit_mesh_v1` and
-`palw_capped_onboarding_v1`** (same branch; the lead's decisions of 2026-10-03 on questions 5–10, adopted as written above).
-
-What Parts II and IV fixed where this text left room (spec chapter 18, §18.15–§18.20, is normative):
-
-- **The manifest carries a witness *count*, not a witness root.** A root the chain cannot recompute would be a free field in the priced bytes — a
-  free draw on both lotteries (ADR-0072 Decision 8). The v2 manifest root is `H(trace_root ‖ chunk_count)`, the count is pinned to the class's
-  profile, and the chunk digests are the producer's served manifest; a seat trusts the algebra, not them. `Unavailable` names witness chunk `i`
-  as manifest chunk `1 + i`.
-- **The audit is drawn at acceptance, not at the licence.** A claim a panel never licenses (a trap claim is one) is still audited; the mesh is a
-  sensor, not a licence. Auditors reserve the trap penalty in `reserved_exposure` for the audit and reveal windows (240 + 240 DAA).
-- **A trap's fault is a tile among at most 64 the commitment binds**; an auditor whose drawn ticket lands on it (`ticket % tiles`) and attested a match
-  is slashed, one that attested the mismatch is paid. The slot lottery is a hash lottery over `(bond, ⌊DAA/100⌋)`.
-- **Capped claims are licensed by the holders, not by the mesh.** Every licensing door the chain has reads a panel's receipts and the rcore ledger beside
-  them; a mesh-only licence would be a second ledger. So a capped class produces and is audited, its claims wait without a bind deadline, and when the
-  holders are seated each claim gets a re-verification window and goes through the ordinary path to `Final` — which is when its reward is paid, and
-  never if it is voided. A DA certificate for a class is `q` = 3 equal `Held` leaves naming the class id (the capture of its probe job).
-- **Tags and numbers**: objects **93** `TrapCommittedV1` and **94** `TrapRevealedV1`, appended after this branch's 91 and 92 (the lead assigns the
-  final numbers at integration — lanes S and U hold 91–94 on theirs); the mesh's four tables ride delta entry 101 (table ids 4 to 7), tail `0xE4`
-  and the `mesh/v1` root block.
-
-What the implementation fixed where this text left room (spec `docs/spec/palw/18-verification-certificates.md` is normative):
-
-- **The leaf carries no segment mask.** A `Valid` attests exactly the seat's assigned mask (`validate_receipt_coverage_v2` requires it of
-  a receipt), so the tally derives it. A `Verdict` leaf is 67 bytes with a `Full` reference and 23 with a `Compact` one (the RFC's 66 and 22
-  plus the verdict's tag byte; `Unavailable` adds 12).
-- **The tally rides the licensing arm.** Counted leaves are expanded into the `Vec<PalwSeatReceiptV3>` a `ReceiptLicensedV2` of the same
-  seats would carry and fed to the same fold arm, so the licence, its locks, its door record and its recount are the receipt path's.
-  On R-core+ the coverage door needs every segment attested twice, which is the full seat and the four partial seats: the tally licenses
-  when the fifth `Valid` lands, as the receipt path does.
-- **The state is three tables** (`vertex_rounds`, `vertex_tallies`, `vertex_held`), one Some-only root block `vertex/v1`, one carriage tail
-  `0xE4`, one generic delta entry `VertexRow` (delta 101). Rows of a round are kept for the evidence window (1,200 DAA) and swept 256 a
-  block; a tally lives while its claim is `PanelBound`; `Held` rows while it is live.
-- **Equivocation evidence carries two headers** (≈ 4.9 KB each) and, when the filer has them, the leaves of either side, so the fold can
-  forfeit the seat's locks on the claims they name. One conviction per `(seat, round)`.
-- **The `Held` exposure.** Every attester of a claim whose data a data-availability default concludes was not served loses 5 ‰ of its
-  collateral (`PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1`), charged beside the producer's own charge. A certificate is `q` = 3 equal leaves.
-- **Prerequisites** (named by `validate_palw_v2`): `palw_verification_v2`, `palw_rcore_plus`, `palw_unavailable_abstains`,
-  `palw_panel_economy`, `palw_objective_offence`, each in force at or below the fence.
-- **Tags and numbers**: objects 91 (`VerificationVertexV1`) and 92 (`VertexEquivocationV1`), delta entry 101, carriage tail `0xE4`.
+<Open.>

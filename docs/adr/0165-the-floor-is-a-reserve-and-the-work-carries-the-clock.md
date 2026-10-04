@@ -23,8 +23,7 @@ joins the pre-write skip arm, so the block stands and **no claim is written**: n
 withheld and burned, as for every skipped own attempt) and no PALW weight is credited. **When the floor IS accepted
 (Idle) it is today's bonded floor attempt, unchanged** — the same bond, producer-floor, exposure, share and room checks, the
 same reservation, weight and reward. The rule adds a refusal and relaxes none; claims taken before the fence settle as before.
-A **REAL attempt** is any attempt of a registered class other than the base class; and it is an event of the machine only as an attempt-lane BLOCK's
-attempt (below): a capacity rider is none.
+A **REAL attempt** is any attempt of a registered class other than the base class.
 
 **The floor state** is one small rooted value, `PalwFloorStateV1 { mode, last_probe_end }`, with `mode` one of
 
@@ -62,13 +61,6 @@ fold makes — the registered, Active class, the bond (key, producer floor, free
 exposure ceiling and share, the network room — **and wrote its claim**. The step runs inside `apply_attempt` just before
 `write_claim`, so a merged attempt the fold later refuses is restored with its checkpoint, and an attempt the fold *skipped*
 (refused by name, before any write) never moves the machine. **The kind a header claims never moves it; the claim does.**
-**A capacity rider is no event** (the coordinator's decision of 2026-10-03, on INT's finding that ADR-0164's riders build the fold's attempt
-origin): a rider (tag 95) rides an object the accepting block carries, has no header and is in no colouring — the machine exists to shield REAL
-attempt *blocks* from the floor blocks that colour against them, so a rider shields nothing, and counting it would refuse floors (the anchors,
-the bonded fallback) for no protection and open a keep-alive that costs no block. It steps the machine neither BLUE nor RED, whatever its class and
-however its lead was coloured; its own accounting (the lead's carve split, the reservation, the weight) is unchanged, and the lead's acceptance
-already stepped the machine once. The fold carries this as an explicit source on the attempt's origin (`PalwFloorEventSourceV1`: `BlockBlue`,
-`BlockRed`, `Rider`), not as a colour. A rider of the floor class still meets the floor's gate, as any floor claim does.
 Within a block the order is the fold's: the block's own attempt first (BLUE: a chain block), then the merged works in
 consensus acceptance order, each stepping the state the one before left, all at the accepting block's DAA (Idle + [RED, BLUE]
 is Probe then Normal; Idle + [BLUE, RED] is Normal and the RED changes nothing). A merged attempt's colour is its place in the
@@ -255,8 +247,7 @@ tick-source rule, the clock-speed simulation), `real_work_reserve_v1` (the fold 
 refuse by name, an unanswered probe expires and the cooldown holds RED off but not BLUE, RED never extends and BLUE does, several
 attempts in one mergeset in the fold's order, **only a fully accepted REAL attempt moves it**, fence straddle, reorg revert/apply and
 branches, the carriage, time writes once, an all-floor network is Idle and live), `palw_useful_work_fences` (dormant on every preset,
-fingerprint and fork id, prerequisites), `palw_floor_riders_are_no_events` (through the ×1000 package's riders: a rider-only flow does not keep Normal
-past `floor_idle_slots`, riders in Idle open no Probe and make no Normal, a BLUE REAL lead carrying riders steps the machine exactly once). Pipeline, on testnet-12's own GHOSTDAG — `t12_real_share` (00.2, 00.5, 00.6: the slow
+fingerprint and fork id, prerequisites). Pipeline, on testnet-12's own GHOSTDAG — `t12_real_share` (00.2, 00.5, 00.6: the slow
 attempt under floors and under heartbeats, the busy chain, the rogue floor, the RED first attempt and its Probe, an unanswered probe
 expiring, B), **the pruned join** (`…a_pruned_join_inside_a_normal_stretch_…`, `…_inside_a_probe_…`: a second node follows the
 archival one through the pruning point, is left as a pruned join leaves it, imports the carriage against the witness child's committed
@@ -264,9 +255,9 @@ root and then agrees with the archival node on every block — sink, root, floor
 `t12_post_launch_fences_combined` (the two fences armed with the whole release at one height: the floor reserve is live, an
 all-floor chain stays Idle and roots as before, the clock still runs). `kaspad` — the drill flags (refusals, the wait rule, the
 policy bypass and its wiring), the hold's wording and level, the anchor duty's rule, the lane watch counting merged attempts. `rpc-service` — `blockKind`.
-The anchor finding and its two fixes (00.9) are measured by `real_share_under_normal_…binds_through_anchor_duty`, `real_share_control_…no_duty`, `real_share_anchor_duty_fires_once_…`, `real_share_the_round_seed_anchor_is_recorded_from_merged_attempts_…` and `real_share_control_without_the_window_…` in `t12_real_share`.
+The anchor finding (00.9) is measured by `real_share_gap_*` and `real_share_control_*` in `t12_real_share`.
 
-### 00.9 What A″ does to anchors — the finding of 2026-10-03 (P2, `lanes/evidence/head-admission-slip-1003/`) and its two fixes
+### 00.9 What A″ does to anchors (open finding of 2026-10-03; P2, `lanes/evidence/head-admission-slip-1003/`)
 
 **The floor was the chain's anchor factory.** In P2's capture every attempt on the selected chain is a floor (1,415 of 1,415 chain
 attempt blocks); **none of the 86 REAL attempts is a chain block** — an 8k attempt is templated slots before it lands, the heartbeat
@@ -283,32 +274,33 @@ holds the producers that made them:
    non-operators and the operators' floor producers hold, **no operator attempt exists and the claim waits for its backstop**
    (`bind_base + window_bind`, 580 DAA, then `BindTimeout` without forfeit).
 
-**The two fixes** (coordinator, 2026-10-03; neither touches the state machine):
-
-* **Anchor duty — a producer policy in this release, default on, no consensus change** (consensus-core's `palw_floor_anchor_duty_v1`,
-  asked by the kaspad worker and by the pipeline tests alike). An operator's floor producer that holds *only* because of the idle-only
-  policy mines ONE binder when a claim has waited 30 slots for an operator attempt (staggered 0–7 slots by bond so the operators do not
-  all fire in one slot; the wait starts again after it fires). A refused floor is still an operator attempt, so it binds the due claims;
-  the cost is about one floor per 30 slots in the non-operator-REAL regime and none while operators' REAL attempts (a 3-slot gap) anchor
-  by themselves. It replaces the time-triggered "beacon floor" an earlier proposal gave the replay, and it is logged (§00.7).
-* **ADR-0170's `palw_anchor_window_v1` — the same release's own fence** (lane P2). A MERGED admitted attempt records the round seed
-  anchor (M1), the anchor survives span boundaries (M2) and the admission jury and the schedule seeding read the latest anchor of the
-  last 24 spans (M3). This ADR neither implements nor needs it for the machine; it is what restores the anchors the floor used to make.
-
-**Measured in-tree** (testnet-12's own pipeline; A″ + B armed; lane A, lane F1 and the bind-deadlock fence armed with 4 of the 8 genesis
-cards as operators; spans are one DAA here; `t12_real_share::real_share_*` — the anchor duty's rule runs on the real chain's own
-producer facts, pass by pass, as the kaspad worker runs it):
+**Measured in-tree** (testnet-12's own pipeline; A″ + B armed; lane A and lane F1 armed with 4 of the 8 genesis cards as operators;
+spans are one DAA here; `t12_real_share::real_share_gap_*` and `…_control_*`, which assert the gap as it stands — flip them when a fix
+lands):
 
 | | result |
 |---|---|
-| a non-operator's REAL claim, chain Normal, floor producers holding, non-operator REAL attempts keeping it Normal — **before the duty** (the finding) | slot DAA 30; twelve slots later still **`Provisional`**, nothing anchoring it (backstop 580 DAA) |
-| the same, then ONE operator floor — refused by the fold (`FloorNotIdle`: no claim, no weight) | **`PanelBound`** at once: the anchor needs the operator's *attempt* (its header), not its claim |
-| **with the anchor duty** (the four operators' producers running the rule) | slot DAA 30; **one** binder by one operator at DAA 66 (30 slots and its stagger past the slot), the claim `PanelBound { bound_daa: 66 }`; no second binder in the thirty slots after; the chain still Normal |
-| the same claim with the REAL attempts made by operators | `PanelBound { bound_daa: 41 }`, **no duty fired** (bound inside the wait) |
-| seed anchors, a dense run (one REAL attempt in flight at a time, four merged beside the chain, none the selected parent of its merger) — **without the window** | Normal, floor held: **1 of 16 spans anchored**; honest floors, Idle: **15 of 16** |
-| the same run **with the window** | each merged admitted attempt records the anchor (the attempt's own block, the merging block's span — M1), it is still the same anchor one slot later across a span boundary (M2), and **every span from the first merged attempt on is followed by an audit that finds a seed in its 24-span window: 14 of 14** (M3) |
+| a non-operator's REAL claim, chain Normal, floor producers holding, non-operator REAL attempts keeping it Normal | slot DAA 30; at DAA 45 still **`Provisional`** |
+| the same, then ONE operator floor — refused by the fold (`FloorNotIdle`: no claim, no weight) | **`PanelBound { bound_daa: 45 }`** at once: the anchor needs the operator's *attempt* (its header), not its claim |
+| the same claim with the REAL attempts made by operators | `PanelBound { bound_daa: 41 }` |
+| seed anchors, the same run | **1 of 36 spans anchored** (the opening REAL attempt, a chain block); the REAL attempts merged beside the chain anchor nothing |
+| seed anchors, a denser run (one REAL attempt in flight at a time, four merged beside the chain, none the selected parent of its merger) against the floor producers mining every slot | Normal, floor held: **1 of 16 spans anchored**; honest floors, Idle: **15 of 16** |
 
-(The Candidate class's own admission through the window — "admitted within two periods with it, not without" — is `t12_anchor_window`'s.)
+**What was decided** (coordinator, 2026-10-03; none of it changes the state machine):
+
+* **Anchor duty — built, in this fence's release, default on** (producer only, no consensus change). An operator's floor producer that
+  holds *only* because of the idle-only policy mines ONE binder when a claim has waited 30 slots for an operator attempt (staggered 0–7
+  slots by bond so the operators do not all fire in one slot, and the wait starts again after it fires:
+  `palw_floor_anchor_duty_v1`). A refused floor is still an operator attempt, so it binds the due claims (measured above); the cost is
+  about one floor per 30 slots in the non-operator-REAL regime and none while operators' REAL attempts (a 3-slot gap) anchor by themselves.
+  It is the only floor the hold lets through, it replaces the time-triggered "beacon floor" an earlier proposal gave the replay, and it is
+  logged (§00.7).
+* **The round seed anchor — NOT in this fence.** Merged admitted attempts recording the anchor, the anchor kept across spans, and the jury
+  and the schedule seeding reading the latest anchor within the last 24 spans are the separate 5,300 fence `palw_anchor_window_v1`
+  (lane P2, branch `anchor/window`, user-approved). This ADR neither implements nor assumes it: without it, A″ leaves the ADR-0130 schedule
+  and the ADR-0147 admission jury without an anchor in almost every span (measured above), and the tests that assert that gap are to be
+  flipped when it merges.
+* **Class-aware colouring — the next fence** (§10.3), handed to lane RF8 (RFC-0008) as the alternative to its merge-admission design.
 
 ## 0. Where the implementation stands
 
@@ -317,7 +309,7 @@ producer facts, pass by pass, as the kaspad worker runs it):
 | **B** — a REAL attempt carries the slot's tick, one tick per slot (`palw_real_clock_tick_v1`) | built, tested (00.6) |
 | **A″** — the floor is the idle-only bonded fallback, behind the floor state machine, 20 / 8 / 20 (`palw_floor_reserve_v1`) | built, tested (00.1–00.5); **the producer hold is default-on** |
 | **FALLBACK-V1** — the bonded fallback block, its weight, reward, cap, idle rule, retiring the heartbeat | **designed here (§5–§8), the next fence, not built** |
-| anchors under Normal (lane A's binding; the round seed and the jury) | **00.9**: both fixed and measured in-tree — **anchor duty** (a producer policy, this ADR) binds a non-operator's claim; **`palw_anchor_window_v1`** (ADR-0170, the same release) restores the seed anchor; class-aware colouring (§10.3) is the next fence |
+| anchors under Normal (lane A's binding; the round seed and the jury) | **00.9**: measured in-tree; **anchor duty built** (binding); the round seed / jury are `palw_anchor_window_v1`'s (separate fence); class-aware colouring (§10.3) is the next fence |
 | header-level floor invalidation / class-aware colouring / re-anchored inference | **open problems, §10, not built** |
 
 ## 1. The defect
