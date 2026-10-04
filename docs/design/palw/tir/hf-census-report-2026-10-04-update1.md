@@ -23,7 +23,7 @@ shape depth; the frame's GGUF supplement re-run). Metadata and headers only; rig
 
 | Change (commit) | Bucket measured | Before | After |
 | --- | --- | --- | --- |
-| Layout search judged at the judged height (`a25a79fe0`), lowered window = declared context and DA twin at the judged height (`ddfaf6c8e`) | eligible sampled decoders judged at the shape depth | 40 % shape-ready of 684 (`COURT_BUDGET` 133, `ADMISSION_EXCEEDS` 73 rows) | 822 of 836 shape-ready; 12 `COURT_BUDGET` + 2 `ADMISSION_EXCEEDS`, every one ≥ 100 B parameters except one 8 B 2-bit export |
+| Layout search judged at the judged height (`a25a79fe0`), lowered window = declared context and DA twin at the judged height (`ddfaf6c8e`) | eligible sampled decoders judged at the shape depth | 151 of 469 judged shape-ready (32 %; `COURT_BUDGET` 219, `ADMISSION_EXCEEDS` 93, budget spent 5) | 822 of 836 shape-ready; 12 `COURT_BUDGET` + 2 `ADMISSION_EXCEEDS`, every one ≥ 100 B parameters except one 8 B 2-bit export |
 | PEFT adapter composed with its pinned base (`3b6cc1164`) | `ADAPTER_UNCHECKED` cohort, N = 186,671, n = 150 | 0 shape-ready | 88 / 150 shape-ready |
 | Training-tool keys inert, `trust_remote_code` classified, partial-rotary/attention_bias keys read (`e9c39983b`, `956302828`, `23f8a9feb`) | headers pass, same 1,773 | 684 eligible; `CONFIG_KEY_UNREAD` 272 rows | 836 eligible; `CONFIG_KEY_UNREAD` ~100 |
 | Task inference v2 (`cb1152dc5`) | `TASK_UNKNOWN` cohort, N = 894,223, n = 150 | 0 | 19 / 150 shape-ready (≈113 k repositories; mostly untasked LLM GGUFs) |
