@@ -1,7 +1,44 @@
 {
   "format": "misaka.palw.model-adapter.v1",
   "id": "llama",
-  "doc": "LlamaForCausalLM (Llama 1-3.x, TinyLlama, Vicuna, Yi, SmolLM 1/2, CodeLlama, ...): the standard decoder as it stands. Written down so a Llama configuration is a Level B read with a named adapter; the same configuration is read identically with no adapter (Level A).",
-  "extends": ["decoder-core"],
-  "match": {"architectures": ["LlamaForCausalLM"], "model_types": ["llama"]}
+  "doc": "LlamaForCausalLM (Llama 1-3.x, TinyLlama, Vicuna, Yi, SmolLM 1/2, CodeLlama, ...): the standard decoder as it stands. Written down so a Llama configuration is a Level B read with a named adapter; the same configuration is read identically with no adapter (Level A). A positional limit under another name (max_seq_len, max_sequence_length, n_ctx, seq_length) is not read (the class declares its context); rope_interleaved and sliding_window are accepted only absent/false/null.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "LlamaForCausalLM"
+    ],
+    "model_types": [
+      "llama"
+    ]
+  },
+  "config": {
+    "inert": [
+      "max_seq_len",
+      "max_sequence_length",
+      "n_ctx",
+      "seq_length"
+    ]
+  },
+  "vars": [
+    {
+      "name": "chk_rope_interleaved",
+      "value": {
+        "$forbid": [
+          "rope_interleaved",
+          "transformers' LlamaAttention rotates halves (rotate_half), never interleaved pairs"
+        ]
+      }
+    },
+    {
+      "name": "chk_sliding_window",
+      "value": {
+        "$forbid": [
+          "sliding_window",
+          "LlamaAttention attends to the whole history"
+        ]
+      }
+    }
+  ]
 }
