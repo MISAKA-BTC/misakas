@@ -141,7 +141,238 @@ pub fn task_of(l: &ListingV1) -> TaskV1 {
     if l.config.get("peft").and_then(|p| p.get("task_type")).and_then(|t| t.as_str()) == Some("CAUSAL_LM") {
         return mk("text-generation", "inferred:peft");
     }
+    // Inference v2 (2026-10-04): what the files declare — the configuration's architecture class, the GGUF's `general.architecture` —
+    // read against transformers' own head classes and llama.cpp's architecture names. Never the repository's code, name or card text.
+    if let Some(t) = l.arch().and_then(task_of_architecture_class) {
+        return mk(t, "inferred:architecture-class");
+    }
+    if let Some(t) = l.gguf_arch.as_deref().and_then(task_of_gguf_architecture) {
+        return mk(t, "inferred:gguf-architecture");
+    }
     TaskV1 { task: "unknown".into(), group: "unknown".into(), profile: Profile::None, source: "none".into() }
+}
+
+/// **The task a transformers head class names** (the class transformers' pipelines resolve for that task); `None` for a class
+/// that names none (a bare `…Model` other than a known sentence encoder, a custom class).
+pub fn task_of_architecture_class(a: &str) -> Option<&'static str> {
+    const SEQ2SEQ_TEXT: &[&str] = &[
+        "T5",
+        "MT5",
+        "UMT5",
+        "Bart",
+        "MBart",
+        "Marian",
+        "Pegasus",
+        "PegasusX",
+        "M2M100",
+        "NllbMoe",
+        "LongT5",
+        "Blenderbot",
+        "BlenderbotSmall",
+        "ProphetNet",
+        "LED",
+        "FSMT",
+        "PLBart",
+        "BigBirdPegasus",
+    ];
+    const SPEECH: &[&str] = &["Whisper", "Speech2Text", "SeamlessM4T", "SeamlessM4Tv2"];
+    const VISION_CHAT: &[&str] = &[
+        "Qwen2VL",
+        "Qwen2_5_VL",
+        "Qwen3VL",
+        "Qwen3VLMoe",
+        "Qwen3_5",
+        "Qwen3_5Moe",
+        "Qwen2_5Omni",
+        "Gemma3",
+        "Gemma3n",
+        "Gemma4",
+        "Llava",
+        "LlavaNext",
+        "LlavaOnevision",
+        "LlavaNextVideo",
+        "Idefics",
+        "Idefics2",
+        "Idefics3",
+        "PaliGemma",
+        "Mllama",
+        "Mistral3",
+        "SmolVLM",
+        "InternVL",
+        "Llama4",
+        "AyaVision",
+        "Florence2",
+        "Blip2",
+        "InstructBlip",
+        "Kosmos2",
+        "Chameleon",
+        "Emu3",
+        "Janus",
+        "GotOcr2",
+        "Glm4v",
+        "Glm4vMoe",
+    ];
+    const ENCODERS: &[&str] = &[
+        "Bert",
+        "Roberta",
+        "XLMRoberta",
+        "DistilBert",
+        "MPNet",
+        "Electra",
+        "DebertaV2",
+        "Deberta",
+        "ModernBert",
+        "Camembert",
+        "Albert",
+        "NomicBert",
+    ];
+    let suffixes: &[(&str, &str)] = &[
+        ("ForCausalLM", "text-generation"),
+        ("LMHeadModel", "text-generation"),
+        ("ForSequenceClassification", "text-classification"),
+        ("ForTokenClassification", "token-classification"),
+        ("ForQuestionAnswering", "question-answering"),
+        ("ForMaskedLM", "fill-mask"),
+        ("ForImageClassification", "image-classification"),
+        ("ForCTC", "automatic-speech-recognition"),
+        ("ForSemanticSegmentation", "image-segmentation"),
+        ("ForObjectDetection", "object-detection"),
+        ("ForAudioClassification", "audio-classification"),
+    ];
+    for (suf, t) in suffixes {
+        if a.ends_with(suf) {
+            return Some(t);
+        }
+    }
+    if let Some(stem) = a.strip_suffix("ForConditionalGeneration") {
+        if SEQ2SEQ_TEXT.contains(&stem) {
+            return Some("text2text-generation");
+        }
+        if SPEECH.contains(&stem) {
+            return Some("automatic-speech-recognition");
+        }
+        if VISION_CHAT.contains(&stem) {
+            return Some("image-text-to-text");
+        }
+        return None;
+    }
+    if let Some(stem) = a.strip_suffix("Model")
+        && ENCODERS.contains(&stem)
+    {
+        return Some("feature-extraction");
+    }
+    None
+}
+
+/// **The task a GGUF's `general.architecture` names** (llama.cpp's names): a decoder LLM → text generation; a vision LLM's
+/// language part (`qwen2vl`, `qwen3vl`…) → its chat task; a sentence encoder → feature extraction; a diffusion model → text to
+/// image. `None` for a name not listed.
+pub fn task_of_gguf_architecture(g: &str) -> Option<&'static str> {
+    const DECODERS: &[&str] = &[
+        "llama",
+        "llama4",
+        "mistral3",
+        "mistral4",
+        "qwen",
+        "qwen2",
+        "qwen3",
+        "qwen35",
+        "qwen2moe",
+        "qwen3moe",
+        "qwen35moe",
+        "qwen3next",
+        "gemma",
+        "gemma2",
+        "gemma3",
+        "gemma3n",
+        "gemma4",
+        "phi2",
+        "phi3",
+        "phimoe",
+        "falcon",
+        "falcon-h1",
+        "granite",
+        "granitemoe",
+        "granitehybrid",
+        "gpt2",
+        "gptj",
+        "gptneox",
+        "gpt-oss",
+        "starcoder",
+        "starcoder2",
+        "olmo",
+        "olmo2",
+        "olmoe",
+        "exaone",
+        "exaone4",
+        "glm4",
+        "glm4moe",
+        "chatglm",
+        "command-r",
+        "cohere2",
+        "mamba",
+        "mamba2",
+        "rwkv6",
+        "rwkv7",
+        "internlm2",
+        "minicpm",
+        "minicpm3",
+        "stablelm",
+        "lfm2",
+        "lfm2moe",
+        "deepseek",
+        "deepseek2",
+        "deepseek4",
+        "nemotron",
+        "nemotron_h",
+        "nemotron_h_moe",
+        "minimax-m2",
+        "hunyuan-moe",
+        "hunyuan-dense",
+        "bailingmoe",
+        "bailingmoe2",
+        "ernie4_5",
+        "ernie4_5-moe",
+        "dots1",
+        "arcee",
+        "smollm3",
+        "seed_oss",
+        "apertus",
+        "jamba",
+        "plamo",
+        "plamo2",
+        "orion",
+        "baichuan",
+        "bloom",
+        "mpt",
+        "refact",
+        "persimmon",
+        "jais",
+        "dbrx",
+        "arctic",
+        "openelm",
+        "bitnet",
+    ];
+    const VISION_CHAT: &[&str] = &["qwen2vl", "qwen3vl", "qwen3vlmoe", "qwen25vl"];
+    const ENCODERS: &[&str] =
+        &["bert", "nomic-bert", "nomic-bert-moe", "jina-bert-v2", "jina-bert-v3", "modern-bert", "neo-bert", "t5encoder"];
+    const IMAGE: &[&str] = &["flux", "sd1", "sd3", "sdxl", "lumina2", "qwen_image", "hidream", "wan", "chroma"];
+    if DECODERS.contains(&g) {
+        return Some("text-generation");
+    }
+    if VISION_CHAT.contains(&g) {
+        return Some("image-text-to-text");
+    }
+    if ENCODERS.contains(&g) {
+        return Some("feature-extraction");
+    }
+    if g == "t5" {
+        return Some("text2text-generation");
+    }
+    if IMAGE.contains(&g) {
+        return Some("text-to-image");
+    }
+    None
 }
 
 // ---- the selected artifact ------------------------------------------------------------------------------------------------------
@@ -545,6 +776,24 @@ pub fn plan_of(l: &ListingV1, sel: &SelectedV1) -> PlanV1 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_missing_task_is_inferred_from_a_head_class_or_a_gguf_architecture_and_nothing_else() {
+        use super::{task_of_architecture_class as a, task_of_gguf_architecture as g};
+        assert_eq!(a("LlamaForCausalLM"), Some("text-generation"));
+        assert_eq!(a("BertForSequenceClassification"), Some("text-classification"));
+        assert_eq!(a("T5ForConditionalGeneration"), Some("text2text-generation"));
+        assert_eq!(a("WhisperForConditionalGeneration"), Some("automatic-speech-recognition"));
+        assert_eq!(a("Qwen2_5_VLForConditionalGeneration"), Some("image-text-to-text"));
+        assert_eq!(a("XLMRobertaModel"), Some("feature-extraction"));
+        assert_eq!(a("CustomResearchModel"), None, "a custom class names no task");
+        assert_eq!(a("SomethingForConditionalGeneration"), None, "an unlisted conditional-generation class is not guessed");
+        assert_eq!(g("llama"), Some("text-generation"));
+        assert_eq!(g("qwen3vl"), Some("image-text-to-text"));
+        assert_eq!(g("nomic-bert"), Some("feature-extraction"));
+        assert_eq!(g("flux"), Some("text-to-image"));
+        assert_eq!(g("clip"), None);
+    }
+
     use super::*;
 
     fn listing(siblings: &[&str]) -> ListingV1 {
@@ -610,12 +859,16 @@ mod tests {
     }
 
     #[test]
-    fn the_task_is_declared_or_inferred_only_from_a_causal_lm_name() {
+    fn the_task_is_declared_or_inferred_from_the_head_class() {
         let mut l = listing(&[]);
         assert_eq!(task_of(&l).task, "unknown");
         l.config = serde_json::json!({"architectures": ["FooForCausalLM"]});
         assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text-generation", "inferred:architecture"));
+        // Inference v2: a head class names its task (still no profile for classification).
         l.config = serde_json::json!({"architectures": ["FooForSequenceClassification"]});
+        assert_eq!((task_of(&l).task.as_str(), task_of(&l).source.as_str()), ("text-classification", "inferred:architecture-class"));
+        assert_eq!(task_of(&l).profile, Profile::None);
+        l.config = serde_json::json!({"architectures": ["FooResearchModel"]});
         assert_eq!(task_of(&l).task, "unknown");
         l.pipeline_tag = Some("image-classification".into());
         assert_eq!(task_of(&l).profile, Profile::None);

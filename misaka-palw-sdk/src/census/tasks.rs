@@ -11,6 +11,10 @@ use serde::Serialize;
 
 pub const TASK_PROFILES_VERSION: &str = "misaka.palw.hf-census-tasks.v1";
 
+/// The rules `census::listing::task_of` infers a missing task by: v2 (2026-10-04) adds transformers head classes and GGUF
+/// architecture names to v1's causal-LM classes and PEFT task types.
+pub const TASK_INFERENCE_VERSION: &str = "inference-v2";
+
 /// What carries a task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,6 +135,8 @@ pub fn tasks_digest() -> String {
         st.update(format!("{:?}", r.profile).as_bytes());
         st.update(b"\n");
     }
+    // The inference rules for a repository with no declared task are part of the table's identity.
+    st.update(TASK_INFERENCE_VERSION.as_bytes());
     crate::preflight::source::hex(st.finalize().as_bytes())
 }
 
