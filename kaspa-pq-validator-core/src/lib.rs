@@ -3074,3 +3074,136 @@ mod validator_seed_writer_tests {
         assert!(err.contains("cannot create key file"), "the message should name the file: {err}");
     }
 }
+
+/// **RFC-0009 Stage A: the sighash audit for a node-less miner's carrier.**
+///
+/// A miner without `kaspad` signs the COMPLETE carrier locally and hands raw bytes to any node. The one thing that makes that safe
+/// is that a relay cannot change the fee, the change output, the funding input or the payload without breaking the funding
+/// signature. These tests pin that coverage field by field, against the real verifier, and pin the converse a relay needs: the
+/// transaction id does not depend on the signature script, so re-encoding or re-sending cannot mint a second identity.
+#[cfg(test)]
+mod rfc9_sighash_audit {
+    use super::*;
+    use kaspa_consensus_core::tx::ScriptPublicKey;
+
+    fn key() -> ValidatorKey {
+        ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN])
+    }
+
+    fn funding(k: &ValidatorKey) -> (TransactionOutpoint, UtxoEntry) {
+        let spk = pay_to_address_script(&k.funding_address(Prefix::Testnet));
+        (TransactionOutpoint::new(Hash64::from_bytes([0xA1; 64]), 3), UtxoEntry::new(5_000_000, spk, 10, false))
+    }
+
+    /// The two pushes the builder wrote: `<sig ‖ hashtype>` then `<pubkey>` (both above 75 bytes, so OP_PUSHDATA2).
+    fn pushes(script: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        assert_eq!(script[0], 0x4d, "OP_PUSHDATA2");
+        let n = u16::from_le_bytes([script[1], script[2]]) as usize;
+        let sig = script[3..3 + n].to_vec();
+        let rest = &script[3 + n..];
+        assert_eq!(rest[0], 0x4d, "OP_PUSHDATA2");
+        let m = u16::from_le_bytes([rest[1], rest[2]]) as usize;
+        (sig, rest[3..3 + m].to_vec())
+    }
+
+    fn sighash(tx: &Transaction, entry: &UtxoEntry) -> Hash64 {
+        let mtx = MutableTransaction::with_entries(tx.clone(), vec![entry.clone()]);
+        calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &Mldsa87SigHashReusedValuesUnsync::new())
+    }
+
+    fn verifies(tx: &Transaction, entry: &UtxoEntry) -> bool {
+        let (sig_ht, pubkey) = pushes(&tx.inputs[0].signature_script);
+        let (sig, hash_type) = sig_ht.split_at(sig_ht.len() - 1);
+        assert_eq!(hash_type, &[SIG_HASH_ALL.to_u8()]);
+        let h = sighash(tx, entry);
+        kaspa_txscript::verify_mldsa87_with_context(&pubkey, h.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT).unwrap_or(false)
+    }
+
+    fn built() -> (Transaction, UtxoEntry, ValidatorKey) {
+        let k = key();
+        let (op, entry) = funding(&k);
+        let tx = k
+            .build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![7u8; 300], op, &entry, 1_234, false)
+            .expect("builds");
+        (tx, entry, k)
+    }
+
+    #[test]
+    fn the_funding_signature_verifies_over_the_whole_carrier_as_built() {
+        let (tx, entry, _) = built();
+        assert!(verifies(&tx, &entry));
+        // The fee is implicit: input amount minus outputs. It is whatever the signed outputs leave.
+        assert_eq!(entry.amount - tx.outputs.iter().map(|o| o.value).sum::<u64>(), 1_234);
+    }
+
+    #[test]
+    fn a_relay_cannot_change_the_fee_the_change_the_funding_or_the_payload() {
+        let (tx, entry, k) = built();
+        let base = sighash(&tx, &entry);
+        let mut variants: Vec<(&str, Transaction, UtxoEntry)> = Vec::new();
+        let mut t = tx.clone();
+        t.outputs[0].value -= 1; // fee up by one sompi
+        variants.push(("change value (fee)", t, entry.clone()));
+        let mut t = tx.clone();
+        t.outputs.push(TransactionOutput::new(1, ScriptPublicKey::default())); // skim an output
+        variants.push(("extra output", t, entry.clone()));
+        let mut t = tx.clone();
+        t.outputs[0].script_public_key = ScriptPublicKey::new(0, vec![0x51].into()); // redirect the change
+        variants.push(("change script", t, entry.clone()));
+        let mut t = tx.clone();
+        t.inputs[0].previous_outpoint.index += 1; // another funding input
+        variants.push(("funding outpoint", t, entry.clone()));
+        let mut e = entry.clone();
+        e.amount += 1; // lie about the funding amount (re-prices the fee)
+        variants.push(("funding amount", tx.clone(), e));
+        let mut t = tx.clone();
+        t.payload[0] ^= 1; // the claim bytes
+        variants.push(("payload", t, entry.clone()));
+        let mut t = tx.clone();
+        t.subnetwork_id = SUBNETWORK_ID_NATIVE;
+        variants.push(("subnetwork", t, entry.clone()));
+        let mut t = tx.clone();
+        t.lock_time = 1;
+        variants.push(("lock time", t, entry.clone()));
+        let mut t = tx.clone();
+        t.inputs[0].sequence ^= 1;
+        variants.push(("sequence", t, entry.clone()));
+        let mut t = tx.clone();
+        t.version ^= 1;
+        variants.push(("version", t, entry.clone()));
+        let mut t = tx.clone();
+        t.gas = 1;
+        variants.push(("gas", t, entry.clone()));
+        for (what, tampered, e) in variants {
+            assert_ne!(sighash(&tampered, &e), base, "{what} is covered by the sighash");
+            assert!(!verifies(&tampered, &e), "{what}: the funding signature must not verify after the change");
+        }
+        // The signer is the key that owns the funding script: sanity that the positive path above was not vacuous.
+        assert_eq!(pushes(&tx.inputs[0].signature_script).1, k.public_key());
+    }
+
+    #[test]
+    fn the_transaction_id_does_not_depend_on_the_signature_script_so_resending_is_idempotent() {
+        let (tx, entry, k) = built();
+        let id = tx.id();
+        // A different (equally valid) signature over the same sighash: ML-DSA signing is hedged, so the bytes differ.
+        let h = sighash(&tx, &entry);
+        let mut other_sig = k.sign_with_context(h.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        other_sig.push(SIG_HASH_ALL.to_u8());
+        let mut resigned = tx.clone();
+        resigned.inputs[0].signature_script = ScriptBuilder::new()
+            .add_data(&other_sig)
+            .unwrap()
+            .add_data(k.public_key())
+            .unwrap()
+            .drain();
+        assert_ne!(resigned.inputs[0].signature_script, tx.inputs[0].signature_script);
+        assert!(verifies(&resigned, &entry));
+        assert_eq!(resigned.id(), id, "the id is the same: a relay re-signing or re-encoding cannot mint another identity");
+        // And what a relay CAN change without touching the signed fields — the script bytes — is exactly what the id ignores.
+        let mut garbage = tx.clone();
+        garbage.inputs[0].signature_script[10] ^= 0xFF;
+        assert_eq!(garbage.id(), id);
+        assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
+    }
+}
