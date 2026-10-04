@@ -4653,7 +4653,34 @@ impl PalwPanelService {
         // RFC-0004 §6.7: the chain's composite records, read once and only if a held class is a composite.
         let mut composite_records: Option<Vec<(Hash64, kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1)>> =
             None;
-        for class in read.classes.iter().filter(|c| !c.is_base_class) {
+        // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): a seat proves every root a class has in force that it holds** — the
+        // registered root as always, and each other root (a line's current version, a preview, a superseded root inside its grace)
+        // as a duty of its own, so an R2 claim finds its seats and an R1 claim keeps them through the grace. The target is the
+        // class's read with `artifact_root` set to the root; everything below (capacity, conformance, the backend resolved by the
+        // digest, the proof) is per `(class, root)`.
+        let root_keyed = self.consensus_config.params.palw_audit_1004_active_at(current_daa);
+        let targets: Vec<(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryClassReadV1, bool)> = read
+            .classes
+            .iter()
+            .filter(|c| !c.is_base_class)
+            .flat_map(|class| {
+                let mut one = vec![(class.clone(), false)];
+                if root_keyed {
+                    for root in class.roots_in_force.iter().filter(|root| **root != class.artifact_root) {
+                        let mut other = class.clone();
+                        other.artifact_root = *root;
+                        one.push((other, true));
+                    }
+                }
+                one
+            })
+            .collect();
+        for (class, extra_root) in targets.iter().map(|(class, extra)| (class, *extra)) {
+            let slot = if extra_root {
+                crate::palw_readiness_escalation::palw_readiness_slot_v1(&class.class_id, &class.artifact_root)
+            } else {
+                class.class_id
+            };
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
             // memory to replay this class proves nothing for it — the standing proof expires by
             // itself and the class counts one seat fewer. The chain judges the proof; the budget
@@ -4685,8 +4712,15 @@ impl PalwPanelService {
                 }
                 Some(PalwSeatConformanceV1::Passed(_)) | Some(PalwSeatConformanceV1::NotApplicable) | None => {}
             }
-            let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
-            let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
+            let row = if extra_root {
+                read.root_readiness
+                    .iter()
+                    .find(|r| r.bond == bond_key && r.class_id == class.class_id && r.root == class.artifact_root)
+                    .map(|r| r.row)
+            } else {
+                read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row)
+            };
+            let last = self.readiness_submitted.lock().unwrap().get(&slot).copied();
             // M1: how urgently this span's proof escalates — the tip's row lapsing, past R-core+.
             let readiness_v2 = self.consensus_config.params.palw_readiness_v2_at(current_daa);
             let urgency = crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(
@@ -4724,9 +4758,10 @@ impl PalwPanelService {
             // and M1's urgency.
             let candidate = crate::palw_candidate_proof_timing::palw_candidate_proof_plan_v1(
                 crate::palw_candidate_proof_timing::palw_candidate_proof_timing_armed_v1(&self.consensus_config.params, current_daa),
-                class.row.as_ref().is_some_and(|lifecycle| {
-                    matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
-                }),
+                !extra_root
+                    && class.row.as_ref().is_some_and(|lifecycle| {
+                        matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                    }),
                 row.as_ref(),
                 readiness_v2,
                 span_now,
@@ -4781,6 +4816,17 @@ impl PalwPanelService {
             let backend = match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(backend) => backend,
                 Err(e) => {
+                    if extra_root {
+                        self.readiness_note(
+                            class.class_id,
+                            format!(
+                                "no proof — ROOT_BUNDLE_MISSING: class {} has root {} in force and this node holds no bundle for it ({e}); \
+                                 not a seat for that root until the bundle is fetched",
+                                class.class_id, class.artifact_root
+                            ),
+                        );
+                        continue;
+                    }
                     self.readiness_note(
                         class.class_id,
                         format!(
@@ -4863,7 +4909,7 @@ impl PalwPanelService {
                 };
                 // Built once per (class, span): the draw is a function of (class, bond, span), so the
                 // proof is too, and a tick that could not submit it must not pay for it again.
-                let cached = self.readiness_built.lock().unwrap().get(&class.class_id).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
+                let cached = self.readiness_built.lock().unwrap().get(&slot).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
                 let proof = match cached {
                     Some(proof) => proof,
                     None => {
@@ -4977,7 +5023,7 @@ impl PalwPanelService {
                             proof.opened.len(),
                             proof.siblings.len()
                         );
-                        self.readiness_built.lock().unwrap().insert(class.class_id, (span_now, proof.clone()));
+                        self.readiness_built.lock().unwrap().insert(slot, (span_now, proof.clone()));
                         proof
                     }
                 };
@@ -5001,6 +5047,7 @@ impl PalwPanelService {
                         signature,
                     },
                     urgency,
+                    slot,
                 });
                 continue;
             }
@@ -5058,6 +5105,7 @@ impl PalwPanelService {
                     signature,
                 },
                 urgency,
+                slot,
             });
         }
         // P3: a Candidate's proofs take the Own site behind every other proof, in their rank's order —
@@ -5211,7 +5259,7 @@ impl PalwPanelService {
                             if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" },
                             if lane { " — on the readiness lane (V07)" } else { "" }
                         );
-                        self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                        self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
                         let next = TransactionOutpoint::new(txid, 0);
                         if !lane {
                             self.persist_fee_outpoint(next);
@@ -5362,7 +5410,7 @@ impl PalwPanelService {
                     replaced.id(),
                     if duty.escalates() { ", escalated: its row is lapsing or lapsed" } else { "" }
                 );
-                self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
                 let next = TransactionOutpoint::new(txid, 0);
                 self.persist_fee_outpoint(next);
                 *funding = Some((
@@ -19244,6 +19292,7 @@ mod seat_r_tests {
             final_work_share_100_permille: 0,
             class_id,
             artifact_root: h(3),
+            roots_in_force: Vec::new(),
             is_base_class: false,
             row,
             ready_seats_now: 0,

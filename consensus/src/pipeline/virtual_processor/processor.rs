@@ -14980,12 +14980,16 @@ impl VirtualStateProcessor {
         // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
         // stands byte for byte: any row, the V1 age.
         let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
-        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
-            &fold,
-            anchor_daa,
-            state.base_class_id(),
-            readiness_v2,
-        ))
+        Some(
+            kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
+                &fold,
+                anchor_daa,
+                state.base_class_id(),
+                readiness_v2,
+            )
+            // Lane MU (ADR-0173): past `palw_audit_1004_v1` the draw reads possession of the root the claim named.
+            .with_root_keyed(state.audit_1004_active_at(anchor_daa)),
+        )
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.

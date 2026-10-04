@@ -32,6 +32,20 @@ use kaspa_hashes::Hash64;
 pub struct PalwReadinessDutyV1 {
     pub object: PalwConsensusObjectV2,
     pub urgency: Option<PalwReadinessUrgencyV1>,
+    /// **Lane MU (ADR-0173): the memo slot the proof is remembered under** — the class id for a class's registered root (as it always
+    /// was), [`palw_readiness_slot_v1`] for any other root the class has in force.
+    pub slot: Hash64,
+}
+
+/// **Lane MU (ADR-0173, `palw_audit_1004_v1`): the node's per-`(class, root)` memo key for a possession proof** (`readiness_submitted`,
+/// `readiness_built`): a blake2b over the class and the root, so two roots of one class are two duties, each once a span.
+pub fn palw_readiness_slot_v1(class_id: &Hash64, root: &Hash64) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/readiness-slot/v1").to_state();
+    state.update(class_id.as_byte_slice());
+    state.update(root.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 impl PalwReadinessDutyV1 {
@@ -130,6 +144,11 @@ mod tests {
             Some(PalwReadinessUrgencyV1::Lapsed),
             "a seat back from downtime recovers its row, behind every lapsing one"
         );
+        // Lane MU (ADR-0173): two roots of one class are two memo slots, and a slot is a function of both.
+        let (class, r1, r2) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3));
+        assert_ne!(palw_readiness_slot_v1(&class, &r1), palw_readiness_slot_v1(&class, &r2));
+        assert_ne!(palw_readiness_slot_v1(&class, &r1), class);
+        assert_eq!(palw_readiness_slot_v1(&class, &r1), palw_readiness_slot_v1(&class, &r1));
         assert!(!palw_readiness_proof_in_flight_v1(Some(10), 52, 5), "five-DAA spans: the next span is past the landing");
         assert!(palw_readiness_duty_waits_v1(true, Some(106), 107, 1), "its proof of 106 is landing: no copy at 107");
         assert!(!palw_readiness_duty_waits_v1(true, Some(106), 108, 1), "…and at 108 it did not land: send again");
@@ -150,11 +169,11 @@ mod tests {
             signature: vec![],
         };
         let duties = vec![
-            PalwReadinessDutyV1 { object: object(1), urgency: None },
-            PalwReadinessDutyV1 { object: object(2), urgency: Some(PalwReadinessUrgencyV1::Lapsed) },
-            PalwReadinessDutyV1 { object: object(3), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 110 }) },
-            PalwReadinessDutyV1 { object: object(4), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }) },
-            PalwReadinessDutyV1 { object: object(5), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }) },
+            PalwReadinessDutyV1 { object: object(1), urgency: None, slot: Hash64::default() },
+            PalwReadinessDutyV1 { object: object(2), urgency: Some(PalwReadinessUrgencyV1::Lapsed), slot: Hash64::default() },
+            PalwReadinessDutyV1 { object: object(3), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 110 }), slot: Hash64::default() },
+            PalwReadinessDutyV1 { object: object(4), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }), slot: Hash64::default() },
+            PalwReadinessDutyV1 { object: object(5), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }), slot: Hash64::default() },
         ];
         assert_eq!(palw_escalated_readiness_pick_v1(&duties), Some(3), "the row closest to lapsing, the first of a tie");
         assert_eq!(palw_escalated_readiness_pick_v1(&duties[..3]), Some(2), "a lapsing row before a lapsed one");
