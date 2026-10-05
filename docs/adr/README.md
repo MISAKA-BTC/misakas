@@ -430,6 +430,8 @@ relation, and why the heartbeat lane needed its own `algo_id = 8` (ADR-0066) rat
 
 ## Added after the 2026-09-02 pass
 
+**2026-10-06 design addition:** [ADR-0171 — probabilistic constraint checks and court on dispute](0171-probabilistic-constraint-checks-and-court-on-dispute.md) records the operator-selected large-model verification direction for RFC11: Freivalds/GKR-style checks with quantified error, verification-plan admission, and exact bounded dispute resolution. It targets Kimi K3-class feasibility, without claiming a benchmark or universal necessity theorem. Implementation and activation remain pending. It replaces RFC11's preferred exhaustive model-specific admission-proof route, retains raw-sampling security objections and changes no shipped consensus rule. ADR-0170 already exists; 0171 was free in the checked main tree when this document was added. Next unallocated local number: **0172** (recheck concurrent branches before use).
+
 | ADR | status |
 |---|---|
 | [0083](0083-the-difficulty-window-counts-only-rows-priced-by-bits.md) | PROPOSED 2026-09-04, implemented dormant on `palw-daa-bits-priced-rows`. Amends ADR-0066 D1 by one sentence: heartbeat rows carry the bits and bound the span but are not COUNTED by the retarget; an empty count answers MAX. Measured on 5f: five emitters tightened bits ×320 and no attempt lane could win. |

@@ -10,6 +10,8 @@
 | Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
+> **2026-10-06 design extension:** [RFC-0011 §15](0011-permissionless-model-and-long-context-onboarding.md#15-sampling-first--court-on-dispute-2026-10-06-decision) and [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md) select probabilistic constraint verification as the normal large-model path, with exact court on dispute. This extends Part II toward explicitly bound public challenges/GKR and whole-claim soundness; it does not publish or reuse private sketches unsafely. Parts III/IV's single-fault warning for raw trace sampling still applies. This extension is design only and activates no rule.
+
 ## 概要(日本語)
 
 - **この RFC が扱うもの。** testnet-12 では検証の供給が claim の throughput を縛っている(lane P の 10-01 報告)。容量計画は bond あたり claim ×10 → ×100 → ×1000。
