@@ -16,8 +16,9 @@ before it reaches `main`.
 | 0008 | Claim-backed PALW consensus blocks: a bounded LLM session yields multiple independently accounted, verifiable work-slice blocks; model-backed BLUE/clock, floor reserve and heartbeat fallback, with explicit safety and capacity gates | Draft, 2026-10-03 — design only; no activation | [0008-palw-claim-backed-consensus-blocks.md](0008-palw-claim-backed-consensus-blocks.md) |
 | 0009 | PALW Remote Miner: signed remote claims, independent evidence delivery, public receipt redemption with bond-bound payout, and a verifiable miner client | Draft, 2026-10-04 — design only; no activation | [0009-palw-remote-miner.md](0009-palw-remote-miner.md) |
 | 0010 | Permissionless PALW Panel binding and claim completion: remove the eight-genesis anchor privilege through sealed claims, frozen public seat snapshots, binder-independent Panel randomness, and open end-to-end claim paths | Draft, 2026-10-04 — design and implementation plan; no activation | [0010-permissionless-palw-panel-and-claim-completion.md](0010-permissionless-palw-panel-and-claim-completion.md) |
+| 0011 | Permissionless model and long-context onboarding: resolve the 9B/2M gates, then demonstrate full-task on-chain registration for ≥90% of all public HF model repositories with a pinned census and conservative confidence bound | Draft, 2026-10-05 — design and measurement contract; 90% not yet demonstrated | [0011-permissionless-model-and-long-context-onboarding.md](0011-permissionless-model-and-long-context-onboarding.md) |
 
-**Next free number: RFC-0011.**
+**Next free number: RFC-0012.**
 
 ## ADRs that read as proposals
 
