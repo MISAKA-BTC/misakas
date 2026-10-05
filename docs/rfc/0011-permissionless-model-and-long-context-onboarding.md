@@ -316,6 +316,8 @@ Accordingly, raw 32–128 segment spot checks may be diagnostic audits but are n
 
 ### 15.2 Constraint map and checker choices
 
+[RFC-0007 Part V](0007-palw-verification-certificates-and-algebraic-checks.md#part-v--constraint-verification-is-the-normal-panel-path-2026-10-06) supplies the Panel integration contract: batched token/cell verification, an evidence-bound `PalwConstraintReceiptV1`, explicit whole-claim/segment/audit scopes, coverage-aware tally and a MatMul-first delivery plan. The proposed receipt is distinct from the already existing `PalwSeatReceiptV3`; protocol versions and old claims must not be reinterpreted. That contract implements the direction here without lowering this section's coverage or §15.4's error target.
+
 | Relation in the committed computation | Normal check | Exactness and evidence obligations |
 | --- | --- | --- |
 | Dense, attention and executed-expert matrix products | Freivalds projection or GKR/sum-check reduction | Bind both inputs, output, dimensions, weights and arithmetic before challenges. Authenticate projected evaluations against those same commitments. |

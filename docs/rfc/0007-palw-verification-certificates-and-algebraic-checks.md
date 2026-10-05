@@ -1,18 +1,31 @@
-# RFC-0007: PALW Verification Certificates and Algebraic Checks — batched seat vertices with licence by tally (Part I), seat-local Freivalds verification of PALW-TIR executions (Part II), security parameters and escalation (Part III), the global audit mesh and staged onboarding (Part IV)
+# RFC-0007: PALW constraint verification — batched Freivalds/GKR Panel checks, evidence-bound receipts, and exact court on dispute
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-10-01 — design. Part II prototyped and measured (crate `misaka-palw-tir-sketch`). Part IV.1's audit prototyped off-chain. Parts I, III and IV.2 are text only |
+| Status | Revised design, 2026-10-06: **Part V is the selected new Panel verification direction**, aligned with RFC11/ADR-0171; unimplemented and unactivated. Parts I–IV retain the 2026-10-01 design/prototype record; several components have since landed (see current spec 18 and §V.1), so their old implementation/activation claims are historical, not live status. |
 | Author(s) | MISAKA core (drafted with Claude; lane M4) |
 | Created | 2026-10-01 |
-| Normative dependencies | **RFC-0002** (PALW-TIR v1 and its Phase F integration: commit points, the step tree, cones, the demand evaluator, the court) for Parts II and IV; the V2 panel (`palw_panel_v2`), ADR-0065 Decision 4, ADR-0098 and ADR-0111 for Parts I, III and IV |
-| Affects | spec/palw 07 (claims, panels, receipts, licensing), 08 (verification), 09 (court: availability requests only — the exact court is unchanged), 10 (rewards and slashing: equivocation, trap settlement, capped-mode vesting), 14 (node: the checker, the audit worker, the vertex pool), 16 (fences), and a new chapter `spec/palw/18-verification-certificates.md` · all networks (dormant until armed) · `consensus/core` (Part I objects and fold, Part IV objects and lifecycle) · node software (Part II checker, Part IV.1 auditor) |
-| Branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`): the crate, its tests, the measurements, this text |
+| Normative dependencies | **RFC-0002** (TIR semantics and court), **RFC-0011 §§13/15** (verification-plan admission, probabilistic acceptance), **ADR-0171** (selected direction); existing Panel/segment rules, ADR-0065/0098/0111 and spec 18 for compatible legacy paths. New receipts and coverage rules require the separate Part V fence. |
+| Affects | spec/palw 07/08/18: scheme/profile/evidence-bound receipts, assignment, coverage and lifecycle; 09: bounded localization into compatible exact court, separately versioned extensions if needed; 14/16: verifier operation and new fence. Existing Parts I–IV are legacy baselines; Part V changes require coordinated SDK, node, fold, DA, RPC and replay work (§V.9). |
+| Original prototype branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`); the 2026-10-06 design revision is audited against `main` commit `7bff920dc`. No claim that the new scheme runs on a deployed node. |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
-> **2026-10-06 design extension:** [RFC-0011 §15](0011-permissionless-model-and-long-context-onboarding.md#15-sampling-first--court-on-dispute-2026-10-06-decision) and [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md) select probabilistic constraint verification as the normal large-model path, with exact court on dispute. This extends Part II toward explicitly bound public challenges/GKR and whole-claim soundness; it does not publish or reuse private sketches unsafely. Parts III/IV's single-fault warning for raw trace sampling still applies. This extension is design only and activates no rule.
+> **Revision precedence:** Part V and the goals below govern the proposed new route. Part II documents the existing private-sketch baseline; its optional witness, secrecy, node-local policy and historical measurements do not specify Part V's public, evidence-bound protocol. Part III's raw-sampling warning remains valid. Part IV's mesh-only capped experiment cannot substitute for Part V's claim coverage or Final conditions. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 ## 概要(日本語)
+
+**通常のPanel検証は、割り当てられたsegmentを丸ごと再実行する方式から、commitされた計算のconstraintを安く検査する方式へ進める。** この方針をPart Vの中心要件とする。
+
+- 同じweightを使う複数token/cellの行列積をまとめ、batched Freivaldsで検査する。GKR/sum-checkは、対応するconstraint群と境界の整合性をまとめて検査する候補とする。
+- routing/TopK、量子化・丸め、非線形演算、入力・出力、memory/history、segment境界も検査範囲に含める。安いexact checkまたはreview済みのrange/lookup等を使い、未検査の関係を残さない。
+- receiptには方式・profile・challenge・検査範囲・証拠を署名でbindする。**区間の検査成功を、claim全体の成功へ無条件に格上げしない。** 部分receiptは被覆条件を満たした範囲にしか数えない。
+- 異常時にだけ、食い違いを局所化して互換性のある既存courtへ渡す。check失敗だけでslashせず、nodeはterminal stepをexactに判定する。
+- 正の証拠、必要な被覆/quorum、DA、challenge window完了が揃えば、RFC11の誤受理確率を許容してFinalにする。nodeは通常時にモデルを実行せず、署名・割当・commitment・期限・被覆を検証する。
+- Kimi K3級への拡張を目指すが、速度向上は未実測。最初はTIR MatMulの再計算とbatched Freivaldsを、CPU時間・証拠生成・帯域・メモリ・cold/warmコスト込みで比較する。
+
+### 旧草案の概要（2026-10-01の設計・計測記録）
+
+以下は元のPart I–IVの説明を保存したもの。新方式に対する規範は上記とPart Vであり、過去の速度推計、quorum、capped-mode、休眠状態の記述を新方式の実績として扱わない。
 
 - **この RFC が扱うもの。** testnet-12 では検証の供給が claim の throughput を縛っている(lane P の 10-01 報告)。容量計画は bond あたり claim ×10 → ×100 → ×1000。
   この RFC は検証を安くする二つの梃子を定める。**(1) 集約を安くする**(Part I)と **(2) 検査そのものを安くする**(Part II)。そのうえで安全性の
@@ -66,29 +79,9 @@
 
 ## Summary
 
-PALW's binding constraint on testnet-12 is verification supply: seats replay claims and file signed receipts, and the receipts a licence
-needs are the scarce resource (lane P, 2026-10-01). This RFC adds two levers and the rules around them.
+The selected design changes what a Panel receipt means: a seat validates the constraints of its assigned computation with batched Freivalds, compatible GKR/sum-check and bounded exact or lookup checks, rather than replaying the entire segment. Part V specifies the new profile, scope, committed evidence, challenge schedule, tally and escalation obligations. A claim passes probabilistically only when its whole statement is covered under the declared error budget; a few individually sound sampled segments are not enough.
 
-1. **Part I — cheaper aggregation.** A seat signs one **vertex** per round: the Merkle root of every verdict it reached that round,
-   together with the verdicts themselves as leaves. Vertices ride once. The fold **tallies** their leaves and licenses a claim when its
-   panel's `Valid` leaves reach quorum. A seat that signs two different vertices for one round has equivocated and is slashed. GHOSTDAG
-   orders vertices; no Bullshark-style ordering layer is needed. Carriage per licensed claim falls from ≈ 14.4 KB to 66–330 bytes, and
-   capacity ×1000 fits a few blocks per DAA.
-2. **Part II — cheaper checks** (prototyped). A PALW-TIR execution never commits its `MatMul` accumulators. The producer serves them as
-   a **witness**. A seat checks each weight product against its secret **sketch** `S = W·v` by Freivalds' algorithm, checks each
-   activation × activation product with a fresh vector, recomputes every other node exactly with the court's own reference evaluator, and
-   compares the committed rows it derives with the claim's. Each node is checked over the fewest primes its refined proven interval needs.
-   The exact court is unchanged. Measured on real configurations, this pays for **decode tokens of classes the seat does not hold in RAM,
-   over links of 100 Mbps or more**. It does not pay for prefill on ordinary links, and for resident classes only past 1–2 Gbps. Its value
-   is feasibility: a seat with 2–6 GB checks classes of 80–674 GB.
-3. **Part III — security parameters and escalation.** 1-of-N with the exact court; never a cluster majority. Weight comes from bonded,
-   Sybil-resistant seat eligibility, post-commit random assignment, permissionless challenge and random audits. Part III states `m` per
-   interval, the audits, and the bond arithmetic.
-4. **Part IV — the global audit mesh and staged onboarding.**
-   - Any bonded seat, drawn post-commit, audits random committed leaves of any class from openings alone. The audit is a sensor for
-     wholesale fabrication, defended against the verifier's dilemma by planted traps.
-   - A newly registered class may produce under the mesh, **capped** and with **unvested** rewards, before full-coverage holders are
-     seated. The holders re-verify its capped claims inside the vesting window.
+Part I's batched signatures remain a transport building block, and Part II's private-sketch code remains an implementation baseline. Their original carriage/performance estimates do not price the new evidence or prove its speedup. Parts III/IV supply the threat analysis and diagnostic audits. Raw audits remain distinct from licensing coverage. The exact court resolves localized disputes; it does not eliminate undetected fast-path error. Implementation starts with a measured MatMul checker and then integrates typed receipts and complete coverage before reward-bearing acceptance.
 
 ## Motivation
 
@@ -130,20 +123,17 @@ convicts.
 
 **Goals.**
 
-- G1. Licence carriage per claim is a small constant (tens to hundreds of bytes), and capacity ×1000 fits the block mass. (Part I)
+- G1. Amortize signatures through verification vertices and keep carriage within a measured budget. Part I's legacy tens-to-hundreds-of-bytes estimate must be recalculated for Part V's new evidence bindings and availability costs.
 - G2. One signature per seat per round, not per claim, at the gossip door and in the fold. (Part I)
-- G3. A seat checks a PALW-TIR execution without recomputing its weight products, and without holding the weight matrices. (Part II)
-- G4. The check is sound by construction: per node, an error escapes with probability at most `1/p`, with moduli chosen from the
-  admission range proofs. (Part II)
-- G5. The check is seat-local. No consensus rule decides which seat checks how, and the court never sees a sketch. (Part II)
-- G6. Security stays 1-of-N with the exact court. Full coverage of an interval comes from holders — panels, RFC-0006 shards, or Part II
-  sketching seats — and never from a vote. (Part III)
+- G3. Assigned segments are verified by their constraints, with batched matrix checks and compatible aggregate proofs; full segment replay is an optional baseline, not the normal large-model duty. Price actual weight/input access and authenticated preprocessing. (Part V)
+- G4. Derive the whole-claim conditional error bound from coverage, fields, repetition, aggregation, binding and adaptive-query assumptions, following RFC11's proposed `2^-128` check target. A per-product `1/p` is not the claim's bound. (Part V)
+- G5. Bind an approved verification suite, profile, scope and evidence to new signed receipts. Kernel selection is seat-local; coverage and security obligations are protocol-defined. The terminal court remains exact. (Part V)
+- G6. Preserve permissionless exact disputes and explicitly account for compromised or inactive Panel members. Full constraint coverage can be algebraic; quorum alone does not prove arithmetic truth. (Parts III/V)
 - G7. Every bonded seat can audit every class from openings alone, and silence is never a verdict. (Part IV.1)
-- G8. A class can produce before full-coverage holders are seated, with its damage capped and its rewards revocable. (Part IV.2)
+- G8. Large classes become feasible with qualified constraint verifiers and bounded DA/court resources; Part IV.2's separate capped experiment never replaces the new route's soundness and coverage gates. (Part V)
 
 **Non-goals.** A probabilistic court: the court stays exact. Weight from cluster agreement ("the largest compatible cluster is
-correct"): refused by the user's decision. zk proofs. A BFT ordering layer: GHOSTDAG orders. Changing the exact court's terminal, its
-cones or its ceilings. Making Part II mandatory for any seat.
+correct"): refused by the user's decision. Privacy/ZK is not required; public interactive proofs and IOPs are permitted. A BFT ordering layer: GHOSTDAG orders. This document does not change shipped terminal semantics or ceilings. Part II remains optional for legacy claims; a Part V receipt must meet its explicitly assigned suite and scope.
 
 ## Part I — Batched verification certificates
 
@@ -320,6 +310,8 @@ How to read it:
   sets `round_daa`, and a node may skip rounds.
 
 ## Part II — Algebraic verification (seat-local)
+
+**Baseline scope:** this section preserves the private-sketch design and historical prototype results. Part V's new default uses committed evidence, profile-bound duties and a reviewed challenge protocol; its normal path need not recompute every non-MatMul node as this baseline does. Part II alone is not evidence that the new public/GKR route is implemented.
 
 The prototype is the crate `misaka-palw-tir-sketch`. Its soundness tests are `tests/soundness.rs` (16) and its unit tests 8 (Part IV.1's
 audit tests are `tests/audit.rs`, 3). Its
@@ -576,6 +568,8 @@ time. Their levers are Part I and scheduling (lane P's F2). Part II's value is *
 
 ### III.2 `m` per interval
 
+This historical illustration assumes independently drawn checkers, detection when an honest checker covers the fault, and timely challenge access. `f^m` is not a theorem for arbitrary quorum/correlated operators, nor does it include algebraic error. Part V uses an explicit composition and actual coverage/tally rules. “Coverage” means all required constraints are represented, not all arithmetic is re-executed.
+
 `m` is the number of independent checkers of one interval:
 
 | how seats check | `m` | escape of a one-point lie | at `f` = 0.1 / 0.2 / 0.33 |
@@ -588,9 +582,7 @@ Two rules follow:
 
 - **Duty runs to `Final`, not to the licence.** Seats keep checking after quorum, and a later finding opens the court inside the
   121-DAA licence-to-`Final` window. That keeps `m = 5` for every class a seat can check fully.
-- **Full coverage where it is affordable.** For classes where full replay or Part II is affordable, seats check every interval. Where
-  neither is, sampled intervals are a sensor, and weight-bearing work needs full-coverage holders: RFC-0006 shards, or Part II sketching
-  seats.
+- **Full constraint coverage for Part V.** Seats discharge assigned segments with the new suite; aggregation may cover the whole claim. No full-replay seat is inherently required by the new route. Raw interval sampling remains a sensor and cannot fill a missing segment or proof obligation. Legacy assignment/replay rules stay effective below the new fence.
 
 ### III.3 Audits and challenges
 
@@ -698,6 +690,8 @@ cap.
 
 ### IV.2 Staged onboarding (capped mode)
 
+**Legacy experiment boundary:** this section records the original mesh-only capped proposal; current implemented behavior is specified in spec 18. It is not the normal Part V path and its timing/cap estimates are not a security proof for probabilistic receipts. Part V requires §V.6's full claim coverage before licensing and §V.7's Final conditions; it does not inherit mesh-only credit, arbitrary random-subset vesting or these activation estimates.
+
 **What it is.** A class may produce blocks under mesh audits **before full-coverage holders are seated**. Three things must hold:
 
 - it is registered;
@@ -758,6 +752,145 @@ witness bytes inside its link budget.
 
 For the t12 classes staging gains hours. For a qwen4_exp-sized class it is the difference between producing and not producing.
 
+## Part V — Constraint verification is the normal Panel path (2026-10-06)
+
+### V.1 Scope and the existing implementation boundary
+
+For a claim using the new route, **the Panel MUST be able to discharge its assigned segment by verifying its constraints without replaying that segment end to end**. Batched Freivalds is the first implementation target; GKR/sum-check is an approved direction for compatible aggregate relations, subject to a concrete reviewed suite. Exact small operations may remain local. A full replay is useful for conformance, shadow comparison and small classes, but must not remain a hidden mandatory duty for the largest-model path.
+
+Source audit at `7bff920dc`:
+
+| Existing surface | Actual role and required extension |
+| --- | --- |
+| [`palw_verification_v2.rs`](../../consensus/core/src/palw_verification_v2.rs) | S1 partitions the job and assigns a full-replay seat plus partial seats, with coverage tally. Part V must version both the full-seat duty and coverage rule; changing a Panel command-line flag is insufficient. |
+| [`PalwSeatReceiptV3`](../../consensus/core/src/palw_panel_v2.rs) | This name already means the V2 receipt plus a signed segment mask. Do not redefine it as the new scheme. `Sampled` is explicitly audit-only and does not count toward quorum/coverage. |
+| [`palw_verification_profile_v1.rs`](../../consensus/core/src/palw_verification_profile_v1.rs) | A shadow timing/capacity profile, not a proof-suite registry or a soundness certificate. Keep resource scheduling distinct from the new cryptographic profile. |
+| [`misaka-palw-tir-sketch`](../../misaka-palw-tir-sketch/src/lib.rs), [`Panel sketch integration`](../../kaspad/src/palw_panel/sketch.rs) | Private-sketch checker and integration provide the starting point. Their existence does not establish public transcript binding, GKR, or the new receipt/tally. |
+| [Spec 18](../spec/palw/18-verification-certificates.md) | Existing vertex, witness, audit and capped-mode wire rules. Reuse compatible machinery, reserve new tags/versions, and keep old claim interpretation unchanged. |
+
+The attachment's name “Verification V3” is a conceptual label only; proposed names below are deliberately distinct from the already existing `PalwSeatReceiptV3`. Exact serialized fields/tags require a spec update and tests before activation. This RFC revision changes no Rust code or network parameters.
+
+### V.2 Profile, statement and constraint coverage
+
+Propose a `PalwConstraintVerificationProfileV1` embedded by digest in RFC11's `VerificationPlanV1`. It binds:
+
+* frozen program/artifact/tokenizer/input-output schema, full context, arithmetic and memory semantics, and constraint-compiler version;
+* approved `verification_scheme_id` and version, field/modulus/range policy, repetition and aggregation rules, transcript/challenge construction;
+* allowed scopes (`WholeClaim`, canonical `SegmentSet`, `AuditOnly`), the assignment and coverage policy, exact/nonlinear/lookup checker families and all boundary obligations;
+* deterministic limits on evidence decoding, tensor/query/proof sizes, verifier work, localization, terminal court, DA retention and concurrent duties;
+* the derivation of conditional soundness, including maximum relations/rounds/attempts, plus measured cold/warm timing and bandwidth inputs for the separate capacity profile.
+
+This is a permissionless composition of reviewed primitive/verifier templates, not a hand-maintained allowlist of model brands. Qwen, Kimi/MoE and recurrent models may compose different templates, but cannot choose weaker security thresholds or omit a constraint. Unknown templates remain unsupported until versioned review/activation. Nodes recompute permitted parameters and coverage metadata; a producer-declared `soundness_bits` never establishes a bound.
+
+Every execution-affecting relation has a checker: products, model-weight binding, quantization/rounding/carry, activation/normalization, TopK and expert selection, dynamic reads/writes, history and segment entry/exit, initial input and final output. TIR semantics stay exact. A correct `Y=XW` with fabricated `X`, substituted `W`, wrong expert or disconnected predecessor must fail the composed statement. Range/lookup and state-continuity checks cannot themselves be raw spot checks unless the suite includes their selection loss or a sound encoding/aggregation. Artifact-possession samples and Merkle membership prove neither computation nor complete state consistency.
+
+### V.3 Batch repeated work, not semantic context
+
+Collect rows from multiple tokens/cells using the same weight root, layer/expert, dtype, shape and arithmetic policy into `X[b,k]`, `W[k,n]`, `Y[b,n]`. The canonical batch directory binds every row to `(claim, segment, global token, layer, operator, expert, row index)` before random coefficients are known. Sort keys, lengths and padding are specified; missing/duplicated/reordered rows cannot escape coverage accounting or create new PWU.
+
+Two candidate checks, whose parameters belong to the suite:
+
+```text
+right projection:       X (W r) = Y r          r ∈ F_p^n
+token-row aggregation: (aᵀ X) W = aᵀ Y         a ∈ F_p^b
+```
+
+For a fixed incorrect field product, either complete vector equality has miss probability at most `1/p` with a fresh uniform vector. Repeating independently gives at most `p^-t`. Do not reduce both sides to a single scalar and reuse that bound without a separate analysis. Do not multiply repetition counts from correlated rounds, seats or moduli; enough moduli to prevent integer aliasing do not automatically provide independent repetitions. Rounding and narrowing are separate constrained relations. The relevant source for these algebraic checks is [Slalom](https://arxiv.org/html/1806.03287v2); its trusted-hardware setup is not a MISAKA assumption.
+
+This batches verification after rows exist; it does not parallelize autoregressive generation or erase sequential dependencies. Expert-routed rows are grouped per actual expert and the routing relation is verified. Require a bounded batching wait so a low-traffic class can still finish inside its window; when `b=1`, report the actual GEMV cost. No fixed 256-token minimum may stall all smaller jobs. Initial rollout batches **within one claim**; cross-claim batching needs a separate binding, deadline and exposure design.
+
+Direct checks still read large operands: `O(bk+kn+bn)` work per repetition. Fresh public vectors require fresh projections or authenticated computation of them. A claimed `Wr` returned by a worker is not verified by its signature or a weight Merkle root alone. Charge a verified streaming pass, a reviewed evaluation-opening protocol or another sound check. Keep Part II's secret reusable sketches private and account for their distinct leakage, refresh and adaptive-probing assumptions. Do not obtain an apparent speedup by treating unverified projections as inputs.
+
+### V.4 GKR and encoded-query extension
+
+Where circuit structure permits, a GKR/sum-check suite can verify a larger segment or a whole-claim constraint graph with less verifier work. Bind the wiring, layer relations, input/weight evaluations, state/memory interfaces and output statement. Sum-check rounds contribute error according to degree, field and round count; proof generation, circuit depth and authenticated input access remain costs. [GKR](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-for-muggles/) and [SafetyNets](https://arxiv.org/abs/1706.10268) establish relevant component protocols, not an off-the-shelf verifier for arbitrary TIR/MoE.
+
+An optional FRI/IOP suite needs an explicit constraint-to-encoding reduction and boundary checks; Reed–Solomon proximity alone does not establish computation. Plain erasure-coded DA and execution soundness have separate acceptance predicates. Select commitments compatible with the network's post-quantum policy. Public non-ZK proofs are allowed; witness generation can be expensive and is included in feasibility measurements.
+
+A partial-segment GKR proof remains partial. A whole-claim aggregate proof covers all of its bound relation set, even if its verifier reads few encoded queries. This distinction must appear in the receipt scope and the coverage report.
+
+### V.5 Commitments and challenge ordering
+
+Before deriving check positions or coefficients, bind the claim, class/profile/suite, initial/final and segment boundary states, trace/constraint/batch directory, complete witness commitments and artifact/input roots. Evidence openings must refer to those exact roots. Private-sketch baseline witnesses without a commitment cannot be adopted as the new public-challenge protocol.
+
+Derive `sample_seed` from a ruleset-defined future challenge anchor and those bindings, with separate domains for assignment, segment/query selection, vector generation, aggregation and each proof round. Node validation recomputes the seed; seats cannot choose favorable seeds or counts. Pin inclusion cutoff, beacon eligibility/finality, unbiased field sampling and reorg/abort rules. Panel sortition randomness alone is not proof that the verifier's algebraic challenges are unbiased.
+
+Every interactive prover message precedes **its own** challenge. A single seed that exposes all future sum-check challenges is insufficient. Before shipping, choose a reviewed staged-beacon or transcript-bound Fiat–Shamir construction, including grinding/query bounds and post-quantum assumptions. All nodes replay the fixed transcript/anchor, never freshly draw local randomness for consensus. A new claim commitment, branch or attempt cannot reset an unbounded number of free trials.
+
+### V.6 Typed receipts and a coverage-aware tally
+
+Propose `PalwConstraintReceiptV1` (conceptual schema; tag allocation pending):
+
+```text
+claim_id, class_id, verification_profile_hash, verification_scheme_id, scheme_version
+assignment_root, scope_kind, scope_root, covered_relation_count
+challenge_anchor, sample_seed, sample_count, sampled_cells_root
+field_policy_id, freivalds_rounds, soundness_policy_id, derived_soundness_bits
+evidence_manifest_root, algebraic_check_root, transition_check_root, transcript_root
+verdict, seat_bond, signed_daa, signature
+```
+
+`sample_count` measures the suite's queries, not an arbitrary number of tokens. `scope_root` commits to the full statement attested; `sampled_cells_root` commits to the actual query set, which may be much smaller in an aggregate proof. The plan fixes which fields are meaningful for each suite, with canonical encodings for unused fields. Round/field/security values must match derived policy; metadata is not a substitute for the proof or the honest-seat assumption.
+
+Sign all fields with a fresh network-separated ML-DSA domain; Part I-style batching may carry the same signed meaning in a new versioned leaf. The network/version/ruleset must be bound by the message/domain. Do not append fields to existing receipt encodings, repurpose `Sampled` or tally a V1 bare `Valid` as a new scheme's pass. Bind the evidence locator to content hashes; retain material through challenges and ongoing disputes. Root-only carriage is acceptable only with separately specified availability duties, not as evidence that the checker ran.
+
+The fold checks registration and scheme eligibility, signatures, assigned scope, anchor/seed, required counts/policy, caps and deadlines. It deduplicates by claim/seat/duty under the frozen assignment; duplicate or overlapping receipts from one seat never increase coverage. It applies the plan's **per-segment/relation** quorum/independence requirements and boundary coverage as well as any overall Panel quorum. Three receipts for the same small segment cannot license the remainder. A `WholeClaim` receipt counts as full coverage only when that suite actually attests the complete statement. A failed receipt followed by a same-duty pass cannot erase a dispute; tally and appeal follow explicit first-counted/equivocation rules.
+
+The first implementation SHOULD preserve existing segment coverage strength while replacing replay with cheaper constraint verification: the assigned full-scope seat checks the whole statement algebraically, and partial seats check their assigned scopes. This removes its full-**replay** duty without removing its full-**scope** obligation. A later partition-only/GKR assignment can remove that role only after proving equivalent or stronger coverage/independence under a separately pinned policy. Cross-segment state equality must have designated checkers or aggregate coverage; a merely committed but unchecked boundary is insufficient.
+
+Nodes perform these deterministic structural and lifecycle checks; Panels run the heavy verification suite off chain. Publicly replayable evidence permits audits but its presence does not mean every node validated its arithmetic. Thus a malicious accepting Panel remains a security event. A node-verified succinct-proof mode would require separately metered consensus proof verification and a new acceptance rule; it is not implicitly provided by this receipt schema.
+
+### V.7 Error accounting, licence, Final and dispute
+
+For `N` raw segments and `s` distinct uniform samples, a single bad segment is missed with probability `1-s/N`. If selected segments have conditional error `ε_local`, the single-fault miss bound is `1-(s/N)(1-ε_local)`, under the stated selection/check assumptions. Freivalds does not remove this selection term. Therefore an `AuditOnly` receipt cannot become full-security coverage, regardless of its small `ε_local`.
+
+For the new qualifying route, derive the **whole-claim** `ε_check` from every product/aggregate proof, field representation, nonlinear/memory constraints, boundary binding, openings and any selection loss. Use RFC11's proposed conditional target `ε_check ≤ 2^-128`; the attachment's illustrative `2^-80` is not adopted as a silent reduction. Neither target is presently demonstrated. A conservative composition sums error bounds unless a stronger theorem applies. The general `ε ≤ Σ_i ε_i` union bound needs no independence, whereas multiplying repeated-check errors does. Shared public vectors across seats do not create independent repetitions.
+
+Publish separate compromised-Panel, biased-beacon, unavailable-data/censorship and grinding assumptions. Across `Q` adaptive attempts the conditional check contribution can grow to `Q·ε_check`; add the appropriately modeled bad-assumption probability instead of advertising network-wide 128-bit security. An `f^5` estimate is only valid under the actual independent drawing, duty and timely-challenge assumptions, not merely because the Panel has five seats. Economic audits/PoSP incentives complement this analysis; they do not replace it.
+
+```text
+committed evidence → bound challenge → constraint checks → positive scoped receipts
+                                                        → coverage/quorum → licensed
+                                                        → challenge window + DA → Final
+                    mismatch → localized dispute → exact terminal verdict
+                    missing evidence / no quorum → existing compatible DA/timeout path
+```
+
+No receipt silence, absent proof round, unchecked relation or missed DA duty counts as positive evidence. Licence is not immediate Final. Open accepted disputes block finalization under the versioned lifecycle. Bind pre-Final weight/escrow exposure to the existing compatible accounting and RFC11/RFC8 requirements; extra checks, batches and receipts mint no extra inference work. Retain evidence until the last relevant dispute/retention deadline, including across reorg/pruning.
+
+A failing checker files no passing receipt. It names the bound failing relation/evidence; a correct claim with a bad served witness is not automatically producer fraud. Localize through authenticated batch partitions, matrix tiles, state steps or circuit relations to an exact TIR/VM terminal supported by court. Bound **total** localization work, bytes, moves and concurrency, not just the last operation. Finding a false GKR statement does not itself locate a leaf: each suite needs a tested localization protocol. Unknown/incompatible terminal semantics require a versioned extension. No fallback may require complete Kimi-class inference on a validator.
+
+Anyone with the required bond/material can challenge; exact court conviction, dismissal and DA/timeout outcomes keep their distinct evidence rules. Missing material is handled as availability; slashing requires the corresponding proven violation. Court catches filed disputes, leaving residual undetected error after Final. This proposal adds no automatic post-final rollback.
+
+### V.8 Delivery plan and acceptance measurements
+
+| Stage | Work | Passing evidence |
+| --- | --- | --- |
+| P0 — one TIR MatMul | Compare independent exact execution, Part II private sketch and fresh committed batched Freivalds. Include batch 1, uneven sizes and multiple-token batches, cold/warm weights and field/range cases. | Same deterministic outputs; single-scalar/alias/substitution faults covered; toy-field experiments agree with the error model. Report CPU/GPU time, preprocessing, bytes, RSS/VRAM and amortization. No claimed 10–100× gain without measurements. |
+| P1 — complete segment | Cover nonlinear, routing, quantization, memory and boundary relations; add authenticated batch/evidence directory and bounded failure localization. | A valid segment passes without routine whole-segment replay. Forged predecessor/input/expert and disconnected-but-locally-correct matrices fail; worst dispute fits budgets. |
+| P2 — receipts and claim coverage | New profile, challenge schedule, receipt/vertex version, scope-aware tally, DA retention, licence/Final and state/RPC reporting. | Partial/duplicate/foreign-scheme receipts cannot license a whole claim; no hidden full replay; old claims retain old meaning; cold IBD, reorg and pruning reproduce decisions. |
+| P3 — GKR/encoded aggregation where needed | Implement a specific circuit/opening/transcript suite with reviewed composition and deterministic integer semantics. | Single sparse fault and boundary faults remain covered; adaptive-message/grinding tests and proof review; real measured prover/verifier costs and bounded exact localization. Freivalds/exact composition may serve compatible classes earlier if it already meets the same whole-claim gate. |
+| P4 — large models and activation | 9B-8k, validated 2M and source-pinned Kimi K3 cases; shadow comparisons followed by separate rollout decision. | Full task/context, qualified seats, measured cost/DA/court budgets, reviewed error and Panel assumptions, claim through Final. Missing implementation or benchmarks remain explicit blockers. |
+
+Measure prefill and autoregressive decode separately, including MoE batch fragmentation and recurrent state. Report producer execution plus witness/proof generation, seat p50/p95/p99, verification service capacity, network transfer, cold preprocessing and worst-case attack-driven disputes. Compare equivalent security/coverage and the same hardware, not a GPU miner against an unrelated CPU baseline. The new mode must fit a predeclared resource/window budget and demonstrate its claimed advantage on its target workload. Extra witness/proof work can cancel arithmetic savings. Stop promotion for a workload if it does not meet its budget; adjust the scheme or retain its compatible replay path without claiming acceleration.
+
+### V.9 Activation and required spec changes
+
+Use RFC11/ADR-0171's proposed `palw_probabilistic_constraints_v1` fence for the new route, with **no height selected here**. It is distinct from existing RFC7 vertex/witness/audit/capped fences. Profile and scheme versions enter class/claim identity, signature domains, evidence/receipt handling, replayable state and fingerprints as applicable. Pin the claim's rules at binding so a mid-window fence cannot reinterpret its duties. Mixed versions need explicit compatibility; a new receipt never silently upgrades an old sampled audit.
+
+Update spec 07/08/18 and the relevant class/claim, Panel assignment, receipt/vertex pool, fold, DA, RPC and SDK paths together. Terminal court changes only when the chosen suite cannot localize to an existing supported step. Reserve wire tags centrally, append rather than renumber enum variants, charge bytes and node work before allocation, and cap pending transcript/dispute state. Recalculate Part I's carriage table with the new fields, roots, evidence availability and signatures; its legacy 66–330-byte estimate is not the new receipt cost.
+
+Normative requirements for the new route:
+
+* **PALW-CV-1:** an eligible immutable profile defines complete statement coverage, allowed suites and derived security/resource limits.
+* **PALW-CV-2:** evidence and each interactive message are bound before their corresponding challenges; seeds and queries are reproducible and policy-valid.
+* **PALW-CV-3:** all constraints in a receipt's declared scope pass the suite, and the signed receipt binds that exact scope, profile and evidence. `AuditOnly` never satisfies missing licence coverage.
+* **PALW-CV-4:** licence requires scope-aware coverage and the specified quorum/independence; Final additionally requires the challenge/DA conditions and no unresolved accepted dispute.
+* **PALW-CV-5:** failure escalates within bounded total resources to compatible exact court or the proper DA/timeout outcome; a failed probabilistic test alone is not a slashing verdict.
+* **PALW-CV-6:** old receipt/claim semantics, unique work accounting, replay determinism and the explicit error/Panel assumptions are preserved by the migration. Unimplemented schemes stay ineligible.
+
+These are proposed requirements. Implementations must attach a test/evidence artifact to each before activation. The execution blueprint follows [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md#15-sampling-first--court-on-dispute-2026-10-06-decision) and [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md); neither the sketches in Part II nor this text proves the new protocol complete.
+
 ## Relations
 
 - **RFC-0006 (layer-sharded panels, lane M3).** Shards are the bandwidth-efficient way to use the global seat set for full coverage. A
@@ -779,7 +912,7 @@ For the t12 classes staging gains hours. For a qwen4_exp-sized class it is the d
 
 ## Proposed Spec text (new chapter `spec/palw/18-verification-certificates.md`)
 
-Applies past the fences named. Rules marked *(node)* are node software and bind no consensus object.
+**Historical Parts I–IV text:** the chapter now exists; its current wire/activation rules govern deployed behavior. Rules below describe the original proposal and are retained for context, not an override of that chapter. Part V adds PALW-CV-1…6 under its own future fence. In this older path, rules marked *(node)* are seat-local software; that does not exempt Part V's profile, receipt or coverage obligations from consensus.
 
 - **PALW-VC-1 (one vertex per seat-round).** Past `palw_verification_vertex_v1`, the fold MUST accept at most one
   `VerificationVertexV1` per `(seat_bond, round)`, the first in accepted order, and MUST refuse a vertex whose leaves are not strictly
@@ -811,8 +944,7 @@ Applies past the fences named. Rules marked *(node)* are node software and bind 
 
 ## Activation plan
 
-Every fence is dormant on every shipped preset. The fingerprint is **Some-only**: a preset that leaves a fence `None` fingerprints
-byte-identically to a build without the field. Each fence is written in all four places:
+**Legacy activation record:** the four-fence plan below was drafted before integration. Current spec 18 records the t12 DAA-5,300 activation; the old table is not a claim that those fences remain dormant today. New Part V uses §V.9's separate proposed fence, with no height. Preserve the existing **Some-only** fingerprint discipline for a new field: a preset leaving it `None` must retain its prior fingerprint. Integration includes all four places:
 
 1. the `Params` field;
 2. `for_each_fence`;
@@ -828,9 +960,9 @@ Each goes at an **independent height**: a fence at an already-scheduled height i
 | `palw_audit_mesh_v1` | the audit draw, `Audited` leaves, `TrapCommitted` / `TrapRevealed`, audit pay | `palw_verification_vertex_v1` | a fabricating producer at `q` = 0.1 caught within the predicted number of audits; a lazy auditor slashed by a planted trap; the trap setter not slashed |
 | `palw_capped_onboarding_v1` | the `Capped` lifecycle state, the caps, provisional rewards, the re-verification window | `palw_audit_mesh_v1` | a new class registered past the fence produces capped blocks under mesh audits; holders seated; one capped claim forged and convicted in re-verification with its unvested reward forfeited; the weight cap never exceeded |
 
-Part II's checker needs no fence: it is a node release. It ships behind a node flag, default off, with the soundness suite and a mirror
+Part II's original local checker needs no new receipt-policy fence: it is a node release. The original rollout called for a node flag, default off, with the soundness suite and a mirror
 check — the checker run beside a full replay on every claim a seat already replays, with any disagreement logged and alarmed — before any
-seat relies on it.
+seat relies on it. That rollout does not activate Part V: its new receipts, duties and tally require the separate fence and shadow gates in §V.8–9.
 
 ## Alternatives
 
@@ -841,7 +973,8 @@ seat relies on it.
 | A Narwhal/Bullshark DAG of vertices with its own ordering | GHOSTDAG already orders, and the chain carries every vertex, which is availability. Parent edges would certify nothing new |
 | Weight from cluster agreement ("the largest compatible cluster is correct") | Refused by the user's decision. A vote over executions is a vote on who holds the most seats; 1-of-N with the exact court is the model |
 | Serve `Q·Kᵀ`'s scores | 8 bytes a score against `d` = 128 MACs saved; never pays below ≈ 10 Gbps (measurements §5) |
-| Algebraic verification as the court | The court is exact and needs no secret. A public sketch would be forgeable (§II.4), so a probabilistic check cannot convict |
+| A failed algebraic check as an immediate conviction | A served witness may be wrong even for a correct claim; localize and use exact court. Public vectors are unsafe if known before the claimed result is fixed; Part V defines post-commit public checks separately from Part II's secret reusable sketches |
+| Freivalds/GKR replacing normal segment replay | **Selected in Part V**, with complete constraints, reviewed error composition and evidence-bound receipts; exact court remains the dispute endpoint |
 | zk proofs of the execution | Orders of magnitude above recompute (RFC-0002 Alternatives) |
 | Sample more intervals instead | 90 % catch of a one-point lie costs each seat 37 % of the job (ADR-0098), and grinding makes the uncaught 10 % valuable (ADR-0072) |
 | Mesh audits as the security floor | `m/N` against single-point lies: 64 audits catch one lied tile of a 512-position job with probability ≤ 0.04 % |
@@ -861,15 +994,16 @@ seat relies on it.
   - A failed check convicts no one, so the seat escalates to the exact court.
   - A producer gains nothing by serving a bad witness: it loses its licence.
   - Seats are heterogeneous by design, and the check is local.
-- **Part III.** Full coverage gives `f^5`, and sampling gives ≈ 95 % escape for the best one-point lie at `f = 0.2`. Weight-bearing work
-  needs full coverage.
+- **Part III.** The historical independent-checker example gives `f^5` for full coverage and ≈ 95 % escape for raw interval sampling at `f = 0.2`. Part V requires actual coverage/tally and assumption analysis; these numbers are not its whole-claim soundness bound.
 - **Part IV.**
   - The mesh catches fabrication at `1 − (1 − q)^m` and single-point lies at `m/N`. It is a sensor.
   - Traps price lazy auditing.
   - Capped mode bounds the unrecoverable part of a lie — fork-choice influence — by `w_cap`, and makes the recoverable part, rewards,
     revocable.
 
-## Open questions
+## Historical open questions (Parts I–IV)
+
+These were the original draft's questions. Spec 18 §§18.0/18.20 records subsequent implementation decisions; do not reopen settled wire/policy choices merely because this list is retained. Part V's remaining decisions follow this list.
 
 1. **`round_daa` and the leaf caps.** 1 DAA (today's licence latency) or longer (less header overhead at low load)? Should a seat be
    allowed to sign mid-round when its leaves fill a vertex?
@@ -889,4 +1023,6 @@ seat relies on it.
 
 ## Decision
 
-<Open.>
+**Selected 2026-10-06:** adopt Part V's constraint-based Panel verification as the new large-model direction. Begin with batched Freivalds on a real TIR MatMul, extend to complete segment constraints and scope-bound receipts, then aggregate compatible relations with GKR/IOP where measurements justify it. Preserve exact bounded court on dispute and RFC11's whole-claim security target.
+
+Before implementation is eligible for activation, settle the exact suite/transcript and opening construction, canonical receipt encoding/tag allocation, assignment/coverage policy, derived parameter limits, total localization bound, evidence retention and measured capacity. §V.8 is the delivery order and §V.9 the migration contract. No deployment, benchmark success, Kimi compatibility or change to existing claim semantics is established by this decision.
