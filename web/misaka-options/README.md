@@ -1,5 +1,51 @@
 # MISAKA Options
 
+## Publisher workspace and generated icons (2026-10-06)
+
+`#/me/repositories` now has Find / Type / Sort / New. `#/me/new` initializes a
+repository working copy (required owner/name, description up to 350 Unicode
+characters, README, None/Node/Python/Rust gitignore, None/MIT license). Files have
+SHA-256 content hashes. A wallet-scoped or explicitly device-local IndexedDB provider
+supports atomic, case-insensitive duplicate rejection, listing, reload and export.
+Repository and profile features are separate modules, not another large app block.
+
+**This is local creation, not completed public publication.** The envelope is
+`misaka/repository-draft/v1`, never an unsigned object labelled as the authoritative
+`misaka/repository/v1`. A wallet address is only a workspace scope, not a verified
+username or PALW identity. The form owner is frozen until reopened. Browser storage
+is not encrypted/custodial storage; no private keys belong here. Clearing browser
+data loses working copies. Export a backup; MIT's copyright holder is a placeholder
+to review before publication. Private is disabled until encryption/access control
+exists. Git history, hosting, Issues/PRs and Actions are not implemented by this form.
+
+No working-copy content is POSTed to any VPS, stored in a VPS database or silently
+published to peers. The future public provider must owner-sign the canonical
+manifest, verify the chain identity/controller link, publish files by content hash
+through the owner's `misaka-torrentd`, and serve a verifiable owner index from peers.
+Generic repository signing, seeding and public indexing are **not wired into New**
+yet. Existing owner-published model bundles keep their separate verified path.
+
+`profiles/avatar.js` implements `misaka-identicon:v1`: network+namespace+normalized
+identifier → non-cryptographic 128-bit mixing/PRNG → 5×5 symmetric grid → one SVG
+path. Images require no requests, image service, DB column, disk file or upload.
+The live Models Hub uses each model's immutable line ID, not its mutable title or
+catalogue owner label. Profiles use an EVM address (or an explicitly local seed).
+Different namespaces/networks are domain-separated; an identicon is decorative,
+can collide, and must never authenticate ownership.
+
+Tests: `node --test web/misaka-options/profiles/repository-workspace.test.mjs`.
+The live Hub and this checkout's legacy shell differ. Both get thin profile route
+integration; **do not deploy the legacy shell over the live Hub**. The exact live
+patch is [`deploy/20261006-repositories-identicon-hub.patch`](deploy/20261006-repositories-identicon-hub.patch).
+Its app baseline SHA-256 is
+`1ae826fbbac5f5878ad50124ae733076303eb5c134c5437904c00b9a916218cf`;
+HTML baseline is `e737c7aeb257a8e11cf1e24afb74e6aa8541d8c2757c0dcead91568d5f5cb217`.
+Deploy the changed profile modules/styles plus the patched Hub shell, preserve the
+existing public-profile/auth/readiness/publish assets, and version changed imports.
+VPS backup location for the live pre-change static shell:
+`/root/misakaoptions-ui-backups/20261006-repositories1/`. No user repository payload
+or signing key is included in that backup.
+
 ## Production readiness (2026-10-06)
 
 `model-readiness.js` is a no-build, injected-RPC provider shared with the deployed Hub.

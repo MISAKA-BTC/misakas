@@ -3740,7 +3740,33 @@ async function pageDev(arg) {
 // ============================================================================================
 // 12. router, boot, self-test
 // ============================================================================================
-const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev };
+async function pageMyProfile(arg) {
+  const gen = pageState.gen, main = $('#main');
+  let request = 0;
+  const tab = String(arg || '').split('/')[0] || 'overview';
+  const alive = () => gen === pageState.gen;
+  const { renderMyProfile } = await import('./profiles/me.js?v=20261006-repositories3');
+  const { renderRepositoryWorkspace } = await import('./profiles/repository-create.js?v=20261006-repositories4');
+  if (!alive()) return;
+  async function load() {
+    const current = ++request, account = wallet.account;
+    const currentPage = () => alive() && current === request;
+    if (tab === 'new' || tab === 'repositories') {
+      await renderRepositoryWorkspace({ main, account, path:String(arg || ''), alive:currentPage }); return;
+    }
+    renderMyProfile({ main, account, tab, loading:!!account, onConnect:()=>$('#connectBtn').click() });
+    if (!account || (tab !== 'overview' && tab !== 'memberships')) return;
+    let positions=null,error=false;
+    try {
+      const result=await positionsOf(account);
+      positions=result.positions.map(item=>({name:db.line(item.lineId)?db.named(db.line(item.lineId)).text:'MP-'+item.lineId.slice(0,8),units:String(item.units),href:'#/line/'+item.lineId}));
+    } catch { error=true; }
+    if (currentPage()) renderMyProfile({ main, account, tab, positions,error,onConnect:()=>$('#connectBtn').click() });
+  }
+  if (tab !== 'new') { wallet.listeners.add(load); onCleanup(()=>wallet.listeners.delete(load)); }
+  await load();
+}
+const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev, me:pageMyProfile };
 async function route() {
   const first = parseHash();
   // Links printed before the store was called a store still exist, in wallets, chats and the
@@ -3751,6 +3777,7 @@ async function route() {
   clearPage();
   const { name, arg } = parseHash();
   pageState.name = name; pageState.arg = arg;
+  document.body.classList.toggle('profile-route', name === 'me');
   renderNav();
   const page = PAGES[name] || pageStore;
   try { await page(arg); } catch (e) { console.error(e); $('#main').innerHTML = h`<div class="panel"><div class="empty">This page failed to render: ${e.message}</div></div>`.s; }
@@ -3938,6 +3965,9 @@ async function boot() {
   wallet.listeners.add(renderNav);
   window.addEventListener('hashchange', route);
   window.MO = { encodeRawTx, rawTxFromRpc, replacementFees, addEstimatedGas, orders, pollTransactions, curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, VIRTUAL_V2_SOMPI, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
+  const localProfileFirst = parseHash().name === 'me';
+  const initialRouteGeneration = pageState.gen || 0;
+  if (localProfileFirst) void route(); // local working copies do not need node discovery
   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js?v=20261001-adr0162'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
   if (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.init) window.MISAKA_MOCK.init(window.MO);
   await wallet.init();
@@ -3946,7 +3976,7 @@ async function boot() {
   await discoverClasses();
   await discoverLines();
   renderBanner();
-  await route();
+  if (!localProfileFirst && (pageState.gen || 0) === initialRouteGeneration) await route();
   setInterval(async () => { await refreshChainInfo(); renderBanner(); }, 15000);
   setInterval(() => pollTransactions(), 12000);
 }
