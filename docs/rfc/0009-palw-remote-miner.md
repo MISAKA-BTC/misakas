@@ -1,12 +1,15 @@
-# RFC-0009: PALW Remote Miner — node を持たない claim と非保管型の報酬回収
+# RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収
 
 * Status: Draft, 2026-10-04 — design only; activation height、fingerprint、wire format は未決定。
-* 対象: 現行 `testnet-12` の PALW attempt / free-prompt claim。将来の [RFC-0008](0008-palw-claim-backed-consensus-blocks.md) の work-slice block は別途適合性を審査する。
+* 改訂: 2026-10-06 — node-less モデル登録と登録者の GAS 負担を追加。仕様の追記であり、実装・有効化済みという意味ではない。
+* 対象: 現行 `testnet-12` のモデル/class 登録と PALW attempt / free-prompt claim。将来の [RFC-0008](0008-palw-claim-backed-consensus-blocks.md) の work-slice block は別途適合性を審査する。
 * 関連: [ADR-0044](../adr/0044-palw-free-prompt-receipts.md)、[ADR-0124](../adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)、[ADR-0125](../adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md)。
 
 ## 0. 結論
 
 **miner 自身が full `kaspad` を立てずに claim し、正当に得た報酬を回収できる設計として進めてよい。** pool は必須ではない。ただし「署名済み claim + 任意 relay」だけでは目標に届かない。現在の free-prompt lane は Panel が producer の node から material を取得し、`Final` 後の winning quantum は**同じ bond の producer が receipt block に使う**。この二つを protocol 上で切り離す必要がある。
+
+**モデル登録者も、自分の full node や Panel を立てずにモデルを追加できる経路を提供する。登録は無料ではなく、ユーザーが MSK の GAS と登録に必要な bond 資金を用意する。** ローカル/委託 builder が artifact と登録 object を作り、ユーザーが自分の鍵で登録 object と funding transaction を署名し、任意 node/relay が提出する。node-less はノード運用を不要にするだけで、登録の審査・署名・経済条件をなくさない。詳細は §3.3–§3.6 と [RFC11 §11.2](0011-permissionless-model-and-long-context-onboarding.md#112-exact-duplicates-must-be-idempotent-without-inventing-a-new-mandatory-registry)。
 
 推奨する最終形は次のとおり。
 
@@ -34,6 +37,7 @@ miner は chain の必要情報を取得・検証し、計算と署名が終わ�
 | `Final` は free-prompt の quantum を使える状態にするが、単体ではその receipt-block 報酬を払わない | quantum の抽選・使用窓・一回限りの spend を維持しつつ、block builder と claim owner を分離する。 |
 | [`ProducerNotExecutor`](../../consensus/core/src/palw_fp_admission_v3.rs) が receipt block の `producer_bond == claim.bond` を要求する | versioned receipt で executor bond と builder bond を別フィールドにし、報酬帰属を executor に固定する。 |
 | ordinary attempt は計算済み work の block を producer が作る | remote template と完成済み block の提出を提供する。attempt の work identity と署名者は miner のまま維持する。 |
+| `model add` は live registration terms、Active registrant bond、署名済み登録 object と有料 carrier を使う | builder/preflight、ユーザー署名/funding、relay、登録結果の追跡を分離する。ユーザー PC の node/Panel 起動は不要とし、GAS・burn・exposure は維持する。 |
 
 `Final` claim の通常の escrow payout は既に bond の登録済み payout へ chain が支払う。これは block producer に渡す必要がない。free-prompt の **quantum receipt block** は別の報酬経路なので、同じ `Settlement` という語で混同しない。既存 execution-lane round の permit、fee payout、weight も本 RFC の receipt 変更だけで書き換えない。
 
@@ -44,6 +48,7 @@ miner は chain の必要情報を取得・検証し、計算と署名が終わ�
 3. 現行の未来 anchor、Panel 選定、verdict、court、保留・`Final`・void、量子抽選、使用窓、chain 候補ごとの一意性を保持する。
 4. material 欠落と不正計算の責任を、証明できる範囲で分ける。ローカル timeout だけを slash 証拠にしない。
 5. 基礎 PoW を別人へ譲渡する仕組み、Panel node の撤廃、未検証の「trustless light client」、RFC-0008 の work-slice lane の有効化はこの RFC の対象外。
+6. モデル登録者にも full node・Panel 起動を要求しない。登録 GAS の見積り、自己署名、任意 relay、accepted registry state の確認までを remote client の対象とする。登録のために推論 miner を起動する必要はないが、変換・pack・適合性検査など artifact 作成の計算は省略しない。
 
 ## 3. 署名済み claim と permissionless relay
 
@@ -58,6 +63,53 @@ claim identity は network domain、class、job/input/output/trace roots、execu
 attempt は claim を載せる**block 自体が work**である。外部 node に未署名の template を作らせても、計算結果と header commitment に対する miner の署名・work identity は miner 側に残す。miner は完成した block を任意 node へ送信し、node は通常の候補検証をする。stale parent、誤った target、bond/class/fence 状態の偽装で高価な推論が無効になり得るため、remote template を単一 RPC の言い値で採用しない。後述の §6 の軽量検証を導入するまでは複数独立 node の一致、固定 checkpoint、鮮度上限、不一致時停止を最低条件とする。
 
 **計算を開始する前の署名**や relay による header 改変を認めない。既存の attempt/receipt wire を暗黙に流用せず、必要な remote-template API と署名 digest を仕様化する。
+
+### 3.3 node-less モデル登録: prepare → sign → relay → verify
+
+モデル追加は独立した remote workflow とし、claim の提出や採掘開始を前提にしない。
+
+1. **Prepare / preflight:** 登録者の PC または委託 worker で artifact、canonical manifest、class ID、inventory root、宣言した context と必要な適合性検査を完成させる。既存の SDK/gate を使い、network/genesis、ruleset/fence、判定 DAA、参照した chain state を固定する。外部 worker の成功表示だけで未検証 artifact を受理しない。HF URL や Torrent magnet だけでは登録 object にならない。
+2. **Read terms / quote:** remote RPC の `getPalwRegistrationTerms` と bond/UTXO 状態を読み、実際の post-genesis 登録 object、carrier と費用明細を構築する。単一 RPC の古い terms を信用せず §6 の鮮度・照合・停止規則を適用する。dry-run の合格は将来の chain 受理を保証しない。
+3. **Sign locally:** 現行の [`signed_class_registration`](../../misaka-cli/src/operator/model_add.rs) と SDK の署名対象・network domain を再利用する。登録者自身の Active bond の鍵で canonical object を署名し、wallet が funding inputs、fee、change を含む完成 carrier transaction を署名する。鍵・seed・wallet backup を worker、relay、サイト、VPS へ渡さない。builder の未署名 bytes はユーザー側で照合する。
+4. **Relay:** 完成済み raw transaction を任意の node/relay へ渡す。relay は通常の mempool 検証・gossip を使い、登録者・owner・artifact・費用を改変できない。接続先を選べるものとし、特定 VPS、pool、サイト管理者の承認を登録条件にしない。
+5. **Verify accepted state:** transaction inclusion と registry の accepted state を別々に追跡する。ユーザー PC に `kaspad` がなくても、署名した class/line/root と実際に採用された登録結果が一致することを確認できるようにする。
+
+これらの prepare/build/quote/sign/submit/status 境界は SDK/CLI に分離し、Web UI も同じ実装を利用する。新しい API 名・wire field を既存 RPC に実装済みと扱わず、追加が必要なら schema/version と適合性 test を仕様化する。登録者の bond と carrier の fee payer は区別するが、**現行で Active registrant bond が必要な条件は維持**する。bond の設定も remote wallet の署名・提出で行え、ローカル Panel の稼働とは別である。
+
+[RFC04](0004-palw-model-improvement.md)、[RFC05](0005-palw-ml-vm.md)、[RFC11](0011-permissionless-model-and-long-context-onboarding.md) の対象 profile と [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) の versioned Kernel 境界を守る。node-less 登録を admission の迂回路や Universal VM の導入理由にしない。未対応 Kernel、審査上限、未有効 fence は理由を返して停止する。
+
+### 3.4 GAS は登録者が用意する: 固定登録費・carrier fee・担保を区別
+
+**「node を立てない」≠「無料でモデルを追加できる」。ユーザーは署名前に必要な MSK を用意し、費用を確認する。** 本 RFC の登録 UI でいう GAS は登録操作のネットワーク費用であり、モデル登録を EVM transaction に変えたり、EVM の `gasLimit × gasPrice` を native carrier の料金へそのまま当てはめたりしない。
+
+| 項目 | 支払元・扱い |
+| --- | --- |
+| 固定の登録価格 / burn | 現行 T12 の対象 fence 以降は `PALW_CLASS_REGISTRATION_BURN_SOMPI_V1` = **1 MSK**。受理・fold 時に registrant bond の collateral から burn する。wallet の carrier fee から引かれるわけではなく、返金される担保や fraud penalty とも別。対象 network/fence の現行規則を確認する。 |
+| Carrier transaction fee | funding wallet の spendable MSK/UTXO から支払う。実際の carrier の mass、network fee policy、選択した priority を用いて見積もる。固定の登録価格と別であり、total GAS を常に 1 MSK と表示しない。 |
+| Bond / registration exposure | Active bond の存在と残余 collateral を検査する。既存 reservation、live slashable locks、今回の exposure、burn 後の backing を同じ chain gate で確認する。GAS が払えても担保不足なら登録不可。 |
+| その他の filing / 任意サービス | certification 等に追加 filing/rent が必要なら個別に表示する。activation pool、市場開設 deposit、worker/relay/seeding の任意サービス料金は登録 GAS と混ぜず、別承認とする。 |
+
+根拠は [`palw_state_v2.rs`](../../consensus/core/src/palw_state_v2.rs) の登録 burn・exposure・live-lock gate と、[`model_add.rs`](../../misaka-cli/src/operator/model_add.rs) の費用提示・署名・carrier 提出経路である。本 RFC は新しい burn 額や免除規則を設けない。
+
+quote には `network/genesis`、ruleset/fence、参照 tip/DAA と期限、class/root/object digest、登録 burn とその支払元、carrier mass/fee と wallet の change、必要 collateral/exposure、追加 filing の有無、ユーザーの最大支払額を含める。wallet は funding UTXO と bond の両方を確認し、不足額を分けて返す。**残高不足・quote 期限切れ・terms 変更・署名対象の差替えは、署名/提出前に停止する。** fee を増やす再構築は再見積り・再署名・再承認が必要で、relay に無制限の fee 変更権を与えない。
+
+既定はユーザー自己負担とし、無料登録・自動スポンサーを装わない。スポンサーを提供する場合も明示的な署名済み条件に限定し、fee payer、bond signer、publisher、model-line owner を区別する。carrier fee の肩代わりだけで owner を取得できず、現行の bond burn がスポンサーへ移ることもない。所有者/支払元の新しい分離規則が必要なら別の合意更新とする。
+
+### 3.5 Artifact と公開情報は MISAKA Torrent / 投稿者 seeder
+
+モデル本体、README、HF provenance、distribution metadata は署名付き content-addressed object として MISAKA Torrent の投稿者 PC / peer seeder へ置く。チェーンには既存規則で必要な commitment・登録 object を載せ、巨大な重みを carrier へ埋め込まない。**投稿データの唯一の正本や durable copy をサイト VPS の DB・ファイルへ置かない。** VPS を使う場合は非永続 relay とし、必要な保存・再構築は peer 側で行う。鍵は配信 object に含めない。
+
+取得者は signature、chain owner、class/root、content hash、Torrent commitment を検証する。署名付き README の公開と chain の class 登録は別操作で、公開成功を登録受理と表示しない。サイトにも登録者の署名検証経路から表示し、管理者の catalogue 編集を必須にしない。後続の Panel/court が必要な material の取得と責任は §4 の規則に従う。
+
+node-less は seeder まで不要にする意味ではない。他の peer に検証済みコピーと必要な保持期間を確保できるまでは、投稿者 PC を停止しても配信が続くとは約束しない。magnet、storage receipt、peer count だけで将来の可用性を証明したと扱わず、取得可能性を別に表示する。
+
+### 3.6 状態追跡・再送・登録と readiness の分離
+
+client は `prepared / preflight-passed / needs-gas-or-bond / signed / relay-accepted / tx-included / registration-accepted / refused / reorged` を区別し、raw tx ID、registration object ID、class/line/root と拒否理由を保持する。名称は client の表示状態案であり、新しい consensus lifecycle を追加するものではない。relay ACK、mempool 受理、carrier inclusion は登録完了の証拠にならず、fold が登録 object を拒否する場合はその理由を返す。
+
+GAS の返金を保証しない。carrier が取り込まれ登録 object が拒否された場合でも transaction fee は消費され得る。同じ raw transaction を複数 relay に送る再送と、追加費用を払う新しい transaction を区別する。exact class の既存登録は accepted state と完全 identity を確認して再利用し、不要な再登録 fee を取らない。ただし Frozen/Dormant 等の lifecycle をそのまま表示し、再利用で凍結解除や再有効化の署名・予約条件を迂回しない。異なる context、program、tokenizer、root は exact duplicate と扱わない。reorg 後は registry と funding/bond 状態を再検査し、費用が発生する自動再提出をしない。
+
+**登録受理、Panel readiness、最初の licensed/Final claim、報酬資格、ブロック生成、市場開設は別々の事実として表示する。** 本 workflow の完了は本人の署名と ownership に対応する accepted class/line を確認するところまでであり、Panel 起動・採掘・市場 deposit を暗黙に実行しない。
 
 ## 4. miner から独立した evidence 配信
 
@@ -106,6 +158,7 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 
 | 段階 | 内容 | 合格条件 |
 | --- | --- | --- |
+| A0: remote model registration | prepare/preflight・live terms/費用明細・ローカル署名・有料 carrier relay・accepted registry state の追跡を SDK/CLI/Web に分離する。Artifact/metadata は投稿者/peer の Torrent 配信とする。 | `kaspad`・Panel がないユーザー PC から、自己負担の GAS と Active bond で登録が本人の class/line/root として受理される。GAS 不足、担保不足、期限切れ quote、改変 relay/owner、二重提出、fold 拒否、reorg、VPS 再作成、seeder 停止を test し、誤課金・誤帰属・偽 readiness を起こさない。 |
 | A: remote claim | rail の署名/funding と node の提出を分離し、attempt の remote template と完成 block relay を実装。複数 RPC と状態監視を入れる。 | miner PC に `kaspad` がなくても claim が本人の bond で chain に入り、改変 relay・stale template・二重提出・reorg で誤帰属しない。material 配信責任は従来どおり。 |
 | B: independent DA | manifest、複数 provider、Panel の root 検証を実装。まず既存責任下で試験し、客観的 provider challenge/court 後に責任を移す。 | miner PC を落としても Panel/court が期限内に material を取得・裁定できる。取得障害と fraud の結果が全 node で一致する。 |
 | C: public receipt redemption | V4 spend、builder fee、bond payout、旧 V3 との fence 境界を実装。 | miner PC を `Final` 後も止めたまま、他者の block が winning quantum を一度だけ使い、報酬が miner に入る。builder の取り分以外の供給・weight・Panel 報酬は現行の上限を超えない。 |
@@ -120,3 +173,4 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 - V4 の producer/builder fee の原資・上限・競争規則と、base-layer block template への正確な carriage。
 - remote client の proof に必要な state commitment、checkpoint の配布/更新、検証資源。
 - RFC-0008 の work-slice block が実装された場合の同一 work の二重 credit と public redemption の扱い。
+- remote registration の quote/unsigned-object/署名/状態照会の API 境界、offline wallet が費用・identity を検証できる schema、複数 relay の retry と fee-change 承認。現行 burn・担保規則を変えずに実装できる部分と、新しい authority/fence が必要な部分の切り分け。
