@@ -1,5 +1,46 @@
 # MISAKA Options
 
+## Production readiness (2026-10-06)
+
+`model-readiness.js` is a no-build, injected-RPC provider shared with the deployed Hub.
+Explore models replaces Opening (locked) with **Panel ready** and adds **Readiness**
+between Versions and Status. Panel ready is `getPalwModel.readySeats`: current
+chain-confirmed readiness records, not an online-connection or distinct-operator count.
+Missing RPC evidence is a dash, never a fabricated zero.
+
+Ready requires a successful `getPalwProducerFacts` response with `withBond: true`,
+`available: true`, `bondKnown: true` and an explicitly empty `notReadyReason`.
+The provider inspects the line owner's bond and up to 16 discovered Panel bonds;
+it is not an exhaustive census of external producers. It does not infer readiness
+from market Open, Active, quorum count, or historical Final. Even the built-in floor
+must use the node's verdict: its Panel quorum exception makes a universal seat-count
+gate incorrect. A confirmed refusal is Not ready; missing proof is Unknown or
+Registered only. Ready means current eligibility for an inspected bond, not that
+a producer is actually running, every proposed block will be accepted, or a future
+claim is guaranteed to reach Final.
+
+Final counts come from `getPalwClassEconomics`' retained ledger (or its `claimsFinal`
+fallback). Reward recorded means a producer leg was named/vested, not proof of a
+spendable payout. These are class-level retained counters, not lifetime totals.
+Markets and membership benefits remain independent.
+
+Reads do not delay initial table rendering. Panel counts and Final history render
+before producer probes finish; class/probe concurrency is bounded, with an in-memory
+45-second freshness limit and 20-second minimum refresh interval. Nothing is stored
+in an authoritative VPS database. Phones retain Model / Price / Holders +24 h columns
+and a compact eligibility, Final and Panel caption under the name; Description stays hidden.
+
+Tests: `node web/misaka-options/model-readiness.test.cjs`.
+
+The public Hub currently has a newer `app.buy6.js`/HTML shell than this checkout's
+legacy `app.js`. Do **not** replace its shell wholesale with this directory.
+The exact, narrowly scoped Hub integration is preserved in
+[`deploy/20261006-readiness-hub.patch`](deploy/20261006-readiness-hub.patch), based on
+SHA-256 `39ac2592989833716de1dbf634c5089b3e26b2a0ac635bef11ef8dd235e51fc0`.
+Load `model-readiness.css` after existing compact/light styles and
+`model-readiness.js` before the application. Preserve existing Hub/profile/auth assets
+and bump the application cache version. The legacy application also uses this provider.
+
 ## Using the membership desk
 
 The 2026-09-13 interface puts model selection, three key metrics and the membership cost preview

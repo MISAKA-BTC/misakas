@@ -2827,6 +2827,7 @@ async function loadAllLines(withUsage) {
   const ids = Array.from(db.lines.keys());
   await pool(ids, 4, async (id) => { await refreshMarket(id); const r = db.line(id); if (!r.row) await refreshLineInfo(id); });
   if (withUsage) await pool(ids, 4, (id) => refreshUsage(id));
+  if (window.MISAKA_READINESS) window.MISAKA_READINESS.refresh(Array.from(db.lines.values()), rpc, () => db.emit()).catch(() => {});
   db.emit();
 }
 function usageOf(r) { return r.usage ? r.usage.attempt + r.usage.fp : null; }
@@ -2834,11 +2835,11 @@ function lineRowsHtml(list, opts) {
   opts = opts || {};
   return h`<div class="tbl-wrap"><table class="tbl" id="linesTbl"><thead><tr>
     ${opts.rank ? raw('<th>#</th>') : ''}
-    <th class="l">Model</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th>24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought back and retired (ADR-0091)">Mining bought</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve" title="The real MSK the curve holds to buy memberships back (the virtual reserve prices and is never paid)">Real reserve (MSK)</th><th title="The lowest price the curve can ever quote: every membership back in the curve">Floor (MSK)</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="An optional seed, locked for good, that deepened the pool before its first trade">Seed (locked)</th><th class="l">Owner</th><th>Versions</th><th class="l">Status</th>
+    <th class="l">Model</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th>24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought back and retired (ADR-0091)">Mining bought</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve" title="The real MSK the curve holds to buy memberships back (the virtual reserve prices and is never paid)">Real reserve (MSK)</th><th title="The lowest price the curve can ever quote: every membership back in the curve">Floor (MSK)</th><th title="Chain-confirmed ready Panel seats for this model; readiness records, not live connections">Panel ready</th><th class="l">Owner</th><th>Versions</th><th class="l" title="Production eligibility and retained Final records, independent of whether the store is open">Readiness</th><th class="l">Status</th>
   </tr></thead><tbody>
     ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/store/${r.lineId}">
       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
-      <td class="l">${nameCell(r)}<br><span class="dim tiny mono">${shortId(r.lineId, 12)}</span></td>
+      <td class="l">${nameCell(r)}${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.phoneCell(r) : '')}<br><span class="dim tiny mono">${shortId(r.lineId, 12)}</span></td>
       <td class="l"><span class="mono tiny" title="${r.classId || ''}">${r.classId ? shortId(r.classId) : '—'}</span></td>
       <td class="num" title="attempt + free-prompt claims on the current version, counted by the fold">${u != null ? fmtInt(u) : '—'}</td>
       <td class="num">${seeded && m.price != null ? fmtPrice(m.price) : m && !seeded ? raw('<span class="dim" title="This network has not armed ADR-0162\'s virtual reserve">no market</span>') : '—'}</td>
@@ -2847,11 +2848,12 @@ function lineRowsHtml(list, opts) {
       <td class="num" title="${m && m.buybackSompi != null && bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' memberships retired' : '5 % of a claim\'s escrowed worker reward on this line, at its Final, while the store trades'}">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : raw('<span class="dim">—</span>')}</td>
       <td class="num">${seeded ? fmtMsk(m.mskReserve, 2) : m ? raw('<span class="dim">0</span>') : '—'}</td>
       <td class="num">${seeded && m.floor != null ? fmtPrice(m.floor) : raw('<span class="dim">—</span>')}</td>
-      <td class="num">${seeded ? (m.seedSompi != null ? (m.seedSompi > 0n ? fmtMsk(m.seedSompi, 0) : raw('<span class="dim">none</span>')) : raw('<span class="dim" title="not served by the AMM window">—</span>')) : m ? raw('<span class="dim">none</span>') : '—'}</td>
+      <td class="num panel-ready-cell">${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.panelCell(r) : '—')}</td>
       <td class="l" title="${o ? o.title : ''}">${o ? o.text : '—'}</td>
       <td class="num">${row && row.versionsPublished != null ? row.versionsPublished + ' (v' + row.current + ')' : '—'}</td>
+      <td class="l production-cell">${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.cell(r) : '—')}</td>
       <td class="l">${statusTag(r)} <a class="tiny" href="#/line/${r.lineId}">details</a></td>
-    </tr>`; }) : raw('<tr><td colspan="14" class="empty">No models known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
+    </tr>`; }) : raw('<tr><td colspan="' + (opts.rank ? '15' : '14') + '" class="empty">No models known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
   </tbody></table></div>`.s;
 }
 function sortLines(list, key) {

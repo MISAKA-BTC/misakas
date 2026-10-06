@@ -24,6 +24,7 @@ window.MISAKA_CONFIG = {
   // not reachable or the market fence is dormant. The founding line of a class has
   // the class id as its line id. Known testnet-11 class ids are listed in README.md.
   CLASS_IDS: [
+    "b4a2ba784ae3d2680b7770a01fac46bbcde51ff401248e5b44c55fdc24f65f4c8f585edad1ce442b7d4e524159d318a0e8415f1a1a4f9a5ed27a2969fa67c97b", // Llama-3.2-3B-Instruct Uncensored, TIR @512
     "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01", // Qwen2.5-1.5B graph-v7 @8192
     "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a", // Qwen2.5-1.5B graph-v7 @2097152
     "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", // PALW-BASE-0 (the floor)
@@ -38,6 +39,14 @@ window.MISAKA_CONFIG = {
   // Keyed by class id (a class's founding line has the class's id) or by any line id.
   // testnet-12's genesis classes (docs/testnet-12-regenesis-2026-09-23.md, and getPalwClasses).
   MODELS: {
+    "b4a2ba784ae3d2680b7770a01fac46bbcde51ff401248e5b44c55fdc24f65f4c8f585edad1ce442b7d4e524159d318a0e8415f1a1a4f9a5ed27a2969fa67c97b": {
+      title: "Llama-3.2-3B-Instruct Uncensored · 512 ctx",
+      summary: "3B text-generation model converted from the pinned Q4_K_M GGUF. This registered profile uses 512-token context; panel readiness and mining eligibility are separate checks.",
+      variant: "PALWTIR1 · Q4_K_M source · n_ctx 512",
+      params: "3B",
+      hf: "https://huggingface.co/mradermacher/Llama-3.2-3B-Instruct-uncensored-GGUF",
+      artifact: "4.73 GiB (5,079,273,984 bytes), declared PALWTIR1 · inventory root d5a4ef2d6c0e…e2a5",
+    },
     "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01": {
       title: "Qwen/Qwen2.5-1.5B-Instruct",
       variant: "A16 · graph-v7 · n_ctx 8192",

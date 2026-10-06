@@ -1,0 +1,28 @@
+.model-production { display:inline-flex; flex-direction:column; gap:2px; font:inherit; line-height:1.25; }
+.model-production .production-label { font-weight:600; white-space:nowrap; }
+.model-production small { color:var(--muted); font:inherit; font-size:10px; white-space:normal; }
+.model-production.ok .production-label { color:var(--ok); }
+.model-production.warn .production-label { color:var(--warn); }
+.production-phone { display:none !important; }
+@media (min-width:641px) {
+  #linesBox #linesTbl.lines-model-description th,
+  #linesBox #linesTbl.lines-model-description td { width:auto !important; }
+  #linesBox #linesTbl.lines-model-description th:nth-child(1),
+  #linesBox #linesTbl.lines-model-description td:nth-child(1) { width:16% !important; }
+  #linesBox #linesTbl.lines-model-description th:nth-child(2),
+  #linesBox #linesTbl.lines-model-description td:nth-child(2) { width:14% !important; }
+  #linesBox #linesTbl.lines-model-description th:nth-child(12),
+  #linesBox #linesTbl.lines-model-description td:nth-child(12) { width:9% !important; }
+}
+/* Keep the existing three-column comparison list on phones. Full production facts are on desktop. */
+@media (max-width:640px) {
+  #linesBox #linesTbl.lines-model-description tbody td:first-child .production-phone { display:block !important; font-size:10px; margin-top:3px; }
+  #linesBox #linesTbl.lines-model-description tbody td:first-child .production-phone .model-production { display:inline-flex !important; flex-direction:row; flex-wrap:wrap; gap:3px; }
+  #linesBox #linesTbl.lines-model-description .production-phone small { font-size:9px; }
+  #linesBox #linesTbl.lines-model-description thead th:nth-child(1),
+  #linesBox #linesTbl.lines-model-description thead th:nth-child(6),
+  #linesBox #linesTbl.lines-model-description thead th:nth-child(7),
+  #linesBox #linesTbl.lines-model-description tbody td:nth-child(1),
+  #linesBox #linesTbl.lines-model-description tbody td:nth-child(6),
+  #linesBox #linesTbl.lines-model-description tbody td:nth-child(7) { display:table-cell !important; }
+}
