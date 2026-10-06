@@ -1,5 +1,13 @@
 # ADR-0108 — An extension is a manifest the verifier recomputes, and a receipt is evidence, not a vote
 
+> **2026-10-06 future-profile boundary:** manifest recomputation establishes canonical identity,
+> dependencies and admission/resource facts; it is not mandatory whole-inference recomputation.
+> [ADR0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) permits only approved
+> versioned kernels and bounded plans, not manifest-uploaded executable verifiers. New large-model
+> claim correctness follows [ADR0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md)'s
+> encoded probabilistic checks and bounded exact court on dispute. These decisions change no legacy
+> manifest verifier or active consensus rule merely by documentation.
+
 * Status: PROPOSED 2026-09-11, at the operator's request ("このような拡張をパーミッションレスで行える
   基盤を作成するADRを作成してから実装して"). **Decisions 1–9 IMPLEMENTED the same day** (§9),
   consensus-inert: no consensus object, acceptance rule, fence, parameter or fingerprint moves. A

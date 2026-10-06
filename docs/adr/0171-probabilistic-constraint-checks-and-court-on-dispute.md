@@ -2,7 +2,7 @@
 
 **Status:** Design direction selected at the operator's request, 2026-10-06. Protocol specification/implementation pending; **not active on any network**. No activation height, implementation success or fingerprint change is implied by this document.
 
-> **2026-10-06 extension-mechanism amendment:** [ADR-0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) selects versioned kernels and withdraws the VM implementation/fallback programme. References below to primitive/VM templates are historical alternatives: new plans use approved kernel-primitive templates only. This changes the extensibility mechanism, not this ADR's probabilistic verification, error accounting or exact-dispute policy.
+> **2026-10-06 extension-mechanism amendment:** [ADR-0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) selects versioned kernels and withdraws the VM implementation/fallback programme. The former primitive/VM-template option is withdrawn: new plans use approved kernel-primitive templates only. This changes the extensibility mechanism, not this ADR's probabilistic verification, error accounting or exact-dispute policy.
 
 **Specifies:** [RFC-0011 §§0, 13 and 15](../rfc/0011-permissionless-model-and-long-context-onboarding.md). Builds on [RFC-0007](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md)'s algebraic checker and exact escalation, RFC-0006's bounded partitions and RFC-0008's unique work accounting. Existing consensus and old claims keep their existing rules until a separate fence activates a complete implementation.
 
@@ -22,7 +22,7 @@ RFC7 already proposes Freivalds-style checks. Its §II.9 reports bandwidth-sensi
 
 ## 2. Rules selected
 
-1. **Register a verification plan.** `VerificationPlanV1` binds model/program/task/context and arithmetic, all constraint families, approved checker versions, soundness parameters, authenticated material and bounded dispute procedures. Reuse primitive/VM templates and compositional envelopes; no exhaustive unrolling of future executions at registration. Dynamic routing/memory must be covered by an applicable verifier rule. Missing support is an explicit blocker.
+1. **Register a verification plan.** `VerificationPlanV1` binds model/program/task/context and arithmetic, all constraint families, approved checker versions, soundness parameters, authenticated material and bounded dispute procedures. Reuse approved kernel-primitive templates and compositional envelopes, never a VM fallback; no exhaustive unrolling of future executions at registration. Dynamic routing/memory must be covered by an applicable verifier rule. Missing support requires the ADR0172 kernel-extension path.
 2. **Use randomized algebraic checks in ordinary verification.** Freivalds handles appropriate matrix relations; GKR/sum-check can aggregate compatible circuits. Quantization, nonlinear operations, routing, memory and segment boundaries need their own exact or probabilistic constraints. Their costs and combined soundness count toward the same claim. Ordinary Panel verification does not require complete segment replay.
 3. **Commit before each relevant challenge.** Fix outputs and evidence before deriving unpredictable challenges. Interactive proof messages must also precede their round's challenge. Domain separation, bias, grinding, aborts, reorg and any Fiat–Shamir assumptions require an explicit construction. A fixed public vector before execution is prohibited.
 4. **Accept quantified risk.** A false whole claim may pass with the reviewed nonzero error bound. RFC11 proposes a conditional `ε_check ≤ 2^-128` target; field size or sample count alone does not establish it. Panel compromise, challenge bias, DA/censorship and repeated attempts are separately budgeted. A signature quorum is not an arithmetic proof and shared challenges are not independent repetitions.
@@ -59,5 +59,16 @@ The new proposed fence is `palw_probabilistic_constraints_v1`; the name is a pro
 * A dormant implementation, shadow comparison, independent review and an explicit network activation decision. This documentation authorizes no deployment or model-registration transaction.
 
 ## 6. Primary basis
+
+The operator's clarified implementation direction is [RFC11 §15.9](../rfc/0011-permissionless-model-and-long-context-onboarding.md):
+compare PoSP/spML economics and opML disputes first; implement and benchmark a Freivalds/Slalom-inspired
+matrix checker before broader aggregation. Use DAS for availability, and GKR/SafetyNets/FRI only as
+reviewed components of a fully bound computation relation. This borrows neither a new orchestrator/
+DNS-validator set, Slalom's TEE trust nor opML's VM. Economic audit probability is distinct from
+algebraic challenge randomness: optional audits do not waive mandatory positive checks before Final.
+TEE/enclave trust for validity, model/fraud-proof VMs and BFT orchestrator/PKI/committee-beacon
+authority are explicitly **excluded**, not merely architectures to avoid copying unchanged.
+Source-pinned prefill, decode and MoE measurements, full-statement soundness and bounded kernel court
+are required; expected-loss estimates do not replace a protocol-specific incentive proof.
 
 [Slalom](https://arxiv.org/abs/1806.03287) motivates cheaper checks for linear layers; [GKR](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-for-muggles/) and [SafetyNets](https://arxiv.org/abs/1706.10268) motivate probabilistic circuit verification. [FRI](https://eccc.weizmann.ac.il/report/2017/134/) supplies a possible proximity component, and [Celestia DAS](https://docs.celestia.org/learn/celestia-101/data-availability/) concerns availability. [PoSP](https://arxiv.org/html/2405.00295v3) studies economic sampling/recomputation; [opML](https://arxiv.org/abs/2401.17555) supplies interactive ML-dispute precedent. These are component-level precedents; none is an implementation or performance proof for this combined MISAKA design. The detailed obligations and cost limits are in RFC11 §15.

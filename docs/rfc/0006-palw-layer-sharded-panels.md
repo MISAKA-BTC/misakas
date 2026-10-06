@@ -10,6 +10,23 @@
 | Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-gpu/tests/layer_shard.rs`) |
 | Related | ADR-0098 (coverage is a number), **ADR-0099 / ADR-0100** (a seat holds a shard: the plan, the stratified draw, `ShardCourtAccused`, `ShardReceiptLicensed` — built for legacy classes, dormant), ADR-0103 (held context; D2 interval, D7 a seat holds a shard of the model and its state), ADR-0111 (leaf demand), ADR-0062 (DA court), ADR-0117 (a draw is one forward), ADR-0133 (verification is its own clock; segment-scoped receipts), **ADR-0147** (independence is drawn: the outsider seat), ADR-0152 (Q-1…Q-7, `basis_k`), ADR-0160 (claim capacity), RFC-0002 Phase F (`TirShardCourtAccused`, `TirStepLeaf`/`TirStepNode`), **RFC-0007** (lane M4: batched verification certificates and algebraic checks — receipt aggregation and cheaper per-shard checks are its subject, not this RFC's), `docs/design/palw/tir/gpu-integer-backend.md` |
 
+## Current verification boundary — 2026-10-06
+
+The cell partition, authenticated boundaries and exact localization baseline below remain useful.
+For new probabilistic profiles, [RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)
+and [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md) replace routine whole-cell
+replay with approved small constraint checks. [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
+requires versioned kernels/typed plans, not a model VM or arbitrary circuit interpreter.
+
+Each receipt binds class/kernel/plan/suite, checked scope, openings and transcript. Tally coverage
+includes all required relations, initial/output state, cross-cell boundaries, memory and routing,
+with composed whole-claim soundness. Randomly selecting a few raw cells is insufficient: one faulty
+cell is found only with its selection probability even if its checker is perfect. The first-
+divergence replay lemma below is a localization/conformance baseline, not algebraic-check soundness.
+A cell checker needs reviewed relation binding, integer/field rules, sparse-error bounds and an exact
+bounded court path. Missing evidence/scope, DA failure or silent seats cannot produce Final. Legacy
+replay claims keep their old rules; a new receipt/coverage profile needs a separately reviewed fence.
+
 ## 概要(日本語)
 
 - **問題。** claim の throughput を縛っているのは検証の供給(panel の receipt)。t12 の backlog(10-01)では未 licence の

@@ -21,6 +21,16 @@ before it reaches `main`.
 
 **Next free number: RFC-0013.**
 
+## Model-extension precedence (2026-10-06)
+
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) governs
+RFC01–12's model extension: active versioned kernels and bounded declarative plans, never a model
+VM fallback. [RFC11 §15.9](0011-permissionless-model-and-long-context-onboarding.md) defines the
+MatMul-first probabilistic-check research/benchmark basis; TEE validity trust and BFT orchestrator
+authority are excluded. The [consistency audit](evidence/0012-kernel-only-design-audit.md) lists
+all twelve RFCs and relevant ADR dispositions. Older replay rules and RFC05's withdrawn VM appendix
+are historical/conformance records, not new implementation instructions. No activation is implied.
+
 ## ADRs that read as proposals
 
 These ADRs decide nothing, or were forward-looking designs with nothing built. They keep their ADR

@@ -67,6 +67,13 @@ claim が現在 bind する `trace_root`、`output_root`、`execution_root`、`t
 
 provider は鍵、bond、報酬の代理人ではなく byte 配信者である。storage receipt には provider identity、manifest root、対象 chunk 集合、保持期限、network、署名を含める。必要な複製数、byte cap、同一運営者の重複、rate limit、discovery、料金は実測と攻撃予算から fence ごとに固定する。特定の transport や `misaka-torrentd` が現リポジトリにあると仮定しない。
 
+**新profileの適用境界（2026-10-06）:** 既存profileへの配信は既存replay/courtを維持する。
+将来の大型claimは[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)・
+[RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)の小さいconstraint検査へ認証済み証拠を渡し、
+異常時のみ有界exact courtを使う。manifestはclass/kernel/plan/suiteと証拠をbindし、proof/openingの配信・保持費用も
+計上する。[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)のKernel更新境界を
+remote executionで迂回せず、未対応演算をVMで処理した結果を有効なclaimとしない。
+
 ### 4.2 可用性と責任
 
 storage receipt は**保管の約束**であり、将来の全 Panel からの取得可能性の証明ではない。初期段階では claim の従来の producer 責任を残し、外部配信を node 不要化の運用改善として試す。miner を配信責任から外す fence は、provider 側の bond と客観的な不履行証明が動いた後に限る。

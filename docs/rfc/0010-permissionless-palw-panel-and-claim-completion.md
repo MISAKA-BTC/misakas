@@ -14,6 +14,22 @@ For one sealed claim on one canonical history, the target invariant is `Panel(cl
 
 This is a conditional proposal. The current chain has no demonstrated randomness source that meets §3.3 merely because a hash function is applied to public fields. The new rule MUST stay dormant until a concrete beacon, its implementation and its adversarial bias bound pass the activation gates in §9. In particular, removing the eight-bond predicate while continuing to seed the Panel from a cheaply replaceable attempt is forbidden.
 
+### 0.1 New verification profiles — 2026-10-06
+
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) supplies the
+active-kernel/plan boundary; a new model VM is not part of open Panel admission. For new large-model
+claims, [RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md) / [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)
+select small encoded/algebraic checks, positive scope-bound receipts and exact bounded court on
+dispute. Capabilities/readiness must identify the approved suite and its real verification/DA/court
+resources; the legacy full-replay working set is not automatically the new checker's requirement.
+Neither reduced resources nor extra bonds waive complete constraint coverage or Final conditions.
+
+Panel-selection randomness, generation randomness and algebraic proof challenges are distinct
+domains. This RFC's fixed Panel seed does not expose future GKR round challenges prematurely or
+permit reusable public Freivalds vectors. Apply RFC11's post-commit/round/transcript policy separately.
+The paper's “validator” in PoSP means a computation checker here, not a DNS finality validator or a
+new privileged orchestrator set. Keep RFC12's PALW-native authority and this RFC's public bond rules.
+
 ## 1. Current rule and trust boundary
 
 On testnet-12, lane F1 derives a Panel seed from `H(anchor attempt execution_commitment_v3 || claim_id)`. Lane A then lets only an attempt from one of the eight genesis operator bonds anchor a claim's Panel. A chain block that merges such an attempt may carry the bind, but the operator attempt supplies the seed. The [incident note](../t12-panel-seed-2026-09-25.md) explains the price: an attacker could obtain fresh valid attempt wins with cheap junk work while P0-10 remained open, preview the Panel, and publish a favourable candidate. Lane A prevents an untrusted participant from controlling that source by trusting the operator position instead.

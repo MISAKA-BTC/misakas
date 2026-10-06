@@ -398,6 +398,68 @@ The benchmark report must include producer execution **and** witness/proof gener
 * [PoSP/spML](https://arxiv.org/html/2405.00295v3): probabilistic challenges, recomputation and economic arbitration assumptions. Its selected validators recompute the function; it does not prove this RFC's sub-execution checker sound.
 * [opML (2024)](https://arxiv.org/abs/2401.17555): interactive ML fraud-proof precedent. MISAKA still needs its own binding and bounded localization implementation; a dispute system cannot detect a lie no participant challenges.
 
+### 15.9 Selected research basis: economic challenge, MatMul-first checks and bounded disputes
+
+**Explicit exclusions:** no TEE/enclave/SGX trust assumption for computation validity; no model
+execution/fraud-proof VM; no spML-style BFT orchestrator committee, trusted operator PKI or committee
+beacon as a protocol authority. These concepts are not alternative implementations or future
+dependencies of this route. Use public consensus identity/bond rules, independently specified
+post-commit randomness, approved kernel checkers and the existing bounded PALW court. Existing
+native EVM and required historical validation are outside this model-VM prohibition.
+
+**2026-10-06 clarification requested by the operator:** “small probabilistic checks” means this
+combination of established ideas, not inventing a raw few-segment trust rule. Review comparison
+baselines in the following order before changing the acceptance policy; engineering starts with
+the matrix checker. These are component precedents, not a theorem for the combined MISAKA protocol.
+
+| Priority / primary comparison | What to use | What does not transfer automatically |
+| --- | --- | --- |
+| 1. [PoSP/spML v3, 2025](https://arxiv.org/html/2405.00295v3), §§2–3 | Economic challenge probability, verifier selection after commitment, bonded rewards/slashing, arbitration and failure handling | Selected validators recompute `f(x)`; the Nash-equilibrium result has rationality, cost, collusion and accurate-arbitration assumptions. spML also assumes BFT orchestrators/beacon and trusted chain/PKI. This is neither sublinear algebraic-check soundness nor authority to add DNS validators. |
+| 2. [opML v2](https://arxiv.org/html/2401.17555v2), §§3, 5–6 | Interactive localization of a disagreement, execution/proving separation and bounded terminal arbitration as a comparison target | Its FPVM is not adopted. MISAKA localizes to an approved tensor/state kernel transition, not an ISA step. A participant must actually discover/file a fault. |
+| 3. [Freivalds / Slalom](https://arxiv.org/html/1806.03287v2), Lemma 2.1 / §3 | First implement and measure committed matrix-product checks, batching and fixed-weight preprocessing | No inherited TEE, secret-reuse assumptions, field/quantization choices or reported speedups. Public-challenge openings and MISAKA integer semantics need their own construction. |
+| 4. [Celestia DAS](https://docs.celestia.org/learn/celestia-101/data-availability/) | Coded data/commitments make substantial withholding detectable by a few availability queries | DA error amplification concerns missing data, not an incorrect scalar or transition. Merely erasure-coding a wrong trace cannot certify inference. |
+| 5. [GKR](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-for-muggles/), [SafetyNets](https://arxiv.org/abs/1706.10268), [FRI](https://eccc.weizmann.ac.il/report/2017/134/) | Reviewed constraint aggregation / interactive proof / proximity components when their complete relation binding and measured cost justify them | Circuit/proof machinery does not authorize a model VM, arbitrary uploaded circuits or omitted nonlinear/state relations. Proximity alone does not prove execution. |
+
+#### Implementation sequence and the measurement that decides it
+
+1. Profile a source-pinned deterministic model: record fractions of execution work **and time**
+   for GEMM/GEMV, attention, active-expert products, routing, nonlinear/range and authenticated
+   state. Do not assume matrix multiplication dominates every model/device/task just from its brand
+   or parameter count. Kimi K3 remains §15.6's measured full-task stress target, not proven support.
+2. Implement the §15.2 Freivalds relation as a versioned checker kernel. Fix every matrix and
+   material commitment before challenges; authenticate projections. Compare exact multiplication
+   with fresh public-vector checks and a separately specified preprocessing variant on identical
+   inputs/weights. Measure prefill batched GEMM, single-token GEMV and executed MoE experts separately.
+   Include producer witness cost, cold/warm setup, retained sketches, openings, bytes, RAM and
+   end-to-end receipt latency. A speedup in multiplication alone is not an end-to-end win.
+3. Cover the remaining routing, quantization, nonlinear, memory and boundary relations using
+   approved exact small checks or reviewed algebraic/lookup suites. Add GKR-style aggregation only
+   with a bound for the **whole committed relation**, including sparse faults and all input openings.
+   Add a computation-encoding/FRI route only with a demonstrated constraint-to-encoding reduction.
+4. Localize failed checks to compatible bounded exact court with tested worst-case work/bytes/time.
+   PoSP-style challenge/reward and timeout analysis must price this new checker/localization cost,
+   not copy a full-function replay cost. Differentiate provable fraud, DA failure and verifier faults.
+5. Repeat adversarial tests and independent soundness/economic review, then shadow the complete
+   registration/Panel/Final path. No checker or Kernel extension is activated by this comparison.
+
+#### Economic deterrence is not the cryptographic error bound
+
+Preserve positive mandatory checks before Final. Optional PoSP-inspired extra audits can measure
+cheating incentives and verifier shirking, but cannot replace those checks by “unchallenged = Final”.
+If the **only** check is dispatched with probability `p`, then under an ideal honest checker with
+conditional miss bound `ε`, a deliberately false claim's miss probability is
+`(1-p) + p·ε`; a small dispatch probability cannot yield §15.4's whole-check target. This is distinct
+from sampling a random vector on **every** claim, whose algebraic relation has its own conditional
+soundness bound. Panel compromise and randomness/DA failures remain separately budgeted.
+
+Publish the actual probability of detection **and successful enforceable conviction**, available
+collateral, saved compute/proof cost, maximum external/reorg gain, checker participation costs,
+fees/rewards, collusion/Sybil assumptions, and dispute backlog. As a screening requirement, expected
+enforceable loss must exceed the bounded gain from fraud; that inequality alone is not a Nash-
+equilibrium proof for MISAKA. RFC08's pre-Final fork-choice exposure and RFC12's settlement risk
+must be included, not priced as zero. PoSP's paper “validators” map to computation checkers/Panel
+seats here, never a new DNS attestation/precommit/finality authority.
+
 ## 16. Model extensibility without a VM (2026-10-06 revision)
 
 ### 16.1 Fixed policy, changed extension mechanism

@@ -9,10 +9,24 @@
 | Branch | `rfc/0003-image-generation` (text only) |
 | Related | RFC-0001 (§A FP Job V4, frozen; ADR-0082 D11 sampler), RFC-0002 (PALW-TIR; spec [04b](../spec/palw/04b-tensor-ir.md) on `tir/core`; Phase F integration design on `tir/phase-f`), ADR-0040 (integers only), ADR-0044 (F5/F6/F15: no randomness from executor-chosen fields), ADR-0053 (no tolerance), ADR-0057 (backends below the semantic boundary), ADR-0069 (weight needs e2e adjudicability), ADR-0072 (one inference, one ticket), ADR-0074 D1 (canonical prompt mode), ADR-0096 (refuse by name), ADR-0133 (resume), ADR-0135 D7 (a new op is a protocol upgrade), ADR-0144 (P1–P7), ADR-0145 §6 (a cache is an execution fact) |
 
+## Current extension and verification boundary — 2026-10-06
+
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) governs future
+profiles: bounded declarative pipelines over active kernels; missing semantic/checker/court or task
+relations need coordinated versioned kernel extensions, not BVM/GVM, arbitrary tests or uploaded
+universal circuits. [RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)
+and [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md) select small probabilistic
+checks over encoded constraints, with exact bounded court only on disputes. Every stage, derived
+input, decode rule, cross-stage edge and output belongs to the checked statement. Compose soundness
+over the whole pipeline; a checked decoder alone is not verification of a multimodal model.
+Generation randomness `R` is distinct from post-commit verifier challenges. Legacy replay below
+remains a reference/old-profile rule, not a requirement for routine whole-stage/segment replay in
+the new profile. This amendment changes no active implementation or fence.
+
 ## 概要(日本語)
 
 - **目的。** 画像生成モデル(Qwen-Image の 2.x 系、FLUX.2 [klein] 4B など)を、テキスト LLM と同じ形 ——
-  **Job → 決定論的な実行 → commit された出力 → 争い → court による replay** —— で permissionless に
+  **Job → 決定論的実行・constraint commitment → 小さい確率的検査 → Final（異常時のみexact court）** —— で permissionless に
   登録できるようにする。同じ形を埋め込み・音声・動画にも使う。モデルごとの差は小さな「class profile」に
   閉じ込め、共通層を先に作る。RFC は増やさず、この 1 本を **Part I(共通層)** と **Part II(class profile)** に分ける。
 - **Part I-1 決定論的乱数 `R(seed, domain, step, position, lane)`。** 置き場所は **(a) job/consensus 層**。
@@ -2060,7 +2074,8 @@ encodes as before:
 - **`FinalizedOutput { claim, stage }`** (token source tag 5). It is the generated ids of the job's
   `claim`-th finalized claim (`claim < 8`), from that claim's stream stage `stage`. It is a token
   source rather than a new binding, so a template, its padding and its count are the existing
-  `JobTokens` / `JobTokenCount` bindings'. A pairwise judge reads two, and RFC-0005's `Tests` kind one.
+  `JobTokens` / `JobTokenCount` bindings'. A pairwise judge reads two. RFC05's former VM `Tests` kind
+  is withdrawn; a future bounded non-VM test relation needs a separate active kernel/task profile.
   The job carries the ids and the chain holds their commitment. Where that commitment lives and how a
   close carries the ids is the evaluation job family's (RFC-0004 A6).
 - **The key** (token source `Key`, tag 4): an evaluation item's key ids, which an exact-match stage

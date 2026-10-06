@@ -12,6 +12,13 @@
 
 > **Revision precedence:** Part V and the goals below govern the proposed new route. Part II documents the existing private-sketch baseline; its optional witness, secrecy, node-local policy and historical measurements do not specify Part V's public, evidence-bound protocol. Part III's raw-sampling warning remains valid. Part IV's mesh-only capped experiment cannot substitute for Part V's claim coverage or Final conditions. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
+> **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
+> and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) govern Part V. Checkers are approved versioned kernel
+> relations; registration, claims, receipts and transcripts bind descriptor/plan identity. GKR's
+> generality does not authorize arbitrary uploaded programs, guests or universal CPU circuits.
+> Missing relations require a coordinated kernel upgrade and matching bounded court, not a VM
+> fallback. Part V's probabilistic Final policy is unchanged.
+
 ## 概要(日本語)
 
 **通常のPanel検証は、割り当てられたsegmentを丸ごと再実行する方式から、commitされた計算のconstraintを安く検査する方式へ進める。** この方針をPart Vの中心要件とする。
@@ -858,7 +865,7 @@ committed evidence → bound challenge → constraint checks → positive scoped
 
 No receipt silence, absent proof round, unchecked relation or missed DA duty counts as positive evidence. Licence is not immediate Final. Open accepted disputes block finalization under the versioned lifecycle. Bind pre-Final weight/escrow exposure to the existing compatible accounting and RFC11/RFC8 requirements; extra checks, batches and receipts mint no extra inference work. Retain evidence until the last relevant dispute/retention deadline, including across reorg/pruning.
 
-A failing checker files no passing receipt. It names the bound failing relation/evidence; a correct claim with a bad served witness is not automatically producer fraud. Localize through authenticated batch partitions, matrix tiles, state steps or circuit relations to an exact TIR/VM terminal supported by court. Bound **total** localization work, bytes, moves and concurrency, not just the last operation. Finding a false GKR statement does not itself locate a leaf: each suite needs a tested localization protocol. Unknown/incompatible terminal semantics require a versioned extension. No fallback may require complete Kimi-class inference on a validator.
+A failing checker files no passing receipt. It names the bound failing relation/evidence; a correct claim with a bad served witness is not automatically producer fraud. Localize through authenticated batch partitions, matrix tiles, state steps or approved circuit relations to an exact **TIR/kernel terminal** supported by court, never a VM step. Bound **total** localization work, bytes, moves and concurrency, not just the last operation. Finding a false GKR statement does not itself locate a leaf: each suite needs a tested localization protocol. Unknown/incompatible terminal semantics require a versioned kernel/court extension. No fallback may require complete Kimi-class inference on a seat or node.
 
 Anyone with the required bond/material can challenge; exact court conviction, dismissal and DA/timeout outcomes keep their distinct evidence rules. Missing material is handled as availability; slashing requires the corresponding proven violation. Court catches filed disputes, leaving residual undetected error after Final. This proposal adds no automatic post-final rollback.
 

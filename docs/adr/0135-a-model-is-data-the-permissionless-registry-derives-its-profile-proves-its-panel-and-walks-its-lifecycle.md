@@ -28,6 +28,16 @@ PREFETCHING → PROBATION → ACTIVE_LIMITED → ACTIVE on chain-visible facts a
 not a window, not a rate, not a share — is ever stated by a registrant, measured by an operator or committed to
 a source tree.**
 
+> **2026-10-06 terminology and future-profile amendment:** “canonical ML VM” / “VM boundary”
+> below denote the then-existing layer-template/kernel evaluator, not a BVM/GVM/Universal VM
+> implementation plan. [ADR0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
+> selects active-kernel declarative plans, with coordinated kernel updates for missing relations.
+> [ADR0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md) replaces ordinary full replay
+> for new large-model profiles with small encoded constraint checks and exact court on dispute.
+> Historical work/seat/lifecycle formulas remain the legacy baseline; derive and test new resource
+> schedules separately. The quoted operator direction and original decisions below are historical.
+> This amendment changes no active registry or existing class identity.
+
 ## 1. What today's path still needs a human for, and what stays a human's
 
 Today (ADR-0133 §9a): shadow measurement → the operator freezes a profile → a fence in `main` → a share set by

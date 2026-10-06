@@ -118,6 +118,14 @@ Scope, stated plainly: this covers any model expressible in the catalogued kerne
 checkpoints, new sizes, new context widths, new quantization maps of the families the kernels
 serve. It does not cover new architectures; see Decision 3.
 
+> **2026-10-06 future-profile clarification:** [ADR0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
+> preserves this kernel/code versus model/data boundary. Typed TIR/VerificationPlan composition is
+> data over defined kernels, not a universal uploaded instruction set. A new semantic/checker/court
+> family requires a coordinated versioned kernel update. The legacy replay wording below does not
+> override [ADR0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md)'s normal small
+> constraint checks and exact-dispute-only policy for new large-model profiles. Existing classes
+> retain their historical rules until separately fenced transitions.
+
 ## Decision 3 — the kernel set is the consensus surface, and it is irreducible
 
 Adjudication means a seat recomputes the same arithmetic and compares. Executable semantics

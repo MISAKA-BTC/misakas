@@ -64,6 +64,17 @@ slice の正しさは optimistic に licence → challenge → Final と進め�
 
 複数 slice は panel、licence、court、DA の負荷を増やす。[RFC-0006](0006-palw-layer-sharded-panels.md) の layer/position sharding と [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md) の batched receipts/代数的チェックは候補となるが、両 RFC は Draft である。採用しない場合も同等の throughput、安全性、censorship 耐性を実測で示す。単に producer を増やして verification backlog を後ろに押す案は認めない。
 
+### 3.4 Kernelと確率的検査の境界（2026-10-06）
+
+新しいslice profileの通常検証は[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)・
+[RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)の小さいencoded/algebraic constraint検査とする。
+slice全体の再実行を通常経路に要求せず、異常時だけ有界exact courtへ局所化する。
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)のactive Kernel・plan・suiteを
+root/slice/receiptにbindし、未対応演算はKernel更新まで拒否する。VM代替経路は設けない。
+各sliceの初期・終端stateとpredecessorを被覆し、session全体の誤受理確率を合成する。同じ証拠やchallengeを
+複数blockに載せても独立な検査回数とは数えない。正のreceipt、DA、challenge window、§7の未確定weight上限を
+維持し、軽量化を根拠に無検証のBLUE/rewardを増やさない。
+
 ## 4. BLUE・floor・heartbeat の役割
 
 ### 4.1 通常時の floor 排除は GHOSTDAG より前

@@ -25,6 +25,11 @@ RFC's new VM workflow/model fallback, guest ISA/syscalls, universal one-step cou
 associated VM-dependent EXEC implementation. Existing EVM contracts may continue under their own
 rules; an EVM job-precompile roadmap is no longer a prerequisite or selected workaround here.
 
+The research comparators in RFC11 §15.9 do not introduce their original trust architectures:
+TEE/enclave validity trust, a model/fraud-proof VM, and a spML-style BFT orchestrator/PKI/committee
+beacon are explicitly excluded, not deferred alternatives. Kernel checkers, public bond/identity
+rules and separately analysed post-commit randomness carry the selected route.
+
 ## K.1 Extension ladder, without an interpreter escape hatch
 
 | Model requirement | Route | Consensus update? |

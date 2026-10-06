@@ -9,6 +9,17 @@
 
 ---
 
+## 将来profileの検証境界（2026-10-06）
+
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)に従い、モデル拡張は
+active Kernelの宣言的plan、またはversioned Kernelの合意更新で行う。モデル用VMは実装しない。
+凍結済みdecode算法と既存claimの規則は変更しない。将来の大型モデルprofileでは
+[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md) / [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)
+の小さい確率的constraint検査を通常経路とする。logitsからpenalty、bias、constraint、sampler、stop、
+出力までstatementにbindし、未検査のdecode段階を残さない。生成用の決定論的乱数は検証用の
+post-commit challengeではない。異常時のみ有界exact courtへ局所化する。reference replayとgolden
+vectorsは適合確認として残す。この文書改訂で新profileを有効化しない。
+
 ## §A. リリース「FP Job V4 — Deterministic Decode Pipeline」(Implementation Frozen)
 
 **この節の算法・表現・順序は凍結されている。** 実装中に変える場合は「コードを仕様に合わせる」のではなく、本 RFC の変更として明示し、golden vectors も同時に改訂する。

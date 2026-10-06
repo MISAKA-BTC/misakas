@@ -26,6 +26,11 @@ syscall、guestメモリ、gas、one-step VM court、toolchainを合意規則と
 選ばれたsegment全部を再実行する設計へ戻さない。例外時だけ、拘束された証拠から有界のterminal courtへ落とす。
 単なるtraceの抜取りやデータのerasure codingだけでは、単一点不正に対するこの保証は成立しない。
 
+**追加の明示的禁止:** 参照論文にあるTEE/enclaveを正当性の信頼根拠にする方式、モデル検証・fraud-proof VM、
+spML型BFT運営者委員会・trusted PKI・committee beaconは、この経路では採用しない。将来の代替依存としても
+残さない。公開のidentity/bond規則、別途安全性を定義するpost-commit乱数、承認済みKernel検査器と有界PALW courtを使う。
+論文から利用する検査・誘因・局所化の考え方と、利用しない信頼アーキテクチャを区別する。
+
 ## 1. Why remove the VM implementation programme
 
 An existing production ISA still needs MISAKA-specific deterministic arithmetic, syscall bindings,
@@ -113,8 +118,14 @@ challenged faults, not a mechanism that retroactively removes undetected-error p
 | RFC04 improvement, candidate/evaluation/promotion rules | Keep. Off-chain automation is unrestricted. Code-by-tests/EXEC is not promised via a future VM; a distinct reviewed non-VM checker extension would need its own specification. |
 | RFC11 model registration and broad coverage | Replace all proposed VM fallback with active-kernel plan composition or an explicitly required future kernel. Preserve the real 9B/2M blockers and the all-HF denominator. |
 | ADR0171 / RFC07 probabilistic verification | Unchanged security direction; reusable kernel-primitive templates replace references to VM templates. Full replay remains a conformance baseline or exact small-class option, not the required ordinary large-model path. |
-| Other draft references to RFC05, including RFC02's residual-GVM route | Do not authorize a VM implementation. Resolve through this decision/RFC05 and record the residual as unsupported until a kernel route passes. |
+| RFC02's residual-GVM route and RFC03's VM Tests reference | Withdrawn; RFC02 §§II.11–II.12 now specify active-kernel registration and an explicit extension queue. RFC03's future test relation needs a bounded non-VM kernel/task profile. Missing support stays uncovered until the full route passes. |
 | Existing live EVM and any historical VM-coded objects | No change by documentation. Inventory actual activation/code before cleanup; retain required historical replay. Dormant prototypes need no new implementation or activation under this roadmap. |
+
+The [RFC01–12 consistency audit](../rfc/evidence/0012-kernel-only-design-audit.md) records the
+2026-10-06 cross-document dispositions. RFC01/03/06 distinguish legacy replay from the new checker;
+RFC07/08/09/10 bind kernel/checker identities without reviving an interpreter. RFC12 removes DNS
+authority, not the existing native EVM lane. RFC11 §15.9 specifies the research/benchmark basis
+for probabilistic checks and the boundary between economic audits and cryptographic soundness.
 
 ## 6. Acceptance evidence and honest coverage
 
