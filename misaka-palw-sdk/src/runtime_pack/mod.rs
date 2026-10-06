@@ -9,6 +9,7 @@
 //! * [`hfref`] — the Hugging Face reference an integer program is held to, and the unit check.
 //! * [`provenance`] — what an artifact's own provenance record says (scope, adapter, descriptors, math).
 
+pub mod bind;
 pub mod build;
 pub mod cli;
 pub mod conformance;

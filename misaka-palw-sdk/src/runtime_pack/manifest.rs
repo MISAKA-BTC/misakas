@@ -324,6 +324,72 @@ pub struct DeclaredClass {
     pub h_tile: u32,
     /// The container written with the layout: its file digest.
     pub file_digest: String,
+    /// Full effective layout; old packs remain readable but cannot reproduce it from a base artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_layout: Option<ExactLayoutRec>,
+}
+
+/// Actual class inputs, not the search options that happened to produce them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactLayoutRec {
+    pub version: u16,
+    pub commit_tiles: Vec<u32>,
+    pub state_tiles: Vec<u32>,
+    pub logits_scheme_id: String,
+}
+
+impl DeclaredClass {
+    pub fn from_class(
+        network: String,
+        class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+        root: &kaspa_hashes::Hash64,
+        file_digest: String,
+    ) -> Result<Self, String> {
+        let program = class.decode_program().map_err(|e| e.to_string())?;
+        Ok(Self {
+            network,
+            layout_digest: class.layout_digest().to_string(),
+            class_id: class.class_id(root).to_string(),
+            max_context: class.layout.max_context,
+            checkpoint_interval: class.layout.checkpoint_interval,
+            h_tile: class.layout.h_tile,
+            file_digest,
+            exact_layout: Some(ExactLayoutRec {
+                version: class.layout.version,
+                commit_tiles: class.layout.commit_tiles.clone(),
+                state_tiles: class.layout.state_tiles.clone(),
+                logits_scheme_id: hex(&program.logits_scheme_id),
+            }),
+        })
+    }
+
+    /// Reconstruct exactly; never search under this binary's current admission rules.
+    pub fn class_from_program(
+        &self,
+        program: &misaka_palw_tir::TirProgramV1,
+        tokenizer_id: kaspa_hashes::Hash64,
+    ) -> Result<kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1, String> {
+        use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1, PalwTirLayoutV1};
+        let r = self.exact_layout.as_ref().ok_or("legacy pack has no exact layout; bind its declared artifact into a new pack")?;
+        let scheme: kaspa_hashes::Hash64 = r.logits_scheme_id.parse().map_err(|e| format!("logits scheme: {e:?}"))?;
+        let mut p = program.clone();
+        p.logits_scheme_id.copy_from_slice(scheme.as_byte_slice());
+        let p = misaka_palw_tir::TirProgramV1::decode_canonical(&p.encode()).map_err(|e| e.to_string())?;
+        Ok(PalwTirClassV1 {
+            version: PALW_TIR_CLASS_VERSION_V1,
+            program: p.encode(),
+            tokenizer_id,
+            layout: PalwTirLayoutV1 {
+                version: r.version,
+                max_context: self.max_context,
+                checkpoint_interval: self.checkpoint_interval,
+                h_tile: self.h_tile,
+                commit_tiles: r.commit_tiles.clone(),
+                state_tiles: r.state_tiles.clone(),
+            },
+        })
+    }
 }
 
 /// A sidecar file of the pack directory, pinned by hash.
@@ -400,7 +466,11 @@ impl RuntimePackV1 {
     /// The structural rules a manifest must satisfy whoever wrote it (hex lengths, file names).
     pub fn check_shape(&self) -> Result<(), String> {
         let hexn = |what: &str, s: &str, n: usize| -> Result<(), String> {
-            if s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) { Ok(()) } else { Err(format!("{what} is not {n} lowercase hex characters")) }
+            if s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+                Ok(())
+            } else {
+                Err(format!("{what} is not {n} lowercase hex characters"))
+            }
         };
         hexn("model.config_digest", &self.model.config_digest, 64)?;
         for f in &self.model.files {
@@ -453,6 +523,19 @@ impl RuntimePackV1 {
         for d in &self.declared {
             hexn("declared.layout_digest", &d.layout_digest, 128)?;
             hexn("declared.class_id", &d.class_id, 128)?;
+            hexn("declared.file_digest", &d.file_digest, 128)?;
+            if let Some(l) = &d.exact_layout {
+                hexn("declared.exact_layout.logits_scheme_id", &l.logits_scheme_id, 128)?;
+                if l.version != 1
+                    || d.max_context == 0
+                    || d.checkpoint_interval == 0
+                    || d.h_tile == 0
+                    || l.commit_tiles.contains(&0)
+                    || l.state_tiles.contains(&0)
+                {
+                    return Err("declared exact layout has an unsupported version or a zero dimension".into());
+                }
+            }
         }
         Ok(())
     }

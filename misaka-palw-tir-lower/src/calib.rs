@@ -9,7 +9,7 @@
 //! So this format writes every float as its IEEE bit pattern — an integer, which JSON carries
 //! exactly — in a fixed field order, and its digest ([`stats_digest`]) is over that canonical text.
 //!
-//! The legacy `--stats-out` of `palw-tir-fidelity` (plain `serde` floats) is still read
+//! Older `--stats-out` files of `palw-tir-fidelity` (plain `serde` floats) are still read
 //! ([`stats_from_json`] recognises it by the absence of a schema), for measuring; a runtime pack
 //! accepts only this one ([`stats_from_json_exact`]).
 
@@ -67,7 +67,8 @@ impl From<SiteStatV1> for SiteStat {
 
 /// The canonical text of `stats`: sites in name order, fields in fixed order, floats as bits.
 pub fn stats_to_json(stats: &BTreeMap<String, SiteStat>) -> String {
-    let f = FileV1 { schema: CALIB_STATS_SCHEMA_V1.into(), sites: stats.iter().map(|(k, v)| (k.clone(), SiteStatV1::from(v))).collect() };
+    let f =
+        FileV1 { schema: CALIB_STATS_SCHEMA_V1.into(), sites: stats.iter().map(|(k, v)| (k.clone(), SiteStatV1::from(v))).collect() };
     serde_json::to_string(&f).expect("plain data serialises")
 }
 
@@ -141,7 +142,10 @@ mod tests {
             assert_eq!(b.sum_sq.to_bits(), v.sum_sq.to_bits());
             assert_eq!(b.pos0_absmax.to_bits(), v.pos0_absmax.to_bits());
             assert_eq!(b.rest_absmax.to_bits(), v.rest_absmax.to_bits());
-            assert_eq!(b.chan_absmax.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), v.chan_absmax.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+            assert_eq!(
+                b.chan_absmax.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                v.chan_absmax.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
             assert_eq!((b.count, b.ragged), (v.count, v.ragged));
         }
         // The text is canonical: writing what was read gives the same text and the same digest.

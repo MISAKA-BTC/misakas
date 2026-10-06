@@ -61,7 +61,13 @@ impl VerifyReport {
             };
             o.push_str(&format!("  {s} {:<18} {}\n", c.name, c.detail));
         }
-        o.push_str(if self.verified() { "VERIFIED\n" } else if self.ok() { "NOT FULLY VERIFIED (nothing failed; some checks were skipped)\n" } else { "FAILED\n" });
+        o.push_str(if self.verified() {
+            "VERIFIED\n"
+        } else if self.ok() {
+            "NOT FULLY VERIFIED (nothing failed; some checks were skipped)\n"
+        } else {
+            "FAILED\n"
+        });
         o
     }
 }
@@ -76,7 +82,7 @@ pub struct VerifyOpts {
     /// Rebuild the artifact from `model` with the pack's profile.
     pub rebuild: bool,
     pub impls: ImplSet,
-    /// Re-declare the pack's declared classes (needs the artifact).
+    /// Check the exact declared identities (needs the artifact); no fresh layout search.
     pub declared: bool,
     /// **Streamed conformance** (RFC-0002 Part II §II.9 L2): the reference reads each tensor when asked, the typed backend runs over the
     /// mapped file, and the Hugging Face fit runs on the mapped backend — no executor holds the artifact whole. `None`: automatically,
@@ -86,7 +92,15 @@ pub struct VerifyOpts {
 
 impl VerifyOpts {
     pub fn new(pack_dir: impl Into<PathBuf>) -> Self {
-        VerifyOpts { pack_dir: pack_dir.into(), model: None, artifact: None, rebuild: false, impls: ImplSet::default(), declared: true, streamed: None }
+        VerifyOpts {
+            pack_dir: pack_dir.into(),
+            model: None,
+            artifact: None,
+            rebuild: false,
+            impls: ImplSet::default(),
+            declared: true,
+            streamed: None,
+        }
     }
 }
 
@@ -171,7 +185,11 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
             pack.converter.lowering,
             env!("CARGO_PKG_VERSION"),
             LOWERING_VERSION_V1,
-            if same_build { "the same converter" } else { "another converter: the artifact's roots, not the version, are what must agree" },
+            if same_build {
+                "the same converter"
+            } else {
+                "another converter: the artifact's roots, not the version, are what must agree"
+            },
             math_note
         ),
     );
@@ -196,7 +214,11 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
             (None, _) => acc.skip("rebuild", "--rebuild needs --model (the public source)"),
             (Some(_), false) => acc.skip("rebuild", format!("not attempted: {math_note}")),
             (Some(model), true) => {
-                let out_dir = std::env::temp_dir().join(format!("palw-pack-verify-{}-{}", std::process::id(), UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+                let out_dir = std::env::temp_dir().join(format!(
+                    "palw-pack-verify-{}-{}",
+                    std::process::id(),
+                    UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
                 std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
                 let out = out_dir.join("rebuild.palwtir");
                 let mut req = ConvertRequest::new(model, &out);
@@ -243,7 +265,7 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
     if streamed {
         // Neither the reference nor the typed backend holds the artifact whole: the reference reads one tensor at a time, the typed backend
         // runs over the mapping, and the fit to the Hugging Face reference is measured on the mapped backend.
-        conformance_check_streamed(&mut acc, &pack, &art, opts.impls);
+        conformance_check_streamed(&mut acc, &pack, &art, opts.impls, log);
         hf_check_streamed(&mut acc, &pack, &art, dir);
     } else {
         let loaded = match conformance::LoadedArtifact::open(&art) {
@@ -269,11 +291,22 @@ fn adapter_check(acc: &mut Acc, pack: &RuntimePackV1, dir: &Path) {
         "none" => acc.pass(what, "none (Level A)"),
         "built-in" => match (p.id.as_deref().and_then(adapter::builtin::by_id), &p.hash) {
             (Some(a), Some(h)) if a.hash == *h => acc.pass(what, format!("built-in `{}` {}", a.id, &a.hash[..16])),
-            (Some(a), Some(h)) => acc.fail(what, format!("built-in `{}`: the pack pins {}, this build's is {} (the adapter changed since the pack was written)", a.id, short(h), short(&a.hash))),
+            (Some(a), Some(h)) => acc.fail(
+                what,
+                format!(
+                    "built-in `{}`: the pack pins {}, this build's is {} (the adapter changed since the pack was written)",
+                    a.id,
+                    short(h),
+                    short(&a.hash)
+                ),
+            ),
             _ => acc.fail(what, "this build has no such built-in adapter"),
         },
         "user-file" => match (&p.file, &p.hash) {
-            (Some(f), Some(h)) => match std::fs::read_to_string(dir.join(f)).map_err(|e| e.to_string()).and_then(|t| adapter::parse(&t, adapter::Origin::User).map_err(|e| e.to_string())) {
+            (Some(f), Some(h)) => match std::fs::read_to_string(dir.join(f))
+                .map_err(|e| e.to_string())
+                .and_then(|t| adapter::parse(&t, adapter::Origin::User).map_err(|e| e.to_string()))
+            {
                 Ok(a) if a.hash == *h => acc.pass(what, format!("supplied `{}` {}", a.id, &a.hash[..16])),
                 Ok(a) => acc.fail(what, format!("the supplied file hashes to {}, the pack pins {}", short(&a.hash), short(h))),
                 Err(e) => acc.fail(what, format!("the supplied adapter does not parse: {e}")),
@@ -300,12 +333,17 @@ fn descriptor_check(acc: &mut Acc, pack: &RuntimePackV1, dir: &Path) -> Vec<Path
                 None => bad.push(format!("{}: not built in here", d.name)),
             },
             "file" => match d.file.as_ref().map(|f| dir.join(f)) {
-                Some(p) => match std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|t| QuantFormat::from_json(&t).map_err(|e| e.to_string())) {
+                Some(p) => match std::fs::read_to_string(&p)
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| QuantFormat::from_json(&t).map_err(|e| e.to_string()))
+                {
                     Ok(f) if f.digest_hex() == d.digest => {
                         ok += 1;
                         files.push(p);
                     }
-                    Ok(f) => bad.push(format!("{}: the file's digest is {}, pinned {}", d.name, short(&f.digest_hex()), short(&d.digest))),
+                    Ok(f) => {
+                        bad.push(format!("{}: the file's digest is {}, pinned {}", d.name, short(&f.digest_hex()), short(&d.digest)))
+                    }
                     Err(e) => bad.push(format!("{}: {e}", d.name)),
                 },
                 None => bad.push(format!("{}: a file descriptor without a file", d.name)),
@@ -327,7 +365,9 @@ fn source_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path) {
     for f in &pack.model.files {
         match super::build::sha256_file(&sdir.join(&f.path)) {
             Ok((n, sha)) if n == f.bytes && sha == f.sha256 => {}
-            Ok((n, sha)) => bad.push(format!("{}: {} bytes {} (pinned {} bytes {})", f.path, n, short(&sha), f.bytes, short(&f.sha256))),
+            Ok((n, sha)) => {
+                bad.push(format!("{}: {} bytes {} (pinned {} bytes {})", f.path, n, short(&sha), f.bytes, short(&f.sha256)))
+            }
             Err(e) => bad.push(e),
         }
     }
@@ -356,7 +396,9 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
         }
     };
     let read = match pack.frontend.adapter.file.as_ref().map(|f| std::fs::read_to_string(dir.join(f))) {
-        Some(Ok(t)) => misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::Text(t) },
+        Some(Ok(t)) => {
+            misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::Text(t) }
+        }
         Some(Err(e)) => {
             acc.fail("frontend", format!("the supplied adapter: {e}"));
             return None;
@@ -377,23 +419,45 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
     let f = &o.frontend;
     let mut ok = cmp(acc, "frontend", "spec digest", &f.spec_digest, &pack.frontend.spec_digest);
     ok &= cmp(acc, "frontend", "level", &f.level.to_string(), &pack.frontend.level);
-    ok &= cmp(acc, "frontend", "configuration digest", &blake2b256_hex(adapter::canonical_json(&f.config).as_bytes()), &pack.model.config_digest);
-    let uses: Vec<serde_json::Value> = o.prepared.spec.features().iter().map(|u| serde_json::to_value(u).unwrap_or_default()).collect();
+    ok &= cmp(
+        acc,
+        "frontend",
+        "configuration digest",
+        &blake2b256_hex(adapter::canonical_json(&f.config).as_bytes()),
+        &pack.model.config_digest,
+    );
+    let uses: Vec<serde_json::Value> =
+        o.prepared.spec.features().iter().map(|u| serde_json::to_value(u).unwrap_or_default()).collect();
     if uses != pack.features.used {
         acc.fail("frontend", "the features the spec uses differ from the pack's");
         ok = false;
     }
-    let idx = if o.gguf { misaka_palw_tir_lower::hf_schema::TensorIndex::from_source(o.source.as_ref()) } else { misaka_palw_tir_lower::hf_schema::TensorIndex::from_checkpoint_path(model).unwrap_or_default() };
-    let scope = misaka_palw_tir_lower::model::scope_of(&f.config, Some(&o.prepared.spec), Some(&idx), &misaka_palw_tir_lower::model::sibling_files(model));
+    let idx = if o.gguf {
+        misaka_palw_tir_lower::hf_schema::TensorIndex::from_source(o.source.as_ref())
+    } else {
+        misaka_palw_tir_lower::hf_schema::TensorIndex::from_checkpoint_path(model).unwrap_or_default()
+    };
+    let scope = misaka_palw_tir_lower::model::scope_of(
+        &f.config,
+        Some(&o.prepared.spec),
+        Some(&idx),
+        &misaka_palw_tir_lower::model::sibling_files(model),
+    );
     if serde_json::to_value(&scope).unwrap_or_default() != pack.features.scope {
         acc.fail("frontend", "the feature scope differs from the pack's");
         ok = false;
     }
     if ok {
-        acc.pass("frontend", format!("level {}, spec {}, {} feature uses, scope: {}", f.level, &f.spec_digest[..16], uses.len(), scope.headline()));
+        acc.pass(
+            "frontend",
+            format!("level {}, spec {}, {} feature uses, scope: {}", f.level, &f.spec_digest[..16], uses.len(), scope.headline()),
+        );
     }
     if misaka_palw_tir_lower::model::registry_digest() != pack.features.registry_digest {
-        acc.skip("feature-registry", "this build's feature vocabulary differs from the pack's (feature ids are versioned: the uses above still agree)");
+        acc.skip(
+            "feature-registry",
+            "this build's feature vocabulary differs from the pack's (feature ids are versioned: the uses above still agree)",
+        );
     }
     Some(())
 }
@@ -415,10 +479,18 @@ fn artifact_check(acc: &mut Acc, pack: &RuntimePackV1, art: &Path) {
     if let Some(d) = pack.declared.iter().find(|d| d.file_digest == digest && digest != r.artifact_digest) {
         ok &= cmp(acc, "artifact", "inventory root", &m.inventory_root.to_string(), &r.inventory_root);
         ok &= cmp(acc, "artifact", "tokenizer id", &hex(&m.tokenizer_id), &r.tokenizer_id);
+        ok &= cmp(acc, "artifact", "class id", &m.class_id.map(|h| h.to_string()).unwrap_or_default(), &d.class_id);
+        ok &= cmp(acc, "artifact", "layout digest", &m.layout_digest.map(|h| h.to_string()).unwrap_or_default(), &d.layout_digest);
         if ok {
             acc.pass(
                 "artifact",
-                format!("the artifact declared for {} (class {}): file {} · inventory root {}", d.network, &d.class_id[..16], &digest[..16], &r.inventory_root[..16]),
+                format!(
+                    "the artifact declared for {} (class {}): file {} · inventory root {}",
+                    d.network,
+                    &d.class_id[..16],
+                    &digest[..16],
+                    &r.inventory_root[..16]
+                ),
             );
         }
         return;
@@ -428,35 +500,70 @@ fn artifact_check(acc: &mut Acc, pack: &RuntimePackV1, art: &Path) {
     ok &= cmp(acc, "artifact", "graph root", &m.graph_ir_root.to_string(), &r.graph_ir_root);
     ok &= cmp(acc, "artifact", "tokenizer id", &hex(&m.tokenizer_id), &r.tokenizer_id);
     if ok {
-        acc.pass("artifact", format!("file {} · inventory root {} · graph root {}", &r.artifact_digest[..16], &r.inventory_root[..16], &r.graph_ir_root[..16]));
+        acc.pass(
+            "artifact",
+            format!(
+                "file {} · inventory root {} · graph root {}",
+                &r.artifact_digest[..16],
+                &r.inventory_root[..16],
+                &r.graph_ir_root[..16]
+            ),
+        );
     }
 }
 
 fn declared_check(acc: &mut Acc, pack: &RuntimePackV1, art: &Path) {
-    use crate::tir_layout::TirLayoutChoiceV1;
+    let artifact = match misaka_palw_tir_exec::node::TirArtifactV1::open(art) {
+        Ok(a) => a,
+        Err(e) => {
+            acc.fail("declared", e);
+            return;
+        }
+    };
+    let root = match pack.result.inventory_root.parse::<kaspa_hashes::Hash64>() {
+        Ok(r) => r,
+        Err(e) => {
+            acc.fail("declared", format!("inventory root: {e:?}"));
+            return;
+        }
+    };
     for d in &pack.declared {
-        let params = match super::build::network(&d.network) {
-            Ok(p) => p,
-            Err(e) => {
-                acc.skip("declared", format!("{}: {e}", d.network));
-                continue;
+        if d.exact_layout.is_none() {
+            acc.skip(
+                "declared",
+                format!("{}: legacy pack has no exact layout; bind the declared artifact into a new pack", d.network),
+            );
+            continue;
+        }
+        match d.class_from_program(&artifact.container().program, kaspa_hashes::Hash64::from_bytes(artifact.header().tokenizer_id)) {
+            Ok(class) => {
+                let ok = cmp(acc, "declared", "class id", &class.class_id(&root).to_string(), &d.class_id)
+                    & cmp(acc, "declared", "layout digest", &class.layout_digest().to_string(), &d.layout_digest);
+                if ok {
+                    acc.pass(
+                        "declared",
+                        format!(
+                            "{}: exact class {} (context {}, interval {}); identity verification, not live admission",
+                            d.network,
+                            &d.class_id[..16],
+                            d.max_context,
+                            d.checkpoint_interval
+                        ),
+                    );
+                }
             }
-        };
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { continue };
-        let out = std::env::temp_dir().join(format!("palw-pack-declare-{}-{}-{}.palwtir", std::process::id(), UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), d.network));
-        let choice = TirLayoutChoiceV1 { max_context: Some(d.max_context), tile_len: crate::tir_layout::TirLayoutChoiceV1::default().tile_len, h_chunk: d.h_tile, logits_scheme: None, logits_tile: None };
-        let r = crate::tir_layout::tir_declare_layout_v1(&params, bundle, art, &out, &choice, Some(&pack.name));
-        let _ = std::fs::remove_file(&out);
-        match r {
-            Ok(r) if r.class_id.to_string() == d.class_id => acc.pass("declared", format!("{}: class {} (context {}, interval {})", d.network, &d.class_id[..16], d.max_context, d.checkpoint_interval)),
-            Ok(r) => acc.fail("declared", format!("{}: the class id is {}, the pack says {}", d.network, short(&r.class_id.to_string()), short(&d.class_id))),
-            Err(e) => acc.fail("declared", format!("{}: {e}", d.network)),
+            Err(e) => acc.fail("declared", e),
         }
     }
 }
 
 fn conformance_check(acc: &mut Acc, pack: &RuntimePackV1, a: &conformance::LoadedArtifact, impls: ImplSet) {
-    let jobs: Vec<ConformanceJob> = pack.conformance.vectors.iter().map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode }).collect();
+    let jobs: Vec<ConformanceJob> = pack
+        .conformance
+        .vectors
+        .iter()
+        .map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode })
+        .collect();
     match conformance::run(a, &jobs, impls, &|_| {}) {
         Err(e) => acc.fail("conformance", e),
         Ok(got) => {
@@ -476,7 +583,15 @@ fn conformance_check(acc: &mut Acc, pack: &RuntimePackV1, a: &conformance::Loade
                 .collect();
             if bad.is_empty() {
                 let names: Vec<String> = impls.records().into_iter().map(|r| r.name).collect();
-                acc.pass("conformance", format!("{} vector(s), {} positions, equal on {}", got.len(), got.iter().map(|v| v.positions).sum::<usize>(), names.join(", ")));
+                acc.pass(
+                    "conformance",
+                    format!(
+                        "{} vector(s), {} positions, equal on {}",
+                        got.len(),
+                        got.iter().map(|v| v.positions).sum::<usize>(),
+                        names.join(", ")
+                    ),
+                );
             } else {
                 acc.fail("conformance", bad.join("; "));
             }
@@ -485,9 +600,29 @@ fn conformance_check(acc: &mut Acc, pack: &RuntimePackV1, a: &conformance::Loade
 }
 
 /// [`conformance_check`] streamed (L2): the same vectors, the same digests, the artifact never held whole.
-fn conformance_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, impls: ImplSet) {
-    let jobs: Vec<ConformanceJob> = pack.conformance.vectors.iter().map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode }).collect();
-    match conformance::run_streamed(art, &jobs, impls, &|_| {}) {
+fn conformance_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, impls: ImplSet, log: &dyn Fn(String)) {
+    let jobs: Vec<ConformanceJob> = pack
+        .conformance
+        .vectors
+        .iter()
+        .map(|v| ConformanceJob { label: v.label.clone(), prompt: v.prompt.clone(), decode: v.decode })
+        .collect();
+    log(format!(
+        "streamed conformance: {} vectors, {} positions; checking every requested executor",
+        jobs.len(),
+        jobs.iter().map(|j| j.prompt.len() + j.decode).sum::<usize>()
+    ));
+    let position = |ji: usize, pos: usize| {
+        log(format!(
+            "conformance vector {}/{} ({}): position {}/{} computed; final conformance-vector comparison pending",
+            ji + 1,
+            jobs.len(),
+            jobs[ji].label,
+            pos + 1,
+            jobs[ji].prompt.len() + jobs[ji].decode
+        ));
+    };
+    match conformance::run_streamed_with_progress(art, &jobs, impls, &|_| {}, &position) {
         Err(e) => acc.fail("conformance", e),
         Ok((got, note)) => {
             let bad: Vec<String> = got
@@ -521,11 +656,12 @@ fn conformance_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, i
                 acc.pass(
                     "conformance",
                     format!(
-                        "streamed: {} vector(s), {} positions, equal on {} (the reference held at most {:.1} MiB at once)",
+                        "streamed: {} vector(s), {} positions, equal on {} (largest decoded parameter: reference {:.1} MiB, independent {:.1} MiB; not process RSS)",
                         got.len(),
                         got.iter().map(|v| v.positions).sum::<usize>(),
                         note.ran.join(", "),
-                        note.reference_peak_tensor_bytes as f64 / (1 << 20) as f64
+                        note.reference_peak_tensor_bytes as f64 / (1 << 20) as f64,
+                        note.independent_peak_tensor_bytes as f64 / (1 << 20) as f64
                     ),
                 );
             }
@@ -558,7 +694,17 @@ fn hf_check_streamed(acc: &mut Acc, pack: &RuntimePackV1, art: &Path, dir: &Path
         Ok(fit) => {
             let bad = hfref::check(&fit, &pack.logits.tolerance);
             if bad.is_empty() {
-                acc.pass("hf-reference", format!("streamed: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5} over {} positions", fit.slope, fit.corr, fit.top1, fit.kl_mean, hf.positions()));
+                acc.pass(
+                    "hf-reference",
+                    format!(
+                        "streamed: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5} over {} positions",
+                        fit.slope,
+                        fit.corr,
+                        fit.top1,
+                        fit.kl_mean,
+                        hf.positions()
+                    ),
+                );
             } else {
                 acc.fail("hf-reference", bad.join("; "));
             }
@@ -582,7 +728,8 @@ fn hf_check(acc: &mut Acc, pack: &RuntimePackV1, a: &conformance::LoadedArtifact
         Err(e) => acc.fail("hf-reference", e),
         Ok(fit) => {
             let bad = hfref::check(&fit, &pack.logits.tolerance);
-            let units = if pack.logits.convention == "q24-natural-v1" { "q24 natural-log logits" } else { "legacy greedy-only: tool scale" };
+            let units =
+                if pack.logits.convention == "q24-natural-v1" { "q24 natural-log logits" } else { "legacy greedy-only: tool scale" };
             if bad.is_empty() {
                 acc.pass("hf-reference", format!("{units}: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5} over {} positions (pack recorded top-1 {:.3}, KL {:.5})", fit.slope, fit.corr, fit.top1, fit.kl_mean, hf.positions(), h.measured.top1, h.measured.kl_mean));
             } else {

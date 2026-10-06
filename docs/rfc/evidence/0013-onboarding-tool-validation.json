@@ -1,0 +1,198 @@
+{
+  "schema": "misaka.onboarding-tool-evidence.v1",
+  "environment_date": "2026-10-06",
+  "source_base_commit": "808baa6b9adcb029e64fffe51fcd84027f82e7c0",
+  "source_status_at_conformance_capture": "uncommitted tool and RFC changes; not a deployed release",
+  "source": {
+    "repo": "mradermacher/Llama-3.2-3B-Instruct-uncensored-GGUF",
+    "revision": "186911b5658f85bfe68684b83646ba2e89169a0c",
+    "file": "Llama-3.2-3B-Instruct-uncensored.Q4_K_M.gguf",
+    "bytes": 2241004096,
+    "sha256": "1a01383341be9bf04a904e168089401c3f0533b3af4089d3536d8b36e497ccd6"
+  },
+  "class": {
+    "class_id": "b4a2ba784ae3d2680b7770a01fac46bbcde51ff401248e5b44c55fdc24f65f4c8f585edad1ce442b7d4e524159d318a0e8415f1a1a4f9a5ed27a2969fa67c97b",
+    "inventory_root": "d5a4ef2d6c0ed8a97055b89e178ac38df81771d2e643d95fd5210f497be67be8f857b4c50555196cb8aac52163e51ab2162da495b163d089078c52672e52e2a5",
+    "layout_digest": "bfd7733e655d96d2e8808078540250b8ddb397692dfa68172f5b382cf444f67eb605ec53216c8c507cdfba13715f3806239c877757be6e951dec72fd64bd6b99",
+    "declared_file_digest": "2f76528daa676ee6e906c91ff9a018574162d75d5c85471280e6b6ba39aa44ca1cd1b0b4daf9d157bd35708a1d1aa1c4db5404c2d6a29447e23f3aae12703da9",
+    "declared_file_bytes": 5079273984,
+    "max_context": 512,
+    "checkpoint_interval": 65536,
+    "h_tile": 32,
+    "commit_tiles": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      512
+    ],
+    "state_tiles": [
+      64,
+      64
+    ]
+  },
+  "bind_class": {
+    "status": "PASS",
+    "new_pack_digest": "e2cb3f0610210f44ff75d943dfd8145151dc128e3133d6e893d376025012ac9b",
+    "old_pack_unchanged": true,
+    "class_artifact_unchanged": true,
+    "admission_or_certification_implied": false
+  },
+  "live_preflight": {
+    "tipDaa": 5775,
+    "available": true,
+    "admissible": true,
+    "processorVerdict": "ADMISSION_OK",
+    "check": "TIR_ADMISSION_V10",
+    "registration_submitted": false,
+    "node_binary_schedule_parity_with_local_tool": "NOT_ESTABLISHED"
+  },
+  "tests": {
+    "runtime_pack": {
+      "passed": 9,
+      "failed": 0
+    },
+    "ref2_lib": {
+      "passed": 12,
+      "failed": 0
+    },
+    "ref2_differential": {
+      "passed": 8,
+      "failed": 0
+    },
+    "ref2_golden": {
+      "passed": 3,
+      "failed": 0
+    },
+    "calibration_filtered_lib": {
+      "passed": 5,
+      "failed": 0
+    },
+    "fidelity_binary_check": "PASS",
+    "existing_rfc11_coverage_audit_check": "PASS; coverage remains UNPROVEN",
+    "existing_rfc11_coverage_audit_self_test": "PASS",
+    "streamed_position_progress_and_extended_identity_mutations": "PASS; final runtime_pack rerun: 9 passed, 0 failed"
+  },
+  "final_tool_build": {
+    "status": "PASS",
+    "profile": "release",
+    "binary": "palw-class",
+    "sha256": "a70e96a4fc9e627ab3faeb52218dff117eb237267ae8dfcfa437c3b5aa04a41f",
+    "progress_and_extended_report_included": true,
+    "real_artifact_rerun_after_logging_changes": false,
+    "deployed": false
+  },
+  "real_artifact_conformance": {
+    "status": "PASS",
+    "tool_sha256": "5fea575e4389e6912b315397dcd60be95a32ed73816f2771ec174903173ff5ef",
+    "profile": "release",
+    "vectors": 2,
+    "positions": 8,
+    "requested_implementations": [
+      "reference",
+      "typed-backend",
+      "independent"
+    ],
+    "size_skip_override": false,
+    "full_source_fidelity_implied": false,
+    "pack_fully_verified": false,
+    "elapsed_seconds": 1228.9,
+    "user_seconds": 1147.77,
+    "system_seconds": 72.4,
+    "maximum_resident_set_bytes": 12828917760,
+    "peak_memory_footprint_bytes": 13707344008,
+    "swaps": 0,
+    "exit_code": 0,
+    "run_precedes_position_progress_logging_and_peak_tensor_reporting_changes": true,
+    "report": {
+      "checks": [
+        {
+          "check": "manifest",
+          "detail": "Llama-3.2-3B-Instruct Uncensored Q4_K_M (e2cb3f0610210f44), schema misaka.palw.runtime-pack.v1",
+          "status": "PASS"
+        },
+        {
+          "check": "sidecars",
+          "detail": "2 file(s) match their hashes",
+          "status": "PASS"
+        },
+        {
+          "check": "adapter",
+          "detail": "built-in `llama` 4be1f4c6294c049a",
+          "status": "PASS"
+        },
+        {
+          "check": "descriptors",
+          "detail": "3 pinned, all equal",
+          "status": "PASS"
+        },
+        {
+          "check": "converter",
+          "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) — the same converter; math libm-v1: the same bytes on every platform",
+          "status": "PASS"
+        },
+        {
+          "check": "source",
+          "detail": "1 file(s) match their SHA-256",
+          "status": "PASS"
+        },
+        {
+          "check": "frontend",
+          "detail": "level B, spec a3952e897fa73f5e, 9 feature uses, scope: text-generation: token ids → next-token logits; nothing left out",
+          "status": "PASS"
+        },
+        {
+          "check": "artifact",
+          "detail": "the artifact declared for testnet-12 (class b4a2ba784ae3d268): file 2f76528daa676ee6 · inventory root d5a4ef2d6c0ed8a9",
+          "status": "PASS"
+        },
+        {
+          "check": "declared",
+          "detail": "testnet-12: exact class b4a2ba784ae3d268 (context 512, interval 65536); identity verification, not live admission",
+          "status": "PASS"
+        },
+        {
+          "check": "conformance",
+          "detail": "streamed: 2 vector(s), 8 positions, equal on reference, typed-backend, independent (the reference held at most 6012.0 MiB at once)",
+          "status": "PASS"
+        },
+        {
+          "check": "hf-reference",
+          "detail": "the pack carries no Hugging Face reference",
+          "status": "SKIPPED"
+        }
+      ],
+      "ok": true,
+      "pack": "e2cb3f0610210f44ff75d943dfd8145151dc128e3133d6e893d376025012ac9b",
+      "verified": false
+    }
+  },
+  "registration_at_conformance_capture": "NOT_SUBMITTED",
+  "certification_mineability": "NOT_ESTABLISHED",
+  "panel_started": false,
+  "consensus_rules_changed": false,
+  "main_pushed_at_conformance_capture": false,
+  "publication_fingerprint_check": {
+    "date": "2026-10-06",
+    "origin_main_at_check": "d57f32cd28a19063386befca17c0c5c5af48321f",
+    "consensus_core_tree_on_main_and_source_base": "8801f9bd7fdb763a2bb1b6b9fca443c41bced9bc",
+    "t12_repin_values": "PASS; no pins rewritten",
+    "shipped_presets_have_pinned_fingerprints": "PASS",
+    "params_fingerprint": "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "identity": "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+    "schedule": "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "live_doctor_node": "PASS; same fingerprint and activation schedule, synced at DAA 5797"
+  },
+  "coverage_claim": "UNPROVEN"
+}

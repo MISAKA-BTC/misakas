@@ -145,7 +145,12 @@ fn pin_of(a: &misaka_palw_tir_lower::model::AdapterSource, user_file: Option<&st
     match a {
         S::None => AdapterPin { kind: "none".into(), id: None, hash: None, file: None },
         S::BuiltIn { id, hash } => AdapterPin { kind: "built-in".into(), id: Some(id.clone()), hash: Some(hash.clone()), file: None },
-        S::UserFile { id, hash } => AdapterPin { kind: "user-file".into(), id: Some(id.clone()), hash: Some(hash.clone()), file: user_file.map(str::to_string) },
+        S::UserFile { id, hash } => AdapterPin {
+            kind: "user-file".into(),
+            id: Some(id.clone()),
+            hash: Some(hash.clone()),
+            file: user_file.map(str::to_string),
+        },
         // A reader written in Rust (the diffusers route's): pinned by name; a pack of such a class has no adapter file to hash.
         S::CoreReader { id } => AdapterPin { kind: "core-reader".into(), id: Some(id.clone()), hash: None, file: None },
     }
@@ -168,7 +173,9 @@ fn descriptor_pins(used: &[(String, String)], supplied: &[PathBuf], pack_dir: &P
             out.push(DescriptorPin { name: name.clone(), digest: digest.clone(), source: "built-in".into(), file: None });
             continue;
         }
-        let (_, text) = by_digest.get(digest).ok_or_else(|| format!("the model is read with quant format {name} {digest}, which is neither built in nor a supplied file"))?;
+        let (_, text) = by_digest.get(digest).ok_or_else(|| {
+            format!("the model is read with quant format {name} {digest}, which is neither built in nor a supplied file")
+        })?;
         let file = format!("descriptors/{name}.json");
         std::fs::create_dir_all(pack_dir.join("descriptors")).map_err(|e| e.to_string())?;
         std::fs::write(pack_dir.join(&file), text).map_err(|e| e.to_string())?;
@@ -215,7 +222,11 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
             seqs.iter_mut().for_each(|q| q.truncate(n));
         }
         seqs.retain(|q| !q.is_empty());
-        std::fs::write(dir.join("calib-tokens.json"), serde_json::to_string(&serde_json::json!({ "source": c.source, "sequences": seqs })).unwrap_or_default()).map_err(|e| e.to_string())?;
+        std::fs::write(
+            dir.join("calib-tokens.json"),
+            serde_json::to_string(&serde_json::json!({ "source": c.source, "sequences": seqs })).unwrap_or_default(),
+        )
+        .map_err(|e| e.to_string())?;
         sequences_file = Some("calib-tokens.json".to_string());
     }
 
@@ -251,13 +262,20 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
     };
     let vocab = match &loaded {
         Some(l) => l.program.token_bound as usize,
-        None => misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| format!("{}: {e}", artifact.display()))?.program.token_bound as usize,
+        None => {
+            misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact)
+                .map_err(|e| format!("{}: {e}", artifact.display()))?
+                .program
+                .token_bound as usize
+        }
     };
     let jobs = conformance::jobs(vocab, opts.prompts, opts.prefill, opts.decode, opts.seed);
     let vectors = match &loaded {
         Some(l) => conformance::run(l, &jobs, opts.impls, &|j| log(format!("conformance vector {} of {}", j + 1, jobs.len())))?,
         None => {
-            let (v, note) = conformance::run_streamed(artifact, &jobs, opts.impls, &|j| log(format!("conformance vector {} of {}", j + 1, jobs.len())))?;
+            let (v, note) = conformance::run_streamed(artifact, &jobs, opts.impls, &|j| {
+                log(format!("conformance vector {} of {}", j + 1, jobs.len()))
+            })?;
             if let Some(why) = &note.ref2_skipped {
                 log(format!("the independent implementation did not run: {why}"));
             }
@@ -273,21 +291,34 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
             Some(l) => hfref::measure(l, logits_scale, &hf)?,
             None => hfref::measure_streamed(&misaka_palw_tir_exec::node::TirArtifactV1::open(artifact)?, logits_scale, &hf)?,
         };
-        log(format!("against the reference: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5}, max |Δ| {:.3}", fit.slope, fit.corr, fit.top1, fit.kl_mean, fit.max_abs));
+        log(format!(
+            "against the reference: slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5}, max |Δ| {:.3}",
+            fit.slope, fit.corr, fit.top1, fit.kl_mean, fit.max_abs
+        ));
         let bad = hfref::check(&fit, &opts.tolerance);
         if !bad.is_empty() && !opts.allow_out_of_tolerance {
             return Err(format!("the program is outside the tolerance of its reference: {}", bad.join("; ")));
         }
         let (json_name, _) = hf.write(dir)?;
         let digest = blake2b256_hex(&std::fs::read(dir.join(&json_name)).map_err(|e| e.to_string())?);
-        hf_section = Some(HfReferenceSection { file: json_name, digest, producer: hf.producer.clone(), sequences: hf.sequences.len(), positions: hf.positions(), vocab: hf.vocab, measured: fit });
+        hf_section = Some(HfReferenceSection {
+            file: json_name,
+            digest,
+            producer: hf.producer.clone(),
+            sequences: hf.sequences.len(),
+            positions: hf.positions(),
+            vocab: hf.vocab,
+            measured: fit,
+        });
     }
 
     // 6. Declared classes.
     let mut declared = Vec::new();
     for d in &opts.declare {
         let params = network(&d.network)?;
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("checked by network()") };
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            unreachable!("checked by network()")
+        };
         let mut out = artifact.clone().into_os_string();
         out.push(format!(".{}.palwtir", d.network));
         let out = PathBuf::from(out);
@@ -295,21 +326,15 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
         let r = tir_declare_layout_v1(&params, bundle, artifact, &out, &d.choice, Some(&opts.name))?;
         r.admission.as_ref().map_err(|e| format!("{}: the class is not admitted: {e}", d.network))?;
         let dm = PalwTirManifestV1::derive_streamed(&out)?;
-        declared.push(DeclaredClass {
-            network: d.network.clone(),
-            layout_digest: dm.layout_digest.map(|h| h.to_string()).ok_or("the declared container carries no layout")?,
-            class_id: r.class_id.to_string(),
-            max_context: r.layout.max_context,
-            checkpoint_interval: r.layout.checkpoint_interval,
-            h_tile: r.layout.h_tile,
-            file_digest: hex(&dm.artifact_digest),
-        });
+        let class = misaka_palw_tir_exec::node::TirArtifactV1::open(&out)?.class()?;
+        declared.push(DeclaredClass::from_class(d.network.clone(), &class, &dm.inventory_root, hex(&dm.artifact_digest))?);
     }
 
     // 7. The manifest.
     let adapter_file = match &conv.frontend.adapter {
         misaka_palw_tir_lower::model::AdapterSource::UserFile { .. } => {
-            let text = std::fs::read_to_string(request.adapter.as_ref().ok_or("a user adapter without a file")?).map_err(|e| e.to_string())?;
+            let text = std::fs::read_to_string(request.adapter.as_ref().ok_or("a user adapter without a file")?)
+                .map_err(|e| e.to_string())?;
             std::fs::write(dir.join("adapter.json"), text).map_err(|e| e.to_string())?;
             Some("adapter.json")
         }
@@ -320,7 +345,11 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
         .flatten()
         .map(|a| AdapterPin { kind: "built-in".into(), id: Some(a.id.clone()), hash: Some(a.hash.clone()), file: None });
     let cfg = &conv.frontend.config;
-    let architectures: Vec<String> = cfg.get("architectures").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|s| s.as_str()).map(str::to_string).collect()).unwrap_or_default();
+    let architectures: Vec<String> = cfg
+        .get("architectures")
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str()).map(str::to_string).collect())
+        .unwrap_or_default();
     let uses: Vec<serde_json::Value> = conv.features.iter().map(|f| serde_json::to_value(f).unwrap_or_default()).collect();
     let calibration = CalibrationRec {
         schema: "misaka.palw.calib-stats.v1".into(),
@@ -373,16 +402,33 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
             level: conv.frontend.level.to_string(),
             assumed_defaults: conv.frontend.assumed_defaults.clone(),
         },
-        features: FeaturesSection { registry_digest: registry_digest(), used: uses, scope: serde_json::to_value(&conv.scope).unwrap_or_default() },
+        features: FeaturesSection {
+            registry_digest: registry_digest(),
+            used: uses,
+            scope: serde_json::to_value(&conv.scope).unwrap_or_default(),
+        },
         quant,
         profile: ProfileSection {
-            policy: PolicyRec { headroom16: request.policy.headroom16, headroom32: request.policy.headroom32, headroom_resid: request.policy.headroom_resid },
+            policy: PolicyRec {
+                headroom16: request.policy.headroom16,
+                headroom32: request.policy.headroom32,
+                headroom_resid: request.policy.headroom_resid,
+            },
             max_window: request.max_window,
             context: request.context,
             calibration,
         },
-        converter: ConverterSection { name: "palw-tir-convert".into(), crate_version: env!("CARGO_PKG_VERSION").into(), lowering: LOWERING_VERSION_V1.into(), math },
-        executor: ExecutorSection { program_format: "PALWTIR1".into(), prim_set_id: hex(&misaka_palw_tir::prim::PRIM_SET_ID_V1), implementations: opts.impls.records() },
+        converter: ConverterSection {
+            name: "palw-tir-convert".into(),
+            crate_version: env!("CARGO_PKG_VERSION").into(),
+            lowering: LOWERING_VERSION_V1.into(),
+            math,
+        },
+        executor: ExecutorSection {
+            program_format: "PALWTIR1".into(),
+            prim_set_id: hex(&misaka_palw_tir::prim::PRIM_SET_ID_V1),
+            implementations: opts.impls.records(),
+        },
         logits: LogitsSection { convention, scale: logits_scale, tolerance: opts.tolerance.clone() },
         result,
         conformance: ConformanceSection { vectors },

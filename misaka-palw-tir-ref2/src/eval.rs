@@ -15,6 +15,18 @@ use crate::types::{DType, TensorType};
 /// Param instances by `(param index, layer)`; the layer is `None` for a global param.
 pub type Params = BTreeMap<(u16, Option<u32>), Tensor>;
 
+/// Parameter bytes may be decoded on demand instead of retaining the entire model.
+/// The independent evaluator still checks each tensor and evaluates all primitives itself.
+pub trait ParamSource {
+    fn tensor(&self, index: u16, layer: Option<u32>) -> Res<Option<Tensor>>;
+}
+
+impl ParamSource for Params {
+    fn tensor(&self, index: u16, layer: Option<u32>) -> Res<Option<Tensor>> {
+        Ok(self.get(&(index, layer)).cloned())
+    }
+}
+
 /// The run state of §9.1: position, `Fixed` values and `Hist` rows by `(state, layer)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunState {
@@ -151,7 +163,7 @@ type Effect = (Prim, Option<u32>, Tensor);
 #[allow(clippy::too_many_arguments)]
 fn eval_one(
     p: &Program,
-    params: &Params,
+    params: &dyn ParamSource,
     b: usize,
     layer: Option<u32>,
     h: u64,
@@ -182,12 +194,12 @@ fn eval_one(
             }
             Ref::Param(j) => {
                 let d = &p.params[j as usize];
-                let Some(t) = params.get(&(j, instance(d.per_layer, layer))) else {
+                let Some(t) = params.tensor(j, instance(d.per_layer, layer))? else {
                     return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
                 };
-                check_tensor(t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?;
+                check_tensor(&t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?;
                 from_node.push(None);
-                owned.push(t.clone());
+                owned.push(t);
             }
             Ref::Const(j) => {
                 from_node.push(None);
@@ -250,7 +262,7 @@ fn eval_one(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_nodes(
     p: &Program,
-    params: &Params,
+    params: &dyn ParamSource,
     b: usize,
     layer: Option<u32>,
     h: u64,
@@ -277,7 +289,7 @@ fn evaluate_nodes(
 /// node whose operands can be computed: a node that fails adds its class and poisons its consumers
 /// (and, through the carry, the next occurrence's readers), which are not evaluable. Empty iff the
 /// step succeeds.
-pub fn step_violations(p: &Program, params: &Params, st: &RunState, token: u64) -> BTreeSet<Class> {
+pub fn step_violations(p: &Program, params: &dyn ParamSource, st: &RunState, token: u64) -> BTreeSet<Class> {
     let mut out = BTreeSet::new();
     if st.pos >= p.history_bound as u64 {
         out.insert(Class::Position);
@@ -360,12 +372,12 @@ pub struct OccTrace {
 }
 
 /// §9.1: one step from `st` with `token`. Returns the step's result and the next run state.
-pub fn step(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(StepOutput, RunState)> {
+pub fn step(p: &Program, params: &dyn ParamSource, st: &RunState, token: u64) -> Res<(StepOutput, RunState)> {
     step_inner(p, params, st, token, None)
 }
 
 /// [`step`], also returning every occurrence's carry-in and node values (for building cones).
-pub fn step_traced(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(StepOutput, RunState, Vec<OccTrace>)> {
+pub fn step_traced(p: &Program, params: &dyn ParamSource, st: &RunState, token: u64) -> Res<(StepOutput, RunState, Vec<OccTrace>)> {
     let mut trace = Vec::new();
     let (o, next) = step_inner(p, params, st, token, Some(&mut trace))?;
     Ok((o, next, trace))
@@ -373,7 +385,7 @@ pub fn step_traced(p: &Program, params: &Params, st: &RunState, token: u64) -> R
 
 fn step_inner(
     p: &Program,
-    params: &Params,
+    params: &dyn ParamSource,
     st: &RunState,
     token: u64,
     mut trace: Option<&mut Vec<OccTrace>>,
@@ -464,7 +476,7 @@ fn step_inner(
 }
 
 /// A run: steps at positions `0 … T−1` from the initial state (§9.1).
-pub fn run(p: &Program, params: &Params, tokens: &[u64]) -> Res<Vec<StepOutput>> {
+pub fn run(p: &Program, params: &dyn ParamSource, tokens: &[u64]) -> Res<Vec<StepOutput>> {
     let mut st = initial_state(p);
     let mut out = Vec::with_capacity(tokens.len());
     for &t in tokens {
@@ -495,7 +507,7 @@ pub struct ConeEnv {
 /// evaluated the position (`Position`) and the token (`Missing`/`Operand`), then every value the
 /// closure reads against the §9.2 table (absent → `Missing`, never implied; ill-formed → `Operand`;
 /// a history with the wrong number of rows → `Position`), and only then the evaluation.
-pub fn eval_cone(p: &Program, params: &Params, block: u8, layer: Option<u32>, target: u16, env: &ConeEnv) -> Res<Tensor> {
+pub fn eval_cone(p: &Program, params: &dyn ParamSource, block: u8, layer: Option<u32>, target: u16, env: &ConeEnv) -> Res<Tensor> {
     let bu = block as usize;
     // The request.
     let is_occurrence = bu < p.blocks.len()
@@ -567,9 +579,9 @@ pub fn eval_cone(p: &Program, params: &Params, block: u8, layer: Option<u32>, ta
                 },
                 Ref::Param(j) => {
                     let d = &p.params[j as usize];
-                    match params.get(&(j, instance(d.per_layer, layer))) {
+                    match params.tensor(j, instance(d.per_layer, layer))? {
                         None => return err(Class::Missing, format!("param {j} at layer {layer:?} not supplied")),
-                        Some(t) => check_tensor(t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?,
+                        Some(t) => check_tensor(&t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?,
                     }
                 }
                 Ref::Const(_) | Ref::Input(_) => {}

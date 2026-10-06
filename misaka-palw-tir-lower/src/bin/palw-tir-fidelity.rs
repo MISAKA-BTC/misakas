@@ -161,7 +161,15 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     );
     // A Hugging Face directory, or a GGUF file (`model.gguf` in the directory, or its path).
     let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::with_files(&a.quant_format).map_err(|e| e.to_string())?;
-    let (prep, ck) = fidelity::open_model_read(&a.model, &misaka_palw_tir_lower::hf_schema::ReadOptions { adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(&a.model_adapter).map_err(|e| e.to_string())? }, &opts, &reg).map_err(|e| e.to_string())?;
+    let (prep, ck) = fidelity::open_model_read(
+        &a.model,
+        &misaka_palw_tir_lower::hf_schema::ReadOptions {
+            adapter: misaka_palw_tir_lower::hf_schema::AdapterChoice::parse_arg(&a.model_adapter).map_err(|e| e.to_string())?,
+        },
+        &opts,
+        &reg,
+    )
+    .map_err(|e| e.to_string())?;
     let ck = ck.as_ref();
     // RFC-0004: a LoRA candidate replaces the program; the parent stays for its calibration.
     let (prep, candidate) = match &a.adapter {
@@ -228,8 +236,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
     };
     let read_stats = |p: &PathBuf| -> Result<BTreeMap<String, SiteStat>, String> {
-        serde_json::from_slice(&std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?)
-            .map_err(|e| format!("{}: {e}", p.display()))
+        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let (stats, exact) = misaka_palw_tir_lower::calib::stats_from_json(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+        if !exact {
+            log(format!("legacy decimal statistics from {}: not bit-exact", p.display()));
+        }
+        Ok(stats)
     };
     let stats = match (&a.stats_in, &candidate) {
         (Some(p), _) => {
@@ -270,7 +282,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
     };
     if let Some(p) = &a.stats_out {
-        std::fs::write(p, serde_json::to_vec_pretty(&stats).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        std::fs::write(p, misaka_palw_tir_lower::calib::stats_to_json(&stats)).map_err(|e| e.to_string())?;
     }
     if a.calibrate_only {
         return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "sites": stats.len(), "metrics": {} }));

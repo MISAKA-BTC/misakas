@@ -259,12 +259,15 @@ fn take_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
 fn run(args: &[String]) -> Result<(), String> {
     let mut args = args.to_vec();
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
-    let network = take_flag(&mut args, "--network");
-    match command.as_str() {
-        "pack" => match misaka_palw_sdk::runtime_pack::cli::run(&args)? {
+    // Pack subcommands own their arguments, including bind-class's --network.
+    if command == "pack" {
+        return match misaka_palw_sdk::runtime_pack::cli::run(&args)? {
             0 => Ok(()),
             code => std::process::exit(code),
-        },
+        };
+    }
+    let network = take_flag(&mut args, "--network");
+    match command.as_str() {
         "ledger" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             ledger(&view);
@@ -283,7 +286,10 @@ fn run(args: &[String]) -> Result<(), String> {
             let remote = args.iter().any(|a| a.starts_with("http://") || a.starts_with("https://") || a.starts_with("hf://"));
             if remote
                 || first.as_ref().is_some_and(|p| {
-                    !matches!(misaka_palw_sdk::preflight::detect(std::path::Path::new(p)), Ok(misaka_palw_sdk::preflight::InputKind::Artifact))
+                    !matches!(
+                        misaka_palw_sdk::preflight::detect(std::path::Path::new(p)),
+                        Ok(misaka_palw_sdk::preflight::InputKind::Artifact)
+                    )
                 })
             {
                 return match model_preflight(network.as_deref(), &mut args)? {
@@ -499,9 +505,9 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
     // `--node-facts <file>`: what a node said (`misaka model preflight --node` writes the same facts); `--pack <dir>` / `--artifact <file>`:
     // the `full` depth's inputs; `--hf-endpoint <url>`: the endpoint a repository id (`hf://org/name[@revision]`) is read from.
     let node = match take_flag(args, "--node-facts") {
-        Some(f) => Some(
-            misaka_palw_sdk::preflight::node::NodeFacts::parse(&std::fs::read_to_string(&f).map_err(|e| format!("--node-facts {f}: {e}"))?)?,
-        ),
+        Some(f) => Some(misaka_palw_sdk::preflight::node::NodeFacts::parse(
+            &std::fs::read_to_string(&f).map_err(|e| format!("--node-facts {f}: {e}"))?,
+        )?),
         None => None,
     };
     let full = misaka_palw_sdk::preflight::full::FullInputs {
@@ -668,7 +674,10 @@ fn check_architecture(view: &NetworkView, config: Option<&str>, tir: Option<&str
         }
         if r.artifact_bytes > 0 {
             // Reported, never judged: a registration may carry any artifact size; a seat's resources gate its readiness.
-            println!("  seat need: {:.2} GiB of integer parameters resident (a seat's resources gate readiness, not admission)", r.artifact_bytes as f64 / (1u64 << 30) as f64);
+            println!(
+                "  seat need: {:.2} GiB of integer parameters resident (a seat's resources gate readiness, not admission)",
+                r.artifact_bytes as f64 / (1u64 << 30) as f64
+            );
         }
         if let Some(h) = r.graph_ir_root {
             println!("  graph_ir_root {h}");
@@ -706,11 +715,14 @@ fn lora_budget(
 
 /// **`improve eval`** (RFC-0004, A10): run the evaluation executor on a held class, offline.
 fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
-    use kaspa_consensus_core::palw_improve_eval_v1::{PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_answer_of_v1, palw_improve_answer_span_hash_v1, palw_improve_answer_span_v1};
+    use kaspa_consensus_core::palw_improve_eval_v1::{
+        PalwEvalModeV1, PalwEvalStageParamsV1, palw_improve_answer_of_v1, palw_improve_answer_span_hash_v1,
+        palw_improve_answer_span_v1,
+    };
     use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+    use misaka_palw_sdk::PalwModelLineageV1;
     use misaka_palw_sdk::improve::PalwImproveEvalTaskV1;
     use misaka_palw_sdk::improve_eval::{PalwEvalHeldV1, palw_eval_run_v1};
-    use misaka_palw_sdk::PalwModelLineageV1;
     let ids = |text: String, what: &str| -> Result<Vec<u32>, String> {
         text.split(',')
             .map(str::trim)
@@ -724,14 +736,21 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
     let entry = match (parent, section, full) {
         (Some(parent), Some(section), None) => {
             let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
-            lineage.load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache).map_err(|e| format!("{parent}: {e}"))?;
+            lineage
+                .load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache)
+                .map_err(|e| format!("{parent}: {e}"))?;
             lineage.open_composite_entry(std::path::Path::new(&section))?
         }
         (None, None, Some(full)) => misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(std::path::Path::new(&full))?,
-        _ => return Err("improve eval takes --artifact <class.palwtir>, or --parent <parent.palwtir> --section <candidate.palwtirs>".into()),
+        _ => {
+            return Err(
+                "improve eval takes --artifact <class.palwtir>, or --parent <parent.palwtir> --section <candidate.palwtirs>".into()
+            );
+        }
     };
     let held = PalwEvalHeldV1::from_entry(&entry)?;
-    let max_new: u32 = take_flag(args, "--max-new").map(|v| v.parse().map_err(|e| format!("--max-new: {e}"))).transpose()?.unwrap_or(8);
+    let max_new: u32 =
+        take_flag(args, "--max-new").map(|v| v.parse().map_err(|e| format!("--max-new: {e}"))).transpose()?.unwrap_or(8);
     let stop = take_flag(args, "--stop").map(|v| ids(v, "--stop")).transpose()?.unwrap_or_default();
     let open: i32 = take_flag(args, "--open").map(|v| v.parse().map_err(|e| format!("--open: {e}"))).transpose()?.unwrap_or(-1);
     let close: i32 = take_flag(args, "--close").map(|v| v.parse().map_err(|e| format!("--close: {e}"))).transpose()?.unwrap_or(-1);
@@ -739,7 +758,8 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
     // The items: a setter-set spec's prompts and keys, or one --prompt (and --key).
     let (prompts, keys): (Vec<Vec<u32>>, Vec<Option<Vec<u32>>>) = match take_flag(args, "--items") {
         Some(path) => {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?).map_err(|e| format!("{path}: {e}"))?;
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?)
+                .map_err(|e| format!("{path}: {e}"))?;
             let rows = |k: &str| -> Result<Vec<Vec<u32>>, String> {
                 v.get(k)
                     .and_then(|a| a.as_array())
@@ -749,7 +769,11 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
                         row.as_array()
                             .ok_or_else(|| format!("{path}: a `{k}` row is not an array"))?
                             .iter()
-                            .map(|t| t.as_u64().and_then(|t| u32::try_from(t).ok()).ok_or_else(|| format!("{path}: a `{k}` id is not a u32")))
+                            .map(|t| {
+                                t.as_u64()
+                                    .and_then(|t| u32::try_from(t).ok())
+                                    .ok_or_else(|| format!("{path}: a `{k}` id is not a u32"))
+                            })
                             .collect()
                     })
                     .collect()
@@ -808,7 +832,9 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
             row["answer"] = serde_json::json!(palw_improve_answer_of_v1(&generated, open, close).map(|h| h.to_string()));
             if let Some(Some(key)) = keys.get(i) {
                 row["key"] = serde_json::json!(key);
-                row["pass"] = serde_json::json!(palw_improve_answer_of_v1(&generated, open, close) == Some(palw_improve_answer_span_hash_v1(key)));
+                row["pass"] = serde_json::json!(
+                    palw_improve_answer_of_v1(&generated, open, close) == Some(palw_improve_answer_span_hash_v1(key))
+                );
             }
         } else {
             row["score"] = serde_json::json!(work.tail.score);
@@ -844,11 +870,16 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
     let kind = if args.is_empty() { return Err(USAGE.to_string()) } else { args.remove(0) };
     let network_id: NetworkId = network.ok_or(USAGE)?.parse().map_err(|e| format!("--network: {e}"))?;
     let drill = match take_flag(args, "--drill-salt") {
-        Some(hex) => Some(kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&hex).map_err(|e| format!("--drill-salt: {e}"))?),
+        Some(hex) => {
+            Some(kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&hex).map_err(|e| format!("--drill-salt: {e}"))?)
+        }
         None => None,
     };
     let params = kaspa_consensus_core::config::drill::palw_chain_params_v1(network_id, drill.as_ref())?;
-    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash));
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        params.net.to_string().as_bytes(),
+        Some(params.genesis.hash),
+    );
     let key_file = take_flag(args, "--key-file").ok_or("--key-file <ml-dsa-87 seed> is required")?;
     let seed = kaspa_pq_validator_core::load_validator_seed(&key_file)?;
     let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
@@ -901,13 +932,19 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
                 };
                 kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_check_v1(p, &ceilings, lifecycle)
                     .map_err(|why| format!("the policy would be refused: {why}"))?;
-                println!("policy check      ok under {} ceilings", if params.palw_improvement_v1.is_some() { "the network's" } else { "the drill's" });
+                println!(
+                    "policy check      ok under {} ceilings",
+                    if params.palw_improvement_v1.is_some() { "the network's" } else { "the drill's" }
+                );
                 match lifecycle {
                     Some(l) => println!("claim lifecycle   {l} DAA (court_margin must be at least this)"),
                     None => println!("claim lifecycle   not asked (this network has no V2 bundle)"),
                 }
                 println!("policy digest     {}", kaspa_consensus_core::palw_improve_state_v1::palw_improvement_policy_digest_v1(p));
-                println!("epoch length L_e  {} DAA", kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_epoch_length_v1(&p.windows));
+                println!(
+                    "epoch length L_e  {} DAA",
+                    kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_epoch_length_v1(&p.windows)
+                );
             }
             write(&out, &signer.policy(line, sequence, policy), "ModelLineImprovementPolicySet (tag 70)")
         }
@@ -916,8 +953,11 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
             let (case, opened) = spec::hard_case(&v)?;
             println!("case id           {}", case.case_id);
             if let Some((key, salt)) = opened {
-                std::fs::write(side(".key.json"), serde_json::json!({ "case_id": case.case_id.to_string(), "key": key, "salt": salt.to_string() }).to_string())
-                    .map_err(|e| e.to_string())?;
+                std::fs::write(
+                    side(".key.json"),
+                    serde_json::json!({ "case_id": case.case_id.to_string(), "key": key, "salt": salt.to_string() }).to_string(),
+                )
+                .map_err(|e| e.to_string())?;
                 println!("key and salt      {}", side(".key.json").display());
             }
             write(&out, &signer.hard_case(need_bond()?, case), "HardCaseSubmitted (tag 71)")
@@ -925,7 +965,8 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
         "opt-in" => {
             let tx_path = take_flag(args, "--commitment-tx").ok_or("--commitment-tx <fp-commitment-tx.borsh> is required")?;
             let tx: kaspa_consensus_core::tx::Transaction =
-                borsh::from_slice(&std::fs::read(&tx_path).map_err(|e| format!("{tx_path}: {e}"))?).map_err(|e| format!("{tx_path}: {e}"))?;
+                borsh::from_slice(&std::fs::read(&tx_path).map_err(|e| format!("{tx_path}: {e}"))?)
+                    .map_err(|e| format!("{tx_path}: {e}"))?;
             let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
                 borsh::from_slice(&tx.payload).map_err(|e| format!("{tx_path}: the payload is not a free-prompt commitment: {e}"))?;
             let facts = kaspa_consensus_core::palw_improve_material_v1::PalwFpJobFactsV1::of_commitment(&payload.commitment);
@@ -938,7 +979,10 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
         "setter-set" => {
             let v = spec_json(args)?;
             let (set, salt) = spec::setter_set(&v)?;
-            println!("set id            {}\nitems             {}\nsalt              {salt}", set.commitment.set_id, set.commitment.items);
+            println!(
+                "set id            {}\nitems             {}\nsalt              {salt}",
+                set.commitment.set_id, set.commitment.items
+            );
             write(&side(".prompts"), &obj::improve_setter_prompts_object_v1(set.prompts), "SetterSetRevealed (tag 74): the prompts")?;
             write(&side(".keys"), &obj::improve_setter_keys_object_v1(set.keys), "SetterKeysRevealed (tag 75): the keys")?;
             write(&out, &signer.setter_set(need_bond()?, set.commitment), "SetterSetCommitted (tag 73)")
@@ -1016,7 +1060,9 @@ fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> 
             let section = take_flag(args, "--section").ok_or("--section <candidate.palwtirs> is required")?;
             let lineage = misaka_palw_sdk::lineages::tir::TirLineageV1::new();
             use misaka_palw_sdk::PalwModelLineageV1;
-            lineage.load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache).map_err(|e| format!("{parent}: {e}"))?;
+            lineage
+                .load(std::path::Path::new(&parent), misaka_palw_sdk::PalwWeightResidencyV1::PageCache)
+                .map_err(|e| format!("{parent}: {e}"))?;
             let entry = lineage.open_composite_entry(std::path::Path::new(&section))?;
             let r = *entry.artifact.composite_ref().ok_or("the section opened as a single artifact")?;
             let class_id = entry.class_id();

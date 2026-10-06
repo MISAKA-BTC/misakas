@@ -18,8 +18,9 @@ before it reaches `main`.
 | 0010 | Permissionless PALW Panel binding and claim completion: remove the eight-genesis anchor privilege through sealed claims, frozen public seat snapshots, binder-independent Panel randomness, and open end-to-end claim paths | Draft, 2026-10-04 — design and implementation plan; no activation | [0010-permissionless-palw-panel-and-claim-completion.md](0010-permissionless-palw-panel-and-claim-completion.md) |
 | 0011 | Permissionless model onboarding with probabilistic encoded-constraint checks and exact court on dispute; active-kernel plan admission, explicit kernel-extension gaps (no VM fallback), 9B/2M barriers and ≥90% full-task HF evidence | Revised Draft, 2026-10-06 — ADR-0171/0172; no activation, Kimi feasibility and 90% coverage unproven; §16 kernel-only route | [0011-permissionless-model-and-long-context-onboarding.md](0011-permissionless-model-and-long-context-onboarding.md) |
 | 0012 | PALW-only consensus and native EVM settlement: retire DNS validators, attestations, precommits, DNS-final and stake reorg veto; PALW-derived EVM heads, legacy bond/reward wind-down and coordinated migration | Draft, 2026-10-06 — design only; no activation, settlement/security parameters require evidence | [0012-palw-only-consensus-and-native-evm-settlement.md](0012-palw-only-consensus-and-native-evm-settlement.md) |
+| 0013 | Reproducible exact layouts and resource-bounded onboarding tools: historical/live gate separation, bit-exact calibration interchange, independent streamed conformance and honest registration evidence | Draft, 2026-10-06 — tool fixes and release criteria; no consensus activation | [0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md) |
 
-**Next free number: RFC-0013.**
+**Next free number: RFC-0014.**
 
 ## Model-extension precedence (2026-10-06)
 

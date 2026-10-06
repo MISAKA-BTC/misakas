@@ -27,6 +27,53 @@ fn scale() -> usize {
     std::env::var("TIR_REF2_CASES").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
 }
 
+#[test]
+fn lazy_parameter_sources_preserve_values_errors_and_fail_closed_on_io_errors() {
+    use ref2::eval::{ParamSource, step};
+    struct Lazy<'a> {
+        params: &'a Params,
+        reads: std::cell::Cell<usize>,
+        fail: bool,
+    }
+    impl ParamSource for Lazy<'_> {
+        fn tensor(&self, index: u16, layer: Option<u32>) -> ref2::Res<Option<Tensor>> {
+            self.reads.set(self.reads.get() + 1);
+            if self.fail {
+                return Err(ref2::TirError::new(Class::Missing, "injected source I/O failure"));
+            }
+            Ok(self.params.get(&(index, layer)).cloned())
+        }
+    }
+    let mut rng = R::seed_from_u64(130013);
+    let mut reads = 0;
+    let mut io_refusals = 0;
+    for _ in 0..64 {
+        let g = gen_program(&mut rng, GenCfg::default());
+        let lazy = Lazy { params: &g.params, reads: std::cell::Cell::new(0), fail: false };
+        let mut state = initial_state(&g.prog);
+        for _ in 0..3 {
+            let token = rng.gen_range(0..g.prog.token_bound) as u64;
+            let expected = step(&g.prog, &g.params, &state, token);
+            assert_eq!(step(&g.prog, &lazy, &state, token), expected);
+            if let Ok((_, next)) = expected {
+                state = next;
+            } else {
+                break;
+            }
+        }
+        reads += lazy.reads.get();
+        let broken = Lazy { params: &g.params, reads: std::cell::Cell::new(0), fail: true };
+        let verdict = step(&g.prog, &broken, &initial_state(&g.prog), 0);
+        if broken.reads.get() > 0 {
+            let e = verdict.expect_err("source errors cannot be silently ignored");
+            assert_eq!(e.reason, "injected source I/O failure");
+            assert_eq!(e.class, Class::Missing);
+            io_refusals += 1;
+        }
+    }
+    assert!(reads > 0 && io_refusals > 0, "parameter reads {reads}, I/O refusals {io_refusals}");
+}
+
 #[derive(Default, Debug)]
 struct Tally {
     cases: usize,

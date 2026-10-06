@@ -21,11 +21,12 @@ USAGE:
                            [--hf-reference <audit dir | logits.json | hf-reference.json>]
                            [--slope-min F] [--slope-max F] [--corr-min F] [--top1-min F] [--kl-max F] [--allow-out-of-tolerance]
                            [--prompts N] [--prefill N] [--decode N] [--seed N] [--no-ref2] [--no-exec] [--stream|--no-stream]
-                           [--declare <network>[:max-context=N][:tile=N][:h-chunk=N]]...
+                           [--declare <network>[:max-context=N][:tile=N][:h-chunk=N][:logits-tile=N]]...
                            [--chunk-store <dir>] [--keep-chunks] [--block-mib N] [--defer-min-mib N]
     palw-class pack verify <pack dir> [--model <dir | .gguf>] [--artifact <file>] [--rebuild]
                            [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
+    palw-class pack bind-class --pack <existing dir> --artifact <declared.palwtir> --network <network> --out <new dir>
 
 `build` converts the model (the streaming converter, libm-v1 math by default), writes the artifact to --out and
 the pack to --pack: the manifest `pack.json` and the sidecars it pins by hash (the calibration statistics, the
@@ -35,7 +36,10 @@ program to the reference (units, order, KL) within the tolerance, and — per --
 network. `verify` checks every claim it can from what is at hand and says PASS, FAIL or SKIPPED for each; with
 --model and --rebuild it rebuilds the artifact from the public source and the pack's profile and compares roots;
 with --artifact it checks that file. VERIFIED only when nothing failed and nothing was skipped. Exit 0 verified
-(or, without --strict, nothing failed), 2 failed, 1 an error.";
+(or, without --strict, nothing failed), 2 failed, 1 an error.
+`bind-class` pins an existing declared artifact's exact layout into a NEW pack without recalibration or admission search.
+It changes the pack digest, not the class/artifact identity. It does not certify admission, readiness or mining;
+run `pack verify` and live `misaka model preflight` separately. Old packs remain untouched.";
 
 fn take_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -96,6 +100,19 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     match sub.as_str() {
+        "bind-class" => {
+            let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
+            let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);
+            let network = take_flag(&mut args, "--network").ok_or(PACK_USAGE)?;
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or(PACK_USAGE)?);
+            if let Some(extra) = args.first() {
+                return Err(format!("unexpected argument `{extra}`"));
+            }
+            let pack = super::bind::bind_class(&dir, &artifact, &network, &out)?;
+            println!("{}", pack.digest());
+            log("bound exact identity only; verify this pack and check live admission before registering".into());
+            Ok(0)
+        }
         "build" => {
             let model = PathBuf::from(take_flag(&mut args, "--model").ok_or(PACK_USAGE)?);
             let out = PathBuf::from(take_flag(&mut args, "--out").ok_or(PACK_USAGE)?);
@@ -132,7 +149,8 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             if let Some(v) = num(&mut args, "--defer-min-mib")? {
                 req.defer_min_mib = v;
             }
-            let name = take_flag(&mut args, "--name").unwrap_or_else(|| model.file_name().and_then(|n| n.to_str()).unwrap_or("model").to_string());
+            let name = take_flag(&mut args, "--name")
+                .unwrap_or_else(|| model.file_name().and_then(|n| n.to_str()).unwrap_or("model").to_string());
             let mut o = BuildOpts::new(req, pack_dir, name);
             o.repo = take_flag(&mut args, "--repo");
             o.revision = take_flag(&mut args, "--revision");
@@ -166,7 +184,13 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                 o.seed = v;
             }
             o.impls = ImplSet { exec: !take_bool(&mut args, "--no-exec"), ref2: !take_bool(&mut args, "--no-ref2") };
-            o.streamed = if take_bool(&mut args, "--stream") { Some(true) } else if take_bool(&mut args, "--no-stream") { Some(false) } else { None };
+            o.streamed = if take_bool(&mut args, "--stream") {
+                Some(true)
+            } else if take_bool(&mut args, "--no-stream") {
+                Some(false)
+            } else {
+                None
+            };
             for d in take_all(&mut args, "--declare") {
                 o.declare.push(parse_declare(&d)?);
             }
@@ -185,7 +209,13 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             o.artifact = take_flag(&mut args, "--artifact").map(PathBuf::from);
             o.rebuild = take_bool(&mut args, "--rebuild");
             o.impls = ImplSet { exec: !take_bool(&mut args, "--no-exec"), ref2: !take_bool(&mut args, "--no-ref2") };
-            o.streamed = if take_bool(&mut args, "--stream") { Some(true) } else if take_bool(&mut args, "--no-stream") { Some(false) } else { None };
+            o.streamed = if take_bool(&mut args, "--stream") {
+                Some(true)
+            } else if take_bool(&mut args, "--no-stream") {
+                Some(false)
+            } else {
+                None
+            };
             o.declared = !take_bool(&mut args, "--no-declared");
             o.pack_dir = PathBuf::from(args.first().ok_or(PACK_USAGE)?);
             let r = verify(&o, &log)?;
@@ -195,7 +225,13 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                     .iter()
                     .map(|c| serde_json::json!({ "check": c.name, "status": format!("{:?}", c.status).to_uppercase(), "detail": c.detail }))
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "pack": r.pack_digest, "verified": r.verified(), "ok": r.ok(), "checks": checks })).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({ "pack": r.pack_digest, "verified": r.verified(), "ok": r.ok(), "checks": checks })
+                    )
+                    .unwrap_or_default()
+                );
             } else {
                 print!("{}", r.render());
             }
@@ -222,7 +258,13 @@ pub fn show(p: &RuntimePackV1) -> String {
     let mut o = String::new();
     let s = |x: &str| x.chars().take(16).collect::<String>();
     o.push_str(&format!("pack         {} ({})\n", p.name, p.digest()));
-    o.push_str(&format!("model        {} [{}], {} source file(s), {}\n", p.model.label, p.model.format, p.model.files.len(), p.model.architectures.join(", ")));
+    o.push_str(&format!(
+        "model        {} [{}], {} source file(s), {}\n",
+        p.model.label,
+        p.model.format,
+        p.model.files.len(),
+        p.model.architectures.join(", ")
+    ));
     o.push_str(&format!(
         "frontend     level {}, adapter {}{}, spec {}\n",
         p.frontend.level,
@@ -231,7 +273,10 @@ pub fn show(p: &RuntimePackV1) -> String {
         s(&p.frontend.spec_digest)
     ));
     let scope = &p.features.scope;
-    let left: Vec<String> = scope["excluded"].as_array().map(|a| a.iter().filter_map(|e| e["what"].as_str()).map(str::to_string).collect()).unwrap_or_default();
+    let left: Vec<String> = scope["excluded"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|e| e["what"].as_str()).map(str::to_string).collect())
+        .unwrap_or_default();
     o.push_str(&format!(
         "scope        {} → {}{}\n",
         scope["input"].as_str().unwrap_or("?"),
@@ -241,7 +286,11 @@ pub fn show(p: &RuntimePackV1) -> String {
     o.push_str(&format!("features     {} in use\n", p.features.used.len()));
     o.push_str(&format!(
         "quant        {}\n",
-        if p.quant.descriptors.is_empty() { "float checkpoint".to_string() } else { p.quant.descriptors.iter().map(|d| format!("{} {}", d.name, s(&d.digest))).collect::<Vec<_>>().join(", ") }
+        if p.quant.descriptors.is_empty() {
+            "float checkpoint".to_string()
+        } else {
+            p.quant.descriptors.iter().map(|d| format!("{} {}", d.name, s(&d.digest))).collect::<Vec<_>>().join(", ")
+        }
     ));
     o.push_str(&format!(
         "profile      headroom {}/{}/{}, calibration {} ({} sites), math {}{}\n",
@@ -254,16 +303,47 @@ pub fn show(p: &RuntimePackV1) -> String {
         p.converter.math.platform.as_ref().map(|x| format!(" ({x})")).unwrap_or_default()
     ));
     o.push_str(&format!("converter    {} {} / {}\n", p.converter.name, p.converter.crate_version, p.converter.lowering));
-    o.push_str(&format!("executors    {}\n", p.executor.implementations.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(", ")));
-    o.push_str(&format!("logits       {} (scale {:e}); tolerance slope [{}, {}], corr ≥ {}, top-1 ≥ {}, KL ≤ {}\n", p.logits.convention, p.logits.scale, p.logits.tolerance.slope_min, p.logits.tolerance.slope_max, p.logits.tolerance.corr_min, p.logits.tolerance.top1_min, p.logits.tolerance.kl_max));
-    o.push_str(&format!("artifact     {} bytes, file {}, inventory root {}, graph root {}\n", p.result.artifact_bytes, s(&p.result.artifact_digest), s(&p.result.inventory_root), s(&p.result.graph_ir_root)));
-    o.push_str(&format!("conformance  {} vector(s), {} positions\n", p.conformance.vectors.len(), p.conformance.vectors.iter().map(|v| v.positions).sum::<usize>()));
+    o.push_str(&format!(
+        "executors    {}\n",
+        p.executor.implementations.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(", ")
+    ));
+    o.push_str(&format!(
+        "logits       {} (scale {:e}); tolerance slope [{}, {}], corr ≥ {}, top-1 ≥ {}, KL ≤ {}\n",
+        p.logits.convention,
+        p.logits.scale,
+        p.logits.tolerance.slope_min,
+        p.logits.tolerance.slope_max,
+        p.logits.tolerance.corr_min,
+        p.logits.tolerance.top1_min,
+        p.logits.tolerance.kl_max
+    ));
+    o.push_str(&format!(
+        "artifact     {} bytes, file {}, inventory root {}, graph root {}\n",
+        p.result.artifact_bytes,
+        s(&p.result.artifact_digest),
+        s(&p.result.inventory_root),
+        s(&p.result.graph_ir_root)
+    ));
+    o.push_str(&format!(
+        "conformance  {} vector(s), {} positions\n",
+        p.conformance.vectors.len(),
+        p.conformance.vectors.iter().map(|v| v.positions).sum::<usize>()
+    ));
     match &p.hf_reference {
-        Some(h) => o.push_str(&format!("reference    {} positions over {} sequence(s): slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5}\n", h.positions, h.sequences, h.measured.slope, h.measured.corr, h.measured.top1, h.measured.kl_mean)),
+        Some(h) => o.push_str(&format!(
+            "reference    {} positions over {} sequence(s): slope {:.4}, corr {:.5}, top-1 {:.3}, KL {:.5}\n",
+            h.positions, h.sequences, h.measured.slope, h.measured.corr, h.measured.top1, h.measured.kl_mean
+        )),
         None => o.push_str("reference    none\n"),
     }
     for d in &p.declared {
-        o.push_str(&format!("declared     {}: class {} (context {}, interval {})\n", d.network, s(&d.class_id), d.max_context, d.checkpoint_interval));
+        o.push_str(&format!(
+            "declared     {}: class {} (context {}, interval {})\n",
+            d.network,
+            s(&d.class_id),
+            d.max_context,
+            d.checkpoint_interval
+        ));
     }
     o
 }
