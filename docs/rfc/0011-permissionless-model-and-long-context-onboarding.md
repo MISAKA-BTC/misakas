@@ -11,7 +11,9 @@
 
 Registration checks a bounded `VerificationPlanV1`: semantic bindings, coverage of constraint families, probabilistic soundness parameters, compositional resource limits and a bounded dispute route. It does not enumerate the entire future execution or prove every execution value correct in advance. Heavy conversion, calibration, witness construction and proof generation may be supplied by untrusted workers. A class can be listed before it is mineable; useful-work weight requires the armed verification, DA and capacity rules.
 
-**Revision boundary.** This replaces §13.1's former requirement for a model-specific, exhaustive deterministic admission proof as the preferred route. Small existing classes may retain exact sizing/replay. The old 9B/2M failures and coverage audit remain historical evidence. Probabilistic execution acceptance does not permit probabilistic parser/memory safety: every permitted query and terminal dispute must still fit enforced bounds, established through reusable primitive/VM rules and composition. An unknown dynamic access can use an authenticated-memory constraint and bounded opening; it cannot be omitted from verification. §15 defines the new route; where earlier release gates mention exact bounds they refer to resource safety and terminal semantics, not full normal-path replay.
+**Revision boundary.** This replaces §13.1's former requirement for a model-specific, exhaustive deterministic admission proof as the preferred route. Small existing classes may retain exact sizing/replay. The old 9B/2M failures and coverage audit remain historical evidence. Probabilistic execution acceptance does not permit probabilistic parser/memory safety: every permitted query and terminal dispute must still fit enforced bounds, established through reusable approved kernel-primitive rules and composition. An unknown dynamic access can use an authenticated-memory constraint and bounded opening; it cannot be omitted from verification. §15 defines the new route; where earlier release gates mention exact bounds they refer to resource safety and terminal semantics, not full normal-path replay.
+
+**Kernel-only revision, 2026-10-06:** [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) withdraw the BVM/GVM fallback. Model extensibility uses declarative plans within active kernels or a coordinated, versioned kernel extension when semantics/checkers/courts are missing (§16). The probabilistic, encoded-constraint acceptance policy in §15 is unchanged. This is not a claim that all finite models fit today's kernels or that a SegWit-style extension is automatically a soft fork.
 
 **The coverage claim this RFC is intended to enable is not “90% of decoder fixtures” or “90% of local LLMs”; it is `registered_full_task / D_all ≥ 0.90` for a dated, reproducible census of all public Hugging Face model repositories (§7).** `registered_full_task` requires an accepted on-chain class registration under the target rules, or independently reproduced equivalence to an already registered class (§11.2), not a passing config parser, a draft artifact, a catalogue entry, a short-context substitute or a model-market line. This proposal does not assert that today's implementation meets that threshold; it defines the evidence that must exist before anyone may say it does.
 
@@ -168,15 +170,15 @@ The following are **candidate workstreams**, not unsupported claims about their 
 
 | Full-task blocker family | Required generic route | Passing evidence; no shortcut |
 | --- | --- | --- |
-| Text generation, MoE, recurrent/hybrid, 8k–2M context | RFC-0002 TIR or a separately proven bounded fallback; real-size close sizing, prompt attribution, calibration and court fixes in §§2–4. | Full configured context and source-equivalent task pass actual chain admission; 9B and 2M examples are adversarial fixtures, not representative counts. |
+| Text generation, MoE, recurrent/hybrid, 8k–2M context | RFC-0002 TIR / active versioned kernel relations; new families require the §16 upgrade route, not a VM fallback. Real-size close sizing, prompt attribution, calibration and court fixes in §§2–4. | Full configured context and source-equivalent task pass actual chain admission; 9B and 2M examples are adversarial fixtures, not representative counts. |
 | Text encoders, classifiers, rerankers, seq2seq and embeddings | Task-specific canonical input/output and pooling/heads, tokenizer and labels, bidirectional/encoder–decoder execution; no decoder-only inference from a familiar backbone. | Each advertised output and preprocessing path reproduced by independent vectors and the court; real checkpoint registered. |
 | Image classification, detection, segmentation, generation/editing, vision-language | Full image preprocessing, backbone/projector or diffusion/flow pipeline, output profile and input commitments through RFC-0003 or an equally exact route. | Complete vision task, not the text subnetwork, passes exact job, artifact, DA and court tests. |
 | Speech, audio, video and other temporal or multimodal tasks | Canonical media encoding/preprocessing, stage pipeline, bounded long-sequence/reduction dissection, exact output forms. | End-to-end intended modality and resolution/duration; missing RFC-0003 profile is an explicit blocker. |
 | GGUF, GPTQ/AWQ, bitsandbytes, MLX and other quantized or framework-specific formats | Declarative, versioned importers and per-format tensor/scale/rounding semantics; offline sandbox for untrusted code. | Real upstream files and independent decoder cross-check; no implicit dequantize-and-requantize that changes the claimed model silently. |
-| LoRA/PEFT, merged variants, custom-code architectures and composite repositories | Resolve every pinned base, adapter, tokenizer and custom component; lower to frozen TIR or an independently checked bounded VM. | Whole dependency graph and source equivalence, not a generic `model_type` guess; no arbitrary Python executed by validators or seats. |
+| LoRA/PEFT, merged variants, custom-code architectures and composite repositories | Resolve every pinned base, adapter, tokenizer and custom component; lower into an active kernel's bounded tensor/state and constraint grammar. | Whole dependency graph and source equivalence, not a generic `model_type` guess; custom source is conversion input, never an uploaded verifier or guest executed by consensus. |
 | Gated, missing, ambiguous or legally unusable sources | Access and rights evidence, archive/revision pinning, or upstream repair. | If unresolved, fail `source` and remain in `D_all`; software cannot manufacture absent weights or permission. |
 
-An architecture adapter is sufficient **only** when the complete operation is expressible under armed semantics. Otherwise a missing general primitive, task profile, format semantics, DA route or court path requires a versioned upgrade and an actual fence. RFC-0005's GVM may cover a measured residual **only after** its real-size gas, memory, exact-court and registration path is implemented; a proposed VM is not coverage. Keep model-file size, operator hardware and court envelope visible separately. More capable machines can satisfy finite execution budgets; they cannot validate an unbounded or unrepresentable class by declaration.
+An architecture adapter is sufficient **only** when the complete operation is expressible under armed semantics. Otherwise a missing general primitive, task profile, format semantics, DA route or court path requires a versioned kernel upgrade and an actual fence (§16). RFC05's former GVM residual is withdrawn: unsupported operations remain `KERNEL_EXTENSION_REQUIRED` until the complete new kernel route is implemented and active. Keep model-file size, operator hardware and court envelope visible separately. More capable machines can satisfy finite execution budgets; they cannot validate an unbounded or unrepresentable class by declaration.
 
 ## 10. Reproducible census, experiment, and release decision
 
@@ -198,7 +200,7 @@ The 9B sequence (`metadata` → `tile MAC` → `close-sizing` → possible later
 | Gate family | Current/likely blocker | Closure obligation and proof |
 | --- | --- | --- |
 | Source, scope, rights | Missing/gated weights, unresolved base/adapters, `CONFIG_INVALID`, partial advertised task, unsafe custom code or `RIGHTS_UNCONFIRMED` | Immutable complete source graph; owner/access evidence; full-task input/output and external-code isolation. A missing or unauthorized source is an **external** failure, not “fixed” by implementation. |
-| Frontend and material | `ARCH_REFUSED`, `ARCH_NEEDS_PRIMITIVE`, unknown quant type, unconsumed tensor, tokenizer mismatch, `calibrated_context`/`--stats-in` mismatch, fidelity or reproducibility failure | Versioned adapter or generic VM semantics, all weight/layout/rounding keys consumed, independent reference comparison, same root on independent workers and full declared context. |
+| Frontend and material | `ARCH_REFUSED`, `ARCH_NEEDS_PRIMITIVE`, unknown quant type, unconsumed tensor, tokenizer mismatch, `calibrated_context`/`--stats-in` mismatch, fidelity or reproducibility failure | Versioned adapter over active kernel semantics, or an explicitly required kernel extension; all weight/layout/rounding keys consumed, independent reference comparison, same root on independent workers and full declared context. |
 | Protocol availability | `FENCE_NOT_ARMED`, wrong `prim_set_id`, absent task/job/output profile, legacy-only prompt attribution | Required rule actually armed at the target DAA with a pinned fingerprint; direct-TIR remains open, new primitives use a reviewed fence, and >4,096 prompt IDs have a complete IR proof route. |
 | Static admission | `TIR_EXCEEDS_CEILING`, tile MAC/elementwise/transcendental budget, close-sizing `2^26`, range/bounds, canonical job, PWU, ladder, credit, context and history bounds | A candidate layout or mathematically equivalent bound passes the *same* chain gate under worst-case real-size inputs; no unmeasured ceiling waiver. All later checks are run after each fix. |
 | Court and DA | `TIR_NEEDS_DISSECTION`, `TIR_DISSECTION_REFUSED`, close bytes, unavailable history/tile, court window, unanswerable DA challenge | Every reachable commit point has an exact one-move or bounded dissection route, a feasible signed DA response and deterministic worst-case bytes/work/time; independent false-claim court drill. |
@@ -235,7 +237,7 @@ The following code facts were checked at the audit commit. They are independent 
 
 | Current gate and source | Current bound / behavior | Required design change or retained condition |
 | --- | --- | --- |
-| TIR shape/encoding, [`program.rs`](../../misaka-palw-tir/src/program.rs) | 256 KiB encoded program; 16 blocks; 512 nodes/block; 1,024 layers; 4,096 parameter declarations; 64 state declarations; 8 inputs/node. These are **declarations**, not a 4,096-weight parameter limit. | Reuse structural templates where semantically exact. For models beyond this grammar, versioned graph modules with typed interfaces and compositional summaries; a finite fallback VM only after its own RFC gates. Do not raise parser/allocation caps without metering or assume every architecture fits this grammar. |
+| TIR shape/encoding, [`program.rs`](../../misaka-palw-tir/src/program.rs) | 256 KiB encoded program; 16 blocks; 512 nodes/block; 1,024 layers; 4,096 parameter declarations; 64 state declarations; 8 inputs/node. These are **declarations**, not a 4,096-weight parameter limit. | Reuse structural templates where semantically exact. For models beyond this grammar, versioned kernel graph composition with typed interfaces and bounded summaries; missing grammar/semantics requires an activated extension, not a VM. Do not raise parser/allocation caps without metering or assume every architecture fits this grammar. |
 | Network TIR ceilings, [`PALW_T12_TIR_CEILINGS_V1`](../../consensus/core/src/palw_tir_v1.rs) | 88,000 program bytes; 65,536 unrolled nodes; 262,144 positions; `2^37` MACs/position; 32 GiB state; 4 GiB peak live; 65,536 cone-work units. | Separate **total producer resources** from **maximum validator/terminal work**. A versioned resource envelope may allow larger total work/state when bounded segments, authenticated paging, complete DA and court verification cover it. Those aggregate caps remain effective until that route is armed; available RAM alone is insufficient. |
 | IR held/context and canonical input, [`verify_class_admission_v10`](../../consensus/core/src/palw_tir_admission_v1.rs) | Explicit refusal of `HISTORY_BOUND_V1_HELD`; canonical prefill ≤4,096 IDs, thus context ≤32,783 independently of the larger network cap. | Versioned IR held bindings plus attributable prompt tiles, with predecessor-state and input challenges. Implement all three context changes together, not by waiving one check. |
 | Per-tile court and recurrence | MAC, elementwise/transcendental work, operands and `(checkpoint_interval − 1) × state-replay work` are bounded independently. Smaller output tiles do not necessarily shrink a whole input/reduction or state replay. | Derive a legal tile/checkpoint plan. If none exists, split the reduction/state transition into committed, independently adjudicable steps preserving rounding and order. Supply a witness for **every** commit point, not just the largest matmul. |
@@ -251,11 +253,11 @@ The inventory must also traverse nested decoder/layout errors, transaction mass/
 
 ### 13.1 Verification-plan admission; probabilistic execution acceptance
 
-The preferred route is `VerificationPlanV1`, composed from versioned primitive or bounded-VM verifier templates. Registration checks the plan and resource envelope; later claims instantiate its randomized checks. Existing exact range sizing remains available for compatible classes. This is a proposed protocol, not a certificate system already shipped.
+The preferred route is `VerificationPlanV1`, composed from implemented, versioned kernel-primitive verifier templates. Registration checks the plan and resource envelope; later claims instantiate its randomized checks. The plan is bounded typed data, not executable verifier code or a universal circuit/ISA fallback. Existing exact range sizing remains available for compatible classes. This is a proposed protocol, not a certificate system already shipped.
 
-1. Bind the network/ruleset, source/program/tokenizer/artifact roots, full task/context, arithmetic and memory semantics, constraint compiler, verifier suite, segmentation and plan version. Bind the challenge schedule, field/modulus choices, repetition policy, maximum proof/witness sizes, resource limits and security target. Neither a registrant nor a seat may lower these below the armed network policy.
+1. Bind the network/ruleset, active kernel descriptor/version, source/program/tokenizer/artifact roots, full task/context, arithmetic and memory semantics, constraint compiler, verifier suite, segmentation and plan version. Bind the challenge schedule, field/modulus choices, repetition policy, maximum proof/witness sizes, resource limits and security target. Neither a registrant nor a seat may lower these below the armed network policy.
 2. Use reusable templates for matrix relations, nonlinear/lookup constraints, routing and authenticated state/memory. Verify typed interfaces and composition over a compact graph or metered modules. Do not unroll every token, expert execution and possible dynamic index at registration. Dynamic access must have an authenticated read/write and bounds rule; routing must prove which expert is selected. The plan covers all constraint families and input/output bindings even though checking their instances is probabilistic.
-3. Enforce deterministic limits on parser/allocation work, query openings, localization and terminal computation. A generic bounded microstep court or a composed primitive bound can establish adjudicability without a separate symbolic proof for each reachable model commit point. If a primitive cannot be checked or localized within the current route, return the missing verifier/court capability. A sample cannot establish the worst-case safety of an unchecked operation.
+3. Enforce deterministic limits on parser/allocation work, query openings, localization and terminal computation. Approved kernel-primitive courts and composed primitive bounds establish adjudicability without a separate symbolic proof for each reachable model commit point; this is not an arbitrary ISA/microcode court. If a primitive cannot be checked or localized within the current route, return the missing verifier/court capability. A sample cannot establish the worst-case safety of an unchecked operation.
 4. Charge each module/rule, arithmetic width and evidence byte before allocation; cache under the full semantic digest. Large plans use metered composition with authenticated accumulated state, expiry and replay/reorg rules. Registration completes only after composition and stateful gates pass. Cold/warm cache and IBD must give the same result.
 5. At claim time verify the committed constraints with the suite in §15. Accept at its reviewed error bound after positive evidence and the challenge window; full trace or full segment replay is not the normal-path completion condition. Preserve deterministic reference executors for conformance and exact terminal disputes.
 
@@ -367,7 +369,7 @@ Committed → ChallengeBound → Checking → ProbabilisticPass → WindowClosed
 
 `ProbabilisticPass` requires the complete suite's positive evidence and the specified receipt rule. Silence, missing rounds, absent required constraints or unavailable witnesses never count as pass. Final requires the armed challenge window to close, required DA/retention obligations, and no unresolved accepted dispute. Reward escrow and useful-work maturation follow this lifecycle. Any pre-Final fork-choice weight and its aggregate adversarial exposure must be explicitly bounded and drilled with RFC-0008/ADR-0069; sampling receipts must not immediately release an entire session's budget or duplicate slice credit. A single network-versioned policy applies to all claims using this route, not a model-selected confidence level.
 
-A failing random check suspends acceptance and identifies an evidence/relation disagreement. It does **not** by itself convict a miner: the served witness may differ from the committed claim, or a verifier may be faulty. Localize via authenticated matrix tiling or proof/dissection into named TIR/VM steps with bounded inputs, weights and entry state. Then the existing compatible terminal court recomputes the exact step; a new primitive requires a versioned court extension. A GKR mismatch does not automatically identify a false terminal leaf: the plan must supply and test that localization protocol, its total bytes, work and deadline. No emergency end-to-end replay of a multi-terabyte model is an acceptable hidden dependency.
+A failing random check suspends acceptance and identifies an evidence/relation disagreement. It does **not** by itself convict a miner: the served witness may differ from the committed claim, or a verifier may be faulty. Localize via authenticated matrix tiling or proof/dissection into named TIR/kernel primitive transitions with bounded inputs, weights and entry state. Then the existing compatible terminal court recomputes the exact step; a new primitive requires a versioned court extension, not a generic VM fallback. A GKR mismatch does not automatically identify a false terminal leaf: the plan must supply and test that localization protocol, its total bytes, work and deadline. No emergency end-to-end replay of a multi-terabyte model is an acceptable hidden dependency.
 
 Use the existing distinction between missing material, missed duties and proven false computation. Apply slashing only under its defined evidence/obligation rule; verifier unavailability is not producer arithmetic fraud. Rate-limit bonded disputes and bound simultaneous court exposure so an attacker cannot force unbounded fallback work. Exact fraud proof, dismissal and availability/timeout results must each have deterministic transitions. The protocol accepts the residual chance of undetected invalidity after Final; court does not make it zero, and this proposal does not invent a post-final rollback rule.
 
@@ -395,3 +397,93 @@ The benchmark report must include producer execution **and** witness/proof gener
 * [Celestia DA documentation](https://docs.celestia.org/learn/celestia-101/data-availability/): erasure-coded availability sampling. Available data may still encode an invalid computation.
 * [PoSP/spML](https://arxiv.org/html/2405.00295v3): probabilistic challenges, recomputation and economic arbitration assumptions. Its selected validators recompute the function; it does not prove this RFC's sub-execution checker sound.
 * [opML (2024)](https://arxiv.org/abs/2401.17555): interactive ML fraud-proof precedent. MISAKA still needs its own binding and bounded localization implementation; a dispute system cannot detect a lie no participant challenges.
+
+## 16. Model extensibility without a VM (2026-10-06 revision)
+
+### 16.1 Fixed policy, changed extension mechanism
+
+Under [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md),
+the preferred large-model path is:
+
+`pinned model → active kernel + declarative VerificationPlan → committed encoded constraints →`
+`small probabilistic checks → positive receipts / DA / closed window → Final`.
+
+Disagreement still invokes bounded exact court; routine full execution/segment replay is not added.
+“Encoding” means a sound relation-preserving construction over all relevant computation, boundaries
+and memory, not just erasure-coded trace storage. The miner/prover still performs the large work.
+Whole-claim sparse-error soundness, post-commit randomness and the conditional proposed `2^-128`
+target in §15 stay in force. Static bounds/identity checks remain deterministic.
+
+The removed path is `unsupported model → BVM/GVM/Universal VM`. It is replaced by
+`unsupported relation → precise missing kernel capability → reviewed versioned upgrade → retry`.
+The full kernel descriptor, class binding and activation design is [RFC05 §§K.0–K.8](0005-palw-ml-vm.md).
+
+### 16.2 Registration outcomes, independently of hardware
+
+| Finding | Outcome / next step |
+| --- | --- |
+| Whole task fits active kernel relations and all plan/admission bounds | `ELIGIBLE_AT(...)` after stateful admission; actual inclusion remains subject to §13.4 |
+| Source/format frontend missing but target semantics exist | `FRONTEND_REQUIRED`; off-chain importer/lowerer and reference tests, no semantic node upgrade |
+| Missing semantic primitive, verifier relation, memory rule or terminal court | `KERNEL_EXTENSION_REQUIRED` with family id, offending relation and required/available bounds; no successful registration under unknown semantics |
+| Matching descriptor exists in code but is not activated | `KERNEL_NOT_ACTIVE` plus schedule/proposal status; no automatic activation by registration |
+| Finite declared producer/seat requirements exceed current operators | Distinct readiness/capacity status; no arbitrary 8 GiB fleet cap on a semantically admissible class |
+| Mandatory node/DA/court bounds exceeded, or incomplete constraint coverage | Refuse precisely; more producer CPU does not remove node DoS or missing-proof obligations |
+| Missing rights/source material, uncontrolled external input or unbounded computation | Preserve the external/semantic blocker; neither a new kernel nor more CPU manufactures validity |
+
+These are proposed structured outcomes, not already implemented RPC codes. Listing an extension
+request is not class admission, and class admission is neither mineability nor market opening.
+
+### 16.3 Extension contract
+
+1. A kernel contains reusable computational families, not per-model-brand allowlists. Plans may
+   combine supported families without node updates, but must bind all task/context/quantization and
+   input/output semantics. Frontend output and generated constraint circuits are untrusted input.
+2. The plan grammar names implemented operators/checkers with finite dimensions, fixed bounded
+   state templates and metered composition. It never supplies executable plugins, a guest ISA or
+   a custom verifier program. GKR circuit support must be constrained to the approved relation
+   constructors and checked against the intended model statement.
+3. Every newly permitted family needs a deterministic reference, an independent implementation,
+   full-statement error composition, authenticated evidence, bounded localization/terminal court,
+   parser/resource limits and adversarial tests. No arbitrary success for unknown kernel/op ids.
+4. New-format class/claim ids bind the immutable descriptor and plan. Old class ids and already-bound
+   claims keep old rules. New semantics require a new version, not reinterpretation of old hashes.
+   Snapshot/IBD and cross-kernel composition follow the same rule as live verification.
+5. A SegWit/Taproot-class extension is the design analogy, **not automatic soft-fork compatibility**.
+   Use a coordinated fingerprinted schedule unless a concrete valid-history/state/fork-choice
+   compatibility proof supports something narrower. Unupgraded nodes cannot count unknown work as
+   verified, reward it or continue post-fence full validation by skipping its witness.
+
+### 16.4 Recalculate coverage without fictional VM successes
+
+The existing audit and historical 9B/2M evidence are unchanged by this design choice. No model has
+been newly registered by editing these RFCs. Keep the exact pinned all-HF denominator and sampling
+method in §§7–10. Assign **one primary current blocker per repository**, with secondary tags:
+
+* `supported_active_kernel`: complete-task on-chain registration evidence under the measured release;
+* `frontend_gap`: representable but importer/lowerer missing or untested;
+* `kernel_extension_gap`: missing semantics/checker/court or not yet active;
+* `resource_or_lifecycle_gap`: semantically covered but required admission/DA/resource/state gate fails;
+* `external_gap`: inaccessible/missing/unauthorized source or other external dependency;
+* `untested`: no qualifying end-to-end result.
+
+Only the first bucket supplies successes to the existing estimator; the others remain failures.
+Models formerly described as “GVM residual” are reclassified by actual kernel/adapter evidence, never
+credited because a future extension could theoretically represent them. Thus **there is no new
+numeric coverage percentage to report until new trials run**. The reference's 90–95% and 95–99%
+figures are not empirical inputs, lower bounds or adopted guarantees. Do not change `D_all` to
+“kernel-expressible models” to make the target easier.
+
+Prioritize extensions by measured full-task repository gain, verification/prover/DA costs and audit
+effort; publish both before and after results at each activated kernel version. The release gate
+remains the all-HF ≥90% one-sided lower bound with source/task/registration evidence, not theoretical
+expressiveness, a successful conformance fixture or a model-name list.
+
+### 16.5 Additional completion tests
+
+Test old/new kernel coexistence, absent/not-active/forged ids, cheap but unsound custom checkers,
+omitted relation families, cross-kernel replay, activation-boundary claims and rollback/pruning.
+Require equivalent node/SDK verdicts without VM dependencies and real 9B-8k/validated long-context
+registration plus Final/court/DA results. Report actual proof preparation and small-check costs.
+Any reference replay used during development must be labelled conformance work rather than a
+hidden prerequisite on every ordinary claim. No arbitrary soft-fork, universal-model support or
+performance claim follows from choosing the kernel-only implementation strategy.

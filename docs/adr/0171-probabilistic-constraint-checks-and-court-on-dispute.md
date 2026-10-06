@@ -2,6 +2,8 @@
 
 **Status:** Design direction selected at the operator's request, 2026-10-06. Protocol specification/implementation pending; **not active on any network**. No activation height, implementation success or fingerprint change is implied by this document.
 
+> **2026-10-06 extension-mechanism amendment:** [ADR-0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) selects versioned kernels and withdraws the VM implementation/fallback programme. References below to primitive/VM templates are historical alternatives: new plans use approved kernel-primitive templates only. This changes the extensibility mechanism, not this ADR's probabilistic verification, error accounting or exact-dispute policy.
+
 **Specifies:** [RFC-0011 §§0, 13 and 15](../rfc/0011-permissionless-model-and-long-context-onboarding.md). Builds on [RFC-0007](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md)'s algebraic checker and exact escalation, RFC-0006's bounded partitions and RFC-0008's unique work accounting. Existing consensus and old claims keep their existing rules until a separate fence activates a complete implementation.
 
 ## Decision in Japanese

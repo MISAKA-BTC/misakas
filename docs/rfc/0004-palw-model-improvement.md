@@ -2,21 +2,21 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft, 2026-09-29 — design. Phase A of the improvement roadmap. By the user's order of 2026-09-29, it is implemented in full before any work on RFC-0005 (the VM) starts |
+| Status | Revised Draft, 2026-10-06 — improvement remains independent of a VM. ADR-0172 withdraws the later BVM/GVM programme; model extension uses versioned kernels, with RFC07/RFC11 probabilistic verification (§0) |
 | Author(s) | MISAKA core (drafted with Claude) |
 | Created | 2026-09-29 |
-| Normative dependencies | **RFC-0002** (PALW-TIR and its Phase F integration) and **RFC-0003** (R, `TirProgramV2`, pipelines, canonical outputs; its text profile carries RFC-0001 §A's frozen decode rule). Nothing else: **no VM, and no EVM contract** |
+| Normative dependencies | **RFC-0002** (PALW-TIR) and **RFC-0003** (R, pipelines, canonical outputs); new kernel-bound registration/verification additionally follows RFC05 §§K.0–K.8, RFC07, RFC11 §§15–16 and ADR-0171/0172. Legacy profiles keep their rules. **No VM or EVM-contract dependency** |
 | Affects | spec/palw 03 (registry: candidates, composite artifacts), 05 (canonical work of evaluation jobs), 07/08/09 (evaluation claims and their court), 10 (fees, bounties, vesting), 11 (the data-use opt-in), 15 (lines: the improvement policy and protocol promotion), 16 (fences), and a new chapter `spec/palw/17-model-improvement.md` · all networks (dormant until armed) · `consensus/core` (the fold: epochs, candidates, evaluation jobs, promotion, the pool), `misaka-palw-tir` (the scoring library), `misaka-palw-tir-lower` (adapter lowering), `misaka-palw-sdk`, the node |
 | Branch | `rfc/0004-0005-vm` (text only) |
-| Related | RFC-0005 (optional Layer 2: bounded improvement workflows as Phase B, research programs and EXEC checkers as Phase C), ADR-0088 and spec 15 (lines, versions, proposals, the market), ADR-0160 (claim capacity), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0044 F5/F15 (beacons), ADR-0072 (one inference, one ticket) |
+| Related | RFC-0005 (current kernel-only extension design; former VM roadmap withdrawn), ADR-0088 and spec 15 (lines, versions, proposals, the market), ADR-0160 (claim capacity), ADR-0144 P1–P7, ADR-0145 (canonical work), ADR-0069 (weight), ADR-0044 F5/F15 (beacons), ADR-0072 (one inference, one ticket) |
 
 ## 概要(日本語)
 
 - **目的。** 外部から登録されたモデル(例:Qwen v12)を、実利用が生む hard case と収益を使って蒸留と RL で強くし、勝った候補を
-  次の head(v13)にする。これを **PALW-TIR(RFC-0002/0003)だけで、VM なしで** 回す。ユーザーの順序では、この RFC を全部
-  実装してから RFC-0005(VM)に進む。
+  次の head(v13)にする。これを **PALW-TIR / 有効なKernelで、VMなしで** 回す。2026-10-06の方針変更により、
+  RFC-0005のBVM/GVMは後からも実装せず、モデル拡張はversioned Kernelで行う(§0)。
 - **層。** Layer 0 = PALW-TIR(候補を評価する場所)。Layer 1 = この Improvement Protocol(epoch・dataset・候補の registry・
-  報酬・promotion)。Layer 2 = 任意の VM による自動化(RFC-0005)。Phase A はこの RFC で IR だけ。Phase B と C は RFC-0005。
+  報酬・promotion)。自動化や学習はconsensusの外。旧Phase B/CのVM実装計画は撤回し、RFC05の現行Kernel設計へ置き換える。
 - **分担。** 学習は consensus の外、評価は PALW-TIR、promotion はプロトコル。**作り方は自由で、成果物だけを厳密に検証する**
   (Bitcoin はブロックが正しいかを検証し、ASIC の作り方は問わない)。規範:**候補モデルが VM で作られたことを要求しては
   ならない(MUST NOT)**。プロトコルが検証するのは 4 つだけ:モデル成果物(IR class の admission)、provenance policy
@@ -33,7 +33,7 @@
 - **評価は RFC-0003 の pipeline と TIR の採点 stage。** 親と各候補を同じ評価入力で TIR 上で走らせる。採点は
   (1) R で seed した生成の RFC-0003 正準出力の完全一致、(2) 参照の teacher-forced 対数尤度(forward 1 回で安く正確)、
   (3) 登録済みの judge / reward-model class(評価時に登録集合から R で引く。重みは低く、完全一致の anchor で校正)、
-  (4) 親と候補の対比較。**コードをテストで評価することは Phase A ではできない**(RFC-0005 が要る)ので、コードは完全一致
+  (4) 親と候補の対比較。**任意コードをテスト実行して評価する機能は対象外**なので、コードは完全一致
   出力か尤度の課題で扱う。評価は隠されていて、しかも未来のもの:凍結後の時間的 hold-out と、答えを採点後に開示する bonded
   setter セット。
 - **promotion。** 項目ごとの対比較、δ の差、下側信頼限界 > 0(ピン留めした二項表による整数の符号検定、候補数で Bonferroni)、
@@ -65,7 +65,8 @@
 - **工数(Phase A、VM なし、rung A も待たない)。** 既存コードに対する実装項目 A1〜A15(line の改良 policy と promotion、
   epoch 状態機械、hard case・setter・opt-in、合成 artifact、評価 job 種別、採点 pipeline、promotion 演算、報酬と pool、node 側、
   adapter の lowering、第 2 実装、drill、監査、soak)で合計 **60〜84 engineer-weeks(約 14〜20 EM)**。agent による実装は
-  約 3〜5 週、**mainnet-safe は開始から約 8〜11 か月**。前提は PALW-TIR(Phase F)と RFC-0003 の pipeline(step 3〜5)だけ。
+  約 3〜5 週、mainnet-safe約 8〜11 か月という**旧Phase Aの見積もり**。新Kernelと確率的検査の実装・監査工数は含まず、
+  現在の納期予測ではない。新経路は§0の依存関係を加えて再見積もりする。
 
 ## Summary
 
@@ -77,14 +78,14 @@ statistical rule. Everything runs on PALW-TIR (RFC-0002) and RFC-0003's pipeline
 no EVM dependency.
 
 - **Layers.** Layer 0 is PALW-TIR, where candidates are evaluated. Layer 1 is this protocol: epochs,
-  datasets, the candidate registry, rewards and promotion. Layer 2 is optional VM automation
-  (RFC-0005).
+  datasets, the candidate registry, rewards and promotion. Automation stays off chain; new model
+  semantics use RFC05's versioned kernels, not a future Layer-2 VM programme.
 - **The division of work.** Training is outside consensus; evaluation is PALW-TIR; promotion is the
   protocol. The generation method is free and only the artifact is strictly verified — as Bitcoin checks
   that a block is valid, not how the ASIC that mined it was built. A candidate MUST NOT be required to
   come from the VM.
 - **What is verified.** Exactly four things: the model artifact (IR class admission), the provenance
-  policy (form and references, not truth), the evaluation result (court-adjudicated claims), and
+  policy (form and references, not truth), the evaluation result (claims accepted under their pinned verification policy), and
   promotion eligibility (fold arithmetic). Training, provenance truth and freedom from backdoors are not
   verified, and every reward says which of its inputs are.
 - **Evaluation** runs the parent and every candidate through RFC-0003 pipelines on the same inputs:
@@ -96,7 +97,52 @@ no EVM dependency.
   path in the IR graph — whose composite artifact lets seats reuse the parent's bytes.
 - **Implementation.** The RFC ends with a plan against the existing code (spec 15's lines, the fold,
   Phase F's IR classes and court, ADR-0160's capacity) of 60–84 engineer-weeks, about 3–5 weeks of
-  agent implementation and 8–11 months to mainnet-safe use.
+  agent implementation and 8–11 months to mainnet-safe use. These are historical Phase A estimates,
+  excluding the new kernel/proof programme; they are not a current delivery commitment.
+
+## 0. Kernel-only registration and probabilistic evaluation (2026-10-06)
+
+This section takes precedence over legacy Phase F wire examples and cost assumptions below.
+[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) withdraws
+the BVM/GVM programme; [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) defines the replacement. Preserve
+[RFC11 §§15–16](0011-permissionless-model-and-long-context-onboarding.md) and
+[RFC07](0007-palw-verification-certificates-and-algebraic-checks.md): small probabilistic checks
+of committed encoded constraints are the ordinary large-model verification path, not full replay.
+
+* **Admission is not a prior proof of every future output.** Bind the active kernel descriptor,
+  plan, complete model/task/context and artifact. Check finite typed composition, constraint coverage,
+  fees/state and worst DA/court bounds deterministically. An external worker may prepare the artifact;
+  the registering user or node need not reproduce its entire inference. Fidelity and operator readiness
+  remain separate requirements. Missing semantics require a reviewed kernel extension, never a VM.
+* **An evaluation still executes the real task.** Its producer executes and creates evidence; the
+  Panel checks complete algebraic/encoded relations under post-commit challenges. Positive receipts,
+  DA, the closed challenge window and no unresolved dispute precede Final. ExactMatch is an exact
+  comparison of committed answers, not a requirement to rerun inference exactly at every seat.
+* **Promotion consumes correctly labelled evidence.** Keep V/B/J/T labels but add an assurance mode,
+  claim id, kernel/suite id and applicable error bound for each V result. Exact fold arithmetic,
+  bounded exact court, legacy checks and probabilistic claims are distinguishable. A judge's opinion
+  remains J even when its execution is valid. A checksum or quorum alone is not a computation proof.
+* **Two statistical questions stay separate.** The sign test in §7.5 measures evidence of improvement
+  on the selected tasks; §15 of RFC11 bounds computational false acceptance. For at most `M` evaluation
+  claims with established check bounds `ε_i`, a union bound is `Σ ε_i` (or `M·ε` if uniform), conditional
+  on those assumptions. Add separately the common Panel/randomness/DA failure events and account for
+  retries; do not equate the sign-test significance with cryptographic soundness or assume independent
+  seats. The proposed per-claim `2^-128` target is not a proved property of this draft.
+* **Identity and compatibility are explicit.** Legacy class-id formulas stay unchanged. New-format
+  candidates bind kernel and plan as RFC05 specifies. Kernel versions may differ only under an active
+  family/evaluation-composition profile preserving task, tokenizer/output and policy requirements;
+  changing kernels cannot change the epoch's score definition. Pin the accepted profiles when the
+  epoch opens; no mid-epoch change of interpretation or retroactive regrading.
+* **Normal-path checks are small, not incomplete.** All output/state/reward-relevant constraints must
+  enter the sound aggregation. A failing check localizes to bounded kernel court; silence, missing
+  evidence or unsupported constraints cannot finalize. Old profiles/claims retain their existing
+  rules, and full replay remains a development/conformance baseline where needed.
+
+For the new route, extend the improvement fence/epoch commitment with the permitted kernel,
+verification and evaluation-composition policies; the legacy `palw_improvement_v1` example below is
+not sufficient by itself. No activation is implied. Tests must cover forged scores, omitted adapter
+constraints, wrong routing/state, invalid suite changes, reorg, old/new claims and correct promotion
+after valid small-check Final. No VM implementation is a dependency of these tests.
 
 ## Motivation
 
@@ -111,7 +157,7 @@ no EVM dependency.
    repeats.
 3. **Everything evaluation needs is already TIR.** Generation, likelihood and judge models are IR
    classes. Scoring is a small TIR program. Promotion is integer arithmetic in the fold. So the loop
-   needs no VM (Phase A), and RFC-0005's VM becomes optional automation on top (Phases B and C).
+   needs no VM; RFC05 now supplies kernel extension, while arbitrary automation stays off chain.
 4. **The Bitcoin analogy.** Bitcoin checks that a block is valid. It does not care how the ASIC that
    found it was designed. This protocol checks a candidate — its artifact, its declarations, its
    measured result — and does not care how it was trained. That keeps research methods free, and keeps
@@ -137,37 +183,32 @@ no EVM dependency.
 - G10. Implementable against the current code with no VM and no EVM contract.
 
 **Non-goals.** Training inside consensus in v1 (§12). Verifying which data a trainer used. Code
-evaluation by running tests (it needs RFC-0005's VM). Subjective validator weights. Renting agents,
+evaluation by running arbitrary tests (no VM implementation is planned). Subjective validator weights. Renting agents,
 GPUs or accounts. Paying from PALW worker rewards. Legal advice.
 
 ## 1. Layers and phases
 
 ```
-Layer 2 (optional, RFC-0005)   automation: Phase B, bounded improvement workflows (PALW-BVM)
-                                           Phase C, permissionless research programs and EXEC checkers (PALW-GVM)
+Off chain                    automation, training and research tools; submit ordinary jobs/candidates
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
 Layer 1 (this RFC, Phase A)    the Improvement Protocol: the line's policy · epochs · hard cases · datasets ·
                                the candidate registry · evaluation jobs · rewards · promotion · the lineage head
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
-Layer 0 (RFC-0002, RFC-0003)   PALW-TIR: candidates are IR classes; generation, likelihood, judges and scoring
-                               stages are TIR executions, adjudicated by the TIR court
+Layer 0 (RFC02/03/05/07/11)   versioned tensor/state kernels; encoded-constraint checks for normal verification,
+                               exact bounded court for disputes; legacy profiles unchanged
 ```
 
-- **Phase A** is this RFC: IR only, complete on its own.
-- **Phase B** (RFC-0005 Part I) lets a bounded VM program run improvement loops — for example
-  `FOR generation IN 0..8 { generate a dataset; train; evaluate; keep the best }` — whose results
-  still enter this protocol as ordinary candidates.
-- **Phase C** (RFC-0005 Part II) adds permissionless research programs, and the EXEC checkers that
-  code-by-tests evaluation needs.
-- Neither B nor C changes a rule of this RFC. They add producers of candidates and datasets, and (C)
-  more scoring kinds.
+- **Phase A** remains this improvement protocol, with no VM dependency.
+- The former **Phase B/C** BVM/GVM roadmap is withdrawn by ADR0172, not merely delayed.
+- New model families follow RFC05's kernel extension gates; existing-family plans need no new node
+  semantics. Off-chain loops submit ordinary candidates and cannot change promotion or rewards.
 
 ## 2. The division of work
 
 | Activity | Where it runs | What consensus knows about it |
 | --- | --- | --- |
 | data collection, teaching, training | anywhere, by any method | nothing, beyond declarations |
-| evaluation | PALW-TIR: evaluation jobs as claims, adjudicated by the court | every score, as a committed output |
+| evaluation | Active tensor/state kernel: normal constraint checks, exact court on dispute | committed scores and their claim/suite/assurance identities |
 | promotion, rewards, rollback | the fold | everything: it computes them |
 
 **The generation method is free; only the artifact is strictly verified.** Normatively (PALW-MIP-1),
@@ -178,9 +219,9 @@ tool or party.
 
 | # | What | How | Label |
 | --- | --- | --- | --- |
-| 1 | **the model artifact** | the candidate is an admitted IR class (Phase F admission v10) of the parent's family: same tokenizer, same output interface; its artifact is complete and available (§6) | V |
+| 1 | **the model artifact** | admitted class under its bound active kernel (legacy Phase F v10 retained), same family interface; complete artifact and plan coverage (§0, §6) | V |
 | 2 | **the provenance policy** | the candidate's declarations satisfy the line's policy: every dataset it names is registered, every licence class and teacher class is allowed, every `TeacherLicence` it cites exists and covers the use | V for the form and references; B for their truth |
-| 3 | **the evaluation result** | evaluation jobs' claims, final under the court | V |
+| 3 | **the evaluation result** | evaluation claims Final under the bound suite/window/DA policy; exact court only for disputes | V with assurance metadata (§0) |
 | 4 | **promotion eligibility** | the fold's paired rule over committed scores (§7.5) | V |
 
 ### 2.2 Trust labels
@@ -189,7 +230,7 @@ Every reward and every quantity an interface shows carries one of four labels.
 
 | Label | Meaning |
 | --- | --- |
-| **V**, verified | recomputed by the court or computed by the fold: a PALW claim, a scoring stage, the promotion rule |
+| **V**, verified | accepted under the declared assurance mode: exact fold/court result or probabilistic constraint-verified claim; carry suite/error/claim metadata (§0), never imply zero-error whole-execution replay |
 | **B**, bonded | a statement someone staked on, challengeable by a stated procedure; a false one forfeits the bond |
 | **J**, judged | a registered judge class's output, verified as *the judge's* answer: deterministic, and gameable |
 | **T**, trusted | not checkable at all, and stated as an assumption wherever a reward rests on it |
@@ -338,8 +379,10 @@ HardCaseV1 { case_id, domain, prompt (token ids under the line's tokenizer),
 | **JUDGED** | a registered judge class | J |
 | **HUMAN** | a bonded person, challengeable | B |
 
-EXEC (running tests or checkers), CRITIC (an executed counterexample) and PROOF (a proof checker) need
-a VM, and belong to RFC-0005 Phase C.
+Arbitrary EXEC (running tests/checkers), CRITIC (executed counterexample) and PROOF checker programs
+are not supported by this profile. The former VM Phase C route is withdrawn. A future bounded,
+non-VM relation/checker family needs its own kernel specification and activation; these names alone
+do not authorize arbitrary program execution.
 
 ### 5.3 Teaching artifacts and registered datasets
 
@@ -361,10 +404,11 @@ DatasetRegisteredV1 { dataset_id, content_root, items, license_classes, teacher_
 | SyntheticProblem | the setter's committed key | B | S1, to the setter, if the head fails it |
 | HardCaseVariant | the parent's key, and the head verifiably failing the variant | V | S1, to the setter |
 | RewardSignal | a SELF_PLAY rollout: the head's final claim and its EXACT or LIKELIHOOD score (§11) | V | S2 |
-| Critique | JUDGED only (an executed counterexample needs Phase C) | J | S2 |
+| Critique | JUDGED only; an executed counterexample needs a separately specified active checker relation | J | S2 |
 
-Kinds that need execution — `TestCase`, `Counterexample`, `VerifiedCode`, `ToolTrace`, `FormalProof` —
-arrive with RFC-0005 Phase C.
+Kinds that need arbitrary execution — `TestCase`, `Counterexample`, `VerifiedCode`, `ToolTrace`,
+`FormalProof` — are not promised by a future VM. They remain unsupported as machine-verified types
+unless a separately reviewed non-VM kernel profile defines their exact bounded relation.
 
 **Teacher classes** are declared in every artifact and dataset:
 
@@ -387,11 +431,12 @@ forfeits its bond. An honest failure costs only its fee.
 
 ### 6.1 What a candidate is
 
-A candidate is an **admitted IR class** (Phase F admission v10) of the parent's family: the same
+A candidate is an **admitted class under its pinned active kernel** (legacy IR uses Phase F v10) of the parent's family: the same
 tokenizer, the same output interface (a `Logits` program whose logits scheme equals the parent's), and a
 program the family rule accepts. It is registered as any IR class is (`ClassRegisteredTirV1`, the 1 MSK
 burn, the per-block cap), and then entered in the epoch by `CandidateSubmitted` with its fees, bond and
-declarations. Its artifact is one of two kinds.
+declarations. That wire path describes the legacy profile; new kernel-bound classes use §0's
+versioned admission/identity without rewriting legacy ids. Its artifact is one of two kinds.
 
 - **Full weights.** A single artifact root, with scales of its own. Allowed only if the policy allows it,
   and charged for the seats' prefetch (§6.7, §13).
@@ -431,6 +476,10 @@ program's. On four PEFT fixtures (ranks 4–64; q/k/v/o and MLPs; `all-linear`; 
 Fidelity is measured, never required (RFC-0002 criterion 5).
 
 ### 6.3 Composite artifacts and the class id
+
+The following is the **legacy Phase F identity**, preserved verbatim. New kernel-bound classes add
+RFC05's immutable descriptor/plan binding in a new versioned domain (§0); never reinterpret or
+rehash an already registered legacy class to opt it into new verification semantics.
 
 The lowering orders params so that **the candidate's first `P` params are the parent program's,
 byte-identical in declaration and tensor** (`lower::adapter_params_last`). Params `P..` are the adapter
@@ -582,8 +631,8 @@ Each is a TIR program in the scoring library (`misaka-palw-tir`, with golden vec
 
 ### 7.4 Code in Phase A
 
-Code evaluated by running tests needs a VM, so it is **not available in Phase A**. It arrives with
-RFC-0005 Phase C (EXEC). Until then code tasks use:
+Arbitrary code-by-tests execution is **outside this profile**. No future VM implementation is
+promised. Code tasks currently use:
 
 - **exact output** — the value a program prints, the result of an expression, a canonical single-line
   fix; or
@@ -743,33 +792,37 @@ money not yet paid out is the only lever left.
 ## 13. Capacity and cost
 
 - **Evaluation claims are claims.** Each reserves capacity by ADR-0160's stage-1 rule (`⌈w_c / ρ⌉`)
-  like any other claim, and each seat that verifies it pays its execution. An epoch's evaluation budget —
+  like any other claim. Producers pay execution/proof cost; seats pay the bound kernel's check/DA cost,
+  not mandatory full segment replay on the probabilistic route. An epoch's evaluation budget —
   `n × (k_max + 1)` subject jobs plus judge jobs, times their positions — is capped per epoch by the
   policy and by a network ceiling expressed as a share of the span's claim capacity, so evaluation cannot
   crowd out attempts.
 - **Candidates pay.** A registration fee (plus the IR class's own 1 MSK burn), and evaluation fees for
   their own `n` subject jobs and pairwise jobs.
 - **Candidates per epoch** are capped by `k_max` and by the network's ceiling.
-- **Prefetch.** Every seat that may verify an evaluation claim must hold the subject's artifact. Adapters
+- **Prefetch (legacy replay baseline).** Under the legacy full-replay profile every seat must hold the subject's artifact. Adapters
   cost about 3 % of the parent (§6.7), so four adapter candidates add about 210 MB to a 1.5B line; a
   full-weight candidate adds 1.6 GB per seat, and is priced for it.
 - **A worked size.** A Qwen2.5-1.5B-shaped line, `n = 400`, four candidates plus the parent, 256 prompt
   and 256 generated tokens per item: 400 × 5 × 512 ≈ 1.0 × 10^6 positions. At the 17 tokens per second
   that Phase F's typed backend measured for a 1.5B decoder (2026-09-28), that is about 17 hours of one
   node, spread across many executors, before replicas. Teacher-forced items cost only a prefill. The
-  pairwise jobs add one judge pass per item and candidate.
+  pairwise jobs add one judge pass per item and candidate. This is execution sizing, not a verifier
+  cost estimate for encoded-constraint checks. Measure proof generation, cold preprocessing, query
+  openings, material availability and worst disputes separately; a new kernel must specify which
+  weights/openings a seat needs rather than assume all weights fit in its RAM.
 
-## 14. Layer 2: what RFC-0005 may add, and what it may not change
+## 14. Kernel extensions and off-chain automation
 
-- **Phase B** (RFC-0005 Part I, the bounded VM) may run improvement loops as programs — generate data
-  with PALW jobs, filter it with this RFC's scoring stages, train (off chain, or later through the
-  training profile of §12), evaluate locally, keep the best — and submit the result as an ordinary
-  candidate.
-- **Phase C** (RFC-0005 Part II, the Turing-complete VM) adds permissionless research programs and the
-  EXEC, CRITIC and PROOF verification types: code by tests, executed counterexamples, proof checkers, and
-  the artifact kinds that need them.
-- **Neither may change this RFC's rules.** A candidate produced by a VM program is evaluated and promoted
-  exactly as any other, and a candidate produced without one is never disadvantaged (PALW-MIP-1).
+RFC05's current §§K.0–K.8 replace the former bounded/general VM roadmap. A new kernel may add a
+reusable computational or checker family after soundness/resource/court review and coordinated
+activation. A frontend plus a declarative plan suffices only within active semantics. New kernel
+support cannot bypass this RFC's family, provenance, evaluation, fees or promotion rules.
+
+Research/training loops may run in any off-chain software and submit ordinary artifacts. The protocol
+never requires evidence that a candidate was produced by a particular tool. No new VM, EVM fallback
+or arbitrary EXEC/CRITIC/PROOF checker is implicitly authorized. A separately specified bounded
+checker relation is possible, but unimplemented types remain unsupported and cannot earn as verified.
 
 ## 15. Threats
 
@@ -803,10 +856,11 @@ backdoors) it says so and prices the risk with bonds, vesting and rollback.
 
 ## 17. Implementation plan and effort
 
-Against the current code (the Phase F line, `tir/phase-f-f7`, and the live integration line), in
-engineer-weeks for two to four experienced people. **Phase A depends on nothing but RFC-0002's Phase F
-and RFC-0003's steps 3–5** (`TirProgramV2`, pipelines, their court). It does not wait on the EVM rung or
-on any VM.
+The table preserves the original Phase F / `tir/phase-f-f7` planning baseline, in engineer-weeks for
+two to four experienced people. Its legacy Phase A dependencies were RFC02 Phase F and RFC03 steps
+3–5 (`TirProgramV2`, pipelines, their court). The new kernel-bound route additionally requires §0's
+RFC05/07/11 suites, assurance/identity changes and independent review; re-estimate those costs before
+scheduling. There is no EVM-rung or VM implementation dependency.
 
 | # | Work item | Where | Depends on | Engineer-weeks | With agents |
 | --- | --- | --- | --- | --- | --- |
@@ -966,7 +1020,8 @@ without the A-2 tolerance.
    RFC-0003's pipeline format (A7, `rfc4/eval`).
 9. **Training as IR**: do the 25 primitives suffice for a future training profile (optimizer state,
    gradient accumulation, reductions, sampling by R, batching)?
-10. **Challenging a setter's key without a VM**: bonded human or judged challenges only, until Phase C.
+10. **Challenging a setter's key**: bonded human/judged procedures keep their trust labels; a new
+    machine-checked relation needs a separately reviewed non-VM kernel extension, not a promised Phase C.
 11. **Artifact content**: who must keep teaching artifacts and datasets available for audits and
     challenges, and whether that is bonded.
 12. **The safety suite**: who writes it for a line, and whether it may veto a winner that passes
@@ -984,4 +1039,6 @@ without the A-2 tolerance.
 - Accept Phase A as the first deliverable of the improvement roadmap, as the user ordered.
 - Implement A1–A13 as soon as RFC-0003's steps 3–5 land. Arm on a testnet with adapter-only candidates
   and S1 first; add full-weight candidates and S2 after an epoch; keep S3 on testnets.
-- Start RFC-0005 only after Phase A is fully implemented.
+- Follow RFC05's current kernel-only design for new model semantics; do not start its withdrawn
+  BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
+  probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
