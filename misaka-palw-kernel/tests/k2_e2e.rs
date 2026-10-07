@@ -3,15 +3,21 @@
 //! primitive instance and convicted by a court that reads only public material, the DA path kept apart from fraud, and every
 //! way a plan can try to weaken its own check.
 
+use misaka_palw_kernel::KernelFaultProofV1;
 use misaka_palw_kernel::check::{check_plan_v1, registration_outcome_v1};
 use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor};
+use misaka_palw_kernel::evidence::{EvidenceHeaderV1, VerificationEvidenceV1, build_evidence_v1};
 use misaka_palw_kernel::family::{CheckerIdV1, ConstraintFamilyV1};
 use misaka_palw_kernel::outcome::{CoverageBucketV1, RegistrationOutcomeV1};
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
+use misaka_palw_kernel::trace::WiringV1;
 use misaka_palw_kernel::trace::{ParamCommitmentsV1, TraceV1, trace_v1};
 use misaka_palw_kernel::verify::{
-    ClaimContextV1, ClaimVerdictV1, DismissalV1, FaultKindV1, MaterialV1, TraceMaterialV1, verify_claim_v1, verify_fault_proof_v1,
+    ClaimContextV1, ClaimVerdictV1, ConvictionV1, DismissalV1, FaultKindV1, MaterialV1, ScopeV1, TraceMaterialV1,
+    verify_fault_proof_v1, verify_scope_v1,
 };
+
+type Court = Box<dyn Fn(&KernelFaultProofV1) -> Result<ConvictionV1, DismissalV1>>;
 use misaka_palw_kernel::{challenge::ChallengeBindingV1, hash::id};
 use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{Interpreter, MapParams, Prim, Tensor};
@@ -46,48 +52,77 @@ impl Claim {
         Claim { program: fx.program, params: fx.params, plan, trace, pc }
     }
 
-    /// Verify `trace` as the producer's COMMITTED values, served by `material`.
-    fn verify_with(
+    fn header(&self) -> EvidenceHeaderV1 {
+        EvidenceHeaderV1 {
+            network_domain: [9; 64],
+            ruleset_digest: [3; 64],
+            class_binding_id: [7; 64],
+            program_root: root_of(&self.program),
+            artifact_root: self.pc.root(),
+            plan_root: self.plan.root(),
+        }
+    }
+
+    /// The §15.3 evidence object a producer commits for `committed` (segments of 2 positions).
+    fn evidence_of(&self, committed: &TraceV1) -> VerificationEvidenceV1 {
+        let w = WiringV1::new(&self.program).unwrap();
+        build_evidence_v1(&w, &committed.evidence(), &TOKENS, self.header(), &k2_tir_v1_descriptor(), 2).unwrap()
+    }
+
+    fn verify_with(&self, committed: &TraceV1, material: &dyn MaterialV1) -> (ClaimVerdictV1, Court) {
+        self.verify_scope(committed, material, &ScopeV1::WholeClaim)
+    }
+
+    /// Verify one scope of `committed` (the producer's COMMITTED values), served by `material`.
+    fn verify_scope(&self, committed: &TraceV1, material: &dyn MaterialV1, scope: &ScopeV1) -> (ClaimVerdictV1, Court) {
+        let ev = self.evidence_of(committed);
+        self.verify_object(committed, &ev, material, scope)
+    }
+
+    fn verify_object(
         &self,
         committed: &TraceV1,
+        ev: &VerificationEvidenceV1,
         material: &dyn MaterialV1,
-    ) -> (
-        ClaimVerdictV1,
-        Box<dyn Fn(&misaka_palw_kernel::KernelFaultProofV1) -> Result<misaka_palw_kernel::verify::ConvictionV1, DismissalV1>>,
-    ) {
+        scope: &ScopeV1,
+    ) -> (ClaimVerdictV1, Court) {
         let d = k2_tir_v1_descriptor();
-        let evidence = committed.evidence();
+        let trace = committed.evidence();
+        let header = self.header();
         let binding = ChallengeBindingV1 {
-            network_domain: [9; 64],
+            network_domain: header.network_domain,
             claim_id: [8; 64],
-            class_binding_id: [7; 64],
+            class_binding_id: header.class_binding_id,
             plan_root: self.plan.root(),
-            evidence_root: evidence.root(),
+            evidence_root: ev.root(),
             beacon: [0x42; 64],
         };
         let ctx = ClaimContextV1 {
             descriptor: &d,
             program: &self.program,
             plan: &self.plan,
-            evidence: &evidence,
+            trace: &trace,
+            evidence: ev,
+            header,
             params: &self.pc,
             tokens: &TOKENS,
-            claimed_output_root: evidence.output_root(&self.program),
             binding,
         };
-        let verdict = verify_claim_v1(&ctx, material);
-        // The court, as a fresh party holding only the public material (the evidence, the param commitments, the tokens).
-        let (program, plan, pc) = (self.program.clone(), self.plan.clone(), self.pc.clone());
-        let court = move |proof: &misaka_palw_kernel::KernelFaultProofV1| {
+        let verdict = verify_scope_v1(&ctx, material, scope);
+        // The court, as a fresh party holding only the public material (the evidence object, the trace commitments, the param
+        // commitments, the tokens).
+        let (program, plan, pc, ev) = (self.program.clone(), self.plan.clone(), self.pc.clone(), ev.clone());
+        let court = move |proof: &KernelFaultProofV1| {
             let d = k2_tir_v1_descriptor();
             let ctx = ClaimContextV1 {
                 descriptor: &d,
                 program: &program,
                 plan: &plan,
-                evidence: &evidence,
+                trace: &trace,
+                evidence: &ev,
+                header,
                 params: &pc,
                 tokens: &TOKENS,
-                claimed_output_root: evidence.output_root(&program),
                 binding,
             };
             verify_fault_proof_v1(&ctx, proof)
@@ -216,8 +251,8 @@ fn an_honest_claim_passes_with_its_derived_bound() {
     let c = Claim::honest();
     let material = TraceMaterialV1 { trace: &c.trace, params: &c.params };
     let (v, _) = c.verify_with(&c.trace, &material);
-    let ClaimVerdictV1::Pass { probabilistic_instances, error_bits } = v else { panic!("{v:?}") };
-    assert!(probabilistic_instances > 0);
+    let ClaimVerdictV1::Pass { probabilistic_checks, error_bits, .. } = v else { panic!("{v:?}") };
+    assert!(probabilistic_checks > 0);
     assert!(error_bits >= 128);
 }
 
@@ -319,25 +354,28 @@ fn a_value_served_but_not_committed_is_the_da_path_never_a_conviction() {
 fn a_challenge_drawn_before_the_evidence_was_bound_is_refused() {
     let c = Claim::honest();
     let d = k2_tir_v1_descriptor();
-    let evidence = c.trace.evidence();
+    let trace = c.trace.evidence();
+    let ev = c.evidence_of(&c.trace);
+    let header = c.header();
     let ctx = ClaimContextV1 {
         descriptor: &d,
         program: &c.program,
         plan: &c.plan,
-        evidence: &evidence,
+        trace: &trace,
+        evidence: &ev,
+        header,
         params: &c.pc,
         tokens: &TOKENS,
-        claimed_output_root: evidence.output_root(&c.program),
         binding: ChallengeBindingV1 {
-            network_domain: [9; 64],
+            network_domain: header.network_domain,
             claim_id: [8; 64],
-            class_binding_id: [7; 64],
+            class_binding_id: header.class_binding_id,
             plan_root: c.plan.root(),
             evidence_root: [0; 64],
             beacon: [1; 64],
         },
     };
-    let v = verify_claim_v1(&ctx, &TraceMaterialV1 { trace: &c.trace, params: &c.params });
+    let v = verify_scope_v1(&ctx, &TraceMaterialV1 { trace: &c.trace, params: &c.params }, &ScopeV1::WholeClaim);
     assert!(matches!(v, ClaimVerdictV1::EvidenceMalformed { .. }), "{v:?}");
 }
 
@@ -355,4 +393,75 @@ fn every_single_scalar_lie_in_one_product_is_caught() {
         let ClaimVerdictV1::Fault(proof) = v else { panic!("element {e}: {v:?}") };
         court(&proof).unwrap();
     }
+}
+
+#[test]
+fn a_fabricated_segment_boundary_a_weaker_suite_or_another_output_is_refused_before_any_check() {
+    let c = Claim::honest();
+    let material = TraceMaterialV1 { trace: &c.trace, params: &c.params };
+    let honest = c.evidence_of(&c.trace);
+    assert_eq!(honest.segments.len(), 3, "5 positions in segments of 2");
+    assert_eq!(honest.segments[1].entry_state_root, honest.segments[0].exit_state_root, "a segment's entry is its predecessor's exit");
+    let mut forged = honest.clone();
+    forged.segments[1].entry_state_root = [0xEE; 64];
+    let (v, _) = c.verify_object(&c.trace, &forged, &material, &ScopeV1::Segments(vec![1]));
+    assert!(matches!(&v, ClaimVerdictV1::EvidenceMalformed { why } if why.contains("fabricated boundary")), "{v:?}");
+    let mut weak = honest.clone();
+    weak.suite.repetitions = 1;
+    assert!(matches!(c.verify_object(&c.trace, &weak, &material, &ScopeV1::WholeClaim).0, ClaimVerdictV1::EvidenceMalformed { .. }));
+    let mut other_output = honest.clone();
+    other_output.output_root = [1; 64];
+    assert!(matches!(
+        c.verify_object(&c.trace, &other_output, &material, &ScopeV1::WholeClaim).0,
+        ClaimVerdictV1::EvidenceMalformed { .. }
+    ));
+    let mut gap = honest.clone();
+    gap.segments.remove(1);
+    assert!(matches!(c.verify_object(&c.trace, &gap, &material, &ScopeV1::WholeClaim).0, ClaimVerdictV1::EvidenceMalformed { .. }));
+}
+
+#[test]
+fn a_segment_scope_checks_only_its_positions_and_reads_its_entry_from_the_committed_predecessor() {
+    let c = Claim::honest();
+    // A lie at position 4 (segment 2) leaves segments 0 and 1 passing and is found by segment 2's scope.
+    let at = c.find(4, |p| matches!(p, Prim::MatMul));
+    let lie = lie_at(&c, at, 0);
+    let material = TraceMaterialV1 { trace: &lie, params: &c.params };
+    let (v, _) = c.verify_scope(&lie, &material, &ScopeV1::Segments(vec![0, 1]));
+    let ClaimVerdictV1::Pass { positions, scope_root, .. } = v else { panic!("{v:?}") };
+    assert_eq!(positions, 4);
+    let (v, court) = c.verify_scope(&lie, &material, &ScopeV1::Segments(vec![2]));
+    let ClaimVerdictV1::Fault(proof) = v else { panic!("{v:?}") };
+    assert_eq!(proof.position, 4);
+    court(&proof).unwrap();
+    // Different scopes attest different roots; an audit sample is its own kind.
+    let (a, _) =
+        c.verify_scope(&c.trace, &TraceMaterialV1 { trace: &c.trace, params: &c.params }, &ScopeV1::AuditOnly(vec![0, 1, 2, 3]));
+    let ClaimVerdictV1::Pass { scope_root: audit_root, .. } = a else { panic!("{a:?}") };
+    let (h, _) = c.verify_scope(&c.trace, &TraceMaterialV1 { trace: &c.trace, params: &c.params }, &ScopeV1::Segments(vec![0, 1]));
+    let ClaimVerdictV1::Pass { scope_root: honest_root, .. } = h else { panic!("{h:?}") };
+    assert_ne!(audit_root, honest_root);
+    assert_ne!(scope_root, [0; 64]);
+}
+
+#[test]
+fn weight_products_are_batched_across_the_scope_so_checks_and_weight_reads_do_not_grow_per_token() {
+    let c = Claim::honest();
+    let material = TraceMaterialV1 { trace: &c.trace, params: &c.params };
+    let pass = |scope: ScopeV1| match c.verify_scope(&c.trace, &material, &scope).0 {
+        ClaimVerdictV1::Pass { probabilistic_checks, cost, .. } => (probabilistic_checks, cost),
+        v => panic!("{v:?}"),
+    };
+    let (one, one_cost) = pass(ScopeV1::AuditOnly(vec![0]));
+    let (all, all_cost) = pass(ScopeV1::WholeClaim);
+    assert!(all < 5 * one, "5 tokens batched: {all} checks against {one} for one token");
+    assert!(
+        all_cost.field_mults < 5 * one_cost.field_mults,
+        "W r once per scope: {} vs {}",
+        all_cost.field_mults,
+        one_cost.field_mults
+    );
+    // Every param instance is opened once per scope, whatever the number of tokens.
+    assert_eq!(all_cost.param_bytes, one_cost.param_bytes);
+    assert!(all_cost.param_bytes > 0);
 }

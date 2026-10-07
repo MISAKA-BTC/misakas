@@ -28,6 +28,7 @@ pub const TENSOR_COMMITMENT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/tensor/v1";
 pub const EVIDENCE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/evidence/v1";
 pub const OUTPUT_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/output/v1";
 pub const PARAM_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/params/v1";
+pub const STATE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/state-root/v1";
 
 /// `H(dtype ‖ rank ‖ dims ‖ canonical little-endian elements)`.
 pub fn tensor_commitment(t: &Tensor) -> Digest {
@@ -248,6 +249,47 @@ impl<'p> WiringV1<'p> {
         let (as_, an) = *self.appenders.get(&(state, layer)).ok_or_else(|| malformed("no appender"))?;
         let rows = (p as usize).min(window as usize - 1) as u32;
         (p - rows..p).map(|q| self.input_source(tokens, q, as_, an, 0)).collect()
+    }
+}
+
+impl WiringV1<'_> {
+    /// The commitment a source names: a committed node's from `evidence`, a public value's recomputed. `None` for a param or const
+    /// (artifact and program material, which no state boundary reads).
+    pub fn source_commitment(&self, evidence: &EvidenceV1, src: &SourceV1) -> Option<Digest> {
+        match src {
+            SourceV1::Node { position, occurrence, node } => evidence.at(*position, *occurrence, *node).copied(),
+            SourceV1::Zeros { dtype, shape } => Some(tensor_commitment(&Tensor::zeros(*dtype, shape))),
+            SourceV1::Public(v) => Tensor::scalar(DType::Idx, *v as i128).ok().map(|t| tensor_commitment(&t)),
+            SourceV1::Param { .. } | SourceV1::Const(_) => None,
+        }
+    }
+
+    /// **The state root entering position `p`** (RFC-0011 §15.2's boundary row): every written `Fixed` state instance's value (the
+    /// previous position's committed write, or zeros at 0) and every `Hist` instance's prior rows (the earlier positions' committed
+    /// appended rows), in `(state, layer)` order. Derived from the committed trace — a segment's entry state is never a separate claim.
+    pub fn state_root_entering(&self, evidence: &EvidenceV1, tokens: &[u32], p: u32) -> TirResult<Digest> {
+        let mut s = keyed(STATE_ROOT_DOMAIN_V1);
+        s.update(&p.to_le_bytes());
+        for ((state, layer), (ws, wn)) in &self.writers {
+            s.update(&[0]).update(&state.to_le_bytes()).update(&layer.map(|l| l as u32 + 1).unwrap_or(0).to_le_bytes());
+            let src = if p == 0 {
+                let st = &self.program.states[*state as usize];
+                SourceV1::Zeros { dtype: st.dtype, shape: st.shape.iter().map(|d| *d as usize).collect() }
+            } else {
+                SourceV1::Node { position: p - 1, occurrence: *ws, node: *wn }
+            };
+            s.update(&self.source_commitment(evidence, &src).ok_or_else(|| malformed("a state write outside the evidence"))?);
+        }
+        for ((state, layer), (as_, an)) in &self.appenders {
+            s.update(&[1]).update(&state.to_le_bytes()).update(&layer.map(|l| l as u32 + 1).unwrap_or(0).to_le_bytes());
+            // The prior rows the appender at `p` would read are exactly the history entering `p`.
+            let rows = self.hist_prior_sources(tokens, p, *as_, *an)?;
+            s.update(&(rows.len() as u32).to_le_bytes());
+            for r in &rows {
+                s.update(&self.source_commitment(evidence, r).ok_or_else(|| malformed("a history row outside the evidence"))?);
+            }
+        }
+        Ok(finish(s))
     }
 }
 

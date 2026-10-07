@@ -20,8 +20,10 @@
 //! * [`outcome`] — RFC-0011 §16.2's structured outcomes and §16.4's coverage buckets.
 //! * [`field`], [`challenge`] — GF(2^127 − 1) and the post-commit challenge stream (bind first, then
 //!   draw; no modulo bias).
-//! * [`trace`] — an honest producer's trace and its evidence commitment (every node value of every
-//!   position, committed before any challenge exists).
+//! * [`trace`] — an honest producer's trace and its commitments (every node value of every position, committed before any
+//!   challenge exists), the wiring every input is authenticated by, and the state root entering any position.
+//! * [`evidence`] — RFC-0011 §15.3's `VerificationEvidenceV1`: network, ruleset, class, program, artifact, plan, job input, initial
+//!   and final state, trace, output, context, a segment directory with derived boundary roots, and the suite's parameters.
 //! * [`verify`] — the K2 reference verifier: Freivalds for `MatMul`, exact recompute for the cheap
 //!   families, authenticated state continuity by wiring, and [`verify::KernelFaultProofV1`]: a fault
 //!   localized to one primitive instance (one scalar for a `MatMul`) that **any** node re-checks from
@@ -46,6 +48,7 @@ pub mod assurance;
 pub mod challenge;
 pub mod check;
 pub mod descriptor;
+pub mod evidence;
 pub mod family;
 pub mod field;
 pub mod hash;
@@ -58,8 +61,11 @@ pub use check::{PlanAcceptanceV1, check_plan_v1};
 pub use descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, ModelKernelBindingV1, builtin_schedule_v1, k2_tir_v1_descriptor,
 };
+pub use evidence::{VerificationEvidenceV1, build_evidence_v1};
 pub use family::{CheckerIdV1, ConstraintFamilyV1, CourtIdV1};
 pub use hash::Digest;
 pub use outcome::{CoverageBucketV1, RegistrationOutcomeV1};
 pub use plan::{VerificationPlanV1, plan_for_tir_program_v1};
-pub use verify::{ClaimVerdictV1, KernelFaultProofV1, verify_claim_v1, verify_fault_proof_v1};
+pub use verify::{
+    ClaimVerdictV1, KernelFaultProofV1, ScopeV1, ScopeVerdictV1, verify_claim_v1, verify_fault_proof_v1, verify_scope_v1,
+};

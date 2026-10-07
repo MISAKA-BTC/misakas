@@ -43,6 +43,9 @@ impl ChallengeBindingV1 {
 /// The label of one relation instance's vectors: position, occurrence, node, repetition, batch slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ChallengeLabelV1 {
+    /// 0: one relation instance at one position; 1: a scope's cross-token batch of one relation (RFC-0007 §V.3), whose `position`
+    /// is the scope's first position and `slice` the scope's index.
+    pub kind: u8,
     pub position: u32,
     pub occurrence: u16,
     pub node: u16,
@@ -66,6 +69,7 @@ impl ChallengeStreamV1 {
     fn refill(&mut self) {
         let mut s = keyed(CHALLENGE_STREAM_DOMAIN_V1);
         s.update(&self.seed);
+        s.update(&[self.label.kind]);
         s.update(&self.label.position.to_le_bytes());
         s.update(&self.label.occurrence.to_le_bytes());
         s.update(&self.label.node.to_le_bytes());
@@ -117,7 +121,7 @@ mod tests {
     #[test]
     fn the_seed_moves_with_every_commitment_and_labels_separate_streams() {
         assert_ne!(binding(5).seed(), binding(7).seed(), "a different evidence root is a different challenge");
-        let l = ChallengeLabelV1 { position: 0, occurrence: 1, node: 2, repetition: 0, slice: 0 };
+        let l = ChallengeLabelV1 { kind: 0, position: 0, occurrence: 1, node: 2, repetition: 0, slice: 0 };
         let a = ChallengeStreamV1::new(binding(5).seed(), l).vector(9);
         let b = ChallengeStreamV1::new(binding(5).seed(), ChallengeLabelV1 { repetition: 1, ..l }).vector(9);
         assert_ne!(a, b);

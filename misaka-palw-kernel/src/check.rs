@@ -2,7 +2,7 @@
 //!
 //! Everything a plan states is re-derived here from the program and the descriptor and compared:
 //!
-//! 1. the descriptor the plan names is this one and is **Active** at the DAA (else `KERNEL_NOT_ACTIVE`);
+//! 1. the descriptor the plan names is this one (else `PLAN_FORGED`);
 //! 2. the program validates and is in the descriptor's primitive set (else `FRONTEND_REQUIRED` /
 //!    `KERNEL_EXTENSION_REQUIRED`), and the plan is about this program;
 //! 3. every node of every scheduled block has exactly one relation, with the descriptor's checker,
@@ -12,7 +12,8 @@
 //! 5. every state has its boundary;
 //! 6. the budgets agree with the derivation and every total fits the descriptor's ceilings;
 //! 7. the whole-claim error is derived (`t·126 − ⌈log2 R⌉`, union with the binding term), must reach
-//!    the descriptor's target, and the declaration may not exceed it.
+//!    the descriptor's target, and the declaration may not exceed it;
+//! 8. last, the descriptor is **Active** at the DAA (else `KERNEL_NOT_ACTIVE`, which therefore always means "expressible, not active").
 //!
 //! Static admission does not assert that future outputs are correct (RFC-0005 §K.4).
 
@@ -62,11 +63,6 @@ pub fn check_plan_v1(
         return Err(O::PlanForged { why: "the plan names another kernel descriptor".into() });
     }
     descriptor.well_formed().map_err(|why| O::PlanForged { why: format!("descriptor: {why}") })?;
-    match schedule.standing_at(&digest, daa) {
-        KernelStandingV1::Active => {}
-        KernelStandingV1::NotActive(status) => return Err(O::KernelNotActive { descriptor: digest, status: Some(status) }),
-        KernelStandingV1::Unknown => return Err(O::KernelNotActive { descriptor: digest, status: None }),
-    }
     if plan.grammar != PLAN_GRAMMAR_V1 {
         return Err(O::KernelExtensionRequired {
             family: None,
@@ -217,6 +213,15 @@ pub fn check_plan_v1(
             why: format!("declares ε ≤ 2^-{} where the suite derives 2^-{error_bits}", plan.declared_error_bits),
         });
     }
+    // 8. Last: the descriptor's standing. `KERNEL_NOT_ACTIVE` means "this descriptor expresses the whole task within its bounds and is
+    // not active" (RFC-0011 §16.2); a missing capability or a bound is reported as such whatever the schedule says.
+    match schedule.standing_at(&digest, daa) {
+        KernelStandingV1::Active => {}
+        KernelStandingV1::NotActive(status) => return Err(O::KernelNotActive { descriptor: digest, status: Some(status) }),
+        KernelStandingV1::Unknown => return Err(O::KernelNotActive { descriptor: digest, status: None }),
+    }
+    // 8. Last: the descriptor's standing. `KERNEL_NOT_ACTIVE` means "this descriptor expresses the whole task within its bounds and is
+    // not active" (RFC-0011 §16.2); a missing capability or a bound is reported as such whatever the schedule says.
     Ok(PlanAcceptanceV1 { plan_root: plan.root(), error_bits, claim_verifier_work: claim_work, claim_evidence_bytes: claim_bytes })
 }
 
