@@ -272,8 +272,6 @@ impl ConsensusServices {
             // ADR-0132 S (H-1 of the 2026-09-18 audit): a proof's post-fence attempt headers carry
             // no Layer-0 work, so the proof's PoW check reads the same fence the pipeline does.
             params.palw_single_lottery,
-            // ADR-0172: an algo-8 proof header at or past the fence is a FALLBACK.
-            params.palw_accounting_v2_fence(),
             is_consensus_exiting,
         ));
 

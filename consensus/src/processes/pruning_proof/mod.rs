@@ -158,8 +158,6 @@ pub struct PruningProofManager {
     /// checked with the same rule the header pipeline uses — checking them with the fence off made a
     /// proof fail its own PoW and no new node could join by a pruned sync.
     palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// ADR-0172: `Params::palw_accounting_v2_fence` — from it an algo-8 proof header is a FALLBACK and must carry its envelope.
-    palw_accounting_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -193,7 +191,6 @@ impl PruningProofManager {
         palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        palw_accounting_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -241,7 +238,6 @@ impl PruningProofManager {
             palw_heartbeat_transparent,
             palw_round_lane,
             palw_single_lottery,
-            palw_accounting_v2,
 
             is_consensus_exiting,
         }
@@ -316,13 +312,6 @@ impl PruningProofManager {
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         // ADR-0072 SA-3: pre-fence proof headers validate under the old envelope version, which is
         // the whole point of a fence on a chain that keeps its history.
-        // ADR-0172: algo 8 at or past `palw_accounting_v2` is a FALLBACK and carries its envelope; below it, nothing (the generic rule below, unchanged).
-        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
-        {
-            return kaspa_consensus_core::palw_fallback_v1::check_algo8_commitment_shape_v1(true, &header.palw_commitment)
-                .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e));
-        }
         kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
             header.pow_algo_id,
             &header.palw_commitment,

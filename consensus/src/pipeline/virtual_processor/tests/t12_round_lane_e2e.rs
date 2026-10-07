@@ -308,39 +308,11 @@ impl T12Chain {
         stamp_harness_time(&self.config.params, &mut t.block.header, self.ctx.simulated_time);
         t.block.header.nonce = self.nonce;
         t.block.header.finalize();
-        let (mut t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
+        let (t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
         assert_eq!(t.block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1);
-        // ADR-0172: at or past `palw_accounting_v2` a beat is a FALLBACK and carries card 1's signed envelope (the harness's FALLBACK miner).
-        if self.config.params.palw_accounting_v2_active_at(t.block.header.daa_score) {
-            self.sign_fallback(&mut t.block.header, 1);
-        }
         self.ctx.simulated_time = self.ctx.simulated_time.max(t.block.header.timestamp);
         self.heartbeats += 1;
         self.insert_chain_block(t.block, "a heartbeat").await
-    }
-
-    /// **The harness's FALLBACK miner** (ADR-0172 §5): sign card `card`'s envelope over the finished header's position (pre-PoW hash, timestamp, nonce), attach it and re-finalize.
-    pub(super) fn sign_fallback(&self, header: &mut kaspa_consensus_core::header::Header, card: usize) {
-        use kaspa_consensus_core::palw_fallback_v1::{PALW_FALLBACK_ENVELOPE_VERSION_V1, PalwFallbackEnvelopeV1, palw_fallback_signing_message_v1};
-        let bond = self.bonds[card];
-        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let message = palw_fallback_signing_message_v1(self.network_domain, pre_pow, header.timestamp, header.nonce, &bond);
-        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
-            &card_key(card).signing_key,
-            message.as_byte_slice(),
-            kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
-            [0u8; 32],
-        )
-        .expect("ML-DSA-87 signs");
-        let envelope = PalwFallbackEnvelopeV1 {
-            version: PALW_FALLBACK_ENVELOPE_VERSION_V1,
-            network_domain: self.network_domain,
-            bond,
-            pubkey: card_pubkey(card),
-            signature: signature.as_ref().to_vec(),
-        };
-        header.palw_commitment = envelope.encode();
-        header.finalize();
     }
 
     /// **An attempt block (the attempt lane) by genesis card `card`**: the template the node builds,

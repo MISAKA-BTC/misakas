@@ -874,16 +874,6 @@ const PALW_DRILL_FLAG_DAY_CLASS_SEATING_V1: PalwDrillFlagDayV1 = PalwDrillFlagDa
     flag: "--palw-drill-class-seating-at",
 };
 
-/// Consensus accounting v2 alone (`--palw-drill-accounting-v2-at`, ADR-0172): a drill-only list.
-const PALW_DRILL_FLAG_DAY_ACCOUNTING_V2_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::palw_accounting_v2::PALW_DRILL_ACCOUNTING_V2_FENCES_V1, flag: "--palw-drill-accounting-v2-at" };
-
-/// **A drill crosses consensus accounting v2 at a low height** (ADR-0172; `--palw-drill-accounting-v2-at`) — ARMS `palw_accounting_v2` at `at` through the entry's own `set` (the
-/// bundle's mirror included) and moves nothing else. `validate_palw_v2` refuses the result unless every prerequisite it names is in force at or below `at`.
-pub fn palw_drill_accounting_v2_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
-    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_ACCOUNTING_V2_V1)
-}
-
 /// The Useful Work Transition's two fences (`--palw-drill-useful-work-at`, ADR-0165): a drill-only list.
 const PALW_DRILL_FLAG_DAY_USEFUL_WORK_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
     list: crate::palw_real_share_v1::PALW_DRILL_USEFUL_WORK_FENCES_V1,

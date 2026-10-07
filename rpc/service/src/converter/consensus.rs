@@ -707,8 +707,7 @@ impl Debug for ConsensusConverter {
 pub fn palw_block_kind_v1(params: &kaspa_consensus_core::config::params::Params, header: &kaspa_consensus_core::header::Header) -> &'static str {
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, is_palw_attempt_algo_id};
     if header.pow_algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
-        // ADR-0172: from `palw_accounting_v2` algo 8 is the one FALLBACK kind (the BASE-0 floor and the heartbeat merged); below it, the heartbeat.
-        return if params.palw_accounting_v2_active_at(header.daa_score) { "FALLBACK" } else { "LEGACY_HEARTBEAT" };
+        return "LEGACY_HEARTBEAT";
     }
     if header.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
         return "EXEC";
@@ -789,12 +788,6 @@ mod block_kind_tests {
         assert_eq!(palw_block_kind_v1(&params, &attempt(real, 9_999)), "REAL");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_HEARTBEAT_V1, 9_999, vec![])), "LEGACY_HEARTBEAT");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_ROUND_V1, 9_999, vec![])), "EXEC");
-        // ADR-0172: algo 8 is FALLBACK from `palw_accounting_v2`, and the heartbeat below it.
-        let mut v2 = palw_t12_shipped_params();
-        v2.palw_accounting_v2 = Some(ForkActivation::new(9_000));
-        v2.sync_palw_accounting_v2();
-        assert_eq!(palw_block_kind_v1(&v2, &header(POW_ALGO_ID_HEARTBEAT_V1, 8_999, vec![])), "LEGACY_HEARTBEAT");
-        assert_eq!(palw_block_kind_v1(&v2, &header(POW_ALGO_ID_HEARTBEAT_V1, 9_000, vec![])), "FALLBACK");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_COMMITTED_V2, 9_999, vec![1, 2, 3])), "", "undecodable commitment");
         assert_eq!(palw_block_kind_v1(&params, &header(1, 9_999, vec![])), "", "a non-PALW header");
         // Dormant ruleset (int-12: testnet-12 as shipped arms the fence at 5,300, so the dormant one is the int-10 baseline): a floor

@@ -218,11 +218,6 @@ impl CoinbaseManager {
         // outputs, in that order. The two sum to exactly what the one output would have been, so no issuance, panel leg, reserve or maturity
         // moves. Empty where the fence is dormant, which leaves this function byte-identical.
         palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
-        // **ADR-0172: the schedule budget of the DAAs THIS block advanced** (`Σ calc_block_subsidy(d)` for `d` in `(selected parent's DAA, this DAA]`, past
-        // `palw_accounting_v2`; `0` below it and on a block that did not advance the DAA). Past the fence every block's own payload declares zero subsidy, so no block
-        // creates MSK; the budget is minted here, ONCE per DAA, by the chain block that ticked it: its inclusion share (§D) joins the pool below and the validator share
-        // joins `coinbase_validator_pool`'s. The claims' share is vested at `Final`, never minted here. Never summed over the merged blocks' declared subsidies.
-        palw_tick_subsidy: u64,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
@@ -236,9 +231,6 @@ impl CoinbaseManager {
             "a selected parent that escrowed a reward must be inside the DAA window, or its escrow is unfunded"
         );
         let mut worker_inclusion_pool = 0u64;
-        if let Some(fs) = carve.filter(|_| palw_tick_subsidy > 0) {
-            worker_inclusion_pool = split_block_subsidy(palw_tick_subsidy, fs).worker_inclusion_sompi;
-        }
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
         let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
 
@@ -473,10 +465,8 @@ impl CoinbaseManager {
         palw_unentitled: &BlockHashSet,
         // ADR-0125: round blocks' fees are paid whole to their payouts, so none of them funds the pool.
         palw_round_blocks: &BlockHashSet,
-        // ADR-0172: the schedule budget of the DAAs this block advanced (see `expected_coinbase_transaction`); its validator share joins the pool.
-        palw_tick_subsidy: u64,
     ) -> u64 {
-        let mut pool = if palw_tick_subsidy > 0 { split_block_subsidy(palw_tick_subsidy, fee_split).validator_sompi } else { 0u64 };
+        let mut pool = 0u64;
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
             if palw_unentitled.contains(blue) {
                 continue;
@@ -581,22 +571,6 @@ impl CoinbaseManager {
         let extra_data = parser.remaining;
 
         Ok(CoinbaseData { blue_score, subsidy, miner_data: MinerData { script_public_key, extra_data } })
-    }
-
-    /// **ADR-0172: the schedule budget of the DAAs a chain block advanced** — `Σ calc_block_subsidy(d)` for `d` in `(selected_parent_daa, daa_score]` that are at or past
-    /// `fence` (`0` where the fence is `None`, and for a block that did not advance the DAA). Bounded to 64 steps: a mergeset cannot tick more.
-    pub fn palw_accounting_v2_tick_subsidy(
-        &self,
-        fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        selected_parent_daa: u64,
-        daa_score: u64,
-    ) -> u64 {
-        let Some(fence) = fence else { return 0 };
-        let first = selected_parent_daa.saturating_add(1).max(fence.daa_score());
-        if daa_score < first || !fence.is_active(daa_score) {
-            return 0;
-        }
-        (first..=daa_score).take(64).fold(0u64, |acc, d| acc.saturating_add(self.calc_block_subsidy(d)))
     }
 
     pub fn calc_block_subsidy(&self, daa_score: u64) -> u64 {
@@ -986,7 +960,6 @@ mod tests {
                 &Default::default(),
                 &rounds,
                 &Default::default(),
-                0,
             )
             .unwrap();
         let outputs: Vec<(u64, ScriptPublicKey)> =
@@ -1009,88 +982,15 @@ mod tests {
             finality_fee_worker_bps: 2500,
             finality_fee_service_bps: 0,
         };
-        let with_rounds = cbm.coinbase_validator_pool(&ghostdag, &rewards, &non_daa, &split, &Default::default(), &rounds, 0);
+        let with_rounds = cbm.coinbase_validator_pool(&ghostdag, &rewards, &non_daa, &split, &Default::default(), &rounds);
         let without_round_rows = {
             let mut only_chain = rewards.clone();
             for round in &rounds {
                 only_chain.insert(*round, BlockRewardData::new(0, 0, 0, script(0)));
             }
-            cbm.coinbase_validator_pool(&ghostdag, &only_chain, &non_daa, &split, &Default::default(), &Default::default(), 0)
+            cbm.coinbase_validator_pool(&ghostdag, &only_chain, &non_daa, &split, &Default::default(), &Default::default())
         };
         assert_eq!(with_rounds, without_round_rows, "a round block's fees fund no validator pool");
-    }
-
-    /// **ADR-0172: past `palw_accounting_v2` blocks create no MSK; the DAA's budget is minted once, by the chain block that ticked it.** A mergeset of any number of blocks
-    /// that each declare zero subsidy (the new rule) pays their miners fees only; the tick adds the DAA's validator share (to `coinbase_validator_pool`) and inclusion share (to
-    /// the includer), computed from ONE `calc_block_subsidy` — never summed over the merged blocks. Two chain blocks of the SAME DAA mint it once between them
-    /// (only the one whose DAA advanced carries the tick). Below the fence the tick is 0 and nothing changes.
-    #[test]
-    fn a_tick_mints_the_daas_validator_and_inclusion_shares_once_and_blocks_mint_nothing() {
-        use kaspa_consensus_core::coinbase::{BlockRewardData, MinerData};
-        use kaspa_consensus_core::config::params::ForkActivation;
-        use kaspa_consensus_core::tx::ScriptPublicKey;
-        use kaspa_hashes::Hash64;
-        let cbm = create_manager(&MAINNET_PARAMS);
-        let script = |b: u8| ScriptPublicKey::new(0, scriptvec![0xAA, b]);
-        let fence = Some(ForkActivation::new(10));
-        let b = |d: u64| cbm.calc_block_subsidy(d);
-        // The tick: the DAAs a block advanced, from the fence on, one budget each, none for a block that did not advance.
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(None, 4, 5), 0, "dormant");
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(fence, 4, 5), 0, "below the fence");
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(fence, 12, 12), 0, "a block that did not advance the DAA mints no budget");
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(fence, 11, 12), b(12), "one tick, one budget");
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(fence, 9, 11), b(10) + b(11), "the fence's own first DAA counts, none before it");
-        // Two sibling chain blocks of one DAA (both advanced from the same parent): each is its OWN chain block, so a chain holds only one of them as a tick; the second one,
-        // built on the first, advanced nothing.
-        assert_eq!(cbm.palw_accounting_v2_tick_subsidy(fence, 12, 12), 0);
-
-        let fs = FeeSplitParams {
-            subsidy_worker_base_bps: 7200,
-            subsidy_worker_inclusion_bps: 800,
-            subsidy_validator_bps: 2000,
-            subsidy_service_bps: 0,
-            normal_fee_worker_bps: 9000,
-            normal_fee_validator_bps: 1000,
-            normal_fee_service_bps: 0,
-            finality_fee_validator_bps: 7500,
-            finality_fee_worker_bps: 2500,
-            finality_fee_service_bps: 0,
-        };
-        let budget = b(12);
-        let (sp, m1, m2) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3));
-        let ghostdag = GhostdagData::new(
-            10,
-            0.into(),
-            sp,
-            kaspa_consensus_core::blockhash::BlockHashes::new(vec![sp, m1, m2]),
-            kaspa_consensus_core::blockhash::BlockHashes::new(vec![]),
-            Default::default(),
-        );
-        let mut rewards = BlockHashMap::default();
-        // Past the fence every block's declared subsidy is ZERO; fees are theirs.
-        rewards.insert(sp, BlockRewardData::new(0, 100, 0, script(1)));
-        rewards.insert(m1, BlockRewardData::new(0, 200, 0, script(2)));
-        rewards.insert(m2, BlockRewardData::new(0, 300, 0, script(3)));
-        let non_daa = BlockHashSet::default();
-        let pool_without = cbm.coinbase_validator_pool(&ghostdag, &rewards, &non_daa, &fs, &Default::default(), &Default::default(), 0);
-        let pool_with = cbm.coinbase_validator_pool(&ghostdag, &rewards, &non_daa, &fs, &Default::default(), &Default::default(), budget);
-        let expected_validator_share = split_block_subsidy(budget, &fs).validator_sompi;
-        assert_eq!(pool_with - pool_without, expected_validator_share, "the tick adds ONE budget's validator share, however many blocks the mergeset holds");
-        let build = |tick: u64| {
-            cbm.expected_coinbase_transaction(
-                12, 0, MinerData::new(script(0x33), vec![]), &ghostdag, &rewards, &non_daa, &[], Some(&fs), (1, 1), 0, &Default::default(), false,
-                &Default::default(), &Default::default(), &Default::default(), tick,
-            )
-            .unwrap()
-        };
-        let (plain, ticked) = (build(0), build(budget));
-        let sum = |t: &CoinbaseTransactionTemplate| t.tx.outputs.iter().map(|o| o.value as u128).sum::<u128>();
-        let inclusion_share = split_block_subsidy(budget, &fs).worker_inclusion_sompi;
-        assert!(sum(&ticked) - sum(&plain) <= inclusion_share as u128, "the tick adds at most the §D inclusion share to the coinbase");
-        assert!(sum(&ticked) - sum(&plain) > 0, "and the includer is paid it");
-        // The whole DAA, every route the coinbase has: validators + inclusion ≤ 28 % of ONE budget; the claims' 72 % is vested at Final, bounded by `P_d`.
-        let minted = (pool_with - pool_without) as u128 + (sum(&ticked) - sum(&plain));
-        assert!(minted <= budget as u128 * 28 / 100 + 1, "{minted} of {budget}");
     }
 
     /// **RFC-0009: a V4 receipt block's reward is split in two outputs and the total never moves.** The miner leg (the subsidy-derived
@@ -1145,7 +1045,6 @@ mod tests {
                 &Default::default(),
                 &Default::default(),
                 v4,
-                0,
             )
             .unwrap()
             .tx

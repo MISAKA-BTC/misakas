@@ -976,30 +976,21 @@ impl VirtualStateProcessor {
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
             self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
         );
-        // ADR-0172: at or past `palw_accounting_v2` an algo-8 header is a FALLBACK — its commitment is an envelope (shape and signature were the header stage's), and it is no
-        // attempt, so the attempt admission below has nothing to say about it. Below the fence this is the call it always was.
-        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
-        {
-            kaspa_consensus_core::palw_fallback_v1::check_algo8_commitment_shape_v1(true, &header.palw_commitment)
-                .map_err(BadPalwCommitmentShape)?;
-        } else {
-            kaspa_pow::palw_admission::check_palw_block_admission_v1(
-                header,
-                selected_parent_bond_view,
-                |class_id| self.palw_class_facts_for_block(class_id, header),
-                // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
-                self.genesis.hash.as_bytes().as_slice(),
-                commitment_bound,
-                attempt_lane,
-                // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
-                // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
-                |key, message, signature, context| {
-                    kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
-                },
-            )
-            .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
-        }
+        kaspa_pow::palw_admission::check_palw_block_admission_v1(
+            header,
+            selected_parent_bond_view,
+            |class_id| self.palw_class_facts_for_block(class_id, header),
+            // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
+            self.genesis.hash.as_bytes().as_slice(),
+            commitment_bound,
+            attempt_lane,
+            // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
+            // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
+            |key, message, signature, context| {
+                kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+            },
+        )
+        .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
@@ -1035,7 +1026,6 @@ impl VirtualStateProcessor {
                 fs,
                 &ctx.palw_v2_unentitled_blues,
                 &self.palw_round_blocks_of(&ctx.ghostdag_data),
-                self.palw_accounting_v2_tick_subsidy_of(ctx.selected_parent(), header.daa_score),
             )
         });
         let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
@@ -1088,10 +1078,8 @@ impl VirtualStateProcessor {
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
         // expected coinbase must expect the same bytes the body rule already enforced.
-        let own_subsidy = if (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
-            // ADR-0172: past `palw_accounting_v2` every block declares zero (blocks create no MSK).
-            || self.palw_accounting_v2.is_some_and(|fence| fence.is_active(header.daa_score))
+        let own_subsidy = if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
         {
             0
         } else {
@@ -1112,7 +1100,6 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_merged_escrow_withheld,
             &self.palw_round_blocks_of(&ctx.ghostdag_data),
             &ctx.palw_v2_receipt_v4_payouts,
-            self.palw_accounting_v2_tick_subsidy_of(ctx.selected_parent(), header.daa_score),
         )?;
 
         // Verify the header pruning point
@@ -1181,8 +1168,6 @@ impl VirtualStateProcessor {
         // RFC-0009: the merged V4 receipt blocks' split payouts, threaded to `expected_coinbase_transaction`. Empty where the fence is
         // dormant.
         palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
-        // ADR-0172: the schedule budget of the DAAs this block advanced (0 below `palw_accounting_v2`), threaded to `expected_coinbase_transaction`.
-        palw_tick_subsidy: u64,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -1204,7 +1189,6 @@ impl VirtualStateProcessor {
                 palw_merged_escrow_withheld,
                 palw_round_blocks,
                 palw_receipt_v4_payouts,
-                palw_tick_subsidy,
             )
             .unwrap()
             .tx;

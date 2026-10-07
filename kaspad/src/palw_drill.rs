@@ -113,8 +113,6 @@ pub struct PalwDrillExtraFencesV1 {
     pub panel_liveness_at: Option<u64>,
     /// ADR-0165's Useful Work Transition (`palw_floor_reserve_v1` + `palw_real_clock_tick_v1`).
     pub useful_work_at: Option<u64>,
-    /// ADR-0172's consensus accounting v2 (`palw_accounting_v2`).
-    pub accounting_v2_at: Option<u64>,
     pub improve_at: Option<u64>,
     /// RFC-0006's layer-sharded panels (`--palw-drill-tir-shard-at`, `palw_tir_shard_v1`): armed after the fences it names.
     pub tir_shard_at: Option<u64>,
@@ -160,7 +158,6 @@ impl PalwDrillExtraFencesV1 {
             capped_at: args.palw_drill_capped_at,
             panel_liveness_at: args.palw_drill_panel_liveness_at,
             useful_work_at: args.palw_drill_useful_work_at,
-            accounting_v2_at: args.palw_drill_accounting_v2_at,
             improve_at: args.palw_drill_improve_at,
             tir_shard_at: args.palw_drill_tir_shard_at,
             int11_at: args.palw_drill_int11_at,
@@ -190,7 +187,6 @@ impl PalwDrillExtraFencesV1 {
             || self.capped_at.is_some()
             || self.panel_liveness_at.is_some()
             || self.useful_work_at.is_some()
-            || self.accounting_v2_at.is_some()
             || self.improve_at.is_some()
             || self.tir_shard_at.is_some()
             || self.int11_at.is_some()
@@ -262,7 +258,6 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-capped-at", self.capped_at, "RFC-0007's capped onboarding (palw_capped_onboarding_v1)"),
             ("--palw-drill-panel-liveness-at", self.panel_liveness_at, "lane PL's panel-liveness list (ADR-0166)"),
             ("--palw-drill-useful-work-at", self.useful_work_at, "ADR-0165's Useful Work Transition (palw_floor_reserve_v1, palw_real_clock_tick_v1)"),
-            ("--palw-drill-accounting-v2-at", self.accounting_v2_at, "ADR-0172's consensus accounting v2 (palw_accounting_v2)"),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-tir-shard-at", self.tir_shard_at, "RFC-0006's layer-sharded panels (palw_tir_shard_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
@@ -418,9 +413,6 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.useful_work_at {
             moves.extend(d::palw_drill_useful_work_at_v1(params, at).map_err(|e| format!("--palw-drill-useful-work-at: {e}"))?);
         }
-        if let Some(at) = self.accounting_v2_at {
-            moves.extend(d::palw_drill_accounting_v2_at_v1(params, at).map_err(|e| format!("--palw-drill-accounting-v2-at: {e}"))?);
-        }
         if let Some(at) = self.improve_at {
             moves.extend(d::palw_drill_improve_fence_at_v1(params, at).map_err(|e| format!("--palw-drill-improve-at: {e}"))?);
         }
@@ -500,7 +492,6 @@ impl PalwDrillExtraFencesV1 {
                 self.capacity2_marker_text(),
             ),
             ("useful_work_at=", "--palw-drill-useful-work-at", palw_drill_marker_fence_text_v1(self.useful_work_at)),
-            ("accounting_v2_at=", "--palw-drill-accounting-v2-at", palw_drill_marker_fence_text_v1(self.accounting_v2_at)),
         ]
     }
 
@@ -1169,7 +1160,6 @@ pub fn palw_drill_write_keyring_v4(
         "capped_at": extra.capped_at,
         "panel_liveness_at": extra.panel_liveness_at,
         "useful_work_at": extra.useful_work_at,
-        "accounting_v2_at": extra.accounting_v2_at,
         "int11_at": extra.int11_at,
         "improve_at": extra.improve_at,
         "tir_shard_at": extra.tir_shard_at,
@@ -1400,42 +1390,6 @@ mod tests {
             let argv: Vec<&str> = std::iter::once("kaspad").chain(argv.iter().map(String::as_str)).collect();
             assert!(Args::parse(argv).is_err(), "{bad} is out of range");
         }
-    }
-
-    /// **`--palw-drill-accounting-v2-at` is a drill node's flag and nobody else's** (ADR-0172): refused without the salt, by name, on public testnet-12 too; a salted drill node takes it; off by
-    /// default; and its move arms `palw_accounting_v2` ALONE at the height through the entry's own `set` (the bundle's mirror included), refusing a chain whose prerequisites are not in force.
-    #[test]
-    fn the_accounting_v2_flag_is_refused_off_a_salted_chain_and_arms_the_fence_alone() {
-        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
-        let with = |extra: &[&str]| {
-            let mut argv: Vec<&str> = base.to_vec();
-            argv.extend_from_slice(extra);
-            parse(&argv)
-        };
-        let salt_flag = format!("--palw-drill-genesis-salt={SALT}");
-        let why = refusal(&with(&["--palw-drill-accounting-v2-at=9999"]));
-        assert!(why.contains("--palw-drill-accounting-v2-at=9999") && why.contains("needs --palw-drill-genesis-salt"), "{why}");
-        let public = parse(&["--testnet", "--netsuffix=12", "--palw-drill-accounting-v2-at=9999"]);
-        assert!(refusal(&public).contains("needs --palw-drill-genesis-salt"), "public testnet-12 refuses it");
-        let salted = with(&[&salt_flag, "--palw-drill-accounting-v2-at=9999"]);
-        assert_eq!(salted.palw_drill_accounting_v2_at, Some(9_999));
-        palw_drill_validate_args_v1(&salted).expect("a salted drill node takes it");
-        assert_eq!(with(&[&salt_flag]).palw_drill_accounting_v2_at, None, "off by default");
-        // The move, on testnet-12 as shipped (every prerequisite armed at or below the 5,300 flag day): the fence and its mirror, nothing else.
-        let extra = PalwDrillExtraFencesV1 { accounting_v2_at: Some(9_999), ..Default::default() };
-        let salted_argv: Vec<&str> = base.iter().copied().chain([salt_flag.as_str()]).collect();
-        let mut params = config_of(&parse(&salted_argv)).params.clone();
-        let before = params.palw_fences_v1();
-        let moves = extra.apply(&mut params).expect("the drill arms it");
-        assert_eq!(moves.len(), 1);
-        assert_eq!(params.palw_accounting_v2.map(|f| f.daa_score()), Some(9_999));
-        params.validate_palw_v2().expect("the mirror follows the fence");
-        let after = params.palw_fences_v1();
-        let moved: Vec<&str> = before.iter().zip(&after).filter(|(b, a)| b.1 != a.1).map(|(_, a)| a.0).collect();
-        assert_eq!(moved, ["palw_accounting_v2"], "no other fence moved");
-        // On public testnet-12's genesis the move is refused (the post-launch fences move on a salted drill chain only).
-        let mut public = kaspa_consensus_core::config::params::palw_t12_shipped_params();
-        assert!(extra.apply(&mut public).unwrap_err().contains("salted drill chain only"));
     }
 
     /// **`--palw-drill-floor-ignore-policy` is a drill node's flag and nobody else's** (ADR-0165): refused without the salt, by

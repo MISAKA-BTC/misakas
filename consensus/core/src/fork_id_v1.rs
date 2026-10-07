@@ -787,7 +787,6 @@ mod tests {
             "palw_receipt_spend_v4" => params.palw_receipt_spend_v4 = Some(at),
             // RFC-0009 stage B: a bare height.
             "palw_evidence_court_v1" => params.palw_evidence_court_v1 = Some(at),
-            "palw_accounting_v2" => params.palw_accounting_v2 = Some(at),
             "palw_audit_1004_v1" => params.palw_audit_1004_v1 = Some(at),
             // RFC-0004, likewise: the drill's value (the fence is in no network's release).
             "palw_improvement_v1" => params.palw_improvement_v1 = Some(crate::palw_improve_v1::PalwImprovementFenceV1::drill_v1(at)),
