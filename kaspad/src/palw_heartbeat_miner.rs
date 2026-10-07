@@ -244,6 +244,13 @@ pub struct PalwHeartbeatMinerConfig {
     pub pay_address: String,
     pub address_prefix: kaspa_addresses::Prefix,
     pub network_id: NetworkId,
+    /// **ADR-0172: the FALLBACK identity** — the operator's bond key file and `<txid>:<index>` (the same `--palw-producer-key` / `--palw-producer-bond`). At or past `palw_accounting_v2`
+    /// an algo-8 block is a FALLBACK and must carry an envelope signed by this key; a miner without one holds there rather than mine blocks every peer refuses. `None` below the
+    /// fence changes nothing.
+    pub fallback_key_path: Option<String>,
+    pub fallback_bond: Option<String>,
+    /// ADR-0172 §5.7: how long a claim waits for an operator block before this operator's FALLBACK miner gives way to the anchor duty — the release's 30 slots unless a salted drill shortened it.
+    pub anchor_duty_after_slots: u64,
     // `enable_unsynced_mining` used to live here, "honoured exactly as the producer honours it" —
     // which was the defect: the sink-age clause it waived should never have applied to the clock
     // at all (see the worker's gate comment, ADR-0068 launch audit). The lane needs no waiver
@@ -256,6 +263,10 @@ pub struct PalwHeartbeatMinerService {
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
     miner_data: Option<MinerData>,
+    /// ADR-0172 §5.7: the anchor duty's wait, observed once a pass.
+    duty: std::sync::Mutex<FallbackDutyV1>,
+    /// ADR-0172: the loaded FALLBACK identity (bond, ML-DSA-87 key pair), if the operator gave one.
+    fallback: Option<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>)>,
     /// Fired by `signal_exit` so `start` can finish — the panel's fix, copied here for the same
     /// reason it went into the producer: the ADR-0068 drill's H node hung in `pthread_join` on
     /// SIGTERM with every server already stopped (finding F1).
@@ -272,6 +283,67 @@ pub struct PalwHeartbeatMinerService {
     /// reason, then at most every five minutes, so an unchanging cause cannot bury the line that
     /// explains it.
     last_hold: std::sync::Mutex<Option<(String, std::time::Instant)>>,
+}
+
+/// **The anchor duty's wait, as the FALLBACK miner keeps it** (ADR-0172 §5.7): consensus-core's wait tracker and rule, nothing of its own.
+#[derive(Default)]
+pub(crate) struct FallbackDutyV1 {
+    wait: kaspa_consensus_core::palw_real_share_v1::PalwFloorAnchorDutyWaitV1,
+}
+
+impl FallbackDutyV1 {
+    /// Observe the facts at `daa`; `true` when the duty is due (`after_slots` plus `stagger` slots waited, a claim still due).
+    pub(crate) fn observe(&mut self, binder_due: bool, daa: u64, after_slots: u64, stagger: u64) -> bool {
+        let waited = self.wait.observe(binder_due, daa);
+        kaspa_consensus_core::palw_accounting_v2::palw_fallback_anchor_duty_v1(binder_due, waited, after_slots, stagger)
+    }
+
+    /// The duty's beat was mined at `daa`: the wait starts again from it.
+    pub(crate) fn fired(&mut self, daa: u64) {
+        self.wait.fired(daa);
+    }
+}
+
+/// **A FALLBACK envelope for a solved header** — the miner's whole signing step, pure over the key so a test can run it: sign the header position (pre-PoW hash, timestamp, nonce, bond) and return
+/// the carriage bytes. The signature is a witness; any 32 bytes of signing randomness is valid.
+pub(crate) fn fallback_envelope_v1(
+    domain: kaspa_hashes::Hash64,
+    header: &kaspa_consensus_core::header::Header,
+    bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    keypair: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    randomness: [u8; 32],
+) -> Result<Vec<u8>, String> {
+    let message = kaspa_consensus_core::palw_fallback_v1::palw_fallback_signing_message_v1(
+        domain,
+        kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
+        header.timestamp,
+        header.nonce,
+        bond,
+    );
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        randomness,
+    )
+    .map_err(|e| format!("the FALLBACK envelope could not be signed: {e:?}"))?;
+    Ok(kaspa_consensus_core::palw_fallback_v1::PalwFallbackEnvelopeV1 {
+        version: kaspa_consensus_core::palw_fallback_v1::PALW_FALLBACK_ENVELOPE_VERSION_V1,
+        network_domain: domain,
+        bond: *bond,
+        pubkey: keypair.verification_key.as_ref().to_vec(),
+        signature: signature.as_ref().to_vec(),
+    }
+    .encode())
+}
+
+/// The 32 bytes ML-DSA-87 signing is randomised with. The envelope's signature is a witness, never identity (the signature is outside the block id's preimage only through the nonce
+/// the message already binds), so any value is valid; a time-seeded one keeps two signatures of one position distinct without reaching for a global RNG.
+fn rand_core_free_randomness() -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    out[..16].copy_from_slice(&now.to_le_bytes());
+    out
 }
 
 impl PalwHeartbeatMinerService {
@@ -301,12 +373,32 @@ impl PalwHeartbeatMinerService {
                 None
             }
         };
+        // ADR-0172: the FALLBACK identity, read once. Both halves or none; a bad half is said and the miner runs without one (it then holds past the fence).
+        let fallback = match (config.fallback_key_path.as_deref(), config.fallback_bond.as_deref()) {
+            (Some(key_path), Some(bond)) => match (kaspa_pq_validator_core::load_validator_seed(key_path), crate::palw_producer::parse_outpoint(bond)) {
+                (Ok(seed), Ok(outpoint)) => Some((
+                    kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                    Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed)),
+                )),
+                (key, bond) => {
+                    warn!(
+                        "[{PALW_HEARTBEAT}] the FALLBACK identity is unusable (key: {:?}, bond: {:?}) — this miner will hold at or past palw_accounting_v2",
+                        key.err().map(|e| e.to_string()),
+                        bond.err()
+                    );
+                    None
+                }
+            },
+            _ => None,
+        };
         Self {
             config,
             consensus_manager,
             mining_manager,
             flow_context,
             miner_data,
+            duty: std::sync::Mutex::new(FallbackDutyV1::default()),
+            fallback,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
             yield_budget: std::sync::Mutex::new(HeartbeatYieldBudget::new()),
             last_hold: std::sync::Mutex::new(None),
@@ -463,6 +555,26 @@ impl PalwHeartbeatMinerService {
         // bonded selected parent refill the budget even on a pass the slot rule is about to hold.
         let hint = session.heartbeat_yield_hint();
         self.with_yield_budget(|budget| budget.observe(hint));
+        // **ADR-0172 §5.7: the anchor duty.** An operator's FALLBACK is a binder for a claim waiting for an operator block. Once a claim has waited `anchor_duty_after_slots` slots plus this bond's
+        // stagger (0..8) the miner stops standing aside for a waiting bonded block (ADR-0105's yield) and mines its beat at the open slot; after it fires the wait starts again.
+        let duty_due = match (self.fallback.as_ref(), self.flow_context.config.params.palw_accounting_v2_fence()) {
+            (Some((bond, _)), Some(_)) => {
+                let base = match &self.flow_context.config.params.palw_consensus_mode {
+                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+                    _ => None,
+                };
+                match base.and_then(|base| session.palw_producer_facts_v2(base, Some(bond.0))) {
+                    Some(facts) if self.flow_context.config.params.palw_accounting_v2_active_at(facts.daa_score) => {
+                        let stagger = kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_stagger_v1(
+                            bond.0.transaction_id.as_byte_slice()[0],
+                        );
+                        self.duty.lock().map(|mut duty| duty.observe(facts.binder_due, facts.daa_score, self.config.anchor_duty_after_slots, stagger)).unwrap_or(false)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
         // **H1: a taken slot is waited out, not ground against.** The clock already advanced into
         // the slot a beat minted now would claim; the beat would be merged, weigh ε, add a blue
         // score and tick nothing. Wait for the next slot, then ask again with fresh facts.
@@ -543,7 +655,12 @@ impl PalwHeartbeatMinerService {
         //
         // Decided only once the slot is open, so time the slot rule was already holding the lane is
         // never charged to the episode's budget.
-        let decision = self.with_yield_budget(|budget| budget.decide(hint, now));
+        let decision = if duty_due {
+            info!("[{PALW_HEARTBEAT}] anchor duty: a claim has waited for an operator block — this operator's FALLBACK beat is mined at the open slot (ADR-0172 §5.7)");
+            HeartbeatYieldDecision::Mine { ended_yield: false }
+        } else {
+            self.with_yield_budget(|budget| budget.decide(hint, now))
+        };
         match decision {
             HeartbeatYieldDecision::Wait { wait_ms, until, remaining_ms, started } => {
                 if started {
@@ -570,6 +687,17 @@ impl PalwHeartbeatMinerService {
         // still has the parents this template was built on. A rival beat for the same slot, or the
         // step that opens the next one, moves the virtual — and a beat finished against the old
         // parents would be one that loses the race, gets relayed and ticks nothing.
+        // **ADR-0172: at or past `palw_accounting_v2` this beat is a FALLBACK** — it needs the operator's identity to sign its envelope, and holds without one.
+        let fallback_active = self.flow_context.config.params.palw_accounting_v2_active_at(template.block.header.daa_score);
+        if fallback_active && self.fallback.is_none() {
+            self.say_hold(Some(
+                "palw_accounting_v2 is in force: an algo-8 block is a FALLBACK and carries an envelope signed by a bond — give this node --palw-producer-key and \
+                 --palw-producer-bond (the miner holds rather than mine blocks every peer refuses)"
+                    .to_string(),
+            ));
+            self.tick(std::time::Duration::from_millis(MAX_WAIT_MS)).await;
+            return Ok(PassOutcomeV1::Waited);
+        }
         let header0 = template.block.header.clone();
         let network_id = self.config.network_id;
         let parents: kaspa_consensus_core::BlockHashSet = header0.direct_parents().iter().copied().collect();
@@ -600,7 +728,19 @@ impl PalwHeartbeatMinerService {
             GrindOutcomeV1::Shutdown => return Ok(PassOutcomeV1::Idle),
         };
         template.block.header.nonce = nonce;
+        // The envelope signs the SOLVED header position (pre-PoW hash, timestamp, nonce, bond) and rides outside the PoW pre-image, so it is attached after the grind.
+        if let (true, Some((bond, keypair))) = (fallback_active, self.fallback.as_ref()) {
+            let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.config.network_id.to_string().as_bytes(),
+                Some(self.flow_context.config.genesis.hash),
+            );
+            let header = &mut template.block.header;
+            header.palw_commitment = fallback_envelope_v1(domain, header, bond, keypair, rand_core_free_randomness())?;
+        }
         template.block.header.finalize();
+        if duty_due && let Ok(mut duty) = self.duty.lock() {
+            duty.fired(template.block.header.daa_score);
+        }
         let role = HeartbeatRoleV1::of(
             template.block.header.daa_score,
             template.selected_parent_daa_score,
@@ -836,5 +976,76 @@ mod grind_and_role_tests {
         let mut budget = HeartbeatYieldBudget::new();
         assert_eq!(budget.decide(HeartbeatYieldHintV1::SlotTaken(u64::MAX), 1), HeartbeatYieldDecision::Mine { ended_yield: false });
         assert_eq!(budget, HeartbeatYieldBudget::new());
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_fallback_v1::{PalwFallbackEnvelopeV1, check_algo8_commitment_shape_v1};
+    use kaspa_consensus_core::palw_real_share_v1::PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as AFTER;
+
+    fn keypair() -> libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+        libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x42u8; 32])
+    }
+
+    fn bond() -> kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 {
+        kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(9), 1))
+    }
+
+    fn solved_header(timestamp: u64, nonce: u64) -> kaspa_consensus_core::header::Header {
+        let mut header = kaspa_consensus_core::header::Header::from_precomputed_hash(kaspa_hashes::Hash64::from_u64_word(5), vec![kaspa_hashes::Hash64::from_u64_word(4)]);
+        header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1;
+        header.timestamp = timestamp;
+        header.nonce = nonce;
+        header
+    }
+
+    /// **The miner's signing step is the header stage's verifier's input**: what `fallback_envelope_v1` signs, `PalwFallbackEnvelopeV1::validate_stateless` accepts under the real ML-DSA-87
+    /// verifier, the shape gate admits, and a changed nonce, network or bond refuses.
+    #[test]
+    fn the_miners_envelope_verifies_under_the_header_stages_own_check_and_binds_the_position() {
+        let (kp, domain) = (keypair(), kaspa_hashes::Hash64::from_u64_word(77));
+        let header = solved_header(1_234, 99);
+        let bytes = fallback_envelope_v1(domain, &header, &bond(), &kp, [1u8; 32]).expect("signs");
+        check_algo8_commitment_shape_v1(true, &bytes).expect("a well-formed FALLBACK commitment");
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&header);
+        let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false);
+        let envelope = PalwFallbackEnvelopeV1::decode(&bytes).unwrap();
+        envelope.validate_stateless(domain, pre_pow, 1_234, 99, verify).expect("the header stage accepts the miner's envelope");
+        assert!(envelope.validate_stateless(domain, pre_pow, 1_234, 100, verify).is_err(), "a re-solved nonce is another position");
+        assert!(envelope.validate_stateless(domain, pre_pow, 1_235, 99, verify).is_err(), "and another timestamp");
+        assert!(envelope.validate_stateless(kaspa_hashes::Hash64::from_u64_word(78), pre_pow, 1_234, 99, verify).is_err(), "and another network");
+        let mut other_bond = envelope.clone();
+        other_bond.bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(9), 2));
+        assert!(other_bond.validate_stateless(domain, pre_pow, 1_234, 99, verify).is_err(), "and another bond");
+        // Two signings of one position differ in the witness and agree on everything else.
+        let again = fallback_envelope_v1(domain, &header, &bond(), &kp, [2u8; 32]).unwrap();
+        assert_eq!(PalwFallbackEnvelopeV1::decode(&again).unwrap().pubkey, envelope.pubkey);
+    }
+
+    /// **The anchor duty policy** (ADR-0172 §5.7): quiet until a claim has waited the release's 30 slots plus this bond's stagger (0..8), fires once, and the wait starts again from it;
+    /// a claim that stops being due breaks the wait.
+    #[test]
+    fn the_anchor_duty_waits_thirty_slots_plus_the_stagger_fires_once_and_starts_again() {
+        for stagger in [0u64, 4, 7] {
+            let mut duty = FallbackDutyV1::default();
+            let mut fired = Vec::new();
+            for daa in 1_000..1_000 + 3 * AFTER + 30 {
+                if duty.observe(true, daa, AFTER, stagger) {
+                    fired.push(daa);
+                    duty.fired(daa);
+                }
+            }
+            assert_eq!(fired.first().copied(), Some(1_000 + AFTER + stagger), "first at the wait plus the stagger ({stagger})");
+            assert!(fired.windows(2).all(|w| w[1] - w[0] == AFTER + stagger), "then once every wait: {fired:?}");
+        }
+        let mut duty = FallbackDutyV1::default();
+        for daa in 0..AFTER - 1 {
+            assert!(!duty.observe(true, daa, AFTER, 0));
+        }
+        assert!(!duty.observe(false, AFTER, AFTER, 0), "the claim was bound: no duty");
+        assert!(!duty.observe(true, AFTER + 1, AFTER, 0), "and the wait began again");
+        assert!(AFTER >= 30 && kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_stagger_v1(0xFF) < 8);
     }
 }

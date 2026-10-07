@@ -168,6 +168,13 @@ impl PalwOperatorAnchorRuleV1 {
     /// which only its own key could have signed — is not operator production, whether or not the
     /// stateful admission would later disqualify it.
     pub fn operator_of_v1(&self, header: &Header) -> Option<PalwBondKeyV2> {
+        // ADR-0172 (the anchor duty): a FALLBACK — algo 8 carrying its envelope, which only exists at or past `palw_accounting_v2` — keyed to an operator's bond is an operator
+        // block like an operator's attempt: it may BIND the claims waiting for an operator (its seed is `palw_panel_anchor_execution_v1`'s FALLBACK branch). E2 evidence: the
+        // genesis key set, header-stage checkable. A bare heartbeat carries no envelope and is nobody's.
+        if header.pow_algo_id == crate::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+            let envelope = crate::palw_fallback_v1::PalwFallbackEnvelopeV1::decode(&header.palw_commitment).ok()?;
+            return (self.keys.get(&envelope.bond)? == &envelope.pubkey).then_some(envelope.bond);
+        }
         if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
             return None;
         }

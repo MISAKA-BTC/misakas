@@ -507,6 +507,10 @@ pub mod palw_evidence_v1;
 pub mod palw_evidence_court_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
+/// ADR-0172, consensus accounting v2 (C-BLUE / E-BLUE / FALLBACK and one tick a slot): the pure rules and the dormant fence `palw_accounting_v2`.
+pub mod palw_accounting_v2;
+/// ADR-0172 §5: the FALLBACK envelope an algo-8 header carries at or past `palw_accounting_v2`.
+pub mod palw_fallback_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).

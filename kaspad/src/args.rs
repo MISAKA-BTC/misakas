@@ -426,6 +426,10 @@ pub struct Args {
     /// (`config::drill::palw_drill_useful_work_at_v1`). Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_useful_work_at: Option<u64>,
+    /// **DRILL ONLY: cross consensus accounting v2 (ADR-0172) at this DAA** — `palw_accounting_v2` alone (`config::drill::palw_drill_accounting_v2_at_v1`); its prerequisites
+    /// must already be in force. Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_accounting_v2_at: Option<u64>,
     /// **DRILL ONLY (a salted testnet-12 chain; refused anywhere else): hold a REAL attempt's submission until
     /// this many seconds after its template** — a REAL (non-floor) attempt this producer wins is submitted at
     /// `template + N s`, however quickly its drill-sized class ran, so the chain moves on under it exactly as it
@@ -903,6 +907,7 @@ impl Default for Args {
             palw_drill_class_seating_at: None,
             palw_drill_panel_liveness_at: None,
             palw_drill_useful_work_at: None,
+            palw_drill_accounting_v2_at: None,
             palw_drill_real_submit_delay_s: None,
             palw_drill_floor_ignore_policy: false,
             palw_drill_anchor_duty_after_slots: None,
@@ -2196,6 +2201,17 @@ pub fn cli() -> Command {
                      waited for an operator attempt, while the floor is held as the idle-only fallback (ADR-0165), before this node's \
                      floor producer mines its ONE anchor-duty binder (1..=3600; the release's value is 30). Meaningful only for an \
                      operator's bond.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-accounting-v2-at")
+                .long("palw-drill-accounting-v2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: cross consensus accounting v2 (ADR-0172: three block tiers, FALLBACK = algo 8 with a bond envelope, one block's \
+                     subsidy a DAA shared by W_claim) at this DAA on the drill chain. Nothing else moves; every prerequisite must already be in force at or below it. \
+                     Refused without the salt, at 0, and at a height another fence uses.",
                 ),
         )
         .arg(
@@ -3622,6 +3638,7 @@ impl Args {
             palw_drill_class_seating_at: m.get_one::<u64>("palw-drill-class-seating-at").copied(),
             palw_drill_panel_liveness_at: m.get_one::<u64>("palw-drill-panel-liveness-at").copied(),
             palw_drill_useful_work_at: m.get_one::<u64>("palw-drill-useful-work-at").copied(),
+            palw_drill_accounting_v2_at: m.get_one::<u64>("palw-drill-accounting-v2-at").copied(),
             palw_drill_real_submit_delay_s: m.get_one::<u64>("palw-drill-real-submit-delay-s").copied(),
             palw_drill_floor_ignore_policy: m.get_flag("palw-drill-floor-ignore-policy"),
             palw_drill_anchor_duty_after_slots: m.get_one::<u64>("palw-drill-anchor-duty-after-slots").copied(),
