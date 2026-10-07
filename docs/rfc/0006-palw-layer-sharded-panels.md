@@ -869,6 +869,17 @@ decides.
 
 <Open.>
 
+## Shared verification-challenge boundary — 2026-10-08
+
+New algebraic checks of cells/layers and their boundary relations bind [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)'s
+immutable challenge policy and complete statement before its future source window. Panel/role assignment stays a
+separate versioned randomness contract; assigning a cell is not evidence of an unpredictable computation challenge.
+No local seed formula or initially exposed seed for later adaptive proof messages is permitted. Partial cells still
+need scope/boundary coverage and whole-claim error composition; repeated same-seed watchers do not add independent
+trials. A fresh outsider reconstructs public queries/transcripts and follows mismatch through RFC14's bounded exact
+court/DA rules. Source scarcity leaves checks pending under their deadlines without changing chain liveness.
+This amendment adds no live policy, quorum change or implementation result.
+
 ## Mission alignment amendment — 2026-10-07
 
 §2のfirst-divergence lemmaは、必要な認証境界と全対象commit pointを取得・検査した場合の局所化の補題である。honest seatが存在するだけの検出保証でも、公開証拠の取得やcourt proof生成の完成証明でもない。cell/shardのopening・重み・stateと有界dissection/closeを、選出されていない普通のpublic bondにも提供する。outsiderの選出やcell quorumを、そのbondの訴追権の条件にしない。

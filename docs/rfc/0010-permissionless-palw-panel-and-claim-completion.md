@@ -101,6 +101,16 @@ After `AssignmentPointV1`, the first selected-chain block at or after the prescr
 
 The state records `claim_seal_id`, `panel_snapshot_root`, `beacon_id`, `panel_seed_v3`, `assignment_point`, `binding_block`, the exact seat list and exposure reservations. `binding_block` is an inclusion witness; it is never a source of Panel randomness. Alternative valid blocks at the bind point compute the same Panel and reservations for the same canonical history. The pre-fence `PalwAnchorFactV2` and its historical block/execution seed remain valid for old claims.
 
+### 3.4a Verification challenges are a separate contract (2026-10-08)
+
+[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) alone
+governs the proposed post-commit algebraic/conformance challenges. RFC10's Panel draw, receipt-ticket sources and
+redraw list remain separately versioned rules; their safety does not automatically prove Freivalds/GKR challenges
+unbiased. Even if a future release shares physical source facts, use distinct domains, bindings, timing and independent
+source/bias review. Panel assignment seeds never substitute for a missing verification beacon. This amendment does
+not migrate existing Panel/claim seeds or reactivate DNS/BFT beacon authority. EXEC slices are neither chain binders
+nor N beacon contributors; their root must separately meet the shared source eligibility rules.
+
 ### 3.5 Unavailability and a finite fallback
 
 If an assigned seat does not answer, any permitted redraw chooses the **next deterministic, non-reused seat** from the fixed snapshot using `H(panel_seed_v3 || retry_index || role)`. It never obtains new randomness from the timeout block, a candidate anchor, or a late bond. Retry count and windows are bounded; exhaustion is `NoCapablePanel` or the existing named non-fraud void outcome. A seat's silence may influence which precommitted alternate is reached, so the abuse bound must include adversarial seat weight and economic cost; the protocol must not claim perfect withholding resistance from a deterministic list alone.

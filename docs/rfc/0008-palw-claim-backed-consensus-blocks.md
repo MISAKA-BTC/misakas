@@ -148,6 +148,10 @@ heartbeatとBASE-0はsliceのpending数、検証結果、header種別、node-loc
 
 whole-claim誤受理確率はslice/boundaryの検査を合成する。同じ証拠やchallengeの複数carrierを独立検査と数えない。reorg/pruning/IBD後もpublic prosecutionとFinal後の回収に必要なmaterialを保持する。EXECのweightが0でもpending reward、collateral、DA、courtのexposureは0ではない。
 
+**2026-10-08共通challenge protocol:** [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)を唯一の正本とする。root/class/planは`challenge_policy_id`をbindし、各`WORK_SLICE` subjectはroot、index、canonical range、前後state、evidence/oracle rootsをchallenge前に固定する。future source windowはそのslice statementのcommit後に始める。root-open時に既知になったseedを、後で自由に作れる全slice statementへ再利用しない。whole-root検証も同じpolicyのbinding/coverageに従い、seed式をRFC8側で追加しない。
+
+EXEC_TX、heartbeat、BASE-0、未検証sliceはbeacon entropyにならない。独立検証・Final・G14・source資格を満たした長いroot useful workを将来sourceにする場合も、root work identity単位で一回だけであり、N carrierをN sourceに数えない。beacon不足はpending/既定deadline処理であり、sliceにweight/clockを与えたりheartbeat・BASE-0を抑止したりしない。
+
 deterministic traceのcommitmentだけで物理的な計算時刻を証明できるとは主張しない。precomputation、fork reuse、root/jobの複製、Sybilによる計算credit再利用をwork identityと台帳で防ぎ、その限界を仕様とUIに表示する。
 
 ## 7. 実装境界とactivation gates

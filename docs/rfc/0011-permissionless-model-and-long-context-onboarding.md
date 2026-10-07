@@ -3,7 +3,7 @@
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* Status: Draft, revised 2026-10-06 at the operator's request. **Sampling-first / court-on-dispute is the selected design direction**, recorded in [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md). Design and acceptance criteria only; no testnet-12 rule, activation height, or fingerprint changes by merging this text.
+* Status: Revised Draft, 2026-10-08. **Sampling-first / court-on-dispute** remains the ADR-0171 direction; §17 adds Static Admission → Beacon Conformance → Active Eligibility using RFC07's single challenge protocol. Design and acceptance criteria only; no runtime, testnet-12 rule, activation height or fingerprint changes by merging this text.
 * Source audit: repository commit `27670cd2b` (includes the DAA 5,300 release). Source-proven limits below describe this commit, not a fresh measurement of every deployed node. Prior 9B run results, current code facts, and proposed fixes are labelled separately; no successful 9B registration or 2M run is claimed.
 * Scope: PALW-TIR model conversion, class admission, long-context claims, probabilistic constraint checks, data availability, court, and readiness. The primary coverage target is **at least 90% of all public Hugging Face model repositories at a pinned snapshot, registered as their complete advertised task and context**. Registration must be independent of the registrant's VPS size. Execution semantics and terminal adjudication remain exact; normal verification accepts a quantified, nonzero soundness error.
 * Related: [RFC-0002](0002-palw-tensor-ir.md), [RFC-0006](0006-palw-layer-sharded-panels.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [ADR-0082](../adr/0082-the-close-is-flat-in-the-context.md), [ADR-0103](../adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md), [ADR-0135](../adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md).
@@ -345,13 +345,13 @@ GKR is the preferred candidate for aggregating compatible large constraint graph
 
 The proposed `VerificationPlanV1` and `VerificationEvidenceV1` are new schemas, not names of existing wire objects. They bind `chain_genesis`, `ruleset`, class/program/artifact roots, job/input and initial/final state roots, trace/constraint/material commitments, full semantic context, segment directory, suite version and security parameters. A claim cannot substitute a different output, expert, witness or plan after learning a challenge.
 
-1. Carry the claim and required initial commitments, reserve its exposure, and fix its canonical challenge anchor under a specified reorg policy.
-2. Derive challenge seed(s) from a future beacon only after those commitments are bound. Domain-separate by chain, claim, suite, stage, round and repetition. Specify field sampling without modulo bias, inclusion cutoff, beacon delay/finality, withholding behavior and allowable reorg depth. A convenient recent block hash is not automatically an unbiased beacon.
-3. Each GKR/sum-check round fixes the prover's message **before that round's challenge**. Revealing the entire challenge sequence after the first trace root can still break an adaptive interactive protocol. Choose a reviewed multi-round beacon construction or a transcript-bound Fiat–Shamir transform with its random-oracle, grinding and post-quantum analysis; the release must pin one, including latency and bytes. Trace commitment alone is not a Fiat–Shamir security argument.
+1. Carry the claim and required initial commitments, reserve its exposure, and bind the immutable `challenge_policy_id` of [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol).
+2. Use only that protocol's qualifying future PALW work, canonical collection/lock, seed derivation and field/query sampler. RFC11 defines no independent seed formula. Source validity must be independent of the consuming claim; a header-valid attempt, heartbeat/BASE-0/EXEC hash or committee signature is not replacement entropy.
+3. Each GKR/sum-check round fixes the prover's message **before that round's challenge**, under the policy-pinned staged-beacon or transcript-bound Fiat–Shamir mode in RFC07 VI.6. No all-future-challenges seed, prover-selected mode switch or unbounded transcript retry is permitted; the transform's own security review remains necessary.
 4. Make roots/openings/transcripts available before their deadlines. Seats verify assigned relations or the aggregate proof and file positive signed receipts bound to evidence and suite. The baseline retains a versioned, explicitly specified Panel quorum: node replay checks signatures, assignment, roots, timing and lifecycle; it does not secretly replay the LLM. A receipt attests that a seat ran the suite, not that the node checked all its arithmetic. If compact public proof verification is later moved into consensus, meter it separately and define the new acceptance rule.
 5. Canonical bytes and fixed transcript challenges yield identical verification/replay decisions. Nodes never use private runtime randomness to decide consensus. Reorg/IBD/pruning restore the same roots, seed derivation and outcome; a new anchor invalidates stale receipts as prescribed by the fence. Bound and account for retries rather than letting producers resample until success.
 
-The normative construction of the beacon, transcript transform, commitment opening and Panel tally remains an activation gate. This draft supplies neither a new secure beacon nor a proof that the current one meets these requirements.
+RFC07 Part VI is the normative construction contract; its source-unpredictability, bias, bootstrap, codec, parameters, transcript transform and replay gates remain open. Commitment opening and Panel tally also need complete implementation evidence. This draft does not prove a deployed beacon secure. §17 extends the same protocol to model onboarding; it does not replace per-claim checks by registration conformance.
 
 ### 15.4 Whole-claim error budget and adversary
 
@@ -555,6 +555,95 @@ registration plus Final/court/DA results. Report actual proof preparation and sm
 Any reference replay used during development must be labelled conformance work rather than a
 hidden prerequisite on every ordinary claim. No arbitrary soft-fork, universal-model support or
 performance claim follows from choosing the kernel-only implementation strategy.
+
+## 17. Three-stage model onboarding with post-commit conformance (2026-10-08)
+
+This is a proposed semantic lifecycle for the new route, not a change to current Rust enums, legacy registration,
+active classes or network rules. [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
+alone defines the policy, sources, seed/sampling and interactive transcript rules. RFC05 binds the policy to the
+Kernel; RFC02 binds it into new class/plan identity; RFC13 records commitment/evidence and resumable tooling.
+
+```text
+Candidate -> StaticAdmitted / RegisteredDormant
+          -> ChallengePending -> ConformancePending -> ConformancePassed
+          -> G14 + public availability + resources + actual chain eligibility
+          -> ActiveRewardable
+```
+
+`Registered != Active != Rewardable`. A static registration can finish without waiting for future work; a CLI can
+return a durable candidate/commitment id and resume status later. Transaction presence or a local preflight alone
+cannot claim chain registration, conformance PASS or reward eligibility. Missing beacon keeps the candidate dormant.
+
+### 17.1 Stage A — Static Admission
+
+Resolve supported active Kernel semantics, all typed relation/constraint coverage, exact-court/localization coverage,
+authenticated public-material structure, deterministic class/plan identity and worst-case parse/verification/DA/court
+resources. G14 structurally possible is required here; completed public-outside prosecution evidence is required
+again at Stage C. Unknown op, uncovered rounding/routing/state relation or missing court returns the precise extension
+gap. Beacon sampling cannot authorize it, and a Kernel proposal is not an active descriptor.
+
+Fix artifact, program, tokenizer/input schema, layout, verification-plan, constraint and conformance commitments,
+implementation-set root, scope, challenge policy and conditional error/resource profile. New-format class identity
+is determined now, before actual beacon evidence, using the versioned RFC02 binding. The canonical accepted
+commitment object and its position start the future window; a caller's wall-clock timestamp is insufficient.
+
+### 17.2 Stage B — Beacon Conformance
+
+Apply `MODEL_CONFORMANCE` under the precommitted RFC07 policy. Only independently validated future work from
+pre-existing eligible source classes qualifies; candidate X and work relying on X cannot test X. Collect/lock/replay
+the source facts exactly as RFC07 specifies. Absence of qualifying sources is `BEACON_UNAVAILABLE`, not success,
+and never enables heartbeat/BASE-0/EXEC/hash/committee fallback.
+
+Run the approved independent authenticated checks: tensor/weight ranges, state positions, routing/TopK/boundaries,
+pipeline stages, conformance vectors and Freivalds coefficients where the selected relation supports them. Include
+all required static/adversarial deterministic tests. Pin reference/independent/optimized implementations before
+randomness; retain exact results, openings, scope and transcript. No shared implementation disguised as an
+independent oracle and no operator-picked post-beacon fixture list.
+
+PASS is **probabilistic conformance for a declared scope and reviewed fault model**. It does not prove omitted
+semantics or replace per-claim whole-statement verification. Derive/check the declared epsilon under the approved
+suite rather than trusting manifest assertions. Raw s-of-N tile sampling misses a single bad tile with probability
+`1-s/N`; Freivalds inside sampled tiles does not remove that selection term. A missing coverage/soundness argument
+is UNKNOWN/ineligible for this route, not an unqualified conformance PASS. Publish measured artifact access,
+transfer, verifier/prover work and resource use; a 100GB artifact becoming a few GB of checks is a feasibility target,
+not demonstrated by this document. Opening authenticates bytes, not the computation relation by itself.
+
+Changes to artifact/layout/plan/constraints/scope/implementation invalidate evidence and require a new commitment
+before a new future window, subject to counted retries. A failed check initiates authenticated localization and the
+applicable exact/DA outcome; it does not itself convict or slash. Preserve failed and aborted records.
+
+### 17.3 Stage C — Active Eligibility
+
+ConformancePassed additionally needs complete semantic/constraint/court coverage, RFC14/G14 fresh-public-bond
+prosecution, class-bound public download/DA/retention, funded bond/liability, bounded resource profile, active
+Kernel/challenge policy, challenge lifecycle and the actual chain carrier/admission path. Local conformance, a Panel
+vote, register transaction or successful market opening cannot replace any of those conditions. Source fidelity,
+market listing, operator readiness and active reward eligibility remain separately labelled.
+
+```text
+ActiveRewardable = SemanticComplete AND ConstraintComplete AND ChallengeComplete
+                  AND CourtComplete AND PublicMaterialComplete AND G14Complete
+                  AND ResourceBounded AND ConformancePassed AND ActiveChainEligibility
+```
+
+Future randomness provides ChallengeComplete only when RFC07's source/security/implementation gates pass. It
+does not supply the other predicates. A conformance pass does not activate a Kernel extension, remove Panel rules
+or certify a future claim. Whole-claim Final, one-use work/reward and all present exposure caps still apply.
+Reorg rolls back dependent challenge/conformance/activation state under RFC07's branch-relative lock policy.
+
+### 17.4 Kernel extension and release evidence
+
+Kernel authors first satisfy semantics, constraint coverage, court, public-material and resource completeness.
+Then freeze implementation revisions and differential-vector scope, commit `KERNEL_CONFORMANCE` under RFC07,
+and compare reference, independent implementation and optimized backend on canonical selected cases. Tests can
+reduce fixture-selection bias; they cannot prove the statement includes every required relation or a Kernel sound.
+Unknown semantics await ADR0172's coordinated extension review, shadow validation and explicit activation.
+
+Test dormant asynchronous registration, missing/biased/nonqualifying sources, candidate self-source, changed roots,
+policy/suite substitution, honest/invalid conformance, adaptive GKR messages, retries, no-private-state outsider
+reconstruction/localization/conviction, reorg/restart/IBD/pruning and existing liveness under useful-work scarcity.
+All new protocol gates remain open. Preserve existing 9B/2M/HF evidence and coverage denominators; these added
+requirements do not convert untested models or dormant proposals into registered/active successes.
 
 ## Mission alignment amendment — 2026-10-07
 

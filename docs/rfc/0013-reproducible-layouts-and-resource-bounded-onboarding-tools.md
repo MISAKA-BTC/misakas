@@ -3,7 +3,7 @@
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* Status: Draft, 2026-10-06. Tooling remediation and release criteria; **no consensus activation or ceiling increase**.
+* Status: Revised Draft, 2026-10-08. Existing tooling remediation plus proposed post-commit conformance records; **no runtime implementation, consensus activation or ceiling increase from this revision**. Earlier test results retain their original scope.
 * Source baseline: `808baa6b9adcb029e64fffe51fcd84027f82e7c0`; the working-tree fixes accompanying this RFC are not yet a released binary or a main deployment.
 * Validation record: [0013-onboarding-tool-validation.json](evidence/0013-onboarding-tool-validation.json). Real-run stage status is explicit; a test result does not certify registration or source fidelity.
 * Related: [RFC04](0004-palw-model-improvement.md), [RFC05](0005-palw-ml-vm.md), [RFC11](0011-permissionless-model-and-long-context-onboarding.md), [RFC02](0002-palw-tensor-ir.md), [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
@@ -193,6 +193,9 @@ Expose independently restartable stages:
 
 `resolve → calibrate → convert → declare → target preflight → bind pack → conformance → certify → submit → observe`.
 
+That pipeline records the earlier local-tool stages. The proposed beacon route adds the independently resumable
+stages of §9; local deterministic conformance is neither Beacon Conformance nor Active eligibility.
+
 Persist each stage's input/output hashes and status using atomic completion records. No output is
 complete merely because its path exists. Resume only when all pinned inputs still match; changed
 tile/scheme/DAA invalidates affected checks without recalibrating unchanged weights. Checksums, roots,
@@ -245,6 +248,93 @@ They do not implement all of §§4–7: explicit target-snapshot/offline parity,
 durable per-position resume, complete calibration provenance, registration/certification and broad
 coverage remain distinct acceptance work. Test/real-run results belong in the evidence report;
 neither this text nor a passing build proves those unfinished outcomes.
+
+## 9. Beacon-aware packs and asynchronous conformance evidence (2026-10-08)
+
+[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) is the sole
+source/seed/sampling/transcript protocol; [RFC11 §17](0011-permissionless-model-and-long-context-onboarding.md#17-three-stage-model-onboarding-with-post-commit-conformance-2026-10-08)
+owns Static Admission → Beacon Conformance → Active Eligibility. RFC13 persists reproducible evidence and status,
+not an independent beacon or admission authority. These records are proposed tool-manifest schemas; wire ids,
+consensus carriage and compatible pack versioning require their own reviewed release.
+
+```text
+ConformanceCommitmentV1 {
+    version, chain_genesis, ruleset_id,
+    subject_kind, class_candidate_id_or_kernel_candidate_id,
+    kernel_descriptor_id, challenge_policy_id,
+    artifact_root, program_root, tokenizer_or_input_schema_root,
+    layout_root, verification_plan_root, constraint_root,
+    implementation_set_root, test_scope_root, conformance_commitment,
+    input_and_state_binding_root, resource_profile_id,
+    commitment_object_id, canonical_commitment_position
+}
+
+BeaconConformanceEvidenceV1 {
+    version, commitment_root, challenge_policy_id,
+    challenge_anchor, qualifying_source_evidence_root, lock_evidence_root,
+    challenge_seed, selected_vectors_root, selected_tensor_ranges_root,
+    reference_result_root, independent_result_root, backend_result_root,
+    authenticated_openings_root, per_round_transcript_root, transcript_root,
+    checks_required, checks_run, checks_failed, missing_checks,
+    scope_and_fault_model_id, derived_epsilon, soundness_assumptions_root,
+    status, measured_work_bytes_ram_time, public_material_locator_root
+}
+```
+
+Canonical identity/commitment bytes come from the appropriate versioned RFC02/05/07 binding, never ordinary JSON
+serialization. JSON is a tool record. Cached seed/epsilon/status fields are claims to recompute, not trusted inputs.
+`commitment_object_id` and `canonical_commitment_position` are observed submission provenance outside the precommit
+statement digest; do not hash an object id into itself. The conformance commitment binds the fixed test statement.
+Reference code, independent implementation and optimized backend revisions/math/layout policies are committed
+before randomness; the implementation set cannot be changed to agree with a revealed challenge. For Kernel testing,
+bind the proposed descriptor/relation/court scope without treating that descriptor as an already active model Kernel.
+
+The evidence locators resolve immutable public authenticated source, Final/settlement provenance, statement,
+query openings, output and complete GKR transcript bytes. Root-only records do not show checks ran. Missing, skipped,
+scope-mismatched or stale data cannot be a PASS. Record conditional probabilistic conformance separately from exact
+reference agreement, semantic admission, full-task source fidelity, G14 and actual chain Active/Rewardable state.
+Derive/check epsilon for the committed scope and fault model; a guessed epsilon or successful finite test list is
+not a whole-Kernel/whole-model security theorem.
+
+### 9.1 Resume, retries and changed inputs
+
+```text
+resolve / calibrate / convert / bind exact pack
+-> StaticAdmitted / RegisteredDormant
+-> submit and observe canonical ConformanceCommitment
+-> WaitingRandomness / BEACON_UNAVAILABLE
+-> ChallengeResolved (RFC07 lock predicate)
+-> ConformanceChecked / ConformancePassed
+-> G14 + availability + resource + chain eligibility
+-> ActiveRewardable
+```
+
+Persist hashes, commitment/source references, policy, per-stage progress, retry/abort history and atomic completion
+records. A CLI may exit while WaitingRandomness and resume from the canonical object; it need not keep the process
+or giant artifact fully resident until enough work arrives. Reconstruct from public chain facts, not the old process's
+memory. Local timeout is pending/cancelled, never entropy substitution or activation.
+
+Artifact/program/tokenizer/layout/plan/constraints/scope/implementation/policy changes invalidate every dependent
+challenge/check result and require a new pre-beacon commitment. Retain the old failed/aborted evidence rather than
+overwriting it; RFC07 counts retries and distinguishes off-chain grinding assumptions. Unchanged upstream stages
+may be reused only after verifying their pinned hashes. Reorg invalidates branch-dependent source/lock/conformance
+and eligibility evidence; do not rerun an optimizer or retain a stale seed under an apparently unchanged class id.
+The actual beacon/queries/transcript are activation evidence, not new class-identity inputs.
+
+### 9.2 Independent bounded checks and release cases
+
+Retain mandatory exact/adversarial conformance and the independent implementation requirements of §5. A reviewed
+beacon profile may add bounded authenticated randomized checks over a huge artifact; it cannot silently turn a
+previously required full-scope test into an unchecked sample or hide selection error. Stream/mmap verified ranges,
+charge hash/opening/preprocessing and transfer work, and measure actual checked bytes/RAM/prover/verifier costs.
+No 100GB-to-MB/GB reduction or universal speedup is claimed without an equivalent-security real-artifact run.
+
+Require policy/suite/seed/source/lock replay, reference/independent/backend agreement on selected cases, forged
+openings, changed implementations/layouts, omitted vectors, raw-sampling scope labels, adaptive GKR transcripts,
+candidate self-source, scarcity, cancellation/resume, bounded retries and reorg/IBD/pruning tests. A fresh public
+verifier must rebuild the same challenge and follow a mismatch through exact court/DA rules without producer-private
+state. Old manifests stay readable with explicit unsupported/missing-evidence labels; upgrading pack metadata
+cannot silently activate a new challenge policy or rehash a legacy class. All §9 implementation evidence is pending.
 
 ## Mission alignment amendment — 2026-10-07
 

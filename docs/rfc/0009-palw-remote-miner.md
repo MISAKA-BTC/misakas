@@ -179,6 +179,12 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 - RFC-0008 の work-slice block が実装された場合の同一 work の二重 credit と public redemption の扱い。
 - remote registration の quote/unsigned-object/署名/状態照会の API 境界、offline wallet が費用・identity を検証できる schema、複数 relay の retry と fee-change 承認。現行 burn・担保規則を変えずに実装できる部分と、新しい authority/fence が必要な部分の切り分け。
 
+## 共通post-commit challengeとremote status — 2026-10-08
+
+新しいKernel/model onboarding、claim/EXEC slice検査は[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)だけを使う。remote clientもclass/policy、canonical commitment、qualifying future workとFinal/settlement provenanceからseed・queries・GKR transcriptを検証し、remote worker/operatorのseedを信頼しない。既存receipt quantum/ticketのbeacon規則とは別のversioned契約であり、今回の文書で再解釈しない。
+
+RFC11 §17 / RFC13 §9のRegisteredDormant、WaitingRandomness、ConformancePassed、ActiveRewardableを明示し、beacon待ちはdurable idからresumeできる。artifact/layout/plan/implementation変更は古いevidenceを無効にする。source不足をheartbeat/BASE-0/EXEC hash・BFT/DNS署名で補わず、candidate/verificationだけをpending/既定deadline扱いにする。source/constraint/G14不足を「registered/active成功」と表示せず、fraud proofの客観性・担保・public material条件を維持する。runtime・activationは変更しない。
+
 ## Mission alignment amendment — 2026-10-07
 
 node-less producerとrelayの分離は維持する。証拠の配布先をPanelだけに限定せず、普通のpublic bondがproducerの停止後も認証されたmaterialを取得して局所化・court提出できる責任と保持期間を定義する。複数RPCの一致は算術証明ではない。relayのHTTP失敗やmaterial未到達を自動slashの根拠にせず、規範的demand/disclosure/defaultで扱う。

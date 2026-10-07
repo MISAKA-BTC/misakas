@@ -18,5 +18,8 @@ validate the replacement EXEC design. No old fence is activated by this change.
 - Current main's heartbeat, BASE-0, 120-second cadence and liveness structure remain the baseline.
 - ADR-0173/RFC14 public prosecution, evidence retention and liability apply to every slice/boundary.
   Panel=0 still requires RFC14 and RFC15's separate completion/activation gates.
+- New root/slice statements bind [RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)'s
+  common post-commit policy. Each slice's evidence is fixed before its corresponding future source window;
+  a seed exposed at root-open cannot test later freely chosen statements. Carriers never multiply beacon sources.
 
 This is a design/documentation update. The replacement runtime has not been implemented or activated by it.

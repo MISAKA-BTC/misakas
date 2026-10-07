@@ -2066,6 +2066,30 @@ real-checkpoint `Final` references, sustained panel evidence and a complete resi
 coverage: remaining kernel/resource/source/rights failures prevent an unrestricted coverage claim. RFC11's
 broader all-HF target retains `D_all`; neither target implies the other.
 
+## II.13 Immutable challenge-policy binding and later conformance evidence (2026-10-08)
+
+[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) is the sole
+post-commit challenge protocol. For a new versioned class/profile, bind the active KernelDescriptor digest,
+VerificationPlan root, `challenge_policy_id`, program/artifact/tokenizer/input-schema/layout/context commitments
+and RFC14 dispute-plan digest before any challenge randomness. Resolve checker/challenge/soundness as the approved
+immutable Kernel tuple of RFC05; a declarative plan cannot select weaker randomness, omit relations or upload a checker.
+
+| Immutable identity/statement bindings | Later conformance or activation evidence |
+| --- | --- |
+| Kernel descriptor, semantic/checker/court/soundness suites, challenge policy, plan and material/layout identities | Actual source references, beacon/lock descriptor, challenge seed, selected queries/vectors, transcript, outcomes |
+| Canonical class/profile/candidate id fixed before future work | RFC13 ConformanceCommitment submission provenance and BeaconConformanceEvidence tied to that fixed id |
+
+Do not put an actual beacon or sampled row into class identity: a new beacon does not rehash the same class. Changing
+artifact/layout/plan/policy creates the appropriate new class/profile commitment under a separately versioned encoding;
+legacy hashes and already-bound claims keep their old meaning. No new codec/hash domain or network activation is
+assigned by this document. Claims/receipts/cache keys/material manifests bind the applicable identity and policy.
+
+RFC11 §17 defines Static Admission → Beacon Conformance → Active Eligibility. RegisteredDormant can precede the
+beacon, but neither conformance agreement nor an unknown-op sample promotes it to Active. Full semantic/constraint/
+court/public-material/resource admission remains mandatory; the beacon selects tests, not semantics. Independent
+runtime-pack conformance follows RFC13, while per-claim verification and public prosecution use the same RFC07 policy.
+All newly proposed bindings/lifecycle gates need an explicit implementation/migration before use.
+
 ## Mission alignment amendment — 2026-10-07
 
 §5、§II.7、§II.10–II.12のadmissionにpublic-verifier dispute completenessを追加する。静的cone/cost検査、kernel catalog、conformance、readyな独立seat、admission jury、FamilyCertifiedだけでは報酬・weightを有効にしない。boundary/history/checkpoint、fused reductionのdissectionとcloseも、fresh non-seat verifierが公開取得した証拠から作れる必要がある。「登録時にadjudicabilityが確定する」はこの追加gateを含む場合に限る。

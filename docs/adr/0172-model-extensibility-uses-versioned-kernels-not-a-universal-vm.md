@@ -90,7 +90,9 @@ is not validation, and there is no selected activation DAA in this ADR.
 ## 4. Immutable meanings and registration
 
 New-format class identity binds a kernel descriptor/version, semantic/constraint/court suite ids,
-plan root and all existing program/material/task/context commitments. A hash of code is not its
+the immutable challenge policy and approved checker/challenge/soundness tuple, plan root and all existing
+program/material/task/context commitments. Actual future beacon/transcript is later evidence, never an identity
+input. A hash of code is not its
 correctness proof and never authorizes the node to download/execute a module. Legacy class ids and
 in-flight claim semantics stay unchanged; an existing class is not rehashed or upgraded in place.
 
@@ -151,6 +153,30 @@ for probabilistic checks and the boundary between economic audits and cryptograp
 **Outcome:** no VM implementation programme for model extensibility; permissionless plans within
 implemented kernels, explicit protocol upgrades outside them, and unchanged probabilistic-normal /
 exact-dispute verification. This decision neither implements nor activates any of those extensions.
+
+## 7. Beacon-backed Kernel/model conformance, after completeness (2026-10-08)
+
+`KernelDescriptorV1.challenge_policy_id` resolves [RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)'s
+PostCommitChallengePolicyV1 digest. RFC07 alone specifies sources, seed/sampling, transcript transforms and recovery;
+other workstreams must not implement independent formulas. Approve checker/challenge/soundness policies together.
+
+Before Kernel differential challenges, establish semantics completeness, full constraint coverage, exact court,
+public-material/prosecution completeness and bounded resources. Then fix reference/checker/court/independent/
+optimized implementation revisions and test scope, commit, wait for independently valid future PALW work, and run
+canonical randomized vectors alongside required deterministic/adversarial tests. Agreement reduces fixture bias;
+it proves neither Kernel semantics nor soundness. New unknown operations still require coordinated implementation,
+review/shadow evidence and explicit Kernel activation. A beacon or Panel vote cannot authorize them.
+
+Model onboarding follows RFC11 §17: Static Admission / RegisteredDormant, Beacon Conformance, then G14/public
+availability/resource/actual chain Active Eligibility. RFC13 carries commitments, source/lock/transcript/results,
+scoped error and resumable state. Changing implementations/artifact/layout/plan invalidates dependent evidence and
+requires a fresh pre-beacon commitment with counted retries; actual beacon/query data does not rehash the class.
+
+Use RFC07's candidate-independent qualifying Final useful work. Committee/DNS/BFT signatures, heartbeat/BASE-0,
+round/EXEC headers and self-testing candidates supply no substitute entropy. Source absence waits without changing
+main liveness. Bootstrap, source cost/unpredictability, last-contributor/withholding bias, staged GKR/Fiat–Shamir
+security, retries/reorg and fresh-public-verifier exact escalation remain unpassed gates. This documentation adds
+no runtime, source approval privilege, wire id, fingerprint or activation height.
 
 ## Mission alignment amendment — 2026-10-07
 

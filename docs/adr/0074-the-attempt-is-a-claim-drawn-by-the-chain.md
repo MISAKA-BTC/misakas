@@ -1,5 +1,7 @@
 # ADR-0074: The attempt is a claim, drawn by the chain
 
+> **New verification-challenge scope — 2026-10-08:** The chain-derived/no-attestation principle remains. [RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) owns the new conformance/algebraic challenge source and seed. Its qualifying future independently Final useful work is not the legacy first-algo-6 ticket/Panel draw or a cheap fallback floor. Do not inherit unpredictability from algo id or inference cost alone, or reinterpret this ADR's legacy seeds. Source scarcity leaves the new checks pending while current heartbeat/BASE-0/transaction liveness continues; no BFT/DNS beacon authority is added.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 

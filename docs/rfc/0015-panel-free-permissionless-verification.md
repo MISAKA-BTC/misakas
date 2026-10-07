@@ -60,6 +60,12 @@ producerが開示を拒否する場合は、正直なverifierが適格なon-chai
    conviction/slash・Final阻止まで、実node E2Eを完結する。
 8. **Recovery and resources:** restart/IBD/reorg/重複proof/退出/担保保持/資源上限と
    worst-case deadlineを検証する。
+9. **Post-commit challenge completeness:** [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)のimmutable policyをbindし、statement/prover messageを各challenge前に固定する。sourceは独立に有効化・検証された将来のcanonical PALW workであり、fresh outsiderがqualification/Final/settlement、同じsource順序・seed・queries・各GKR roundを公開materialから再構成できる。grinding、abort/retry、withholding、reorg、資源・保持期限のboundsとexact escalationが全許可profileで成立する。
+
+この追加条件はG14の一部であり、別のPanel=0 activation shortcutではない。RegisteredDormant / ConformancePassedと
+ActiveRewardableをRFC11 §17に従って分け、semantic/constraint/court/public-material/resource completenessをsamplingで代替しない。
+source不足やtimeoutをheartbeat/BASE-0/EXEC hash、committee署名、local RNGで補わず、pending/既定deadlineとして扱う。
+chain livenessは現行mainのまま進む。既存のsame-seed watcher非独立性、positive checks、DA/defaultとconvictionの区別を維持する。
 
 このgateは本RFCで許可する**全reward-bearing class、kernel、layout、task/context profile**
 に適用する。canonical 8k held/fusedの三gap [C12]、整合したgarbage trace、borrowed trace、

@@ -1,5 +1,7 @@
 # ADR-0044: Free-prompt PALW — the user's own inference becomes the consensus work, certified before it mines
 
+> **New verification-challenge scope — 2026-10-08:** [RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol) is the sole proposed post-commit policy for Kernel/model conformance and claim/slice/public checks. This ADR's existing receipt-ticket/Panel beacon rules retain their historical/versioned meaning; they do not qualify a cheap BASE-0 floor or an unadmitted attempt as entropy for the new protocol. Source validity must be independent of the consuming challenge, with reviewed paid-work/unpredictability/bias bounds. No free-header hash, committee/DNS/BFT signature or timeout entropy fallback is allowed. No live rule is changed by this note.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
