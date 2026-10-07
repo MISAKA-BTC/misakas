@@ -6,6 +6,7 @@
   "match": {"architectures": ["GPT2LMHeadModel"], "model_types": ["gpt2"]},
   "config": {"defaults": {"vocab_size": 50257, "activation_function": "gelu_new", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true, "scale_attn_weights": true, "scale_attn_by_inverse_layer_idx": false}, "inert": ["reorder_and_upcast_attn", "n_ctx"]},
   "vars": [
+    {"name": "chk_n_special", "value": {"$forbid": ["n_special", "special-token rows beyond the vocabulary (openai-gpt) are not modelled"]}},
     {"name": "hidden", "value": {"$alias": [["n_embd", "hidden_size"], 768]}},
     {"name": "n", "value": {"$alias": [["n_layer", "num_hidden_layers"], 12]}},
     {"name": "heads", "value": {"$alias": [["n_head", "num_attention_heads"], 12]}},

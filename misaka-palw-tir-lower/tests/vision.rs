@@ -356,7 +356,10 @@ fn text_stage(name: &str, stream_key: &str) {
             let fl = sess.run(&stream).expect("float LM, 1-D positions");
             let r1 = rel(&fl.concat().iter().map(|x| *x as f64).collect::<Vec<_>>(), &rows_of(&rec[stream_key]).concat());
             eprintln!("{name} control: the float LM with 1-D positions vs HF: rel {r1:.2e}");
-            assert!(r1 > 0.05, "{name}: the fixture barely exercises M-RoPE (rel {r1} with 1-D positions)");
+            // Qwen3.5 rotates a quarter of a head in its one attention layer (the other is Gated DeltaNet): M-RoPE moves
+            // its logits less, still 10^5 times the float LM's own error against HF.
+            let floor = if name == "qwen3_5" { 0.02 } else { 0.05 };
+            assert!(r1 > floor, "{name}: the fixture barely exercises M-RoPE (rel {r1} with 1-D positions)");
         }
     }
     // 2. Calibration: the prompt with the float tower's rows for random images and a random
@@ -461,7 +464,10 @@ fn text_stage(name: &str, stream_key: &str) {
         let r = rel(&all, &hf.concat());
         eprintln!("{name} integer text stage vs HF, teacher-forced: logits rel {r:.2e}");
         // Well inside the 1-D-position control's error: the integer positions are HF's.
-        assert!(r < 0.03, "{name}: integer logits rel {r}");
+        // Qwen3.5's Gated DeltaNet layer carries its recurrent state through the integer path's own rounding: the logits' rel
+        // error is the hybrid's (its text-only fidelity class), still below the 1-D-position control's (≈ 4–6 % here).
+        let ceiling = if name == "qwen3_5" { 0.04 } else { 0.03 };
+        assert!(r < ceiling, "{name}: integer logits rel {r}");
         for (row, want_row) in tf.output.data.chunks(v).zip(&hf) {
             let got_row: Vec<f64> = row.iter().map(|c| *c as f64 * mat.logits_scale).collect();
             kl_sum += kl(want_row, &got_row);
@@ -641,4 +647,62 @@ fn the_vision_adapters_agree_with_the_rust_reader() {
         let r = vision::parse_vision_rust(&cfg, None, None).expect("rust");
         assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&r).unwrap(), "{name} defaults");
     }
+}
+
+/// **The out-major tower computes the same integers** (`lower_vision_with(.., true)`: `[out, in]` weights, `[1,out,in]·[L,in,1]`):
+/// on every tower fixture, both lowerings materialised from the same calibration give byte-identical outputs on the fixture images,
+/// and the out-major program passes the three implementations and the court.
+#[test]
+fn the_out_major_tower_computes_the_default_tower_s_integers() {
+    for name in ["clip_vision", "siglip_vision", "qwen2_vl", "qwen2_5_vl", "llava"] {
+        let fx = load(name);
+        let s = &fx.spec;
+        let dir = fixture_dir(name);
+        let (hl, binding) = vision::hl_program(s).expect("hl");
+        let ck = Checkpoint::open(&dir).expect("checkpoint");
+        let (params_f, _) = ParamStore::from_source(&hl, &binding, &ck).expect("params");
+        let mut stats = std::collections::BTreeMap::new();
+        for img in calib_images(s, 4) {
+            vision::float_forward(&hl, s, &params_f, &img, Some(&mut stats)).expect("calibration");
+        }
+        let loader = Resident(Arc::new(params_f));
+        let quiet = |_: usize, _: usize| {};
+        let mut outs = Vec::new();
+        for out_major in [false, true] {
+            let lw = vision::lower_vision_with(&hl, s, out_major).expect("lower");
+            let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
+            let p2 = encoder::vision_v2(&lw).expect("v2");
+            let params2 = encoder::lifted_params(&lw.program, &[vision::IMAGE_PARAM], &mat.params);
+            let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
+            let mut per_image = Vec::new();
+            for (img, _) in &fx.images {
+                let mut inputs = tir::interp_v2::MapInputs::default();
+                let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+                inputs.constant.insert(0, t);
+                per_image.push(interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output);
+            }
+            if out_major {
+                let img = &fx.images[0].0;
+                let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+                let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
+                common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name} out-major: three implementations: {e}"));
+                let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name} out-major: court: {e}"));
+                assert!(c.commits > 0);
+            }
+            outs.push((per_image, mat.logits_scale));
+        }
+        assert_eq!(outs[0].1, outs[1].1, "{name}: the same output scale");
+        assert_eq!(outs[0].0, outs[1].0, "{name}: the out-major tower's integers are the default tower's");
+        eprintln!("{name}: out-major tower = default tower on {} images", fx.images.len());
+    }
+}
+
+#[test]
+fn qwen3_5_tower_with_its_resampled_position_table_matches_its_hf_fixture() {
+    check_tower("qwen3_5", "image_rows");
+}
+
+#[test]
+fn qwen3_5_generates_hf_s_greedy_ids_through_the_text_pipeline() {
+    text_stage("qwen3_5", "logits");
 }

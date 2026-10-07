@@ -46,6 +46,8 @@ serde_json.workspace = true
 sha2.workspace = true
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 serde = { workspace = true }
+# The Hugging Face census (`census`) reads its header store gzip-compressed.
+flate2.workspace = true
 
 [[bin]]
 name = "palw-class"

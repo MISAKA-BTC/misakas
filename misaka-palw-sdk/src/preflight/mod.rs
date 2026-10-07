@@ -67,7 +67,7 @@ impl Depth {
 }
 
 /// The three stages, in the order a model meets them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Convert,
@@ -86,7 +86,7 @@ impl Stage {
 }
 
 /// One thing that stops a stage. Codes are stable once published (RFC-0002 §II.2.4).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Blocker {
     pub stage: Stage,
     pub code: String,
@@ -174,7 +174,7 @@ pub struct Verdict {
 }
 
 /// One condition of the chain, as needed against limit.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Condition {
     pub id: String,
     pub what: String,
@@ -216,6 +216,16 @@ pub struct Options {
     pub node: Option<node::NodeFacts>,
     /// The `full` depth's inputs: the runtime pack and the artifact ([`full`]).
     pub full: full::FullInputs,
+    /// A PEFT LoRA adapter over the model (RFC-0004: a candidate is a parent plus an adapter): its `adapter_config.json` and the
+    /// tensor names of its `adapter_model.safetensors`, attached to the model's spec before the shape-only lowering.
+    pub lora: Option<LoraInput>,
+}
+
+/// An adapter the preflight attaches to the model it reads ([`Options::lora`]).
+#[derive(Clone, Debug)]
+pub struct LoraInput {
+    pub config: String,
+    pub tensors: Vec<String>,
 }
 
 impl Default for Options {
@@ -235,6 +245,7 @@ impl Default for Options {
             residency_pin_below_bytes: misaka_palw_tir_exec::tiers::TIR_PIN_BELOW_BYTES_V1,
             node: None,
             full: full::FullInputs::default(),
+            lora: None,
         }
     }
 }
@@ -422,7 +433,156 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
         None => None,
     };
     let src = source::open(path, kind, opts.headers.as_deref(), reg)?;
-    let analysis = model::analyze(&src, opts, reg, adapter_text.as_deref());
+    run_on_source(&src, Some(path), kind, over, opts, reg, adapter_text.as_deref())
+}
+
+/// **The preflight of a source already read** — the Hugging Face census (RFC-0002 §II.10, [`crate::census`]) builds its [`source::Source`]
+/// from a header store (the files' sizes are the Hub's, the shards are their headers) and judges it here, with the built-in registries.
+/// `cache` shares the chain's judgment between sources whose shape-only programs are the same bytes ([`JudgeCache`]).
+pub fn run_census_source(
+    src: &source::Source,
+    label: &str,
+    bytes_read: u64,
+    opts: &Options,
+    cache: Option<&JudgeCache>,
+) -> Result<Report, String> {
+    run_on_source_cached(
+        src,
+        None,
+        InputKind::Remote,
+        InputInfoOverride { label: Some(label.to_string()), bytes_read: Some(bytes_read) },
+        opts,
+        misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
+        None,
+        cache,
+    )
+}
+
+/// **The chain's judgment, shared by identical programs.** [`chain::judge`] is a function of the shape-only program, the
+/// options, and two figures of the convert stage it reads (the parameters' bytes and the inventory's leaf estimate, both functions
+/// of the program); a census meets the same program in every fine-tune of one configuration, and one judgment runs admission v10
+/// many times (the layout search). The key is all of those inputs, so a hit is the same computation, not an approximation. (The
+/// tokenizer's bytes, which differ between fine-tunes that edit a chat template, are not read by the judgment and not keyed.)
+#[derive(Default)]
+pub struct JudgeCache {
+    map: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::OnceLock<chain::ChainOutput>>>>,
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
+    /// A file the judgments are appended to and read back from (one `{"key", "chain"}` per line), so a census that restarts does not
+    /// judge a program twice. The caller names it per build: a judgment is a function of the build's consensus code.
+    file: Option<std::sync::Mutex<std::fs::File>>,
+}
+
+impl JudgeCache {
+    pub fn key(program: &misaka_palw_tir::TirProgramV1, analysis: &model::Analysis, opts: &Options) -> String {
+        let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/v1").to_state();
+        st.update(&program.encode());
+        let a = analysis.artifact.as_ref().map(|a| (a.params_bytes, a.inventory_leaves_estimate));
+        st.update(
+            format!(
+                "|{a:?}|{:?}|{:?}|{:?}|{}|{}|{}|{:?}|{}|{}",
+                opts.network,
+                opts.height,
+                opts.max_context,
+                opts.tile_len,
+                opts.h_chunk,
+                opts.held,
+                opts.seat_shares.iter().map(|s| (s.name.clone(), s.bytes)).collect::<Vec<_>>(),
+                opts.residency_pin_below_bytes,
+                opts.node.is_some()
+            )
+            .as_bytes(),
+        );
+        source::hex(st.finalize().as_bytes())
+    }
+
+    /// A cache backed by `path`: its judgments are loaded, and every new one is appended.
+    pub fn with_file(path: &Path) -> Result<JudgeCache, String> {
+        let c = JudgeCache::default();
+        let mut n = 0;
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let mut m = c.map.lock().map_err(|_| "poisoned")?;
+            for line in text.lines() {
+                // A line cut short by a stopped process is skipped.
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+                let (Some(k), Some(ch)) = (v.get("key").and_then(|k| k.as_str()), v.get("chain")) else { continue };
+                let Ok(out) = serde_json::from_value::<chain::ChainOutput>(ch.clone()) else { continue };
+                let cell = std::sync::OnceLock::new();
+                let _ = cell.set(out);
+                m.insert(k.to_string(), std::sync::Arc::new(cell));
+                n += 1;
+            }
+        }
+        let f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let _ = n;
+        Ok(JudgeCache { file: Some(std::sync::Mutex::new(f)), ..c })
+    }
+
+    /// The judgments the cache holds.
+    pub fn len(&self) -> usize {
+        self.map.lock().map(|m| m.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get_or_judge(&self, key: String, f: impl FnOnce() -> chain::ChainOutput) -> chain::ChainOutput {
+        let key_for_file = key.clone();
+        let cell = {
+            let mut m = self.map.lock().unwrap_or_else(|p| p.into_inner());
+            m.entry(key).or_default().clone()
+        };
+        let mut computed = false;
+        let out = cell
+            .get_or_init(|| {
+                computed = true;
+                f()
+            })
+            .clone();
+        let counter = if computed { &self.misses } else { &self.hits };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if computed
+            && let Some(file) = &self.file
+            && let Ok(line) = serde_json::to_string(&serde_json::json!({"key": key_for_file, "chain": out}))
+            && let Ok(mut f) = file.lock()
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+        out
+    }
+
+    /// (hits, misses).
+    pub fn stats(&self) -> (u64, u64) {
+        (self.hits.load(std::sync::atomic::Ordering::Relaxed), self.misses.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+fn run_on_source(
+    src: &source::Source,
+    path: Option<&Path>,
+    kind: InputKind,
+    over: InputInfoOverride,
+    opts: &Options,
+    reg: &misaka_palw_tir_lower::quantfmt::QuantRegistry,
+    adapter_text: Option<&str>,
+) -> Result<Report, String> {
+    run_on_source_cached(src, path, kind, over, opts, reg, adapter_text, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_on_source_cached(
+    src: &source::Source,
+    path: Option<&Path>,
+    kind: InputKind,
+    over: InputInfoOverride,
+    opts: &Options,
+    reg: &misaka_palw_tir_lower::quantfmt::QuantRegistry,
+    adapter_text: Option<&str>,
+    cache: Option<&JudgeCache>,
+) -> Result<Report, String> {
+    let analysis = model::analyze(src, opts, reg, adapter_text);
 
     // The depth reached: the shape depth needs a network and a program.
     let mut stopped_at: Option<String> = None;
@@ -441,7 +601,10 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
                 {
                     return Err(format!("--node is on {} and --network is {}: the conditions would be judged on another chain", node.network, net.id));
                 }
-                chain_out = chain::judge(&net, opts, program, &analysis, &src);
+                chain_out = match cache {
+                    Some(c) => c.get_or_judge(JudgeCache::key(program, &analysis, opts), || chain::judge(&net, opts, program, &analysis, src)),
+                    None => chain::judge(&net, opts, program, &analysis, src),
+                };
                 network = Some(chain_out.network.clone());
                 reached = Depth::Shape;
             }
@@ -452,7 +615,7 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
     let mut full_register: Vec<Blocker> = Vec::new();
     let mut full_mine: Vec<Blocker> = Vec::new();
     if opts.depth == Depth::Full && stopped_at.is_none() {
-        let model_dir = (kind == InputKind::HfDirectory).then_some(path);
+        let model_dir = path.filter(|_| kind == InputKind::HfDirectory);
         let (info, blockers) = full::judge_full(&opts.full, model_dir, network.as_ref().map(|n| n.id.as_str()), opts.node.as_ref());
         for b in blockers {
             match b.stage {
@@ -495,7 +658,7 @@ fn run_input(path: &Path, kind: InputKind, over: InputInfoOverride, opts: &Optio
         },
         depth: DepthInfo { requested: opts.depth, reached, stopped_at },
         network,
-        source: model::source_info(&src),
+        source: model::source_info(src),
         model: analysis.model.clone(),
         scope: analysis.scope.clone(),
         storage: analysis.storage.clone(),

@@ -88,6 +88,9 @@ pub struct PalwGenAdmissionRulesV1 {
     /// **The box-demand rules at the block** (spec 04b §10.3): the release's, or ref2's H7 `TopK` row
     /// past `Params::palw_tir_fence2` — read by the stages' admission and the value bound `V`.
     pub demand: crate::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    /// **The close-sizing twin at the block**: the element twin, or the range twin past `Params::palw_gen_range_twin_v1` (the same
+    /// bounds, fewer steps of the same work cap).
+    pub twin: crate::palw_tir_close_range_v1::PalwTirCloseTwinV1,
 }
 
 impl PalwGenAdmissionRulesV1 {
@@ -102,6 +105,7 @@ impl PalwGenAdmissionRulesV1 {
             held_armed: tir.is_some_and(|r| r.held.armed),
             held_close_chunks: params.palw_held_close_chunks_active_at(daa_score),
             demand: params.palw_tir_demand_rules_at(daa_score),
+            twin: params.palw_gen_close_twin_at(daa_score),
         })
     }
 }
@@ -430,6 +434,7 @@ pub fn verify_gen_class_admission_v1(
         carriable,
         crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1,
         crate::palw_gen_close_price_v1::PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+        rules.twin,
     )?;
     for (s, stage) in bounds.iter().enumerate() {
         for b in stage {

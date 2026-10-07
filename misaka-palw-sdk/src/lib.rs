@@ -54,6 +54,8 @@ pub mod lineages {
 }
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
+/// RFC-0002 Part II §II.10: the Hugging Face census — one gate row per Hub repository (`palw-class census`).
+pub mod census;
 /// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
 pub mod runtime_pack;
 pub mod sdk;

@@ -12428,6 +12428,12 @@ impl VirtualStateProcessor {
                         held_close_chunks: self.palw_held_close_chunks_at(point.daa_score),
                         // The block's box-demand rules, as the IR arm reads them (the fold's mirror).
                         demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
+                        // The close-sizing twin, read off the bundle's mirror (`palw_gen_range_twin_v1`).
+                        twin: if bundle.state.gen_range_twin_active_at(point.daa_score) {
+                            kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range
+                        } else {
+                            kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element
+                        },
                     };
                     kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
                         .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;

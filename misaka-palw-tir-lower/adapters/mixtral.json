@@ -12,7 +12,7 @@
     {"name": "sw", "value": {"$cfg?": "sliding_window"}},
     {"name": "types", "value": {"$repeat": ["sliding_attention", {"$var": "n"}]}},
     {"name": "rope_theta", "value": 1000000.0},
-    {"name": "abias", "value": false},
+    {"name": "abias", "value": {"$let": ["_", {"$forbid": ["attention_bias", "MixtralAttention has no biases"]}, false]}},
     {"name": "mbias", "value": false},
     {"name": "l_ffn", "value": {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "router": {"scoring": "Softmax", "normalize": true}}}, "layer": true},
     {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"moe.router": "{p}layers.{L}.block_sparse_moe.gate", "moe.gate": "{p}layers.{L}.block_sparse_moe.experts.{E}.w1", "moe.up": "{p}layers.{L}.block_sparse_moe.experts.{E}.w3", "moe.down": "{p}layers.{L}.block_sparse_moe.experts.{E}.w2"}]}},

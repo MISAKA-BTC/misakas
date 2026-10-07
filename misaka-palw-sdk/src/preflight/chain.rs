@@ -29,7 +29,7 @@ use misaka_palw_tir::TirProgramV1;
 use serde::Serialize;
 
 use crate::check_architecture::{ArchVerdictV1, check_ir_program_at_v1, tir_admit_inputs_v1, tir_ceilings_v1};
-use crate::tir_layout::{TirLayoutChoiceV1, tir_choose_layout_v1};
+use crate::tir_layout::TirLayoutChoiceV1;
 
 /// One tier of seat: a name and the memory share a seat of that tier declares.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -80,7 +80,7 @@ impl PreflightNetwork {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct FenceRow {
     pub name: String,
     /// `None`: dormant on this network.
@@ -90,7 +90,7 @@ pub struct FenceRow {
     pub needed: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
 pub struct NetworkInfo {
     pub id: String,
     /// The height the conditions were judged at.
@@ -104,7 +104,7 @@ pub struct NetworkInfo {
     pub fences: Vec<FenceRow>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct LayoutInfo {
     pub max_context: u32,
     pub checkpoint_interval: u32,
@@ -117,7 +117,7 @@ pub struct LayoutInfo {
     pub widest_context: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct GateNumbers {
     pub max_step_leaf_count: u64,
     pub canonical_step_leaf_count: u64,
@@ -126,7 +126,7 @@ pub struct GateNumbers {
     pub max_operand_count: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct AdmissionInfo {
     /// `tir_admit_v1`'s verdict over the shape-only program (`ADMISSIBLE`, `EXCEEDS(...)`, ...).
     pub verdict: String,
@@ -146,7 +146,7 @@ pub struct AdmissionInfo {
     pub not_asked: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct SeatInfo {
     pub artifact_bytes: u64,
     /// The K/V history and recurrent state at the declared context.
@@ -160,7 +160,7 @@ pub struct SeatInfo {
     pub note: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct SeatTier {
     pub name: String,
     pub share_bytes: u64,
@@ -169,7 +169,7 @@ pub struct SeatTier {
     pub fits_at_context: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct Forecast {
     pub verification_window_spans: u32,
     pub artifact_prefetch_spans: u32,
@@ -190,7 +190,7 @@ pub struct Forecast {
 }
 
 /// The seating floor against the operators the network has.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct ForecastIndependence {
     /// `palw_class_seating` is in force on the network at the judged height (its floor is then asked of every claim).
     pub fence_in_force: bool,
@@ -205,7 +205,7 @@ pub struct ForecastIndependence {
     pub note: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Serialize, serde::Deserialize)]
 pub struct ChainOutput {
     pub network: NetworkInfo,
     pub admission: Option<AdmissionInfo>,
@@ -632,14 +632,28 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
             if let Some(hit) = memo.borrow().get(&ctx) {
                 return hit.clone();
             }
-            let r = tir_choose_layout_v1(
+            // **The layout is searched under the rules at the judged height** — the gate the verdict below is asked at. (Before
+            // 2026-10-04 the search judged at the IR flag day's own height, `tir_class_admission_offline_v1`, so on testnet-12 it
+            // ran without `palw_tir_fence2`'s range-twin sizing and returned the widest layout's refusal; the census measured
+            // 7B–13B decoders as COURT_BUDGET that the rules in force admit.)
+            let r = crate::tir_layout::tir_choose_layout_judged_v1(
                 params,
                 bundle,
                 &program_s,
                 placeholder_root,
-                placeholder_root,
                 leaf_estimate.max(2),
                 &TirLayoutChoiceV1 { max_context: Some(ctx), ..base },
+                // `composite: true` skips the search's own DA-answerability twin, which reads the IR flag day's height: it is asked
+                // here, at the judged height, after the gate.
+                true,
+                &|class| {
+                    match gate(params, bundle, class, placeholder_root, judge_daa) {
+                        Gate::Admitted(_) => {}
+                        Gate::Refused(e) => return Err(format!("{} ({e})", e.code())),
+                        Gate::Unbuildable(why) => return Err(why),
+                    }
+                    crate::tir_layout::tir_canonical_job_answerable_at_v1(params, class, judge_daa)
+                },
             );
             memo.borrow_mut().insert(ctx, r.clone());
             r

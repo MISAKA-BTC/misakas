@@ -27,6 +27,7 @@ const USAGE: &str = "palw-class — inspect and preflight PALW model classes thr
 
 USAGE:
     palw-class pack build|verify|show ...   runtime packs: build one from a model, verify one, show one (palw-class pack for its usage)
+    palw-class census classify|gates ...    the Hugging Face census (RFC-0002 §II.10): listing rows and fetch plans; gate rows of fetched repositories
     palw-class ledger    --network <id>
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight [--network <id>] <model>  [--depth headers|shape] [--height <DAA>] [--json] [more: see below]
@@ -268,6 +269,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "census" => misaka_palw_sdk::census::cli::run(&args, network),
         "ledger" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             ledger(&view);
@@ -535,6 +537,7 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         residency_pin_below_bytes: defaults.residency_pin_below_bytes,
         node,
         full,
+        lora: None,
     };
     // A repository: `http(s)://…/<base>` (a mirror, a fixture server) or `hf://org/name[@revision]`, read by ranges.
     let remote_base = if let Some(rest) = input.strip_prefix("hf://") {

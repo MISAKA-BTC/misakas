@@ -47,6 +47,10 @@ use std::collections::BTreeMap;
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
 const LIMITS: DemandLimits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
 
+/// The twin every sizing here is asked with (the element twin; the range twin is compared with it at the end of the file).
+const TWIN: kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1 =
+    kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element;
+
 fn unhex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
 }
@@ -300,7 +304,7 @@ fn priced_bounds_measured(f: &Fixture, job: &PalwGenJobV1, ids: PalwGenIdsV1<'_>
     let programs = &f.programs;
     let leaves = PalwGenInventoryIndexV1::new(programs).expect("an inventory").leaf_count();
     let (priced, work) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1 << 30).expect("the sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("the sizing");
     let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
         .iter()
         .enumerate()
@@ -374,7 +378,7 @@ fn a_close_priced_past_the_carrier_is_refused_by_name_and_the_sizing_stops_there
     let programs = &f.programs;
     let leaves = PalwGenInventoryIndexV1::new(programs).unwrap().leaf_count();
     let all = |carriable: u64| {
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, carriable, u64::MAX, 1 << 30).expect("sizes").0
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, carriable, u64::MAX, 1 << 30, TWIN).expect("sizes").0
     };
     let sized: usize = all(u64::MAX).iter().map(Vec::len).sum();
     let worst = all(u64::MAX).iter().flatten().map(|b| b.close_bytes).max().unwrap();
@@ -384,7 +388,7 @@ fn a_close_priced_past_the_carrier_is_refused_by_name_and_the_sizing_stops_there
     assert!(last.close_bytes > worst - 1, "the last bound sized is the one past the carrier");
     assert!(stopped.iter().map(Vec::len).sum::<usize>() <= sized);
     // A work cap below what the sizing needs: refused by name, never run.
-    match palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1_000) {
+    match palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1_000, TWIN) {
         Err(PalwClassAdmissionError::TirExceeds { limit, cap, .. }) => {
             assert_eq!(limit, "generative close sizing work");
             assert_eq!(cap, 1_000);
@@ -513,7 +517,7 @@ fn the_price_bounds_every_measured_close_of_the_toy_vlm_class() {
     let binding = PalwGenStepBindingV1::of(&job, &e.claim, e.space.leaf_count());
     let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
     let (priced, work) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30).expect("sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("sizing");
     let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
         .iter()
         .enumerate()
@@ -901,7 +905,7 @@ fn gate(class: &PalwGenClassV1, chunks: bool) -> Result<PalwGenAdmittedV1, PalwC
 fn cone_close_max(f: &Fixture) -> u64 {
     let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
     let (priced, _) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30).expect("sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("sizing");
     priced.iter().flatten().map(|b| b.close_bytes).max().expect("a commit point")
 }
 
@@ -1006,4 +1010,36 @@ fn the_generative_sizing_work_cap_is_no_looser_than_the_ir_one() {
         "the generative close sizing may do {PALW_GEN_CLOSE_SIZING_WORK_CAP_V1} steps, the IR's {PALW_TIR_CLOSE_SIZING_WORK_CAP_V1}: the gate is looser"
     );
     assert_eq!(PALW_GEN_CLOSE_SIZING_WORK_CAP_V1, 1 << 26, "2^26, as decided");
+}
+
+// =================================================================================================
+// `palw_gen_range_twin_v1`: the range twin sizes every close of a pipeline exactly as the element twin
+// =================================================================================================
+
+/// Both twins over one class: the same bound of every commit point and checkpoint leaf of every stage, byte for byte; the range
+/// twin's work beside the element twin's.
+fn both_twins(f: &Fixture, what: &str) -> (u64, u64) {
+    use kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1;
+    let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
+    let size = |twin| {
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, twin)
+            .unwrap_or_else(|e| panic!("{what}: {twin:?}: {e}"))
+    };
+    let (element, we) = size(PalwTirCloseTwinV1::Element);
+    let (range, wr) = size(PalwTirCloseTwinV1::Range);
+    assert_eq!(element, range, "{what}: the range twin's bounds are the element twin's");
+    eprintln!("{what}: {} bounds equal; work element {we}, range {wr}", element.iter().map(Vec::len).sum::<usize>());
+    (we, wr)
+}
+
+#[test]
+fn the_generative_range_twin_sizes_every_close_exactly_as_the_element_twin() {
+    for tile in [16u32, 64] {
+        both_twins(&vision(tile), &format!("toy vision class, tile {tile}"));
+        both_twins(&image(tile), &format!("toy image class, tile {tile}"));
+    }
+    let (f, _) = vlm();
+    both_twins(&f, "toy vision-language class (a tower stage and a text stage over its rows)");
+    let (f, _, _) = real_vocab_vlm(32_000, 64, 8);
+    both_twins(&f, "toy vision-language class at a 32,000-id vocabulary");
 }

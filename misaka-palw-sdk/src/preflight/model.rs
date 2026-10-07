@@ -164,7 +164,11 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     let read_opts = ReadOptions { adapter: adapter_text.map(|t| AdapterChoice::Text(t.to_string())).unwrap_or_default() };
     let history_bound =
         if opts.held { misaka_palw_tir::program::HISTORY_BOUND_V1_HELD } else { misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL };
-    let lopts = LowerOpts { history_bound, ..Default::default() };
+    // **A declared context bounds the history window** (`LowerOpts::max_window`, the runtime pack's `max_window`): every job of a
+    // class at C positions reads at most C rows, so a window of C computes what the model's own (wider) window computes on every
+    // job the class admits, and its state and per-position work are those of C, not of the history bound. Admission checks the
+    // window covers the declared context (`tir_window_covers_context_v1`). With no declared context the model's windows are kept.
+    let lopts = LowerOpts { history_bound, max_window: opts.max_context, ..Default::default() };
 
     // ---- completeness of the source -------------------------------------------------------------------------------
     if !src.missing_shards.is_empty() {
@@ -302,7 +306,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             if r.missing.is_empty() && r.unmapped_config_keys.is_empty() && !quant_refusal_in_reason(reason) {
                 let (code, what) = if reason.contains("bad config") {
                     ("CONFIG_INVALID", "the configuration is malformed")
-                } else if reason.contains("remote code") || reason.contains("auto_map") {
+                } else if reason.contains("remote code") || reason.contains("trust_remote_code") || reason.contains("auto_map") {
                     ("REMOTE_CODE", "the architecture is defined by remote code")
                 } else {
                     ("ARCH_REFUSED", "the generic frontend refuses this architecture")
@@ -363,13 +367,22 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     if lowerable && let Some(config) = &src.config {
         let prep: Result<Prepared, String> = match &src.gguf_model {
             Some(m) => m.prepare(&lopts).map_err(|e| e.to_string()),
-            None => read_model_with(config, tindex.as_ref(), &read_opts, reg).map_err(|f| f.to_string()).and_then(|read| {
+            None => read_model_with(config, tindex.as_ref(), &read_opts, reg).map_err(|f| f.to_string()).and_then(|mut read| {
+                // A LoRA adapter over the model (RFC-0004): attached unmerged, every adapter tensor accounted for.
+                if let Some(ad) = &opts.lora {
+                    misaka_palw_tir_lower::lora::attach(&mut read.spec, &ad.config).map_err(|e| e.to_string())?;
+                    misaka_palw_tir_lower::lora::check_adapter_tensors(&read.spec, &ad.tensors).map_err(|e| e.to_string())?;
+                }
                 digest = Some(spec_digest(&read.spec));
                 prepare_spec(read.spec, &lopts).map_err(|e| e.to_string())
             }),
         };
         match prep {
             Ok(p) => prepared = Some(p),
+            Err(e) if e.contains("LoRA adapter:") => blockers.push(
+                Blocker::new(Stage::Convert, "ADAPTER_REFUSED", "the LoRA adapter is not one the lowering attaches")
+                    .evidence([short(&e)]),
+            ),
             Err(e) => {
                 if !quant_refusal_in_reason(&e) {
                     blockers

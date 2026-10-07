@@ -46,8 +46,9 @@ use std::rc::Rc;
 use crate::palw_step::PalwStepCoordinateV1;
 use crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
 use crate::palw_tir_close_size_v1::{
-    HistPattern, PALW_TIR_CLOSE_SIZING_OVER_CAP_V1, PalwTirCloseBoundV1, PalwTirClosePriceV1, PalwTirCloseReadsV1,
-    PalwTirCloseSizingV1, element_count, leaf_cost_of, reaches_hist, size_of_reads, step_preimage_bytes, step_runs, strides,
+    HistPattern, PALW_TIR_CLOSE_SIZING_OVER_CAP_V1, PalwGenClosePricingV1, PalwGenTwinInputV1, PalwGenTwinStageV1,
+    PalwTirCloseBoundV1, PalwTirClosePriceV1, PalwTirCloseReadsV1, PalwTirCloseSizingV1, element_count, leaf_cost_of, reaches_hist,
+    size_of_reads, step_preimage_bytes, step_runs, strides,
 };
 use crate::palw_tir_court_v1::PalwTirInventoryIndexV1;
 use crate::palw_tir_step_v1::{PalwTirJobShapeV1, PalwTirStepSpaceV1};
@@ -321,6 +322,8 @@ struct RCtx {
 }
 
 struct RangeTwin<'a> {
+    /// A pipeline stage's reading of its inputs and its `post`-written states (RFC-0003 PALW-GEN-20); `None` for an IR class.
+    gen_stage: Option<&'a PalwGenTwinStageV1>,
     space: &'a PalwTirStepSpaceV1,
     job_ctx: &'a PalwJobContextV2,
     job: PalwTirJobShapeV1,
@@ -469,6 +472,62 @@ impl RangeTwin<'_> {
         self.place_run(&coord, (a / tile_len) as u64, ((b - 1) / tile_len) as u64, &values, has_h)
     }
 
+    /// The input a view param is, for a pipeline stage (`None` for a declared param, and for every param of an IR class).
+    fn input_of(&self, param: u16) -> Option<u16> {
+        self.gen_stage.and_then(|g| param.checked_sub(g.first_input))
+    }
+
+    /// **Elements `[a, b)` of input `input`, read as the generative court reads them** — the element twin's `input_read` over a
+    /// range: a random or job-bound input opens nothing; an edge is the run of commit leaves of the upstream output node that hold
+    /// the elements, row by row; an image's bytes are a run of input tiles. The same units as one element at a time.
+    fn input_read(&mut self, input: u16, a: usize, b: usize) -> Result<(), String> {
+        if a >= b {
+            return Ok(());
+        }
+        self.tick(1)?;
+        let g = self.gen_stage.ok_or("an input read outside a pipeline stage")?;
+        let model = g.inputs.get(input as usize).ok_or_else(|| format!("no input {input}"))?.clone();
+        match model {
+            PalwGenTwinInputV1::Free => Ok(()),
+            PalwGenTwinInputV1::Edge { stage, rows, tile, elements } => {
+                let tile = tile.max(1) as u64;
+                let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+                    let (t0, t1) = (lo / tile, (hi - 1) / tile);
+                    this.tick(t1 - t0 + 1)?;
+                    for t in t0..=t1 {
+                        let lanes = tile.min(elements.saturating_sub(t * tile)).max(1) as u32;
+                        this.sink().edges.insert((stage, row, t as u32), lanes);
+                    }
+                    Ok(())
+                };
+                match rows {
+                    Some((drop, per_row)) => {
+                        let per_row = per_row.max(1);
+                        let (r0, r1) = (a as u64 / per_row, (b as u64 - 1) / per_row);
+                        self.tick(r1 - r0 + 1)?;
+                        for r in r0..=r1 {
+                            let lo = (a as u64).max(r * per_row) - r * per_row;
+                            let hi = (b as u64).min((r + 1) * per_row) - r * per_row;
+                            put(self, (r as u32).saturating_add(drop), lo, hi)?;
+                        }
+                        Ok(())
+                    }
+                    None => put(self, u32::MAX, a as u64, b as u64),
+                }
+            }
+            PalwGenTwinInputV1::Image { image, tile_len } => {
+                let tl = tile_len.max(1) as u64;
+                let (t0, t1) = (a as u64 / tl, (b as u64 - 1) / tl);
+                self.tick(t1 - t0 + 1)?;
+                let sink = self.sink();
+                for t in t0..=t1 {
+                    sink.images.insert((image, t));
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Param elements `[a, b)`: the inventory leaves holding their first bytes — a range of leaves
     /// (a piece and a row are whole elements).
     fn param_read(&mut self, param: u16, layer: Option<u16>, a: usize, b: usize) -> Result<(), String> {
@@ -492,6 +551,17 @@ impl RangeTwin<'_> {
 
     /// A `Fixed` state's elements at the start of `pos` (the court's `state_at_start`).
     fn state_at_start(&mut self, pos: u32, state: u16, layer: Option<u16>, ranges: &PalwTirRangesV1) -> Result<(), String> {
+        // **A state `post` writes** (a pipeline stage's, NF-29): its value at the start of `pos` is the committed write of `pos − 1`.
+        if let Some(g) = self.gen_stage
+            && let Some((_, (occurrence, node))) = g.post_writers.iter().find(|(s, _)| *s == state).copied()
+        {
+            self.tick(1)?;
+            let Some(prev) = pos.checked_sub(1) else { return Ok(()) };
+            for &(a, b) in ranges.ranges() {
+                self.leaf_read(DemandContext { pos: prev, occurrence }, node, a, b)?;
+            }
+            return Ok(());
+        }
         let c = self.space.layout.checkpoint_interval.max(1);
         let mut at = pos;
         loop {
@@ -640,6 +710,12 @@ impl RangeTwin<'_> {
                 Ok(())
             }
             Ref::Param(j) => {
+                if let Some(input) = self.input_of(j) {
+                    for (a, b) in PalwTirRangesV1::from_ranges(ranges).0 {
+                        self.input_read(input, a, b)?;
+                    }
+                    return Ok(());
+                }
                 let d = program.params.get(j as usize).ok_or("no such param")?;
                 let layer = if d.per_layer { self.ctxs[&(key.pos, key.occurrence)].layer } else { None };
                 for (a, b) in PalwTirRangesV1::from_ranges(ranges).0 {
@@ -806,7 +882,7 @@ impl RangeTwin<'_> {
                 // gathered along its rows, the whole fiber otherwise.
                 match inputs[0] {
                     Ref::Const(_) => Ok(()),
-                    Ref::Param(pj) if a == 0 && dsh.len() >= 2 => {
+                    Ref::Param(pj) if a == 0 && dsh.len() >= 2 && self.input_of(pj).is_none() => {
                         let d = &space.program.params[pj as usize];
                         let layer = if d.per_layer { layer } else { None };
                         let width = d.dtype.width() as u64;
@@ -1002,10 +1078,29 @@ pub fn palw_tir_close_reads_range_split_v1(
     hist_only: bool,
     pattern: bool,
 ) -> Result<PalwTirRangeSplitV1, String> {
+    palw_tir_close_reads_range_split_gen_v1(space, job_ctx, inventory, cache, request, cap, hist_only, pattern, None)
+}
+
+/// [`palw_tir_close_reads_range_split_v1`] over a pipeline stage's view (`gen_stage`: its inputs read where the generative court
+/// reads them, its `post`-written states as the committed write of the position before) — the element twin's
+/// `close_reads_split` with `Some(stage)`, as ranges.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_tir_close_reads_range_split_gen_v1(
+    space: &PalwTirStepSpaceV1,
+    job_ctx: &PalwJobContextV2,
+    inventory: &PalwTirInventoryIndexV1,
+    cache: &mut PalwTirRangeCacheV1,
+    request: &PalwTirCloseRangeRequestV1<'_>,
+    cap: u64,
+    hist_only: bool,
+    pattern: bool,
+    gen_stage: Option<&PalwGenTwinStageV1>,
+) -> Result<PalwTirRangeSplitV1, String> {
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let (block, _) = space.occurrences().get(request.ctx.occurrence as usize).copied().ok_or("no such occurrence")?;
     let leaf_cost = leaf_cost_of(space);
     let mut twin = RangeTwin {
+        gen_stage,
         space,
         job_ctx,
         job,
@@ -1093,10 +1188,39 @@ pub fn palw_tir_worst_closes_range_work_v1(
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None)
+}
+
+/// **[`crate::palw_tir_close_size_v1::palw_gen_worst_closes_v1`] by the range twin** (RFC-0003 PALW-GEN-20 under
+/// `Params::palw_gen_range_twin_v1`): pipeline stage `stage`'s worst terminal closes — the same requests as ranges, the same
+/// generative prices, its checkpoint leaves included — with the work done.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_gen_worst_closes_range_v1(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    stage: usize,
+    class_inventory_leaves: u32,
+    model: &PalwGenTwinStageV1,
+    pricing: PalwGenClosePricingV1,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
+    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, Some(model))
+}
+
+fn worst_closes_range_priced(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    price: PalwTirClosePriceV1<'_>,
+    gen_stage: Option<&PalwGenTwinStageV1>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let program = &space.program;
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
-    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
     let c = space.layout.checkpoint_interval.max(1);
     let has_fixed = !space.fixed_instances().is_empty();
     // The position of `[lo, p_max]` whose replay is the longest: the largest `≡ C − 1 (mod C)`, or
@@ -1173,7 +1297,8 @@ pub fn palw_tir_worst_closes_range_work_v1(
             }
             // An `H`-carrying tile whose cone reduces nothing over `H` is H-LOCAL (spec 04b §10.3).
             let local = !dissected && has_h && reductions.is_empty() && !has_fixed && p_late <= p_max;
-            let mut worst = PalwTirCloseBoundV1 { block: bi8, node: ni16, checkpoint: None, dissected, close_bytes: 0, root_claim_bytes: 0 };
+            let mut worst =
+                PalwTirCloseBoundV1 { block: bi8, node: ni16, checkpoint: None, dissected, close_bytes: 0, root_claim_bytes: 0 };
             for occ in chosen.iter().copied().filter(|o| occurrences[*o as usize].0 == bi8) {
                 let twin = |pos: u32,
                             ranges: &PalwTirRangesV1,
@@ -1191,7 +1316,7 @@ pub fn palw_tir_worst_closes_range_work_v1(
                         range,
                         both,
                     };
-                    let split = palw_tir_close_reads_range_split_v1(
+                    let split = palw_tir_close_reads_range_split_gen_v1(
                         space,
                         job_ctx,
                         inventory,
@@ -1200,6 +1325,7 @@ pub fn palw_tir_worst_closes_range_work_v1(
                         budget.get(),
                         hist_only,
                         pattern,
+                        gen_stage,
                     )?;
                     budget.set(budget.get().saturating_sub(split.work));
                     Ok::<_, String>(split)
@@ -1462,6 +1588,64 @@ pub fn palw_tir_worst_closes_range_work_v1(
                 .is_some_and(|(close, root)| worst.close_bytes > close || (worst.dissected && worst.root_claim_bytes > root));
             out.push(worst);
             if past {
+                return Ok((out, sizing.cap - budget.get()));
+            }
+        }
+    }
+    // **Checkpoint leaves** (a pipeline stage's) — the element twin's section, each tile a range: a `Fixed` state the stage does
+    // not write in `post` has a leaf after every `C`-th position, and a close at it evaluates the state's value after the position.
+    if let Some(g) = gen_stage
+        && p_max + 1 >= c
+    {
+        for inst in space.fixed_instances() {
+            if g.post_writers.iter().any(|(state, _)| *state == inst.state) {
+                continue;
+            }
+            let Some((occ, writer)) = state_writer_v1(program, inst.state, inst.layer) else { continue };
+            let (block, _) = occurrences[occ as usize];
+            if !crate::palw_tir_dissect_v1::palw_tir_cone_reductions_v1(&program.blocks[block as usize], writer).is_empty() {
+                return Err(format!("the checkpoint leaf of state {} reduces over the history: its close is not sized", inst.state));
+            }
+            let pos = rep_from(0);
+            let (lanes, count) = (inst.tile_lanes as usize, inst.elements as usize);
+            let mut bound = PalwTirCloseBoundV1 {
+                block,
+                node: writer,
+                checkpoint: Some(inst.state),
+                dissected: false,
+                close_bytes: 0,
+                root_claim_bytes: 0,
+            };
+            for first in (0..count).step_by(lanes.max(1)) {
+                let last = (first + lanes).min(count);
+                charge(16 + (last - first) as u64)?;
+                let ranges = PalwTirRangesV1::single(first, last);
+                let request = PalwTirCloseRangeRequestV1 {
+                    ctx: DemandContext { pos, occurrence: occ },
+                    target: writer,
+                    ranges: &ranges,
+                    supplied: &[],
+                    range: None,
+                    both: false,
+                };
+                let split = palw_tir_close_reads_range_split_gen_v1(
+                    space,
+                    job_ctx,
+                    inventory,
+                    &mut cache.borrow_mut(),
+                    &request,
+                    budget.get(),
+                    false,
+                    false,
+                    gen_stage,
+                )?;
+                budget.set(budget.get().saturating_sub(split.work));
+                let mut reads = split.reads;
+                reads.merge(&split.hist);
+                bound.close_bytes = bound.close_bytes.max(price.close(&reads, (last - first) as u32));
+            }
+            out.push(bound);
+            if sizing.stop_above.is_some_and(|(close, _)| out.last().is_some_and(|b| b.close_bytes > close)) {
                 return Ok((out, sizing.cap - budget.get()));
             }
         }
