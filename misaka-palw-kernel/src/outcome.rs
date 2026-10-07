@@ -19,6 +19,9 @@ pub enum RegistrationOutcomeV1 {
     KernelExtensionRequired { family: Option<ConstraintFamilyV1>, relation: String, required: String, available: String },
     /// The descriptor exists but is not active at this DAA (or is unknown to this binary).
     KernelNotActive { descriptor: Digest, status: Option<KernelStatusV1> },
+    /// The class is admissible; its finite declared producer/seat requirements exceed the operators that exist now. A capacity fact,
+    /// never a refusal of the class and never an arbitrary fleet cap (RFC-0011 §16.2).
+    CapacityPending { what: String },
     /// Mandatory node/DA/court bounds exceeded.
     BoundsExceeded { what: &'static str, required: u128, limit: u128 },
     /// The plan omits, duplicates or alters a relation, a boundary or a budget.
@@ -37,6 +40,7 @@ impl RegistrationOutcomeV1 {
             Self::FrontendRequired { .. } => "FRONTEND_REQUIRED",
             Self::KernelExtensionRequired { .. } => "KERNEL_EXTENSION_REQUIRED",
             Self::KernelNotActive { .. } => "KERNEL_NOT_ACTIVE",
+            Self::CapacityPending { .. } => "READINESS_OR_CAPACITY",
             Self::BoundsExceeded { .. } => "BOUNDS_EXCEEDED",
             Self::IncompleteCoverage { .. } => "INCOMPLETE_COVERAGE",
             Self::PlanForged { .. } => "PLAN_FORGED",
@@ -56,7 +60,9 @@ impl RegistrationOutcomeV1 {
             Self::EligibleAt { .. } => CoverageBucketV1::Untested,
             Self::FrontendRequired { .. } | Self::PlanForged { .. } => CoverageBucketV1::FrontendGap,
             Self::KernelExtensionRequired { .. } | Self::KernelNotActive { .. } => CoverageBucketV1::KernelExtensionGap,
-            Self::BoundsExceeded { .. } | Self::IncompleteCoverage { .. } => CoverageBucketV1::ResourceOrLifecycleGap,
+            Self::BoundsExceeded { .. } | Self::IncompleteCoverage { .. } | Self::CapacityPending { .. } => {
+                CoverageBucketV1::ResourceOrLifecycleGap
+            }
             Self::ExternalBlocker { .. } => CoverageBucketV1::ExternalGap,
         }
     }
@@ -81,6 +87,7 @@ impl std::fmt::Display for RegistrationOutcomeV1 {
             Self::KernelNotActive { descriptor, status } => {
                 write!(f, "KERNEL_NOT_ACTIVE: kernel {}… is {status:?}", short(descriptor))
             }
+            Self::CapacityPending { what } => write!(f, "READINESS_OR_CAPACITY: {what}"),
             Self::BoundsExceeded { what, required, limit } => write!(f, "BOUNDS_EXCEEDED: {what} {required} > limit {limit}"),
             Self::IncompleteCoverage { what } => write!(f, "INCOMPLETE_COVERAGE: {what}"),
             Self::PlanForged { why } => write!(f, "PLAN_FORGED: {why}"),

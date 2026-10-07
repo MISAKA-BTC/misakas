@@ -28,6 +28,10 @@
 //!   families, authenticated state continuity by wiring, and [`verify::KernelFaultProofV1`]: a fault
 //!   localized to one primitive instance (one scalar for a `MatMul`) that **any** node re-checks from
 //!   public material alone (ADR-0173 D1–D3) — no producer secret, no seat sketch, no Panel vote.
+//! * [`receipt`] — RFC-0007 §V.6's `PalwConstraintReceiptV1` (one seat, one scope, one verdict), the fold's structural admission
+//!   of it (scheme, evidence, challenge, scope, assignment, recomputed soundness, deadline) and the per-segment coverage tally.
+//! * [`lifecycle`] — RFC-0011 §15.5's claim states (pass needs complete coverage; Final needs the window, retention and no open
+//!   dispute; DA outcomes apart from convictions), the dispute budget any public bond files against, and §15.4's network bound.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
 //!
 //! # What this is not
@@ -52,8 +56,10 @@ pub mod evidence;
 pub mod family;
 pub mod field;
 pub mod hash;
+pub mod lifecycle;
 pub mod outcome;
 pub mod plan;
+pub mod receipt;
 pub mod trace;
 pub mod verify;
 

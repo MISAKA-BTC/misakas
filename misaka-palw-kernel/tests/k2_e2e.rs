@@ -465,3 +465,153 @@ fn weight_products_are_batched_across_the_scope_so_checks_and_weight_reads_do_no
     assert_eq!(all_cost.param_bytes, one_cost.param_bytes);
     assert!(all_cost.param_bytes > 0);
 }
+
+mod receipts {
+    use super::*;
+    use misaka_palw_kernel::receipt::{
+        ClaimFactsV1, ConstraintTallyV1, ReceiptInputsV1, ReceiptRefusalV1, ReceiptSignatureVerifier, ReceiptVerdictV1,
+        SignedConstraintReceiptV1, TallyPolicyV1, TallyStateV1, admit_receipt_v1, receipt_for_v1,
+    };
+
+    /// A stand-in signature: the message itself, keyed by the bond (the node's verifier is ML-DSA-87).
+    struct Toy;
+    impl ReceiptSignatureVerifier for Toy {
+        fn verify(&self, bond: &[u8; 64], message: &[u8; 64], sig: &[u8]) -> bool {
+            sig.len() == 128 && sig[..64] == bond[..] && sig[64..] == message[..]
+        }
+    }
+    fn sign(r: misaka_palw_kernel::receipt::PalwConstraintReceiptV1) -> SignedConstraintReceiptV1 {
+        let mut sig = r.seat_bond.to_vec();
+        sig.extend_from_slice(&r.signing_message());
+        SignedConstraintReceiptV1 { receipt: r, signature: sig }
+    }
+
+    fn seat(
+        c: &Claim,
+        committed: &TraceV1,
+        scope: ScopeV1,
+        bond: u8,
+        operator: u8,
+    ) -> misaka_palw_kernel::receipt::PalwConstraintReceiptV1 {
+        let material = TraceMaterialV1 { trace: committed, params: &c.params };
+        let (v, _) = c.verify_scope(committed, &material, &scope);
+        let ev = c.evidence_of(committed);
+        let d = k2_tir_v1_descriptor();
+        receipt_for_v1(
+            &ReceiptInputsV1 {
+                descriptor: &d,
+                evidence: &ev,
+                claim_id: [8; 64],
+                assignment_root: [5; 64],
+                challenge_anchor: [0x42; 64],
+                sample_seed: [0x43; 64],
+                seat_bond: [bond; 64],
+                seat_operator: [operator; 64],
+                signed_daa: 100,
+            },
+            &scope,
+            &v,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn segment_receipts_license_only_with_per_segment_quorum_and_audits_and_repeats_never_count() {
+        let c = Claim::honest();
+        let ev = c.evidence_of(&c.trace);
+        let d = k2_tir_v1_descriptor();
+        let assignments = vec![
+            ([1; 64], ScopeV1::Segments(vec![0, 1])),
+            ([2; 64], ScopeV1::Segments(vec![1, 2])),
+            ([3; 64], ScopeV1::Segments(vec![0, 2])),
+            ([4; 64], ScopeV1::AuditOnly(vec![0, 1, 2, 3, 4])),
+            ([6; 64], ScopeV1::Segments(vec![0, 1])),
+        ];
+        let facts = ClaimFactsV1 {
+            descriptor: &d,
+            evidence: &ev,
+            claim_id: [8; 64],
+            assignment_root: [5; 64],
+            challenge_anchor: [0x42; 64],
+            sample_seed: [0x43; 64],
+            assignments: &assignments,
+            deadline_daa: 1_000,
+        };
+        let tally = std::cell::RefCell::new(ConstraintTallyV1::new(TallyPolicyV1 { per_segment_quorum: 2 }, &ev));
+        let file = |r| {
+            let s = sign(r);
+            admit_receipt_v1(&s, &facts, &Toy).unwrap();
+            tally.borrow_mut().add(&s.receipt, &ev)
+        };
+        assert!(file(seat(&c, &c.trace, ScopeV1::AuditOnly(vec![0, 1, 2, 3, 4]), 4, 4)));
+        assert!(
+            matches!(tally.borrow().state(), TallyStateV1::Incomplete { uncovered } if uncovered == vec![0, 1, 2]),
+            "an audit is never coverage"
+        );
+        assert!(file(seat(&c, &c.trace, ScopeV1::Segments(vec![0, 1]), 1, 1)));
+        assert!(!file(seat(&c, &c.trace, ScopeV1::Segments(vec![0, 1]), 1, 1)), "the same duty twice counts once");
+        // Bond 6 is the same operator as bond 1: no independence gained.
+        assert!(file(seat(&c, &c.trace, ScopeV1::Segments(vec![0, 1]), 6, 1)));
+        assert!(matches!(tally.borrow().state(), TallyStateV1::Incomplete { .. }));
+        assert!(file(seat(&c, &c.trace, ScopeV1::Segments(vec![1, 2]), 2, 2)));
+        assert!(matches!(tally.borrow().state(), TallyStateV1::Incomplete { uncovered } if uncovered == vec![0, 2]));
+        assert!(file(seat(&c, &c.trace, ScopeV1::Segments(vec![0, 2]), 3, 3)));
+        assert_eq!(tally.borrow().state(), TallyStateV1::Covered);
+    }
+
+    #[test]
+    fn a_failing_receipt_opens_a_dispute_no_later_pass_erases_and_equivocation_is_recorded() {
+        let c = Claim::honest();
+        let at = c.find(2, |p| matches!(p, Prim::MatMul));
+        let lie = lie_at(&c, at, 0);
+        let ev = c.evidence_of(&lie);
+        let fail = seat(&c, &lie, ScopeV1::WholeClaim, 1, 1);
+        assert!(matches!(fail.verdict, ReceiptVerdictV1::Fail { position: 2, .. }));
+        let mut tally = ConstraintTallyV1::new(TallyPolicyV1 { per_segment_quorum: 1 }, &ev);
+        tally.add(&fail, &ev);
+        let mut pass = seat(&c, &c.trace, ScopeV1::WholeClaim, 2, 2);
+        pass.evidence_manifest_root = ev.root();
+        tally.add(&pass, &ev);
+        assert!(matches!(tally.state(), TallyStateV1::Disputed { .. }), "a counted failure is not outvoted");
+        let mut flip = fail.clone();
+        flip.verdict = ReceiptVerdictV1::Pass;
+        assert!(!tally.add(&flip, &ev));
+        assert_eq!(tally.equivocations, vec![[1; 64]]);
+    }
+
+    #[test]
+    fn the_fold_refuses_a_receipt_that_overstates_soundness_names_another_scope_or_is_late() {
+        let c = Claim::honest();
+        let ev = c.evidence_of(&c.trace);
+        let d = k2_tir_v1_descriptor();
+        let assignments = vec![([1; 64], ScopeV1::Segments(vec![0]))];
+        let facts = ClaimFactsV1 {
+            descriptor: &d,
+            evidence: &ev,
+            claim_id: [8; 64],
+            assignment_root: [5; 64],
+            challenge_anchor: [0x42; 64],
+            sample_seed: [0x43; 64],
+            assignments: &assignments,
+            deadline_daa: 99,
+        };
+        let honest = seat(&c, &c.trace, ScopeV1::Segments(vec![0]), 1, 1);
+        assert_eq!(admit_receipt_v1(&sign(honest.clone()), &facts, &Toy), Err(ReceiptRefusalV1::Late { signed: 100, deadline: 99 }));
+        let facts = ClaimFactsV1 { deadline_daa: 1_000, ..facts };
+        admit_receipt_v1(&sign(honest.clone()), &facts, &Toy).unwrap();
+        let mut boast = honest.clone();
+        boast.derived_soundness_bits += 1;
+        assert_eq!(admit_receipt_v1(&sign(boast), &facts, &Toy), Err(ReceiptRefusalV1::WrongSoundness));
+        let mut wider = honest.clone();
+        wider.scope = ScopeV1::Segments(vec![0, 1]);
+        assert_eq!(admit_receipt_v1(&sign(wider.clone()), &facts, &Toy), Err(ReceiptRefusalV1::WrongScope));
+        wider.scope_root = wider.scope.root(&ev);
+        assert_eq!(admit_receipt_v1(&sign(wider), &facts, &Toy), Err(ReceiptRefusalV1::NotAssigned));
+        let mut forged = sign(honest.clone());
+        forged.receipt.seat_bond = [2; 64];
+        assert_eq!(admit_receipt_v1(&forged, &facts, &Toy), Err(ReceiptRefusalV1::BadSignature));
+        let mut weak = honest;
+        weak.freivalds_rounds = 1;
+        assert_eq!(admit_receipt_v1(&sign(weak), &facts, &Toy), Err(ReceiptRefusalV1::WrongSoundness));
+    }
+}
