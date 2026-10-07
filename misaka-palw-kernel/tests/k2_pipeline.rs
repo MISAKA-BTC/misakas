@@ -354,3 +354,110 @@ fn a_pipeline_claim_is_bound_to_its_job_and_its_r_binding() {
     let (v, _) = c.check_ev(&c.trace, other, None);
     assert!(matches!(v, PipelineVerdictV1::EvidenceMalformed { .. }), "{v:?}");
 }
+
+/// **RFC-0004 §0 end to end**: evaluation claims (an exact-match evaluation pipeline over a decode stage) are verified by small
+/// checks on the kernel route, reach Final through the lifecycle, and only then enter the promotion as assurance-labelled results;
+/// a forged score is convicted and never counts (a missing result is a loss); the sign test and the computational bound are
+/// reported apart.
+#[test]
+fn rfc04_promotion_reads_only_final_small_check_evaluations_and_a_forged_score_never_counts() {
+    use misaka_palw_kernel::assurance::AssuranceModeV1;
+    use misaka_palw_kernel::improve::{
+        EpochKernelPolicyV1, EvaluationCompositionV1, EvaluationResultV1, PromotionRuleV1, SubjectV1, promotion_decision_v1,
+    };
+    use misaka_palw_kernel::lifecycle::{ClaimEventV1, ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
+    use misaka_palw_kernel::receipt::TallyStateV1;
+
+    let v3 = k2_tir_v3_descriptor();
+    let cand = [0xCA; 64];
+    let base = PipelineJob { prompt: vec![3, 5, 7], scalars: vec![-1, -1], ..PipelineJob::default() };
+    // One evaluation claim: the subject generates; `keyed` sets the item's key to what it generated (score 1), else to an id it did
+    // not generate (score 0). `forge` commits score 1 whatever the run says.
+    let evaluate = |seed: u64, keyed: bool, forge: bool| -> (ClaimStateV1, i64, u16) {
+        let draft = PClaim::new(eval_exact_match_pipeline(), base.clone(), seed);
+        let key = if keyed { draft.job.generated.clone() } else { vec![TOK - 1; draft.job.generated.len()] };
+        let c = PClaim::new(eval_exact_match_pipeline(), PipelineJob { key, ..draft.job.clone() }, seed);
+        let mut committed = c.trace.clone();
+        let out = c.p.output_stage as usize;
+        let v = stage_view_v1(&c.programs[c.p.stages[out].program as usize]);
+        let last = committed.stages[out].values.len() - 1;
+        let score = &mut committed.stages[out].values[last][v.post_occurrence as usize][v.output_node as usize];
+        if forge {
+            score.data[0] = 1;
+        }
+        let claimed = score.data[0] as i64;
+        let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 { check_window_daa: 100, challenge_window_daa: 50 });
+        life.apply(ClaimEventV1::BindChallenge { anchor_daa: 10 }).unwrap();
+        life.apply(ClaimEventV1::StartChecking { daa: 12 }).unwrap();
+        let (verdict, courts) = c.check(&committed, None);
+        let bits = match verdict {
+            PipelineVerdictV1::Pass { error_bits, .. } => {
+                life.apply(ClaimEventV1::Tally { daa: 20, state: TallyStateV1::Covered }).unwrap();
+                error_bits
+            }
+            PipelineVerdictV1::StageFault { stage, proof } => {
+                life.apply(ClaimEventV1::DisputeFiled { daa: 20 }).unwrap();
+                life.apply(ClaimEventV1::CourtVerdict { daa: 30, convicted: (courts.stage)(stage, &proof) }).unwrap();
+                0
+            }
+            v => panic!("{v:?}"),
+        };
+        // Terminal states (a conviction) accept nothing more.
+        let _ = life.apply(ClaimEventV1::RetentionMet);
+        let _ = life.apply(ClaimEventV1::Tick { daa: 100 });
+        (life.state.clone(), claimed, bits)
+    };
+    let items: Vec<u32> = (0..12).collect();
+    let mut results = Vec::new();
+    for item in &items {
+        let id = |s: u8| {
+            let mut x = [s; 64];
+            x[0] = *item as u8;
+            x
+        };
+        let seed = 600 + *item as u64;
+        // Item 5's candidate truly misses and commits a forged pass.
+        for (subject, keyed, forge, cid) in
+            [(SubjectV1::Parent, false, false, id(1)), (SubjectV1::Candidate(cand), *item != 5, *item == 5, id(2))]
+        {
+            let (state, score, bits) = evaluate(seed, keyed, forge);
+            match state {
+                ClaimStateV1::Final { .. } => results.push(EvaluationResultV1 {
+                    claim_id: cid,
+                    item: *item,
+                    subject,
+                    score,
+                    mode: AssuranceModeV1::Probabilistic { descriptor: v3.digest(), error_bits: bits },
+                }),
+                ClaimStateV1::Convicted { .. } => assert!(forge, "only the forged claim is convicted"),
+                s => panic!("item {item}: {s:?}"),
+            }
+        }
+    }
+    assert_eq!(results.len(), 23, "the forged evaluation never reaches Final");
+    let policy = EpochKernelPolicyV1 {
+        line: [5; 64],
+        epoch: 1,
+        opened_daa: 0,
+        permitted_descriptors: vec![v3.digest()],
+        composition: EvaluationCompositionV1 {
+            task_root: [1; 64],
+            tokenizer_or_input_schema_root: [2; 64],
+            task_output_schema: [3; 64],
+            score_definition_root: [4; 64],
+        },
+        cross_kernel_pairs: vec![],
+    };
+    let rule = PromotionRuleV1 { n_min: 10, delta_num: 1, delta_den: 10, alpha_num: 1, alpha_den: 20, candidates: 1 };
+    let d = promotion_decision_v1(&policy, &rule, cand, &items, &results).unwrap();
+    assert_eq!((d.wins, d.losses), (11, 1), "the forged item is a loss, not a win");
+    assert!(d.eligible, "{:?}", d.why_not);
+    assert!(
+        d.computational_error_bits.is_some_and(|b| b >= 100),
+        "the union bound is reported apart: {:?}",
+        d.computational_error_bits
+    );
+    // The same results under an epoch that did not pin v3 are refused (an invalid suite change), never regraded.
+    let other = EpochKernelPolicyV1 { permitted_descriptors: vec![k2_tir_v1_descriptor().digest()], ..policy };
+    assert!(promotion_decision_v1(&other, &rule, cand, &items, &results).is_err());
+}

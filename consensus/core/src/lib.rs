@@ -487,6 +487,8 @@ pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
+/// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
+pub mod palw_probabilistic_constraints_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.

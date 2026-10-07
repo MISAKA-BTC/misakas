@@ -1,7 +1,10 @@
 //! **ADR-0172 — model extensibility through versioned kernels, not a universal VM.**
 //!
-//! This crate is the reference implementation of the route RFC-0005 §§K.0–K.8, RFC-0011 §16 and
-//! RFC-0004 §0 specify, for the one semantics MISAKA already has: PALW-TIR v1.
+//! This crate is the reference implementation of the route RFC-0005 §§K.0–K.8, RFC-0011 §§15–16 and
+//! RFC-0004 §0 specify, for the semantics MISAKA already has: PALW-TIR v1 programs and RFC-0003 pipelines of TIR v2 programs.
+//! Three descriptors of one kernel line: K2-TIR-v1 (every TIR v1 family up to an `i64` accumulator), K2-TIR-v2 (the
+//! multi-modulus dense relation for `i128` accumulators) and K2-TIR-v3 (the media-pipeline family). The completion matrix is
+//! `docs/design/palw/kernel-k2-tir-v1.md`.
 //!
 //! ```text
 //!   pinned model → active kernel + declarative VerificationPlan → committed node values →
@@ -37,15 +40,19 @@
 //! * [`improve`] — RFC-0004 §0 on this route: the epoch's pinned kernel policy, candidate admission under a pinned kernel of the
 //!   parent's family, assurance-labelled evaluation results, and §7.5's integer promotion rule kept apart from the computational error.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
+//! * [`pipeline`] — RFC-0005 §K.3's media-pipeline family (K2-TIR-v3): each pipeline stage a claim over its v1 view with
+//!   committed inputs, every edge (job values, canonical images, earlier stages' rows and finals, `R`) recomputed exactly, an
+//!   edge court, pipeline plans and evidence.
 //! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault
 //!   proofs and the court as byte-level operations, the withholding path (demand → served | producer default), RFC-0015 §1.1's
 //!   G14 criteria per profile, and the reward gate that stays closed until they are complete and the material is public.
 //!
 //! # What this is not
 //!
-//! * **Not consensus.** No fence, object tag, delta, carriage tail, wRPC op or DB prefix. The built-in
-//!   descriptor is `Implemented`, never `Active`, in [`descriptor::builtin_schedule_v1`]: a registration
-//!   checked against it returns `KERNEL_NOT_ACTIVE`. A drill may pass its own schedule.
+//! * **Not consensus.** No object tag, delta, carriage tail, wRPC op or DB prefix; the consensus fence
+//!   `palw_probabilistic_constraints_v1` exists dormant with no height and is refused when armed (RFC-0011 §15.7). The built-in
+//!   descriptors are `Implemented`, never `Active`, in [`descriptor::builtin_schedule_v1`]: a registration
+//!   checked against them returns `KERNEL_NOT_ACTIVE`. A drill may pass its own schedule.
 //! * **Not a VM.** There is no interpreter, ISA, syscall or uploaded checker. An unknown primitive,
 //!   checker or family id is refused, never treated as success.
 //! * **Not a soundness review.** The error bound is the Freivalds/union-bound arithmetic of this suite
