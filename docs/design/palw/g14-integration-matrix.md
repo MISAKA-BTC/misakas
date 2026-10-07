@@ -1,0 +1,95 @@
+# G14 / Public Prosecution — integration matrix
+
+Owner: Lead/Integrator. Baseline: `pre` @ `082636b64` (+ `bd120c08b`, `ca6759d18` docs). Branch: `claude/g14-public-prosecution-integration-9bee39`.
+
+**Property (G14).** The producer and every fixed Panel seat collude. One ordinary bonded verifier outside the Panel — with no
+producer-private state, Panel-private state, `ServedView`, seat capture or privileged endpoint — independently checks, localizes
+and obtains authenticated witnesses from canonical public authenticated material, and reaches an objective conviction the
+consensus accepts deterministically, or, for withheld material, a correctly classified DA/default outcome, for every
+computation / job / input / output / state / DA violation an Active `VerificationPlanV1` covers.
+
+Statuses: **PASS** = implemented and exercised by a named test at that level; **GAP** = repository-implementable and not done;
+**EXTERNAL_GATE** = needs something outside the repository (review, hardware, drill, soak, activation). Unknown is GAP, never PASS.
+
+Two levels are kept apart:
+
+* **Reference** — `misaka-palw-kernel` (`KernelLedgerV1`, an in-process deterministic fold; outsiders replay from genesis).
+* **Real node** — the same rules as `PalwConsensusObjectV2` objects on subnetwork `0x4b`, folded into `PalwChainStateV2`
+  (state root in the header, per-block deltas, pruning snapshot and IBD carriage), reached through RPC/mempool/template.
+
+As of this revision **the kernel route is not wired into the node at all** (`palw_probabilistic_constraints_v1` is read by
+nothing; `KernelLedgerV1` has no canonical codec, a `Debug`-string state root, bare-digest bonds and unsigned filings). Every
+real-node cell is therefore GAP until lane D lands the carrier/fold, and the earlier audit's "repository-level complete" is
+superseded by this matrix.
+
+## 1. Violation families
+
+| # | Family | Active Plan relation | Public material | Verifier entry | Localization | Exact terminal | Consensus outcome | Resource bound | Targeted test (reference) | Reference | Real node | External |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Arithmetic (MatMul, exact families) | `FreivaldsM127` / `FreivaldsCrtV2` / `ExactRecompute` | committed node values (DA or served), public artifact, plan | `OutsiderV1::check` (own salt) | one instance / one MatMul scalar | `MatMulScalar` (3 openings) / `InstanceRecompute` | `Convicted`, reservation slashed, accuser share | `max_opening_bytes`, `max_court_work` (gate) | `k2_e2e`, `k2_ledger` A | PASS | GAP | soundness review (EXTERNAL_GATE) |
+| 2 | Quantization / rounding / carry / range | exact families + `RangeRuleV1` no-wrap proof | same | same | one instance | `InstanceRecompute` under reference semantics | `Convicted` | gate | `k2_e2e` (every exact family), `k2_wide` (i128, mod 2^127−1 aliasing) | PASS | GAP | alias/CRT review |
+| 3 | Routing / TopK / expert | TopK / MoE combine exact relations | committed scores + indices | same | one instance | `InstanceRecompute` | `Convicted` | gate | `k2_adversarial` swapped expert | PASS | GAP | — |
+| 4 | Memory / history | `StateContinuity`; derived `Hist` windows | committed appended rows; windows **derived, never served** | same | one window position | `Misderived` court from rows alone | `Convicted` | linear public bytes | `k2_ledger` history window, `k2_adversarial` permuted window | PASS | GAP | long-context bytes measurement |
+| 5 | Checkpoint / state transition | segment entry/exit roots in evidence | evidence object | inclusion check (`claim_structure_v1`) | n/a (refused) | refused at inclusion | claim never committed | evidence bytes | `k2_e2e` fabricated boundary, `k2_ledger` C | PASS | GAP | — |
+| 6 | Job binding | claim → posted job id | job object | inclusion | n/a | `binding_fault_v1` | refused at inclusion | — | `k2_ledger` C, `k2_ledger_pipeline` | PASS | GAP | — |
+| 7 | Input / prompt binding | `job_input_root`, pipeline `job_root` | job facts | inclusion | n/a | `WrongInput` | refused | — | `k2_ledger` C (borrowed trace) | PASS | GAP | — |
+| 8 | Output / token / logits | decode rule over committed logits | delivered ids + one logits tensor | `OutsiderV1::check` decode loop | one delivered index | `verify_decode_fault_v1` | `Convicted` | `max_response_bytes` | `k2_ledger` C (last + mid-stream) | PASS | GAP | — |
+| 9 | Pipeline stage | per-stage plan | stage commitments | `FreshPipelineVerifierV1` | stage, position, node | stage court | `Convicted` | per-stage sums | `k2_pipeline`, `k2_ledger_pipeline` | PASS | GAP | — |
+| 10 | Pipeline edge | `EdgeRecompute` | upstream outputs + stage input | same | one edge | `verify_edge_fault_v1` | `Convicted` | edge filing bytes | `k2_ledger_pipeline` conditioning edge | PASS | GAP | — |
+| 11 | VLM / media derived input | `R = dist(R(seed,…))`, image edge | job images, public seed | same | one draw / edge | edge / `R` recompute | `Convicted`; other seed refused | — | `k2_ledger_pipeline` jitter, other seed, image edge | PASS | GAP | — |
+| 12 | Self-consistent garbage trace | every relation vs registered artifact | public weights | `check_salted` | first product | court | `Convicted` | — | `k2_ledger` B | PASS | GAP | — |
+| 13 | Borrowed valid trace (another job) | job/input roots | job | inclusion | n/a | `WrongInput` | refused; lender untouched | — | `k2_ledger` C | PASS | GAP | — |
+| 14 | Malformed Merkle / opening | response classification | response bytes | `classify_position_response_v1` | n/a | `malformed`/`wrong_bytes`/`wrong_root`/`fake_opening`/`partial`/`oversized` | response rejected; dismissed filing pays fee | `max_response_bytes`, `max_filing_bytes` | `k2_ledger` B, G | PASS | GAP | — |
+| 15 | Held / fused terminal | profile material must be public | — | gate | — | `PrivateMaterial` gap | class never registers / never rewards | — | `k2_public` fused gap | PASS (fail-closed) | GAP | 8k held real-hardware (RFC-0014 P1/P2) |
+| 16 | Public DA withholding | demand per stage position | on-chain `Respond` | `FileDemand` (one round, all positions) | position | served → court; silence → default | `ProducerDefault` (availability, not fraud), claim `Unavailable` | `max_concurrent_sessions` | `k2_ledger` D, G | PASS | GAP (no public DA fetch RPC either) | DA provider/transport drill |
+| 17 | Court pre-emption | direct proofs | — | `FileProof` | — | adjudicated in-block whatever is open | open demands moot, bonds refunded | — | `k2_ledger` E | PASS | GAP | — |
+| 18 | Challenge / Final race | window + court deadline | — | `FileDemand` / `FileProof` | — | — | Final ≤ window end + deadline; proof at window end blocks Final; post-Final liability | `liability_daa > court_deadline_daa` | `k2_ledger` F | **GAP-R1** (below) | GAP | inclusion/censorship drill |
+| 19 | Reorg / restart / IBD / duplicate proof | pure fold | block sequence | replay | — | `Duplicate` | convicted once; replay root equality | — | `k2_ledger` H, every `outsider()` | PASS (but **GAP-R2**: `Debug` root) | GAP | — |
+| 20 | Collateral / exit / double reservation | free collateral reservation | bonds | — | — | — | no double use; exit delay; withdraw with nothing reserved | — | `k2_ledger` H | PASS (but **GAP-R3**: self-declared bonds) | GAP | economics review |
+
+EXEC work slices (directive Agent 4): **GAP** at every level — no RFC-0008 v2 code on HEAD; the v0 algo-11 branch
+`rfc8/claim-backed-blocks` must not be reused. Ordered after the real-node carrier/fold (priority 6 of 8).
+
+## 2. Reference-level gaps found in this revision
+
+* **GAP-R1 (Final race after service).** A demand served in a block whose tick also closes the window lets the claim finalize
+  in that same block (and the producer's reward is credited) before the demander can file the proof the served values enable.
+  Post-Final liability still convicts, but an accepted, qualified prosecution must not lose to Final. Fix: a bounded proof grace
+  after each service (`Final ≥ last service + proof_grace`), fixed absolute bound `window end + court deadline + proof grace`,
+  `liability_daa > court_deadline_daa + proof_grace`. Owner: lane B.
+* **GAP-R2 (state root).** `KernelLedgerV1::root` hashes `format!("{self:?}")`: not a canonical consensus encoding. Fix: Borsh on
+  every row, per-collection roots, a versioned root. Owner: lane B.
+* **GAP-R3 (bonds and authorization).** Bonds are bare digests with self-declared collateral; filings, demands and responses are
+  unsigned; `PanelCovered` is a transaction anyone may submit; `credits` have no mint path. In the node these must map onto
+  `PalwBondKeyV2` collateral, ML-DSA-87 signatures at acceptance, the V2 claim phase and `pending_payouts`. Owner: lane B (API
+  shape) + lane D (consensus mapping), Lead reviews the mapping.
+* **GAP-R4 (per-object API and budget).** `apply_block` logs refusals into state (junk input grows state) and adjudicates without
+  a per-block budget. Fix: `apply_object -> Result<events, refusal>`, a separate `tick`, a per-block court budget. Owner: lane B.
+* **GAP-R5 (claim beacon).** `beacon.rs` derives claim challenges from selected-chain block hashes and the ledger's beacon is
+  `H(claim id, daa)`. Outsiders never depend on it (own salt), but CLAIM_VERIFICATION checks must come from
+  `misaka-palw-challenge` (PALW Work Beacon). Owner: lane B on top of the Lead contract.
+* **Design note (default vs. conviction economics).** A post-Final demand that defaults costs the producer only
+  `default_penalty`, while conviction takes the reservation. Pre-Final this is harmless (no reward), post-Final a fraudulent
+  producer keeps the reward if `claim_reward > default_penalty`. Track under lane B; resolve with lane D's real collateral.
+
+## 3. Real-node integration plan (lane D, Lead owns the shared parts)
+
+1. **Lead (shared):** `PalwConsensusObjectV2` variants with declared tags ≥ 110 for kernel-route objects, may-ride entries,
+   `palw_object_kind_name`, a Some-only root block and a carriage tail, delta entries with apply/revert. Fence: the existing
+   `palw_probabilistic_constraints_v1`, still refused on every preset.
+2. **Lane D:** acceptance arms (signatures, fee, per-block caps), fold arms calling lane B's per-object API, the per-block tick,
+   bonds mapped to `PalwBondKeyV2` with `reserve`/`slash_bond`, RPC reads (claim record, served positions, demands, verdicts) and
+   a public material read, then the T12Chain-based E2E: RPC → public material → fresh verifier → signed demand/proof → mempool →
+   template → fold → conviction/default → slash/void → Final blocked → restart/IBD/reorg equality.
+3. **Lane D adversarial:** cases A–X of the directive, each from a fresh verifier process/state.
+
+## 4. External gates (EXTERNAL_GATE_PENDING — not stop reasons)
+
+Independent soundness review (composition, alias bounds, CRT); beacon bias/withholding/grinding review and k/D/delay selection
+(RFC-0007 §VI.8); real-hardware 9B-8k / long-context / Kimi measurements; public testnet G14 drill; shadow period; audit/soak;
+activation height.
+
+## 5. Change log
+
+* 2026-10-08 — matrix created; shared challenge contract `misaka-palw-challenge` landed (policy, PALW Work Beacon, seed,
+  samplers, transcripts, lifecycle, conformance records; dormant).
