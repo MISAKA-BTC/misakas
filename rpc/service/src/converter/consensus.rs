@@ -78,6 +78,10 @@ impl ConsensusConverter {
             Some(lane) => crate::palw_lane_view::block_lane_to_rpc_v1(&lane),
             None => (String::new(), None),
         };
+        let palw_merge_view = {
+            let ghostdag = ghostdag_data.clone();
+            consensus.clone().spawn_blocking(move |c| crate::palw_lane_view::palw_merge_view_v1(c, &ghostdag)).await
+        };
         let verbose_data = Some(RpcBlockVerboseData {
             hash,
             difficulty: self.get_difficulty_ratio(block.header.bits),
@@ -88,6 +92,7 @@ impl ConsensusConverter {
             children_hashes: children,
             merge_set_blues_hashes: ghostdag_data.mergeset_blues,
             merge_set_reds_hashes: ghostdag_data.mergeset_reds,
+            palw_merge_view,
             is_chain_block,
             block_kind: self.block_kind(&block.header),
             lane_class,

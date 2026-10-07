@@ -102,6 +102,13 @@ message RpcBlockVerboseData {
   repeated string mergeSetBluesHashes = 18;
   repeated string mergeSetRedsHashes = 19;
   bool isChainBlock = 20;
+  // ADR-0168: additive semantic view; legacy raw reds above keep their meaning.
+  RpcPalwMergeView palwMergeView = 21;
+}
+
+message RpcPalwMergeView {
+  repeated string roundBlocks = 1;
+  repeated string genuineRedBlocks = 2;
 }
 
 message RpcTransaction {

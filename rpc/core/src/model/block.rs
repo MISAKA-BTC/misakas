@@ -91,6 +91,11 @@ pub struct RpcBlockVerboseData {
     pub children_hashes: Vec<RpcHash>,
     pub merge_set_blues_hashes: Vec<RpcHash>,
     pub merge_set_reds_hashes: Vec<RpcHash>,
+    /// ADR-0125 semantic amendment: header-derived semantic partitions of the raw mergeset. `None` means the node
+    /// cannot classify every member (e.g. pruned headers), or a peer lacks this field. JSON and
+    /// gRPC only; the existing wRPC binary format is unchanged and decodes this field as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palw_merge_view: Option<RpcPalwMergeView>,
     pub is_chain_block: bool,
     /// **ADR-0165: the block's kind** — `"REAL"` (a non-floor attempt), `"FALLBACK"` (a floor attempt past
     /// `palw_floor_reserve_v1`), `"LEGACY_FLOOR"` (a floor attempt before it), `"LEGACY_HEARTBEAT"` (algo 8),
@@ -99,14 +104,22 @@ pub struct RpcBlockVerboseData {
     #[serde(default)]
     pub block_kind: String,
     /// **Lane SCAN (node-only, no consensus rule): the block's class** — `BLUE` (chain block or merged
-    /// blue), `EXEC` (an accepted execution-lane round block, algo 10), `RED` (merged red: a round
-    /// block that did not hold its permit, or an ordinary red), `ROUND` (a round block whose verdict
-    /// the node no longer holds) or empty (not merged yet / a node without this field).
+    /// blue), `EXEC` (an accepted execution-lane round block, algo 10), `RED` (an ordinary GHOSTDAG
+    /// red), `ROUND` (a refused round or a round whose verdict the node no longer holds) or empty
+    /// (not merged yet / a node without this field). `exec.verdict` carries round acceptance separately.
     #[serde(default)]
     pub lane_class: String,
     /// A round block's lineage; `None` on every other block.
     #[serde(default)]
     pub exec: Option<RpcPalwExecBlock>,
+}
+
+/// PALW semantic view; `mergeSetRedsHashes` remains the legacy raw GHOSTDAG field.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwMergeView {
+    pub round_blocks: Vec<RpcHash>,
+    pub genuine_red_blocks: Vec<RpcHash>,
 }
 
 /// **A round block as the execution lane sees it**: the round and permit it signed for, the bond that
@@ -216,11 +229,67 @@ impl Deserializer for RpcBlockVerboseData {
             children_hashes,
             merge_set_blues_hashes,
             merge_set_reds_hashes,
+            palw_merge_view: None,
             is_chain_block,
             block_kind: String::new(),
             lane_class,
             exec,
         })
+    }
+}
+
+#[cfg(test)]
+mod adr0125_semantic_merge_view_tests {
+    use super::*;
+
+    fn mixed() -> RpcBlockVerboseData {
+        RpcBlockVerboseData {
+            hash: RpcHash::from_u64_word(1),
+            difficulty: 1.0,
+            selected_parent_hash: RpcHash::from_u64_word(2),
+            transaction_ids: vec![],
+            is_header_only: false,
+            blue_score: 7,
+            children_hashes: vec![],
+            merge_set_blues_hashes: vec![RpcHash::from_u64_word(2)],
+            merge_set_reds_hashes: vec![RpcHash::from_u64_word(3), RpcHash::from_u64_word(4)],
+            is_chain_block: true,
+            block_kind: String::new(),
+            lane_class: "BLUE".into(),
+            exec: None,
+            palw_merge_view: Some(RpcPalwMergeView {
+                round_blocks: vec![RpcHash::from_u64_word(3)],
+                genuine_red_blocks: vec![RpcHash::from_u64_word(4)],
+            }),
+        }
+    }
+
+    #[test]
+    fn json_merge_view_is_additive_and_raw_reds_keep_both_kinds() {
+        let data = mixed();
+        let json = serde_json::to_value(&data).unwrap();
+        assert_eq!(json["mergeSetRedsHashes"].as_array().unwrap().len(), 2);
+        assert_eq!(json["palwMergeView"]["roundBlocks"].as_array().unwrap().len(), 1);
+        let decoded: RpcBlockVerboseData = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded.palw_merge_view, data.palw_merge_view);
+        assert_eq!(decoded.merge_set_reds_hashes, data.merge_set_reds_hashes);
+        let mut old = json;
+        old.as_object_mut().unwrap().remove("palwMergeView");
+        assert!(serde_json::from_value::<RpcBlockVerboseData>(old).unwrap().palw_merge_view.is_none());
+    }
+
+    #[test]
+    fn derived_view_keeps_the_existing_wrpc_binary_bytes() {
+        let mut data = mixed();
+        let mut with_view = vec![];
+        Serializer::serialize(&data, &mut with_view).unwrap();
+        let decoded = <RpcBlockVerboseData as Deserializer>::deserialize(&mut with_view.as_slice()).unwrap();
+        assert!(decoded.palw_merge_view.is_none());
+        assert_eq!(decoded.merge_set_reds_hashes, data.merge_set_reds_hashes);
+        data.palw_merge_view = None;
+        let mut without_view = vec![];
+        Serializer::serialize(&data, &mut without_view).unwrap();
+        assert_eq!(with_view, without_view);
     }
 }
 
@@ -256,6 +325,8 @@ cfg_if::cfg_if! {
             childrenHashes: HexString[];
             mergeSetBluesHashes: HexString[];
             mergeSetRedsHashes: HexString[];
+            /** Derived view, absent when headers are unavailable or on older/binary peers. */
+            palwMergeView?: { roundBlocks: HexString[]; genuineRedBlocks: HexString[] };
             isChainBlock: boolean;
         }
 

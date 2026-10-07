@@ -230,13 +230,14 @@ impl CoinbaseManager {
             palw_escrow_withheld == 0 || !mergeset_non_daa.contains(&ghostdag_data.selected_parent),
             "a selected parent that escrowed a reward must be inside the DAA window, or its escrow is unfunded"
         );
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| palw_round_blocks.contains(&member));
         let mut worker_inclusion_pool = 0u64;
-        let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
+        let mut outputs = Vec::with_capacity(classified.blues().len() + 1); // + 1 for possible red reward
         let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
 
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
-        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        for blue in classified.blues().iter().filter(|h| !mergeset_non_daa.contains(h)) {
             // Not paid, and nothing is redistributed: the share is simply not minted. Placed
             // before the reward lookup so an unentitled blue costs nothing to skip.
             if palw_unentitled_blues.contains(blue) {
@@ -286,19 +287,18 @@ impl CoinbaseManager {
         let mut red_reward = 0u64;
         let mut round_payees: Vec<(ScriptPublicKey, u64)> = Vec::new();
 
-        for red in ghostdag_data.mergeset_reds.iter() {
+        for round in classified.rounds() {
             // ADR-0125: a round block's fees are its payout's, aggregated — never the merger's lump,
             // never a carve (the lane mints nothing, so there is no subsidy to carve).
-            if palw_round_blocks.contains(red) {
-                let reward_data = mergeset_rewards.get(red).unwrap();
-                if reward_data.total_fees > 0 {
-                    match round_payees.iter_mut().find(|(script, _)| *script == reward_data.script_public_key) {
-                        Some((_, value)) => *value = value.saturating_add(reward_data.total_fees),
-                        None => round_payees.push((reward_data.script_public_key.clone(), reward_data.total_fees)),
-                    }
+            let reward_data = mergeset_rewards.get(round).unwrap();
+            if reward_data.total_fees > 0 {
+                match round_payees.iter_mut().find(|(script, _)| *script == reward_data.script_public_key) {
+                    Some((_, value)) => *value = value.saturating_add(reward_data.total_fees),
+                    None => round_payees.push((reward_data.script_public_key.clone(), reward_data.total_fees)),
                 }
-                continue;
             }
+        }
+        for red in classified.genuine_reds() {
             // **The same skip the blues loop has, for the same reason.** It was missing here
             // while the set was built from blues alone, so the two halves agreed only by never
             // meeting: an unentitled red was paid its full worker share to this block's miner.
@@ -466,8 +466,9 @@ impl CoinbaseManager {
         // ADR-0125: round blocks' fees are paid whole to their payouts, so none of them funds the pool.
         palw_round_blocks: &BlockHashSet,
     ) -> u64 {
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| palw_round_blocks.contains(&member));
         let mut pool = 0u64;
-        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        for blue in classified.blues().iter().filter(|h| !mergeset_non_daa.contains(h)) {
             if palw_unentitled.contains(blue) {
                 continue;
             }
@@ -476,10 +477,7 @@ impl CoinbaseManager {
                 split_block_reward(reward_data.subsidy, reward_data.total_fees, reward_data.finality_fees, fee_split).validator_sompi,
             );
         }
-        for red in ghostdag_data.mergeset_reds.iter() {
-            if palw_round_blocks.contains(red) {
-                continue;
-            }
+        for red in classified.genuine_reds() {
             if palw_unentitled.contains(red) {
                 continue;
             }
@@ -993,6 +991,106 @@ mod tests {
         assert_eq!(with_rounds, without_round_rows, "a round block's fees fund no validator pool");
     }
 
+    #[test]
+    fn adr0125_semantic_only_genuine_reds_grow_normal_rewards_in_a_mixed_mergeset() {
+        use kaspa_consensus_core::BlockHash;
+        let cbm = create_manager(&MAINNET_PARAMS);
+        let h = BlockHash::from_u64_word;
+        let script = |n| ScriptPublicKey::new(0, scriptvec![0xAA, n]);
+        let split = FeeSplitParams {
+            subsidy_worker_base_bps: 6200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 3000,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        };
+        for carve in [None, Some(&split)] {
+            for pay_own_miner in [false, true] {
+                for red_count in [1, 2] {
+                    let mut baseline_normal = None;
+                    let mut baseline_pool = None;
+                    for round_count in [0, 1, 4] {
+                        let mut rewards = BlockHashMap::default();
+                        rewards.insert(h(1), BlockRewardData::new(1_000, 0, 0, script(1)));
+                        let mut raw_reds = vec![];
+                        let mut rounds = BlockHashSet::default();
+                        for index in 0..round_count.max(red_count) {
+                            if index < round_count {
+                                let round = h(100 + index);
+                                raw_reds.push(round);
+                                rounds.insert(round);
+                                // Last round has a refused/zero-fee verdict; it still isn't genuine RED.
+                                let fees = if index + 1 == round_count { 0 } else { 30 };
+                                rewards.insert(round, BlockRewardData::new(0, fees, 0, script(9)));
+                            }
+                            if index < red_count {
+                                let red = h(10 + index);
+                                raw_reds.push(red);
+                                rewards.insert(red, BlockRewardData::new(500, 10, 0, script(2)));
+                            }
+                        }
+                        let ghostdag = GhostdagData::new(
+                            7,
+                            0.into(),
+                            h(1),
+                            std::sync::Arc::new(vec![h(1)]),
+                            std::sync::Arc::new(raw_reds),
+                            Default::default(),
+                        );
+                        let coinbase = cbm
+                            .expected_coinbase_transaction(
+                                10,
+                                0,
+                                MinerData::new(script(3), vec![]),
+                                &ghostdag,
+                                &rewards,
+                                &rounds,
+                                &[],
+                                carve,
+                                (0, 0),
+                                0,
+                                &Default::default(),
+                                pay_own_miner,
+                                &Default::default(),
+                                &rounds,
+                                &Default::default(),
+                            )
+                            .unwrap();
+                        let normal: Vec<_> =
+                            coinbase.tx.outputs.iter().filter(|output| output.script_public_key != script(9)).cloned().collect();
+                        let pool = cbm.coinbase_validator_pool(&ghostdag, &rewards, &rounds, &split, &Default::default(), &rounds);
+                        assert_eq!(normal.len(), 1 + if pay_own_miner { red_count as usize } else { 1 });
+                        if let Some(ref expected) = baseline_normal {
+                            assert_eq!(&normal, expected);
+                        } else {
+                            baseline_normal = Some(normal.clone());
+                        }
+                        if let Some(expected) = baseline_pool {
+                            assert_eq!(pool, expected);
+                        } else {
+                            baseline_pool = Some(pool);
+                        }
+                        let red_value = if carve.is_some() { 310 + 9 } else { 500 + 10 };
+                        assert_eq!(normal.iter().skip(1).map(|output| output.value).sum::<u64>(), red_count * red_value);
+                        let round_fees = coinbase
+                            .tx
+                            .outputs
+                            .iter()
+                            .filter(|output| output.script_public_key == script(9))
+                            .map(|output| output.value)
+                            .sum::<u64>();
+                        assert_eq!(round_fees, round_count.saturating_sub(1) * 30);
+                    }
+                }
+            }
+        }
+    }
+
     /// **RFC-0009: a V4 receipt block's reward is split in two outputs and the total never moves.** The miner leg (the subsidy-derived
     /// worker share less the builder's fee) goes to the executor bond's payout script, the builder gets the fee plus every fee-derived
     /// share of its own block, and for blue and red alike the sum of the pair is exactly what the one output was — with and without the
@@ -1065,9 +1163,15 @@ mod tests {
             let before = build(carve, &Default::default());
             let after = build(carve, &payouts);
             let total = |tx: &Transaction| tx.outputs.iter().map(|o| o.value).sum::<u64>();
-            assert_eq!(total(&after), total(&before), "the split moves value between two payees of one block, never in or out of the coinbase");
+            assert_eq!(
+                total(&after),
+                total(&before),
+                "the split moves value between two payees of one block, never in or out of the coinbase"
+            );
             // The V4 blocks' outputs: the miner leg to the payout script, the builder's to the block's own.
-            let paid_to = |tx: &Transaction, s: ScriptPublicKey| tx.outputs.iter().filter(|o| o.script_public_key == s).map(|o| o.value).sum::<u64>();
+            let paid_to = |tx: &Transaction, s: ScriptPublicKey| {
+                tx.outputs.iter().filter(|o| o.script_public_key == s).map(|o| o.value).sum::<u64>()
+            };
             let part = |subsidy: u64| match carve {
                 Some(fs) => split_block_subsidy(subsidy, fs).worker_base_sompi,
                 None => subsidy,
@@ -1078,8 +1182,16 @@ mod tests {
             };
             let (leg_sp, fee_sp) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(part(1_000), 1_000);
             assert_eq!(paid_to(&after, script(0xA1)), leg_sp, "the selected parent's miner leg");
-            assert_eq!(paid_to(&after, script(1)), fee_sp + fee_part(40), "the builder keeps its fee and every fee-derived share of its block");
-            assert_eq!(paid_to(&after, script(0xA2)), part(1_000), "a zero-fee authorization pays the whole subsidy part to the miner");
+            assert_eq!(
+                paid_to(&after, script(1)),
+                fee_sp + fee_part(40),
+                "the builder keeps its fee and every fee-derived share of its block"
+            );
+            assert_eq!(
+                paid_to(&after, script(0xA2)),
+                part(1_000),
+                "a zero-fee authorization pays the whole subsidy part to the miner"
+            );
             assert_eq!(paid_to(&after, script(2)), 0, "…and the zero builder output is dropped");
             let (leg_red, _) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(part(1_000), 500);
             assert_eq!(paid_to(&after, script(0xA3)), leg_red, "an entitled in-window red is split the same way");

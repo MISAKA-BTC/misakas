@@ -16,7 +16,7 @@
 //!
 //! **Round blocks are counted from mergesets, and they are not work** (the route-matrix re-audit's
 //! #9). An algo-10 round block is never a selected parent, never blue and never the sink, so a walk
-//! of the selected chain alone never meets one; each visited chain block's red mergeset is where they
+//! of the selected chain alone never meets one; each visited chain block's classified mergeset is where they
 //! are. They stay out of the alarm: permits from earlier Finals keep minting round blocks for up to
 //! the ~1,200-DAA maturity after the attempt lane stops, so counting them would mask a dead attempt
 //! lane. Algo 9 is not the execution lane either — it is ADR-0072's execution-priced ATTEMPT lane,
@@ -74,7 +74,7 @@ pub(crate) struct PalwLaneMixV1 {
     /// so zero on every network today. It is not the ADR-0125 execution lane; that is `round_blocks`.
     pub exec_priced_attempt_blocks: u64,
     /// 10: ADR-0125 round blocks (the execution lane) MERGED by the window's chain blocks — found in
-    /// their red mergesets, since a round block is never on the selected chain. Not work: see the
+    /// their classified mergesets, since a round block is never on the selected chain. Not work: see the
     /// module doc.
     pub round_blocks: u64,
     /// **Attempt-lane blocks (algos 6, 7 and 9) MERGED by the window's chain blocks, blue or red** (ADR-0165) — the REAL
@@ -165,7 +165,9 @@ impl PalwLaneMixV1 {
         (self.window_blocks >= PALW_LANE_WATCH_MIN_BLOCKS_TO_ALARM && self.blocks_since_work >= PALW_LANE_WATCH_MIN_BLOCKS_TO_ALARM)
             .then(|| {
                 let last = match self.last_work_daa {
-                    Some(daa) => format!("the newest work block is at DAA {daa}, {} selected-chain blocks back", self.blocks_since_work),
+                    Some(daa) => {
+                        format!("the newest work block is at DAA {daa}, {} selected-chain blocks back", self.blocks_since_work)
+                    }
                     None => format!("none in the whole window of {} (DAA {}..{})", self.window_blocks, self.from_daa, self.to_daa),
                 };
                 format!(
@@ -192,27 +194,26 @@ fn lane_mix_v1(consensus: &dyn kaspa_consensus_core::api::ConsensusApi, window: 
     let mut cursor = consensus.get_sink();
     for _ in 0..window {
         let Ok(header) = consensus.get_header(cursor) else { break };
+        let Ok(ghostdag) = consensus.get_ghostdag_data(cursor) else { break };
+        // ADR-0125 semantic amendment: count semantic rounds, independently of raw GHOSTDAG colour. Stop at a
+        // missing header rather than guessing an incomplete member's class.
+        let Ok(classified) = ghostdag.try_classify_palw_mergeset_v1(|member| {
+            consensus.get_header(member).map(|header| header.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1)
+        }) else {
+            break;
+        };
         if mix.window_blocks == 0 {
             mix.to_daa = header.daa_score;
         }
         mix.from_daa = header.daa_score;
         mix.count(header.pow_algo_id, header.daa_score);
-        let Ok(ghostdag) = consensus.get_ghostdag_data(cursor) else { break };
-        // A round block is red wherever it is merged; the blues are read too, so a rule change that
-        // coloured one blue would not make the lane vanish from this count.
-        let merged_rounds = ghostdag
-            .mergeset_reds
-            .iter()
-            .chain(ghostdag.mergeset_blues.iter())
-            .filter(|merged| consensus.get_header(**merged).is_ok_and(|h| h.pow_algo_id == POW_ALGO_ID_PALW_ROUND_V1))
-            .count() as u64;
-        mix.count_merged_rounds(merged_rounds);
+        mix.count_merged_rounds(classified.rounds().len() as u64);
         // ADR-0165: the attempt-lane blocks this chain block merged — a REAL attempt lands beside the chain and is merged by
         // the next block. The selected parent is the walk's own next block, never "merged work".
-        let merged_work = ghostdag
-            .mergeset_reds
+        let merged_work = classified
+            .blues()
             .iter()
-            .chain(ghostdag.mergeset_blues.iter())
+            .chain(classified.genuine_reds())
             .filter(|merged| **merged != ghostdag.selected_parent)
             .filter(|merged| consensus.get_header(**merged).is_ok_and(|h| palw_is_work_algo_v1(h.pow_algo_id)))
             .count() as u64;
@@ -451,6 +452,11 @@ mod tests {
         assert_eq!((mix.window_blocks, mix.attempt_blocks, mix.heartbeat_blocks, mix.other_blocks), (3, 1, 1, 1));
         assert_eq!(mix.round_blocks, 3, "the three round blocks the heartbeat merged");
         assert_eq!((mix.last_work_daa, mix.blocks_since_work), (Some(1), 1));
+        chain.headers.remove(&hash(10));
+        let incomplete = lane_mix_v1(&chain, 600);
+        assert_eq!(incomplete.window_blocks, 0, "incomplete mergesets never become clock-only observations");
+        assert_eq!(incomplete.round_blocks, 0);
+        assert!(incomplete.alarm().is_none(), "missing headers cannot fabricate a dead-work alarm");
     }
 
     /// **ADR-0165: a REAL attempt merged beside the chain is work.** A selected chain of heartbeats whose blocks merge an attempt
@@ -481,7 +487,9 @@ mod tests {
         // An attempt merged 40 blocks back is older than the horizon: still the alarm, with the merge's DAA named.
         let old = walk(&[(40, 1)]);
         assert_eq!((old.merged_work_blocks, old.last_work_daa, old.blocks_since_work), (1, Some(960), 40));
-        assert!(old.alarm().expect("40 blocks since work").contains("the newest work block is at DAA 960, 40 selected-chain blocks back"));
+        assert!(
+            old.alarm().expect("40 blocks since work").contains("the newest work block is at DAA 960, 40 selected-chain blocks back")
+        );
         // One merged 10 blocks back clears it; the newest merge is the one reported, and several in one block count each.
         let recent = walk(&[(10, 2), (50, 1)]);
         assert_eq!((recent.merged_work_blocks, recent.last_work_daa, recent.blocks_since_work), (3, Some(990), 10));
@@ -560,7 +568,10 @@ mod tests {
         let mix = lane_mix_v1(&chain, 600);
         assert_eq!(mix.window_blocks, 5);
         assert_eq!((mix.attempt_blocks, mix.heartbeat_blocks, mix.other_blocks), (0, 4, 1), "no attempt is on the selected chain");
-        assert_eq!(mix.merged_work_blocks, 2, "the blue and the red attempt heartbeat 4 merged; the round block and the heartbeat are not work");
+        assert_eq!(
+            mix.merged_work_blocks, 2,
+            "the blue and the red attempt heartbeat 4 merged; the round block and the heartbeat are not work"
+        );
         assert_eq!(mix.round_blocks, 1);
         assert_eq!(mix.work_blocks(), 0, "the selected-chain count is unchanged");
         // Recency starts at heartbeat 4, one block behind the sink (5): the chain is doing work, so there is no alarm.

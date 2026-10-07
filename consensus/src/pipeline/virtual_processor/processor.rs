@@ -2618,9 +2618,11 @@ impl VirtualStateProcessor {
                                         }
                                         // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
                                         extras.own_job_anchor = own_job_anchor;
-                                        // **ADR-0165: the reds of this block's mergeset** — the floor state machine reads a merged
+                                        // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
                                         // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
-                                        extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
+                                        extras.merged_reds = ctx.ghostdag_data
+                                            .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
+                                            .genuine_reds().iter().copied().collect();
                                         // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
                                         extras.audit_1004_draw_seed_source = self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                         extras
@@ -6633,8 +6635,8 @@ impl VirtualStateProcessor {
         // A red is not a chain block, so the selected-parent exemption below cannot apply to one,
         // and the same entitlement question is the right question for both colours: did this chain
         // accept work from that block.
-        let mergeset_daa =
-            ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()).filter(|h| !mergeset_non_daa.contains(h));
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        let mergeset_daa = classified.blues().iter().chain(classified.genuine_reds()).filter(|h| !mergeset_non_daa.contains(h));
         for blue in mergeset_daa {
             // The selected parent went through the full admission on its way to becoming a chain
             // block, and its reward is escrowed rather than paid. Re-deciding it here could only
@@ -6758,7 +6760,8 @@ impl VirtualStateProcessor {
         let Some(fence) = self.palw_receipt_spend_v4 else {
             return payouts;
         };
-        for block in ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()) {
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for block in classified.blues().iter().chain(classified.genuine_reds()) {
             if mergeset_non_daa.contains(block) || unentitled.contains(block) {
                 continue;
             }
@@ -13242,7 +13245,8 @@ impl VirtualStateProcessor {
             attempts.push((header.daa_score, block));
         }
         let data = self.ghostdag_store.get_data(block).ok()?;
-        for merged in data.mergeset_blues.iter().chain(data.mergeset_reds.iter()).filter(|hash| **hash != data.selected_parent) {
+        let classified = data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for merged in classified.blues().iter().chain(classified.genuine_reds()).filter(|hash| **hash != data.selected_parent) {
             let merged_header = self.headers_store.get_header(*merged).ok()?;
             if rule.operator_of_v1(&merged_header).is_some() {
                 attempts.push((merged_header.daa_score, *merged));
@@ -13672,7 +13676,7 @@ impl VirtualStateProcessor {
         self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
     }
 
-    /// **ADR-0125: the round blocks of a mergeset** — its reds carrying the round lane's id where the
+    /// **ADR-0125 / ADR-0125 semantic amendment: the round blocks of a mergeset** — members carrying the round lane's id where the
     /// lane is open at their own DAA score. Headers only, so the template (which holds no verdicts)
     /// and the validating walk compute the same set; nothing is read where the lane is not configured.
     pub(super) fn palw_round_blocks_of(&self, ghostdag_data: &GhostdagData) -> BlockHashSet {
@@ -13680,11 +13684,9 @@ impl VirtualStateProcessor {
             return BlockHashSet::default();
         };
         ghostdag_data
-            .mergeset_reds
-            .iter()
-            .copied()
-            .filter(|red| {
-                self.headers_store.get_header(*red).is_ok_and(|header| {
+            .unordered_mergeset_without_selected_parent()
+            .filter(|member| {
+                self.headers_store.get_header(*member).is_ok_and(|header| {
                     header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
                         && lane.activation.is_active(header.daa_score)
                 })
@@ -15491,7 +15493,7 @@ impl VirtualStateProcessor {
     ) -> (Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>) {
         let mut works = Vec::new();
         let mut skips = Vec::new();
-        if ghostdag_data.mergeset_blues.len() <= 1 && ghostdag_data.mergeset_reds.is_empty() {
+        if ghostdag_data.unordered_mergeset_without_selected_parent().next().is_none() {
             return (works, skips);
         }
         let non_daa = mergeset_non_daa;
@@ -18183,11 +18185,11 @@ impl VirtualStateProcessor {
             let ghostdag = self.ghostdag_manager.ghostdag(&tentative);
             let mut members = Vec::new();
             let mut malformed = false;
-            for red in ghostdag.mergeset_reds.iter().copied() {
-                if !self.ghostdag_manager.is_round_block(red) {
+            for member in ghostdag.unordered_mergeset_without_selected_parent() {
+                if !self.ghostdag_manager.is_round_block(member) {
                     continue;
                 }
-                match envelope_of(red) {
+                match envelope_of(member) {
                     Some(envelope) => members.push((envelope.round, envelope.permit_index, envelope.bond)),
                     None => malformed = true,
                 }
@@ -19037,10 +19039,9 @@ impl VirtualStateProcessor {
                 continue;
             }
             let members: Option<Vec<_>> = ghostdag
-                .mergeset_reds
-                .iter()
-                .filter(|red| self.ghostdag_manager.is_round_block(**red))
-                .map(|red| envelope_of(*red).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
+                .unordered_mergeset_without_selected_parent()
+                .filter(|member| self.ghostdag_manager.is_round_block(*member))
+                .map(|member| envelope_of(member).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
                 .collect();
             let Some(members) = members else { continue };
             // **A tip the validator would refuse to merge is not a parent** (the 2026-10-03 execution-lane wedge): a round

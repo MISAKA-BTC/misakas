@@ -15,6 +15,20 @@ pub struct ExternalGhostdagData {
     pub blues_anticone_sizes: BlockHashMap<KType>,
 }
 
+impl ExternalGhostdagData {
+    /// ADR-0125 semantic amendment: semantic partitions; the externally exchanged raw data stays unchanged.
+    pub fn try_classify_palw_mergeset_v1<E>(
+        &self,
+        is_round: impl FnMut(BlockHash) -> Result<bool, E>,
+    ) -> Result<crate::palw_mergeset_v1::ClassifiedMergesetV1, E> {
+        crate::palw_mergeset_v1::try_classify_palw_mergeset_v1(
+            self.mergeset_blues.iter().copied(),
+            self.mergeset_reds.iter().copied(),
+            is_round,
+        )
+    }
+}
+
 /// Represents an externally provided block with associated Ghostdag data which
 /// is only partially validated by the consensus layer. Note there is no actual trust
 /// but rather these blocks are indirectly validated through the PoW mined over them

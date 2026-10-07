@@ -37625,7 +37625,8 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
-    /// **ADR-0165: the reds of the accepting block's mergeset** (`GhostdagData::mergeset_reds`), set by the processor. The
+    /// **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of the accepting block's classified mergeset**, set by the processor.
+    /// Execution rounds (including refused rounds) are excluded. The
     /// floor state machine reads a merged attempt's colour from it — a carrying block in the set is RED, every other
     /// (and the block's own attempt) is BLUE. Empty by `Default`: nothing is red, so a caller that merges no work (the
     /// rehearsals, genesis) needs no mergeset.

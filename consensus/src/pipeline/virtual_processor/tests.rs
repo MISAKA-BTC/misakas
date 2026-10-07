@@ -19,6 +19,8 @@ use kaspa_consensus_core::{
 };
 use std::{collections::VecDeque, thread::JoinHandle};
 
+mod palw_mergeset_view;
+
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
     rejected: bool,

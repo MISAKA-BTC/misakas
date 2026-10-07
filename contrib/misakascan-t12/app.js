@@ -986,37 +986,33 @@ function scanDecodeRound(raw){
 }
 const scanIsRound = b => Number(b.algo) === 10;
 
-// ---- block KIND (design of the 5,300 release: heartbeat and PALW-BASE-0 give way to ONE liveness block,
-//      MISAKA-FALLBACK-V1): REAL (a real-model attempt) · EXEC (an execution round block) · FALLBACK (idle-time
-//      liveness) · RED (merged, not selected). The node's own field (verboseData.blockKind / kind, lane RS) is
-//      read first; otherwise the kind is derived from the header. Before the fence a heartbeat (algo-8) or a
-//      floor attempt shows as before, labelled "legacy".
+// ADR-0168: execution rounds, heartbeat and BASE-0 remain distinct. Kind identifies the lane;
+// genuine RED is a separate GHOSTDAG class. Older node kind names remain readable.
 function scanKindOf(b){
   const nk = String(b.nodeKind || "").toUpperCase();
-  const lc = String(b.laneClass || "").toUpperCase();
-  const exact = { REAL_ROUND: { k: "REAL_ROUND", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
-    LEGACY_HEARTBEAT: { k: "FALLBACK", legacy: true, what: "heartbeat" }, LEGACY_FLOOR: { k: "FALLBACK", legacy: true, what: "floor attempt" } };
+  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
+  if (Number(b.algo) === 8) return { k: "HEARTBEAT", legacy: false };
+  if (b.classId && llmIsFloor(b.classId)) return { k: "BASE-0", legacy: false };
+  const exact = { REAL_ROUND: { k: "EXEC", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
+    LEGACY_HEARTBEAT: { k: "HEARTBEAT", legacy: false }, LEGACY_FLOOR: { k: "BASE-0", legacy: false } };
   if (exact[nk]) return exact[nk];   // lane RS's exact values; the substring matches below tolerate a rename
   if (nk) {
     if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
-    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "REAL_ROUND", legacy: false };
+    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "EXEC", legacy: false };
     if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
     if (/EXEC/.test(nk)) return { k: "EXEC", legacy: false };
-    if (/LEGACY.*HEARTBEAT|HEARTBEAT/.test(nk)) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
-    if (/LEGACY.*FLOOR|FLOOR/.test(nk)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+    if (/HEARTBEAT/.test(nk)) return { k: "HEARTBEAT", legacy: false };
+    if (/FLOOR/.test(nk)) return { k: "BASE-0", legacy: false };
   }
-  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
-  if (Number(b.algo) === 8) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
-  if (b.classId && llmIsFloor(b.classId)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
   if (b.classId) return { k: "REAL", legacy: false };
   return { k: "", legacy: false };
 }
 function scanKindPill(b){
   const x = scanKindOf(b);
   if (!x.k) return "";
-  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL_ROUND: "a real-model execution round: a canonical member of the DAG (lane EX)", REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
-  const cls = (x.k === "REAL" || x.k === "REAL_ROUND") ? "blue" : x.k === "EXEC" ? "chain" : "";
-  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "REAL_ROUND" ? "BLUE · canonical round" : x.k}${x.legacy ? " · legacy" : ""}</span>`;
+  const title = ({ REAL: "a real-model attempt", EXEC: "an execution round block", HEARTBEAT: "the independent chain clock", "BASE-0": "a floor-model attempt", FALLBACK: "an idle-time liveness block" })[x.k];
+  const cls = x.k === "REAL" ? "blue" : x.k === "EXEC" ? "chain" : "";
+  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "EXEC" ? "E / ROUND" : x.k}</span>`;
 }
 // ---- claims of an executor bond (cached; one call per bond per 20 s)
 const scanClaimCache = new Map();   // bond -> { ts, rows|null }
@@ -1076,7 +1072,7 @@ function scanRoundsCell(g){
   }
   return `<span class="dim" title="tickets of this claim are not known to this page: ${g.ambiguous ? "the producing bond holds " + g.ambiguous + " claims whose ticket ranges overlap this round" : "no claim of the producing bond covers this round"}">${num(g.blocks.length)} seen</span>`;
 }
-const scanCanonical = b => scanKindOf(b).k === "REAL_ROUND";   // past the lane-EX fence the node says so; before it, round blocks are merged beside the chain
+const scanAcceptedRound = b => scanIsRound(b) && b.exec && b.exec.verdict === "granted";
 function scanRoundLabel(b, g){
   const q = b.exec && b.exec.quantumIndex;
   const t = g.claim && Number(g.claim.execTickets);
@@ -1095,8 +1091,8 @@ function scanRenderExecutions(rows, claimsByBond){
       : `<span class="dim">${g.ambiguous ? g.ambiguous + " claims (overlap)" : "claim unknown"}</span>`;
     const anchor = c && c.acceptedBlock ? linkBlock(c.acceptedBlock) : `<span class="dim">—</span>`;
     const sub = !open ? "" : `<tr class="scan-sub"><td colspan="8">${g.blocks.slice(0, 120).map(b =>
-        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanCanonical(b) ? " · BLUE · canonical round" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("")}
-        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanCanonical) ? "They are canonical members of the DAG (BLUE)." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
+        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanAcceptedRound(b) ? " · round accepted" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanAcceptedRound(b) ? ' <span class="scan-ok">accepted</span>' : ""}</span>`).join("")}
+        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanAcceptedRound) ? "Their permits were accepted; they remain execution rounds." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
     return `<tr class="scan-row-x" data-k="${esc(g.key)}"><td>${open ? "▾" : "▸"} <span class="pill blue">${esc(model)}</span></td>
       <td>${claimCell}</td><td class="nowrap">${scanRoundsCell(g)}</td><td>${esc(final)}</td>
       <td class="mono" title="${esc(g.bond || "")}">${esc(short(g.bond || "—", 8))}</td>
@@ -1279,7 +1275,7 @@ async function renderClaim(arg){
     <h2 class="sec">Timeline</h2>
     <ol class="scan-tl">${steps.map(s => `<li class="${s.k}"><b>${s.n}</b> <span class="dim">·</span> ${s.d}</li>`).join("")}</ol>
     <h2 class="sec">Round blocks seen (${roundBlocks.length}) <span class="dim" style="font-size:13px">on this page's recent window</span></h2>
-    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
+    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanAcceptedRound(b) ? ' <span class="scan-ok">accepted</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
 }
 /* ===================== end SCAN ===================== */
 
@@ -1647,24 +1643,26 @@ async function updateRecent(sink, liveBlue){
 
 
 // ---- ONE "Recent blocks" table: every block in arrival order, round blocks individually, a Type column and filters.
-//   C-BLUE      consensus: a chain/blue attempt, a legacy heartbeat or floor block
-//   E / E-BLUE  model execution: a round block. Before the lane-EX fence it is merged beside the chain, not canonical
-//               ("E · model execution (merged)"); once the node says REAL_ROUND it is canonical ("E-BLUE").
-//   FALLBACK    the idle-time liveness block (blockKind FALLBACK)
-//   RED         not selected: a non-chain, non-round block, or a block the node marked RED
+//   C-BLUE      a selected-chain or merged-blue block
+//   E / ROUND  every execution round, with acceptance reported separately
+//   RED         a confirmed non-round GHOSTDAG red; unclassified blocks remain unknown
+//   HEARTBEAT and BASE-0 identify independent mechanisms in the consensus lane
 let scanAll = [], scanFilter = "all", scanPage = 0;
 const SCAN_PAGE = 25;
 function scanTypeOf(b){
   const kind = scanKindOf(b), lc = String(b.laneClass || "").toUpperCase();
   if (scanIsRound(b)) {
-    if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="a round block the node judged without a permit: merged, its transactions not accepted">RED · not selected</span>` };
-    if (kind.k === "REAL_ROUND") return { cat: "exec", pill: `<span class="pill blue" title="a canonical member of the DAG (lane EX)">E-BLUE · model execution</span>` };
-    return { cat: "exec", pill: `<span class="pill chain" title="an execution round block: merged into the DAG beside the chain, not yet canonical on this network">E · model execution (merged)</span>` };
+    const verdict = b.exec && b.exec.verdict;
+    const state = verdict === "refused" ? "permit refused" : verdict === "granted" ? "accepted" : "verdict unknown";
+    return { cat: "exec", pill: `<span class="pill chain" title="${esc(state)}">E / ROUND · ${esc(state)}</span>` };
   }
-  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="MISAKA-FALLBACK-V1: an idle-time liveness block">FALLBACK</span>` };
-  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, its transactions not accepted">RED · not selected</span>` };
-  if (b.isChain || lc === "BLUE") return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}${kind.legacy ? " · legacy " + kind.what : ""}">C-BLUE · consensus</span>` };
-  return { cat: "red", pill: `<span class="pill red" title="in the DAG but not on the selected chain (a red, or not merged yet); this is not a rejection">RED · not selected</span>` };
+  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="an ordinary GHOSTDAG red; acceptance is independent of colour">RED</span>` };
+  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="an idle-time liveness block">FALLBACK</span>` };
+  if (b.isChain || lc === "BLUE") {
+    const label = ["HEARTBEAT", "BASE-0"].includes(kind.k) ? kind.k : "C-BLUE · consensus";
+    return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}">${label}</span>` };
+  }
+  return { cat: "unknown", pill: `<span class="pill" title="the node has not classified this block">unclassified</span>` };
 }
 function scanBlockContext(b, lookup){
   if (!scanIsRound(b)) return { model: recentModelCell(b), claim: "" };
@@ -1721,8 +1719,8 @@ let compMiss = 0, compRows = new Map(), compBusy = false, compSink = null, compP
 try { const c = JSON.parse(localStorage.getItem(COMP_KEY) || "null"); if (c && Array.isArray(c.rows)) compRows = new Map(c.rows.map(r => [r.h, r])); } catch {}
 function compLabelOf(r){
   const x = scanKindOf({ algo: r.algo, classId: r.classId, nodeKind: r.nodeKind, laneClass: "" });
-  if (x.k === "FALLBACK") return x.legacy ? (x.what === "heartbeat" ? "heartbeat (legacy)" : "PALW-BASE-0 floor (legacy)") : "FALLBACK";
-  if (x.k === "REAL" || x.k === "REAL_ROUND") return r.classId ? scanClaimClassName(r.classId) : "real model (class unknown)";
+  if (["HEARTBEAT", "BASE-0", "FALLBACK"].includes(x.k)) return x.k;
+  if (x.k === "REAL") return r.classId ? scanClaimClassName(r.classId) : "real model (class unknown)";
   return r.algo == null ? "unknown" : "other (algo-" + r.algo + ")";
 }
 async function scanCompTick(sink){
@@ -1975,7 +1973,8 @@ async function renderBlock(hash){
     ["UTXO commitment", `<span class="hash">${esc(hd.utxoCommitment)}</span>`],
     ["Pruning point", linkBlock(hd.pruningPoint)],
     ["Merge set (blues)", num((vd.mergeSetBluesHashes||[]).length)],
-    ["Merge set (reds)", num((vd.mergeSetRedsHashes||[]).length)],
+    ["Merge set (E / ROUND)", vd.palwMergeView ? num(vd.palwMergeView.roundBlocks.length) : "unknown (node view unavailable)"],
+    ["Merge set (RED)", vd.palwMergeView ? num(vd.palwMergeView.genuineRedBlocks.length) : "unknown (node view unavailable)"],
   ];
   // kaspa-pq EVM Lane (ADR-0020 §4): v2 blocks carry the two EVM header commitments. Show them
   // plus whether this block's own payload carries EVM content (bytes beyond the empty baseline).

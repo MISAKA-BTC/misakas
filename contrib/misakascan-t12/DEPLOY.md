@@ -217,3 +217,17 @@ Round rows show model, claim (or "claim unknown") and "Round n/N" when the node 
 Top of the home page: the last 600 **selected-chain** blocks by kind / model class (counts and %), and **DAA advanced by** — for each DAA tick, the kind/class of the first chain block of that score (a block that jumps k ticks carries k).
 Kind comes from `verboseData.blockKind` when the node sends it, else it is derived (algo 8 = heartbeat (legacy), floor class = PALW-BASE-0 floor (legacy), other attempt = REAL with its model name; FALLBACK past the fence).
 Round/execution blocks are never on the chain and appear on their own line, counted over the recent-blocks window. Sampling is one `getBlock` per chain block ever seen (cached in `msk_comp_v1`), so the first visit makes up to 600 calls; later refreshes fetch only new tips.
+
+### 10d. 2026-10-07 - ADR-0125 semantic amendment semantic separation (pre)
+
+Every algo-10 block is E / ROUND, including refused permits. Acceptance is shown separately as
+accepted / permit refused / verdict unknown; an older node's laneClass=RED cannot put a round
+in the RED filter. RED requires a confirmed ordinary GHOSTDAG red; unknown off-chain blocks
+remain unclassified. HEARTBEAT and BASE-0 keep separate labels. Structural E-BLUE and the
+replacement of both mechanisms with FALLBACK are no longer assumed by the display.
+
+Block details read the round / genuine-red counts from verboseData.palwMergeView. It is available
+over JSON and the updated gRPC schema. Older nodes, missing headers and wRPC binary peers lack
+the view: show unknown, never infer ordinary RED counts from the raw red array.
+
+Local regression: node --test test/classification.test.mjs. No public-site deployment is performed.
