@@ -31,9 +31,9 @@ use crate::challenge::{ChallengeBindingV1, ChallengeLabelV1, ChallengeStreamV1};
 use crate::descriptor::KernelDescriptorV1;
 use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1, check_evidence_v1};
 use crate::family::CheckerIdV1;
-use crate::field::Fp;
+use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2};
 use crate::hash::{Digest, finish, keyed};
-use crate::plan::{PlanRelationV1, VerificationPlanV1, derived_error_bits};
+use crate::plan::{PlanRelationV1, VerificationPlanV1, derived_error_bits, relation_moduli};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, SourceV1, WiringV1, const_tensor, eval_node, tensor_commitment};
 
 pub const SCOPE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/scope/v1";
@@ -315,13 +315,29 @@ fn slice_offset(out_batch: &[usize], in_shape: &[usize], slice: usize) -> usize 
     flat * in_shape[r - 2] * in_shape[r - 1]
 }
 
-/// The exact value of `Y[slice, i, j]`.
-fn matmul_scalar(x: &Tensor, wt: &Tensor, y_shape: &[usize], slice: usize, i: usize, j: usize) -> i128 {
+/// `Σ terms` under the reference semantics' exact-result rule (RFC-0002 spec 04b §6): every term fits `i128`, the positive terms'
+/// sum stays `≤ max(out)` and the negative terms' sum `≥ min(out)`. `None` when the semantics refuses (the instance has no valid
+/// output, so any committed value is a fault).
+fn exact_sum(terms: impl Iterator<Item = Option<i128>>, out: DType) -> Option<i128> {
+    let (mut pos, mut neg) = (0i128, 0i128);
+    for t in terms {
+        let t = t?;
+        if t > 0 {
+            pos = pos.checked_add(t).filter(|v| *v <= out.max_value())?;
+        } else {
+            neg = neg.checked_add(t).filter(|v| *v >= out.min_value())?;
+        }
+    }
+    Some(pos + neg)
+}
+
+/// The exact value of `Y[slice, i, j]` (`None`: the semantics refuses it).
+fn matmul_scalar(x: &Tensor, wt: &Tensor, y_shape: &[usize], out: DType, slice: usize, i: usize, j: usize) -> Option<i128> {
     let out_batch = &y_shape[..y_shape.len() - 2];
     let (xo, wo) = (slice_offset(out_batch, &x.shape, slice), slice_offset(out_batch, &wt.shape, slice));
     let k = x.shape[x.shape.len() - 1];
     let n = wt.shape[wt.shape.len() - 1];
-    (0..k).fold(0i128, |acc, kk| acc.wrapping_add(x.data[xo + i * k + kk].wrapping_mul(wt.data[wo + kk * n + j])))
+    exact_sum((0..k).map(|kk| x.data[xo + i * k + kk].checked_mul(wt.data[wo + kk * n + j])), out)
 }
 
 /// The first wrong scalar of row `i` of slice `b`, exactly.
@@ -329,12 +345,12 @@ fn localize_row(x: &Tensor, wt: &Tensor, y: &Tensor, b: usize, i: usize) -> Opti
     let r = y.shape.len();
     let (m, nn) = (y.shape[r - 2], y.shape[r - 1]);
     (0..nn)
-        .find(|&j| matmul_scalar(x, wt, &y.shape, b, i, j) != y.data[b * m * nn + i * nn + j])
+        .find(|&j| matmul_scalar(x, wt, &y.shape, y.dtype, b, i, j) != Some(y.data[b * m * nn + i * nn + j]))
         .map(|j| (b as u64, i as u64, j as u64))
 }
 
 /// `X (W r)` against `Y r` for one slice, row by row; the first row where they differ.
-fn first_bad_row(x: &Tensor, y: &Tensor, b: usize, wr: &[Fp], r: &[Fp], cost: &mut CheckCostV1) -> Option<usize> {
+fn first_bad_row<F: FieldElemV1>(x: &Tensor, y: &Tensor, b: usize, wr: &[F], r: &[F], cost: &mut CheckCostV1) -> Option<usize> {
     let yr = y.shape.len();
     let (m, nn) = (y.shape[yr - 2], y.shape[yr - 1]);
     let k = x.shape[x.shape.len() - 1];
@@ -342,61 +358,108 @@ fn first_bad_row(x: &Tensor, y: &Tensor, b: usize, wr: &[Fp], r: &[Fp], cost: &m
     let (xo, yo) = (slice_offset(out_batch, &x.shape, b), b * m * nn);
     cost.field_mults += (m * (k + nn)) as u128;
     (0..m).find(|&i| {
-        let lhs = Fp::dot((0..k).map(|kk| Fp::from_i128(x.data[xo + i * k + kk])), wr.iter().copied());
-        let rhs = Fp::dot((0..nn).map(|j| Fp::from_i128(y.data[yo + i * nn + j])), r.iter().copied());
+        let lhs = F::dot_iter((0..k).map(|kk| F::of_i128(x.data[xo + i * k + kk])), wr.iter().copied());
+        let rhs = F::dot_iter((0..nn).map(|j| F::of_i128(y.data[yo + i * nn + j])), r.iter().copied());
         lhs != rhs
     })
 }
 
 /// `W r` for the `[k, nn]` matrix starting at `wo`.
-fn project(wt: &Tensor, wo: usize, k: usize, nn: usize, r: &[Fp], cost: &mut CheckCostV1) -> Vec<Fp> {
+fn project<F: FieldElemV1>(wt: &Tensor, wo: usize, k: usize, nn: usize, r: &[F], cost: &mut CheckCostV1) -> Vec<F> {
     cost.field_mults += (k * nn) as u128;
-    (0..k).map(|kk| Fp::dot((0..nn).map(|j| Fp::from_i128(wt.data[wo + kk * nn + j])), r.iter().copied())).collect()
+    (0..k).map(|kk| F::dot_iter((0..nn).map(|j| F::of_i128(wt.data[wo + kk * nn + j])), r.iter().copied())).collect()
+}
+
+/// `rᵀ W` for the `[m, k]` matrix `W`.
+fn project_left<F: FieldElemV1>(wt: &Tensor, r: &[F], cost: &mut CheckCostV1) -> Vec<F> {
+    let (m, k) = (wt.shape[0], wt.shape[1]);
+    cost.field_mults += (m * k) as u128;
+    (0..k).map(|kk| F::dot_iter((0..m).map(|i| F::of_i128(wt.data[i * k + kk])), r.iter().copied())).collect()
 }
 
 /// `(rᵀ W) X` against `rᵀ Y` column by column (`W` `[m, k]`, `X` `[k, nn]`, `Y` `[m, nn]`); the first column where they differ.
-fn first_bad_column(wt: &Tensor, x: &Tensor, y: &Tensor, rw: &[Fp], r: &[Fp], cost: &mut CheckCostV1) -> Option<usize> {
+fn first_bad_column<F: FieldElemV1>(wt: &Tensor, x: &Tensor, y: &Tensor, rw: &[F], r: &[F], cost: &mut CheckCostV1) -> Option<usize> {
     let (m, k) = (wt.shape[0], wt.shape[1]);
     let nn = y.shape[1];
     cost.field_mults += (nn * (k + m)) as u128;
     (0..nn).find(|&j| {
-        let lhs = Fp::dot((0..k).map(|kk| Fp::from_i128(x.data[kk * nn + j])), rw.iter().copied());
-        let rhs = Fp::dot((0..m).map(|i| Fp::from_i128(y.data[i * nn + j])), r.iter().copied());
+        let lhs = F::dot_iter((0..k).map(|kk| F::of_i128(x.data[kk * nn + j])), rw.iter().copied());
+        let rhs = F::dot_iter((0..m).map(|i| F::of_i128(y.data[i * nn + j])), r.iter().copied());
         lhs != rhs
     })
 }
 
-/// Freivalds per instance and batch slice (activation × activation products).
+/// What one modulus and repetition of a dense check found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MissV1 {
+    /// Row `i` of batch slice `b`.
+    Row(usize, usize),
+    /// Column `j` of a left-weight product.
+    Column(usize),
+}
+
+fn raw<F: FieldElemV1>(v: &[F]) -> Vec<u128> {
+    v.iter().map(|f| f.raw()).collect()
+}
+
+fn unraw<F: FieldElemV1>(v: &[u128]) -> Vec<F> {
+    v.iter().map(|x| F::of_raw(*x)).collect()
+}
+
+/// **One repetition of one modulus of a dense check.** A batched weight product (`side`) projects its weight once per scope and
+/// label (kept in `batch`); any other product draws a fresh vector per instance and batch slice.
 #[allow(clippy::too_many_arguments)]
-fn freivalds_instance(
+fn freivalds_once<F: FieldElemV1>(
     seed: &Digest,
     (p, s, n): (u32, u16, u16),
-    reps: u8,
-    x: &Tensor,
-    wt: &Tensor,
+    scope_label: u32,
+    label_rep: u8,
+    side: Option<WeightSide>,
+    inputs: &[Tensor],
     y: &Tensor,
-    checks: &mut u128,
+    batch: &mut BatchProjections,
     cost: &mut CheckCostV1,
-) -> Result<Option<(u64, u64, u64)>, String> {
-    let yr = y.shape.len();
-    let nn = y.shape[yr - 1];
-    let k = x.shape[x.shape.len() - 1];
-    let out_batch = &y.shape[..yr - 2];
-    let slices: usize = out_batch.iter().product();
-    *checks += slices as u128;
-    for rep in 0..reps {
-        for b in 0..slices {
-            let label = ChallengeLabelV1 { kind: 0, position: p, occurrence: s, node: n, repetition: rep, slice: b as u32 };
-            let r = ChallengeStreamV1::new(*seed, label).vector(nn);
-            let wr = project(wt, slice_offset(out_batch, &wt.shape, b), k, nn, &r, cost);
-            if let Some(i) = first_bad_row(x, y, b, &wr, &r, cost) {
-                return localize_row(x, wt, y, b, i)
-                    .map(Some)
-                    .ok_or_else(|| format!("Freivalds failed on row {i} of slice {b} but the row recomputes exactly"));
-            }
+) -> Option<MissV1> {
+    let batch_label = ChallengeLabelV1 { kind: 1, position: scope_label, occurrence: s, node: n, repetition: label_rep, slice: 0 };
+    match side {
+        Some(WeightSide::Right) => {
+            let (x, wt) = (&inputs[0], &inputs[1]);
+            let (k, nn) = (wt.shape[0], wt.shape[1]);
+            let (r, wr, _) = batch.entry((s, n, label_rep)).or_insert_with(|| {
+                let r: Vec<F> = ChallengeStreamV1::new(*seed, batch_label).vector_in(nn);
+                let wr = project(wt, 0, k, nn, &r, cost);
+                (raw(&r), raw(&wr), tensor_commitment(wt))
+            });
+            let (r, wr) = (unraw::<F>(r), unraw::<F>(wr));
+            let slices: usize = y.shape[..y.shape.len() - 2].iter().product();
+            (0..slices).find_map(|b| first_bad_row(x, y, b, &wr, &r, cost).map(|i| MissV1::Row(b, i)))
+        }
+        Some(WeightSide::Left) => {
+            let (wt, x) = (&inputs[0], &inputs[1]);
+            let m = wt.shape[0];
+            let (r, rw, _) = batch.entry((s, n, label_rep)).or_insert_with(|| {
+                let r: Vec<F> = ChallengeStreamV1::new(*seed, batch_label).vector_in(m);
+                let rw = project_left(wt, &r, cost);
+                (raw(&r), raw(&rw), tensor_commitment(wt))
+            });
+            let (r, rw) = (unraw::<F>(r), unraw::<F>(rw));
+            first_bad_column(wt, x, y, &rw, &r, cost).map(MissV1::Column)
+        }
+        None => {
+            let (x, wt) = (&inputs[0], &inputs[1]);
+            let yr = y.shape.len();
+            let nn = y.shape[yr - 1];
+            let k = x.shape[x.shape.len() - 1];
+            let out_batch = &y.shape[..yr - 2];
+            let slices: usize = out_batch.iter().product();
+            (0..slices).find_map(|b| {
+                let label = ChallengeLabelV1 { kind: 0, position: p, occurrence: s, node: n, repetition: label_rep, slice: b as u32 };
+                let r: Vec<F> = ChallengeStreamV1::new(*seed, label).vector_in(nn);
+                let wr = project(wt, slice_offset(out_batch, &wt.shape, b), k, nn, &r, cost);
+                first_bad_row(x, y, b, &wr, &r, cost).map(|i| MissV1::Row(b, i))
+            })
         }
     }
-    Ok(None)
 }
 
 /// Is node `j` of `block` position-independent — computed from params and consts alone (a weight after its casts and reshapes)?
@@ -453,8 +516,9 @@ fn weight_side(program: &TirProgramV1, block: usize, node: &misaka_palw_tir::pro
     None
 }
 
-/// The scope-wide projections of the batched weight products: `(occurrence, node, repetition) → (r, W r, commitment of W)`.
-type BatchProjections = BTreeMap<(u16, u16, u8), (Vec<Fp>, Vec<Fp>, Digest)>;
+/// The scope-wide projections of the batched weight products: `(occurrence, node, label repetition) → (r, W r, commitment of W)`,
+/// field elements as canonical integers (the label repetition names the modulus).
+type BatchProjections = BTreeMap<(u16, u16, u8), (Vec<u128>, Vec<u128>, Digest)>;
 
 /// **Verify one scope of a claim.**
 pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope: &ScopeV1) -> ScopeVerdictV1 {
@@ -517,6 +581,10 @@ fn shape_and_binding(ctx: &Ctx<'_>) -> Result<(), String> {
     if c.header.plan_root != c.plan.root() {
         return Err("the claim's header names another plan".into());
     }
+    if c.plan.descriptor_digest != c.descriptor.digest() {
+        // Cross-kernel replay: a claim bound to one kernel is never judged by another's checkers.
+        return Err("the plan is bound to another kernel descriptor".into());
+    }
     if c.tokens.is_empty() || c.tokens.len() as u64 > c.plan.max_positions as u64 {
         return Err(format!("{} positions against the plan's {}", c.tokens.len(), c.plan.max_positions));
     }
@@ -570,104 +638,70 @@ fn check_instance(
     if !ctx.well_typed(s, p, n, &output) {
         return Err(fault(FaultKindV1::Malformed));
     }
-    // A weight product whose weight at this position is the one the scope projected (or the first one seen) is batched.
-    let batch_side = weight_side(ctx.c.program, ctx.w.occurrences[s as usize].0 as usize, node)
-        .filter(|_| rel.checker == CheckerIdV1::FreivaldsM127)
-        .filter(|side| {
-            let w = &inputs[if *side == WeightSide::Right { 1 } else { 0 }];
-            batch.get(&(s, n, 0)).is_none_or(|(_, _, wc)| *wc == tensor_commitment(w))
-        });
-    let bad_row = match rel.checker {
-        CheckerIdV1::FreivaldsM127 if batch_side.is_some() => {
-            let side = batch_side.expect("guarded");
-            // The same weight at every position of the scope (its commitment is compared, never assumed): one stacked check per
-            // repetition, the weight projected once.
+    match rel.checker {
+        CheckerIdV1::FreivaldsM127 | CheckerIdV1::FreivaldsCrtV2 => {
+            if !matches!(node.prim, Prim::MatMul) {
+                return Err(ScopeVerdictV1::Inconsistent { why: "a Freivalds relation on a node that is not a MatMul".into() });
+            }
+            let Some(moduli) = relation_moduli(rel) else {
+                return Err(ScopeVerdictV1::Inconsistent { why: "a dense relation beyond its checker's moduli".into() });
+            };
+            // A weight product whose weight at this position is the one the scope projected (or the first one seen) is batched:
+            // the same weight at every position (its commitment compared, never assumed), one stacked check per repetition and
+            // modulus, the weight projected once.
+            let side = weight_side(ctx.c.program, ctx.w.occurrences[s as usize].0 as usize, node).filter(|side| {
+                let w = &inputs[if *side == WeightSide::Right { 1 } else { 0 }];
+                batch.get(&(s, n, 0)).is_none_or(|(_, _, wc)| *wc == tensor_commitment(w))
+            });
+            match side {
+                Some(_) if !batch.contains_key(&(s, n, 0)) => *checks += 1,
+                Some(_) => {}
+                None => *checks += output.shape[..output.shape.len() - 2].iter().product::<usize>() as u128,
+            }
             let mut cost = ctx.cost.borrow_mut();
-            let mut found = None;
-            for rep in 0..rel.repetitions {
-                let label = ChallengeLabelV1 { kind: 1, position: scope_label, occurrence: s, node: n, repetition: rep, slice: 0 };
-                let fresh = !batch.contains_key(&(s, n, rep));
-                if fresh && rep == 0 {
-                    *checks += 1;
-                }
-                found = match side {
-                    WeightSide::Right => {
-                        let (x, wt, y) = (&inputs[0], &inputs[1], &output);
-                        let (k, nn) = (wt.shape[0], wt.shape[1]);
-                        let (r, wr, _) = batch.entry((s, n, rep)).or_insert_with(|| {
-                            let r = ChallengeStreamV1::new(*seed, label).vector(nn);
-                            let wr = project(wt, 0, k, nn, &r, &mut cost);
-                            (r, wr, tensor_commitment(wt))
-                        });
-                        let slices: usize = y.shape[..y.shape.len() - 2].iter().product();
-                        (0..slices).find_map(|b| first_bad_row(x, y, b, wr, r, &mut cost).map(|i| (b, i)))
+            let mut miss = None;
+            'reps: for rep in 0..rel.repetitions {
+                for (j, e) in MODULI_V2[..moduli].iter().enumerate() {
+                    // K2-TIR-v1 labels repetitions as they are; the multi-modulus relation gives every (repetition, modulus) its own.
+                    let lr = if rel.checker == CheckerIdV1::FreivaldsM127 { rep } else { rep * MODULI_V2.len() as u8 + j as u8 };
+                    let args = (seed, (p, s, n), scope_label, lr, side);
+                    miss = match e {
+                        127 => freivalds_once::<Fp>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
+                        107 => freivalds_once::<F107>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
+                        _ => freivalds_once::<F89>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
+                    };
+                    if miss.is_some() {
+                        break 'reps;
                     }
-                    WeightSide::Left => {
-                        let (wt, x, y) = (&inputs[0], &inputs[1], &output);
-                        let (m, k) = (wt.shape[0], wt.shape[1]);
-                        let (r, rw, _) = batch.entry((s, n, rep)).or_insert_with(|| {
-                            let r = ChallengeStreamV1::new(*seed, label).vector(m);
-                            cost.field_mults += (m * k) as u128;
-                            let rw = (0..k)
-                                .map(|kk| Fp::dot((0..m).map(|i| Fp::from_i128(wt.data[i * k + kk])), r.iter().copied()))
-                                .collect();
-                            (r, rw, tensor_commitment(wt))
-                        });
-                        first_bad_column(wt, x, y, rw, r, &mut cost).map(|j| (usize::MAX, j))
-                    }
-                };
-                if found.is_some() {
-                    break;
                 }
             }
             drop(cost);
-            match found {
-                None => return Ok(()),
+            match miss {
+                None => Ok(()),
+                Some(MissV1::Row(b, i)) => match localize_row(&inputs[0], &inputs[1], &output, b, i) {
+                    Some((slice, i, j)) => Err(fault(FaultKindV1::MatMulScalar { slice, i, j })),
+                    None => Err(ScopeVerdictV1::Inconsistent { why: format!("Freivalds failed at row {i} which recomputes exactly") }),
+                },
                 // A left-weight column: the wrong scalar is found by recomputing that column exactly.
-                Some((usize::MAX, j)) => {
+                Some(MissV1::Column(j)) => {
                     let (wt, x, y) = (&inputs[0], &inputs[1], &output);
-                    let (m, k, nn) = (wt.shape[0], wt.shape[1], y.shape[1]);
-                    let bad = (0..m).find(|&i| {
-                        (0..k).fold(0i128, |a, kk| a.wrapping_add(wt.data[i * k + kk].wrapping_mul(x.data[kk * nn + j])))
-                            != y.data[i * nn + j]
-                    });
-                    return match bad {
+                    let (m, nn) = (wt.shape[0], y.shape[1]);
+                    match (0..m).find(|&i| matmul_scalar(wt, x, &y.shape, y.dtype, 0, i, j) != Some(y.data[i * nn + j])) {
                         Some(i) => Err(fault(FaultKindV1::MatMulScalar { slice: 0, i: i as u64, j: j as u64 })),
                         None => Err(ScopeVerdictV1::Inconsistent {
                             why: format!("batched Freivalds failed at column {j} which recomputes exactly"),
                         }),
-                    };
+                    }
                 }
-                Some(bi) => Some(bi),
             }
-        }
-        CheckerIdV1::FreivaldsM127 if matches!(node.prim, Prim::MatMul) => {
-            let mut cost = ctx.cost.borrow_mut();
-            let r = freivalds_instance(seed, (p, s, n), rel.repetitions, &inputs[0], &inputs[1], &output, checks, &mut cost);
-            drop(cost);
-            return match r {
-                Ok(None) => Ok(()),
-                Ok(Some((slice, i, j))) => Err(fault(FaultKindV1::MatMulScalar { slice, i, j })),
-                Err(why) => Err(ScopeVerdictV1::Inconsistent { why }),
-            };
-        }
-        CheckerIdV1::FreivaldsM127 => {
-            return Err(ScopeVerdictV1::Inconsistent { why: "a Freivalds relation on a node that is not a MatMul".into() });
         }
         CheckerIdV1::ExactRecompute | CheckerIdV1::StateContinuity => {
             ctx.cost.borrow_mut().exact_elements += (output.len() + inputs.iter().map(Tensor::len).sum::<usize>()) as u128;
-            return match eval_node(ctx.c.program, node, &inputs, &prior, ctx.w.h(s, p)) {
+            match eval_node(ctx.c.program, node, &inputs, &prior, ctx.w.h(s, p)) {
                 Ok(v) if v == output => Ok(()),
                 _ => Err(fault(FaultKindV1::Recompute)),
-            };
+            }
         }
-    };
-    match bad_row {
-        None => Ok(()),
-        Some((b, i)) => match localize_row(&inputs[0], &inputs[1], &output, b, i) {
-            Some((slice, i, j)) => Err(fault(FaultKindV1::MatMulScalar { slice, i, j })),
-            None => Err(ScopeVerdictV1::Inconsistent { why: format!("batched Freivalds failed at row {i} which recomputes exactly") }),
-        },
     }
 }
 
@@ -729,7 +763,10 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
                 return Err(na("the scalar is outside the product".into()));
             }
             let claimed = y.data[slice as usize * m * nn + i as usize * nn + j as usize];
-            if matmul_scalar(&proof.inputs[0], &proof.inputs[1], &y.shape, slice as usize, i as usize, j as usize) == claimed {
+            // The exact integer under the reference semantics: a refused sum (an overflow) convicts any committed value.
+            if matmul_scalar(&proof.inputs[0], &proof.inputs[1], &y.shape, y.dtype, slice as usize, i as usize, j as usize)
+                == Some(claimed)
+            {
                 Err(DismissalV1::NoFault)
             } else {
                 Ok(convicted)

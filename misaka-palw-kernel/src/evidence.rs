@@ -50,7 +50,7 @@ impl SuiteParamsV1 {
             challenge_policy_id: d.challenge_policy_id,
             repetitions: d.soundness.repetitions,
             target_bits: d.soundness.target_bits,
-            field_bits: crate::field::FIELD_BITS as u16,
+            field_bits: d.per_repetition_bits() as u16,
         }
     }
 }

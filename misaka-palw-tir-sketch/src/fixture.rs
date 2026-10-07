@@ -9,6 +9,8 @@
 //!   broadcast and a batched activation, `Q·Kᵀ` and `P·V` over the history, the combine.
 //! * [`wide_v1`] — one layer whose accumulators the refined plan cannot narrow: an `i64` product of
 //!   an `i32`-wide activation (two moduli) and an `i128` product of `i64` operands (three).
+//! * [`wide128_v1`] — one layer whose ranges ARE proven (it passes the exact-result rule) and whose `i64`-weight product needs an
+//!   `i128` accumulator: one Mersenne modulus cannot hold its error span, a multi-modulus relation can.
 //!
 //! Weights are drawn uniformly from each param's stated range by a seeded ChaCha8 stream; nothing
 //! here is a model.
@@ -279,6 +281,44 @@ pub fn dense_moe_v1(seed: u64) -> TirSketchFixtureV1 {
     };
     let logits = (m.pb.blocks[post as usize].nodes.len() - 1) as u16;
     let program = std::mem::replace(&mut m.pb, ProgramBuilder::new(0, 0)).finish(pre, vec![dense, moe], post, logits);
+    m.finish(program, seed)
+}
+
+/// **The admissible wide fixture** (module note): an `i64` weight times an `i32`-ranged activation into `i128`, weight on the left.
+pub fn wide128_v1(seed: u64) -> TirSketchFixtureV1 {
+    let (v, d) = (FX_V, FX_D);
+    let mut m = Model::new(v);
+    let tok = m.p("tok_embd", DType::I8, &[v, d], false, -128, 127);
+    let w64 = m.p("wide.w64", DType::I64, &[d, d], true, -(1i128 << 62), 1i128 << 62);
+    let lm = m.p("output.w", DType::I8, &[v, d], false, -128, 127);
+    let carry = vec![TensorType::fixed(DType::I32, &[d])];
+    let pre = {
+        let mut b = m.pb.block("pre", vec![]);
+        let row = b.gather(tok, Ref::Input(INPUT_TOKEN), 0, 0);
+        let x = b.cast(row, DType::I32);
+        b.finish(&[x])
+    };
+    let wide = {
+        let mut b = m.pb.block("wide", carry.clone());
+        let xc = b.reshape_fixed(Ref::CarryIn(0), &[d, 1]);
+        // |w| ≤ 2^63, |x| ≤ 2^31, k = 16: every partial sum below 2^98 — proven, yet the error span exceeds 2^127 − 1.
+        let acc = b.matmul(w64, xc, DType::I128);
+        let sh = b.shr(acc, 70, Rounding::HalfAwayFromZero, DType::I128);
+        let c = b.clamp(sh, -(1 << 20), 1 << 20, DType::I32);
+        let c = b.reshape_fixed(c, &[d]);
+        b.finish(&[c])
+    };
+    let post = {
+        let mut b = m.pb.block("post", carry.clone());
+        let h = b.clamp(Ref::CarryIn(0), -32767, 32767, DType::I16);
+        let hc = b.reshape_fixed(h, &[d, 1]);
+        let l = b.matmul(lm, hc, DType::I32);
+        let l = b.reshape_fixed(l, &[v]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    let logits = (m.pb.blocks[post as usize].nodes.len() - 1) as u16;
+    let program = std::mem::replace(&mut m.pb, ProgramBuilder::new(0, 0)).finish(pre, vec![wide], post, logits);
     m.finish(program, seed)
 }
 

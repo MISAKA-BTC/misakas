@@ -86,11 +86,26 @@ pub enum CheckerIdV1 {
     /// Exact recompute of the write/append from the entry state, which wiring authenticates as the
     /// predecessor position's committed exit (read-after-write order, initialization, continuity).
     StateContinuity = 3,
+    /// **The multi-modulus dense relation** (K2-TIR-v2): Freivalds modulo the fewest of `2^127 − 1`, `2^107 − 1`, `2^89 − 1`
+    /// whose product exceeds the relation's integer error span, each modulus with its own post-commit vectors, `t` repetitions.
+    /// A nonzero integer error below the product is nonzero modulo one of them (CRT), so per repetition a false product passes
+    /// with probability at most `1/(2^89 − 1)`.
+    FreivaldsCrtV2 = 4,
 }
 
 impl CheckerIdV1 {
     pub const fn is_probabilistic(self) -> bool {
-        matches!(self, Self::FreivaldsM127)
+        matches!(self, Self::FreivaldsM127 | Self::FreivaldsCrtV2)
+    }
+
+    /// What one repetition of the check buys against a fixed false instance, in bits (the worst modulus it may use); 0 for an
+    /// exact checker.
+    pub const fn per_repetition_bits(self) -> u32 {
+        match self {
+            Self::FreivaldsM127 => crate::field::FIELD_BITS,
+            Self::FreivaldsCrtV2 => crate::field::mersenne_bits(crate::field::MODULI_V2[crate::field::MODULI_V2.len() - 1]),
+            Self::ExactRecompute | Self::StateContinuity => 0,
+        }
     }
 }
 

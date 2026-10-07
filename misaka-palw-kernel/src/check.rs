@@ -3,12 +3,13 @@
 //! Everything a plan states is re-derived here from the program and the descriptor and compared:
 //!
 //! 1. the descriptor the plan names is this one (else `PLAN_FORGED`);
-//! 2. the program validates and is in the descriptor's primitive set (else `FRONTEND_REQUIRED` /
-//!    `KERNEL_EXTENSION_REQUIRED`), and the plan is about this program;
+//! 2. the program validates, its ranges are proven (the exact-result rule), and it is in the descriptor's primitive set (else
+//!    `FRONTEND_REQUIRED` / `KERNEL_EXTENSION_REQUIRED`), and the plan is about this program;
 //! 3. every node of every scheduled block has exactly one relation, with the descriptor's checker,
 //!    court and repetitions, the right dimensions, and nothing extra (else `INCOMPLETE_COVERAGE`);
 //! 4. every family is implemented (else `KERNEL_EXTENSION_REQUIRED`, naming the node) and every
-//!    `MatMul` satisfies the field's alias bound: an integer error stays nonzero in GF(p);
+//!    `MatMul` satisfies its checker's alias bound: an integer error stays nonzero in GF(2^127 − 1), or (multi-modulus) modulo
+//!    one of the moduli the relation uses;
 //! 5. every state has its boundary;
 //! 6. the budgets agree with the derivation and every total fits the descriptor's ceilings;
 //! 7. the whole-claim error is derived (`t·126 − ⌈log2 R⌉`, union with the binding term), must reach
@@ -21,13 +22,14 @@ use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{DType, Prim};
 
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1, KernelStandingV1};
+use crate::family::CheckerIdV1;
 use crate::family::{ConstraintFamilyV1, family_of_prim};
 use crate::field::P;
 use crate::hash::Digest;
 use crate::outcome::RegistrationOutcomeV1 as O;
 use crate::plan::{
-    PLAN_GRAMMAR_V1, VerificationPlanV1, block_occurrences, derive_budgets, derived_error_bits, dtype_of_tag, expected_boundaries,
-    expected_relation,
+    PLAN_GRAMMAR_V1, VerificationPlanV1, block_occurrences, dense_moduli_v2, derive_budgets, derived_error_bits, dtype_of_tag,
+    expected_boundaries, expected_relation, matmul_error_span,
 };
 
 /// What a plan that passed carries forward.
@@ -37,16 +39,6 @@ pub struct PlanAcceptanceV1 {
     pub error_bits: u16,
     pub claim_verifier_work: u128,
     pub claim_evidence_bytes: u128,
-}
-
-fn max_abs(d: DType) -> u128 {
-    (d.min_value().unsigned_abs()).max(d.max_value().unsigned_abs())
-}
-
-/// The largest integer error a `MatMul` can make: `|Y_claim| + |Y_true| ≤ max|out| + k·max|a|·max|b|`.
-/// `None` on overflow (an `i128` operand).
-fn matmul_error_span(k: u64, a: DType, b: DType, out: DType) -> Option<u128> {
-    (k as u128).checked_mul(max_abs(a))?.checked_mul(max_abs(b))?.checked_add(max_abs(out))
 }
 
 pub fn check_plan_v1(
@@ -90,6 +82,12 @@ pub fn check_plan_v1(
     }
     misaka_palw_tir::validate::validate(program)
         .map_err(|e| O::FrontendRequired { reason: format!("the program does not validate: {e}") })?;
+    // The exact-result rule (RFC-0002 spec 04b §7): every partial sum of every exact primitive must provably fit its type. A
+    // probabilistic check compares a claimed output with the mathematical integer result; it cannot see a partial-sum overflow the
+    // reference semantics refuses, so a program whose ranges are not proven is the frontend's to narrow, never a kernel success.
+    misaka_palw_tir::interval::analyze_ranges(program).map_err(|e| O::FrontendRequired {
+        reason: format!("the program's ranges are not proven (an exact primitive can overflow): {e}"),
+    })?;
     if plan.program_root != program_root {
         return Err(O::PlanForged { why: "the plan is about another program".into() });
     }
@@ -116,8 +114,12 @@ pub fn check_plan_v1(
             })?;
             if let (Prim::MatMul, Some(d)) = (&node.prim, rel.matmul) {
                 let dt = |t: u8| dtype_of_tag(t).unwrap_or(DType::I128);
-                let span = matmul_error_span(d.k, dt(rel.in_dtypes[0]), dt(rel.in_dtypes[1]), dt(rel.out_dtype));
-                if span.is_none_or(|s| s >= P) {
+                let (a, bt, out) = (dt(rel.in_dtypes[0]), dt(rel.in_dtypes[1]), dt(rel.out_dtype));
+                let expressible = match rel.checker {
+                    CheckerIdV1::FreivaldsCrtV2 => dense_moduli_v2(d.k, a, bt, out).is_some(),
+                    _ => matmul_error_span(d.k, a, bt, out).is_some_and(|s| s < P),
+                };
+                if !expressible {
                     return Err(O::KernelExtensionRequired {
                         family: Some(ConstraintFamilyV1::DenseMatrix),
                         relation: format!(
@@ -127,8 +129,14 @@ pub fn check_plan_v1(
                             dt(rel.out_dtype).name(),
                             d.k
                         ),
-                        required: "an integer error span below 2^127 − 1 (or a multi-modulus dense-matrix relation)".into(),
-                        available: "one GF(2^127 − 1) Freivalds relation".into(),
+                        required: match rel.checker {
+                            CheckerIdV1::FreivaldsCrtV2 => "an integer error span below (2^127 − 1)(2^107 − 1)(2^89 − 1)".into(),
+                            _ => "an integer error span below 2^127 − 1 (or a multi-modulus dense-matrix relation)".into(),
+                        },
+                        available: match rel.checker {
+                            CheckerIdV1::FreivaldsCrtV2 => "the three-modulus Freivalds relation".into(),
+                            _ => "one GF(2^127 − 1) Freivalds relation".into(),
+                        },
                     });
                 }
             }
@@ -220,8 +228,6 @@ pub fn check_plan_v1(
         KernelStandingV1::NotActive(status) => return Err(O::KernelNotActive { descriptor: digest, status: Some(status) }),
         KernelStandingV1::Unknown => return Err(O::KernelNotActive { descriptor: digest, status: None }),
     }
-    // 8. Last: the descriptor's standing. `KERNEL_NOT_ACTIVE` means "this descriptor expresses the whole task within its bounds and is
-    // not active" (RFC-0011 §16.2); a missing capability or a bound is reported as such whatever the schedule says.
     Ok(PlanAcceptanceV1 { plan_root: plan.root(), error_bits, claim_verifier_work: claim_work, claim_evidence_bytes: claim_bytes })
 }
 

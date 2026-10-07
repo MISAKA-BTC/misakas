@@ -3,154 +3,21 @@
 //! primitive instance and convicted by a court that reads only public material, the DA path kept apart from fraud, and every
 //! way a plan can try to weaken its own check.
 
-use misaka_palw_kernel::KernelFaultProofV1;
+mod common;
+
+use common::*;
+use misaka_palw_kernel::challenge::ChallengeBindingV1;
 use misaka_palw_kernel::check::{check_plan_v1, registration_outcome_v1};
 use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor};
-use misaka_palw_kernel::evidence::{EvidenceHeaderV1, VerificationEvidenceV1, build_evidence_v1};
 use misaka_palw_kernel::family::{CheckerIdV1, ConstraintFamilyV1};
-use misaka_palw_kernel::outcome::{CoverageBucketV1, RegistrationOutcomeV1};
+use misaka_palw_kernel::outcome::{CoverageBucketV1, CoverageEvidenceV1, RegistrationOutcomeV1};
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
-use misaka_palw_kernel::trace::WiringV1;
-use misaka_palw_kernel::trace::{ParamCommitmentsV1, TraceV1, trace_v1};
+use misaka_palw_kernel::trace::TraceV1;
 use misaka_palw_kernel::verify::{
-    ClaimContextV1, ClaimVerdictV1, ConvictionV1, DismissalV1, FaultKindV1, MaterialV1, ScopeV1, TraceMaterialV1,
-    verify_fault_proof_v1, verify_scope_v1,
+    ClaimContextV1, ClaimVerdictV1, DismissalV1, FaultKindV1, MaterialV1, ScopeV1, TraceMaterialV1, verify_scope_v1,
 };
-
-type Court = Box<dyn Fn(&KernelFaultProofV1) -> Result<ConvictionV1, DismissalV1>>;
-use misaka_palw_kernel::{challenge::ChallengeBindingV1, hash::id};
-use misaka_palw_tir::program::TirProgramV1;
-use misaka_palw_tir::{Interpreter, MapParams, Prim, Tensor};
-use misaka_palw_tir_sketch::fixture::{dense_moe_v1, wide_v1};
-
-const TOKENS: [u32; 5] = [3, 17, 9, 30, 1];
-const MAX_POSITIONS: u32 = 64;
-
-fn root_of(program: &TirProgramV1) -> [u8; 64] {
-    id(b"test/program", &program.encode())
-}
-
-fn active() -> KernelScheduleV1 {
-    KernelScheduleV1::default().with(k2_tir_v1_descriptor().digest(), KernelStatusV1::Active { since_daa: 0 })
-}
-
-struct Claim {
-    program: TirProgramV1,
-    params: MapParams,
-    plan: misaka_palw_kernel::VerificationPlanV1,
-    trace: TraceV1,
-    pc: ParamCommitmentsV1,
-}
-
-impl Claim {
-    fn honest() -> Self {
-        let fx = dense_moe_v1(7);
-        let d = k2_tir_v1_descriptor();
-        let plan = plan_for_tir_program_v1(&d, &fx.program, root_of(&fx.program), MAX_POSITIONS).unwrap();
-        let trace = trace_v1(&fx.program, &fx.params, &TOKENS).unwrap();
-        let pc = ParamCommitmentsV1::of(&fx.params);
-        Claim { program: fx.program, params: fx.params, plan, trace, pc }
-    }
-
-    fn header(&self) -> EvidenceHeaderV1 {
-        EvidenceHeaderV1 {
-            network_domain: [9; 64],
-            ruleset_digest: [3; 64],
-            class_binding_id: [7; 64],
-            program_root: root_of(&self.program),
-            artifact_root: self.pc.root(),
-            plan_root: self.plan.root(),
-        }
-    }
-
-    /// The §15.3 evidence object a producer commits for `committed` (segments of 2 positions).
-    fn evidence_of(&self, committed: &TraceV1) -> VerificationEvidenceV1 {
-        let w = WiringV1::new(&self.program).unwrap();
-        build_evidence_v1(&w, &committed.evidence(), &TOKENS, self.header(), &k2_tir_v1_descriptor(), 2).unwrap()
-    }
-
-    fn verify_with(&self, committed: &TraceV1, material: &dyn MaterialV1) -> (ClaimVerdictV1, Court) {
-        self.verify_scope(committed, material, &ScopeV1::WholeClaim)
-    }
-
-    /// Verify one scope of `committed` (the producer's COMMITTED values), served by `material`.
-    fn verify_scope(&self, committed: &TraceV1, material: &dyn MaterialV1, scope: &ScopeV1) -> (ClaimVerdictV1, Court) {
-        let ev = self.evidence_of(committed);
-        self.verify_object(committed, &ev, material, scope)
-    }
-
-    fn verify_object(
-        &self,
-        committed: &TraceV1,
-        ev: &VerificationEvidenceV1,
-        material: &dyn MaterialV1,
-        scope: &ScopeV1,
-    ) -> (ClaimVerdictV1, Court) {
-        let d = k2_tir_v1_descriptor();
-        let trace = committed.evidence();
-        let header = self.header();
-        let binding = ChallengeBindingV1 {
-            network_domain: header.network_domain,
-            claim_id: [8; 64],
-            class_binding_id: header.class_binding_id,
-            plan_root: self.plan.root(),
-            evidence_root: ev.root(),
-            beacon: [0x42; 64],
-        };
-        let ctx = ClaimContextV1 {
-            descriptor: &d,
-            program: &self.program,
-            plan: &self.plan,
-            trace: &trace,
-            evidence: ev,
-            header,
-            params: &self.pc,
-            tokens: &TOKENS,
-            binding,
-        };
-        let verdict = verify_scope_v1(&ctx, material, scope);
-        // The court, as a fresh party holding only the public material (the evidence object, the trace commitments, the param
-        // commitments, the tokens).
-        let (program, plan, pc, ev) = (self.program.clone(), self.plan.clone(), self.pc.clone(), ev.clone());
-        let court = move |proof: &KernelFaultProofV1| {
-            let d = k2_tir_v1_descriptor();
-            let ctx = ClaimContextV1 {
-                descriptor: &d,
-                program: &program,
-                plan: &plan,
-                trace: &trace,
-                evidence: &ev,
-                header,
-                params: &pc,
-                tokens: &TOKENS,
-                binding,
-            };
-            verify_fault_proof_v1(&ctx, proof)
-        };
-        (verdict, Box::new(court))
-    }
-
-    /// The first `(position, occurrence, node)` whose primitive satisfies `pick`, from position `from`.
-    fn find(&self, from: u32, pick: impl Fn(&Prim) -> bool) -> (u32, u16, u16) {
-        let occ = self.program.occurrences();
-        for p in from..TOKENS.len() as u32 {
-            for (s, (b, _)) in occ.iter().enumerate() {
-                for (n, node) in self.program.blocks[*b as usize].nodes.iter().enumerate() {
-                    if pick(&node.prim) {
-                        return (p, s as u16, n as u16);
-                    }
-                }
-            }
-        }
-        panic!("no such node")
-    }
-}
-
-fn bump(t: &mut Tensor, at: usize) {
-    // Stay inside the dtype so the lie is arithmetic, not a malformed value.
-    let v = t.data[at];
-    t.data[at] = if t.dtype.contains(v + 1) { v + 1 } else { v - 1 };
-}
+use misaka_palw_tir::{Interpreter, Prim, Tensor};
+use misaka_palw_tir_sketch::fixture::{dense_moe_v1, wide_v1, wide128_v1};
 
 #[test]
 fn the_honest_trace_is_the_reference_evaluators() {
@@ -169,21 +36,29 @@ fn registration_is_kernel_not_active_on_the_shipped_schedule_and_eligible_under_
     let d = k2_tir_v1_descriptor();
     let shipped = registration_outcome_v1(&builtin_schedule_v1(), &d, &fx.program, root_of(&fx.program), MAX_POSITIONS, 1_000);
     assert_eq!(shipped.code(), "KERNEL_NOT_ACTIVE", "{shipped}");
-    assert_eq!(shipped.coverage_bucket(false), CoverageBucketV1::KernelExtensionGap);
+    assert_eq!(shipped.coverage_bucket(CoverageEvidenceV1::NONE), CoverageBucketV1::KernelExtensionGap);
     let armed = registration_outcome_v1(&active(), &d, &fx.program, root_of(&fx.program), MAX_POSITIONS, 1_000);
     let RegistrationOutcomeV1::EligibleAt { error_bits, .. } = armed else { panic!("{armed}") };
     assert!(error_bits >= 128, "the derived whole-claim error reaches the target: 2^-{error_bits}");
-    assert_eq!(armed.coverage_bucket(false), CoverageBucketV1::Untested, "eligibility without on-chain evidence is not coverage");
-    assert!(armed.coverage_bucket(true).counts_as_success());
+    assert_eq!(armed.coverage_bucket(CoverageEvidenceV1::NONE), CoverageBucketV1::Untested, "eligibility alone is not coverage");
+    let registered = CoverageEvidenceV1 { onchain_registration: true, public_prosecution_measured: false };
+    assert_eq!(armed.coverage_bucket(registered), CoverageBucketV1::Untested, "nor is registration without public prosecution");
+    let both = CoverageEvidenceV1 { onchain_registration: true, public_prosecution_measured: true };
+    assert!(armed.coverage_bucket(both).counts_as_success());
 }
 
 #[test]
 fn an_i128_accumulator_and_a_missing_family_are_kernel_extensions_not_successes() {
     let d = k2_tir_v1_descriptor();
-    let fx = wide_v1(3);
+    // Ranges proven, but one Mersenne modulus cannot hold the i128 product's error span.
+    let fx = wide128_v1(3);
     let o = registration_outcome_v1(&active(), &d, &fx.program, root_of(&fx.program), MAX_POSITIONS, 0);
     let RegistrationOutcomeV1::KernelExtensionRequired { family, .. } = &o else { panic!("{o}") };
     assert_eq!(*family, Some(ConstraintFamilyV1::DenseMatrix), "{o}");
+    // Ranges NOT proven (a partial sum can overflow its type): the frontend's to narrow, whatever kernel is asked.
+    let fx = wide_v1(3);
+    let o = registration_outcome_v1(&active(), &d, &fx.program, root_of(&fx.program), MAX_POSITIONS, 0);
+    assert_eq!(o.code(), "FRONTEND_REQUIRED", "{o}");
 
     let mut narrow = d.clone();
     narrow.families.retain(|f| f.family != ConstraintFamilyV1::RecurrentState);

@@ -18,8 +18,10 @@
 //!   per family, the integer-to-field alias bound, state boundaries, resource limits, and the
 //!   whole-claim error **derived** from the suite (a declaration can never raise it).
 //! * [`outcome`] — RFC-0011 §16.2's structured outcomes and §16.4's coverage buckets.
-//! * [`field`], [`challenge`] — GF(2^127 − 1) and the post-commit challenge stream (bind first, then
-//!   draw; no modulo bias).
+//! * [`field`], [`challenge`] — the Mersenne fields (GF(2^127 − 1), and the multi-modulus set of K2-TIR-v2) and the post-commit
+//!   challenge stream (bind first, then draw; no modulo bias).
+//! * [`beacon`] — RFC-0011 §15.3's anchor and beacon policy: a finalized window of blocks strictly after the commitments, the
+//!   inclusion cutoff, counted reorg rebinds, and grinding as attempts in §15.4's network bound.
 //! * [`trace`] — an honest producer's trace and its commitments (every node value of every position, committed before any
 //!   challenge exists), the wiring every input is authenticated by, and the state root entering any position.
 //! * [`evidence`] — RFC-0011 §15.3's `VerificationEvidenceV1`: network, ruleset, class, program, artifact, plan, job input, initial
@@ -35,6 +37,9 @@
 //! * [`improve`] — RFC-0004 §0 on this route: the epoch's pinned kernel policy, candidate admission under a pinned kernel of the
 //!   parent's family, assurance-labelled evaluation results, and §7.5's integer promotion rule kept apart from the computational error.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
+//! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault
+//!   proofs and the court as byte-level operations, the withholding path (demand → served | producer default), RFC-0015 §1.1's
+//!   G14 criteria per profile, and the reward gate that stays closed until they are complete and the material is public.
 //!
 //! # What this is not
 //!
@@ -45,12 +50,13 @@
 //!   checker or family id is refused, never treated as success.
 //! * **Not a soundness review.** The error bound is the Freivalds/union-bound arithmetic of this suite
 //!   under its stated assumptions (post-commit unbiased beacon, BLAKE2b-512 binding). The independent
-//!   review, the beacon construction and the Panel/DA analyses RFC-0011 §15.3–§15.4 require are open.
+//!   review of the composition and of the beacon (see [`beacon`]) and the Panel/DA analyses RFC-0011 §15.3–§15.4 require are open.
 //! * **Flat commitments.** A node value is committed by one BLAKE2b-512 over its canonical bytes, so a
 //!   fault proof opens the whole tensors of one relation. Chunked (Merkle) openings would shrink the
 //!   court's bytes; their cost is reported, not hidden ([`plan::PlanBudgetsV1`]).
 
 pub mod assurance;
+pub mod beacon;
 pub mod challenge;
 pub mod check;
 pub mod descriptor;
@@ -62,6 +68,7 @@ pub mod improve;
 pub mod lifecycle;
 pub mod outcome;
 pub mod plan;
+pub mod public;
 pub mod receipt;
 pub mod trace;
 pub mod verify;
@@ -69,11 +76,12 @@ pub mod verify;
 pub use check::{PlanAcceptanceV1, check_plan_v1};
 pub use descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, ModelKernelBindingV1, builtin_schedule_v1, k2_tir_v1_descriptor,
+    k2_tir_v2_descriptor,
 };
 pub use evidence::{VerificationEvidenceV1, build_evidence_v1};
 pub use family::{CheckerIdV1, ConstraintFamilyV1, CourtIdV1};
 pub use hash::Digest;
-pub use outcome::{CoverageBucketV1, RegistrationOutcomeV1};
+pub use outcome::{CoverageBucketV1, CoverageEvidenceV1, RegistrationOutcomeV1};
 pub use plan::{VerificationPlanV1, plan_for_tir_program_v1};
 pub use verify::{
     ClaimVerdictV1, KernelFaultProofV1, ScopeV1, ScopeVerdictV1, verify_claim_v1, verify_fault_proof_v1, verify_scope_v1,

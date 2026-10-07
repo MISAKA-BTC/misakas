@@ -219,14 +219,68 @@ fn width(tag: u8) -> u128 {
     dtype_of_tag(tag).map(|d| d.width() as u128).unwrap_or(16)
 }
 
+fn max_abs(d: DType) -> u128 {
+    (d.min_value().unsigned_abs()).max(d.max_value().unsigned_abs())
+}
+
+/// `⌈log2 x⌉` for `x ≥ 1`.
+fn log2_up(x: u128) -> u32 {
+    if x <= 1 { 0 } else { 128 - (x - 1).leading_zeros() }
+}
+
+/// The largest integer error a `MatMul` can make, exactly, when it fits a `u128`:
+/// `|Y_claim| + |Y_true| ≤ max|out| + k·max|a|·max|b|`.
+pub(crate) fn matmul_error_span(k: u64, a: DType, b: DType, out: DType) -> Option<u128> {
+    (k as u128).checked_mul(max_abs(a))?.checked_mul(max_abs(b))?.checked_add(max_abs(out))
+}
+
+/// An `s` with `span < 2^s`, for spans past `u128` (`span ≤ 2^(max(⌈log2 k⌉ + ⌈log2 |a|⌉ + ⌈log2 |b|⌉, ⌈log2 |out|⌉) + 1)`).
+fn matmul_error_span_bits(k: u64, a: DType, b: DType, out: DType) -> u32 {
+    let prod = log2_up(k as u128) + log2_up(max_abs(a)) + log2_up(max_abs(b));
+    prod.max(log2_up(max_abs(out))) + 2
+}
+
+/// **How many moduli of [`crate::field::MODULI_V2`] the multi-modulus relation needs** for a `MatMul` of these operand types:
+/// the fewest, largest first, whose product exceeds the integer error span. `None`: beyond all three (still an extension).
+/// The product of `2^e_1 − 1, …, 2^e_j − 1` exceeds `2^(Σe − 1)`, so a span below `2^(Σe − 1)` fits.
+pub fn dense_moduli_v2(k: u64, a: DType, b: DType, out: DType) -> Option<usize> {
+    if matmul_error_span(k, a, b, out).is_some_and(|s| s < crate::field::P) {
+        return Some(1);
+    }
+    let bits = matmul_error_span_bits(k, a, b, out);
+    let mut sum = 0u32;
+    for (j, e) in crate::field::MODULI_V2.iter().enumerate() {
+        sum += e;
+        if j >= 1 && bits < sum {
+            return Some(j + 1);
+        }
+    }
+    None
+}
+
+/// The moduli a relation's dense check uses: 1 for `FreivaldsM127`, the derived count for `FreivaldsCrtV2`.
+pub fn relation_moduli(rel: &PlanRelationV1) -> Option<usize> {
+    match (rel.checker, rel.matmul) {
+        (CheckerIdV1::FreivaldsM127, Some(_)) => Some(1),
+        (CheckerIdV1::FreivaldsCrtV2, Some(d)) => {
+            let dt = |i: usize| rel.in_dtypes.get(i).and_then(|t| dtype_of_tag(*t));
+            dense_moduli_v2(d.k, dt(0)?, dt(1)?, dtype_of_tag(rel.out_dtype)?)
+        }
+        _ => None,
+    }
+}
+
 /// One relation instance's verifier work and opened node bytes, and its worst court.
 pub(crate) fn relation_costs(rel: &PlanRelationV1, window_rows: u64, row_bytes: u128) -> (u128, u128, u64, u64) {
     let out_bytes = rel.out_elements as u128 * width(rel.out_dtype);
     let in_bytes: u128 = rel.in_elements.iter().zip(&rel.in_dtypes).map(|(e, t)| *e as u128 * width(*t)).sum();
     let reads: u128 = rel.out_elements as u128 + rel.in_elements.iter().map(|e| *e as u128).sum::<u128>();
     let (work, court_bytes, court_work) = match (rel.checker, rel.matmul) {
-        (CheckerIdV1::FreivaldsM127, Some(d)) => {
-            let per_rep = d.batch as u128 * (d.k as u128 * d.n as u128 + d.m as u128 * d.k as u128 + d.m as u128 * d.n as u128);
+        (CheckerIdV1::FreivaldsM127 | CheckerIdV1::FreivaldsCrtV2, Some(d)) => {
+            // One pass per modulus (an unexpressible span is refused by the checker before pricing matters).
+            let moduli = relation_moduli(rel).unwrap_or(crate::field::MODULI_V2.len()) as u128;
+            let per_rep =
+                moduli * d.batch as u128 * (d.k as u128 * d.n as u128 + d.m as u128 * d.k as u128 + d.m as u128 * d.n as u128);
             // The court opens the three tensors (flat commitments) and computes one dot product.
             (reads + rel.repetitions as u128 * per_rep, in_bytes + out_bytes, reads as u64 + d.k)
         }
@@ -243,7 +297,7 @@ pub(crate) fn relation_costs(rel: &PlanRelationV1, window_rows: u64, row_bytes: 
     (work, out_bytes, court_bytes.min(u64::MAX as u128) as u64, court_work)
 }
 
-/// The whole-claim error a suite derives (bits): `t·FIELD_BITS − ⌈log2 instances⌉`, then the binding
+/// The whole-claim error a suite derives (bits): `t·b − ⌈log2 instances⌉` (`b` the descriptor's per-repetition bits), then the binding
 /// term by a union bound (`min − 1`). Exact relations contribute nothing; `None` when no probabilistic
 /// relation exists (the bound is then the binding term alone).
 pub fn derived_error_bits(descriptor: &KernelDescriptorV1, probabilistic_instances: u128) -> u16 {
@@ -252,7 +306,7 @@ pub fn derived_error_bits(descriptor: &KernelDescriptorV1, probabilistic_instanc
         return binding.clamp(0, u16::MAX as i64) as u16;
     }
     let log2_up = 128 - (probabilistic_instances - 1).leading_zeros() as i64; // ⌈log2 R⌉ for R ≥ 1
-    let check = descriptor.soundness.repetitions as i64 * crate::field::FIELD_BITS as i64 - log2_up;
+    let check = descriptor.soundness.repetitions as i64 * descriptor.per_repetition_bits() as i64 - log2_up;
     (check.min(binding) - 1).clamp(0, u16::MAX as i64) as u16
 }
 

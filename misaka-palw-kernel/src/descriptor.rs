@@ -94,7 +94,22 @@ impl KernelDescriptorV1 {
         if self.soundness.repetitions == 0 || self.soundness.target_bits == 0 {
             return Err("a descriptor needs at least one repetition and a nonzero target".into());
         }
+        if self.families.iter().any(|f| f.family == ConstraintFamilyV1::DenseMatrix && !f.checker.is_probabilistic()) {
+            // Not unsound, but not this kernel line's dense relation: an exact MatMul recompute is the replay the route replaces.
+            return Err("the dense-matrix family needs a probabilistic checker".into());
+        }
         Ok(())
+    }
+
+    /// The bits one repetition buys against a false instance, for the weakest probabilistic checker the descriptor lists
+    /// (`FIELD_BITS` when it lists none). The whole-claim error is derived from it, never from a plan.
+    pub fn per_repetition_bits(&self) -> u32 {
+        self.families
+            .iter()
+            .filter(|f| f.checker.is_probabilistic())
+            .map(|f| f.checker.per_repetition_bits())
+            .min()
+            .unwrap_or(crate::field::FIELD_BITS)
     }
 }
 
@@ -146,6 +161,25 @@ pub fn k2_tir_v1_descriptor() -> KernelDescriptorV1 {
             max_court_work: 1 << 36,
         },
     }
+}
+
+pub const K2_TIR_V2_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v2: K2-TIR-v1 semantics, except the dense-matrix family: \
+Freivalds modulo the fewest of 2^127-1, 2^107-1, 2^89-1 whose product exceeds the relation's integer error span (CRT), each modulus \
+with its own post-commit vectors, accepting MatMul up to an i128 accumulator; the per-repetition bound is that of 2^89-1";
+
+/// **K2-TIR-v2**: K2-TIR-v1 with the multi-modulus dense-matrix relation, so an `i128` accumulator is expressible. A new
+/// descriptor (new digest, new class ids): classes bound to K2-TIR-v1 keep its rules; nothing is reinterpreted.
+pub fn k2_tir_v2_descriptor() -> KernelDescriptorV1 {
+    let mut d = k2_tir_v1_descriptor();
+    d.version = 2;
+    d.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, K2_TIR_V2_SEMANTICS);
+    d.checker_suite_id = 2;
+    for f in &mut d.families {
+        if f.family == ConstraintFamilyV1::DenseMatrix {
+            f.checker = CheckerIdV1::FreivaldsCrtV2;
+        }
+    }
+    d
 }
 
 /// Where a descriptor stands in the release sequence (ADR-0172 §3: proposal → reference + independent
@@ -203,9 +237,11 @@ impl KernelScheduleV1 {
     }
 }
 
-/// **The shipped schedule: K2-TIR-v1 is implemented and not active** — no network arms it.
+/// **The shipped schedule: K2-TIR-v1 and K2-TIR-v2 are implemented and not active** — no network arms either.
 pub fn builtin_schedule_v1() -> KernelScheduleV1 {
-    KernelScheduleV1::default().with(k2_tir_v1_descriptor().digest(), KernelStatusV1::Implemented)
+    KernelScheduleV1::default()
+        .with(k2_tir_v1_descriptor().digest(), KernelStatusV1::Implemented)
+        .with(k2_tir_v2_descriptor().digest(), KernelStatusV1::Implemented)
 }
 
 /// What a bound class commits beside its program/artifact (RFC-0011 §16.3(4)).
@@ -246,6 +282,12 @@ mod tests {
         assert_eq!(s.standing_at(&d.digest(), u64::MAX), KernelStandingV1::NotActive(KernelStatusV1::Implemented));
         assert_eq!(s.standing_at(&[0; 64], 0), KernelStandingV1::Unknown, "an unknown digest is never active");
         assert!(d.support(ConstraintFamilyV1::MediaPipeline).is_none());
+        let v2 = k2_tir_v2_descriptor();
+        v2.well_formed().unwrap();
+        assert_ne!(v2.digest(), d.digest(), "a new dense relation is a new descriptor");
+        assert!(matches!(s.standing_at(&v2.digest(), u64::MAX), KernelStandingV1::NotActive(KernelStatusV1::Implemented)));
+        assert_eq!(d.per_repetition_bits(), 126);
+        assert_eq!(v2.per_repetition_bits(), 88, "the weakest modulus prices every repetition");
     }
 
     #[test]

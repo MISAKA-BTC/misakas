@@ -52,11 +52,14 @@ impl RegistrationOutcomeV1 {
         matches!(self, Self::EligibleAt { .. })
     }
 
-    /// **The RFC-0011 §16.4 bucket.** `supported_active_kernel` needs complete-task on-chain registration
-    /// evidence under the measured release; an eligibility verdict without it is `untested`.
-    pub fn coverage_bucket(&self, onchain_registration_evidence: bool) -> CoverageBucketV1 {
+    /// **The RFC-0011 §16.4 bucket.** `supported_active_kernel` needs complete-task on-chain registration evidence under the
+    /// measured release **and** (2026-10-07 amendment) a measured fresh non-seat public-bond prosecution of the profile; an
+    /// eligibility verdict without both is `untested`. A kernel-only certificate or an honest Final is never coverage.
+    pub fn coverage_bucket(&self, evidence: CoverageEvidenceV1) -> CoverageBucketV1 {
         match self {
-            Self::EligibleAt { .. } if onchain_registration_evidence => CoverageBucketV1::SupportedActiveKernel,
+            Self::EligibleAt { .. } if evidence.onchain_registration && evidence.public_prosecution_measured => {
+                CoverageBucketV1::SupportedActiveKernel
+            }
             Self::EligibleAt { .. } => CoverageBucketV1::Untested,
             Self::FrontendRequired { .. } | Self::PlanForged { .. } => CoverageBucketV1::FrontendGap,
             Self::KernelExtensionRequired { .. } | Self::KernelNotActive { .. } => CoverageBucketV1::KernelExtensionGap,
@@ -94,6 +97,20 @@ impl std::fmt::Display for RegistrationOutcomeV1 {
             Self::ExternalBlocker { why } => write!(f, "EXTERNAL_BLOCKER: {why}"),
         }
     }
+}
+
+/// What a coverage trial established beside the static outcome.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CoverageEvidenceV1 {
+    /// Complete-task on-chain registration under the measured release.
+    pub onchain_registration: bool,
+    /// A fresh non-seat public bond prosecuted a fault of the profile from public material to an objective outcome
+    /// ([`crate::public::ProsecutionGateV1`] complete for it).
+    pub public_prosecution_measured: bool,
+}
+
+impl CoverageEvidenceV1 {
+    pub const NONE: Self = Self { onchain_registration: false, public_prosecution_measured: false };
 }
 
 /// RFC-0011 §16.4: one primary blocker per repository. Only the first supplies successes to the

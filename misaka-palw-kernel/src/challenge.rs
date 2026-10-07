@@ -5,13 +5,13 @@
 //! A relation's vectors are drawn from the seed under a label naming the relation instance and the
 //! repetition, so two relations, two positions or two repetitions never share a vector.
 //!
-//! Sampling is unbiased: 127 bits are read and the single value `2^127 − 1` (= p) is rejected.
+//! Sampling is unbiased: `e` bits are read for GF(2^e − 1) and the single value `2^e − 1` (= p) is rejected.
 //!
-//! **What this does not supply** (an activation gate of RFC-0011 §15.3): the beacon itself. A caller
-//! passes whatever its policy names; a recent block hash is not automatically an unbiased beacon,
-//! and nothing here bounds withholding or grinding of it.
+//! The beacon comes from [`crate::beacon`]: a finalized window of selected-chain blocks strictly after the claim's commitments,
+//! with reorg rebinds counted and grinding turned into attempts. Its review as an unbiased beacon remains an activation gate of
+//! RFC-0011 §15.3.
 
-use crate::field::{Fp, P};
+use crate::field::{FieldElemV1, Fp};
 use crate::hash::{Digest, finish, keyed};
 
 pub const CHALLENGE_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/challenge-seed/v1";
@@ -78,28 +78,37 @@ impl ChallengeStreamV1 {
         s.update(&self.counter.to_le_bytes());
         self.counter += 1;
         let block = finish(s);
-        // Four 128-bit words per block, consumed in order; the top bit is dropped.
+        // Four 128-bit words per block, consumed in order; a field of 2^e − 1 keeps the low e bits.
         for chunk in block.chunks_exact(16).rev() {
             let mut w = [0u8; 16];
             w.copy_from_slice(chunk);
-            self.buf.push(u128::from_le_bytes(w) & P);
+            self.buf.push(u128::from_le_bytes(w));
         }
     }
 
-    pub fn next_fp(&mut self) -> Fp {
+    /// One element of GF(2^e − 1): `e` bits read, the single value `p` rejected (no modulo bias).
+    pub fn next_in<F: FieldElemV1>(&mut self) -> F {
         loop {
             if self.buf.is_empty() {
                 self.refill();
             }
             let v = self.buf.pop().expect("refilled");
-            if let Some(f) = Fp::from_canonical(v) {
+            if let Some(f) = F::of_word(v) {
                 return f;
             }
         }
     }
 
+    pub fn next_fp(&mut self) -> Fp {
+        self.next_in()
+    }
+
+    pub fn vector_in<F: FieldElemV1>(&mut self, n: usize) -> Vec<F> {
+        (0..n).map(|_| self.next_in()).collect()
+    }
+
     pub fn vector(&mut self, n: usize) -> Vec<Fp> {
-        (0..n).map(|_| self.next_fp()).collect()
+        self.vector_in(n)
     }
 }
 
@@ -126,6 +135,8 @@ mod tests {
         let b = ChallengeStreamV1::new(binding(5).seed(), ChallengeLabelV1 { repetition: 1, ..l }).vector(9);
         assert_ne!(a, b);
         assert_eq!(a, ChallengeStreamV1::new(binding(5).seed(), l).vector(9), "deterministic: every node draws the same vector");
-        assert!(a.iter().all(|f| f.value() < P));
+        assert!(a.iter().all(|f| f.value() < crate::field::P));
+        let c: Vec<crate::field::F89> = ChallengeStreamV1::new(binding(5).seed(), l).vector_in(9);
+        assert!(c.iter().all(|f| f.value() < crate::field::F89::MODULUS));
     }
 }

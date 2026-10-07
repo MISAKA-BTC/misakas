@@ -257,6 +257,59 @@ pub fn promotion_decision_v1(
     })
 }
 
+/// One evaluation claim's prosecutability (RFC-0004's 2026-10-07 amendment): the kernel profile it ran under, and whether the
+/// inputs its check and court need become public, authenticated and retrievable once the item is drawn (holdout secrecy **before**
+/// the draw is kept).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EvaluationProsecutabilityV1 {
+    pub claim_id: Digest,
+    pub profile: Digest,
+    pub inputs_public_after_draw: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ImprovementRewardBlockV1 {
+    #[error("the promotion rule did not pass: {0}")]
+    NotPromoted(String),
+    #[error("a result the decision read has no stated computational bound (a judged/legacy result never decides computation)")]
+    NoComputationalBound,
+    #[error("evaluation claim {0:?} is not publicly prosecutable: {1}")]
+    NotProsecutable(Digest, String),
+}
+
+/// **May a promotion enable a new reward?** The sign test (quality) passed, every result it read has a stated computational bound
+/// (no jury majority decides whether a computation was right), and **every** evaluation claim of the parent and the candidate can
+/// be prosecuted by an ordinary public bond: its inputs are public after the draw and its profile's G14 gate is complete with
+/// public material. Quality comparison and computational agreement are separate claims and both must hold.
+pub fn improvement_reward_gate_v1(
+    decision: &PromotionDecisionV1,
+    results: &[EvaluationResultV1],
+    prosecutability: &[EvaluationProsecutabilityV1],
+    gates: &[crate::public::ProsecutionGateV1],
+) -> Result<(), ImprovementRewardBlockV1> {
+    if !decision.eligible {
+        return Err(ImprovementRewardBlockV1::NotPromoted(decision.why_not.clone().unwrap_or_default()));
+    }
+    if decision.computational_error_bits.is_none() {
+        return Err(ImprovementRewardBlockV1::NoComputationalBound);
+    }
+    for r in results {
+        if r.subject != SubjectV1::Parent && r.subject != SubjectV1::Candidate(decision.candidate) {
+            continue;
+        }
+        let blocked = |why: &str| ImprovementRewardBlockV1::NotProsecutable(r.claim_id, why.into());
+        let p = prosecutability.iter().find(|p| p.claim_id == r.claim_id).ok_or_else(|| blocked("no prosecutability record"))?;
+        if !p.inputs_public_after_draw {
+            return Err(blocked("its inputs stay private after the draw"));
+        }
+        let gate = gates.iter().find(|g| g.profile == p.profile).ok_or_else(|| blocked("no G14 drill for its profile"))?;
+        if !gate.complete() {
+            return Err(blocked(&format!("its profile's G14 drill misses {:?}", gate.missing())));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
