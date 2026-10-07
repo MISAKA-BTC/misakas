@@ -24,7 +24,7 @@ use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::merkle::TensorOpeningV1;
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1};
-use misaka_palw_kernel::trace::{TraceV1, WiringV1, trace_v1};
+use misaka_palw_kernel::trace::{TraceV1, WiringV1, derived_mask_v1, trace_v1};
 use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{MapParams, Prim, Tensor};
 use misaka_palw_tir_sketch::fixture::dense_moe_v1;
@@ -59,17 +59,24 @@ fn policy() -> LedgerPolicyV1 {
     }
 }
 
-/// A public DA provider: the bytes a producer published, minus what it withholds.
+/// The values of the class's program that are derived — a `Hist` window and its views — which nobody serves.
+fn derived() -> Vec<Vec<bool>> {
+    derived_mask_v1(&dense_moe_v1(7).program)
+}
+
+/// A public DA provider: the bytes a producer published, minus what it withholds. It never publishes a derived value (a window is
+/// rebuilt from the committed rows), so its bytes are linear in the claim's length.
 struct Da(BTreeMap<(u32, u16, u16), Vec<u8>>);
 
 impl Da {
     fn publishing(trace: &TraceV1, withhold: &[(u32, u16, u16)]) -> Self {
+        let mask = derived();
         let mut m = BTreeMap::new();
         for (p, pos) in trace.values.iter().enumerate() {
             for (s, occ) in pos.iter().enumerate() {
                 for (n, t) in occ.iter().enumerate() {
                     let k = (p as u32, s as u16, n as u16);
-                    if !withhold.contains(&k) {
+                    if !withhold.contains(&k) && !mask[s][n] {
                         m.insert(k, borsh::to_vec(&TensorWireV1::of(t)).unwrap());
                     }
                 }
@@ -252,8 +259,17 @@ fn refused(ev: &[E]) -> Option<String> {
 
 /// A position demand's response: every committed value of position `p` of `trace`, whole, then `edit`ed.
 fn position(trace: &TraceV1, p: u32, edit: impl FnOnce(&mut Vec<Vec<MaterialResponseV1>>)) -> Vec<u8> {
-    let mut r: Vec<Vec<MaterialResponseV1>> =
-        trace.values[p as usize].iter().map(|o| o.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect()).collect();
+    let mask = derived();
+    let mut r: Vec<Vec<MaterialResponseV1>> = trace.values[p as usize]
+        .iter()
+        .enumerate()
+        .map(|(s, o)| {
+            o.iter()
+                .enumerate()
+                .map(|(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { MaterialResponseV1::Whole(TensorWireV1::of(t)) })
+                .collect()
+        })
+        .collect();
     edit(&mut r);
     borsh::to_vec(&PositionResponseV1 { values: r, inputs: vec![] }).unwrap()
 }
@@ -827,4 +843,71 @@ fn the_state_is_a_pure_fold_so_restart_ibd_and_reorg_agree_and_collateral_is_nev
     assert_ne!(other.root(), w.l.root());
     assert!(w.l.claims[&id2b].convicted);
     assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
+}
+
+// ── D′: a long-history (held) window is derived: never served, convicted from the committed rows ──────────────────────────
+
+#[test]
+fn a_history_window_is_never_served_and_a_misderived_window_is_convicted_from_the_rows_alone() {
+    use misaka_palw_kernel::public::FaultProofWireV1;
+    let mut w = World::new();
+    let mask = derived();
+    let appends: Vec<(u16, u16)> = w
+        .program
+        .occurrences()
+        .iter()
+        .enumerate()
+        .flat_map(|(s, (b, _))| {
+            w.program.blocks[*b as usize]
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| matches!(n.prim, Prim::HistAppend { .. }))
+                .map(move |(n, _)| (s as u16, n as u16))
+        })
+        .collect();
+    assert!(!appends.is_empty() && appends.iter().all(|(s, n)| mask[*s as usize][*n as usize]), "every window is derived");
+    assert!(mask.iter().flatten().filter(|d| **d).count() > appends.len(), "and so are the views of a window");
+
+    // Honest: the DA publishes no window at all, and a fresh outsider passes the claim.
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, da) = (h.claim.id(), Da::publishing(&h.trace, &[]));
+    assert!(da.0.keys().all(|(_, s, n)| !mask[*s as usize][*n as usize]));
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Clean);
+
+    // A permuted window at position 3: committed, never published; the outsider rebuilds it from the rows and convicts.
+    let (s, n) = appends[0];
+    let job = w.post_job(11, &[3, 17, 9], 3, 2);
+    let generated = w.greedy(&w.params.clone(), &job.prompt, 3);
+    let lie = w.produce(&job, PRODUCER, generated, &w.params.clone(), |t| {
+        let win = &mut t.values[3][s as usize][n as usize];
+        let row: usize = win.shape[1..].iter().product();
+        let (a, b) = win.data.split_at_mut(row);
+        a.swap_with_slice(&mut b[..row]);
+    });
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+    w.block(12, vec![lie.tx, T::PanelCovered { claim: id }]);
+    let OutsiderFindingV1::Prosecute(ProsecutionV1::Kernel(bytes)) = outsider(&w, id, &da) else { panic!() };
+    let wire: FaultProofWireV1 = borsh::from_slice(&bytes).unwrap();
+    assert_eq!((wire.position, wire.occurrence, wire.node, wire.kind), (3, s, n, 3), "misderived");
+    assert!(wire.output.bytes.is_empty(), "no byte of the producer's window is in the proof");
+    let ev = w.block(13, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: ProsecutionV1::Kernel(bytes) }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
+
+    // A position response carries no window: one that serves one is malformed.
+    let job = w.post_job(20, &[3, 17, 9], 3, 3);
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    let trace2 = h.trace.clone();
+    w.block(21, vec![h.tx, T::PanelCovered { claim: id }]);
+    w.block(22, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 3 }]);
+    let served_window = position(&trace2, 3, |r| {
+        r[s as usize][n as usize] = MaterialResponseV1::Whole(TensorWireV1::of(&trace2.values[3][s as usize][n as usize]))
+    });
+    let ev = w.block(23, vec![T::Respond { claim: id, stage: 0, position: 3, bytes: served_window }]);
+    assert_eq!(ev, vec![E::ResponseRejected { claim: id, stage: 0, position: 3, class: "malformed" }]);
+    let ev = w.block(24, vec![T::Respond { claim: id, stage: 0, position: 3, bytes: position(&trace2, 3, |_| {}) }]);
+    assert_eq!(ev, vec![E::Served { claim: id, stage: 0, position: 3 }]);
 }

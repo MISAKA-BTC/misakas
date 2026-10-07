@@ -358,6 +358,8 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
             .sum(),
         ..Default::default()
     };
+    // Derived values (a `Hist` window and its views) are rebuilt from committed rows, never served: they are no one's public bytes.
+    let derived = crate::trace::derived_nodes_v1(program);
     for rel in relations {
         let (window_rows, row_bytes) = match program.blocks[rel.block as usize].nodes[rel.node as usize].prim {
             Prim::HistAppend { state } => {
@@ -372,7 +374,9 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
         };
         let (work, bytes, cb, cw) = relation_costs(rel, window_rows, row_bytes);
         b.verifier_work_per_position += work * rel.occurrences as u128;
-        b.evidence_bytes_per_position += bytes * rel.occurrences as u128;
+        if !derived.contains(&(rel.block, rel.node)) {
+            b.evidence_bytes_per_position += bytes * rel.occurrences as u128;
+        }
         if rel.checker.is_probabilistic() {
             b.probabilistic_instances_per_position += rel.occurrences as u64 * rel.matmul.map(|d| d.batch).unwrap_or(1);
         }

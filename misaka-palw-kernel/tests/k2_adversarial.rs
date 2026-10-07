@@ -24,8 +24,8 @@ fn honest_material(c: &Claim) -> TraceMaterialV1<'_> {
     TraceMaterialV1 { trace: &c.trace, params: &c.params }
 }
 
-/// Mutate one committed value, verify, and require a recompute fault the public court convicts.
-fn caught(c: &Claim, at: (u32, u16, u16), mutate: impl Fn(&mut Tensor)) {
+/// Mutate one committed value, verify, and require a fault of `kind` the public court convicts.
+fn caught(c: &Claim, at: (u32, u16, u16), kind: FaultKindV1, mutate: impl Fn(&mut Tensor)) {
     let mut lie = c.trace.clone();
     let t = &mut lie.values[at.0 as usize][at.1 as usize][at.2 as usize];
     let before = t.clone();
@@ -34,7 +34,7 @@ fn caught(c: &Claim, at: (u32, u16, u16), mutate: impl Fn(&mut Tensor)) {
     let (v, court) = c.verify_with(&lie, &TraceMaterialV1 { trace: &lie, params: &c.params });
     let ClaimVerdictV1::Fault(proof) = v else { panic!("{v:?}") };
     assert_eq!((proof.position, proof.occurrence, proof.node), at);
-    assert_eq!(proof.kind, FaultKindV1::Recompute);
+    assert_eq!(proof.kind, kind);
     court(&proof).unwrap();
 }
 
@@ -42,7 +42,8 @@ fn caught(c: &Claim, at: (u32, u16, u16), mutate: impl Fn(&mut Tensor)) {
 fn a_permuted_history_window_is_caught_at_its_append() {
     let c = Claim::honest();
     let at = c.find(3, |p| matches!(p, Prim::HistAppend { .. }));
-    caught(&c, at, |t| {
+    // The window is derived (rebuilt from the committed rows, never served): its wrong commitment is convicted from the rows alone.
+    caught(&c, at, FaultKindV1::Misderived, |t| {
         // Swap the first two rows of the window (memory permutation, RFC-0011 §15.7).
         let row: usize = t.shape[1..].iter().product();
         let (a, b) = t.data.split_at_mut(row);
@@ -55,7 +56,7 @@ fn a_swapped_expert_choice_is_caught_at_the_router() {
     let c = Claim::honest();
     let at = c.find(1, |p| matches!(p, Prim::TopK { .. }));
     // The same experts in another order (or a tie broken the other way) is another value of the TopK relation.
-    caught(&c, at, |t| t.data.reverse());
+    caught(&c, at, FaultKindV1::Recompute, |t| t.data.reverse());
 }
 
 #[test]

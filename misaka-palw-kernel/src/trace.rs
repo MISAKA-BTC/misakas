@@ -18,8 +18,14 @@
 //!
 //! A verifier therefore never trusts an "entry state" the producer states for a segment: it opens the
 //! predecessor's committed exit (RFC-0011 §15.2's boundary row).
+//!
+//! **Derived values** ([`derived_nodes_v1`]): a `Hist` window (a `HistAppend` output) and the pure views of one (`Transpose`,
+//! `Reshape`) are committed like every node, but never served: anyone rebuilds them from the committed appended rows. A window at
+//! position `p` is `O(window · row)` bytes, so serving it at every position would make a long-history (held) claim's public
+//! material quadratic in its length; derived, it is linear (one row per position), and a wrong commitment of a derived value is
+//! convicted from the rows alone ([`crate::verify::FaultKindV1::Misderived`]), never from bytes only the producer holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use misaka_palw_tir::eval::eval_primitive;
 use misaka_palw_tir::program::{INPUT_TOKEN, Ref, StateKind, TirProgramV1};
@@ -201,6 +207,8 @@ pub struct WiringV1<'p> {
     appenders: BTreeMap<(u16, Option<u16>), (u16, u16)>,
     /// The stage's inputs start here (`u16::MAX`: none).
     first_input: u16,
+    /// `(block, node)` of every derived node.
+    derived: BTreeSet<(u8, u16)>,
 }
 
 fn malformed(msg: impl Into<String>) -> TirError {
@@ -226,7 +234,7 @@ impl<'p> WiringV1<'p> {
                 }
             }
         }
-        Ok(Self { program, info, occurrences, writers, appenders, first_input: u16::MAX })
+        Ok(Self { program, info, occurrences, writers, appenders, first_input: u16::MAX, derived: derived_nodes_v1(program) })
     }
 
     /// The wiring of a pipeline stage's version-1 view: its input params resolve to the stage's committed inputs, and its `post`
@@ -242,6 +250,11 @@ impl<'p> WiringV1<'p> {
             }
         }
         Ok(w)
+    }
+
+    /// Is node `n` of occurrence `s` derived (rebuilt from committed rows, never served)?
+    pub fn is_derived(&self, s: u16, n: u16) -> bool {
+        self.occurrences.get(s as usize).is_some_and(|(b, _)| self.derived.contains(&(*b, n)))
     }
 
     /// `H` at a position for an occurrence's block.
@@ -351,6 +364,37 @@ impl WiringV1<'_> {
         }
         Ok(finish(s))
     }
+}
+
+/// **The derived nodes of a program**, as `(block, node)`: every `HistAppend`, and every `Transpose` / `Reshape` whose input is a
+/// derived node of the same block (in node order, so a view of a view is derived too).
+pub fn derived_nodes_v1(program: &TirProgramV1) -> BTreeSet<(u8, u16)> {
+    let mut out = BTreeSet::new();
+    for (b, block) in program.blocks.iter().enumerate() {
+        for (n, node) in block.nodes.iter().enumerate() {
+            let derived = match node.prim {
+                Prim::HistAppend { .. } => true,
+                Prim::Transpose { .. } | Prim::Reshape => {
+                    matches!(node.inputs.first(), Some(Ref::Node(j)) if out.contains(&(b as u8, *j)))
+                }
+                _ => false,
+            };
+            if derived {
+                out.insert((b as u8, n as u16));
+            }
+        }
+    }
+    out
+}
+
+/// [`derived_nodes_v1`] per occurrence: `mask[occurrence][node]`.
+pub fn derived_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
+    let d = derived_nodes_v1(program);
+    program
+        .occurrences()
+        .iter()
+        .map(|(b, _)| (0..program.blocks[*b as usize].nodes.len()).map(|n| d.contains(&(*b, n as u16))).collect())
+        .collect()
 }
 
 /// Resolve a source from the producer's own values (the tracer) — the verifier resolves the same

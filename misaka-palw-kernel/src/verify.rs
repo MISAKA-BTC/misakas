@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::program::{Ref, TirProgramV1};
-use misaka_palw_tir::{DType, Prim, Tensor};
+use misaka_palw_tir::{DType, Prim, Tensor, TirError};
 
 use crate::challenge::{ChallengeBindingV1, ChallengeLabelV1, ChallengeStreamV1};
 use crate::descriptor::KernelDescriptorV1;
@@ -184,6 +184,10 @@ pub enum FaultKindV1 {
     Recompute,
     /// One scalar of a `MatMul`: `Y[slice, i, j] ≠ Σ_k X[slice, i, k] · W[slice, k, j]`.
     MatMulScalar { slice: u64, i: u64, j: u64 },
+    /// A derived value (a `Hist` window or a view of one, [`crate::trace::derived_nodes_v1`]) whose commitment is not the
+    /// commitment of what its authenticated inputs and rows rebuild. Proved without the producer's bytes: the proof carries the
+    /// inputs and the rows, never the output.
+    Misderived,
 }
 
 /// **A fault localized to one primitive instance**, with every opening the court needs.
@@ -306,6 +310,8 @@ struct Ctx<'a> {
     w: WiringV1<'a>,
     param_cache: RefCell<BTreeMap<(u16, Option<u16>), Tensor>>,
     cost: RefCell<CheckCostV1>,
+    /// Derived values rebuilt this scope, `(position, occurrence, node)`.
+    derived_cache: RefCell<BTreeMap<(u32, u16, u16), Tensor>>,
 }
 
 impl Ctx<'_> {
@@ -336,7 +342,47 @@ impl Ctx<'_> {
         }
     }
 
+    /// The inputs and prior rows of `(p, s, n)`, opened.
+    fn operands(&self, m: &dyn MaterialV1, (p, s, n): (u32, u16, u16)) -> Result<(Vec<Tensor>, Vec<Tensor>), ScopeVerdictV1> {
+        let tokens = self.c.tokens;
+        let malformed = |e: TirError| ScopeVerdictV1::EvidenceMalformed { why: e.to_string() };
+        let node = self.w.node(s, n);
+        let inputs = (0..node.inputs.len())
+            .map(|i| self.open(m, &self.w.input_source(tokens, p, s, n, i).map_err(malformed)?))
+            .collect::<Result<Vec<_>, _>>()?;
+        let prior = self
+            .w
+            .hist_prior_sources(tokens, p, s, n)
+            .map_err(malformed)?
+            .iter()
+            .map(|src| self.open(m, src))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((inputs, prior))
+    }
+
+    /// **A derived value, rebuilt** from its opened inputs and rows (never served). `Err(None)` inside: it rebuilds to no valid
+    /// value. Its commitment is compared at its own instance's check, which comes before any reader's.
+    fn derive(&self, m: &dyn MaterialV1, at: (u32, u16, u16)) -> Result<Option<Tensor>, ScopeVerdictV1> {
+        if let Some(t) = self.derived_cache.borrow().get(&at) {
+            return Ok(Some(t.clone()));
+        }
+        let (inputs, prior) = self.operands(m, at)?;
+        let (p, s, n) = at;
+        self.cost.borrow_mut().exact_elements +=
+            (inputs.iter().map(Tensor::len).sum::<usize>() + prior.iter().map(Tensor::len).sum::<usize>()) as u128;
+        Ok(eval_node(self.c.program, self.w.node(s, n), &inputs, &prior, self.w.h(s, p)).ok().inspect(|v| {
+            self.derived_cache.borrow_mut().insert(at, v.clone());
+        }))
+    }
+
     fn open(&self, m: &dyn MaterialV1, src: &SourceV1) -> Result<Tensor, ScopeVerdictV1> {
+        if let SourceV1::Node { position, occurrence, node } = src
+            && self.w.is_derived(*occurrence, *node)
+        {
+            return self
+                .derive(m, (*position, *occurrence, *node))?
+                .ok_or_else(|| ScopeVerdictV1::Inconsistent { why: format!("{src:?}: a derived value read before its own check") });
+        }
         if let SourceV1::Param { index, layer } = src
             && let Some(t) = self.param_cache.borrow().get(&(*index, *layer))
         {
@@ -606,7 +652,13 @@ pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope:
         Ok(w) => w,
         Err(e) => return ScopeVerdictV1::EvidenceMalformed { why: format!("the program does not validate: {e}") },
     };
-    let ctx = Ctx { c, w, param_cache: RefCell::new(BTreeMap::new()), cost: RefCell::new(CheckCostV1::default()) };
+    let ctx = Ctx {
+        c,
+        w,
+        param_cache: RefCell::new(BTreeMap::new()),
+        cost: RefCell::new(CheckCostV1::default()),
+        derived_cache: RefCell::new(BTreeMap::new()),
+    };
     if let Err(why) = shape_and_binding(&ctx) {
         return ScopeVerdictV1::EvidenceMalformed { why };
     }
@@ -653,7 +705,13 @@ pub fn verify_claim_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1) -> Sco
 /// (malformed is unconvictable; refused is never accepted).
 pub fn claim_structure_v1(c: &ClaimContextV1<'_>) -> Result<(), String> {
     let w = WiringV1::for_stage(c.program, c.stage).map_err(|e| format!("the program does not validate: {e}"))?;
-    let ctx = Ctx { c, w, param_cache: RefCell::new(BTreeMap::new()), cost: RefCell::new(CheckCostV1::default()) };
+    let ctx = Ctx {
+        c,
+        w,
+        param_cache: RefCell::new(BTreeMap::new()),
+        cost: RefCell::new(CheckCostV1::default()),
+        derived_cache: RefCell::new(BTreeMap::new()),
+    };
     shape_and_binding(&ctx)
 }
 
@@ -707,17 +765,30 @@ fn check_instance(
     checks: &mut u128,
 ) -> Result<(), ScopeVerdictV1> {
     let node = ctx.w.node(s, n);
-    let tokens = ctx.c.tokens;
-    let src = |i: usize| ctx.w.input_source(tokens, p, s, n, i).map_err(|e| ScopeVerdictV1::EvidenceMalformed { why: e.to_string() });
+    if ctx.w.is_derived(s, n) {
+        // Rebuilt from its inputs and rows, never served: its commitment must be the rebuilt value's.
+        let committed = ctx
+            .commitment_of(&SourceV1::Node { position: p, occurrence: s, node: n })
+            .map_err(|why| ScopeVerdictV1::EvidenceMalformed { why })?;
+        let rebuilt = ctx.derive(m, (p, s, n))?;
+        if rebuilt.is_some_and(|v| tensor_commitment(&v) == committed) {
+            return Ok(());
+        }
+        ctx.derived_cache.borrow_mut().remove(&(p, s, n));
+        let (inputs, prior) = ctx.operands(m, (p, s, n))?;
+        return Err(ScopeVerdictV1::Fault(Box::new(KernelFaultProofV1 {
+            position: p,
+            occurrence: s,
+            node: n,
+            kind: FaultKindV1::Misderived,
+            output: Tensor::zeros(node.out.dtype, &[0]),
+            inputs,
+            prior_rows: prior,
+            scalar: None,
+        })));
+    }
     let output = ctx.open(m, &SourceV1::Node { position: p, occurrence: s, node: n })?;
-    let inputs = (0..node.inputs.len()).map(|i| ctx.open(m, &src(i)?)).collect::<Result<Vec<_>, _>>()?;
-    let prior = ctx
-        .w
-        .hist_prior_sources(tokens, p, s, n)
-        .map_err(|e| ScopeVerdictV1::EvidenceMalformed { why: e.to_string() })?
-        .iter()
-        .map(|src| ctx.open(m, src))
-        .collect::<Result<Vec<_>, _>>()?;
+    let (inputs, prior) = ctx.operands(m, (p, s, n))?;
     let fault = |kind| {
         // A MatMul scalar is proved by three Merkle openings, never by the three tensors.
         let scalar = match kind {
@@ -813,7 +884,13 @@ fn check_instance(
 pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1) -> Result<ConvictionV1, DismissalV1> {
     let w = WiringV1::for_stage(c.program, c.stage)
         .map_err(|e| DismissalV1::NotAuthentic(format!("the program does not validate: {e}")))?;
-    let ctx = Ctx { c, w, param_cache: RefCell::new(BTreeMap::new()), cost: RefCell::new(CheckCostV1::default()) };
+    let ctx = Ctx {
+        c,
+        w,
+        param_cache: RefCell::new(BTreeMap::new()),
+        cost: RefCell::new(CheckCostV1::default()),
+        derived_cache: RefCell::new(BTreeMap::new()),
+    };
     shape_and_binding(&ctx).map_err(DismissalV1::NotAuthentic)?;
     let (p, s, n) = (proof.position, proof.occurrence, proof.node);
     if p as usize >= c.tokens.len()
@@ -834,7 +911,13 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
             Err(e) => Err(na(e)),
         }
     };
-    check(&SourceV1::Node { position: p, occurrence: s, node: n }, &proof.output, "the output")?;
+    let misderived = proof.kind == FaultKindV1::Misderived;
+    if misderived && !ctx.w.is_derived(s, n) {
+        return Err(na("only a derived value is tried without its output".into()));
+    }
+    if !misderived {
+        check(&SourceV1::Node { position: p, occurrence: s, node: n }, &proof.output, "the output")?;
+    }
     if proof.inputs.len() != node.inputs.len() {
         return Err(na("the proof opens another number of inputs".into()));
     }
@@ -849,6 +932,14 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
         check(src, t, "a history row")?;
     }
     let convicted = ConvictionV1 { position: p, occurrence: s, node: n, kind: proof.kind.clone() };
+    if misderived {
+        // The court rebuilds the value from the authenticated inputs and rows and compares commitments.
+        let committed = ctx.commitment_of(&SourceV1::Node { position: p, occurrence: s, node: n }).map_err(na)?;
+        return match eval_node(c.program, node, &proof.inputs, &proof.prior_rows, ctx.w.h(s, p)) {
+            Ok(v) if tensor_commitment(&v) == committed => Err(DismissalV1::NoFault),
+            _ => Ok(convicted),
+        };
+    }
     if !ctx.well_typed(s, p, n, &proof.output) {
         // Whatever kind the filer named, an opened committed value outside its type convicts.
         return Ok(ConvictionV1 { kind: FaultKindV1::Malformed, ..convicted });
@@ -859,7 +950,7 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
             Ok(v) if v == proof.output => Err(DismissalV1::NoFault),
             _ => Ok(convicted),
         },
-        FaultKindV1::MatMulScalar { .. } => Err(na("unreachable: a scalar is tried by its own court".into())),
+        FaultKindV1::MatMulScalar { .. } | FaultKindV1::Misderived => Err(na("unreachable: tried by its own court".into())),
     }
 }
 

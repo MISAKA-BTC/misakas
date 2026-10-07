@@ -50,6 +50,7 @@ use crate::job::{BindingFaultV1, DecodeFaultV1, DecodeRuleV1, KernelClaimV1, Ker
 use crate::lifecycle::{ClaimEventV1, ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
 use crate::pipeline::{
     PipelineEvidenceV1, PipelineHeaderV1, PipelinePlanV1, check_pipeline_plan_v1, pipeline_job_root_v1, pipeline_root_v1,
+    stage_view_v1,
 };
 use crate::pipeline_public::{
     FreshPipelineVerifierV1, PipelineClaimV1, PipelineClassV1, PipelineFindingV1, PipelineJobPostV1, PipelinePublicRecordV1,
@@ -61,7 +62,7 @@ use crate::public::{
     program_root_v1,
 };
 use crate::receipt::TallyStateV1;
-use crate::trace::{EvidenceV1, ParamCommitmentsV1, tensor_commitment};
+use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
 
 /// The network's ledger policy.
@@ -863,6 +864,23 @@ impl KernelLedgerV1 {
         Some((record, class.header(row.class_binding_id), class.binding.clone()))
     }
 
+    /// `derived[occurrence][node]` of a claim's stage: the values rebuilt from committed rows, never served or demanded.
+    pub fn derived_mask(&self, row: &ClaimRowV1, stage: u8) -> Vec<Vec<bool>> {
+        match &row.body {
+            ClaimBodyV1::Program { .. } => {
+                self.classes.get(&row.class_binding_id).map(|c| derived_mask_v1(&c.program)).unwrap_or_default()
+            }
+            ClaimBodyV1::Pipeline { .. } => self
+                .pipeline_classes
+                .get(&row.class_binding_id)
+                .and_then(|c| {
+                    let st = c.pipeline.stages.get(stage as usize)?;
+                    Some(derived_mask_v1(&stage_view_v1(c.programs.get(st.program as usize)?).view))
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
         self.classes.get(class).map(|c| c.bounds).or_else(|| self.pipeline_classes.get(class).map(|c| c.bounds))
     }
@@ -1045,8 +1063,11 @@ impl KernelLedgerV1 {
         let row = self.claims.get(claim).expect("a demand names a committed claim");
         let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
         let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
-        let verdict =
-            if bytes.len() as u128 > limit { Err("oversized") } else { classify_position_response_v1(values, inputs, bytes) };
+        let verdict = if bytes.len() as u128 > limit {
+            Err("oversized")
+        } else {
+            classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+        };
         match verdict {
             Ok(served) => {
                 self.served.insert(k, served);
@@ -1216,7 +1237,7 @@ impl MaterialV1 for StageMaterial<'_> {
 impl OutsiderV1<'_> {
     fn node(&self, stage: u8, p: u32, s: u16, n: u16) -> Option<Tensor> {
         if let Some(sp) = self.ledger.served.get(&(self.claim, stage, p)) {
-            return sp.values.get(s as usize)?.get(n as usize)?.decode().ok();
+            return sp.values.get(s as usize)?.get(n as usize)?.as_ref()?.decode().ok();
         }
         self.material.node(stage, p, s, n)
     }
@@ -1228,17 +1249,20 @@ impl OutsiderV1<'_> {
         self.material.input(stage, p, k)
     }
 
-    /// Every committed value and input, authenticated against its commitment: the stage positions any is missing from.
-    fn missing(&self, body: &ClaimBodyV1) -> Vec<(u8, u32)> {
+    /// Every committed value (but the derived ones, which the verifier rebuilds) and input, authenticated against its commitment:
+    /// the stage positions any is missing from.
+    fn missing(&self, row: &ClaimRowV1) -> Vec<(u8, u32)> {
+        let body = &row.body;
         let ok = |t: Option<Tensor>, c: &Digest| t.is_some_and(|t| tensor_commitment(&t) == *c);
         let mut out = Vec::new();
         for (stage, positions) in body.stages() {
+            let derived = self.ledger.derived_mask(row, stage);
+            let is_derived = |s: usize, n: usize| derived.get(s).and_then(|o| o.get(n)).copied().unwrap_or(false);
             for p in 0..positions {
                 let (values, inputs) = body.position(stage, p).expect("listed");
-                let nodes_ok = values
-                    .iter()
-                    .enumerate()
-                    .all(|(s, occ)| occ.iter().enumerate().all(|(n, c)| ok(self.node(stage, p, s as u16, n as u16), c)));
+                let nodes_ok = values.iter().enumerate().all(|(s, occ)| {
+                    occ.iter().enumerate().all(|(n, c)| is_derived(s, n) || ok(self.node(stage, p, s as u16, n as u16), c))
+                });
                 let inputs_ok = inputs.iter().enumerate().all(|(k, c)| ok(self.input(stage, p, k as u16), c));
                 if !(nodes_ok && inputs_ok) {
                     out.push((stage, p));
@@ -1252,7 +1276,7 @@ impl OutsiderV1<'_> {
     pub fn check(&self) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let row = l.claims.get(&self.claim).ok_or("no such claim")?;
-        let missing = self.missing(&row.body);
+        let missing = self.missing(row);
         if !missing.is_empty() {
             return Ok(OutsiderFindingV1::Demand(missing));
         }

@@ -24,7 +24,7 @@ use misaka_palw_kernel::pipeline_public::{
     PipelineClaimV1, PipelineFaultWireV1, PipelineJobFactsV1, PipelineJobPostV1, PipelineRandomV1, StageCommitmentsV1,
 };
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1};
-use misaka_palw_kernel::trace::ParamCommitmentsV1;
+use misaka_palw_kernel::trace::{ParamCommitmentsV1, derived_mask_v1};
 use misaka_palw_tir::Tensor;
 use misaka_palw_tir::pipeline::{PipelineJob, TirPipelineV1, run_text_pipeline};
 use misaka_palw_tir::program_v2::TirProgramV2;
@@ -69,7 +69,8 @@ struct Da {
 }
 
 impl Da {
-    fn publishing(trace: &PipelineTraceV1, withhold_positions: &[(u8, u32)]) -> Self {
+    /// Never a derived value (`masks[stage][occurrence][node]`): windows are rebuilt from committed rows.
+    fn publishing(trace: &PipelineTraceV1, withhold_positions: &[(u8, u32)], masks: &[Vec<Vec<bool>>]) -> Self {
         let mut da = Da::default();
         for (si, st) in trace.stages.iter().enumerate() {
             for (p, pos) in st.values.iter().enumerate() {
@@ -77,7 +78,7 @@ impl Da {
                     continue;
                 }
                 for (s, occ) in pos.iter().enumerate() {
-                    for (n, t) in occ.iter().enumerate() {
+                    for (n, t) in occ.iter().enumerate().filter(|(n, _)| !masks[si][s][*n]) {
                         da.nodes.insert((si as u8, p as u32, s as u16, n as u16), borsh::to_vec(&TensorWireV1::of(t)).unwrap());
                     }
                 }
@@ -104,10 +105,15 @@ impl PublicSourceV1 for Da {
 }
 
 /// A stage position's response: its values and inputs from `trace`.
-fn position(trace: &PipelineTraceV1, stage: u8, p: u32) -> Vec<u8> {
+fn position(masks: &[Vec<Vec<bool>>], trace: &PipelineTraceV1, stage: u8, p: u32) -> Vec<u8> {
     let st = &trace.stages[stage as usize];
+    let mask = &masks[stage as usize];
     let whole = |t: &Tensor| MaterialResponseV1::Whole(TensorWireV1::of(t));
-    let values = st.values[p as usize].iter().map(|o| o.iter().map(whole).collect()).collect();
+    let values = st.values[p as usize]
+        .iter()
+        .enumerate()
+        .map(|(s, o)| o.iter().enumerate().map(|(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { whole(t) }).collect())
+        .collect();
     let inputs = st.inputs.get(p as usize).map(|r| r.iter().map(whole).collect()).unwrap_or_default();
     borsh::to_vec(&PositionResponseV1 { values, inputs }).unwrap()
 }
@@ -147,6 +153,15 @@ impl World {
             .find_map(|e| if let E::ClassRegistered { class } = e { Some(*class) } else { None })
             .unwrap_or_else(|| panic!("{ev:?}"));
         w
+    }
+
+    /// `masks[stage]`: each stage's derived values.
+    fn masks(&self) -> Vec<Vec<Vec<bool>>> {
+        self.p.stages.iter().map(|st| derived_mask_v1(&stage_view_v1(&self.programs[st.program as usize]).view)).collect()
+    }
+
+    fn da(&self, trace: &PipelineTraceV1, withhold: &[(u8, u32)]) -> Da {
+        Da::publishing(trace, withhold, &self.masks())
     }
 
     fn register(&self, decode: Option<DecodeRuleV1>) -> T {
@@ -257,7 +272,7 @@ fn a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_
     let mut w = World::new(toy_pipeline(), 100, None);
     let job = w.post(2, &toy_job(), 0, 1);
     let honest = w.produce(&job, vec![], RANDOM, |_| {});
-    let (id, da) = (honest.claim.id(), Da::publishing(&honest.trace, &[]));
+    let (id, da) = (honest.claim.id(), w.da(&honest.trace, &[]));
     let ev = w.block(10, vec![honest.tx, T::PanelCovered { claim: id }]);
     assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
     assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Clean);
@@ -281,7 +296,7 @@ fn a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_
     for (nonce, lie) in lies {
         let job = w.post(100 + 30 * nonce as u64, &toy_job(), 0, nonce);
         let bad = w.produce(&job, vec![], RANDOM, |t| lie(t));
-        let (id, da) = (bad.claim.id(), Da::publishing(&bad.trace, &[]));
+        let (id, da) = (bad.claim.id(), w.da(&bad.trace, &[]));
         w.block(110 + 30 * nonce as u64, vec![bad.tx, T::PanelCovered { claim: id }]);
         let f = outsider(&w, id, &da);
         match (nonce, fault(&f)) {
@@ -331,7 +346,7 @@ fn a_trace_drawn_from_another_seed_or_of_another_job_is_refused_and_an_r_that_is
         let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 100 + i as u64)).collect());
         *t = trace_pipeline_v1(&p, &programs, &params, &other_seed, &full).unwrap();
     });
-    let (id, da) = (swapped.claim.id(), Da::publishing(&swapped.trace, &[]));
+    let (id, da) = (swapped.claim.id(), w.da(&swapped.trace, &[]));
     let ev = w.block(11, vec![swapped.tx, T::PanelCovered { claim: id }]);
     assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
     let f = outsider(&w, id, &da);
@@ -348,7 +363,7 @@ fn a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_cour
     let generated = w.generate(&job, 3);
     assert_eq!(generated.len(), 3);
     let honest = w.produce(&job, generated.clone(), RANDOM, |_| {});
-    let (id, da) = (honest.claim.id(), Da::publishing(&honest.trace, &[]));
+    let (id, da) = (honest.claim.id(), w.da(&honest.trace, &[]));
     w.block(10, vec![honest.tx, T::PanelCovered { claim: id }]);
     assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Clean);
 
@@ -358,7 +373,7 @@ fn a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_cour
     sub[0] = (sub[0] + 1) % bound;
     let job2 = w.post(11, &vlm_job(), 3, 2);
     let bad = w.produce(&job2, sub, RANDOM, |_| {});
-    let (id, da) = (bad.claim.id(), Da::publishing(&bad.trace, &[]));
+    let (id, da) = (bad.claim.id(), w.da(&bad.trace, &[]));
     w.block(12, vec![bad.tx, T::PanelCovered { claim: id }]);
     let f = outsider(&w, id, &da);
     assert!(matches!(fault(&f), PipelineFaultWireV1::Decode { index: 0, .. }), "{f:?}");
@@ -372,7 +387,7 @@ fn a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_cour
     let bad = w.produce(&job3, generated.clone(), RANDOM, |t| {
         t.stages[0].inputs[0][0].data[0] = (t.stages[0].inputs[0][0].data[0] + 1) % 256;
     });
-    let (id, da) = (bad.claim.id(), Da::publishing(&bad.trace, &[(0, 0)]));
+    let (id, da) = (bad.claim.id(), w.da(&bad.trace, &[(0, 0)]));
     let trace = bad.trace.clone();
     w.block(21, vec![bad.tx, T::PanelCovered { claim: id }]);
     assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Demand(vec![(0, 0)]));
@@ -381,9 +396,9 @@ fn a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_cour
     // The honest image instead of the committed one is not the committed input.
     let mut honest_input = trace.clone();
     honest_input.stages[0].inputs[0][0].data[0] = (honest_input.stages[0].inputs[0][0].data[0] + 255) % 256;
-    let ev = w.block(23, vec![T::Respond { claim: id, stage: 0, position: 0, bytes: position(&honest_input, 0, 0) }]);
+    let ev = w.block(23, vec![T::Respond { claim: id, stage: 0, position: 0, bytes: position(&w.masks(), &honest_input, 0, 0) }]);
     assert_eq!(ev, vec![E::ResponseRejected { claim: id, stage: 0, position: 0, class: "wrong_bytes" }]);
-    let ev = w.block(24, vec![T::Respond { claim: id, stage: 0, position: 0, bytes: position(&trace, 0, 0) }]);
+    let ev = w.block(24, vec![T::Respond { claim: id, stage: 0, position: 0, bytes: position(&w.masks(), &trace, 0, 0) }]);
     assert_eq!(ev, vec![E::Served { claim: id, stage: 0, position: 0 }]);
     let f = outsider(&w, id, &da);
     assert!(matches!(fault(&f), PipelineFaultWireV1::Edge { stage: 0, .. }), "{f:?}");
