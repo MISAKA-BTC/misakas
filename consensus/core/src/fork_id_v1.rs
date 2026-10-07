@@ -774,6 +774,20 @@ mod tests {
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
             // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
+            // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
+            // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
+            "palw_dns_retirement_v1" => {
+                params.palw_dns_retirement = Some(crate::palw_native_settlement_v1::PalwDnsRetirementV1 {
+                    activation: at,
+                    settlement: crate::palw_native_settlement_v1::PalwSettlementPolicyV1 {
+                        settled_anchor_depth: 1,
+                        unique_mature_work: 1,
+                        max_operator_permille: 1000,
+                        max_class_permille: 1000,
+                    },
+                    legacy_evidence_horizon_daa: 1,
+                })
+            }
             "palw_fp_prefix_inherit" => params.palw_fp_prefix_inherit = Some(at),
             "palw_fp_prefix_state" => params.palw_fp_prefix_state = Some(at),
             "palw_fp_tokenizer_match" => params.palw_fp_tokenizer_match = Some(at),
