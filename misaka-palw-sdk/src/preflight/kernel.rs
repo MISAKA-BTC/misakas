@@ -57,6 +57,33 @@ fn route_under(name: &str, d: &KernelDescriptorV1, program: &TirProgramV1, max_p
     }
 }
 
+/// **The kernel route of a pipeline class** (a vision-chat model's tower + text stage): K2-TIR-v3's media-pipeline family, as
+/// shipped and hypothetically armed. Only v3 implements the family, so v1/v2 are not judged.
+pub fn pipeline_route_of(
+    pipeline: &misaka_palw_tir::pipeline::TirPipelineV1,
+    programs: &[misaka_palw_tir::program_v2::TirProgramV2],
+    daa: u64,
+) -> KernelRouteInfo {
+    use misaka_palw_kernel::pipeline::pipeline_registration_outcome_v1;
+    let d = misaka_palw_kernel::descriptor::k2_tir_v3_descriptor();
+    let judge = |schedule: &KernelScheduleV1| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pipeline_registration_outcome_v1(schedule, &d, pipeline, programs, daa)
+        }))
+        .unwrap_or_else(|_| RegistrationOutcomeV1::FrontendRequired { reason: "the kernel check panicked".into() })
+    };
+    let shipped = judge(&builtin_schedule_v1());
+    let armed = judge(&KernelScheduleV1::default().with(d.digest(), KernelStatusV1::Active { since_daa: 0 }));
+    KernelRouteInfo {
+        kernel: format!("K2-TIR-v3 {}", misaka_palw_kernel::hash::hex(&d.digest()[..8])),
+        shipped: shipped.code().to_string(),
+        hypothetical: armed.code().to_string(),
+        detail: armed.to_string().chars().take(400).collect(),
+        bucket: shipped.coverage_bucket(misaka_palw_kernel::outcome::CoverageEvidenceV1::NONE).name().to_string(),
+        max_positions: pipeline.stages.get(pipeline.output_stage as usize).map(|s| s.max_trip).unwrap_or(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +106,64 @@ mod tests {
         let wide = misaka_palw_tir_sketch::fixture::wide_v1(1);
         let k = kernel_route_of(&wide.program, 64, 0);
         assert_eq!(k.shipped, "FRONTEND_REQUIRED", "{k:?}");
+    }
+
+    #[test]
+    fn a_vision_pipeline_needs_v3_and_is_eligible_if_armed() {
+        let (p, programs) = vision_pipeline_fixture();
+        let k = pipeline_route_of(&p, &programs, 0);
+        assert_eq!((k.shipped.as_str(), k.hypothetical.as_str()), ("KERNEL_NOT_ACTIVE", "ELIGIBLE_AT"), "{k:?}");
+        assert!(k.kernel.starts_with("K2-TIR-v3"));
+    }
+
+    /// A one-stage pipeline over a toy image encoder (the IR's own `tests/v2common` shape): a canonical job image in, a `Final` out.
+    fn vision_pipeline_fixture() -> (misaka_palw_tir::pipeline::TirPipelineV1, Vec<misaka_palw_tir::program_v2::TirProgramV2>) {
+        use misaka_palw_tir::DType;
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::pipeline::*;
+        use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, Ref};
+        use misaka_palw_tir::program_v2::*;
+        let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+        let image = pb.param("vis.image", DType::I16, &[2, 3, 3], false);
+        let w = pb.param("vis.w", DType::I8, &[3, 4], false);
+        let pre = {
+            let mut b = pb.block("vis.pre", vec![]);
+            let x = b.cast(image, DType::I32);
+            let x = b.reshape_fixed(x, &[6, 3]);
+            let y = b.matmul(x, w, DType::I32);
+            let s = b.reduce_sum(y, 0, DType::I32);
+            b.finish(&[s])
+        };
+        let carry = {
+            let b = &pb.blocks[pre as usize];
+            vec![b.nodes[b.carry_out[0] as usize].out.clone()]
+        };
+        let (post, out) = {
+            let mut b = pb.block("vis.post", carry);
+            let o = b.clamp(Ref::CarryIn(0), -(1 << 20), 1 << 20, DType::I32);
+            b.commit(o);
+            let Ref::Node(n) = o else { unreachable!() };
+            (b.finish(&[]), n)
+        };
+        let v1 = pb.finish(pre, vec![], post, out);
+        let prog = TirProgramV2::from_v1_lifting_params(
+            &v1,
+            &[(0, InputSource::External { lo: 0, hi: 255 })],
+            OutputDecl::Final { node: out },
+        )
+        .unwrap();
+        let p = TirPipelineV1 {
+            version: TIR_PIPELINE_VERSION_V1,
+            stages: vec![StageDecl {
+                name: "vision".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobImage { index: 0 }],
+            }],
+            output_stage: 0,
+        };
+        (p, vec![prog])
     }
 }

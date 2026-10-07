@@ -224,6 +224,16 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
     v["gate"] = json!(format!(
         "palw_gen_v1 (testnet12_v1 ceilings) armed hypothetically, judged at DAA {height}; FP Job V5 dormant; shape-only (image 448, 224, 196 or 192 px square when the config declares none, unit 1.0, placeholder root)"
     ));
+    // The kernel route (ADR-0172, RFC-0011 §16.2): K2-TIR-v3's media-pipeline family over the first size whose stages build.
+    // Reported, never judged.
+    if let Some(route) = VLM_PROBE_IMAGE_SIZES_V1.iter().find_map(|size| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vlm_stages_v1(config, max_context, *size).ok()))
+            .ok()
+            .flatten()
+            .map(|st| crate::preflight::kernel::pipeline_route_of(&st.pipeline, &[st.tower.clone(), st.text.clone()], height))
+    }) {
+        v["kernel_route"] = json!(route);
+    }
     v["max_context"] = json!(max_context);
     v["range_twin"] = json!(range_twin);
     v
